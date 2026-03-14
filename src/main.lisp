@@ -95,18 +95,22 @@ Assigns the agent's face-set from the buffer's face registry."
 
 (defun handle-key-event (buf event)
   "Dispatch a key event through the buffer's keymap.
-Returns :QUIT if the application should exit, or nil otherwise."
-  (let ((*current-caller* :user))
+Returns :QUIT if the application should exit, or nil otherwise.
+Croatoan delivers events as EVENT objects; we extract the key via event-key."
+  (let* ((key (if (typep event 'croatoan:event)
+                  (croatoan:event-key event)
+                  event))
+         (*current-caller* :user))
     (cond
-      ((and (characterp event) (char= event #\Etx))  ; C-c = ASCII 3
+      ((and (characterp key) (char= key #\Etx))  ; C-c = ASCII 3
        :quit)
-      ((and (characterp event) (keymap-lookup (buffer-keymap buf) event))
-       (let ((command (keymap-lookup (buffer-keymap buf) event)))
+      ((and (characterp key) (keymap-lookup (buffer-keymap buf) key))
+       (let ((command (keymap-lookup (buffer-keymap buf) key)))
          (funcall command buf)
          nil))
-      ((and (characterp event)
-            (graphic-char-p event))
-       (let ((*self-insert-char* event))
+      ((and (characterp key)
+            (graphic-char-p key))
+       (let ((*self-insert-char* key))
          (self-insert-command buf))
        nil)
       (t nil))))
@@ -129,12 +133,19 @@ Returns :QUIT if the application should exit, or nil otherwise."
                            :height 1
                            :width screen-width
                            :position (list (1- screen-height) 0)))
-           (buf (make-buffer session-name
-                             :agent-name agent-name
-                             :working-directory (truename "."))))
+            (buf (make-buffer session-name
+                              :agent-name agent-name
+                              :working-directory (truename "."))))
       (init-face-registry buf)
       (setf (buffer-keymap buf) *default-keymap*)
+      ;; Flush stdscr's pending clear before our first render so that
+      ;; event-case's auto-refresh of scr doesn't wipe our windows.
+      (croatoan:refresh scr)
+      ;; Initial render
       (render-buffer buf main-win modeline-win)
+      ;; Read events from scr (stdscr). event-case auto-refreshes the
+      ;; event source before each getch; since scr was pre-flushed and
+      ;; never written to, the auto-refresh is a no-op.
       (croatoan:event-case (scr event)
         (:resize
          (let ((new-height (croatoan:height scr))

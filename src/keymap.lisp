@@ -48,12 +48,18 @@
 (defun init-default-keymap ()
   "Build and install the default keymap with standard chat buffer bindings."
   (let ((km (make-keymap :default)))
+    ;; Send message: both #\Return (CR, ASCII 13) and #\Newline (LF, ASCII 10).
+    ;; Terminals with nl() mode translate CR→LF, so Enter arrives as #\Newline.
+    ;; Bind both to catch either terminal behavior.
     (keymap-bind km #\Return 'send-message)
-    (keymap-bind km #\Linefeed 'insert-newline-command)
-    (keymap-bind km #\Soh 'beginning-of-line-command)     ; C-a = ASCII 1
-    (keymap-bind km #\Enq 'end-of-line-command)           ; C-e = ASCII 5
-    (keymap-bind km #\Vt 'kill-line-command)              ; C-k = ASCII 11
-    (keymap-bind km #\Em 'yank-command)                   ; C-y = ASCII 25
+    (keymap-bind km #\Newline 'send-message)
+    ;; Insert newline: C-o (open-line, ASCII 15) since C-j (#\Newline)
+    ;; is indistinguishable from Enter in most terminals.
+    (keymap-bind km (code-char 15) 'insert-newline-command) ; C-o = ASCII 15
+    (keymap-bind km #\Soh 'beginning-of-line-command)       ; C-a = ASCII 1
+    (keymap-bind km #\Enq 'end-of-line-command)             ; C-e = ASCII 5
+    (keymap-bind km #\Vt 'kill-line-command)                ; C-k = ASCII 11
+    (keymap-bind km #\Em 'yank-command)                     ; C-y = ASCII 25
     (keymap-bind km #\Backspace 'delete-char-backward-command)
     (keymap-bind km #\Rubout 'delete-char-backward-command)
     (setf *default-keymap* km)))

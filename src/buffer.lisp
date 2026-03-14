@@ -99,13 +99,32 @@ and create a new empty input message at the tail."
             (buffer-last-message buf) new-input)))
   buf)
 
+(defun set-message-text (msg text)
+  "Replace MSG's lines with lines split from TEXT on newlines."
+  (let* ((parts (loop :for start := 0 :then (1+ pos)
+                      :for pos := (position #\Newline text :start start)
+                      :collect (subseq text start (or pos (length text)))
+                      :while pos))
+         (lines (mapcar #'make-line (or parts (list "")))))
+    ;; Link lines into a DLL
+    (loop :for (a b) :on lines
+          :when b
+          :do (setf (line-next a) b
+                    (line-prev b) a))
+    (setf (message-first-line msg) (first lines)
+          (message-last-line msg) (car (last lines))
+          (message-point-line msg) (first lines)
+          (message-point-offset msg) 0))
+  msg)
+
 (declaim (ftype (function (buffer string) message) buffer-insert-agent-message))
 (defun buffer-insert-agent-message (buf text)
-  "Create a read-only agent message with TEXT and insert it before the input message."
+  "Create a read-only agent message with TEXT and insert it before the input message.
+TEXT may contain newlines, which are split into separate line objects."
   (let* ((agent-keyword (intern (string-upcase (buffer-agent-name buf)) :keyword))
          (agent-msg (make-message agent-keyword :read-only-p t))
          (input (buffer-input-message buf)))
-    (setf (line-content (message-first-line agent-msg)) text)
+    (set-message-text agent-msg text)
     (setf (message-timestamp agent-msg) (get-universal-time))
     (let ((before-input (message-prev input)))
       (setf (message-prev agent-msg) before-input

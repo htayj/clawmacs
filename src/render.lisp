@@ -6,13 +6,16 @@
 
 (defun make-default-user-face-set ()
   "Create the default face set for user messages.
-Background: CGA dark-gray (#8), foreground: white."
+Background: CGA blue (#4), foreground: white.
+Spec calls for dark-gray (#8) but 8-color terminals map that to black,
+making user and agent messages indistinguishable. Blue provides clear
+visual distinction until 256-color detection is added."
   (make-face-set
    :user
    (list (make-instance 'face
            :name :default
-           :background (make-color-spec :cga 8)
-           :foreground (make-color-spec :cga 15)
+           :background (make-color-spec :cga 4)
+           :foreground (make-color-spec :cga 7)
            :bold-p nil
            :underline-p nil
            :reverse-p nil))))
@@ -45,19 +48,23 @@ Background: black (#0), foreground: white."
 ;;; --------------------------------------------------------------------------
 
 (defun color-spec-to-croatoan (cs)
-  "Convert a color-spec to a croatoan color keyword or integer."
+  "Convert a color-spec to a croatoan color keyword or integer.
+CGA 8-15 (bright variants) are mapped to their base 0-7 keyword colors
+because not all terminals support 256-color mode. When 256-color detection
+is added, these can use the integer values directly for terminals that
+support it."
   (ecase (color-spec-type cs)
     (:cga
      (let ((val (color-spec-value cs)))
        (case val
-         (0  :black)
-         (1  :red)
-         (2  :green)
-         (3  :yellow)
-         (4  :blue)
-         (5  :magenta)
-         (6  :cyan)
-         (7  :white)
+         ((0 8)   :black)       ; 8 = dark gray / bright black
+         ((1 9)   :red)         ; 9 = bright red
+         ((2 10)  :green)       ; 10 = bright green
+         ((3 11)  :yellow)      ; 11 = bright yellow
+         ((4 12)  :blue)        ; 12 = bright blue
+         ((5 13)  :magenta)     ; 13 = bright magenta
+         ((6 14)  :cyan)        ; 14 = bright cyan
+         ((7 15)  :white)       ; 15 = bright white
          (otherwise val))))
     (:256
      (color-spec-value cs))
