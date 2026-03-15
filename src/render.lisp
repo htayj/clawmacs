@@ -230,13 +230,22 @@ Respects buffer-scroll-offset for history scrolling."
          (input-start-row history-height))
     (croatoan:clear main-window)
     ;; Collect history messages (all except the input message)
-    ;; Optionally filter out tool-result messages
+    ;; Optionally filter out tool-related messages
     (let ((history-messages nil)
           (hide-tool-results (not (buffer-show-tool-results-p buf))))
       (loop :for msg := (buffer-first-message buf) :then (message-next msg)
             :while (and msg (not (eq msg (buffer-input-message buf))))
             :do (unless (and hide-tool-results
-                             (eq :tool-result (message-sender msg)))
+                             (or ;; Hide tool-result messages
+                                 (eq :tool-result (message-sender msg))
+                                 ;; Hide assistant messages that are purely tool calls
+                                 ;; (raw-content has tool_use blocks but no text)
+                                 (and (message-raw-content msg)
+                                      (not (eq :user (message-sender msg)))
+                                      (every (lambda (block)
+                                               (let ((btype (cdr (assoc :type block))))
+                                                 (not (string= "text" (or btype "")))))
+                                             (message-raw-content msg)))))
                   (push msg history-messages)))
       (setf history-messages (nreverse history-messages))
       ;; Calculate visual heights for all history messages
