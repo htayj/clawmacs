@@ -50,7 +50,16 @@
                          :accessor buffer-show-tool-results-p
                          :initform t
                          :type boolean
-                         :documentation "When nil, tool-result messages are hidden from display."))
+                         :documentation "When nil, tool-result messages are hidden from display.")
+   (pending-stream      :initarg :pending-stream
+                         :accessor buffer-pending-stream
+                         :initform nil
+                         :documentation "When non-nil, holds a stream-state for an in-progress streaming response.")
+   (streaming-message   :initarg :streaming-message
+                         :accessor buffer-streaming-message
+                         :initform nil
+                         :type (or null message)
+                         :documentation "The message being updated by streaming. Updated in-place as tokens arrive."))
   (:documentation
    "A chat buffer containing a doubly-linked list of messages.
 The last message is always the input message (read-only-p = nil).

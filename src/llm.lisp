@@ -182,6 +182,162 @@ MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
         (api-json-decode body-string)))))
 
 ;;; --------------------------------------------------------------------------
+;;; Streaming API Call
+;;; --------------------------------------------------------------------------
+
+(defstruct stream-state
+  "Mutable state for an in-progress streaming response."
+  (text ""             :type string)
+  (content-blocks nil  :type list)
+  (stop-reason nil)
+  (done-p nil          :type boolean)
+  (error-p nil)
+  (lock (bt:make-lock "stream-state")))
+
+(defun parse-sse-line (line)
+  "Parse a single SSE line. Returns (values field value) or nil.
+SSE format: 'field: value' or just 'data: {...}'."
+  (let ((colon-pos (position #\: line)))
+    (when (and colon-pos (plusp colon-pos))
+      (let ((field (subseq line 0 colon-pos))
+            (value (if (< (1+ colon-pos) (length line))
+                       (string-left-trim " " (subseq line (1+ colon-pos)))
+                       "")))
+        (values field value)))))
+
+(defun process-sse-event (data state)
+  "Process a single SSE data payload (JSON string) and update STATE."
+  (handler-case
+      (let* ((event (api-json-decode data))
+             (event-type (cdr (assoc :type event))))
+        (cond
+          ;; content_block_start: new content block beginning
+          ((string= "content_block_start" (or event-type ""))
+           (let ((block (cdr (assoc :content--block event))))
+             (when block
+               (bt:with-lock-held ((stream-state-lock state))
+                 (push block (stream-state-content-blocks state))))))
+
+          ;; content_block_delta: incremental text
+          ((string= "content_block_delta" (or event-type ""))
+           (let* ((delta (cdr (assoc :delta event)))
+                  (delta-type (cdr (assoc :type delta))))
+             (when (string= "text_delta" (or delta-type ""))
+               (let ((text (cdr (assoc :text delta))))
+                 (when text
+                   (bt:with-lock-held ((stream-state-lock state))
+                     (setf (stream-state-text state)
+                           (concatenate 'string (stream-state-text state) text))))))))
+
+          ;; content_block_stop: block finished
+          ((string= "content_block_stop" (or event-type ""))
+           ;; Update the last content block with accumulated text if it's a text block
+           (bt:with-lock-held ((stream-state-lock state))
+             (let ((blocks (stream-state-content-blocks state)))
+               (when (and blocks
+                          (string= "text" (or (cdr (assoc :type (first blocks))) "")))
+                 (setf (first blocks)
+                       (acons :text (stream-state-text state)
+                              (remove :text (first blocks) :key #'car)))))))
+
+          ;; message_delta: stop reason
+          ((string= "message_delta" (or event-type ""))
+           (let ((delta (cdr (assoc :delta event))))
+             (when delta
+               (let ((stop-reason (cdr (assoc :stop--reason delta))))
+                 (when stop-reason
+                   (bt:with-lock-held ((stream-state-lock state))
+                     (setf (stream-state-stop-reason state) stop-reason)))))))
+
+          ;; message_stop: streaming complete
+          ((string= "message_stop" (or event-type ""))
+           (bt:with-lock-held ((stream-state-lock state))
+             (setf (stream-state-done-p state) t)))))
+    (error (e)
+      (declare (ignore e))
+      ;; Silently skip malformed SSE events
+      nil)))
+
+(defun read-sse-stream (stream state)
+  "Read SSE events from STREAM and update STATE. Runs in a background thread."
+  (handler-case
+      (loop :with data-buffer := nil
+            :for line := (read-line stream nil nil)
+            :while line
+            :do (let ((trimmed (string-trim '(#\Return) line)))
+                  (cond
+                    ;; Empty line = end of event, process accumulated data
+                    ((zerop (length trimmed))
+                     (when data-buffer
+                       (process-sse-event
+                        (format nil "~{~A~}" (nreverse data-buffer))
+                        state)
+                       (setf data-buffer nil)))
+                    ;; Data line
+                    (t
+                     (multiple-value-bind (field value) (parse-sse-line trimmed)
+                       (when (and field (string= "data" field))
+                         (push value data-buffer)))))))
+    (error (e)
+      (bt:with-lock-held ((stream-state-lock state))
+        (setf (stream-state-error-p state) (format nil "~A" e)
+              (stream-state-done-p state) t))))
+  ;; Ensure done is set
+  (bt:with-lock-held ((stream-state-lock state))
+    (setf (stream-state-done-p state) t)))
+
+(defun anthropic-request-streaming (messages callback
+                                    &key (model *anthropic-model*)
+                                         (max-tokens 8192)
+                                         tools)
+  "Call the Anthropic Messages API with streaming enabled.
+CALLBACK is called with (stream-state) on each update from the background thread.
+Returns the final stream-state when complete."
+  (let* ((token (or (read-token)
+                    (error "No API token. Run 'claude setup-token', save to ~
+                            ~~/.config/clawmacs/token")))
+         (request-body
+           (let ((body `((:model . ,model)
+                         (:max--tokens . ,max-tokens)
+                         (:stream . t)
+                         (:messages . ,(coerce messages 'vector)))))
+             (when (and tools (plusp (length tools)))
+               (push `(:tools . ,tools) body))
+             (let ((system-prompt (build-system-prompt)))
+               (when system-prompt
+                 (push `(:system . ,system-prompt) body)))
+             (api-json-encode body)))
+         (state (make-stream-state)))
+    (multiple-value-bind (body-stream status-code headers)
+        (drakma:http-request
+         *anthropic-api-url*
+         :method :post
+         :content-type "application/json"
+         :additional-headers
+         `(("Authorization" . ,(format nil "Bearer ~A" token))
+           ("anthropic-version" . ,*anthropic-version*)
+           ("anthropic-beta" . ,*anthropic-beta*))
+         :content request-body
+         :want-stream t)
+      (declare (ignore headers))
+      (unless (= status-code 200)
+        (let ((err (if (streamp body-stream)
+                       (let ((s (make-string-output-stream)))
+                         (loop :for c := (read-char body-stream nil nil)
+                               :while c :do (write-char c s))
+                         (get-output-stream-string s))
+                       (format nil "~A" body-stream))))
+          (error "API error (~A): ~A" status-code err)))
+      ;; Spawn background thread to read SSE events
+      (bt:make-thread
+       (lambda ()
+         (unwind-protect
+              (read-sse-stream body-stream state)
+           (close body-stream)))
+       :name "clawmacs-sse-reader")
+      state)))
+
+;;; --------------------------------------------------------------------------
 ;;; Response Parsing Helpers
 ;;; --------------------------------------------------------------------------
 

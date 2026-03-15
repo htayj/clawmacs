@@ -72,40 +72,99 @@ to avoid breaking the assistant→tool_result message sequence."
             (setf (buffer-first-message buf) tr-msg)))
       raw)))
 
-(declaim (ftype (function (buffer) buffer) send-to-agent-with-context))
-(defun send-to-agent-with-context (buf)
-  "Send the conversation to the LLM with tool support.
-Loops: call API, execute tool calls, send results, repeat until end_turn."
+(defun start-streaming-response (buf)
+  "Start a streaming API call. Creates a placeholder agent message and
+stores the stream state on the buffer. Non-blocking -- the event loop
+polls for updates via update-streaming-response."
   (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
          (tools (let ((*current-caller* agent-kw))
                   (tool-definitions-for-api)))
-         (max-iterations 10))
+         (messages (build-conversation-messages buf)))
     (handler-case
-        (progn
-          (setf (buffer-status buf) :thinking)
-          (loop :for iteration :from 0 :below max-iterations
-                :do (let* ((messages (build-conversation-messages buf))
-                           (response (anthropic-request messages :tools tools))
-                           (content (response-content response))
-                           (stop-reason (response-stop-reason response))
-                           (tool-uses (content-tool-use-blocks content)))
-                      ;; Insert assistant message (text + tool call display)
-                      (insert-agent-message-from-content buf content agent-kw)
-                      (if (and (string= "tool_use" (or stop-reason ""))
-                               tool-uses)
-                          ;; Execute tools and loop
-                          (execute-tool-calls buf tool-uses agent-kw)
-                          ;; Done
-                          (progn
-                            (setf (buffer-status buf) :idle)
-                            (return)))))
-          (setf (buffer-status buf) :idle))
+        (let* ((state (anthropic-request-streaming
+                       messages
+                       (lambda (s) (declare (ignore s)))
+                       :tools tools))
+               ;; Create placeholder message that will be updated as tokens arrive
+               (agent-msg (buffer-insert-agent-message buf "")))
+          (setf (message-face-set agent-msg)
+                (gethash agent-kw (buffer-face-registry buf)))
+          (setf (buffer-pending-stream buf) state
+                (buffer-streaming-message buf) agent-msg
+                (buffer-status buf) :thinking))
       (error (e)
         (setf (buffer-status buf) :error)
         (let ((err-msg (buffer-insert-agent-message
                         buf (format nil "[Error: ~A]" e))))
           (setf (message-face-set err-msg)
-                (gethash agent-kw (buffer-face-registry buf)))))))
+                (gethash agent-kw (buffer-face-registry buf))))))))
+
+(defun update-streaming-response (buf)
+  "Poll the active streaming response and update the display.
+Returns T if still streaming, NIL if done."
+  (let ((state (buffer-pending-stream buf))
+        (msg (buffer-streaming-message buf)))
+    (unless (and state msg)
+      (return-from update-streaming-response nil))
+    ;; Update the message text from the stream state
+    (let ((current-text (bt:with-lock-held ((stream-state-lock state))
+                          (stream-state-text state)))
+          (done (bt:with-lock-held ((stream-state-lock state))
+                  (stream-state-done-p state)))
+          (err (bt:with-lock-held ((stream-state-lock state))
+                 (stream-state-error-p state))))
+      ;; Update the message display text
+      (when (plusp (length current-text))
+        (set-message-text msg current-text))
+      (cond
+        ;; Error during streaming
+        (err
+         (set-message-text msg (format nil "[Streaming error: ~A]" err))
+         (setf (buffer-pending-stream buf) nil
+               (buffer-streaming-message buf) nil
+               (buffer-status buf) :error)
+         nil)
+        ;; Streaming complete
+        (done
+         (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
+                (content-blocks
+                  (bt:with-lock-held ((stream-state-lock state))
+                    (nreverse (stream-state-content-blocks state))))
+                (stop-reason
+                  (bt:with-lock-held ((stream-state-lock state))
+                    (stream-state-stop-reason state)))
+                (tool-uses (content-tool-use-blocks content-blocks)))
+           ;; Update the message with final content + raw-content for API
+           (let ((display (with-output-to-string (s)
+                            (write-string current-text s)
+                            (dolist (tu tool-uses)
+                              (write-char #\Newline s)
+                              (write-string (format-tool-call-display tu) s)))))
+             (set-message-text msg display)
+             (setf (message-raw-content msg) content-blocks))
+           ;; Clear streaming state
+           (setf (buffer-pending-stream buf) nil
+                 (buffer-streaming-message buf) nil)
+           ;; Handle tool calls
+           (if (and (string= "tool_use" (or stop-reason ""))
+                    tool-uses)
+               (progn
+                 (execute-tool-calls buf tool-uses agent-kw)
+                 ;; Start next streaming request for tool results
+                 (start-streaming-response buf)
+                 t) ; still active
+               (progn
+                 (setf (buffer-status buf) :idle)
+                 nil))))
+        ;; Still streaming
+        (t t)))))
+
+(declaim (ftype (function (buffer) buffer) send-to-agent-with-context))
+(defun send-to-agent-with-context (buf)
+  "Start a streaming conversation with the LLM. Non-blocking --
+the event loop polls for updates via update-streaming-response."
+  (setf (buffer-status buf) :thinking)
+  (start-streaming-response buf)
   buf)
 
 ;;; --------------------------------------------------------------------------
@@ -308,24 +367,42 @@ Handles ESC prefix for Meta keys: ESC followed by a key becomes (:alt <key>)."
       (setf *sandbox-root* (truename "."))
       ;; Set scroll page size based on available history area
       (setf *scroll-page-size* (max 1 (- (1- screen-height) 3)))
-      ;; Flush stdscr's pending clear before our first render so that
-      ;; event-case's auto-refresh of scr doesn't wipe our windows.
+      ;; Flush stdscr's pending clear before our first render
       (croatoan:refresh scr)
       ;; Initial render
       (render-buffer buf main-win modeline-win)
-      ;; Read events from scr (stdscr). event-case auto-refreshes the
-      ;; event source before each getch; since scr was pre-flushed and
-      ;; never written to, the auto-refresh is a no-op.
-      (croatoan:event-case (scr event)
-        (:resize
-         (let ((new-height (croatoan:height scr))
-               (new-width (croatoan:width scr)))
-           (croatoan:resize main-win (1- new-height) new-width)
-           (croatoan:resize modeline-win 1 new-width)
-           (croatoan:move-window modeline-win (1- new-height) 0)
-           (render-buffer buf main-win modeline-win)))
-        (otherwise
-         (let ((result (handle-key-event buf event)))
-           (when (eq result :quit)
-             (return-from croatoan:event-case))
-           (render-buffer buf main-win modeline-win)))))))
+      ;; Event loop: uses a short timeout when streaming is active
+      ;; so we can poll for updates; otherwise blocks waiting for input.
+      (loop :named main-loop
+            :do (let ((streaming (buffer-pending-stream buf)))
+                  ;; Set input timeout: 100ms when streaming, blocking otherwise
+                  (setf (croatoan:input-blocking scr)
+                        (if streaming 100 t))
+                  ;; Get event (may be nil on timeout)
+                  (let ((event (croatoan:get-wide-event scr)))
+                    (cond
+                      ;; Timeout (nil event) -- just update streaming if active
+                      ((null event)
+                       (when streaming
+                         (update-streaming-response buf)
+                         (render-buffer buf main-win modeline-win)))
+                      ;; Resize event
+                      ((and (typep event 'croatoan:event)
+                            (typep (croatoan:event-key event) 'croatoan:key)
+                            (eq :resize (croatoan:key-name
+                                         (croatoan:event-key event))))
+                       (let ((new-height (croatoan:height scr))
+                             (new-width (croatoan:width scr)))
+                         (croatoan:resize main-win (1- new-height) new-width)
+                         (croatoan:resize modeline-win 1 new-width)
+                         (croatoan:move-window modeline-win (1- new-height) 0)
+                         (render-buffer buf main-win modeline-win)))
+                      ;; Regular key event
+                      (t
+                       (let ((result (handle-key-event buf event)))
+                         (when (eq result :quit)
+                           (return-from main-loop)))
+                       ;; Update streaming if active
+                       (when streaming
+                         (update-streaming-response buf))
+                       (render-buffer buf main-win modeline-win)))))))))
