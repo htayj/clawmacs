@@ -160,7 +160,13 @@ MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
              (let ((system-prompt (build-system-prompt)))
                (when system-prompt
                  (push `(:system . ,system-prompt) body)))
-             (api-json-encode body))))
+              ;; Debug: log request body
+              (with-open-file (s #P"/tmp/clawmacs-api.log"
+                                 :direction :output :if-exists :append
+                                 :if-does-not-exist :create)
+                (format s "~%=== REQUEST (non-streaming) ===~%~A~%"
+                        (api-json-encode body)))
+              (api-json-encode body))))
     (multiple-value-bind (body status-code)
         (drakma:http-request
          *anthropic-api-url*
@@ -189,6 +195,7 @@ MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
   "Mutable state for an in-progress streaming response."
   (text ""             :type string)
   (content-blocks nil  :type list)
+  (tool-input-json ""  :type string)   ; accumulates input_json_delta for tool_use
   (stop-reason nil)
   (done-p nil          :type boolean)
   (error-p nil)
@@ -216,29 +223,59 @@ SSE format: 'field: value' or just 'data: {...}'."
            (let ((block (cdr (assoc :content--block event))))
              (when block
                (bt:with-lock-held ((stream-state-lock state))
-                 (push block (stream-state-content-blocks state))))))
+                 (push block (stream-state-content-blocks state))
+                 ;; Reset accumulators for the new block
+                 (setf (stream-state-text state) ""
+                       (stream-state-tool-input-json state) "")))))
 
-          ;; content_block_delta: incremental text
+          ;; content_block_delta: incremental text or tool input JSON
           ((string= "content_block_delta" (or event-type ""))
            (let* ((delta (cdr (assoc :delta event)))
                   (delta-type (cdr (assoc :type delta))))
-             (when (string= "text_delta" (or delta-type ""))
-               (let ((text (cdr (assoc :text delta))))
-                 (when text
-                   (bt:with-lock-held ((stream-state-lock state))
-                     (setf (stream-state-text state)
-                           (concatenate 'string (stream-state-text state) text))))))))
+             (cond
+               ((string= "text_delta" (or delta-type ""))
+                (let ((text (cdr (assoc :text delta))))
+                  (when text
+                    (bt:with-lock-held ((stream-state-lock state))
+                      (setf (stream-state-text state)
+                            (concatenate 'string (stream-state-text state) text))))))
+               ((string= "input_json_delta" (or delta-type ""))
+                (let ((partial (cdr (assoc :partial--json delta))))
+                  (when partial
+                    (bt:with-lock-held ((stream-state-lock state))
+                      (setf (stream-state-tool-input-json state)
+                            (concatenate 'string
+                                         (stream-state-tool-input-json state)
+                                         partial)))))))))
 
           ;; content_block_stop: block finished
           ((string= "content_block_stop" (or event-type ""))
-           ;; Update the last content block with accumulated text if it's a text block
            (bt:with-lock-held ((stream-state-lock state))
-             (let ((blocks (stream-state-content-blocks state)))
-               (when (and blocks
-                          (string= "text" (or (cdr (assoc :type (first blocks))) "")))
-                 (setf (first blocks)
-                       (acons :text (stream-state-text state)
-                              (remove :text (first blocks) :key #'car)))))))
+             (let* ((blocks (stream-state-content-blocks state))
+                    (block (first blocks))
+                    (block-type (when block (cdr (assoc :type block)))))
+               (cond
+                 ;; Finalize text block
+                 ((and block (string= "text" (or block-type "")))
+                  (setf (first blocks)
+                        (acons :text (stream-state-text state)
+                               (remove :text (first blocks) :key #'car))))
+                 ;; Finalize tool_use block: parse accumulated JSON into input
+                 ((and block (string= "tool_use" (or block-type "")))
+                  (let ((json-str (stream-state-tool-input-json state)))
+                    (when (plusp (length json-str))
+                      (handler-case
+                          (let ((parsed (api-json-decode json-str)))
+                            (setf (first blocks)
+                                  (acons :input parsed
+                                         (remove :input (first blocks) :key #'car))))
+                        (error () nil))))
+                  ;; Also remove the extra 'caller' field that streaming adds
+                  (setf (first blocks)
+                        (remove :caller (first blocks) :key #'car))))
+               ;; Reset accumulators for next block
+               (setf (stream-state-text state) ""
+                     (stream-state-tool-input-json state) ""))))
 
           ;; message_delta: stop reason
           ((string= "message_delta" (or event-type ""))
@@ -303,10 +340,16 @@ Returns the final stream-state when complete."
                          (:messages . ,(coerce messages 'vector)))))
              (when (and tools (plusp (length tools)))
                (push `(:tools . ,tools) body))
-             (let ((system-prompt (build-system-prompt)))
-               (when system-prompt
-                 (push `(:system . ,system-prompt) body)))
-             (api-json-encode body)))
+              (let ((system-prompt (build-system-prompt)))
+                (when system-prompt
+                  (push `(:system . ,system-prompt) body)))
+              ;; Debug: log request
+              (with-open-file (s #P"/tmp/clawmacs-api.log"
+                                 :direction :output :if-exists :append
+                                 :if-does-not-exist :create)
+                (format s "~%=== REQUEST (streaming) ===~%~A~%"
+                        (api-json-encode body)))
+              (api-json-encode body)))
          (state (make-stream-state)))
     (multiple-value-bind (body-stream status-code headers)
         (drakma:http-request

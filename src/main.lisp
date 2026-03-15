@@ -106,16 +106,26 @@ Returns T if still streaming, NIL if done."
         (msg (buffer-streaming-message buf)))
     (unless (and state msg)
       (return-from update-streaming-response nil))
-    ;; Update the message text from the stream state
-    (let ((current-text (bt:with-lock-held ((stream-state-lock state))
-                          (stream-state-text state)))
+    ;; Read state under lock
+    (let ((in-progress-text (bt:with-lock-held ((stream-state-lock state))
+                              (stream-state-text state)))
           (done (bt:with-lock-held ((stream-state-lock state))
                   (stream-state-done-p state)))
           (err (bt:with-lock-held ((stream-state-lock state))
                  (stream-state-error-p state))))
-      ;; Update the message display text
-      (when (plusp (length current-text))
-        (set-message-text msg current-text))
+      ;; While streaming: update display with in-progress text
+      ;; (stream-state-text accumulates the CURRENT block's text;
+      ;; completed blocks have their text finalized in content-blocks)
+      (unless done
+        (let ((all-text (bt:with-lock-held ((stream-state-lock state))
+                          ;; Collect text from completed blocks + current accumulator
+                          (let ((completed (content-text-blocks
+                                            (reverse (stream-state-content-blocks state)))))
+                            (if (plusp (length in-progress-text))
+                                (concatenate 'string completed in-progress-text)
+                                completed)))))
+          (when (plusp (length all-text))
+            (set-message-text msg all-text))))
       (cond
         ;; Error during streaming
         (err
@@ -129,14 +139,15 @@ Returns T if still streaming, NIL if done."
          (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
                 (content-blocks
                   (bt:with-lock-held ((stream-state-lock state))
-                    (nreverse (stream-state-content-blocks state))))
+                    (nreverse (copy-list (stream-state-content-blocks state)))))
                 (stop-reason
                   (bt:with-lock-held ((stream-state-lock state))
                     (stream-state-stop-reason state)))
-                (tool-uses (content-tool-use-blocks content-blocks)))
-           ;; Update the message with final content + raw-content for API
+                (tool-uses (content-tool-use-blocks content-blocks))
+                (final-text (content-text-blocks content-blocks)))
+           ;; Build final display from content-blocks (not the accumulator)
            (let ((display (with-output-to-string (s)
-                            (write-string current-text s)
+                            (write-string final-text s)
                             (dolist (tu tool-uses)
                               (write-char #\Newline s)
                               (write-string (format-tool-call-display tu) s)))))
@@ -150,9 +161,8 @@ Returns T if still streaming, NIL if done."
                     tool-uses)
                (progn
                  (execute-tool-calls buf tool-uses agent-kw)
-                 ;; Start next streaming request for tool results
                  (start-streaming-response buf)
-                 t) ; still active
+                 t)
                (progn
                  (setf (buffer-status buf) :idle)
                  nil))))
