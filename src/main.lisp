@@ -30,10 +30,14 @@ Shows text parts and tool call summaries. Stores raw-content for round-trip."
     agent-msg))
 
 (defun execute-tool-calls (buf tool-use-blocks agent-kw)
-  "Execute tool calls and insert results into the buffer.
-Returns tool_result content blocks for the API."
+  "Execute tool calls and insert a single tool-result message into the buffer.
+The message displays tool results for the user and carries raw-content
+for the API (tool_result blocks). No separate display messages are created
+to avoid breaking the assistant→tool_result message sequence."
   (let ((result-blocks nil)
+        (display-parts nil)
         (*current-caller* agent-kw))
+    ;; Execute each tool and collect results
     (dolist (tu tool-use-blocks)
       (let* ((tool-id (cdr (assoc :id tu)))
              (tool-name (cdr (assoc :name tu)))
@@ -42,23 +46,22 @@ Returns tool_result content blocks for the API."
                (handler-case
                    (execute-tool tool-name tool-input)
                  (error (e)
-                   (api-json-encode `((:error . ,(format nil "~A" e)))))))
-             (display (format-tool-result-display tool-name result-text)))
-        ;; Show individual result in chat
-        (let ((display-msg (buffer-insert-agent-message buf display)))
-          (setf (message-sender display-msg) :tool-result)
-          (setf (message-face-set display-msg)
-                (gethash agent-kw (buffer-face-registry buf))))
+                   (api-json-encode `((:error . ,(format nil "~A" e))))))))
+        (push (format-tool-result-display tool-name result-text) display-parts)
         (push `((:type . "tool_result")
                 (:tool--use--id . ,tool-id)
                 (:content . ,result-text))
               result-blocks)))
-    ;; Insert a single tool-result message with all results for API
-    (let ((tr-msg (make-message :tool-result :read-only-p t))
-          (input (buffer-input-message buf)))
-      (set-message-text tr-msg "")
-      (setf (message-raw-content tr-msg) (nreverse result-blocks))
+    ;; Insert ONE message: displays results + carries raw-content for API
+    (let* ((display-text (format nil "~{~A~^~%~}" (nreverse display-parts)))
+           (raw (nreverse result-blocks))
+           (tr-msg (make-message :tool-result :read-only-p t))
+           (input (buffer-input-message buf)))
+      (set-message-text tr-msg display-text)
+      (setf (message-raw-content tr-msg) raw)
       (setf (message-timestamp tr-msg) (get-universal-time))
+      (setf (message-face-set tr-msg)
+            (gethash agent-kw (buffer-face-registry buf)))
       ;; Link into buffer before input
       (let ((before-input (message-prev input)))
         (setf (message-prev tr-msg) before-input
@@ -66,8 +69,8 @@ Returns tool_result content blocks for the API."
               (message-prev input) tr-msg)
         (if before-input
             (setf (message-next before-input) tr-msg)
-            (setf (buffer-first-message buf) tr-msg))))
-    result-blocks))
+            (setf (buffer-first-message buf) tr-msg)))
+      raw)))
 
 (declaim (ftype (function (buffer) buffer) send-to-agent-with-context))
 (defun send-to-agent-with-context (buf)
