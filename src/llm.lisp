@@ -160,12 +160,6 @@ MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
              (let ((system-prompt (build-system-prompt)))
                (when system-prompt
                  (push `(:system . ,system-prompt) body)))
-              ;; Debug: log request body
-              (with-open-file (s #P"/tmp/clawmacs-api.log"
-                                 :direction :output :if-exists :append
-                                 :if-does-not-exist :create)
-                (format s "~%=== REQUEST (non-streaming) ===~%~A~%"
-                        (api-json-encode body)))
               (api-json-encode body))))
     (multiple-value-bind (body status-code)
         (drakma:http-request
@@ -343,12 +337,6 @@ Returns the final stream-state when complete."
               (let ((system-prompt (build-system-prompt)))
                 (when system-prompt
                   (push `(:system . ,system-prompt) body)))
-              ;; Debug: log request
-              (with-open-file (s #P"/tmp/clawmacs-api.log"
-                                 :direction :output :if-exists :append
-                                 :if-does-not-exist :create)
-                (format s "~%=== REQUEST (streaming) ===~%~A~%"
-                        (api-json-encode body)))
               (api-json-encode body)))
          (state (make-stream-state)))
     (multiple-value-bind (body-stream status-code headers)
