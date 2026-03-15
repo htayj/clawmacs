@@ -45,7 +45,12 @@
                       :initform 0
                       :type integer
                       :documentation "Number of visual rows scrolled up from the bottom.
-0 means auto-scroll (latest messages visible)."))
+0 means auto-scroll (latest messages visible).")
+   (show-tool-results-p :initarg :show-tool-results-p
+                         :accessor buffer-show-tool-results-p
+                         :initform t
+                         :type boolean
+                         :documentation "When nil, tool-result messages are hidden from display."))
   (:documentation
    "A chat buffer containing a doubly-linked list of messages.
 The last message is always the input message (read-only-p = nil).

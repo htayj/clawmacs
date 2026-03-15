@@ -87,6 +87,7 @@
    #:buffer-face-registry
    #:buffer-keymap
    #:buffer-scroll-offset
+   #:buffer-show-tool-results-p
    #:buffer-finalize-input
    #:buffer-insert-agent-message
    #:buffer-message-count

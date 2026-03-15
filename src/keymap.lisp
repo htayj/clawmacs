@@ -71,4 +71,6 @@
     ;; M-v arrives as ESC then v, normalized to (:alt #\v) by handle-key-event.
     (keymap-bind km '(:alt #\v) 'scroll-up-command)
     (keymap-bind km (code-char 22) 'scroll-down-command)  ; C-v = ASCII 22
+    ;; C-x prefix commands
+    (keymap-bind km '(:ctrl-x #\t) 'toggle-tool-results-command)
     (setf *default-keymap* km)))

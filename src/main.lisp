@@ -180,6 +180,16 @@ Loops: call API, execute tool calls, send results, repeat until end_turn."
       (setf (buffer-scroll-offset buffer) 0))))
 
 ;;; --------------------------------------------------------------------------
+;;; Display Toggle Commands
+;;; --------------------------------------------------------------------------
+
+(defcommand toggle-tool-results-command (:permission :user-only)
+  "Toggle visibility of tool-result messages in the chat."
+  (buffer)
+  (setf (buffer-show-tool-results-p buffer)
+        (not (buffer-show-tool-results-p buffer))))
+
+;;; --------------------------------------------------------------------------
 ;;; Face Registry Setup
 ;;; --------------------------------------------------------------------------
 
@@ -201,10 +211,13 @@ Loops: call API, execute tool calls, send results, repeat until end_turn."
 (defvar *meta-pending* nil
   "When non-nil, the next key event is combined with Meta (ESC prefix).")
 
+(defvar *cx-pending* nil
+  "When non-nil, the next key event is combined with C-x prefix.")
+
 (defun normalize-key (event)
   "Extract and normalize a key from a croatoan EVENT.
-Returns a character, a keyword (for special keys), or a list (:alt <key>)
-for Meta combinations."
+Returns a character, a keyword (for special keys), a list (:alt <key>)
+for Meta combinations, or a list (:ctrl-x <key>) for C-x prefix."
   (let* ((raw-key (if (typep event 'croatoan:event)
                       (croatoan:event-key event)
                       event))
@@ -216,10 +229,18 @@ for Meta combinations."
       ((and (characterp key) (char= key #\Esc))
        (setf *meta-pending* t)
        nil)
+      ;; C-x received (ASCII 24): set cx-pending, return nil
+      ((and (characterp key) (char= key (code-char 24)))
+       (setf *cx-pending* t)
+       nil)
       ;; Meta prefix is active: combine with this key
       (*meta-pending*
        (setf *meta-pending* nil)
        (list :alt key))
+      ;; C-x prefix is active: combine with this key
+      (*cx-pending*
+       (setf *cx-pending* nil)
+       (list :ctrl-x key))
       ;; Normal key
       (t key))))
 
