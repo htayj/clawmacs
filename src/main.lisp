@@ -8,20 +8,30 @@
   "The character to insert for self-insert-command. Bound by the event loop.")
 
 ;;; --------------------------------------------------------------------------
-;;; Stub Agent
+;;; Agent
 ;;; --------------------------------------------------------------------------
 
 (declaim (ftype (function (buffer) buffer) send-to-agent-with-context))
 (defun send-to-agent-with-context (buf)
-  "Stub agent: echoes the last user message back as an agent message.
-Assigns the agent's face-set from the buffer's face registry."
-  (let* ((input (buffer-input-message buf))
-         (user-msg (message-prev input))
-         (user-text (if user-msg (message-text user-msg) ""))
-         (agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
-         (agent-msg (buffer-insert-agent-message buf (format nil "Echo: ~A" user-text))))
-    (setf (message-face-set agent-msg)
-          (gethash agent-kw (buffer-face-registry buf))))
+  "Send the conversation to the LLM and insert the response.
+Reads credentials from Claude Code, builds the message history,
+calls the Anthropic API, and inserts the response as an agent message."
+  (let ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword)))
+    (handler-case
+        (progn
+          (setf (buffer-status buf) :thinking)
+          (let* ((messages (build-conversation-messages buf))
+                 (response-text (anthropic-chat messages))
+                 (agent-msg (buffer-insert-agent-message buf response-text)))
+            (setf (message-face-set agent-msg)
+                  (gethash agent-kw (buffer-face-registry buf)))
+            (setf (buffer-status buf) :idle)))
+      (error (e)
+        (setf (buffer-status buf) :error)
+        (let ((err-msg (buffer-insert-agent-message
+                        buf (format nil "[Error: ~A]" e))))
+          (setf (message-face-set err-msg)
+                (gethash agent-kw (buffer-face-registry buf)))))))
   buf)
 
 ;;; --------------------------------------------------------------------------

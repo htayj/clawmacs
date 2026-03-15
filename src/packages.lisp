@@ -115,6 +115,12 @@
    #:keymap-lookup
    #:*default-keymap*
 
+   ;; LLM
+   #:read-claude-credentials
+   #:anthropic-chat
+   #:build-conversation-messages
+   #:*anthropic-model*
+
    ;; Rendering
    #:render-history
    #:render-modeline

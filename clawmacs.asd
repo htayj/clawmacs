@@ -1,7 +1,7 @@
 (defsystem "clawmacs"
   :description "A Lisp-native Emacs-inspired LLM chat interface"
   :version "0.1.0"
-  :depends-on ("croatoan" "alexandria")
+  :depends-on ("croatoan" "alexandria" "drakma" "cl-json" "bordeaux-threads")
   :serial t
   :components ((:module "src"
                 :serial t
@@ -11,6 +11,7 @@
                              (:file "buffer")
                              (:file "commands")
                              (:file "keymap")
+                             (:file "llm")
                              (:file "render")
                              (:file "main")))))
 
