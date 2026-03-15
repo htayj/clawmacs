@@ -117,6 +117,26 @@ support it."
     (croatoan:refresh modeline-window)))
 
 ;;; --------------------------------------------------------------------------
+;;; Line Wrapping Helpers
+;;; --------------------------------------------------------------------------
+
+(defun wrapped-line-count (content display-width)
+  "Return the number of visual rows needed to display CONTENT within DISPLAY-WIDTH.
+An empty string takes 1 row. A string exactly DISPLAY-WIDTH chars takes 1 row."
+  (if (or (zerop (length content)) (<= (length content) display-width))
+      1
+      (ceiling (length content) display-width)))
+
+(defun message-visual-height (msg width)
+  "Return the total visual rows MSG needs at the given terminal WIDTH.
+Accounts for the sender prefix and line wrapping."
+  (let* ((prefix-len (length (message-sender-prefix msg)))
+         (display-width (max 1 (- width prefix-len))))
+    (loop :for line := (message-first-line msg) :then (line-next line)
+          :while line
+          :sum (wrapped-line-count (line-content line) display-width))))
+
+;;; --------------------------------------------------------------------------
 ;;; Message Rendering
 ;;; --------------------------------------------------------------------------
 
@@ -124,11 +144,24 @@ support it."
   "Return the display prefix for MSG's sender."
   (format nil "~A> " (string-downcase (symbol-name (message-sender msg)))))
 
+(defun render-wrapped-row (window row col text width)
+  "Write TEXT at (ROW, COL) in WINDOW, not exceeding WIDTH total columns.
+Fills the rest of the row with spaces for background color."
+  (when (< row (croatoan:height window))
+    (croatoan:move window row 0)
+    (croatoan:add-string window (make-string width :initial-element #\Space))
+    (croatoan:move window row col)
+    (let ((max-chars (- width col)))
+      (when (plusp max-chars)
+        (croatoan:add-string window (subseq text 0 (min (length text) max-chars)))))))
+
 (defun render-message-lines (window msg start-row width &key show-cursor)
-  "Render MSG's lines into WINDOW starting at START-ROW.
-Returns the number of rows consumed."
+  "Render MSG's lines into WINDOW starting at START-ROW with line wrapping.
+Returns the number of visual rows consumed.
+If SHOW-CURSOR is true, positions the cursor at MSG's point."
   (let* ((prefix (message-sender-prefix msg))
          (prefix-len (length prefix))
+         (display-width (max 1 (- width prefix-len)))
          (face-set (message-face-set msg))
          (face (if face-set
                    (or (get-face face-set :default) (make-modeline-face))
@@ -142,25 +175,34 @@ Returns the number of rows consumed."
           :for line-idx :from 0
           :while (and line (< row (croatoan:height window)))
           :do
-             (croatoan:move window row 0)
-             (croatoan:add-string window (make-string width :initial-element #\Space))
-             (croatoan:move window row 0)
-             (when (= line-idx 0)
-               (croatoan:add-string window prefix))
-             ;; NOTE: Lines longer than display-width are truncated, not wrapped.
-             (let* ((indent (if (= line-idx 0) 0 prefix-len))
-                    (content (line-content line))
-                    (display-width (- width prefix-len))
-                    (truncated (if (> (length content) display-width)
-                                   (subseq content 0 display-width)
-                                   content)))
-               (when (> line-idx 0)
-                 (croatoan:move window row indent))
-               (croatoan:add-string window truncated))
-             (when (and show-cursor (eq line (message-point-line msg)))
-               (setf cursor-y row
-                      cursor-x (+ prefix-len (message-point-offset msg))))
-             (incf row))
+             (let* ((content (line-content line))
+                    (content-len (length content))
+                    (num-wraps (wrapped-line-count content display-width)))
+               ;; Render each visual row of this line
+               (dotimes (wrap-idx num-wraps)
+                 (when (< row (croatoan:height window))
+                   (let* ((chunk-start (* wrap-idx display-width))
+                          (chunk-end (min (* (1+ wrap-idx) display-width) content-len))
+                          (chunk (subseq content chunk-start chunk-end))
+                          (col prefix-len))
+                     ;; Show prefix only on the very first visual row of the message
+                     (when (and (= line-idx 0) (= wrap-idx 0))
+                       (render-wrapped-row window row 0
+                                           (concatenate 'string prefix chunk) width)
+                       (setf col nil)) ; already rendered
+                     (when col
+                       (render-wrapped-row window row col chunk width))
+                     ;; Track cursor position
+                     (when (and show-cursor (eq line (message-point-line msg)))
+                       (let ((point-off (message-point-offset msg)))
+                         (when (and (>= point-off chunk-start)
+                                    (or (< point-off chunk-end)
+                                        ;; cursor at end of last chunk
+                                        (and (= wrap-idx (1- num-wraps))
+                                             (= point-off chunk-end))))
+                           (setf cursor-y row
+                                 cursor-x (+ prefix-len (- point-off chunk-start))))))
+                     (incf row))))))
     (when (and show-cursor cursor-y cursor-x)
       (croatoan:move window cursor-y (min cursor-x (1- width))))
     (- row start-row)))
@@ -169,39 +211,57 @@ Returns the number of rows consumed."
 ;;; Buffer Rendering
 ;;; --------------------------------------------------------------------------
 
-(defun calculate-input-height (buf terminal-height)
-  "Calculate the height of the input area in rows.
-Minimum 3, maximum (floor terminal-height 3)."
+(defun calculate-input-height (buf terminal-height width)
+  "Calculate the visual height of the input area in rows.
+Minimum 3, maximum (floor terminal-height 3). Accounts for line wrapping."
   (let* ((input (buffer-input-message buf))
-         (line-count (message-line-count input))
+         (visual-height (message-visual-height input width))
          (min-height 3)
          (max-height (floor terminal-height 3)))
-    (max min-height (min line-count max-height))))
+    (max min-height (min visual-height max-height))))
 
 (defun render-buffer (buf main-window modeline-window)
-  "Render the entire buffer: history + input into MAIN-WINDOW, modeline."
+  "Render the entire buffer: history + input into MAIN-WINDOW, modeline.
+Respects buffer-scroll-offset for history scrolling."
   (let* ((total-height (croatoan:height main-window))
          (width (croatoan:width main-window))
-         (input-height (calculate-input-height buf total-height))
+         (input-height (calculate-input-height buf total-height width))
          (history-height (- total-height input-height))
          (input-start-row history-height))
     (croatoan:clear main-window)
+    ;; Collect history messages (all except the input message)
     (let ((history-messages nil))
       (loop :for msg := (buffer-first-message buf) :then (message-next msg)
             :while (and msg (not (eq msg (buffer-input-message buf))))
             :do (push msg history-messages))
       (setf history-messages (nreverse history-messages))
-      (let ((rows-used 0)
-            (messages-to-render nil))
-        (loop :for msg :in (reverse history-messages)
-              :for msg-lines := (message-line-count msg)
-              :while (<= (+ rows-used msg-lines) history-height)
-              :do (incf rows-used msg-lines)
-                  (push msg messages-to-render))
-        (let ((row (- history-height rows-used)))
-          (dolist (msg messages-to-render)
-            (let ((consumed (render-message-lines main-window msg row width)))
-              (incf row consumed))))))
+      ;; Calculate visual heights for all history messages
+      (let* ((msg-heights (mapcar (lambda (m) (message-visual-height m width))
+                                  history-messages))
+             (total-history-rows (reduce #'+ msg-heights :initial-value 0))
+             ;; Clamp scroll-offset: can't scroll past the beginning of history
+             (max-scroll (max 0 (- total-history-rows history-height)))
+             (scroll-offset (min (buffer-scroll-offset buf) max-scroll))
+             ;; The bottom of the visible history (in virtual row space)
+             (visible-bottom (- total-history-rows scroll-offset))
+             (visible-top (- visible-bottom history-height)))
+        ;; Write clamped value back to buffer
+        (setf (buffer-scroll-offset buf) scroll-offset)
+        ;; Walk through messages, render those whose virtual rows
+        ;; overlap the visible window [visible-top, visible-bottom)
+        (let ((virtual-row 0))
+          (loop :for msg :in history-messages
+                :for msg-h :in msg-heights
+                :for msg-top := virtual-row
+                :for msg-bottom := (+ virtual-row msg-h)
+                :do (setf virtual-row msg-bottom)
+                    ;; Skip messages entirely above or below visible area
+                    (when (and (< msg-top visible-bottom)
+                               (> msg-bottom visible-top))
+                      ;; This message is at least partially visible
+                      (let ((screen-row (- msg-top visible-top)))
+                        (render-message-lines main-window msg screen-row width)))))))
+    ;; Render input message
     (render-message-lines main-window (buffer-input-message buf)
                           input-start-row width
                           :show-cursor t)

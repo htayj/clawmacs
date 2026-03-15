@@ -62,4 +62,13 @@
     (keymap-bind km #\Em 'yank-command)                     ; C-y = ASCII 25
     (keymap-bind km #\Backspace 'delete-char-backward-command)
     (keymap-bind km #\Rubout 'delete-char-backward-command)
+    ;; Scroll: Page Up / Page Down
+    ;; Croatoan delivers special keys as KEY structs; we extract :name
+    ;; in handle-key-event, so bind by the keyword name.
+    (keymap-bind km :page-up 'scroll-up-command)
+    (keymap-bind km :page-down 'scroll-down-command)
+    ;; Emacs-style scroll: M-v (scroll up/back), C-v (scroll down/forward)
+    ;; M-v arrives as ESC then v, normalized to (:alt #\v) by handle-key-event.
+    (keymap-bind km '(:alt #\v) 'scroll-up-command)
+    (keymap-bind km (code-char 22) 'scroll-down-command)  ; C-v = ASCII 22
     (setf *default-keymap* km)))

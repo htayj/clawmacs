@@ -39,7 +39,13 @@
                       :type hash-table)
    (keymap            :initarg :keymap
                       :accessor buffer-keymap
-                      :initform nil))
+                      :initform nil)
+   (scroll-offset    :initarg :scroll-offset
+                      :accessor buffer-scroll-offset
+                      :initform 0
+                      :type integer
+                      :documentation "Number of visual rows scrolled up from the bottom.
+0 means auto-scroll (latest messages visible)."))
   (:documentation
    "A chat buffer containing a doubly-linked list of messages.
 The last message is always the input message (read-only-p = nil).

@@ -22,11 +22,51 @@
 (test calculate-input-height-minimum
   "Input height is at least 3 rows."
   (let ((buf (make-buffer "test")))
-    (is (= 3 (clawmacs::calculate-input-height buf 30)))))
+    ;; width=80 so wrapping doesn't affect a 1-line empty message
+    (is (= 3 (clawmacs::calculate-input-height buf 30 80)))))
 
 (test calculate-input-height-maximum
   "Input height is capped at (floor terminal-height 3)."
   (let ((buf (make-buffer "test")))
     (dotimes (i 20)
       (message-insert-newline (buffer-input-message buf)))
-    (is (= 10 (clawmacs::calculate-input-height buf 30)))))
+    ;; 21 lines, terminal height 30, max = 10
+    (is (= 10 (clawmacs::calculate-input-height buf 30 80)))))
+
+;;; --------------------------------------------------------------------------
+;;; Line Wrapping Tests
+;;; --------------------------------------------------------------------------
+
+(test wrapped-line-count-short
+  "Short lines take 1 row."
+  (is (= 1 (clawmacs::wrapped-line-count "" 40)))
+  (is (= 1 (clawmacs::wrapped-line-count "hello" 40)))
+  (is (= 1 (clawmacs::wrapped-line-count (make-string 40 :initial-element #\x) 40))))
+
+(test wrapped-line-count-wrapping
+  "Long lines wrap to multiple rows."
+  (is (= 2 (clawmacs::wrapped-line-count (make-string 41 :initial-element #\x) 40)))
+  (is (= 2 (clawmacs::wrapped-line-count (make-string 80 :initial-element #\x) 40)))
+  (is (= 3 (clawmacs::wrapped-line-count (make-string 81 :initial-element #\x) 40))))
+
+(test message-visual-height-basic
+  "A single-line message takes 1 visual row."
+  (let ((m (make-message :user)))
+    (is (= 1 (clawmacs::message-visual-height m 80)))))
+
+(test message-visual-height-multiline
+  "Multi-line messages sum up visual rows."
+  (let ((m (make-message :user)))
+    (message-insert-newline m)
+    (message-insert-newline m)
+    ;; 3 empty lines = 3 rows
+    (is (= 3 (clawmacs::message-visual-height m 80)))))
+
+(test message-visual-height-with-wrapping
+  "Long lines in messages wrap, increasing visual height."
+  (let ((m (make-message :user)))
+    ;; prefix "user> " = 6 chars, so display-width = 80 - 6 = 74
+    ;; Insert 150 chars = ceiling(150/74) = 3 visual rows
+    (dotimes (i 150)
+      (message-insert-char m #\x))
+    (is (= 3 (clawmacs::message-visual-height m 80)))))

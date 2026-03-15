@@ -85,6 +85,7 @@
    #:buffer-status
    #:buffer-face-registry
    #:buffer-keymap
+   #:buffer-scroll-offset
    #:buffer-finalize-input
    #:buffer-insert-agent-message
    #:buffer-message-count
@@ -122,4 +123,7 @@
 
    ;; Main
    #:clawmacs-main
-   #:send-to-agent-with-context))
+   #:send-to-agent-with-context
+   #:scroll-up-command
+   #:scroll-down-command
+   #:*scroll-page-size*))

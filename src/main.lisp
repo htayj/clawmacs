@@ -75,6 +75,27 @@ Assigns the agent's face-set from the buffer's face registry."
     (message-insert-char (buffer-input-message buffer) *self-insert-char*)))
 
 ;;; --------------------------------------------------------------------------
+;;; Scroll Commands
+;;; --------------------------------------------------------------------------
+
+(defvar *scroll-page-size* nil
+  "Number of rows to scroll per page. Set by the event loop based on window height.")
+
+(defcommand scroll-up-command (:permission :user-only)
+  "Scroll history up (back) by one page."
+  (buffer)
+  (when *scroll-page-size*
+    (incf (buffer-scroll-offset buffer) *scroll-page-size*)))
+
+(defcommand scroll-down-command (:permission :user-only)
+  "Scroll history down (forward) by one page."
+  (buffer)
+  (when *scroll-page-size*
+    (decf (buffer-scroll-offset buffer) *scroll-page-size*)
+    (when (minusp (buffer-scroll-offset buffer))
+      (setf (buffer-scroll-offset buffer) 0))))
+
+;;; --------------------------------------------------------------------------
 ;;; Face Registry Setup
 ;;; --------------------------------------------------------------------------
 
@@ -93,25 +114,58 @@ Assigns the agent's face-set from the buffer's face registry."
 ;;; Event Loop
 ;;; --------------------------------------------------------------------------
 
+(defvar *meta-pending* nil
+  "When non-nil, the next key event is combined with Meta (ESC prefix).")
+
+(defun normalize-key (event)
+  "Extract and normalize a key from a croatoan EVENT.
+Returns a character, a keyword (for special keys), or a list (:alt <key>)
+for Meta combinations."
+  (let* ((raw-key (if (typep event 'croatoan:event)
+                      (croatoan:event-key event)
+                      event))
+         (key (if (typep raw-key 'croatoan:key)
+                  (croatoan:key-name raw-key)
+                  raw-key)))
+    (cond
+      ;; ESC received: set meta-pending, return nil (consume the ESC)
+      ((and (characterp key) (char= key #\Esc))
+       (setf *meta-pending* t)
+       nil)
+      ;; Meta prefix is active: combine with this key
+      (*meta-pending*
+       (setf *meta-pending* nil)
+       (list :alt key))
+      ;; Normal key
+      (t key))))
+
 (defun handle-key-event (buf event)
   "Dispatch a key event through the buffer's keymap.
 Returns :QUIT if the application should exit, or nil otherwise.
-Croatoan delivers events as EVENT objects; we extract the key via event-key."
-  (let* ((key (if (typep event 'croatoan:event)
-                  (croatoan:event-key event)
-                  event))
-         (*current-caller* :user))
+Handles ESC prefix for Meta keys: ESC followed by a key becomes (:alt <key>)."
+  (let ((key (normalize-key event))
+        (*current-caller* :user))
+    ;; nil key means ESC was consumed, waiting for next key
+    (when (null key)
+      (return-from handle-key-event nil))
     (cond
-      ((and (characterp key) (char= key #\Etx))  ; C-c = ASCII 3
+      ;; C-c to quit
+      ((and (characterp key) (char= key #\Etx))
        :quit)
-      ((and (characterp key) (keymap-lookup (buffer-keymap buf) key))
+      ;; Keymap lookup (works for characters, keywords, and (:alt ...) lists)
+      ((keymap-lookup (buffer-keymap buf) key)
        (let ((command (keymap-lookup (buffer-keymap buf) key)))
          (funcall command buf)
+         ;; Reset scroll to bottom when user types (not when scrolling)
+         (when (and (characterp key)
+                    (not (member command '(scroll-up-command scroll-down-command))))
+           (setf (buffer-scroll-offset buf) 0))
          nil))
-      ((and (characterp key)
-            (graphic-char-p key))
+      ;; Self-insert for printable characters
+      ((and (characterp key) (graphic-char-p key))
        (let ((*self-insert-char* key))
          (self-insert-command buf))
+       (setf (buffer-scroll-offset buf) 0)
        nil)
       (t nil))))
 
@@ -138,6 +192,8 @@ Croatoan delivers events as EVENT objects; we extract the key via event-key."
                               :working-directory (truename "."))))
       (init-face-registry buf)
       (setf (buffer-keymap buf) *default-keymap*)
+      ;; Set scroll page size based on available history area
+      (setf *scroll-page-size* (max 1 (- (1- screen-height) 3)))
       ;; Flush stdscr's pending clear before our first render so that
       ;; event-case's auto-refresh of scr doesn't wipe our windows.
       (croatoan:refresh scr)
