@@ -279,6 +279,12 @@ Handles ESC prefix for Meta keys: ESC followed by a key becomes (:alt <key>)."
   "Entry point for clawmacs. Initializes the TUI and runs the event loop."
   (init-default-keymap)
   (init-tools)
+  ;; Load custom system prompt from file if it exists
+  (when (probe-file *system-prompt-path*)
+    (setf *system-prompt*
+          (string-trim '(#\Space #\Tab #\Newline #\Return)
+                       (uiop:read-file-string *system-prompt-path*))))
+  ;; Boot files are loaded dynamically by build-system-prompt on each API call
   (croatoan:with-screen (scr :input-echoing nil
                              :input-blocking t
                              :cursor-visible t
@@ -298,6 +304,8 @@ Handles ESC prefix for Meta keys: ESC followed by a key becomes (:alt <key>)."
                               :working-directory (truename "."))))
       (init-face-registry buf)
       (setf (buffer-keymap buf) *default-keymap*)
+      ;; Set sandbox root to the working directory
+      (setf *sandbox-root* (truename "."))
       ;; Set scroll page size based on available history area
       (setf *scroll-page-size* (max 1 (- (1- screen-height) 3)))
       ;; Flush stdscr's pending clear before our first render so that

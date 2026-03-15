@@ -61,6 +61,21 @@ Returns a string result or signals an error."
     (funcall (tool-definition-execute-fn def) args)))
 
 ;;; --------------------------------------------------------------------------
+;;; Sandbox Path Validation
+;;; --------------------------------------------------------------------------
+
+(defun validate-sandbox-path (path)
+  "Validate that PATH is within *sandbox-root*. Returns the resolved pathname.
+Signals an error if the path escapes the sandbox."
+  (let* ((sandbox (or *sandbox-root* (truename ".")))
+         (resolved (merge-pathnames (pathname path) sandbox))
+         (resolved-str (namestring (truename resolved)))
+         (sandbox-str (namestring sandbox)))
+    (unless (alexandria:starts-with-subseq sandbox-str resolved-str)
+      (error "Path ~A is outside the sandbox (~A)" path sandbox-str))
+    resolved))
+
+;;; --------------------------------------------------------------------------
 ;;; HTTP Fetch Tool
 ;;; --------------------------------------------------------------------------
 
@@ -70,11 +85,9 @@ Returns a string result or signals an error."
         (max-chars (or (cdr (assoc :max--chars args)) 50000)))
     (unless url
       (error "url parameter is required"))
-    ;; Validate scheme
     (unless (or (alexandria:starts-with-subseq "http://" url)
                 (alexandria:starts-with-subseq "https://" url))
       (error "Only http:// and https:// URLs are supported, got: ~A" url))
-    ;; Fetch
     (multiple-value-bind (body status-code)
         (drakma:http-request url
                              :method :get
@@ -96,18 +109,181 @@ Returns a string result or signals an error."
              (:truncated . ,(> (length body-string) max-chars))
              (:content . ,truncated))))))))
 
+;;; --------------------------------------------------------------------------
+;;; File Read Tool
+;;; --------------------------------------------------------------------------
+
+(defun execute-file-read (args)
+  "Read a file within the sandbox. Returns file contents as text."
+  (let* ((path (cdr (assoc :path args)))
+         (offset (or (cdr (assoc :offset args)) 0))
+         (limit (or (cdr (assoc :limit args)) 10000))
+         (resolved (validate-sandbox-path path)))
+    (unless path
+      (error "path parameter is required"))
+    (unless (probe-file resolved)
+      (error "File not found: ~A" path))
+    (let* ((content (uiop:read-file-string resolved))
+           (lines (loop :for start := 0 :then (1+ pos)
+                        :for pos := (position #\Newline content :start start)
+                        :collect (subseq content start (or pos (length content)))
+                        :while pos))
+           (total-lines (length lines))
+           (selected (subseq lines
+                             (min offset total-lines)
+                             (min (+ offset limit) total-lines)))
+           (result (format nil "~{~A~^~%~}" selected)))
+      (cl-json:encode-json-to-string
+       `((:path . ,path)
+         (:total--lines . ,total-lines)
+         (:offset . ,offset)
+         (:lines--returned . ,(length selected))
+         (:content . ,result))))))
+
+;;; --------------------------------------------------------------------------
+;;; File Write Tool
+;;; --------------------------------------------------------------------------
+
+(defun execute-file-write (args)
+  "Write content to a file within the sandbox."
+  (let* ((path (cdr (assoc :path args)))
+         (content (cdr (assoc :content args)))
+         (resolved (validate-sandbox-path path)))
+    (unless path
+      (error "path parameter is required"))
+    (unless content
+      (error "content parameter is required"))
+    (ensure-directories-exist resolved)
+    (with-open-file (s resolved
+                       :direction :output
+                       :if-exists :supersede
+                       :if-does-not-exist :create)
+      (write-string content s))
+    (cl-json:encode-json-to-string
+     `((:path . ,path)
+       (:bytes--written . ,(length content))
+       (:status . "ok")))))
+
+;;; --------------------------------------------------------------------------
+;;; Shell Exec Tool
+;;; --------------------------------------------------------------------------
+
+(defun execute-shell-exec (args)
+  "Execute a shell command within the sandbox directory."
+  (let* ((command (cdr (assoc :command args)))
+         (timeout (or (cdr (assoc :timeout args)) 30))
+         (sandbox (or *sandbox-root* (truename "."))))
+    (unless command
+      (error "command parameter is required"))
+    (multiple-value-bind (stdout stderr exit-code)
+        (uiop:run-program (list "sh" "-c" command)
+                          :directory sandbox
+                          :output :string
+                          :error-output :string
+                          :ignore-error-status t)
+      (declare (ignore timeout)) ; TODO: implement actual timeout
+      (cl-json:encode-json-to-string
+       `((:command . ,command)
+         (:exit--code . ,exit-code)
+         (:stdout . ,stdout)
+         (:stderr . ,stderr))))))
+
+;;; --------------------------------------------------------------------------
+;;; Lisp Eval Tool
+;;; --------------------------------------------------------------------------
+
+(defun execute-lisp-eval (args)
+  "Evaluate arbitrary Common Lisp code. Returns the result as a string."
+  (let* ((code (cdr (assoc :code args)))
+         (package-name (or (cdr (assoc :package args)) "CLAWMACS")))
+    (unless code
+      (error "code parameter is required"))
+    (let ((*package* (or (find-package (string-upcase package-name))
+                         (find-package :cl-user))))
+      (handler-case
+          (let* ((form (read-from-string code))
+                 (results (multiple-value-list (eval form)))
+                 (output (format nil "~{~S~^~%~}" results)))
+            (cl-json:encode-json-to-string
+             `((:code . ,code)
+               (:result . ,output)
+               (:values . ,(length results)))))
+        (error (e)
+          (cl-json:encode-json-to-string
+           `((:code . ,code)
+             (:error . ,(format nil "~A" e)))))))))
+
+;;; --------------------------------------------------------------------------
+;;; Tool Registration
+;;; --------------------------------------------------------------------------
+
 (defun init-tools ()
   "Register all built-in tools."
+
   (register-tool
    "http_fetch"
-   "Fetch content from an HTTP or HTTPS URL. Returns the response body as text with metadata. Use this to retrieve web pages, API responses, or any HTTP-accessible content."
+   "Fetch content from an HTTP or HTTPS URL. Returns the response body as text with metadata."
    `((:type . "object")
      (:properties
       . ((:url . ((:type . "string")
                   (:description . "The HTTP or HTTPS URL to fetch.")))
          (:max--chars . ((:type . "integer")
-                         (:description . "Maximum characters of response body to return. Default 50000.")
+                         (:description . "Maximum characters to return. Default 50000.")
                          (:minimum . 100)))))
      (:required . #("url")))
    :agent-allowed
-   #'execute-http-fetch))
+   #'execute-http-fetch)
+
+  (register-tool
+   "file_read"
+   "Read a file from the working directory. Returns the file contents with line offset support for reading large files in chunks."
+   `((:type . "object")
+     (:properties
+      . ((:path . ((:type . "string")
+                   (:description . "File path relative to the working directory.")))
+         (:offset . ((:type . "integer")
+                     (:description . "Line number to start reading from (0-indexed). Default 0.")))
+         (:limit . ((:type . "integer")
+                    (:description . "Maximum number of lines to return. Default 10000.")))))
+     (:required . #("path")))
+   :agent-allowed
+   #'execute-file-read)
+
+  (register-tool
+   "file_write"
+   "Write content to a file in the working directory. Creates parent directories if needed. Overwrites existing files."
+   `((:type . "object")
+     (:properties
+      . ((:path . ((:type . "string")
+                   (:description . "File path relative to the working directory.")))
+         (:content . ((:type . "string")
+                      (:description . "The content to write to the file.")))))
+     (:required . #("path" "content")))
+   :agent-with-permission
+   #'execute-file-write)
+
+  (register-tool
+   "shell_exec"
+   "Execute a shell command in the working directory. Returns stdout, stderr, and exit code."
+   `((:type . "object")
+     (:properties
+      . ((:command . ((:type . "string")
+                      (:description . "The shell command to execute.")))
+         (:timeout . ((:type . "integer")
+                      (:description . "Timeout in seconds. Default 30.")))))
+     (:required . #("command")))
+   :agent-with-permission
+   #'execute-shell-exec)
+
+  (register-tool
+   "lisp_eval"
+   "Evaluate arbitrary Common Lisp code in the clawmacs process. Returns the result of evaluation. Use this for computation, data transformation, or interacting with the running system."
+   `((:type . "object")
+     (:properties
+      . ((:code . ((:type . "string")
+                   (:description . "The Common Lisp code to evaluate.")))
+         (:package . ((:type . "string")
+                      (:description . "Package to evaluate in. Default: CLAWMACS.")))))
+     (:required . #("code")))
+   :agent-allowed
+   #'execute-lisp-eval))

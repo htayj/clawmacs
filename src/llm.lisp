@@ -20,6 +20,49 @@
   (merge-pathnames #P".config/clawmacs/token" (user-homedir-pathname))
   "Path to the stored setup-token file.")
 
+(defvar *system-prompt-path*
+  (merge-pathnames #P".config/clawmacs/system-prompt.txt" (user-homedir-pathname))
+  "Path to an optional system prompt file.")
+
+(defvar *system-prompt*
+  "You are a helpful assistant running inside clawmacs, a Lisp-native terminal chat interface. You have access to tools for fetching URLs, reading/writing files, running shell commands, and evaluating Common Lisp code. Be concise and direct in your responses."
+  "The system prompt sent with every API request.
+Built from boot MD files and/or *system-prompt-path* on startup.")
+
+(defvar *boot-file-names*
+  '("AGENTS.md" "SOUL.md" "USER.md" "IDENTITY.md" "TOOLS.md")
+  "Boot markdown files to load, in order. Checked in the working directory
+and ~/.config/clawmacs/. Compatible with OpenClaw workspace conventions.")
+
+(defun load-boot-files ()
+  "Load boot MD files from the working directory and ~/.config/clawmacs/.
+Returns a concatenated string, or nil if no files found.
+Files are loaded in the order specified by *boot-file-names*.
+Project-local files take precedence over global ones."
+  (let ((parts nil)
+        (global-dir (merge-pathnames #P".config/clawmacs/" (user-homedir-pathname)))
+        (local-dir (truename ".")))
+    (dolist (name *boot-file-names*)
+      (let ((local-path (merge-pathnames name local-dir))
+            (global-path (merge-pathnames name global-dir)))
+        ;; Project-local takes precedence
+        (cond
+          ((probe-file local-path)
+           (push (uiop:read-file-string local-path) parts))
+          ((probe-file global-path)
+           (push (uiop:read-file-string global-path) parts)))))
+    (when parts
+      (format nil "~{~A~^~%~%---~%~%~}" (nreverse parts)))))
+
+(defun build-system-prompt ()
+  "Build the full system prompt from boot files + default/custom prompt.
+Boot file content is prepended to the system prompt."
+  (let ((boot-content (load-boot-files))
+        (base-prompt *system-prompt*))
+    (if boot-content
+        (format nil "~A~%~%---~%~%~A" boot-content base-prompt)
+        base-prompt)))
+
 ;;; --------------------------------------------------------------------------
 ;;; JSON Helpers (underscore-preserving round-trip)
 ;;; --------------------------------------------------------------------------
@@ -114,6 +157,9 @@ MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
                          (:messages . ,(coerce messages 'vector)))))
              (when (and tools (plusp (length tools)))
                (push `(:tools . ,tools) body))
+             (let ((system-prompt (build-system-prompt)))
+               (when system-prompt
+                 (push `(:system . ,system-prompt) body)))
              (api-json-encode body))))
     (multiple-value-bind (body status-code)
         (drakma:http-request
