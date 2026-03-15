@@ -54,6 +54,7 @@
    #:message-read-only-p
    #:message-next
    #:message-prev
+   #:message-raw-content
    #:message-text
    #:message-line-count
 
@@ -116,10 +117,20 @@
    #:*default-keymap*
 
    ;; LLM
-   #:read-claude-credentials
-   #:anthropic-chat
+   #:read-token
+   #:anthropic-request
    #:build-conversation-messages
    #:*anthropic-model*
+   #:api-json-encode
+   #:api-json-decode
+
+   ;; Tools
+   #:*tool-table*
+   #:tool-definition
+   #:register-tool
+   #:execute-tool
+   #:tool-definitions-for-api
+   #:init-tools
 
    ;; Rendering
    #:render-history

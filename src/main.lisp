@@ -11,21 +11,92 @@
 ;;; Agent
 ;;; --------------------------------------------------------------------------
 
+(defun insert-agent-message-from-content (buf content-blocks agent-kw)
+  "Insert an agent message from API content blocks.
+Shows text parts and tool call summaries. Stores raw-content for round-trip."
+  (let* ((text-parts (content-text-blocks content-blocks))
+         (tool-uses (content-tool-use-blocks content-blocks))
+         (display (with-output-to-string (s)
+                    (when (plusp (length text-parts))
+                      (write-string text-parts s))
+                    (dolist (tu tool-uses)
+                      (when (plusp (length text-parts))
+                        (write-char #\Newline s))
+                      (write-string (format-tool-call-display tu) s))))
+         (agent-msg (buffer-insert-agent-message buf display)))
+    (setf (message-raw-content agent-msg) content-blocks)
+    (setf (message-face-set agent-msg)
+          (gethash agent-kw (buffer-face-registry buf)))
+    agent-msg))
+
+(defun execute-tool-calls (buf tool-use-blocks agent-kw)
+  "Execute tool calls and insert results into the buffer.
+Returns tool_result content blocks for the API."
+  (let ((result-blocks nil)
+        (*current-caller* agent-kw))
+    (dolist (tu tool-use-blocks)
+      (let* ((tool-id (cdr (assoc :id tu)))
+             (tool-name (cdr (assoc :name tu)))
+             (tool-input (cdr (assoc :input tu)))
+             (result-text
+               (handler-case
+                   (execute-tool tool-name tool-input)
+                 (error (e)
+                   (api-json-encode `((:error . ,(format nil "~A" e)))))))
+             (display (format-tool-result-display tool-name result-text)))
+        ;; Show individual result in chat
+        (let ((display-msg (buffer-insert-agent-message buf display)))
+          (setf (message-sender display-msg) :tool-result)
+          (setf (message-face-set display-msg)
+                (gethash agent-kw (buffer-face-registry buf))))
+        (push `((:type . "tool_result")
+                (:tool--use--id . ,tool-id)
+                (:content . ,result-text))
+              result-blocks)))
+    ;; Insert a single tool-result message with all results for API
+    (let ((tr-msg (make-message :tool-result :read-only-p t))
+          (input (buffer-input-message buf)))
+      (set-message-text tr-msg "")
+      (setf (message-raw-content tr-msg) (nreverse result-blocks))
+      (setf (message-timestamp tr-msg) (get-universal-time))
+      ;; Link into buffer before input
+      (let ((before-input (message-prev input)))
+        (setf (message-prev tr-msg) before-input
+              (message-next tr-msg) input
+              (message-prev input) tr-msg)
+        (if before-input
+            (setf (message-next before-input) tr-msg)
+            (setf (buffer-first-message buf) tr-msg))))
+    result-blocks))
+
 (declaim (ftype (function (buffer) buffer) send-to-agent-with-context))
 (defun send-to-agent-with-context (buf)
-  "Send the conversation to the LLM and insert the response.
-Reads credentials from Claude Code, builds the message history,
-calls the Anthropic API, and inserts the response as an agent message."
-  (let ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword)))
+  "Send the conversation to the LLM with tool support.
+Loops: call API, execute tool calls, send results, repeat until end_turn."
+  (let ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
+        (tools (let ((*current-caller* agent-kw))
+                 (tool-definitions-for-api)))
+        (max-iterations 10))
     (handler-case
         (progn
           (setf (buffer-status buf) :thinking)
-          (let* ((messages (build-conversation-messages buf))
-                 (response-text (anthropic-chat messages))
-                 (agent-msg (buffer-insert-agent-message buf response-text)))
-            (setf (message-face-set agent-msg)
-                  (gethash agent-kw (buffer-face-registry buf)))
-            (setf (buffer-status buf) :idle)))
+          (loop :for iteration :from 0 :below max-iterations
+                :do (let* ((messages (build-conversation-messages buf))
+                           (response (anthropic-request messages :tools tools))
+                           (content (response-content response))
+                           (stop-reason (response-stop-reason response))
+                           (tool-uses (content-tool-use-blocks content)))
+                      ;; Insert assistant message (text + tool call display)
+                      (insert-agent-message-from-content buf content agent-kw)
+                      (if (and (string= "tool_use" (or stop-reason ""))
+                               tool-uses)
+                          ;; Execute tools and loop
+                          (execute-tool-calls buf tool-uses agent-kw)
+                          ;; Done
+                          (progn
+                            (setf (buffer-status buf) :idle)
+                            (return)))))
+          (setf (buffer-status buf) :idle))
       (error (e)
         (setf (buffer-status buf) :error)
         (let ((err-msg (buffer-insert-agent-message
@@ -183,6 +254,7 @@ Handles ESC prefix for Meta keys: ESC followed by a key becomes (:alt <key>)."
                            (agent-name "echo-agent"))
   "Entry point for clawmacs. Initializes the TUI and runs the event loop."
   (init-default-keymap)
+  (init-tools)
   (croatoan:with-screen (scr :input-echoing nil
                              :input-blocking t
                              :cursor-visible t

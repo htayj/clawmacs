@@ -12,6 +12,7 @@
                              (:file "commands")
                              (:file "keymap")
                              (:file "llm")
+                             (:file "tools")
                              (:file "render")
                              (:file "main")))))
 

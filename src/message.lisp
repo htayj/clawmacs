@@ -72,7 +72,15 @@
    (prev          :initarg :prev
                   :accessor message-prev
                   :initform nil
-                  :type (or null message)))
+                  :type (or null message))
+   (raw-content   :initarg :raw-content
+                  :accessor message-raw-content
+                  :initform nil
+                  :type list
+                  :documentation "When non-nil, holds the API-format content blocks
+(list of alists) for this message. Used for tool_use assistant messages
+and tool_result user messages to preserve structured content for API
+round-tripping."))
   (:documentation
    "A message in the chat buffer. Contains a doubly-linked list of lines,
 a point and optional mark for intra-message cursor/selection, sender
