@@ -73,10 +73,10 @@ Returns tool_result content blocks for the API."
 (defun send-to-agent-with-context (buf)
   "Send the conversation to the LLM with tool support.
 Loops: call API, execute tool calls, send results, repeat until end_turn."
-  (let ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
-        (tools (let ((*current-caller* agent-kw))
-                 (tool-definitions-for-api)))
-        (max-iterations 10))
+  (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
+         (tools (let ((*current-caller* agent-kw))
+                  (tool-definitions-for-api)))
+         (max-iterations 10))
     (handler-case
         (progn
           (setf (buffer-status buf) :thinking)
