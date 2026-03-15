@@ -102,6 +102,48 @@ Enforces the invariant that it is not read-only."
         :count t))
 
 ;;; --------------------------------------------------------------------------
+;;; Buffer Ring
+;;; --------------------------------------------------------------------------
+
+(defvar *buffer-ring* nil
+  "List of all buffers. The first element is the current buffer.")
+
+(defvar *buffer-counter* 0
+  "Counter for generating unique buffer names.")
+
+(defun current-buffer ()
+  "Return the current buffer (first in the ring)."
+  (first *buffer-ring*))
+
+(defun add-buffer-to-ring (buf)
+  "Add BUF to the front of the buffer ring."
+  (push buf *buffer-ring*)
+  buf)
+
+(defun switch-to-buffer (buf)
+  "Make BUF the current buffer by moving it to the front of the ring."
+  (setf *buffer-ring* (cons buf (remove buf *buffer-ring*)))
+  buf)
+
+(defun kill-buffer-from-ring (buf)
+  "Remove BUF from the buffer ring. Returns the new current buffer or nil."
+  (setf *buffer-ring* (remove buf *buffer-ring*))
+  (first *buffer-ring*))
+
+(defun find-buffer-by-name (name)
+  "Find a buffer in the ring by name. Returns the buffer or nil."
+  (find name *buffer-ring* :key #'buffer-name :test #'string=))
+
+(defun next-buffer-name ()
+  "Generate the next unique buffer name."
+  (incf *buffer-counter*)
+  (format nil "session-~A" *buffer-counter*))
+
+(defun buffer-names ()
+  "Return a list of all buffer names in the ring."
+  (mapcar #'buffer-name *buffer-ring*))
+
+;;; --------------------------------------------------------------------------
 ;;; Buffer Operations
 ;;; --------------------------------------------------------------------------
 
@@ -154,3 +196,87 @@ TEXT may contain newlines, which are split into separate line objects."
           (setf (message-next before-input) agent-msg)
           (setf (buffer-first-message buf) agent-msg)))
     agent-msg))
+
+;;; --------------------------------------------------------------------------
+;;; Session Persistence
+;;; --------------------------------------------------------------------------
+
+(defvar *sessions-dir*
+  (merge-pathnames #P".config/clawmacs/sessions/" (user-homedir-pathname))
+  "Directory for saved session files.")
+
+(defun session-path (session-name)
+  "Return the file path for a session by name."
+  (merge-pathnames (format nil "~A.json" session-name) *sessions-dir*))
+
+(defun serialize-message (msg)
+  "Serialize a message to an alist for JSON encoding."
+  `((:sender . ,(symbol-name (message-sender msg)))
+    (:text . ,(message-text msg))
+    (:timestamp . ,(message-timestamp msg))
+    (:read-only-p . ,(message-read-only-p msg))
+    ,@(when (message-raw-content msg)
+        `((:raw-content . ,(coerce (message-raw-content msg) 'vector))))))
+
+(defun serialize-buffer (buf)
+  "Serialize a buffer's conversation to JSON-ready alist."
+  (let ((messages nil))
+    (loop :for msg := (buffer-first-message buf) :then (message-next msg)
+          :while (and msg (not (eq msg (buffer-input-message buf))))
+          :when (message-read-only-p msg)
+          :do (push (serialize-message msg) messages))
+    `((:name . ,(buffer-name buf))
+      (:agent-name . ,(buffer-agent-name buf))
+      (:messages . ,(coerce (nreverse messages) 'vector)))))
+
+(defun save-session (buf)
+  "Save the buffer's conversation to a session file."
+  (let ((path (session-path (buffer-name buf))))
+    (ensure-directories-exist path)
+    (with-open-file (s path :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string (cl-json:encode-json-to-string (serialize-buffer buf)) s))
+    path))
+
+(defun load-session (session-name &key (agent-name "claude"))
+  "Load a saved session into a new buffer. Returns the buffer or nil."
+  (let ((path (session-path session-name)))
+    (unless (probe-file path)
+      (return-from load-session nil))
+    (let* ((json-str (uiop:read-file-string path))
+           (data (cl-json:decode-json-from-string json-str))
+           (name (or (cdr (assoc :name data)) session-name))
+           (agent (or (cdr (assoc :agent-name data)) agent-name))
+           (messages (cdr (assoc :messages data)))
+           (buf (make-buffer name :agent-name agent
+                                  :working-directory (truename "."))))
+      ;; Replay messages into the buffer
+      (loop :for msg-data :across messages
+            :for sender-str := (cdr (assoc :sender msg-data))
+            :for text := (cdr (assoc :text msg-data))
+            :for raw-content := (cdr (assoc :raw-content msg-data))
+            :for sender-kw := (intern sender-str :keyword)
+            :do (let ((msg (make-message sender-kw :read-only-p t)))
+                  (set-message-text msg (or text ""))
+                  (setf (message-timestamp msg)
+                        (cdr (assoc :timestamp msg-data)))
+                  (when raw-content
+                    (setf (message-raw-content msg)
+                          (coerce raw-content 'list)))
+                  ;; Insert before input
+                  (let ((input (buffer-input-message buf))
+                        (before (message-prev (buffer-input-message buf))))
+                    (setf (message-prev msg) before
+                          (message-next msg) input
+                          (message-prev input) msg)
+                    (if before
+                        (setf (message-next before) msg)
+                        (setf (buffer-first-message buf) msg)))))
+      buf)))
+
+(defun list-saved-sessions ()
+  "Return a list of saved session names."
+  (when (probe-file *sessions-dir*)
+    (let ((files (directory (merge-pathnames "*.json" *sessions-dir*))))
+      (mapcar (lambda (f) (pathname-name f)) files))))

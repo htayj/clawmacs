@@ -73,4 +73,8 @@
     (keymap-bind km (code-char 22) 'scroll-down-command)  ; C-v = ASCII 22
     ;; C-x prefix commands
     (keymap-bind km '(:ctrl-x #\t) 'toggle-tool-results-command)
+    (keymap-bind km '(:ctrl-x #\n) 'new-buffer-command)       ; C-x n = new buffer
+    (keymap-bind km '(:ctrl-x #\b) 'next-buffer-command)      ; C-x b = next buffer
+    (keymap-bind km '(:ctrl-x #\k) 'kill-buffer-command)      ; C-x k = kill buffer
+    (keymap-bind km (list :ctrl-x (code-char 19)) 'save-session-command) ; C-x C-s
     (setf *default-keymap* km)))

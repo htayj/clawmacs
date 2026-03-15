@@ -88,9 +88,23 @@
    #:buffer-keymap
    #:buffer-scroll-offset
    #:buffer-show-tool-results-p
+   #:buffer-pending-stream
+   #:buffer-streaming-message
+   #:*buffer-ring*
+   #:current-buffer
+   #:add-buffer-to-ring
+   #:switch-to-buffer
+   #:kill-buffer-from-ring
+   #:find-buffer-by-name
+   #:next-buffer-name
+   #:buffer-names
    #:buffer-finalize-input
    #:buffer-insert-agent-message
    #:buffer-message-count
+   #:save-session
+   #:load-session
+   #:list-saved-sessions
+   #:*sessions-dir*
 
    ;; Commands
    #:*current-caller*

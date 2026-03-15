@@ -239,6 +239,52 @@ the event loop polls for updates via update-streaming-response."
       (setf (buffer-scroll-offset buffer) 0))))
 
 ;;; --------------------------------------------------------------------------
+;;; Buffer Management Commands
+;;; --------------------------------------------------------------------------
+
+(defcommand new-buffer-command (:permission :user-only)
+  "Create a new chat buffer and switch to it."
+  (buffer)
+  (declare (ignore buffer))
+  (let* ((name (next-buffer-name))
+         (new-buf (make-buffer name
+                               :agent-name "claude"
+                               :working-directory (truename "."))))
+    (init-face-registry new-buf)
+    (setf (buffer-keymap new-buf) *default-keymap*)
+    (add-buffer-to-ring new-buf)
+    (switch-to-buffer new-buf)))
+
+(defcommand next-buffer-command (:permission :user-only)
+  "Switch to the next buffer in the ring."
+  (buffer)
+  (declare (ignore buffer))
+  (when (cdr *buffer-ring*)
+    ;; Rotate: move first to end
+    (let ((current (pop *buffer-ring*)))
+      (setf *buffer-ring* (append *buffer-ring* (list current))))))
+
+(defcommand kill-buffer-command (:permission :user-only)
+  "Kill the current buffer. Switches to the next buffer in the ring."
+  (buffer)
+  (declare (ignore buffer))
+  (when (cdr *buffer-ring*)  ; Don't kill the last buffer
+    (kill-buffer-from-ring (current-buffer))))
+
+;;; --------------------------------------------------------------------------
+;;; Session Commands
+;;; --------------------------------------------------------------------------
+
+(defcommand save-session-command (:permission :user-only)
+  "Save the current buffer's conversation to a session file."
+  (buffer)
+  (let ((path (save-session buffer)))
+    ;; Insert a system message confirming the save
+    (let ((sys-msg (buffer-insert-agent-message
+                    buffer (format nil "[Session saved to ~A]" path))))
+      (setf (message-sender sys-msg) :system))))
+
+;;; --------------------------------------------------------------------------
 ;;; Display Toggle Commands
 ;;; --------------------------------------------------------------------------
 
@@ -363,6 +409,9 @@ Handles ESC prefix for Meta keys: ESC followed by a key becomes (:alt <key>)."
                               :working-directory (truename "."))))
       (init-face-registry buf)
       (setf (buffer-keymap buf) *default-keymap*)
+      ;; Initialize buffer ring
+      (setf *buffer-ring* nil *buffer-counter* 0)
+      (add-buffer-to-ring buf)
       ;; Set sandbox root to the working directory
       (setf *sandbox-root* (truename "."))
       ;; Set scroll page size based on available history area
@@ -370,23 +419,21 @@ Handles ESC prefix for Meta keys: ESC followed by a key becomes (:alt <key>)."
       ;; Flush stdscr's pending clear before our first render
       (croatoan:refresh scr)
       ;; Initial render
-      (render-buffer buf main-win modeline-win)
-      ;; Event loop: uses a short timeout when streaming is active
-      ;; so we can poll for updates; otherwise blocks waiting for input.
+      (render-buffer (current-buffer) main-win modeline-win)
+      ;; Event loop: current-buffer may change between iterations.
+      ;; Short timeout when streaming is active for polling updates.
       (loop :named main-loop
-            :do (let ((streaming (buffer-pending-stream buf)))
-                  ;; Set input timeout: 100ms when streaming, blocking otherwise
+            :for buf := (current-buffer)
+            :for streaming := (buffer-pending-stream buf)
+            :do (progn
                   (setf (croatoan:input-blocking scr)
                         (if streaming 100 t))
-                  ;; Get event (may be nil on timeout)
                   (let ((event (croatoan:get-wide-event scr)))
                     (cond
-                      ;; Timeout (nil event) -- just update streaming if active
                       ((null event)
                        (when streaming
                          (update-streaming-response buf)
                          (render-buffer buf main-win modeline-win)))
-                      ;; Resize event
                       ((and (typep event 'croatoan:event)
                             (typep (croatoan:event-key event) 'croatoan:key)
                             (eq :resize (croatoan:key-name
@@ -396,13 +443,12 @@ Handles ESC prefix for Meta keys: ESC followed by a key becomes (:alt <key>)."
                          (croatoan:resize main-win (1- new-height) new-width)
                          (croatoan:resize modeline-win 1 new-width)
                          (croatoan:move-window modeline-win (1- new-height) 0)
-                         (render-buffer buf main-win modeline-win)))
-                      ;; Regular key event
+                         (render-buffer (current-buffer) main-win modeline-win)))
                       (t
                        (let ((result (handle-key-event buf event)))
                          (when (eq result :quit)
                            (return-from main-loop)))
-                       ;; Update streaming if active
-                       (when streaming
-                         (update-streaming-response buf))
-                       (render-buffer buf main-win modeline-win)))))))))
+                       (let ((cur (current-buffer)))
+                         (when (buffer-pending-stream cur)
+                           (update-streaming-response cur))
+                         (render-buffer cur main-win modeline-win))))))))))
