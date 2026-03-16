@@ -213,12 +213,19 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
 
 (defun calculate-input-height (buf terminal-height width)
   "Calculate the visual height of the input area in rows.
-Minimum 3, maximum (floor terminal-height 3). Accounts for line wrapping."
+Minimum 3, maximum (floor terminal-height 3). Accounts for line wrapping.
+During approval prompts, allows up to 2/3 of terminal height."
   (let* ((input (buffer-input-message buf))
          (visual-height (message-visual-height input width))
          (min-height 3)
-         (max-height (floor terminal-height 3)))
-    (max min-height (min visual-height max-height))))
+         (approval-active (buffer-approval-pending buf))
+         (max-height (if approval-active
+                         (floor (* terminal-height 2) 3)
+                         (floor terminal-height 3))))
+    (if approval-active
+        ;; During approval, give enough room for the full prompt
+        (max min-height (min (max 12 visual-height) max-height))
+        (max min-height (min visual-height max-height)))))
 
 (defun render-buffer (buf main-window modeline-window)
   "Render the entire buffer: history + input into MAIN-WINDOW, modeline.
