@@ -22,10 +22,11 @@
   :serial t
   :components ((:module "tests"
                 :serial t
-                :components ((:file "packages")
-                             (:file "faces-test")
-                             (:file "message-test")
-                             (:file "buffer-test")
-                             (:file "commands-test")
-                             (:file "keymap-test")
-                             (:file "render-test")))))
+                 :components ((:file "packages")
+                              (:file "faces-test")
+                              (:file "message-test")
+                              (:file "buffer-test")
+                              (:file "commands-test")
+                              (:file "llm-test")
+                              (:file "keymap-test")
+                              (:file "render-test")))))

@@ -44,3 +44,103 @@
       (is (message-read-only-p agent-msg))
       (is (eq :echo (message-sender agent-msg))))
     (is (not (message-read-only-p (buffer-input-message buf))))))
+
+(test buffer-provider-and-model-overrides
+  "Buffer overrides can be set and read back."
+  (let ((buf (make-buffer "test")))
+    (is (null (buffer-provider-override buf)))
+    (is (null (buffer-model-override buf)))
+    (setf (buffer-provider-override buf) :openai-codex
+          (buffer-model-override buf) "gpt-5.4")
+    (is (eq :openai-codex (buffer-provider-override buf)))
+    (is (string= "gpt-5.4" (buffer-model-override buf)))))
+
+(test buffer-override-helpers-only-mutate-target-buffer
+  "Per-buffer override helpers update only the provided buffer."
+  (let ((first-buffer (make-buffer "first"))
+        (second-buffer (make-buffer "second")))
+    (set-buffer-provider-override first-buffer :openai-codex)
+    (set-buffer-model-override first-buffer "gpt-5.3-codex")
+    (is (eq :openai-codex (buffer-provider-override first-buffer)))
+    (is (string= "gpt-5.3-codex" (buffer-model-override first-buffer)))
+    (is (null (buffer-provider-override second-buffer)))
+    (is (null (buffer-model-override second-buffer)))))
+
+(test serialize-buffer-includes-overrides
+  "Serialized sessions include provider/model overrides."
+  (let ((buf (make-buffer "test" :agent-name "echo")))
+    (setf (buffer-provider-override buf) :anthropic
+          (buffer-model-override buf) "claude-3.7")
+    (let ((data (clawmacs::serialize-buffer buf)))
+      (is (eq :anthropic (cdr (assoc :provider-override data))))
+      (is (string= "claude-3.7" (cdr (assoc :model-override data)))))))
+
+(test load-session-missing-overrides-default-to-nil
+  "Sessions without override fields load nil overrides."
+  (let* ((session-name "missing-overrides")
+         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
+         (path (clawmacs::session-path session-name)))
+    (ensure-directories-exist path)
+    (with-open-file (stream path :direction :output
+                                 :if-exists :supersede
+                                 :if-does-not-exist :create)
+      (write-string
+       (cl-json:encode-json-to-string
+        '((:name . "missing-overrides")
+          (:agent-name . "echo")
+          (:messages . #((( :sender . "USER")
+                          (:text . "hello")
+                          (:timestamp . 0)
+                          (:read-only-p . t))))))
+       stream))
+    (let ((cl-json:*json-array-type* 'list))
+      (let ((buf (load-session session-name)))
+       (is (not (null buf)))
+       (is (null (buffer-provider-override buf)))
+        (is (null (buffer-model-override buf)))))))
+
+(test save-and-load-session-round-trips-overrides
+  "Saved sessions preserve override values and types when reloaded."
+  (let* ((session-name "override-round-trip")
+         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
+         (buf (make-buffer session-name :agent-name "echo")))
+    (setf (buffer-provider-override buf) :anthropic
+          (buffer-model-override buf) "claude-3.7")
+    (message-insert-char (buffer-input-message buf) #\h)
+    (message-insert-char (buffer-input-message buf) #\i)
+    (buffer-finalize-input buf)
+    (save-session buf)
+    (let* ((cl-json:*json-array-type* 'list)
+           (loaded (load-session session-name)))
+      (is (eq :anthropic (buffer-provider-override loaded)))
+      (is (typep (buffer-provider-override loaded) 'keyword))
+      (is (string= "claude-3.7" (buffer-model-override loaded)))
+      (is (typep (buffer-model-override loaded) 'string)))))
+
+(test load-session-normalizes-legacy-raw-content
+  "Legacy saved session raw-content is normalized to canonical blocks on load."
+  (let* ((session-name "legacy-raw-content")
+         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
+         (path (clawmacs::session-path session-name)))
+    (ensure-directories-exist path)
+    (with-open-file (stream path :direction :output
+                                 :if-exists :supersede
+                                 :if-does-not-exist :create)
+      (write-string
+       "{\"name\":\"legacy-raw-content\",\"agent-name\":\"echo\",\"messages\":[{\"sender\":\"ECHO\",\"text\":\"Searching\",\"timestamp\":1,\"read-only-p\":true,\"raw-content\":[{\"type\":\"text\",\"text\":\"Searching\"},{\"type\":\"tool_use\",\"id\":\"toolu_123\",\"name\":\"read_file\",\"input\":{\"path\":\"/tmp/example.txt\"}}]},{\"sender\":\"TOOL-RESULT\",\"text\":\"done\",\"timestamp\":2,\"read-only-p\":true,\"raw-content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_123\",\"content\":\"done\"}]}]}"
+       stream))
+    (let ((buf (load-session session-name)))
+      (is (not (null buf)))
+      (let* ((assistant-msg (buffer-first-message buf))
+             (tool-result-msg (message-next assistant-msg)))
+        (is (equal '(((:type . "text")
+                      (:text . "Searching"))
+                     ((:type . "tool_use")
+                      (:id . "toolu_123")
+                      (:name . "read_file")
+                      (:input . ((:path . "/tmp/example.txt")))))
+                   (message-raw-content assistant-msg)))
+        (is (equal '(((:type . "tool_result")
+                      (:tool-use-id . "toolu_123")
+                      (:content . "done")))
+                   (message-raw-content tool-result-msg)))))))

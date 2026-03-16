@@ -72,6 +72,7 @@
     (keymap-bind km #\Em 'yank-command)                     ; C-y = ASCII 25
     (keymap-bind km '(:alt #\y) 'yank-pop-command)          ; M-y
     ;; Delete
+    (keymap-bind km (code-char 4) 'delete-char-forward-command) ; C-d = ASCII 4
     (keymap-bind km #\Backspace 'delete-char-backward-command)
     (keymap-bind km #\Rubout 'delete-char-backward-command)
     ;; Scroll: Page Up / Page Down

@@ -31,12 +31,20 @@
                       :initform 200000
                       :type integer)
    (status            :initarg :status
-                      :accessor buffer-status
-                      :initform :idle
-                      :type keyword)
-   (face-registry     :initarg :face-registry
-                      :accessor buffer-face-registry
-                      :type hash-table)
+                       :accessor buffer-status
+                       :initform :idle
+                       :type keyword)
+   (provider-override :initarg :provider-override
+                      :accessor buffer-provider-override
+                      :initform nil
+                      :type (or null keyword))
+   (model-override    :initarg :model-override
+                      :accessor buffer-model-override
+                      :initform nil
+                      :type (or null string))
+    (face-registry     :initarg :face-registry
+                       :accessor buffer-face-registry
+                       :type hash-table)
    (keymap            :initarg :keymap
                       :accessor buffer-keymap
                       :initform nil)
@@ -123,6 +131,37 @@ Enforces the invariant that it is not read-only."
   (loop :for current := (buffer-first-message buf) :then (message-next current)
         :while current
         :count t))
+
+(declaim (ftype (function (buffer keyword) buffer) set-buffer-provider-override))
+(defun set-buffer-provider-override (buf provider)
+  "Set BUF's provider override to PROVIDER and return BUF."
+  (setf (buffer-provider-override buf) provider)
+  buf)
+
+(declaim (ftype (function (buffer string) buffer) set-buffer-model-override))
+(defun set-buffer-model-override (buf model)
+  "Set BUF's model override to MODEL and return BUF."
+  (setf (buffer-model-override buf) model)
+  buf)
+
+(declaim (ftype (function (buffer) buffer) clear-buffer-provider-override))
+(defun clear-buffer-provider-override (buf)
+  "Clear BUF's provider override and return BUF."
+  (setf (buffer-provider-override buf) nil)
+  buf)
+
+(declaim (ftype (function (buffer) buffer) clear-buffer-model-override))
+(defun clear-buffer-model-override (buf)
+  "Clear BUF's model override and return BUF."
+  (setf (buffer-model-override buf) nil)
+  buf)
+
+(declaim (ftype (function (buffer) buffer) clear-buffer-provider/model-overrides))
+(defun clear-buffer-provider/model-overrides (buf)
+  "Clear BUF's provider and model overrides and return BUF."
+  (clear-buffer-provider-override buf)
+  (clear-buffer-model-override buf)
+  buf)
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Ring
@@ -250,6 +289,8 @@ TEXT may contain newlines, which are split into separate line objects."
           :do (push (serialize-message msg) messages))
     `((:name . ,(buffer-name buf))
       (:agent-name . ,(buffer-agent-name buf))
+      (:provider-override . ,(buffer-provider-override buf))
+      (:model-override . ,(buffer-model-override buf))
       (:messages . ,(coerce (nreverse messages) 'vector)))))
 
 (defun save-session (buf)
@@ -267,36 +308,44 @@ TEXT may contain newlines, which are split into separate line objects."
   (let ((path (session-path session-name)))
     (unless (probe-file path)
       (return-from load-session nil))
-    (let* ((json-str (uiop:read-file-string path))
-           (data (cl-json:decode-json-from-string json-str))
-           (name (or (cdr (assoc :name data)) session-name))
-           (agent (or (cdr (assoc :agent-name data)) agent-name))
-           (messages (cdr (assoc :messages data)))
-           (buf (make-buffer name :agent-name agent
-                                  :working-directory (truename "."))))
-      ;; Replay messages into the buffer
-      (loop :for msg-data :across messages
-            :for sender-str := (cdr (assoc :sender msg-data))
-            :for text := (cdr (assoc :text msg-data))
-            :for raw-content := (cdr (assoc :raw-content msg-data))
-            :for sender-kw := (intern sender-str :keyword)
-            :do (let ((msg (make-message sender-kw :read-only-p t)))
-                  (set-message-text msg (or text ""))
-                  (setf (message-timestamp msg)
-                        (cdr (assoc :timestamp msg-data)))
-                  (when raw-content
-                    (setf (message-raw-content msg)
-                          (coerce raw-content 'list)))
-                  ;; Insert before input
-                  (let ((input (buffer-input-message buf))
-                        (before (message-prev (buffer-input-message buf))))
-                    (setf (message-prev msg) before
-                          (message-next msg) input
-                          (message-prev input) msg)
-                    (if before
-                        (setf (message-next before) msg)
-                        (setf (buffer-first-message buf) msg)))))
-      buf)))
+    (let ((cl-json:*json-array-type* 'vector))
+      (let* ((json-str (uiop:read-file-string path))
+             (data (cl-json:decode-json-from-string json-str))
+             (name (or (cdr (assoc :name data)) session-name))
+             (agent (or (cdr (assoc :agent-name data)) agent-name))
+             (provider-override (cdr (assoc :provider-override data)))
+             (model-override (cdr (assoc :model-override data)))
+             (messages (cdr (assoc :messages data)))
+             (buf (make-buffer name :agent-name agent
+                                     :working-directory (truename "."))))
+        (setf (buffer-provider-override buf)
+              (and provider-override
+                   (intern (string-upcase provider-override) :keyword))
+              (buffer-model-override buf)
+              model-override)
+        ;; Replay messages into the buffer
+        (loop :for msg-data :across messages
+              :for sender-str := (cdr (assoc :sender msg-data))
+              :for text := (cdr (assoc :text msg-data))
+              :for raw-content := (cdr (assoc :raw-content msg-data))
+              :for sender-kw := (intern sender-str :keyword)
+              :do (let ((msg (make-message sender-kw :read-only-p t)))
+                    (set-message-text msg (or text ""))
+                     (setf (message-timestamp msg)
+                           (cdr (assoc :timestamp msg-data)))
+                     (when raw-content
+                       (setf (message-raw-content msg)
+                            (normalize-legacy-raw-content raw-content)))
+                     ;; Insert before input
+                     (let ((input (buffer-input-message buf))
+                           (before (message-prev (buffer-input-message buf))))
+                      (setf (message-prev msg) before
+                            (message-next msg) input
+                            (message-prev input) msg)
+                      (if before
+                          (setf (message-next before) msg)
+                          (setf (buffer-first-message buf) msg)))))
+        buf))))
 
 (defun list-saved-sessions ()
   "Return a list of saved session names."

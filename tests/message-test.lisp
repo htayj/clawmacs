@@ -102,6 +102,33 @@
     (is (string= "ab" (line-content (message-first-line m))))
     (is (= 1 (message-point-offset m)))))
 
+(test message-delete-char-forward
+  "Deleting forward removes the next character and preserves point."
+  (let ((m (make-message :user)))
+    (message-insert-char m #\a)
+    (message-insert-char m #\b)
+    (message-insert-char m #\c)
+    (setf (message-point-offset m) 1)
+    (is (fboundp 'message-delete-char-forward))
+    (when (fboundp 'message-delete-char-forward)
+      (message-delete-char-forward m)
+      (is (string= "ac" (line-content (message-first-line m))))
+      (is (= 1 (message-point-offset m))))))
+
+(test message-delete-char-forward-joins-lines
+  "Deleting forward at end of line removes the line break and preserves point."
+  (let ((m (make-message :user)))
+    (message-insert-char m #\a)
+    (message-insert-newline m)
+    (message-insert-char m #\b)
+    (setf (message-point-line m) (message-first-line m)
+          (message-point-offset m) 1)
+    (message-delete-char-forward m)
+    (is (= 1 (message-line-count m)))
+    (is (string= "ab" (line-content (message-first-line m))))
+    (is (eq (message-first-line m) (message-last-line m)))
+    (is (= 1 (message-point-offset m)))))
+
 (test message-move-beginning-of-line
   "C-a moves point to beginning of current line."
   (let ((m (make-message :user)))

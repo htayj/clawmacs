@@ -59,12 +59,13 @@
    #:message-line-count
 
    ;; Message editing
-   #:message-insert-char
-   #:message-insert-newline
-   #:message-delete-char-backward
-   #:message-forward-char
-   #:message-backward-char
-   #:message-forward-word
+    #:message-insert-char
+    #:message-insert-newline
+    #:message-delete-char-backward
+    #:message-delete-char-forward
+    #:message-forward-char
+    #:message-backward-char
+    #:message-forward-word
    #:message-backward-word
    #:message-move-beginning-of-line
    #:message-move-end-of-line
@@ -89,10 +90,17 @@
    #:buffer-input-message
    #:buffer-agent-name
    #:buffer-working-directory
-   #:buffer-token-count
-   #:buffer-context-limit
-   #:buffer-status
-   #:buffer-face-registry
+    #:buffer-token-count
+    #:buffer-context-limit
+    #:buffer-status
+    #:buffer-provider-override
+    #:buffer-model-override
+    #:set-buffer-provider-override
+    #:set-buffer-model-override
+    #:clear-buffer-provider-override
+    #:clear-buffer-model-override
+    #:clear-buffer-provider/model-overrides
+     #:buffer-face-registry
    #:buffer-keymap
    #:buffer-scroll-offset
    #:buffer-show-tool-results-p
@@ -139,11 +147,20 @@
    #:keymap-lookup
    #:*default-keymap*
 
-   ;; LLM
-   #:read-token
-   #:anthropic-request
-   #:build-conversation-messages
-   #:*anthropic-model*
+    ;; LLM
+    #:provider-token-path
+    #:read-provider-token
+     #:save-provider-token
+     #:read-token
+     #:load-agent-defaults
+     #:save-agent-defaults
+     #:agent-default
+     #:set-agent-default
+     #:ensure-agent-defaults-loaded
+     #:resolve-buffer-provider-and-model
+     #:anthropic-request
+     #:build-conversation-messages
+    #:*anthropic-model*
    #:api-json-encode
    #:api-json-decode
 
@@ -175,6 +192,6 @@
    ;; Main
    #:clawmacs-main
    #:send-to-agent-with-context
-   #:scroll-up-command
-   #:scroll-down-command
-   #:*scroll-page-size*))
+    #:scroll-up-command
+    #:scroll-down-command
+    #:*scroll-page-size*))

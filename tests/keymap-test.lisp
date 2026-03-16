@@ -31,3 +31,9 @@
     (keymap-bind child #\a 'child-version)
     (is (eq 'child-version (keymap-lookup child #\a)))
     (is (eq 'parent-version (keymap-lookup parent #\a)))))
+
+(test default-keymap-binds-ctrl-d-to-forward-delete
+  "The default keymap binds Ctrl+d to forward delete."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::delete-char-forward-command
+          (keymap-lookup *default-keymap* (code-char 4)))))

@@ -15,16 +15,17 @@
   "Insert an agent message from API content blocks.
 Shows text parts and tool call summaries. Stores raw-content for round-trip."
   (let* ((text-parts (content-text-blocks content-blocks))
-         (tool-uses (content-tool-use-blocks content-blocks))
-         (display (with-output-to-string (s)
-                    (when (plusp (length text-parts))
-                      (write-string text-parts s))
-                    (dolist (tu tool-uses)
-                      (when (plusp (length text-parts))
-                        (write-char #\Newline s))
-                      (write-string (format-tool-call-display tu) s))))
-         (agent-msg (buffer-insert-agent-message buf display)))
-    (setf (message-raw-content agent-msg) content-blocks)
+          (tool-uses (content-tool-use-blocks content-blocks))
+          (canonical-content (canonicalize-message-content "assistant" content-blocks))
+          (display (with-output-to-string (s)
+                     (when (plusp (length text-parts))
+                       (write-string text-parts s))
+                     (dolist (tu tool-uses)
+                       (when (plusp (length text-parts))
+                         (write-char #\Newline s))
+                       (write-string (format-tool-call-display tu) s))))
+          (agent-msg (buffer-insert-agent-message buf display)))
+    (setf (message-raw-content agent-msg) canonical-content)
     (setf (message-face-set agent-msg)
           (gethash agent-kw (buffer-face-registry buf)))
     agent-msg))
@@ -138,16 +139,17 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
   (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
          (results (nreverse (buffer-tool-call-results buf)))
          (display-parts (mapcar (lambda (r) (cdr (assoc :display r))) results))
-         (result-blocks (mapcar (lambda (r)
-                                  `((:type . "tool_result")
-                                    (:tool--use--id . ,(cdr (assoc :tool-id r)))
-                                    (:content . ,(cdr (assoc :result r)))))
-                                results))
-         (display-text (format nil "~{~A~^~%~}" display-parts))
-         (tr-msg (make-message :tool-result :read-only-p t))
-         (input (buffer-input-message buf)))
+          (result-blocks (mapcar (lambda (r)
+                                   `((:type . "tool_result")
+                                     (:tool-use-id . ,(cdr (assoc :tool-id r)))
+                                     (:content . ,(cdr (assoc :result r)))))
+                                 results))
+          (canonical-result-blocks (canonicalize-message-content "user" result-blocks))
+          (display-text (format nil "~{~A~^~%~}" display-parts))
+          (tr-msg (make-message :tool-result :read-only-p t))
+          (input (buffer-input-message buf)))
     (set-message-text tr-msg display-text)
-    (setf (message-raw-content tr-msg) result-blocks)
+    (setf (message-raw-content tr-msg) canonical-result-blocks)
     (setf (message-timestamp tr-msg) (get-universal-time))
     (setf (message-face-set tr-msg)
           (gethash agent-kw (buffer-face-registry buf)))
@@ -175,24 +177,28 @@ stores the stream state on the buffer. Non-blocking -- the event loop
 polls for updates via update-streaming-response."
   (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
          (tools (let ((*current-caller* agent-kw))
-                  (tool-definitions-for-api)))
+                   (tool-definitions-for-api)))
          (messages (build-conversation-messages buf)))
     (handler-case
-        (let* ((state (anthropic-request-streaming
+        (multiple-value-bind (provider model)
+            (resolve-buffer-provider-and-model buf)
+          (let* ((state (provider-request-streaming
+                       provider
                        messages
                        (lambda (s) (declare (ignore s)))
+                       :model model
                        :tools tools))
-               ;; Create placeholder message that will be updated as tokens arrive
-               (agent-msg (buffer-insert-agent-message buf "")))
+                 ;; Create placeholder message that will be updated as tokens arrive
+                 (agent-msg (buffer-insert-agent-message buf "")))
           (setf (message-face-set agent-msg)
                 (gethash agent-kw (buffer-face-registry buf)))
           (setf (buffer-pending-stream buf) state
                 (buffer-streaming-message buf) agent-msg
-                (buffer-status buf) :thinking))
+                (buffer-status buf) :thinking)))
       (error (e)
         (setf (buffer-status buf) :error)
         (let ((err-msg (buffer-insert-agent-message
-                        buf (format nil "[Error: ~A]" e))))
+                         buf (format nil "[Error: ~A]" e))))
           (setf (message-face-set err-msg)
                 (gethash agent-kw (buffer-face-registry buf))))))))
 
@@ -234,25 +240,26 @@ Returns T if still streaming, NIL if done."
         ;; Streaming complete
         (done
          (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
-                (content-blocks
-                  (bt:with-lock-held ((stream-state-lock state))
-                    (nreverse (copy-list (stream-state-content-blocks state)))))
-                (stop-reason
-                  (bt:with-lock-held ((stream-state-lock state))
-                    (stream-state-stop-reason state)))
-                (tool-uses (content-tool-use-blocks content-blocks))
-                (final-text (content-text-blocks content-blocks)))
-           ;; Build final display from content-blocks (not the accumulator)
-           (let ((display (with-output-to-string (s)
-                            (write-string final-text s)
-                            (dolist (tu tool-uses)
-                              (write-char #\Newline s)
-                              (write-string (format-tool-call-display tu) s)))))
-             (set-message-text msg display)
-             (setf (message-raw-content msg) content-blocks))
-           ;; Clear streaming state
-           (setf (buffer-pending-stream buf) nil
-                 (buffer-streaming-message buf) nil)
+                 (content-blocks
+                   (bt:with-lock-held ((stream-state-lock state))
+                     (nreverse (copy-list (stream-state-content-blocks state)))))
+                 (canonical-content (canonicalize-message-content "assistant" content-blocks))
+                 (stop-reason
+                   (bt:with-lock-held ((stream-state-lock state))
+                     (stream-state-stop-reason state)))
+                 (tool-uses (content-tool-use-blocks canonical-content))
+                 (final-text (content-text-blocks canonical-content)))
+            ;; Build final display from content-blocks (not the accumulator)
+            (let ((display (with-output-to-string (s)
+                             (write-string final-text s)
+                             (dolist (tu tool-uses)
+                               (write-char #\Newline s)
+                               (write-string (format-tool-call-display tu) s)))))
+              (set-message-text msg display)
+              (setf (message-raw-content msg) canonical-content))
+            ;; Clear streaming state
+            (setf (buffer-pending-stream buf) nil
+                  (buffer-streaming-message buf) nil)
            ;; Handle tool calls
             (if (and (string= "tool_use" (or stop-reason ""))
                      tool-uses)
@@ -316,6 +323,11 @@ the event loop polls for updates via update-streaming-response."
   "Delete the character before point."
   (buffer)
   (message-delete-char-backward (buffer-input-message buffer)))
+
+(defcommand delete-char-forward-command (:permission :user-only)
+  "Delete the character after point."
+  (buffer)
+  (message-delete-char-forward (buffer-input-message buffer)))
 
 (defcommand forward-char-command (:permission :user-only)
   "Move point one character forward."
