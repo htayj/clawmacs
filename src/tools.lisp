@@ -41,24 +41,60 @@ Only includes tools visible to the current *current-caller*."
              *tool-table*)
     (coerce tools 'vector)))
 
+(defun tool-requires-permission-p (name)
+  "Return T if tool NAME requires user permission."
+  (let ((def (gethash name *tool-table*)))
+    (and def (eq :agent-with-permission (tool-definition-permission def)))))
+
 (defun execute-tool (name args)
   "Execute tool NAME with ARGS (an alist of parameter values).
 Returns a string result or signals an error."
   (let ((def (gethash name *tool-table*)))
     (unless def
       (error "Unknown tool: ~A" name))
-    ;; Check permission
     (let ((perm (tool-definition-permission def)))
       (ecase perm
         (:agent-allowed t)
-        (:agent-with-permission
-         ;; For v1, agent-with-permission tools are auto-approved.
-         ;; TODO: Add interactive approval UI.
-         t)
+        (:agent-with-permission t)  ; caller is responsible for approval check
         (:user-only
          (unless (eq *current-caller* :user)
            (error "Tool ~A is user-only" name)))))
     (funcall (tool-definition-execute-fn def) args)))
+
+(defun format-tool-call-sexpr (name args)
+  "Format a tool call as a raw s-expression string.
+E.g., (shell_exec :command \"ls -la\")"
+  (with-output-to-string (s)
+    (format s "(~A" name)
+    (loop :for (k . v) :in args
+          :do (format s " :~A ~S"
+                      (string-downcase (symbol-name k)) v))
+    (write-char #\) s)))
+
+(defun format-tool-call-expanded (name args)
+  "Format a tool call with expanded parameter descriptions.
+E.g., (shell_exec
+        :command \"ls -la\"  ; The shell command to execute
+        :timeout 30)         ; Timeout in seconds"
+  (let ((def (gethash name *tool-table*))
+        (schema-props nil))
+    ;; Extract property descriptions from schema
+    (when def
+      (let ((schema (tool-definition-input-schema def)))
+        (when schema
+          (let ((props (cdr (assoc :properties schema))))
+            (when props
+              (setf schema-props props))))))
+    (with-output-to-string (s)
+      (format s "(~A" name)
+      (loop :for (k . v) :in args
+            :for param-name := (string-downcase (symbol-name k))
+            :for desc := (let ((prop (cdr (assoc k schema-props))))
+                           (when prop (cdr (assoc :description prop))))
+            :do (format s "~%  :~A ~S" param-name v)
+                (when desc
+                  (format s "  ; ~A" desc)))
+      (write-char #\) s))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Sandbox Path Validation

@@ -29,48 +29,143 @@ Shows text parts and tool call summaries. Stores raw-content for round-trip."
           (gethash agent-kw (buffer-face-registry buf)))
     agent-msg))
 
-(defun execute-tool-calls (buf tool-use-blocks agent-kw)
-  "Execute tool calls and insert a single tool-result message into the buffer.
-The message displays tool results for the user and carries raw-content
-for the API (tool_result blocks). No separate display messages are created
-to avoid breaking the assistant→tool_result message sequence."
-  (let ((result-blocks nil)
-        (display-parts nil)
-        (*current-caller* agent-kw))
-    ;; Execute each tool and collect results
-    (dolist (tu tool-use-blocks)
-      (let* ((tool-id (cdr (assoc :id tu)))
-             (tool-name (cdr (assoc :name tu)))
-             (tool-input (cdr (assoc :input tu)))
-             (result-text
-               (handler-case
-                   (execute-tool tool-name tool-input)
-                 (error (e)
-                   (api-json-encode `((:error . ,(format nil "~A" e))))))))
-        (push (format-tool-result-display tool-name result-text) display-parts)
-        (push `((:type . "tool_result")
-                (:tool--use--id . ,tool-id)
-                (:content . ,result-text))
-              result-blocks)))
-    ;; Insert ONE message: displays results + carries raw-content for API
-    (let* ((display-text (format nil "~{~A~^~%~}" (nreverse display-parts)))
-           (raw (nreverse result-blocks))
-           (tr-msg (make-message :tool-result :read-only-p t))
-           (input (buffer-input-message buf)))
-      (set-message-text tr-msg display-text)
-      (setf (message-raw-content tr-msg) raw)
-      (setf (message-timestamp tr-msg) (get-universal-time))
-      (setf (message-face-set tr-msg)
-            (gethash agent-kw (buffer-face-registry buf)))
-      ;; Link into buffer before input
-      (let ((before-input (message-prev input)))
-        (setf (message-prev tr-msg) before-input
-              (message-next tr-msg) input
-              (message-prev input) tr-msg)
-        (if before-input
-            (setf (message-next before-input) tr-msg)
-            (setf (buffer-first-message buf) tr-msg)))
-      raw)))
+(defun begin-tool-approval (buf tool-use-blocks)
+  "Start the tool approval process. Stashes user input and presents
+the first tool needing permission, or auto-executes allowed tools.
+Called from update-streaming-response when tool calls are detected."
+  ;; Stash current input
+  (setf (buffer-stashed-input buf) (message-text (buffer-input-message buf)))
+  ;; Queue all tool calls for processing
+  (setf (buffer-pending-tool-calls buf) (copy-list tool-use-blocks))
+  (setf (buffer-tool-call-results buf) nil)
+  ;; Process the first tool (or all auto-approved ones)
+  (advance-tool-approval buf))
+
+(defun advance-tool-approval (buf)
+  "Process the next pending tool call. Auto-executes :agent-allowed tools,
+shows approval prompt for :agent-with-permission tools.
+When all tools are done, finalizes the results."
+  (let ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword)))
+    (loop :while (buffer-pending-tool-calls buf)
+          :for tu := (first (buffer-pending-tool-calls buf))
+          :for tool-name := (cdr (assoc :name tu))
+          :for tool-input := (cdr (assoc :input tu))
+          :for tool-id := (cdr (assoc :id tu))
+          :do (cond
+                ;; Tool needs permission: show approval prompt and return
+                ((tool-requires-permission-p tool-name)
+                 (let ((raw-sexpr (format-tool-call-sexpr tool-name tool-input))
+                       (expanded (format-tool-call-expanded tool-name tool-input)))
+                   (setf (buffer-approval-pending buf)
+                         `((:tool-name . ,tool-name)
+                           (:tool-id . ,tool-id)
+                           (:tool-input . ,tool-input)
+                           (:display-raw . ,raw-sexpr)
+                           (:display-expanded . ,expanded)
+                           (:tool-use-block . ,tu)))
+                   ;; Clear input area for the prompt
+                   (set-message-text (buffer-input-message buf) "")
+                   (setf (buffer-status buf) :approval)
+                   (return)))  ; exit loop, wait for user
+                ;; Tool is auto-approved: execute immediately
+                (t
+                 (let* ((*current-caller* agent-kw)
+                        (result-text
+                          (handler-case
+                              (execute-tool tool-name tool-input)
+                            (error (e)
+                              (api-json-encode `((:error . ,(format nil "~A" e))))))))
+                   (push `((:result . ,result-text)
+                           (:display . ,(format-tool-result-display tool-name result-text))
+                           (:tool-id . ,tool-id))
+                         (buffer-tool-call-results buf)))
+                 (pop (buffer-pending-tool-calls buf)))))
+    ;; If no more pending tools, finalize
+    (unless (buffer-pending-tool-calls buf)
+      (finalize-tool-results buf))))
+
+(defun handle-approval-response (buf response)
+  "Handle user's approval decision for the current pending tool.
+RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
+  (let* ((approval (buffer-approval-pending buf))
+         (tool-name (cdr (assoc :tool-name approval)))
+         (tool-id (cdr (assoc :tool-id approval)))
+         (tool-input (cdr (assoc :tool-input approval)))
+         (agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword)))
+    ;; Clear approval state
+    (setf (buffer-approval-pending buf) nil)
+    (cond
+      ;; Approved: execute the tool
+      ((eq response :approve)
+       (let* ((*current-caller* agent-kw)
+              (result-text
+                (handler-case
+                    (execute-tool tool-name tool-input)
+                  (error (e)
+                    (api-json-encode `((:error . ,(format nil "~A" e))))))))
+         (push `((:result . ,result-text)
+                 (:display . ,(format-tool-result-display tool-name result-text))
+                 (:tool-id . ,tool-id))
+               (buffer-tool-call-results buf))))
+      ;; Denied with message
+      ((and (consp response) (eq (car response) :deny-with-message))
+       (let ((reason (cdr response)))
+         (push `((:result . ,(api-json-encode
+                              `((:denied . t)
+                                (:reason . ,(or reason "User denied this tool call")))))
+                 (:display . ,(format nil "[~A DENIED: ~A]" tool-name (or reason "denied")))
+                 (:tool-id . ,tool-id))
+               (buffer-tool-call-results buf))))
+      ;; Denied (no message)
+      (t
+       (push `((:result . ,(api-json-encode `((:denied . t) (:reason . "User denied"))))
+               (:display . ,(format nil "[~A DENIED]" tool-name))
+               (:tool-id . ,tool-id))
+             (buffer-tool-call-results buf))))
+    ;; Move to next tool
+    (pop (buffer-pending-tool-calls buf))
+    ;; Restore stashed input
+    (when (buffer-stashed-input buf)
+      (set-message-text (buffer-input-message buf) (buffer-stashed-input buf))
+      (setf (buffer-stashed-input buf) nil))
+    ;; Continue with remaining tools
+    (advance-tool-approval buf)))
+
+(defun finalize-tool-results (buf)
+  "Insert the accumulated tool results as a message and continue the conversation."
+  (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
+         (results (nreverse (buffer-tool-call-results buf)))
+         (display-parts (mapcar (lambda (r) (cdr (assoc :display r))) results))
+         (result-blocks (mapcar (lambda (r)
+                                  `((:type . "tool_result")
+                                    (:tool--use--id . ,(cdr (assoc :tool-id r)))
+                                    (:content . ,(cdr (assoc :result r)))))
+                                results))
+         (display-text (format nil "~{~A~^~%~}" display-parts))
+         (tr-msg (make-message :tool-result :read-only-p t))
+         (input (buffer-input-message buf)))
+    (set-message-text tr-msg display-text)
+    (setf (message-raw-content tr-msg) result-blocks)
+    (setf (message-timestamp tr-msg) (get-universal-time))
+    (setf (message-face-set tr-msg)
+          (gethash agent-kw (buffer-face-registry buf)))
+    ;; Link into buffer before input
+    (let ((before-input (message-prev input)))
+      (setf (message-prev tr-msg) before-input
+            (message-next tr-msg) input
+            (message-prev input) tr-msg)
+      (if before-input
+          (setf (message-next before-input) tr-msg)
+          (setf (buffer-first-message buf) tr-msg)))
+    ;; Clear tool call state
+    (setf (buffer-tool-call-results buf) nil
+          (buffer-pending-tool-calls buf) nil)
+    ;; Restore stashed input if still stashed
+    (when (buffer-stashed-input buf)
+      (set-message-text (buffer-input-message buf) (buffer-stashed-input buf))
+      (setf (buffer-stashed-input buf) nil))
+    ;; Continue: start next streaming request
+    (start-streaming-response buf)))
 
 (defun start-streaming-response (buf)
   "Start a streaming API call. Creates a placeholder agent message and
@@ -157,12 +252,11 @@ Returns T if still streaming, NIL if done."
            (setf (buffer-pending-stream buf) nil
                  (buffer-streaming-message buf) nil)
            ;; Handle tool calls
-           (if (and (string= "tool_use" (or stop-reason ""))
-                    tool-uses)
-               (progn
-                 (execute-tool-calls buf tool-uses agent-kw)
-                 (start-streaming-response buf)
-                 t)
+            (if (and (string= "tool_use" (or stop-reason ""))
+                     tool-uses)
+                (progn
+                  (begin-tool-approval buf tool-uses)
+                  t)
                (progn
                  (setf (buffer-status buf) :idle)
                  nil))))
@@ -359,29 +453,65 @@ for Meta combinations, or a list (:ctrl-x <key>) for C-x prefix."
       ;; Normal key
       (t key))))
 
+(defvar *deny-message-mode* nil
+  "When non-nil, the input area is being used to type a denial message.")
+
 (defun handle-key-event (buf event)
   "Dispatch a key event through the buffer's keymap.
 Returns :QUIT if the application should exit, or nil otherwise.
-Handles ESC prefix for Meta keys: ESC followed by a key becomes (:alt <key>)."
+Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
   (let ((key (normalize-key event))
         (*current-caller* :user))
-    ;; nil key means ESC was consumed, waiting for next key
     (when (null key)
       (return-from handle-key-event nil))
     (cond
-      ;; C-c to quit
+      ;; C-c always quits
       ((and (characterp key) (char= key #\Etx))
        :quit)
-      ;; Keymap lookup (works for characters, keywords, and (:alt ...) lists)
+
+      ;; === DENY MESSAGE MODE ===
+      ;; User is typing a denial reason; Enter submits, normal editing works
+      (*deny-message-mode*
+       (cond
+         ((and (characterp key) (char= key #\Newline))
+          ;; Submit denial message
+          (let ((reason (message-text (buffer-input-message buf))))
+            (setf *deny-message-mode* nil)
+            (handle-approval-response buf (cons :deny-with-message reason))))
+         ;; Normal editing in the input area
+         ((keymap-lookup (buffer-keymap buf) key)
+          (let ((command (keymap-lookup (buffer-keymap buf) key)))
+            ;; Only allow editing commands, not send-message
+            (unless (eq command 'send-message)
+              (funcall command buf))))
+         ((and (characterp key) (graphic-char-p key))
+          (let ((*self-insert-char* key))
+            (self-insert-command buf))))
+       nil)
+
+      ;; === APPROVAL MODE ===
+      ;; Waiting for a/d/m keypress
+      ((buffer-approval-pending buf)
+       (when (characterp key)
+         (case key
+           (#\a (handle-approval-response buf :approve))
+           (#\d (handle-approval-response buf :deny))
+           (#\m
+            ;; Switch to deny-message mode: clear input for typing reason
+            (set-message-text (buffer-input-message buf) "")
+            (setf *deny-message-mode* t))))
+       nil)
+
+      ;; === NORMAL MODE ===
+      ;; Keymap lookup
       ((keymap-lookup (buffer-keymap buf) key)
        (let ((command (keymap-lookup (buffer-keymap buf) key)))
          (funcall command buf)
-         ;; Reset scroll to bottom when user types (not when scrolling)
          (when (and (characterp key)
                     (not (member command '(scroll-up-command scroll-down-command))))
            (setf (buffer-scroll-offset buf) 0))
          nil))
-      ;; Self-insert for printable characters
+      ;; Self-insert
       ((and (characterp key) (graphic-char-p key))
        (let ((*self-insert-char* key))
          (self-insert-command buf))

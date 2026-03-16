@@ -144,8 +144,18 @@
    #:tool-definition
    #:register-tool
    #:execute-tool
+   #:tool-requires-permission-p
    #:tool-definitions-for-api
+   #:format-tool-call-sexpr
+   #:format-tool-call-expanded
    #:init-tools
+
+   ;; Approval
+   #:buffer-approval-pending
+   #:buffer-approval-result
+   #:buffer-stashed-input
+   #:buffer-pending-tool-calls
+   #:buffer-tool-call-results
 
    ;; Rendering
    #:render-history

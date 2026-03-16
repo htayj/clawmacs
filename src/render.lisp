@@ -274,9 +274,75 @@ Respects buffer-scroll-offset for history scrolling."
                       ;; This message is at least partially visible
                       (let ((screen-row (- msg-top visible-top)))
                         (render-message-lines main-window msg screen-row width)))))))
-    ;; Render input message
-    (render-message-lines main-window (buffer-input-message buf)
-                          input-start-row width
-                          :show-cursor t)
+    ;; Render input area: either approval prompt or normal input
+    (if (buffer-approval-pending buf)
+        (render-approval-prompt main-window buf input-start-row width)
+        (render-message-lines main-window (buffer-input-message buf)
+                              input-start-row width
+                              :show-cursor t))
     (croatoan:refresh main-window)
     (render-modeline buf modeline-window)))
+
+;;; --------------------------------------------------------------------------
+;;; Approval Prompt Rendering
+;;; --------------------------------------------------------------------------
+
+(defun render-approval-prompt (window buf start-row width)
+  "Render the permission approval prompt in the input area."
+  (let* ((approval (buffer-approval-pending buf))
+         (tool-name (cdr (assoc :tool-name approval)))
+         (raw-sexpr (cdr (assoc :display-raw approval)))
+         (expanded (cdr (assoc :display-expanded approval)))
+         (row start-row)
+         ;; Use a distinct face: yellow on black for warnings
+         (warn-fg '(:yellow))
+         (prompt-fg '(:white)))
+    (declare (ignore warn-fg prompt-fg))
+    ;; Set colors: yellow text for the prompt
+    (setf (croatoan:color-pair window) '(:yellow :black))
+    (setf (croatoan:attributes window) '(:bold))
+    ;; Header
+    (when (< row (croatoan:height window))
+      (croatoan:move window row 0)
+      (croatoan:add-string window (make-string width :initial-element #\-))
+      (croatoan:move window row 0)
+      (croatoan:add-string window
+                           (format nil "-- PERMISSION REQUIRED: ~A " tool-name))
+      (incf row))
+    ;; Raw sexpr
+    (setf (croatoan:attributes window) nil)
+    (setf (croatoan:color-pair window) '(:cyan :black))
+    (dolist (line (split-string-by-newline raw-sexpr))
+      (when (< row (croatoan:height window))
+        (croatoan:move window row 0)
+        (croatoan:add-string window (make-string width :initial-element #\Space))
+        (croatoan:move window row 0)
+        (croatoan:add-string window (subseq line 0 (min (length line) width)))
+        (incf row)))
+    ;; Expanded form
+    (setf (croatoan:color-pair window) '(:white :black))
+    (dolist (line (split-string-by-newline expanded))
+      (when (< row (croatoan:height window))
+        (croatoan:move window row 0)
+        (croatoan:add-string window (make-string width :initial-element #\Space))
+        (croatoan:move window row 0)
+        (croatoan:add-string window (subseq line 0 (min (length line) width)))
+        (incf row)))
+    ;; Options
+    (when (< row (croatoan:height window))
+      (incf row) ; blank line
+      (setf (croatoan:color-pair window) '(:green :black))
+      (setf (croatoan:attributes window) '(:bold))
+      (croatoan:move window row 0)
+      (croatoan:add-string window (make-string width :initial-element #\Space))
+      (croatoan:move window row 0)
+      (croatoan:add-string window
+                           "[a]pprove  [d]eny  [m]essage (deny with note to agent)")
+      (incf row))))
+
+(defun split-string-by-newline (str)
+  "Split STR by newlines into a list of strings."
+  (loop :for start := 0 :then (1+ pos)
+        :for pos := (position #\Newline str :start start)
+        :collect (subseq str start (or pos (length str)))
+        :while pos))

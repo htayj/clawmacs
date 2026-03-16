@@ -55,11 +55,34 @@
                          :accessor buffer-pending-stream
                          :initform nil
                          :documentation "When non-nil, holds a stream-state for an in-progress streaming response.")
-   (streaming-message   :initarg :streaming-message
+    (streaming-message   :initarg :streaming-message
                          :accessor buffer-streaming-message
                          :initform nil
                          :type (or null message)
-                         :documentation "The message being updated by streaming. Updated in-place as tokens arrive."))
+                         :documentation "The message being updated by streaming. Updated in-place as tokens arrive.")
+   ;; Permission approval state
+   (approval-pending    :initarg :approval-pending
+                         :accessor buffer-approval-pending
+                         :initform nil
+                         :documentation "When non-nil, an alist describing the tool call awaiting approval:
+(:tool-name :tool-id :tool-input :display-raw :display-expanded :tool-use-block)")
+   (approval-result     :initarg :approval-result
+                         :accessor buffer-approval-result
+                         :initform nil
+                         :documentation "Set by the approval UI: :approve, :deny, or (:deny-with-message . \"reason\")")
+   (stashed-input       :initarg :stashed-input
+                         :accessor buffer-stashed-input
+                         :initform nil
+                         :type (or null string)
+                         :documentation "User's input text stashed during approval prompt.")
+   (pending-tool-calls  :initarg :pending-tool-calls
+                         :accessor buffer-pending-tool-calls
+                         :initform nil
+                         :documentation "List of tool_use blocks awaiting sequential approval.")
+   (tool-call-results   :initarg :tool-call-results
+                         :accessor buffer-tool-call-results
+                         :initform nil
+                         :documentation "Accumulated results from approved/denied tool calls."))
   (:documentation
    "A chat buffer containing a doubly-linked list of messages.
 The last message is always the input message (read-only-p = nil).
