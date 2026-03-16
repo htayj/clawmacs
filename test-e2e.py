@@ -21,6 +21,7 @@ import argparse
 MCP_BIN = os.environ.get(
     "CLAWMACS_MCP_BIN", os.path.expanduser("~/.cargo/bin/mcp-tui-driver")
 )
+DEFAULT_AGENT_NAME = "claude"
 CLAWMACS_DIR = os.path.dirname(os.path.abspath(__file__))
 SCREENSHOT_DIR = os.path.join(CLAWMACS_DIR, "screenshots")
 SSL_LIB = os.environ.get(
@@ -87,7 +88,7 @@ def render_text_screenshot(text, path, cols=120, rows=35):
         # Detect user message
         is_user = line.strip().startswith("user>")
         # Detect continuation of user message (indented under user>)
-        is_user_cont = (row_idx > 0 and not line.strip().startswith("echo-agent>")
+        is_user_cont = (row_idx > 0 and not line.strip().startswith(f"{DEFAULT_AGENT_NAME}>")
                        and not line.strip().startswith("tool-result>")
                        and not is_modeline)
 
@@ -280,6 +281,24 @@ def assert_not_contains(screen_text, expected, msg=""):
         raise AssertionError(f"{msg}: '{expected}' should NOT be in screen")
 
 
+def wait_for_send_result(s, expected_agent_prefix, timeout=20):
+    """Wait until a sent message produces an agent turn and returns input prompt."""
+    deadline = time.time() + timeout
+    last_screen = ""
+    while time.time() < deadline:
+        screen = s.text()
+        last_screen = screen
+        has_agent_turn = f"{expected_agent_prefix}>" in screen
+        has_input_prompt = screen.count("user>") >= 2
+        if has_agent_turn and has_input_prompt:
+            return screen
+        time.sleep(0.25)
+    raise AssertionError(
+        "message send did not complete with agent turn + input prompt; "
+        f"last screen:\n{last_screen[:500]}"
+    )
+
+
 def clear_input(s):
     """Clear current input robustly using editor keybinds."""
     s.press("Ctrl+a")
@@ -329,7 +348,7 @@ def test_01_initial_render(s):
     screen = s.text()
     assert_contains(screen, "user>", "input prompt")
     assert_contains(screen, "session-01", "buffer name in modeline")
-    assert_contains(screen, "echo-agent", "agent name in modeline")
+    assert_contains(screen, DEFAULT_AGENT_NAME, "agent name in modeline")
     s.screenshot("01-initial-render")
 
 
@@ -403,10 +422,9 @@ def test_06_send_message(s):
     time.sleep(0.2)
     s.type_text("say hello")
     s.press("Enter")
-    time.sleep(5)  # Wait for agent response (may call LLM)
-    screen = s.text()
+    screen = wait_for_send_result(s, DEFAULT_AGENT_NAME)
     assert_contains(screen, "say hello", "sent user message")
-    assert_contains(screen, ">", "agent responded")
+    assert_contains(screen, f"{DEFAULT_AGENT_NAME}>", "agent turn rendered")
     s.screenshot("06-send-message")
 
 
@@ -718,7 +736,7 @@ def test_21_modeline_content(s):
     lines = [l for l in screen.split("\n") if l.strip()]
     modeline = lines[-1] if lines else ""
     assert_contains(modeline, "session-01", "buffer name")
-    assert_contains(modeline, "echo-agent", "agent name")
+    assert_contains(modeline, DEFAULT_AGENT_NAME, "agent name")
     assert_contains(modeline, "/200000", "context limit")
     s.screenshot("21-modeline")
 

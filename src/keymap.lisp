@@ -68,6 +68,12 @@
     (keymap-bind km (code-char 21) 'kill-backward-line-command) ; C-u = ASCII 21
     (keymap-bind km '(:alt #\d) 'kill-word-command)         ; M-d
     (keymap-bind km (code-char 23) 'backward-kill-word-command) ; C-w = ASCII 23
+    (keymap-bind km '(:alt #\Backspace) 'backward-kill-word-command)
+    (keymap-bind km '(:alt #\Rubout) 'backward-kill-word-command)
+    (keymap-bind km '(:alt :backspace) 'backward-kill-word-command)
+    (keymap-bind km '(:ctrl #\Backspace) 'backward-kill-word-command)
+    (keymap-bind km '(:ctrl #\Rubout) 'backward-kill-word-command)
+    (keymap-bind km '(:ctrl :backspace) 'backward-kill-word-command)
     ;; Yank/paste
     (keymap-bind km #\Em 'yank-command)                     ; C-y = ASCII 25
     (keymap-bind km '(:alt #\y) 'yank-pop-command)          ; M-y
@@ -78,6 +84,7 @@
     (keymap-bind km (code-char 4) 'delete-char-forward-command) ; C-d = ASCII 4
     (keymap-bind km #\Backspace 'delete-char-backward-command)
     (keymap-bind km #\Rubout 'delete-char-backward-command)
+    (keymap-bind km :backspace 'delete-char-backward-command)
     (keymap-bind km (code-char 4) 'delete-char-forward-command) ; C-d = ASCII 4
     ;; Scroll: Page Up / Page Down
     ;; Croatoan delivers special keys as KEY structs; we extract :name

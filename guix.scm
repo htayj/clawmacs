@@ -4,6 +4,7 @@
   '(
     "sbcl"
     "openssl"
+    "ncurses"
     "python"
     "python-pillow"
     "nss-certs"

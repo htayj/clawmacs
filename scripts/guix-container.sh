@@ -9,11 +9,13 @@ PAYLOAD_SHIFT_COUNT=0
 QUICKLISP_ENV_LOADED=0
 WORKSPACE_HOME=/workspace/.cache/home
 WORKSPACE_QUICKLISP_SETUP=/workspace/.cache/home/quicklisp/setup.lisp
+WORKSPACE_XDG_CACHE=/workspace/.cache
 HOST_HOME=''
 HOST_QUICKLISP_SETUP=''
 RESOLVED_SSL_LIB_PATH=''
 CONTAINER_LAUNCH_DIR=/tmp
 GUIX_MANIFEST_PATH=''
+HOST_USER_HOME=${HOME:-}
 
 stderr() {
   printf '%s %s\n' "$LAUNCHER_PREFIX" "$*" >&2
@@ -202,11 +204,23 @@ validate_quicklisp_pin_values() {
 set_quicklisp_runtime_env() {
   HOST_HOME="$REPO_ROOT/.cache/home"
   HOST_QUICKLISP_SETUP="$HOST_HOME/quicklisp/setup.lisp"
+  host_config_dir="$HOST_HOME/.config/clawmacs"
+  source_config_dir=''
+
+  if [ -n "$HOST_USER_HOME" ]; then
+    source_config_dir="$HOST_USER_HOME/.config/clawmacs"
+  fi
 
   mkdir -p "$HOST_HOME"
 
+  if [ -n "$source_config_dir" ] && [ -d "$source_config_dir" ]; then
+    mkdir -p "$host_config_dir"
+    cp -R "$source_config_dir/." "$host_config_dir/"
+  fi
+
   export HOME="$WORKSPACE_HOME"
   export CLAWMACS_QUICKLISP_SETUP="$WORKSPACE_QUICKLISP_SETUP"
+  export XDG_CACHE_HOME="$WORKSPACE_XDG_CACHE"
 }
 
 run_in_container() {
@@ -224,7 +238,7 @@ probe_quicklisp_setup() {
     return 1
   fi
 
-  run_in_container 'set -eu; setup_path="$1"; home_path="$2"; HOME="$home_path" sbcl --noinform --non-interactive --disable-debugger --load "$setup_path" --eval "(quit)" >/dev/null 2>&1' "$container_setup_path" "$WORKSPACE_HOME"
+  run_in_container 'set -eu; setup_path="$1"; home_path="$2"; xdg_cache_path="$3"; HOME="$home_path" XDG_CACHE_HOME="$xdg_cache_path" sbcl --noinform --non-interactive --disable-debugger --load "$setup_path" --eval "(quit)" >/dev/null 2>&1' "$container_setup_path" "$WORKSPACE_HOME" "$WORKSPACE_XDG_CACHE"
 }
 
 bootstrap_quicklisp_once() {
@@ -235,7 +249,7 @@ bootstrap_quicklisp_once() {
     return 1
   fi
 
-  run_in_container 'set -eu; bootstrap_url="$1"; expected_sha="$2"; timeout_secs="$3"; retry_count="$4"; download_path="$5"; bootstrap_home="$6"; runtime_home="$7"; mkdir -p "$runtime_home"; curl --fail --location --silent --show-error --max-time "$timeout_secs" --retry "$retry_count" -o "$download_path" "$bootstrap_url"; actual_sha=$(sha256sum "$download_path" | cut -d" " -f1); [ "$actual_sha" = "$expected_sha" ]; mkdir -p "$bootstrap_home"; HOME="$runtime_home" sbcl --noinform --non-interactive --disable-debugger --load "$download_path" --eval "(quicklisp-quickstart:install :path \"$bootstrap_home\")" --eval "(quit)" >/dev/null 2>&1' "$QUICKLISP_BOOTSTRAP_URL" "$QUICKLISP_BOOTSTRAP_SHA256" "$QUICKLISP_BOOTSTRAP_TIMEOUT_SECS" "$QUICKLISP_BOOTSTRAP_RETRIES" "$download_path" "$bootstrap_target_home" "$WORKSPACE_HOME"
+  run_in_container 'set -eu; bootstrap_url="$1"; expected_sha="$2"; timeout_secs="$3"; retry_count="$4"; download_path="$5"; bootstrap_home="$6"; runtime_home="$7"; xdg_cache_path="$8"; mkdir -p "$runtime_home"; mkdir -p "$xdg_cache_path"; curl --fail --location --silent --show-error --max-time "$timeout_secs" --retry "$retry_count" -o "$download_path" "$bootstrap_url"; actual_sha=$(sha256sum "$download_path" | cut -d" " -f1); [ "$actual_sha" = "$expected_sha" ]; mkdir -p "$bootstrap_home"; HOME="$runtime_home" XDG_CACHE_HOME="$xdg_cache_path" sbcl --noinform --non-interactive --disable-debugger --load "$download_path" --eval "(quicklisp-quickstart:install :path \"$bootstrap_home\")" --eval "(quit)" >/dev/null 2>&1' "$QUICKLISP_BOOTSTRAP_URL" "$QUICKLISP_BOOTSTRAP_SHA256" "$QUICKLISP_BOOTSTRAP_TIMEOUT_SECS" "$QUICKLISP_BOOTSTRAP_RETRIES" "$download_path" "$bootstrap_target_home" "$WORKSPACE_HOME" "$WORKSPACE_XDG_CACHE"
 }
 
 validate_quicklisp_bootstrap() {
@@ -553,7 +567,7 @@ launch_payload() {
     fail 112 "quicklisp bootstrap failed"
   fi
 
-  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|ANTHROPIC_API_KEY|OPENAI_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_MCP_BIN|HOME|CLAWMACS_QUICKLISP_SETUP|LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" -- bash -lc 'cd /workspace && exec "$@"' bash "$@"
+  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|ANTHROPIC_API_KEY|OPENAI_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_MCP_BIN|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" -- bash -lc 'cd /workspace && export HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}"; exec "$@"' bash "$@"
 }
 
 main() {

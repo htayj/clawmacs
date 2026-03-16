@@ -573,7 +573,7 @@ set +e
 env PATH="$TMP_BIN:$PATH" \
   CLAWMACS_ENABLE_TEST_TOGGLES=1 \
   CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  "$LAUNCHER" --mode run -- sh -c 'test "$HOME" = "/workspace/.cache/home" && test "$CLAWMACS_QUICKLISP_SETUP" = "/workspace/.cache/home/quicklisp/setup.lisp" && test -f ".cache/home/quicklisp/setup.lisp"' 2>"$TMP_DIR/runtime-env.stderr"
+  "$LAUNCHER" --mode run -- sh -c 'test "$HOME" = "/workspace/.cache/home" && test "$CLAWMACS_QUICKLISP_SETUP" = "/workspace/.cache/home/quicklisp/setup.lisp" && test "$XDG_CACHE_HOME" = "/workspace/.cache" && test -f ".cache/home/quicklisp/setup.lisp"' 2>"$TMP_DIR/runtime-env.stderr"
 actual_code=$?
 set -e
 if [ "$actual_code" -ne 0 ]; then

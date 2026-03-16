@@ -47,3 +47,29 @@
   (clawmacs::init-default-keymap)
   (is (eq 'clawmacs::delete-char-forward-command
           (keymap-lookup *default-keymap* (code-char 4)))))
+
+(test default-keymap-backspace-bindings
+  "Default keymap binds backspace variants to backward char delete."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::delete-char-backward-command
+          (keymap-lookup *default-keymap* #\Backspace)))
+  (is (eq 'clawmacs::delete-char-backward-command
+          (keymap-lookup *default-keymap* #\Rubout)))
+  (is (eq 'clawmacs::delete-char-backward-command
+          (keymap-lookup *default-keymap* :backspace))))
+
+(test default-keymap-backward-kill-word-backspace-bindings
+  "Default keymap binds C-Backspace and M-Backspace to backward-kill-word."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::backward-kill-word-command
+          (keymap-lookup *default-keymap* '(:alt #\Backspace))))
+  (is (eq 'clawmacs::backward-kill-word-command
+          (keymap-lookup *default-keymap* '(:alt #\Rubout))))
+  (is (eq 'clawmacs::backward-kill-word-command
+          (keymap-lookup *default-keymap* '(:alt :backspace))))
+  (is (eq 'clawmacs::backward-kill-word-command
+          (keymap-lookup *default-keymap* '(:ctrl #\Backspace))))
+  (is (eq 'clawmacs::backward-kill-word-command
+          (keymap-lookup *default-keymap* '(:ctrl #\Rubout))))
+  (is (eq 'clawmacs::backward-kill-word-command
+          (keymap-lookup *default-keymap* '(:ctrl :backspace)))))
