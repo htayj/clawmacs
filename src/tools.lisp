@@ -10,19 +10,25 @@
   (description ""              :type string   :read-only t)
   (input-schema nil            :type list     :read-only t)
   (permission  :agent-allowed  :type keyword  :read-only t)
-  (execute-fn  nil             :type (or null function)))
+  (execute-fn  nil             :type (or null function))
+  ;; Optional function (args) -> string-or-nil for extra approval context
+  (approval-display-fn nil     :type (or null function)))
 
 (defvar *tool-table* (make-hash-table :test #'equal)
   "Global table mapping tool name strings to tool-definition structs.")
 
-(defun register-tool (name description schema permission execute-fn)
-  "Register a tool in *tool-table*."
+(defun register-tool (name description schema permission execute-fn
+                      &key approval-display-fn)
+  "Register a tool in *tool-table*.
+APPROVAL-DISPLAY-FN, if provided, is called with (args) during permission
+approval to generate extra display context (e.g., file diffs)."
   (setf (gethash name *tool-table*)
         (make-tool-definition :name name
                               :description description
                               :input-schema schema
                               :permission permission
-                              :execute-fn execute-fn)))
+                              :execute-fn execute-fn
+                              :approval-display-fn approval-display-fn)))
 
 (defun tool-definitions-for-api ()
   "Return a vector of tool definitions formatted for the Anthropic API.
@@ -95,6 +101,71 @@ E.g., (shell_exec
                 (when desc
                   (format s "  ; ~A" desc)))
       (write-char #\) s))))
+
+;;; --------------------------------------------------------------------------
+;;; File Diff for Approval Display
+;;; --------------------------------------------------------------------------
+
+(defun compute-simple-diff (old-text new-text)
+  "Compute a simple line-by-line diff between OLD-TEXT and NEW-TEXT.
+Returns a string with +/- prefixed lines. Not a full unified diff,
+just enough to show what changes."
+  (let ((old-lines (if old-text
+                       (loop :for start := 0 :then (1+ pos)
+                             :for pos := (position #\Newline old-text :start start)
+                             :collect (subseq old-text start (or pos (length old-text)))
+                             :while pos)
+                       nil))
+        (new-lines (loop :for start := 0 :then (1+ pos)
+                         :for pos := (position #\Newline new-text :start start)
+                         :collect (subseq new-text start (or pos (length new-text)))
+                         :while pos)))
+    (with-output-to-string (s)
+      (cond
+        ;; New file
+        ((null old-lines)
+         (format s "--- (new file)~%+++ ~A~%" "new")
+         (dolist (line new-lines)
+           (format s "+~A~%" line)))
+        ;; Show removed and added lines
+        (t
+         (format s "--- old~%+++ new~%")
+         ;; Simple approach: show lines unique to old as -, unique to new as +,
+         ;; common lines as context
+         (let ((max-lines 40)
+               (old-set (make-hash-table :test #'equal))
+               (new-set (make-hash-table :test #'equal)))
+           (dolist (l old-lines) (setf (gethash l old-set) t))
+           (dolist (l new-lines) (setf (gethash l new-set) t))
+           ;; Show old lines not in new
+           (let ((removed (remove-if (lambda (l) (gethash l new-set)) old-lines)))
+             (dolist (line (subseq removed 0 (min (length removed) max-lines)))
+               (format s "-~A~%" line)))
+           ;; Show new lines not in old
+           (let ((added (remove-if (lambda (l) (gethash l old-set)) new-lines)))
+             (dolist (line (subseq added 0 (min (length added) max-lines)))
+               (format s "+~A~%" line)))))))))
+
+(defun file-write-approval-display (args)
+  "Approval display for file_write: shows diff against existing file."
+  (let* ((path (cdr (assoc :path args)))
+         (new-content (cdr (assoc :content args)))
+         (sandbox (or *sandbox-root* (truename ".")))
+         (resolved (merge-pathnames (pathname path) sandbox)))
+    (handler-case
+        (let ((old-content (when (probe-file resolved)
+                             (uiop:read-file-string resolved))))
+          (compute-simple-diff old-content (or new-content "")))
+      (error () nil))))
+
+(defun tool-approval-extra-display (name args)
+  "Get extra display text for a tool's approval prompt.
+Returns a string or nil. Calls the tool's approval-display-fn if set."
+  (let ((def (gethash name *tool-table*)))
+    (when (and def (tool-definition-approval-display-fn def))
+      (handler-case
+          (funcall (tool-definition-approval-display-fn def) args)
+        (error () nil)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Sandbox Path Validation
@@ -296,7 +367,8 @@ Signals an error if the path escapes the sandbox."
                       (:description . "The content to write to the file.")))))
      (:required . #("path" "content")))
    :agent-with-permission
-   #'execute-file-write)
+   #'execute-file-write
+   :approval-display-fn #'file-write-approval-display)
 
   (register-tool
    "shell_exec"

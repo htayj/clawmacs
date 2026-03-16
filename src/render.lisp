@@ -335,6 +335,24 @@ Respects buffer-scroll-offset for history scrolling."
         (croatoan:move window row 0)
         (croatoan:add-string window (subseq line 0 (min (length line) width)))
         (incf row)))
+    ;; Extra display (e.g., file diff, command preview)
+    (let ((extra (cdr (assoc :display-extra approval))))
+      (when extra
+        (dolist (line (split-string-by-newline extra))
+          (when (< row (croatoan:height window))
+            (croatoan:move window row 0)
+            (croatoan:add-string window (make-string width :initial-element #\Space))
+            (croatoan:move window row 0)
+            ;; Color-code diff lines: green for +, red for -, white for context
+            (cond
+              ((and (plusp (length line)) (char= (char line 0) #\+))
+               (setf (croatoan:color-pair window) '(:green :black)))
+              ((and (plusp (length line)) (char= (char line 0) #\-))
+               (setf (croatoan:color-pair window) '(:red :black)))
+              (t
+               (setf (croatoan:color-pair window) '(:white :black))))
+            (croatoan:add-string window (subseq line 0 (min (length line) width)))
+            (incf row)))))
     ;; Options
     (when (< row (croatoan:height window))
       (incf row) ; blank line

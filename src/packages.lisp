@@ -148,6 +148,7 @@
    #:tool-definitions-for-api
    #:format-tool-call-sexpr
    #:format-tool-call-expanded
+   #:tool-approval-extra-display
    #:init-tools
 
    ;; Approval

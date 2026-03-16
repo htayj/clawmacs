@@ -54,14 +54,16 @@ When all tools are done, finalizes the results."
           :do (cond
                 ;; Tool needs permission: show approval prompt and return
                 ((tool-requires-permission-p tool-name)
-                 (let ((raw-sexpr (format-tool-call-sexpr tool-name tool-input))
-                       (expanded (format-tool-call-expanded tool-name tool-input)))
+                 (let* ((raw-sexpr (format-tool-call-sexpr tool-name tool-input))
+                        (expanded (format-tool-call-expanded tool-name tool-input))
+                        (extra (tool-approval-extra-display tool-name tool-input)))
                    (setf (buffer-approval-pending buf)
                          `((:tool-name . ,tool-name)
                            (:tool-id . ,tool-id)
                            (:tool-input . ,tool-input)
                            (:display-raw . ,raw-sexpr)
                            (:display-expanded . ,expanded)
+                           ,@(when extra `((:display-extra . ,extra)))
                            (:tool-use-block . ,tu)))
                    ;; Clear input area for the prompt
                    (set-message-text (buffer-input-message buf) "")
