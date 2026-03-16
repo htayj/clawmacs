@@ -618,7 +618,52 @@ def test_17_file_write_diff(s):
         s.screenshot("17-file-write-diff-no-approval")
 
 
-def test_18_modeline_content(s):
+def test_18_file_write_append(s):
+    """Test: file_write appends to existing files, never overwrites."""
+    for _ in range(20):
+        s.press("Ctrl+k")
+    for _ in range(20):
+        s.press("Backspace")
+    # Use lisp_eval to verify append behavior directly
+    s.type_text("Use the lisp_eval tool to: (progn (clawmacs::init-tools) (setf clawmacs::*sandbox-root* (truename \".\")) (clawmacs::execute-tool \"file_write\" (list (cons :path \"e2e-append-test.txt\") (cons :content \"first\"))) (clawmacs::execute-tool \"file_write\" (list (cons :path \"e2e-append-test.txt\") (cons :content \" second\"))) (uiop:read-file-string (merge-pathnames \"e2e-append-test.txt\" (truename \".\"))))")
+    s.press("Enter")
+    time.sleep(8)
+    screen = s.text()
+    s.screenshot("18-file-write-append")
+    # The eval result should show "first second" (appended, not overwritten)
+    assert_contains(screen, "first second", "file_write appended content")
+
+
+def test_19_file_edit_search_replace(s):
+    """Test: file_edit does search-and-replace with approval prompt showing diff."""
+    for _ in range(20):
+        s.press("Ctrl+k")
+    for _ in range(20):
+        s.press("Backspace")
+    # Ask agent to edit the file we just created
+    s.type_text("Edit the file e2e-append-test.txt: replace 'first' with 'FIRST'")
+    s.press("Enter")
+    time.sleep(8)
+    screen = s.text()
+    s.screenshot("19-file-edit-prompt")
+
+    has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
+                    or "APPROVAL" in screen)
+    if has_approval:
+        # Should show diff with -first / +FIRST
+        has_diff = ("-" in screen or "+" in screen or "old" in screen)
+        s.screenshot("19-file-edit-diff")
+        # Approve the edit
+        s.press("a")
+        time.sleep(5)
+        screen = s.text()
+        s.screenshot("19-file-edit-approved")
+        assert_contains(screen, "echo-agent>", "agent responded after edit approval")
+    else:
+        s.screenshot("19-file-edit-no-approval")
+
+
+def test_20_modeline_content(s):
     """Test: Modeline shows all expected fields."""
     screen = s.text()
     lines = [l for l in screen.split("\n") if l.strip()]
@@ -626,7 +671,7 @@ def test_18_modeline_content(s):
     assert_contains(modeline, "session-01", "buffer name")
     assert_contains(modeline, "echo-agent", "agent name")
     assert_contains(modeline, "/200000", "context limit")
-    s.screenshot("18-modeline")
+    s.screenshot("20-modeline")
 
 
 # ==========================================================================
@@ -683,7 +728,9 @@ def main():
         ("15-permission-deny", test_15_permission_deny),
         ("16-permission-deny-message", test_16_permission_deny_with_message),
         ("17-file-write-diff", test_17_file_write_diff),
-        ("18-modeline", test_18_modeline_content),
+        ("18-file-write-append", test_18_file_write_append),
+        ("19-file-edit", test_19_file_edit_search_replace),
+        ("20-modeline", test_20_modeline_content),
     ]
 
     for name, fn in tests:

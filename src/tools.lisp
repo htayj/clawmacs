@@ -146,18 +146,6 @@ just enough to show what changes."
              (dolist (line (subseq added 0 (min (length added) max-lines)))
                (format s "+~A~%" line)))))))))
 
-(defun file-write-approval-display (args)
-  "Approval display for file_write: shows diff against existing file."
-  (let* ((path (cdr (assoc :path args)))
-         (new-content (cdr (assoc :content args)))
-         (sandbox (or *sandbox-root* (truename ".")))
-         (resolved (merge-pathnames (pathname path) sandbox)))
-    (handler-case
-        (let ((old-content (when (probe-file resolved)
-                             (uiop:read-file-string resolved))))
-          (compute-simple-diff old-content (or new-content "")))
-      (error () nil))))
-
 (defun tool-approval-extra-display (name args)
   "Get extra display text for a tool's approval prompt.
 Returns a string or nil. Calls the tool's approval-display-fn if set."
@@ -173,12 +161,19 @@ Returns a string or nil. Calls the tool's approval-display-fn if set."
 
 (defun validate-sandbox-path (path)
   "Validate that PATH is within *sandbox-root*. Returns the resolved pathname.
-Signals an error if the path escapes the sandbox."
+Signals an error if the path escapes the sandbox.
+Works for both existing and not-yet-existing files."
   (let* ((sandbox (or *sandbox-root* (truename ".")))
          (resolved (merge-pathnames (pathname path) sandbox))
-         (resolved-str (namestring (truename resolved)))
+         ;; For validation, resolve the directory part (which must exist)
+         ;; and check the full path string for sandbox containment.
+         (dir (make-pathname :directory (pathname-directory resolved)
+                             :device (pathname-device resolved)))
+         (dir-str (namestring (if (probe-file dir)
+                                  (truename dir)
+                                  dir)))
          (sandbox-str (namestring sandbox)))
-    (unless (alexandria:starts-with-subseq sandbox-str resolved-str)
+    (unless (alexandria:starts-with-subseq sandbox-str dir-str)
       (error "Path ~A is outside the sandbox (~A)" path sandbox-str))
     resolved))
 
@@ -248,11 +243,13 @@ Signals an error if the path escapes the sandbox."
          (:content . ,result))))))
 
 ;;; --------------------------------------------------------------------------
-;;; File Write Tool
+;;; File Write Tool (create new or append, never overwrite)
 ;;; --------------------------------------------------------------------------
 
 (defun execute-file-write (args)
-  "Write content to a file within the sandbox."
+  "Write content to a file within the sandbox.
+If the file does not exist, creates it. If it exists, appends to it.
+Never overwrites existing content."
   (let* ((path (cdr (assoc :path args)))
          (content (cdr (assoc :content args)))
          (resolved (validate-sandbox-path path)))
@@ -261,15 +258,103 @@ Signals an error if the path escapes the sandbox."
     (unless content
       (error "content parameter is required"))
     (ensure-directories-exist resolved)
-    (with-open-file (s resolved
-                       :direction :output
-                       :if-exists :supersede
-                       :if-does-not-exist :create)
-      (write-string content s))
-    (cl-json:encode-json-to-string
-     `((:path . ,path)
-       (:bytes--written . ,(length content))
-       (:status . "ok")))))
+    (let ((existed (probe-file resolved)))
+      (with-open-file (s resolved
+                         :direction :output
+                         :if-exists :append
+                         :if-does-not-exist :create)
+        (write-string content s))
+      (cl-json:encode-json-to-string
+       `((:path . ,path)
+         (:bytes--written . ,(length content))
+         (:mode . ,(if existed "appended" "created"))
+         (:status . "ok"))))))
+
+(defun file-write-approval-display (args)
+  "Approval display for file_write: shows what will be appended or created."
+  (let* ((path (cdr (assoc :path args)))
+         (new-content (cdr (assoc :content args)))
+         (sandbox (or *sandbox-root* (truename ".")))
+         (resolved (merge-pathnames (pathname path) sandbox)))
+    (handler-case
+        (if (probe-file resolved)
+            (format nil "--- APPENDING to existing file: ~A ---~%~{+~A~^~%~}"
+                    path
+                    (loop :for start := 0 :then (1+ pos)
+                          :for pos := (position #\Newline (or new-content "") :start start)
+                          :collect (subseq (or new-content "") start (or pos (length (or new-content ""))))
+                          :while pos))
+            (format nil "--- CREATING new file: ~A ---~%~{+~A~^~%~}"
+                    path
+                    (loop :for start := 0 :then (1+ pos)
+                          :for pos := (position #\Newline (or new-content "") :start start)
+                          :collect (subseq (or new-content "") start (or pos (length (or new-content ""))))
+                          :while pos)))
+      (error () nil))))
+
+;;; --------------------------------------------------------------------------
+;;; File Edit Tool (search-and-replace)
+;;; --------------------------------------------------------------------------
+
+(defun execute-file-edit (args)
+  "Edit a file by replacing the first occurrence of old_text with new_text.
+The file must exist. old_text must be found exactly once."
+  (let* ((path (cdr (assoc :path args)))
+         (old-text (cdr (assoc :old--text args)))
+         (new-text (cdr (assoc :new--text args)))
+         (resolved (validate-sandbox-path path)))
+    (unless path
+      (error "path parameter is required"))
+    (unless old-text
+      (error "old_text parameter is required"))
+    (unless new-text
+      (error "new_text parameter is required (use empty string to delete)"))
+    (unless (probe-file resolved)
+      (error "File not found: ~A" path))
+    (let* ((content (uiop:read-file-string resolved))
+           (pos (search old-text content))
+           (count (loop :for start := 0 :then (+ p (length old-text))
+                        :for p := (search old-text content :start2 start)
+                        :while p :count t)))
+      (unless pos
+        (error "old_text not found in ~A" path))
+      (when (> count 1)
+        (error "old_text found ~A times in ~A (must be unique). Provide more context."
+               count path))
+      ;; Perform the replacement
+      (let ((new-content (concatenate 'string
+                                      (subseq content 0 pos)
+                                      new-text
+                                      (subseq content (+ pos (length old-text))))))
+        (with-open-file (s resolved
+                           :direction :output
+                           :if-exists :supersede
+                           :if-does-not-exist :create)
+          (write-string new-content s))
+        (cl-json:encode-json-to-string
+         `((:path . ,path)
+           (:old--text--length . ,(length old-text))
+           (:new--text--length . ,(length new-text))
+           (:status . "ok")))))))
+
+(defun file-edit-approval-display (args)
+  "Approval display for file_edit: shows diff of the replacement."
+  (let* ((path (cdr (assoc :path args)))
+         (old-text (cdr (assoc :old--text args)))
+         (new-text (cdr (assoc :new--text args)))
+         (sandbox (or *sandbox-root* (truename ".")))
+         (resolved (merge-pathnames (pathname path) sandbox)))
+    (handler-case
+        (when (probe-file resolved)
+          (let* ((content (uiop:read-file-string resolved))
+                 (pos (search old-text content)))
+            (when pos
+              (let ((new-content (concatenate 'string
+                                              (subseq content 0 pos)
+                                              new-text
+                                              (subseq content (+ pos (length old-text))))))
+                (compute-simple-diff content new-content)))))
+      (error () nil))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Shell Exec Tool
@@ -358,17 +443,33 @@ Signals an error if the path escapes the sandbox."
 
   (register-tool
    "file_write"
-   "Write content to a file in the working directory. Creates parent directories if needed. Overwrites existing files."
+   "Write content to a file in the working directory. If the file does not exist, creates it. If it exists, appends the content to the end. Never overwrites. Use file_edit to modify existing content."
    `((:type . "object")
      (:properties
       . ((:path . ((:type . "string")
                    (:description . "File path relative to the working directory.")))
          (:content . ((:type . "string")
-                      (:description . "The content to write to the file.")))))
+                      (:description . "The content to write (created or appended).")))))
      (:required . #("path" "content")))
    :agent-with-permission
    #'execute-file-write
    :approval-display-fn #'file-write-approval-display)
+
+  (register-tool
+   "file_edit"
+   "Edit an existing file by replacing the first occurrence of old_text with new_text. The old_text must match exactly and appear only once. Use this for precise modifications to existing files."
+   `((:type . "object")
+     (:properties
+      . ((:path . ((:type . "string")
+                   (:description . "File path relative to the working directory.")))
+         (:old--text . ((:type . "string")
+                        (:description . "The exact text to find and replace. Must appear exactly once in the file.")))
+         (:new--text . ((:type . "string")
+                        (:description . "The replacement text. Use empty string to delete the matched text.")))))
+     (:required . #("path" "old_text" "new_text")))
+   :agent-with-permission
+   #'execute-file-edit
+   :approval-display-fn #'file-edit-approval-display)
 
   (register-tool
    "shell_exec"
