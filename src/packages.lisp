@@ -62,10 +62,18 @@
    #:message-insert-char
    #:message-insert-newline
    #:message-delete-char-backward
+   #:message-forward-char
+   #:message-backward-char
+   #:message-forward-word
+   #:message-backward-word
    #:message-move-beginning-of-line
    #:message-move-end-of-line
    #:message-kill-line
+   #:message-kill-backward-line
+   #:message-kill-word
+   #:message-backward-kill-word
    #:message-yank
+   #:message-yank-pop
 
    ;; Kill ring
    #:*kill-ring*

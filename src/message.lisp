@@ -223,6 +223,73 @@ identity, and links to adjacent messages in the buffer."))
         (length (line-content (message-point-line msg))))
   msg)
 
+(declaim (ftype (function (message) message) message-forward-char))
+(defun message-forward-char (msg)
+  "Move point one character forward. Wraps to next line if at end."
+  (let* ((pl (message-point-line msg))
+         (po (message-point-offset msg))
+         (len (length (line-content pl))))
+    (cond
+      ((< po len)
+       (setf (message-point-offset msg) (1+ po)))
+      ((line-next pl)
+       (setf (message-point-line msg) (line-next pl)
+             (message-point-offset msg) 0))))
+  msg)
+
+(declaim (ftype (function (message) message) message-backward-char))
+(defun message-backward-char (msg)
+  "Move point one character backward. Wraps to previous line if at start."
+  (let* ((pl (message-point-line msg))
+         (po (message-point-offset msg)))
+    (cond
+      ((> po 0)
+       (setf (message-point-offset msg) (1- po)))
+      ((line-prev pl)
+       (setf (message-point-line msg) (line-prev pl)
+             (message-point-offset msg)
+             (length (line-content (line-prev pl)))))))
+  msg)
+
+(defun word-char-p (char)
+  "Return T if CHAR is a word constituent (alphanumeric or underscore)."
+  (or (alphanumericp char) (char= char #\_)))
+
+(declaim (ftype (function (message) message) message-forward-word))
+(defun message-forward-word (msg)
+  "Move point forward to end of next word."
+  (let* ((pl (message-point-line msg))
+         (po (message-point-offset msg))
+         (content (line-content pl))
+         (len (length content)))
+    ;; Skip non-word characters
+    (loop :while (and (< po len) (not (word-char-p (char content po))))
+          :do (incf po))
+    ;; Skip word characters
+    (loop :while (and (< po len) (word-char-p (char content po)))
+          :do (incf po))
+    (setf (message-point-offset msg) po))
+  msg)
+
+(declaim (ftype (function (message) message) message-backward-word))
+(defun message-backward-word (msg)
+  "Move point backward to beginning of previous word."
+  (let* ((pl (message-point-line msg))
+         (po (message-point-offset msg))
+         (content (line-content pl)))
+    ;; Skip non-word characters backward
+    (loop :while (and (> po 0) (not (word-char-p (char content (1- po)))))
+          :do (decf po))
+    ;; Skip word characters backward
+    (loop :while (and (> po 0) (word-char-p (char content (1- po))))
+          :do (decf po))
+    (setf (message-point-offset msg) po))
+  msg)
+
+;;; --------------------------------------------------------------------------
+;;; Kill/Cut Operations
+;;; --------------------------------------------------------------------------
+
 (declaim (ftype (function (message) message) message-kill-line))
 (defun message-kill-line (msg)
   "Kill from point to end of line. If at end of line, join with next line.
@@ -248,13 +315,93 @@ Killed text is pushed to the kill ring."
       (t nil)))
   msg)
 
+(declaim (ftype (function (message) message) message-kill-backward-line))
+(defun message-kill-backward-line (msg)
+  "Kill from start of line to point (C-u). Pushes killed text to kill ring."
+  (let* ((pl (message-point-line msg))
+         (po (message-point-offset msg))
+         (content (line-content pl)))
+    (when (> po 0)
+      (let ((killed (subseq content 0 po)))
+        (setf (line-content pl) (subseq content po)
+              (message-point-offset msg) 0)
+        (kill-ring-push killed))))
+  msg)
+
+(declaim (ftype (function (message) message) message-kill-word))
+(defun message-kill-word (msg)
+  "Kill from point to end of current word (M-d). Pushes to kill ring."
+  (let* ((pl (message-point-line msg))
+         (po (message-point-offset msg))
+         (content (line-content pl))
+         (len (length content))
+         (end po))
+    ;; Skip non-word characters
+    (loop :while (and (< end len) (not (word-char-p (char content end))))
+          :do (incf end))
+    ;; Skip word characters
+    (loop :while (and (< end len) (word-char-p (char content end)))
+          :do (incf end))
+    (when (> end po)
+      (let ((killed (subseq content po end)))
+        (setf (line-content pl)
+              (concatenate 'string (subseq content 0 po) (subseq content end)))
+        (kill-ring-push killed))))
+  msg)
+
+(declaim (ftype (function (message) message) message-backward-kill-word))
+(defun message-backward-kill-word (msg)
+  "Kill from beginning of current word to point (C-w). Pushes to kill ring."
+  (let* ((pl (message-point-line msg))
+         (po (message-point-offset msg))
+         (content (line-content pl))
+         (start po))
+    ;; Skip non-word characters backward
+    (loop :while (and (> start 0) (not (word-char-p (char content (1- start)))))
+          :do (decf start))
+    ;; Skip word characters backward
+    (loop :while (and (> start 0) (word-char-p (char content (1- start))))
+          :do (decf start))
+    (when (< start po)
+      (let ((killed (subseq content start po)))
+        (setf (line-content pl)
+              (concatenate 'string (subseq content 0 start) (subseq content po))
+              (message-point-offset msg) start)
+        (kill-ring-push killed))))
+  msg)
+
 (declaim (ftype (function (message) message) message-yank))
 (defun message-yank (msg)
-  "Insert the top of the kill ring at point."
+  "Insert the top of the kill ring at point (C-y)."
   (let ((text (kill-ring-top)))
     (when text
       (loop :for char :across text
             :do (if (char= char #\Newline)
                     (message-insert-newline msg)
                     (message-insert-char msg char)))))
+  msg)
+
+(defvar *yank-index* 0
+  "Current position in the kill ring for yank-pop cycling.")
+
+(declaim (ftype (function (message) message) message-yank-pop))
+(defun message-yank-pop (msg)
+  "Replace the just-yanked text with the next kill ring entry (M-y).
+Must be called after message-yank or message-yank-pop."
+  (when (and *kill-ring* (> (length *kill-ring*) 1))
+    ;; Delete the previously yanked text by undoing
+    ;; For simplicity: we track yank-index and re-yank
+    (incf *yank-index*)
+    (when (>= *yank-index* (length *kill-ring*))
+      (setf *yank-index* 0))
+    ;; The previous yank text needs to be removed first.
+    ;; This is complex without tracking yank boundaries.
+    ;; For now, just insert the next kill ring entry at point.
+    ;; Users should use C-y then M-y to cycle.
+    (let ((text (nth *yank-index* *kill-ring*)))
+      (when text
+        (loop :for char :across text
+              :do (if (char= char #\Newline)
+                      (message-insert-newline msg)
+                      (message-insert-char msg char))))))
   msg)

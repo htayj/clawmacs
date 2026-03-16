@@ -56,10 +56,22 @@
     ;; Insert newline: C-o (open-line, ASCII 15) since C-j (#\Newline)
     ;; is indistinguishable from Enter in most terminals.
     (keymap-bind km (code-char 15) 'insert-newline-command) ; C-o = ASCII 15
+    ;; Cursor movement
     (keymap-bind km #\Soh 'beginning-of-line-command)       ; C-a = ASCII 1
     (keymap-bind km #\Enq 'end-of-line-command)             ; C-e = ASCII 5
+    (keymap-bind km (code-char 6) 'forward-char-command)    ; C-f = ASCII 6
+    (keymap-bind km (code-char 2) 'backward-char-command)   ; C-b = ASCII 2
+    (keymap-bind km '(:alt #\f) 'forward-word-command)      ; M-f
+    (keymap-bind km '(:alt #\b) 'backward-word-command)     ; M-b
+    ;; Kill/cut
     (keymap-bind km #\Vt 'kill-line-command)                ; C-k = ASCII 11
+    (keymap-bind km (code-char 21) 'kill-backward-line-command) ; C-u = ASCII 21
+    (keymap-bind km '(:alt #\d) 'kill-word-command)         ; M-d
+    (keymap-bind km (code-char 23) 'backward-kill-word-command) ; C-w = ASCII 23
+    ;; Yank/paste
     (keymap-bind km #\Em 'yank-command)                     ; C-y = ASCII 25
+    (keymap-bind km '(:alt #\y) 'yank-pop-command)          ; M-y
+    ;; Delete
     (keymap-bind km #\Backspace 'delete-char-backward-command)
     (keymap-bind km #\Rubout 'delete-char-backward-command)
     ;; Scroll: Page Up / Page Down

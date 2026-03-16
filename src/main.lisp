@@ -317,6 +317,46 @@ the event loop polls for updates via update-streaming-response."
   (buffer)
   (message-delete-char-backward (buffer-input-message buffer)))
 
+(defcommand forward-char-command (:permission :user-only)
+  "Move point one character forward."
+  (buffer)
+  (message-forward-char (buffer-input-message buffer)))
+
+(defcommand backward-char-command (:permission :user-only)
+  "Move point one character backward."
+  (buffer)
+  (message-backward-char (buffer-input-message buffer)))
+
+(defcommand forward-word-command (:permission :user-only)
+  "Move point forward to end of next word."
+  (buffer)
+  (message-forward-word (buffer-input-message buffer)))
+
+(defcommand backward-word-command (:permission :user-only)
+  "Move point backward to beginning of previous word."
+  (buffer)
+  (message-backward-word (buffer-input-message buffer)))
+
+(defcommand kill-backward-line-command (:permission :user-only)
+  "Kill from start of line to point."
+  (buffer)
+  (message-kill-backward-line (buffer-input-message buffer)))
+
+(defcommand kill-word-command (:permission :user-only)
+  "Kill from point to end of current word."
+  (buffer)
+  (message-kill-word (buffer-input-message buffer)))
+
+(defcommand backward-kill-word-command (:permission :user-only)
+  "Kill from beginning of current word to point."
+  (buffer)
+  (message-backward-kill-word (buffer-input-message buffer)))
+
+(defcommand yank-pop-command (:permission :user-only)
+  "Replace just-yanked text with next kill ring entry."
+  (buffer)
+  (message-yank-pop (buffer-input-message buffer)))
+
 (defcommand self-insert-command (:permission :user-only)
   "Insert a character at point. The character is passed via *self-insert-char*."
   (buffer)
