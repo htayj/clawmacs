@@ -212,20 +212,20 @@ identity, and links to adjacent messages in the buffer."))
 
 (declaim (ftype (function (message) message) message-delete-char-forward))
 (defun message-delete-char-forward (msg)
-  "Delete the character after point. Point stays in place."
-  (let* ((pl (message-point-line msg))
-         (po (message-point-offset msg))
-         (content (line-content pl)))
+  "Delete the character after point. If at end of line, join with next line."
+  (let ((pl (message-point-line msg))
+        (po (message-point-offset msg)))
     (cond
-      ((< po (length content))
-       (setf (line-content pl)
-             (concatenate 'string
-                          (subseq content 0 po)
-                          (subseq content (1+ po)))))
+      ((< po (length (line-content pl)))
+       (let* ((content (line-content pl))
+              (new-content (concatenate 'string
+                                        (subseq content 0 po)
+                                        (subseq content (1+ po)))))
+         (setf (line-content pl) new-content)))
       ((line-next pl)
        (let ((next (line-next pl)))
          (setf (line-content pl)
-               (concatenate 'string content (line-content next)))
+               (concatenate 'string (line-content pl) (line-content next)))
          (setf (line-next pl) (line-next next))
          (when (line-next next)
            (setf (line-prev (line-next next)) pl))

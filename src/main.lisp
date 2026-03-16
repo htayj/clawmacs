@@ -369,6 +369,28 @@ the event loop polls for updates via update-streaming-response."
   (buffer)
   (message-yank-pop (buffer-input-message buffer)))
 
+(defun message-insert-string (msg text)
+  "Insert TEXT at point in MSG."
+  (loop :for char :across text
+        :do (if (char= char #\Newline)
+                (message-insert-newline msg)
+                (message-insert-char msg char)))
+  msg)
+
+(defcommand yank-previous-command-first-arg-command (:permission :user-only)
+  "Insert the first argument of the previous user command."
+  (buffer)
+  (let ((arg (buffer-previous-command-first-argument buffer)))
+    (when arg
+      (message-insert-string (buffer-input-message buffer) arg))))
+
+(defcommand yank-previous-command-last-arg-command (:permission :user-only)
+  "Insert the last argument of the previous user command."
+  (buffer)
+  (let ((arg (buffer-previous-command-last-argument buffer)))
+    (when arg
+      (message-insert-string (buffer-input-message buffer) arg))))
+
 (defcommand self-insert-command (:permission :user-only)
   "Insert a character at point. The character is passed via *self-insert-char*."
   (buffer)

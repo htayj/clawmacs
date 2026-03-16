@@ -1,5 +1,6 @@
-./reference
+reference/
 session-*.md
 screenshot-*.png
 screenshots/
 e2e-*.txt
+.worktrees/

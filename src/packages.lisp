@@ -59,13 +59,13 @@
    #:message-line-count
 
    ;; Message editing
-    #:message-insert-char
-    #:message-insert-newline
-    #:message-delete-char-backward
-    #:message-delete-char-forward
-    #:message-forward-char
-    #:message-backward-char
-    #:message-forward-word
+   #:message-insert-char
+   #:message-insert-newline
+   #:message-delete-char-backward
+   #:message-delete-char-forward
+   #:message-forward-char
+   #:message-backward-char
+   #:message-forward-word
    #:message-backward-word
    #:message-move-beginning-of-line
    #:message-move-end-of-line

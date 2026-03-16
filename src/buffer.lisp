@@ -223,6 +223,50 @@ and create a new empty input message at the tail."
             (buffer-last-message buf) new-input)))
   buf)
 
+(defun whitespace-char-p (char)
+  "Return T when CHAR is treated as command-word whitespace."
+  (or (char= char #\Space)
+      (char= char #\Tab)
+      (char= char #\Newline)
+      (char= char #\Return)))
+
+(defun split-command-words (text)
+  "Split TEXT into whitespace-delimited words."
+  (let ((words nil)
+        (len (length text))
+        (start 0))
+    (loop
+      (let ((word-start (position-if-not #'whitespace-char-p text :start start)))
+        (unless word-start
+          (return (nreverse words)))
+        (let ((word-end (or (position-if #'whitespace-char-p text :start word-start)
+                            len)))
+          (push (subseq text word-start word-end) words)
+          (setf start word-end))))))
+
+(defun buffer-previous-user-command-text (buf)
+  "Return the latest finalized user message text in BUF, or nil."
+  (loop :for msg := (message-prev (buffer-input-message buf)) :then (message-prev msg)
+        :while msg
+        :for text := (message-text msg)
+        :when (and (message-read-only-p msg)
+                   (eq (message-sender msg) :user)
+                   (plusp (length (string-trim '(#\Space #\Tab #\Newline #\Return) text))))
+          :return text
+        :finally (return nil)))
+
+(defun buffer-previous-command-first-argument (buf)
+  "Return previous command's first argument (second word), or nil."
+  (let* ((command (buffer-previous-user-command-text buf))
+         (words (and command (split-command-words command))))
+    (second words)))
+
+(defun buffer-previous-command-last-argument (buf)
+  "Return previous command's last argument, or nil when unavailable."
+  (let* ((command (buffer-previous-user-command-text buf))
+         (words (and command (split-command-words command))))
+    (car (last words))))
+
 (defun set-message-text (msg text)
   "Replace MSG's lines with lines split from TEXT on newlines."
   (let* ((parts (loop :for start := 0 :then (1+ pos)

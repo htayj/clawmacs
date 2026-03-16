@@ -109,11 +109,9 @@
     (message-insert-char m #\b)
     (message-insert-char m #\c)
     (setf (message-point-offset m) 1)
-    (is (fboundp 'message-delete-char-forward))
-    (when (fboundp 'message-delete-char-forward)
-      (message-delete-char-forward m)
-      (is (string= "ac" (line-content (message-first-line m))))
-      (is (= 1 (message-point-offset m))))))
+    (message-delete-char-forward m)
+    (is (string= "ac" (line-content (message-first-line m))))
+    (is (= 1 (message-point-offset m)))))
 
 (test message-delete-char-forward-joins-lines
   "Deleting forward at end of line removes the line break and preserves point."

@@ -71,10 +71,14 @@
     ;; Yank/paste
     (keymap-bind km #\Em 'yank-command)                     ; C-y = ASCII 25
     (keymap-bind km '(:alt #\y) 'yank-pop-command)          ; M-y
+    (keymap-bind km '(:alt #\Em) 'yank-previous-command-first-arg-command) ; M-C-y
+    (keymap-bind km '(:alt #\.) 'yank-previous-command-last-arg-command)    ; M-.
+    (keymap-bind km '(:alt #\_) 'yank-previous-command-last-arg-command)    ; M-_
     ;; Delete
     (keymap-bind km (code-char 4) 'delete-char-forward-command) ; C-d = ASCII 4
     (keymap-bind km #\Backspace 'delete-char-backward-command)
     (keymap-bind km #\Rubout 'delete-char-backward-command)
+    (keymap-bind km (code-char 4) 'delete-char-forward-command) ; C-d = ASCII 4
     ;; Scroll: Page Up / Page Down
     ;; Croatoan delivers special keys as KEY structs; we extract :name
     ;; in handle-key-event, so bind by the keyword name.

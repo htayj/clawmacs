@@ -32,8 +32,18 @@
     (is (eq 'child-version (keymap-lookup child #\a)))
     (is (eq 'parent-version (keymap-lookup parent #\a)))))
 
-(test default-keymap-binds-ctrl-d-to-forward-delete
-  "The default keymap binds Ctrl+d to forward delete."
+(test default-keymap-readline-argument-yank-bindings
+  "Default keymap includes readline-style argument yank keybindings."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::yank-previous-command-first-arg-command
+          (keymap-lookup *default-keymap* '(:alt #\Em))))
+  (is (eq 'clawmacs::yank-previous-command-last-arg-command
+          (keymap-lookup *default-keymap* '(:alt #\.))))
+  (is (eq 'clawmacs::yank-previous-command-last-arg-command
+          (keymap-lookup *default-keymap* '(:alt #\_)))))
+
+(test default-keymap-ctrl-d-binding
+  "Default keymap binds Ctrl+d to forward delete."
   (clawmacs::init-default-keymap)
   (is (eq 'clawmacs::delete-char-forward-command
           (keymap-lookup *default-keymap* (code-char 4)))))

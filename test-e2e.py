@@ -16,6 +16,7 @@ import time
 import os
 import select
 import traceback
+import argparse
 
 MCP_BIN = os.path.expanduser("~/.cargo/bin/mcp-tui-driver")
 CLAWMACS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -271,6 +272,28 @@ def assert_not_contains(screen_text, expected, msg=""):
     """Assert that screen text does NOT contain expected string."""
     if expected in screen_text:
         raise AssertionError(f"{msg}: '{expected}' should NOT be in screen")
+
+
+def clear_input(s):
+    """Clear current input robustly using editor keybinds."""
+    s.press("Ctrl+a")
+    for _ in range(20):
+        s.press("Ctrl+k")
+    for _ in range(20):
+        s.press("Backspace")
+
+
+def set_input(s, text):
+    """Replace current input text with TEXT."""
+    clear_input(s)
+    s.type_text(text)
+
+
+def seed_previous_command(s, command):
+    """Send COMMAND so argument-yank binds have previous-command context."""
+    set_input(s, command)
+    s.press("Enter")
+    time.sleep(1.0)
 
 
 def run_test(name, fn, session):
@@ -694,11 +717,213 @@ def test_21_modeline_content(s):
     s.screenshot("21-modeline")
 
 
+def test_22_ctrl_b(s):
+    """Test: Ctrl+b moves cursor one character left."""
+    set_input(s, "ac")
+    s.press("Ctrl+e")
+    s.press("Ctrl+b")
+    s.type_text("b")
+    screen = s.text()
+    assert_contains(screen, "abc", "Ctrl+b moved left before insert")
+    s.screenshot("22-ctrl-b")
+
+
+def test_23_ctrl_f(s):
+    """Test: Ctrl+f moves cursor one character right."""
+    set_input(s, "ac")
+    s.press("Ctrl+a")
+    s.press("Ctrl+f")
+    s.type_text("b")
+    screen = s.text()
+    assert_contains(screen, "abc", "Ctrl+f moved right before insert")
+    s.screenshot("23-ctrl-f")
+
+
+def test_24_alt_b(s):
+    """Test: Alt+b moves cursor one word left."""
+    set_input(s, "one two three")
+    s.press("Escape")
+    s.press("b")
+    s.type_text("X")
+    screen = s.text()
+    assert_contains(screen, "one two Xthree", "Alt+b moved left by word")
+    s.screenshot("24-alt-b")
+
+
+def test_25_alt_f(s):
+    """Test: Alt+f moves cursor one word right."""
+    set_input(s, "one two three")
+    s.press("Ctrl+a")
+    s.press("Escape")
+    s.press("f")
+    s.type_text("X")
+    screen = s.text()
+    assert_contains(screen, "oneX two three", "Alt+f moved right by word")
+    s.screenshot("25-alt-f")
+
+
+def test_26_ctrl_a(s):
+    """Test: Ctrl+a moves cursor to start of line."""
+    set_input(s, "middle")
+    s.press("Ctrl+a")
+    s.type_text(">>>")
+    screen = s.text()
+    assert_contains(screen, ">>>middle", "Ctrl+a moved to line start")
+    s.screenshot("26-ctrl-a")
+
+
+def test_27_ctrl_e(s):
+    """Test: Ctrl+e moves cursor to end of line."""
+    set_input(s, "middle")
+    s.press("Ctrl+a")
+    s.press("Ctrl+e")
+    s.type_text("<<<")
+    screen = s.text()
+    assert_contains(screen, "middle<<<", "Ctrl+e moved to line end")
+    s.screenshot("27-ctrl-e")
+
+
+def test_28_ctrl_u(s):
+    """Test: Ctrl+u cuts from line start to cursor."""
+    set_input(s, "hello world")
+    s.press("Ctrl+e")
+    s.press("Ctrl+u")
+    screen = s.text()
+    assert_not_contains(screen, "hello world", "Ctrl+u removed content before cursor")
+    s.press("Ctrl+y")
+    screen = s.text()
+    assert_contains(screen, "hello world", "Ctrl+y restored Ctrl+u kill")
+    s.screenshot("28-ctrl-u")
+
+
+def test_29_ctrl_k(s):
+    """Test: Ctrl+k cuts from cursor to end of line."""
+    set_input(s, "hello world")
+    s.press("Ctrl+a")
+    s.press("Ctrl+k")
+    screen = s.text()
+    assert_not_contains(screen, "hello world", "Ctrl+k removed content after cursor")
+    s.press("Ctrl+y")
+    screen = s.text()
+    assert_contains(screen, "hello world", "Ctrl+y restored Ctrl+k kill")
+    s.screenshot("29-ctrl-k")
+
+
+def test_30_alt_d(s):
+    """Test: Alt+d cuts current word after cursor."""
+    set_input(s, "one two")
+    s.press("Ctrl+a")
+    s.press("Escape")
+    s.press("d")
+    screen = s.text()
+    assert_contains(screen, " two", "Alt+d removed first word")
+    s.press("Ctrl+y")
+    screen = s.text()
+    assert_contains(screen, "one two", "Ctrl+y restored Alt+d kill")
+    s.screenshot("30-alt-d")
+
+
+def test_31_ctrl_w(s):
+    """Test: Ctrl+w cuts current word before cursor."""
+    set_input(s, "one two")
+    s.press("Ctrl+e")
+    s.press("Ctrl+w")
+    screen = s.text()
+    assert_contains(screen, "user> one", "Ctrl+w removed previous word")
+    assert_not_contains(screen, "one two", "Ctrl+w removed text before cursor")
+    s.press("Ctrl+y")
+    screen = s.text()
+    assert_contains(screen, "one two", "Ctrl+y restored Ctrl+w kill")
+    s.screenshot("31-ctrl-w")
+
+
+def test_32_ctrl_y(s):
+    """Test: Ctrl+y pastes previous cut text."""
+    set_input(s, "paste me")
+    s.press("Ctrl+a")
+    s.press("Ctrl+k")
+    s.press("Ctrl+y")
+    screen = s.text()
+    assert_contains(screen, "paste me", "Ctrl+y pasted latest kill")
+    s.screenshot("32-ctrl-y")
+
+
+def test_33_alt_y(s):
+    """Test: Alt+y pastes second latest cut text."""
+    set_input(s, "first")
+    s.press("Ctrl+a")
+    s.press("Ctrl+k")
+    set_input(s, "second")
+    s.press("Ctrl+a")
+    s.press("Ctrl+k")
+    s.press("Ctrl+y")
+    s.press("Escape")
+    s.press("y")
+    screen = s.text()
+    assert_contains(screen, "second", "Ctrl+y pasted latest kill")
+    assert_contains(screen, "first", "Alt+y pasted older kill ring entry")
+    s.screenshot("33-alt-y")
+
+
+def test_34_alt_ctrl_y(s):
+    """Test: Alt+Ctrl+y pastes first argument of previous command."""
+    seed_previous_command(s, "git commit -m msg")
+    clear_input(s)
+    s.press("Escape")
+    s.press("Ctrl+y")
+    screen = s.text()
+    assert_contains(screen, "commit", "Alt+Ctrl+y yanked first argument")
+    s.screenshot("34-alt-ctrl-y")
+
+
+def test_35_alt_dot(s):
+    """Test: Alt+. pastes last argument of previous command."""
+    seed_previous_command(s, "echo alpha beta")
+    clear_input(s)
+    s.press("Escape")
+    s.press(".")
+    screen = s.text()
+    assert_contains(screen, "beta", "Alt+. yanked last argument")
+    s.screenshot("35-alt-dot")
+
+
+def test_36_alt_underscore(s):
+    """Test: Alt+_ pastes last argument of previous command."""
+    seed_previous_command(s, "echo alpha gamma")
+    clear_input(s)
+    s.press("Escape")
+    s.press("_")
+    screen = s.text()
+    assert_contains(screen, "gamma", "Alt+_ yanked last argument")
+    s.screenshot("36-alt-underscore")
+
+
+def test_37_ctrl_d(s):
+    """Test: Ctrl+d deletes next character after cursor."""
+    set_input(s, "abc")
+    s.press("Ctrl+a")
+    s.press("Ctrl+f")
+    s.press("Ctrl+d")
+    screen = s.text()
+    assert_contains(screen, "ac", "Ctrl+d deleted next character")
+    assert_not_contains(screen, "abc", "Ctrl+d removed middle character")
+    s.screenshot("37-ctrl-d")
+
+
 # ==========================================================================
 # Main
 # ==========================================================================
 
 def main():
+    parser = argparse.ArgumentParser(description="Run clawmacs e2e tests")
+    parser.add_argument(
+        "--only",
+        choices=["all", "readline"],
+        default="all",
+        help="run only a subset of tests",
+    )
+    args = parser.parse_args()
+
     os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
     if not os.path.exists(MCP_BIN):
@@ -752,7 +977,43 @@ def main():
         ("19-file-write-append", test_19_file_write_append),
         ("20-file-edit", test_20_file_edit_search_replace),
         ("21-modeline", test_21_modeline_content),
+        ("22-ctrl-b", test_22_ctrl_b),
+        ("23-ctrl-f", test_23_ctrl_f),
+        ("24-alt-b", test_24_alt_b),
+        ("25-alt-f", test_25_alt_f),
+        ("26-ctrl-a", test_26_ctrl_a),
+        ("27-ctrl-e", test_27_ctrl_e),
+        ("28-ctrl-u", test_28_ctrl_u),
+        ("29-ctrl-k", test_29_ctrl_k),
+        ("30-alt-d", test_30_alt_d),
+        ("31-ctrl-w", test_31_ctrl_w),
+        ("32-ctrl-y", test_32_ctrl_y),
+        ("33-alt-y", test_33_alt_y),
+        ("34-alt-ctrl-y", test_34_alt_ctrl_y),
+        ("35-alt-dot", test_35_alt_dot),
+        ("36-alt-underscore", test_36_alt_underscore),
+        ("37-ctrl-d", test_37_ctrl_d),
     ]
+
+    if args.only == "readline":
+        tests = [
+            ("22-ctrl-b", test_22_ctrl_b),
+            ("23-ctrl-f", test_23_ctrl_f),
+            ("24-alt-b", test_24_alt_b),
+            ("25-alt-f", test_25_alt_f),
+            ("26-ctrl-a", test_26_ctrl_a),
+            ("27-ctrl-e", test_27_ctrl_e),
+            ("28-ctrl-u", test_28_ctrl_u),
+            ("29-ctrl-k", test_29_ctrl_k),
+            ("30-alt-d", test_30_alt_d),
+            ("31-ctrl-w", test_31_ctrl_w),
+            ("32-ctrl-y", test_32_ctrl_y),
+            ("33-alt-y", test_33_alt_y),
+            ("34-alt-ctrl-y", test_34_alt_ctrl_y),
+            ("35-alt-dot", test_35_alt_dot),
+            ("36-alt-underscore", test_36_alt_underscore),
+            ("37-ctrl-d", test_37_ctrl_d),
+        ]
 
     for name, fn in tests:
         run_test(name, fn, session)

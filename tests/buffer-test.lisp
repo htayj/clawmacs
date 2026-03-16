@@ -40,9 +40,9 @@
     (buffer-insert-agent-message buf "Echo: hi")
     (is (= 3 (buffer-message-count buf)))
     (let ((agent-msg (message-next (buffer-first-message buf))))
-      (is (string= "Echo: hi" (message-text agent-msg)))
-      (is (message-read-only-p agent-msg))
-      (is (eq :echo (message-sender agent-msg))))
+     (is (string= "Echo: hi" (message-text agent-msg)))
+     (is (message-read-only-p agent-msg))
+     (is (eq :echo (message-sender agent-msg))))
     (is (not (message-read-only-p (buffer-input-message buf))))))
 
 (test buffer-provider-and-model-overrides
@@ -144,3 +144,19 @@
                       (:tool-use-id . "toolu_123")
                       (:content . "done")))
                    (message-raw-content tool-result-msg)))))))
+
+(test previous-command-argument-extraction
+  "Extract first and last argument from previous user command."
+  (let ((buf (make-buffer "test")))
+    (clawmacs::set-message-text (buffer-input-message buf) "git commit -m msg")
+    (buffer-finalize-input buf)
+    (is (string= "commit" (clawmacs::buffer-previous-command-first-argument buf)))
+    (is (string= "msg" (clawmacs::buffer-previous-command-last-argument buf)))))
+
+(test previous-command-argument-extraction-no-arguments
+  "Return nil when previous command has no arguments."
+  (let ((buf (make-buffer "test")))
+    (clawmacs::set-message-text (buffer-input-message buf) "ls")
+    (buffer-finalize-input buf)
+    (is (null (clawmacs::buffer-previous-command-first-argument buf)))
+    (is (string= "ls" (clawmacs::buffer-previous-command-last-argument buf)))))
