@@ -488,7 +488,27 @@ def test_13_backspace(s):
     s.screenshot("13-backspace")
 
 
-def test_14_permission_approve(s):
+def test_14_point_face(s):
+    """Test: Cursor at point shows reverse-video face on the character."""
+    # Type text and position cursor in the middle
+    s.type_text("Hello World Cursor Test")
+    time.sleep(0.3)
+    # Move to beginning, then forward a few chars
+    s.press("Ctrl+a")
+    time.sleep(0.2)
+    s.screenshot("14-point-face-at-start")
+    # The cursor should be at the 'H' character, rendered with reverse-video
+    # We can't verify reverse-video via tui_text, but the screenshot shows it
+    # Move to end
+    s.press("Ctrl+e")
+    time.sleep(0.2)
+    s.screenshot("14-point-face-at-end")
+    # Clean up
+    s.press("Ctrl+a")
+    s.press("Ctrl+k")
+
+
+def test_15_permission_approve(s):
     """Test: Agent tool needing permission shows approval prompt, user approves."""
     # Switch back to main buffer if needed, clear input
     for _ in range(20):
@@ -502,7 +522,7 @@ def test_14_permission_approve(s):
 
     # Check for approval prompt
     screen = s.text()
-    s.screenshot("14-permission-prompt")
+    s.screenshot("15-permission-prompt")
 
     # The screen should show PERMISSION REQUIRED or the approval options
     has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
@@ -512,17 +532,17 @@ def test_14_permission_approve(s):
         s.press("a")
         time.sleep(3)
         screen = s.text()
-        s.screenshot("14-permission-approved")
+        s.screenshot("15-permission-approved")
         # After approval, tool should have executed
         assert_contains(screen, "echo-agent>", "agent continued after approval")
     else:
         # Agent might have answered without using the tool, or tool was auto-approved
         # Just verify it responded
         assert_contains(screen, "echo-agent>", "agent responded")
-        s.screenshot("14-permission-approved")
+        s.screenshot("15-permission-approved")
 
 
-def test_15_permission_deny(s):
+def test_16_permission_deny(s):
     """Test: Agent tool needing permission shows approval prompt, user denies."""
     for _ in range(20):
         s.press("Ctrl+k")
@@ -533,7 +553,7 @@ def test_15_permission_deny(s):
     time.sleep(8)
 
     screen = s.text()
-    s.screenshot("15-permission-deny-prompt")
+    s.screenshot("16-permission-deny-prompt")
 
     has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
                     or "APPROVAL" in screen or "approve" in screen.lower())
@@ -542,13 +562,13 @@ def test_15_permission_deny(s):
         s.press("d")
         time.sleep(3)
         screen = s.text()
-        s.screenshot("15-permission-denied")
+        s.screenshot("16-permission-denied")
         assert_contains(screen, "DENIED", "denial shown in chat")
     else:
-        s.screenshot("15-permission-denied")
+        s.screenshot("16-permission-denied")
 
 
-def test_16_permission_deny_with_message(s):
+def test_17_permission_deny_with_message(s):
     """Test: User denies with a message to the agent."""
     for _ in range(20):
         s.press("Ctrl+k")
@@ -559,7 +579,7 @@ def test_16_permission_deny_with_message(s):
     time.sleep(8)
 
     screen = s.text()
-    s.screenshot("16-permission-message-prompt")
+    s.screenshot("17-permission-message-prompt")
 
     has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
                     or "APPROVAL" in screen or "approve" in screen.lower())
@@ -571,13 +591,13 @@ def test_16_permission_deny_with_message(s):
         s.press("Enter")
         time.sleep(5)
         screen = s.text()
-        s.screenshot("16-permission-deny-message")
+        s.screenshot("17-permission-deny-message")
         assert_contains(screen, "echo-agent>", "agent responded to denial message")
     else:
-        s.screenshot("16-permission-deny-message")
+        s.screenshot("17-permission-deny-message")
 
 
-def test_17_file_write_diff(s):
+def test_18_file_write_diff(s):
     """Test: file_write approval prompt shows a diff against existing file."""
     # First, create a file with known content via shell
     for _ in range(20):
@@ -598,7 +618,7 @@ def test_17_file_write_diff(s):
     time.sleep(8)
 
     screen = s.text()
-    s.screenshot("17-file-write-diff-prompt")
+    s.screenshot("18-file-write-diff-prompt")
 
     has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
                     or "APPROVAL" in screen)
@@ -606,19 +626,19 @@ def test_17_file_write_diff(s):
         # Check that diff-like content is visible (+ or - prefixed lines)
         has_diff = ("+" in screen or "---" in screen or "new file" in screen)
         if has_diff:
-            s.screenshot("17-file-write-diff-visible")
+            s.screenshot("18-file-write-diff-visible")
         # Deny it (we just wanted to see the diff)
         s.press("d")
         time.sleep(3)
         screen = s.text()
-        s.screenshot("17-file-write-diff-denied")
+        s.screenshot("18-file-write-diff-denied")
         assert_contains(screen, "echo-agent>", "agent responded after denial")
     else:
         # Agent may not have used file_write
-        s.screenshot("17-file-write-diff-no-approval")
+        s.screenshot("18-file-write-diff-no-approval")
 
 
-def test_18_file_write_append(s):
+def test_19_file_write_append(s):
     """Test: file_write appends to existing files, never overwrites."""
     for _ in range(20):
         s.press("Ctrl+k")
@@ -629,12 +649,12 @@ def test_18_file_write_append(s):
     s.press("Enter")
     time.sleep(8)
     screen = s.text()
-    s.screenshot("18-file-write-append")
+    s.screenshot("19-file-write-append")
     # The eval result should show "first second" (appended, not overwritten)
     assert_contains(screen, "first second", "file_write appended content")
 
 
-def test_19_file_edit_search_replace(s):
+def test_20_file_edit_search_replace(s):
     """Test: file_edit does search-and-replace with approval prompt showing diff."""
     for _ in range(20):
         s.press("Ctrl+k")
@@ -645,25 +665,25 @@ def test_19_file_edit_search_replace(s):
     s.press("Enter")
     time.sleep(8)
     screen = s.text()
-    s.screenshot("19-file-edit-prompt")
+    s.screenshot("20-file-edit-prompt")
 
     has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
                     or "APPROVAL" in screen)
     if has_approval:
         # Should show diff with -first / +FIRST
         has_diff = ("-" in screen or "+" in screen or "old" in screen)
-        s.screenshot("19-file-edit-diff")
+        s.screenshot("20-file-edit-diff")
         # Approve the edit
         s.press("a")
         time.sleep(5)
         screen = s.text()
-        s.screenshot("19-file-edit-approved")
+        s.screenshot("20-file-edit-approved")
         assert_contains(screen, "echo-agent>", "agent responded after edit approval")
     else:
-        s.screenshot("19-file-edit-no-approval")
+        s.screenshot("20-file-edit-no-approval")
 
 
-def test_20_modeline_content(s):
+def test_21_modeline_content(s):
     """Test: Modeline shows all expected fields."""
     screen = s.text()
     lines = [l for l in screen.split("\n") if l.strip()]
@@ -671,7 +691,7 @@ def test_20_modeline_content(s):
     assert_contains(modeline, "session-01", "buffer name")
     assert_contains(modeline, "echo-agent", "agent name")
     assert_contains(modeline, "/200000", "context limit")
-    s.screenshot("20-modeline")
+    s.screenshot("21-modeline")
 
 
 # ==========================================================================
@@ -724,13 +744,14 @@ def main():
         ("11-switch-buffer", test_11_switch_buffer),
         ("12-kill-buffer", test_12_kill_buffer),
         ("13-backspace", test_13_backspace),
-        ("14-permission-approve", test_14_permission_approve),
-        ("15-permission-deny", test_15_permission_deny),
-        ("16-permission-deny-message", test_16_permission_deny_with_message),
-        ("17-file-write-diff", test_17_file_write_diff),
-        ("18-file-write-append", test_18_file_write_append),
-        ("19-file-edit", test_19_file_edit_search_replace),
-        ("20-modeline", test_20_modeline_content),
+        ("14-point-face", test_14_point_face),
+        ("15-permission-approve", test_15_permission_approve),
+        ("16-permission-deny", test_16_permission_deny),
+        ("17-permission-deny-message", test_17_permission_deny_with_message),
+        ("18-file-write-diff", test_18_file_write_diff),
+        ("19-file-write-append", test_19_file_write_append),
+        ("20-file-edit", test_20_file_edit_search_replace),
+        ("21-modeline", test_21_modeline_content),
     ]
 
     for name, fn in tests:

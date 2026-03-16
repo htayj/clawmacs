@@ -203,8 +203,28 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
                            (setf cursor-y row
                                  cursor-x (+ prefix-len (- point-off chunk-start))))))
                      (incf row))))))
+    ;; Render point face: reverse-video on the character at cursor
     (when (and show-cursor cursor-y cursor-x)
-      (croatoan:move window cursor-y (min cursor-x (1- width))))
+      (let ((cx (min cursor-x (1- width))))
+        ;; Get the character at point (or space if at end of line)
+        (let* ((point-line (message-point-line msg))
+               (point-off (message-point-offset msg))
+               (content (when point-line (line-content point-line)))
+               (char-at-point (if (and content (< point-off (length content)))
+                                  (char content point-off)
+                                  #\Space)))
+          ;; Draw the character with reverse-video face
+          (let ((fg (color-spec-to-croatoan (resolved-face-foreground resolved)))
+                (bg (color-spec-to-croatoan (resolved-face-background resolved))))
+            ;; Swap fg/bg for reverse video
+            (setf (croatoan:color-pair window) (list bg fg))
+            (setf (croatoan:attributes window) '(:bold))
+            (croatoan:move window cursor-y cx)
+            (croatoan:add-string window (string char-at-point))
+            ;; Restore normal face
+            (apply-face-to-window window resolved)))
+        ;; Position the terminal cursor at point
+        (croatoan:move window cursor-y cx)))
     (- row start-row)))
 
 ;;; --------------------------------------------------------------------------
