@@ -21,10 +21,81 @@ MCP_BIN = os.path.expanduser("~/.cargo/bin/mcp-tui-driver")
 CLAWMACS_DIR = os.path.dirname(os.path.abspath(__file__))
 SCREENSHOT_DIR = os.path.join(CLAWMACS_DIR, "screenshots")
 SSL_LIB = "/gnu/store/mb4yqk21zfvbkdy58ry1wi032mm9lsh5-openssl-3.0.8/lib"
+FONT_PATH = "/run/current-system/profile/share/fonts/truetype/DejaVuSansMono.ttf"
 
 # Track test results
 PASSED = []
 FAILED = []
+
+# Try to import Pillow for text-based screenshot rendering
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    HAS_PILLOW = True
+except ImportError:
+    HAS_PILLOW = False
+
+
+def render_text_screenshot(text, path, cols=120, rows=35):
+    """Render terminal text content to a PNG image using Pillow.
+    Falls back to mcp-tui-driver screenshots if Pillow unavailable."""
+    if not HAS_PILLOW:
+        return False
+
+    font_size = 14
+    try:
+        font = ImageFont.truetype(FONT_PATH, font_size)
+    except (OSError, IOError):
+        font = ImageFont.load_default()
+
+    # Measure character size
+    bbox = font.getbbox("M")
+    char_w = bbox[2] - bbox[0]
+    char_h = int(font_size * 1.5)
+
+    img_w = cols * char_w + 20  # padding
+    img_h = rows * char_h + 20
+
+    # Terminal colors
+    bg_color = (0, 0, 0)         # black background
+    fg_color = (204, 204, 204)   # light gray text
+    ml_bg = (200, 200, 200)      # modeline background (white-ish)
+    ml_fg = (0, 0, 0)            # modeline foreground
+    user_bg = (0, 0, 120)        # user message blue bg
+    user_fg = (255, 255, 255)    # user message white fg
+
+    img = Image.new("RGB", (img_w, img_h), bg_color)
+    draw = ImageDraw.Draw(img)
+
+    lines = text.split("\n")
+    # Pad or truncate to rows
+    while len(lines) < rows:
+        lines.append("")
+    lines = lines[:rows]
+
+    for row_idx, line in enumerate(lines):
+        y = 10 + row_idx * char_h
+        # Detect modeline (contains " | " separators and looks like status bar)
+        is_modeline = (" | " in line and
+                       any(s in line for s in ["session", "IDLE", "THINKING", "ERROR"]))
+        # Detect user message
+        is_user = line.strip().startswith("user>")
+        # Detect continuation of user message (indented under user>)
+        is_user_cont = (row_idx > 0 and not line.strip().startswith("echo-agent>")
+                       and not line.strip().startswith("tool-result>")
+                       and not is_modeline)
+
+        if is_modeline:
+            # Draw modeline with inverted colors
+            draw.rectangle([(10, y), (img_w - 10, y + char_h)], fill=ml_bg)
+            draw.text((10, y), line[:cols], font=font, fill=ml_fg)
+        elif is_user or (is_user_cont and False):  # only color user> lines for now
+            draw.rectangle([(10, y), (10 + len(line) * char_w, y + char_h)], fill=user_bg)
+            draw.text((10, y), line[:cols], font=font, fill=user_fg)
+        else:
+            draw.text((10, y), line[:cols], font=font, fill=fg_color)
+
+    img.save(path)
+    return True
 
 
 class MCPClient:
@@ -126,32 +197,25 @@ class ClawmacsSession:
         return json.loads(text).get("found", False)
 
     def screenshot(self, name):
-        """Take a screenshot and save to screenshots/name.png."""
+        """Take a screenshot and save to screenshots/name.png.
+        Uses Pillow to render text content with a real font if available,
+        falls back to mcp-tui-driver's block renderer."""
+        path = os.path.join(SCREENSHOT_DIR, f"{name}.png")
+        # Prefer Pillow text rendering (legible fonts)
+        if HAS_PILLOW:
+            screen = self.text()
+            if screen and render_text_screenshot(screen, path, self.cols, self.rows):
+                return path
+        # Fallback: mcp-tui-driver screenshot
         r = self.client.call_tool("tui_screenshot", {"session_id": self.session_id})
         if not r:
-            print(f"    [screenshot {name}: no response]", file=sys.stderr)
             return None
         for c in r.get("result", {}).get("content", []):
             if c.get("type") == "image":
                 data = base64.b64decode(c["data"])
-                path = os.path.join(SCREENSHOT_DIR, f"{name}.png")
                 with open(path, "wb") as f:
                     f.write(data)
                 return path
-        # Maybe data is in text content
-        for c in r.get("result", {}).get("content", []):
-            if c.get("type") == "text":
-                try:
-                    d = json.loads(c["text"])
-                    if "data" in d:
-                        data = base64.b64decode(d["data"])
-                        path = os.path.join(SCREENSHOT_DIR, f"{name}.png")
-                        with open(path, "wb") as f:
-                            f.write(data)
-                        return path
-                except:
-                    pass
-        print(f"    [screenshot {name}: no image in response, types: {[c.get('type') for c in r.get('result',{}).get('content',[])]}]", file=sys.stderr)
         return None
 
     def text(self):
