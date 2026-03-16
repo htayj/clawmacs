@@ -425,6 +425,7 @@ def test_06_send_message(s):
     screen = wait_for_send_result(s, DEFAULT_AGENT_NAME)
     assert_contains(screen, "say hello", "sent user message")
     assert_contains(screen, f"{DEFAULT_AGENT_NAME}>", "agent turn rendered")
+    assert_not_contains(screen, "[Error:", "message send completed without API error")
     s.screenshot("06-send-message")
 
 

@@ -141,7 +141,7 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
          (display-parts (mapcar (lambda (r) (cdr (assoc :display r))) results))
           (result-blocks (mapcar (lambda (r)
                                    `((:type . "tool_result")
-                                     (:tool-use-id . ,(cdr (assoc :tool-id r)))
+                                     (:tool--use--id . ,(cdr (assoc :tool-id r)))
                                      (:content . ,(cdr (assoc :result r)))))
                                  results))
           (canonical-result-blocks (canonicalize-message-content "user" result-blocks))

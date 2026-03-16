@@ -141,7 +141,7 @@
                       (:input . ((:path . "/tmp/example.txt")))))
                    (message-raw-content assistant-msg)))
         (is (equal '(((:type . "tool_result")
-                      (:tool-use-id . "toolu_123")
+                      (:tool--use--id . "toolu_123")
                       (:content . "done")))
                    (message-raw-content tool-result-msg)))))))
 

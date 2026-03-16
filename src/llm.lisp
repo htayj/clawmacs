@@ -122,10 +122,13 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
       ((string= "tool_result" (or block-type ""))
        (unless (string= role "user")
          (error "tool_result blocks are only allowed on user messages"))
-       `((:type . "tool_result")
-         (:tool-use-id . ,(or (cdr (assoc :tool-use-id block))
-                              (cdr (assoc :tool--use--id block))))
-         (:content . ,(cdr (assoc :content block)))))
+       (let ((tool-use-id (or (cdr (assoc :tool--use--id block))
+                              (cdr (assoc :tool-use-id block)))))
+         (unless tool-use-id
+           (error "tool_result blocks require tool_use_id"))
+        `((:type . "tool_result")
+          (:tool--use--id . ,tool-use-id)
+          (:content . ,(cdr (assoc :content block))))))
       (t
        (error "Unsupported content block type ~S" block-type)))))
 
@@ -159,10 +162,10 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
                  (:name . ,(cdr (assoc :name block)))
                  (:input . ,(cdr (assoc :input block)))))
               ((string= "tool_result" (or block-type ""))
-               `((:type . "tool_result")
-                 (:tool-use-id . ,(or (cdr (assoc :tool-use-id block))
-                                      (cdr (assoc :tool--use--id block))))
-                 (:content . ,(cdr (assoc :content block)))))
+                `((:type . "tool_result")
+                  (:tool--use--id . ,(or (cdr (assoc :tool--use--id block))
+                                         (cdr (assoc :tool-use-id block))))
+                  (:content . ,(cdr (assoc :content block)))))
               (t block))))))
 
 ;;; --------------------------------------------------------------------------
@@ -484,9 +487,10 @@ falls back to plain text content."
                 (when (not (blank-string-p text))
                   (list `((:role . "user")
                           (:content . ,text))))
-                (loop :for block :in tool-results
-                      :collect `((:role . "tool")
-                                 (:tool--call--id . ,(cdr (assoc :tool-use-id block)))
+                 (loop :for block :in tool-results
+                       :collect `((:role . "tool")
+                                 (:tool--call--id . ,(or (cdr (assoc :tool--use--id block))
+                                                         (cdr (assoc :tool-use-id block))))
                                  (:content . ,(cdr (assoc :content block)))))))
               (t
                (list `((:role . ,role)

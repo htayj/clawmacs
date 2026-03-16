@@ -264,13 +264,25 @@
 (test canonicalize-message-content-accepts-user-tool-result
   "User tool_result blocks are accepted as canonical content."
   (is (equal '(((:type . "tool_result")
-                (:tool-use-id . "toolu_123")
+                (:tool--use--id . "toolu_123")
                 (:content . "done")))
              (clawmacs::canonicalize-message-content
               "user"
               '(((:type . "tool_result")
                  (:tool-use-id . "toolu_123")
                  (:content . "done")))))))
+
+(test canonical-tool-result-json-uses-tool-use-id-underscore-key
+  "Canonical tool_result blocks encode tool_use_id (underscore), not camelCase."
+  (let* ((block (first
+                 (clawmacs::canonicalize-message-content
+                  "user"
+                  '(((:type . "tool_result")
+                     (:tool-use-id . "toolu_123")
+                     (:content . "done"))))))
+         (json (clawmacs::api-json-encode block)))
+    (is (search "\"tool_use_id\"" json))
+    (is (not (search "\"toolUseId\"" json)))))
 
 (test canonicalize-message-content-rejects-invalid-role-block-pairings
   "Invalid role/block pairings signal an error."
@@ -285,8 +297,8 @@
     (clawmacs::canonicalize-message-content
      "assistant"
      '(((:type . "tool_result")
-        (:tool-use-id . "toolu_123")
-        (:content . "done"))))))
+         (:tool--use--id . "toolu_123")
+         (:content . "done"))))))
 
 (test canonicalize-message-content-rejects-invalid-role-for-plain-text
   "Plain string content rejects roles that cannot carry text blocks."
