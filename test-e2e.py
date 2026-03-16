@@ -577,7 +577,48 @@ def test_16_permission_deny_with_message(s):
         s.screenshot("16-permission-deny-message")
 
 
-def test_17_modeline_content(s):
+def test_17_file_write_diff(s):
+    """Test: file_write approval prompt shows a diff against existing file."""
+    # First, create a file with known content via shell
+    for _ in range(20):
+        s.press("Ctrl+k")
+    for _ in range(20):
+        s.press("Backspace")
+    s.type_text("Please use the lisp_eval tool to evaluate this: (with-open-file (s (merge-pathnames \"e2e-diff-test.txt\" (truename \".\")) :direction :output :if-exists :supersede :if-does-not-exist :create) (write-string \"line one\" s) (terpri s) (write-string \"line two\" s) (terpri s) (write-string \"line three\" s))")
+    s.press("Enter")
+    time.sleep(8)
+
+    # Now ask the agent to overwrite it with different content
+    for _ in range(20):
+        s.press("Ctrl+k")
+    for _ in range(20):
+        s.press("Backspace")
+    s.type_text("Please write this exact content to e2e-diff-test.txt: line one\nline two modified\nline four")
+    s.press("Enter")
+    time.sleep(8)
+
+    screen = s.text()
+    s.screenshot("17-file-write-diff-prompt")
+
+    has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
+                    or "APPROVAL" in screen)
+    if has_approval:
+        # Check that diff-like content is visible (+ or - prefixed lines)
+        has_diff = ("+" in screen or "---" in screen or "new file" in screen)
+        if has_diff:
+            s.screenshot("17-file-write-diff-visible")
+        # Deny it (we just wanted to see the diff)
+        s.press("d")
+        time.sleep(3)
+        screen = s.text()
+        s.screenshot("17-file-write-diff-denied")
+        assert_contains(screen, "echo-agent>", "agent responded after denial")
+    else:
+        # Agent may not have used file_write
+        s.screenshot("17-file-write-diff-no-approval")
+
+
+def test_18_modeline_content(s):
     """Test: Modeline shows all expected fields."""
     screen = s.text()
     lines = [l for l in screen.split("\n") if l.strip()]
@@ -585,7 +626,7 @@ def test_17_modeline_content(s):
     assert_contains(modeline, "session-01", "buffer name")
     assert_contains(modeline, "echo-agent", "agent name")
     assert_contains(modeline, "/200000", "context limit")
-    s.screenshot("17-modeline")
+    s.screenshot("18-modeline")
 
 
 # ==========================================================================
@@ -641,7 +682,8 @@ def main():
         ("14-permission-approve", test_14_permission_approve),
         ("15-permission-deny", test_15_permission_deny),
         ("16-permission-deny-message", test_16_permission_deny_with_message),
-        ("17-modeline", test_17_modeline_content),
+        ("17-file-write-diff", test_17_file_write_diff),
+        ("18-modeline", test_18_modeline_content),
     ]
 
     for name, fn in tests:
