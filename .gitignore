@@ -4,3 +4,4 @@ screenshot-*.png
 screenshots/
 e2e-*.txt
 .worktrees/
+.cache/

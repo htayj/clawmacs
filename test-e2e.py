@@ -18,11 +18,17 @@ import select
 import traceback
 import argparse
 
-MCP_BIN = os.path.expanduser("~/.cargo/bin/mcp-tui-driver")
+MCP_BIN = os.environ.get(
+    "CLAWMACS_MCP_BIN", os.path.expanduser("~/.cargo/bin/mcp-tui-driver")
+)
 CLAWMACS_DIR = os.path.dirname(os.path.abspath(__file__))
 SCREENSHOT_DIR = os.path.join(CLAWMACS_DIR, "screenshots")
-SSL_LIB = "/gnu/store/mb4yqk21zfvbkdy58ry1wi032mm9lsh5-openssl-3.0.8/lib"
-FONT_PATH = "/run/current-system/profile/share/fonts/truetype/DejaVuSansMono.ttf"
+SSL_LIB = os.environ.get(
+    "CLAWMACS_SSL_LIB", "/gnu/store/mb4yqk21zfvbkdy58ry1wi032mm9lsh5-openssl-3.0.8/lib"
+)
+FONT_PATH = os.environ.get(
+    "CLAWMACS_FONT_PATH", "/run/current-system/profile/share/fonts/truetype/DejaVuSansMono.ttf"
+)
 
 # Track test results
 PASSED = []
