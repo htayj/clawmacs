@@ -326,6 +326,12 @@ def run_test(name, fn, session):
     print(f"  [{name}] ", end="", flush=True)
     try:
         fn(session)
+        screen_after = session.text()
+        assert_not_contains(
+            screen_after,
+            "[Error:",
+            f"{name}: unexpected runtime error detected",
+        )
         PASSED.append(name)
         print("PASS")
     except Exception as e:
