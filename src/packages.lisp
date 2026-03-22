@@ -148,6 +148,8 @@
    #:*default-keymap*
 
     ;; LLM
+    #:*claude-code-credentials-path*
+    #:read-claude-code-oauth-token
     #:provider-token-path
     #:read-provider-token
      #:save-provider-token

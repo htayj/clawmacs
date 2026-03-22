@@ -105,6 +105,64 @@
       (is (string= "trimmed-token"
                    (clawmacs::read-provider-token :anthropic))))))
 
+(test read-claude-code-oauth-token-reads-credentials
+  "read-claude-code-oauth-token extracts the access token from Claude Code credentials."
+  (let ((creds-path (merge-pathnames
+                     (format nil "clawmacs-creds-~A/credentials.json" (gensym))
+                     #P"/tmp/")))
+    (ensure-directories-exist creds-path)
+    (with-open-file (s creds-path
+                       :direction :output
+                       :if-exists :supersede
+                       :if-does-not-exist :create)
+      (write-string "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-test-token\",\"refreshToken\":\"sk-ant-ort01-test\"}}" s))
+    (let ((clawmacs::*claude-code-credentials-path* creds-path))
+      (is (string= "sk-ant-oat01-test-token"
+                   (clawmacs::read-claude-code-oauth-token))))))
+
+(test read-claude-code-oauth-token-returns-nil-when-missing
+  "read-claude-code-oauth-token returns nil when credentials file is absent."
+  (let ((clawmacs::*claude-code-credentials-path*
+          #P"/tmp/nonexistent-clawmacs-creds/credentials.json"))
+    (is (null (clawmacs::read-claude-code-oauth-token)))))
+
+(test read-provider-token-prefers-claude-code-for-anthropic
+  "read-provider-token prefers Claude Code credentials for :ANTHROPIC."
+  (let ((anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex))
+        (creds-path (merge-pathnames
+                     (format nil "clawmacs-creds-~A/credentials.json" (gensym))
+                     #P"/tmp/")))
+    (ensure-directories-exist creds-path)
+    ;; Write a token file with one value
+    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+      (clawmacs::save-provider-token :anthropic "file-token")
+      ;; Write Claude Code credentials with a different value
+      (with-open-file (s creds-path
+                         :direction :output
+                         :if-exists :supersede
+                         :if-does-not-exist :create)
+        (write-string "{\"claudeAiOauth\":{\"accessToken\":\"claude-code-token\"}}" s))
+      (let ((clawmacs::*claude-code-credentials-path* creds-path))
+        ;; Should prefer Claude Code token
+        (is (string= "claude-code-token"
+                     (clawmacs::read-provider-token :anthropic)))
+        ;; OpenAI Codex should still use its own file
+        (clawmacs::save-provider-token :openai-codex "codex-token")
+        (is (string= "codex-token"
+                     (clawmacs::read-provider-token :openai-codex)))))))
+
+(test read-provider-token-falls-back-to-file-when-no-claude-code
+  "read-provider-token falls back to token file when Claude Code credentials are absent."
+  (let ((anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex))
+        (clawmacs::*claude-code-credentials-path*
+          #P"/tmp/nonexistent-clawmacs-creds/credentials.json"))
+    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+      (clawmacs::save-provider-token :anthropic "fallback-token")
+      (is (string= "fallback-token"
+                   (clawmacs::read-provider-token :anthropic))))))
+
 (test read-token-uses-anthropic-provider-path
   "read-token delegates to the Anthropic provider-specific file."
   (let ((anthropic-path (temp-test-token-path :anthropic))
@@ -167,7 +225,7 @@
       (multiple-value-bind (provider model)
           (clawmacs::resolve-buffer-provider-and-model buf)
         (is (eq :anthropic provider))
-        (is (string= "claude-sonnet-4-20250514" model))))))
+        (is (string= "claude-haiku-4-5-20251001" model))))))
 
 (test resolve-buffer-provider-and-model-openai-codex-fallback-model
   "OpenAI Codex resolves to its built-in fallback model."

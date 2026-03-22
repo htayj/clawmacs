@@ -4,7 +4,7 @@
 ;;; Configuration
 ;;; --------------------------------------------------------------------------
 
-(defvar *anthropic-model* "claude-sonnet-4-20250514"
+(defvar *anthropic-model* "claude-haiku-4-5-20251001"
   "The Anthropic model to use for chat completions.")
 
 (defvar *anthropic-api-url* "https://api.anthropic.com/v1/messages"
@@ -13,8 +13,8 @@
 (defvar *anthropic-version* "2023-06-01"
   "The Anthropic API version header value.")
 
-(defvar *anthropic-beta* "claude-code-20250219,oauth-2025-04-20"
-  "Beta features header for OAuth token authentication.")
+(defvar *anthropic-beta* "interleaved-thinking-2025-05-14,oauth-2025-04-20"
+  "Beta features header for OAuth token authentication and extended thinking.")
 
 (defvar *openai-codex-model* "codex-mini-latest"
   "The OpenAI Codex model to use for chat completions.")
@@ -191,12 +191,33 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
              provider)))
    (user-homedir-pathname)))
 
+(defvar *claude-code-credentials-path*
+  (merge-pathnames #P".claude/.credentials.json" (user-homedir-pathname))
+  "Path to Claude Code's OAuth credentials file.")
+
+(defun read-claude-code-oauth-token ()
+  "Read the Anthropic OAuth access token from Claude Code's credentials file.
+Returns the access token string if the file exists and contains a valid
+claudeAiOauth entry, otherwise nil."
+  (when (probe-file *claude-code-credentials-path*)
+    (handler-case
+        (let* ((json-str (uiop:read-file-string *claude-code-credentials-path*))
+               (creds (cl-json:decode-json-from-string json-str))
+               (oauth (cdr (assoc :claude-ai-oauth creds)))
+               (token (cdr (assoc :access-token oauth))))
+          (when (and token (stringp token) (plusp (length token)))
+            token))
+      (error () nil))))
+
 (defun read-provider-token (provider)
-  "Read PROVIDER's token from its provider-specific file."
-  (let ((token-path (provider-token-path provider)))
-    (when (probe-file token-path)
-      (string-trim '(#\Space #\Tab #\Newline #\Return)
-                   (uiop:read-file-string token-path)))))
+  "Read PROVIDER's token, preferring Claude Code's live OAuth credentials
+for :ANTHROPIC, falling back to the provider-specific token file."
+  (or (when (eq provider :anthropic)
+        (read-claude-code-oauth-token))
+      (let ((token-path (provider-token-path provider)))
+        (when (probe-file token-path)
+          (string-trim '(#\Space #\Tab #\Newline #\Return)
+                       (uiop:read-file-string token-path))))))
 
 (defun save-provider-token (provider token)
   "Save TOKEN to PROVIDER's provider-specific token file."
@@ -212,7 +233,7 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
     token))
 
 (defparameter *provider-fallback-models*
-  '((:anthropic . "claude-sonnet-4-20250514")
+  '((:anthropic . "claude-haiku-4-5-20251001")
     (:openai-codex . "codex-mini-latest"))
   "Built-in fallback model names by provider.")
 
