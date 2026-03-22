@@ -5,3 +5,4 @@ screenshots/
 e2e-*.txt
 .worktrees/
 .cache/
+.direnv/
