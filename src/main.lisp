@@ -419,6 +419,33 @@ the event loop polls for updates via update-streaming-response."
       (setf (buffer-scroll-offset buffer) 0))))
 
 ;;; --------------------------------------------------------------------------
+;;; OpenAI Codex OAuth Command
+;;; --------------------------------------------------------------------------
+
+(defcommand openai-codex-oauth-command (:permission :user-only)
+  "Start the OpenAI Codex OAuth login flow. Opens a browser URL and waits
+for the user to paste the callback URL."
+  (buffer)
+  (handler-case
+      (multiple-value-bind (auth-url code-verifier state)
+          (openai-codex-oauth-start)
+        (setf *openai-oauth-pending*
+              `((:code-verifier . ,code-verifier) (:state . ,state)))
+        ;; Display auth URL as a system message
+        (let ((sys-msg (buffer-insert-agent-message
+                        buffer
+                        (format nil "[OpenAI Codex OAuth]~%~%Open this URL in your browser:~%~%  ~A~%~%After signing in, your browser will redirect to a localhost URL.~%Copy that full URL from the address bar and paste it here.~%(It starts with ~A?...)~%~%Press Enter to submit, C-g to cancel."
+                                auth-url *openai-oauth-redirect-uri*))))
+          (setf (message-sender sys-msg) :system))
+        ;; Clear input area for pasting
+        (set-message-text (buffer-input-message buffer) "")
+        (setf (buffer-status buffer) :oauth))
+    (error (e)
+      (let ((sys-msg (buffer-insert-agent-message
+                      buffer (format nil "[OAuth error: ~A]" e))))
+        (setf (message-sender sys-msg) :system)))))
+
+;;; --------------------------------------------------------------------------
 ;;; Buffer Management Commands
 ;;; --------------------------------------------------------------------------
 
@@ -506,6 +533,10 @@ the event loop polls for updates via update-streaming-response."
 
 (defvar *cx-pending* nil
   "When non-nil, the next key event is combined with C-x prefix.")
+
+(defvar *openai-oauth-pending* nil
+  "When non-nil, an alist storing the active OAuth flow state:
+(:code-verifier . string) (:state . string).")
 
 (defvar *buffer-selector-active* nil
   "When non-nil, the buffer selector overlay is displayed.")
@@ -631,6 +662,45 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
        (handle-buffer-selector-key key)
        nil)
 
+      ;; === OPENAI OAUTH MODE ===
+      ;; User is pasting the callback URL; Enter/Return submits, C-g cancels
+      (*openai-oauth-pending*
+       (cond
+         ;; C-g: cancel OAuth flow
+         ((and (characterp key) (char= key (code-char 7)))
+          (setf *openai-oauth-pending* nil
+                (buffer-status buf) :idle)
+          (let ((sys-msg (buffer-insert-agent-message buf "[OAuth cancelled]")))
+            (setf (message-sender sys-msg) :system)))
+         ;; Return or C-j: submit callback URL
+         ((and (characterp key) (or (char= key #\Return)
+                                     (char= key #\Newline)))
+          (let ((callback-url (message-text (buffer-input-message buf))))
+            (handler-case
+                (let* ((code-verifier (cdr (assoc :code-verifier *openai-oauth-pending*)))
+                       (expected-state (cdr (assoc :state *openai-oauth-pending*))))
+                  (openai-codex-oauth-finish callback-url code-verifier expected-state)
+                  (let ((sys-msg (buffer-insert-agent-message
+                                  buf "[OpenAI Codex OAuth: Login successful! Token saved.]")))
+                    (setf (message-sender sys-msg) :system)))
+              (error (e)
+                (let ((sys-msg (buffer-insert-agent-message
+                                buf (format nil "[OAuth error: ~A]" e))))
+                  (setf (message-sender sys-msg) :system)))))
+          (setf *openai-oauth-pending* nil
+                (buffer-status buf) :idle)
+          (set-message-text (buffer-input-message buf) ""))
+         ;; Normal editing (but not send-message)
+         ((keymap-lookup (buffer-keymap buf) key)
+          (let ((command (keymap-lookup (buffer-keymap buf) key)))
+            (unless (eq command 'send-message)
+              (funcall command buf))))
+         ;; Self-insert for pasting URL characters
+         ((and (characterp key) (graphic-char-p key))
+          (let ((*self-insert-char* key))
+            (self-insert-command buf))))
+       nil)
+
       ;; === DENY MESSAGE MODE ===
       ;; User is typing a denial reason; Enter submits, normal editing works
       (*deny-message-mode*
@@ -711,11 +781,12 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
                               :working-directory (truename "."))))
       (init-face-registry buf)
       (setf (buffer-keymap buf) *default-keymap*)
-      ;; Initialize buffer ring and selector state
+      ;; Initialize buffer ring, selector state, and OAuth state
       (setf *buffer-ring* nil *buffer-counter* 0)
       (setf *buffer-selector-active* nil
             *buffer-selector-index* 0
             *buffer-selector-scroll* 0)
+      (setf *openai-oauth-pending* nil)
       (add-buffer-to-ring buf)
       ;; Set sandbox root to the working directory
       (setf *sandbox-root* (truename "."))

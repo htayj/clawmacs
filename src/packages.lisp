@@ -166,6 +166,28 @@
    #:api-json-encode
    #:api-json-decode
 
+   ;; OpenAI Codex OAuth
+   #:*openai-oauth-client-id*
+   #:*openai-oauth-auth-url*
+   #:*openai-oauth-token-url*
+   #:*openai-oauth-redirect-uri*
+   #:*openai-oauth-scopes*
+   #:*openai-codex-oauth-path*
+   #:generate-code-verifier
+   #:compute-code-challenge
+   #:generate-oauth-state
+   #:url-encode-param
+   #:extract-oauth-callback-params
+   #:openai-codex-oauth-start
+   #:exchange-openai-oauth-code
+   #:save-openai-codex-oauth-tokens
+   #:read-openai-codex-oauth-tokens
+   #:refresh-openai-codex-oauth-token
+   #:read-openai-codex-oauth-token
+   #:openai-codex-oauth-finish
+   #:*openai-oauth-pending*
+   #:openai-codex-oauth-command
+
    ;; Tools
    #:*tool-table*
    #:tool-definition

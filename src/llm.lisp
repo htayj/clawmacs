@@ -22,6 +22,26 @@
 (defvar *openai-codex-api-url* "https://api.openai.com/v1/chat/completions"
   "The OpenAI Chat Completions API endpoint for Codex models.")
 
+;;; OpenAI Codex OAuth 2.0 Configuration
+(defvar *openai-oauth-client-id* "app_EMoamEEZ73f0CkXaXp7hrann"
+  "OpenAI Codex OAuth 2.0 public client identifier.")
+
+(defvar *openai-oauth-auth-url* "https://auth.openai.com/oauth/authorize"
+  "OpenAI OAuth 2.0 authorization endpoint.")
+
+(defvar *openai-oauth-token-url* "https://auth.openai.com/oauth/token"
+  "OpenAI OAuth 2.0 token exchange endpoint.")
+
+(defvar *openai-oauth-redirect-uri* "http://localhost:1455/callback"
+  "OAuth redirect URI. No server needed; user pastes the callback URL.")
+
+(defvar *openai-oauth-scopes* "openid profile email offline_access"
+  "OAuth scopes to request from OpenAI.")
+
+(defvar *openai-codex-oauth-path*
+  (merge-pathnames #P".config/clawmacs/openai-codex-oauth.json" (user-homedir-pathname))
+  "Path to the persisted OpenAI Codex OAuth credentials (JSON).")
+
 (defvar *system-prompt-path*
   (merge-pathnames #P".config/clawmacs/system-prompt.txt" (user-homedir-pathname))
   "Path to an optional system prompt file.")
@@ -210,10 +230,12 @@ claudeAiOauth entry, otherwise nil."
       (error () nil))))
 
 (defun read-provider-token (provider)
-  "Read PROVIDER's token, preferring Claude Code's live OAuth credentials
-for :ANTHROPIC, falling back to the provider-specific token file."
+  "Read PROVIDER's token, preferring live OAuth credentials when available,
+falling back to the provider-specific static token file."
   (or (when (eq provider :anthropic)
         (read-claude-code-oauth-token))
+      (when (eq provider :openai-codex)
+        (read-openai-codex-oauth-token))
       (let ((token-path (provider-token-path provider)))
         (when (probe-file token-path)
           (string-trim '(#\Space #\Tab #\Newline #\Return)
@@ -231,6 +253,229 @@ for :ANTHROPIC, falling back to the provider-specific token file."
     (ignore-errors
       (uiop:run-program (list "chmod" "600" (namestring token-path))))
     token))
+
+;;; --------------------------------------------------------------------------
+;;; OpenAI Codex OAuth 2.0 (PKCE Flow)
+;;; --------------------------------------------------------------------------
+
+(defun generate-random-string (length)
+  "Generate a random string of LENGTH alphanumeric characters.
+Uses /dev/urandom for cryptographic randomness."
+  (let ((chars "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+        (num-chars 62))
+    (with-open-file (urandom "/dev/urandom" :element-type '(unsigned-byte 8))
+      (with-output-to-string (s)
+        (loop :repeat length
+              :for byte := (read-byte urandom)
+              :do (write-char (char chars (mod byte num-chars)) s))))))
+
+(defun generate-code-verifier ()
+  "Generate a 43-character PKCE code verifier (RFC 7636)."
+  (generate-random-string 43))
+
+(defun generate-oauth-state ()
+  "Generate a 32-character random state for CSRF protection."
+  (generate-random-string 32))
+
+(defun hex-string-to-bytes (hex-string)
+  "Convert a HEX-STRING to a byte array."
+  (let* ((len (/ (length hex-string) 2))
+         (bytes (make-array len :element-type '(unsigned-byte 8))))
+    (loop :for i :from 0 :below (length hex-string) :by 2
+          :for j :from 0
+          :do (setf (aref bytes j)
+                    (parse-integer hex-string :start i :end (+ i 2) :radix 16)))
+    bytes))
+
+(defun compute-code-challenge (code-verifier)
+  "Compute S256 PKCE code challenge from CODE-VERIFIER (RFC 7636 Section 4.2).
+Uses openssl for SHA-256 and base64, then converts to base64url encoding."
+  (string-trim
+   '(#\Newline #\Space #\Return)
+   (with-output-to-string (out)
+     (uiop:run-program
+      (format nil "printf '%s' '~A' | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '='"
+              code-verifier)
+      :output out))))
+
+(defun url-encode-param (string)
+  "Percent-encode STRING for use as a URL query parameter value."
+  (with-output-to-string (s)
+    (loop :for char :across string
+          :do (cond
+                ((or (alphanumericp char)
+                     (find char "-_.~"))
+                 (write-char char s))
+                ((< (char-code char) 128)
+                 (format s "%~2,'0X" (char-code char)))
+                (t
+                 ;; Multi-byte: encode each UTF-8 byte
+                 (loop :for byte :across (flexi-streams:string-to-octets
+                                          (string char) :external-format :utf-8)
+                       :do (format s "%~2,'0X" byte)))))))
+
+(defun split-string-by-char (string delimiter)
+  "Split STRING into substrings at each occurrence of DELIMITER character."
+  (loop :for start := 0 :then (1+ end)
+        :for end := (position delimiter string :start start)
+        :collect (subseq string start (or end (length string)))
+        :while end))
+
+(defun parse-query-string (query)
+  "Parse a URL QUERY string into an alist of (key . value) string pairs."
+  (loop :for part :in (split-string-by-char query #\&)
+        :for eq-pos := (position #\= part)
+        :when eq-pos
+          :collect (cons (subseq part 0 eq-pos)
+                         (subseq part (1+ eq-pos)))))
+
+(defun extract-oauth-callback-params (url)
+  "Extract authorization code and state from an OAuth callback URL.
+Returns (values code state). Signals an error if the code is missing."
+  (let* ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) url))
+         (query-start (position #\? trimmed)))
+    (unless query-start
+      (error "Invalid callback URL (no query parameters).~%Expected: ~A?code=...&state=..."
+             *openai-oauth-redirect-uri*))
+    (let* ((query (subseq trimmed (1+ query-start)))
+           (params (parse-query-string query))
+           (code (cdr (assoc "code" params :test #'string=)))
+           (state (cdr (assoc "state" params :test #'string=))))
+      (unless code
+        (error "No authorization code in callback URL. Check that you copied the full URL."))
+      (values code state))))
+
+(defun openai-codex-oauth-start ()
+  "Initiate an OpenAI Codex OAuth PKCE flow.
+Generates PKCE pair and state, builds the authorization URL.
+Returns (values auth-url code-verifier state)."
+  (let* ((code-verifier (generate-code-verifier))
+         (code-challenge (compute-code-challenge code-verifier))
+         (state (generate-oauth-state))
+         (auth-url (format nil "~A?client_id=~A&redirect_uri=~A&response_type=code&scope=~A&code_challenge=~A&code_challenge_method=S256&state=~A"
+                           *openai-oauth-auth-url*
+                           *openai-oauth-client-id*
+                           (url-encode-param *openai-oauth-redirect-uri*)
+                           (url-encode-param *openai-oauth-scopes*)
+                           code-challenge
+                           state)))
+    (values auth-url code-verifier state)))
+
+(defun exchange-openai-oauth-code (code code-verifier)
+  "Exchange an OAuth authorization CODE for access/refresh tokens using CODE-VERIFIER.
+Returns a plist (:access-token ... :refresh-token ... :expires-in ...)."
+  (multiple-value-bind (body status-code)
+      (drakma:http-request
+       *openai-oauth-token-url*
+       :method :post
+       :content-type "application/x-www-form-urlencoded"
+       :content (format nil "grant_type=authorization_code&client_id=~A&code=~A&redirect_uri=~A&code_verifier=~A"
+                        (url-encode-param *openai-oauth-client-id*)
+                        (url-encode-param code)
+                        (url-encode-param *openai-oauth-redirect-uri*)
+                        (url-encode-param code-verifier))
+       :want-stream nil
+       :force-binary nil)
+    (let ((body-string (http-body-string body)))
+      (unless (= status-code 200)
+        (error "OAuth token exchange failed (~A): ~A" status-code body-string))
+      (let ((response (api-json-decode body-string)))
+        (list :access-token (cdr (assoc :access--token response))
+              :refresh-token (cdr (assoc :refresh--token response))
+              :expires-in (cdr (assoc :expires--in response)))))))
+
+(defun save-openai-codex-oauth-tokens (access-token refresh-token expires-in)
+  "Save OAuth tokens with computed expiry timestamp to the credential file.
+Returns the access token."
+  (let* ((expires-at (+ (get-universal-time) (or expires-in 3600)))
+         (data `((:access--token . ,access-token)
+                 (:refresh--token . ,refresh-token)
+                 (:expires--at . ,expires-at))))
+    (ensure-directories-exist *openai-codex-oauth-path*)
+    (with-open-file (s *openai-codex-oauth-path*
+                       :direction :output
+                       :if-exists :supersede
+                       :if-does-not-exist :create)
+      (write-string (api-json-encode data) s))
+    (ignore-errors
+      (uiop:run-program (list "chmod" "600" (namestring *openai-codex-oauth-path*))))
+    access-token))
+
+(defun read-openai-codex-oauth-tokens ()
+  "Read persisted OAuth credentials from the credential file.
+Returns a plist (:access-token ... :refresh-token ... :expires-at ...)
+or nil if the file does not exist or cannot be parsed."
+  (when (probe-file *openai-codex-oauth-path*)
+    (handler-case
+        (let* ((json (uiop:read-file-string *openai-codex-oauth-path*))
+               (data (api-json-decode json)))
+          (list :access-token (cdr (assoc :access--token data))
+                :refresh-token (cdr (assoc :refresh--token data))
+                :expires-at (cdr (assoc :expires--at data))))
+      (error () nil))))
+
+(defun refresh-openai-codex-oauth-token (refresh-token)
+  "Refresh the OpenAI Codex access token using REFRESH-TOKEN.
+Saves the new credentials and returns the new access token, or nil on failure."
+  (handler-case
+      (multiple-value-bind (body status-code)
+          (drakma:http-request
+           *openai-oauth-token-url*
+           :method :post
+           :content-type "application/x-www-form-urlencoded"
+           :content (format nil "grant_type=refresh_token&client_id=~A&refresh_token=~A"
+                            (url-encode-param *openai-oauth-client-id*)
+                            (url-encode-param refresh-token))
+           :want-stream nil
+           :force-binary nil)
+        (let ((body-string (http-body-string body)))
+          (when (= status-code 200)
+            (let ((response (api-json-decode body-string)))
+              (save-openai-codex-oauth-tokens
+               (cdr (assoc :access--token response))
+               (or (cdr (assoc :refresh--token response)) refresh-token)
+               (cdr (assoc :expires--in response)))
+              (cdr (assoc :access--token response))))))
+    (error () nil)))
+
+(defun read-openai-codex-oauth-token ()
+  "Read a valid OpenAI Codex access token from the OAuth credential store.
+Auto-refreshes if the token is expired or expiring within 5 minutes.
+Returns the access token string or nil."
+  (let ((creds (read-openai-codex-oauth-tokens)))
+    (when creds
+      (let ((access-token (getf creds :access-token))
+            (refresh-token (getf creds :refresh-token))
+            (expires-at (getf creds :expires-at)))
+        (cond
+          ;; Token is still valid (with 5 minute buffer)
+          ((and access-token expires-at
+                (> expires-at (+ (get-universal-time) 300)))
+           access-token)
+          ;; Token expired but we have a refresh token
+          ((and refresh-token (stringp refresh-token) (plusp (length refresh-token)))
+           (or (refresh-openai-codex-oauth-token refresh-token)
+               access-token))
+          ;; Return whatever we have
+          (t access-token))))))
+
+(defun openai-codex-oauth-finish (callback-url code-verifier expected-state)
+  "Complete the OAuth flow by exchanging the authorization code for tokens.
+CALLBACK-URL is the full redirect URL the user pasted.
+CODE-VERIFIER is the PKCE verifier from the initial request.
+EXPECTED-STATE is the state parameter for CSRF validation.
+Returns the access token on success."
+  (multiple-value-bind (code state)
+      (extract-oauth-callback-params callback-url)
+    (when (and expected-state state (not (string= state expected-state)))
+      (error "OAuth state mismatch (possible CSRF). Expected ~A, got ~A"
+             expected-state state))
+    (let ((tokens (exchange-openai-oauth-code code code-verifier)))
+      (save-openai-codex-oauth-tokens
+       (getf tokens :access-token)
+       (getf tokens :refresh-token)
+       (getf tokens :expires-in))
+      (getf tokens :access-token))))
 
 (defparameter *provider-fallback-models*
   '((:anthropic . "claude-haiku-4-5-20251001")

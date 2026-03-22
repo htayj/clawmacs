@@ -659,3 +659,219 @@
                                    (:content . "hello")))))
                      (bt:with-lock-held ((clawmacs::stream-state-lock state))
                        (reverse (clawmacs::stream-state-content-blocks state))))))))))
+
+;;; --------------------------------------------------------------------------
+;;; OpenAI Codex OAuth Tests
+;;; --------------------------------------------------------------------------
+
+(test generate-code-verifier-length-and-characters
+  "Code verifier is 43 alphanumeric characters."
+  (let ((verifier (clawmacs::generate-code-verifier)))
+    (is (= 43 (length verifier)))
+    (is (every #'alphanumericp verifier))))
+
+(test generate-code-verifier-uniqueness
+  "Two generated verifiers are different."
+  (let ((v1 (clawmacs::generate-code-verifier))
+        (v2 (clawmacs::generate-code-verifier)))
+    (is (not (string= v1 v2)))))
+
+(test generate-oauth-state-length
+  "OAuth state is 32 alphanumeric characters."
+  (let ((state (clawmacs::generate-oauth-state)))
+    (is (= 32 (length state)))
+    (is (every #'alphanumericp state))))
+
+(test compute-code-challenge-is-base64url
+  "Code challenge is base64url encoded (no +, /, or = characters)."
+  (let ((challenge (clawmacs::compute-code-challenge "test-verifier-12345678901234567890123456")))
+    (is (plusp (length challenge)))
+    (is (not (find #\+ challenge)))
+    (is (not (find #\/ challenge)))
+    (is (not (find #\= challenge)))))
+
+(test compute-code-challenge-deterministic
+  "Same verifier produces the same challenge."
+  (let* ((verifier "deterministic-test-verifier-1234567890abcdef")
+         (c1 (clawmacs::compute-code-challenge verifier))
+         (c2 (clawmacs::compute-code-challenge verifier)))
+    (is (string= c1 c2))))
+
+(test url-encode-param-preserves-safe-characters
+  "URL encoding preserves unreserved characters (RFC 3986)."
+  (is (string= "abc-_.~" (clawmacs::url-encode-param "abc-_.~")))
+  (is (string= "ABCxyz0189" (clawmacs::url-encode-param "ABCxyz0189"))))
+
+(test url-encode-param-encodes-special-characters
+  "URL encoding percent-encodes spaces, slashes, and other special characters."
+  (is (string= "hello%20world" (clawmacs::url-encode-param "hello world")))
+  (is (string= "a%2Fb" (clawmacs::url-encode-param "a/b")))
+  (is (string= "key%3Dvalue" (clawmacs::url-encode-param "key=value")))
+  (is (string= "q%26a" (clawmacs::url-encode-param "q&a"))))
+
+(test extract-oauth-callback-params-extracts-code-and-state
+  "Callback URL parameters are correctly extracted."
+  (multiple-value-bind (code state)
+      (clawmacs::extract-oauth-callback-params
+       "http://localhost:1455/callback?code=abc123&state=xyz789")
+    (is (string= "abc123" code))
+    (is (string= "xyz789" state))))
+
+(test extract-oauth-callback-params-code-only
+  "Callback URL with only code (no state) still works."
+  (multiple-value-bind (code state)
+      (clawmacs::extract-oauth-callback-params
+       "http://localhost:1455/callback?code=onlycode")
+    (is (string= "onlycode" code))
+    (is (null state))))
+
+(test extract-oauth-callback-params-rejects-missing-query
+  "Callback URL without query parameters signals an error."
+  (signals error
+    (clawmacs::extract-oauth-callback-params
+     "http://localhost:1455/callback")))
+
+(test extract-oauth-callback-params-rejects-missing-code
+  "Callback URL without a code parameter signals an error."
+  (signals error
+    (clawmacs::extract-oauth-callback-params
+     "http://localhost:1455/callback?state=xyz789")))
+
+(test openai-codex-oauth-start-returns-valid-url
+  "oauth-start returns an authorization URL with all required PKCE parameters."
+  (multiple-value-bind (url verifier state)
+      (clawmacs::openai-codex-oauth-start)
+    (is (search "https://auth.openai.com/oauth/authorize?" url))
+    (is (search "client_id=app_EMoamEEZ73f0CkXaXp7hrann" url))
+    (is (search "response_type=code" url))
+    (is (search "code_challenge_method=S256" url))
+    (is (search "code_challenge=" url))
+    (is (= 43 (length verifier)))
+    (is (= 32 (length state)))
+    (is (search (format nil "state=~A" state) url))))
+
+(defun temp-oauth-path ()
+  (let ((base (make-pathname :directory (list :absolute "tmp"
+                                              (format nil "clawmacs-oauth-~A"
+                                                      (gensym))))))
+    (ensure-directories-exist (merge-pathnames #P".keep" base))
+    (merge-pathnames "openai-codex-oauth.json" base)))
+
+(test save-and-read-openai-codex-oauth-tokens-round-trip
+  "OAuth tokens round-trip through save and read."
+  (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path)))
+    (clawmacs::save-openai-codex-oauth-tokens "access-tok" "refresh-tok" 3600)
+    (let ((creds (clawmacs::read-openai-codex-oauth-tokens)))
+      (is (string= "access-tok" (getf creds :access-token)))
+      (is (string= "refresh-tok" (getf creds :refresh-token)))
+      (is (numberp (getf creds :expires-at)))
+      (is (> (getf creds :expires-at) (get-universal-time))))))
+
+(test read-openai-codex-oauth-tokens-returns-nil-when-missing
+  "Reading from a nonexistent path returns nil."
+  (let ((clawmacs::*openai-codex-oauth-path*
+          #P"/tmp/nonexistent-clawmacs-oauth/oauth.json"))
+    (is (null (clawmacs::read-openai-codex-oauth-tokens)))))
+
+(test read-openai-codex-oauth-token-returns-valid-token
+  "read-openai-codex-oauth-token returns access token when not expired."
+  (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path)))
+    (clawmacs::save-openai-codex-oauth-tokens "fresh-token" "refresh-tok" 7200)
+    (is (string= "fresh-token"
+                 (clawmacs::read-openai-codex-oauth-token)))))
+
+(test read-openai-codex-oauth-token-refreshes-when-expired
+  "read-openai-codex-oauth-token auto-refreshes an expired token."
+  (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path))
+        (refresh-called-p nil))
+    ;; Save an expired token (expires_at in the past)
+    (let* ((expired-at (- (get-universal-time) 100))
+           (data `((:access--token . "old-token")
+                   (:refresh--token . "good-refresh")
+                   (:expires--at . ,expired-at))))
+      (ensure-directories-exist clawmacs::*openai-codex-oauth-path*)
+      (with-open-file (s clawmacs::*openai-codex-oauth-path*
+                         :direction :output
+                         :if-exists :supersede
+                         :if-does-not-exist :create)
+        (write-string (clawmacs::api-json-encode data) s)))
+    ;; Override refresh to return a new token
+    (with-function-override (clawmacs::refresh-openai-codex-oauth-token (refresh-token)
+                              (setf refresh-called-p t)
+                              (is (string= "good-refresh" refresh-token))
+                              "refreshed-token")
+      (is (string= "refreshed-token"
+                   (clawmacs::read-openai-codex-oauth-token)))
+      (is-true refresh-called-p))))
+
+(test read-provider-token-prefers-oauth-for-openai-codex
+  "read-provider-token checks OAuth credentials first for :OPENAI-CODEX."
+  (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path))
+        (anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex)))
+    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+      ;; Save a static token file
+      (clawmacs::save-provider-token :openai-codex "static-token")
+      ;; Save an OAuth token
+      (clawmacs::save-openai-codex-oauth-tokens "oauth-token" "refresh" 3600)
+      ;; OAuth token wins
+      (is (string= "oauth-token"
+                   (clawmacs::read-provider-token :openai-codex))))))
+
+(test read-provider-token-falls-back-to-file-for-openai-codex
+  "read-provider-token falls back to token file when no OAuth credentials exist."
+  (let ((clawmacs::*openai-codex-oauth-path*
+          #P"/tmp/nonexistent-clawmacs-oauth/oauth.json")
+        (anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex)))
+    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+      (clawmacs::save-provider-token :openai-codex "fallback-token")
+      (is (string= "fallback-token"
+                   (clawmacs::read-provider-token :openai-codex))))))
+
+(test exchange-openai-oauth-code-makes-correct-request
+  "Token exchange sends the correct form parameters to the token endpoint."
+  (let ((captured-content nil)
+        (captured-url nil))
+    (with-function-override (drakma:http-request (url &rest args)
+                              (setf captured-url url
+                                    captured-content (getf args :content))
+                              (values "{\"access_token\":\"new-access\",\"refresh_token\":\"new-refresh\",\"expires_in\":3600}"
+                                      200))
+      (let ((tokens (clawmacs::exchange-openai-oauth-code "auth-code-123" "verifier-xyz")))
+        (is (string= "https://auth.openai.com/oauth/token" captured-url))
+        (is (search "grant_type=authorization_code" captured-content))
+        (is (search "code=auth-code-123" captured-content))
+        (is (search "code_verifier=verifier-xyz" captured-content))
+        (is (string= "new-access" (getf tokens :access-token)))
+        (is (string= "new-refresh" (getf tokens :refresh-token)))
+        (is (= 3600 (getf tokens :expires-in)))))))
+
+(test openai-codex-oauth-finish-validates-state
+  "oauth-finish rejects mismatched state parameters."
+  (with-function-override (clawmacs::exchange-openai-oauth-code (code verifier)
+                            (declare (ignore code verifier))
+                            (list :access-token "tok" :refresh-token "ref" :expires-in 3600))
+    (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path)))
+      (signals error
+        (clawmacs::openai-codex-oauth-finish
+         "http://localhost:1455/callback?code=abc&state=wrong"
+         "verifier"
+         "expected-state")))))
+
+(test openai-codex-oauth-finish-succeeds-with-matching-state
+  "oauth-finish completes and saves tokens when state matches."
+  (with-function-override (clawmacs::exchange-openai-oauth-code (code verifier)
+                            (is (string= "auth-code" code))
+                            (is (string= "my-verifier" verifier))
+                            (list :access-token "final-token" :refresh-token "final-refresh" :expires-in 7200))
+    (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path)))
+      (let ((result (clawmacs::openai-codex-oauth-finish
+                     "http://localhost:1455/callback?code=auth-code&state=good-state"
+                     "my-verifier"
+                     "good-state")))
+        (is (string= "final-token" result))
+        ;; Verify it was persisted
+        (let ((saved (clawmacs::read-openai-codex-oauth-tokens)))
+          (is (string= "final-token" (getf saved :access-token)))
+          (is (string= "final-refresh" (getf saved :refresh-token))))))))
