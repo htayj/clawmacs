@@ -391,3 +391,144 @@ Respects buffer-scroll-offset for history scrolling."
         :for pos := (position #\Newline str :start start)
         :collect (subseq str start (or pos (length str)))
         :while pos))
+
+;;; --------------------------------------------------------------------------
+;;; Buffer Selector Rendering
+;;; --------------------------------------------------------------------------
+
+(defun format-selector-line (marker name agent status count-str width)
+  "Format a single line for the buffer selector with aligned columns.
+Adapts column widths to the terminal WIDTH."
+  (let* ((name-width (max 8 (min 30 (floor width 4))))
+         (agent-width (max 6 (min 15 (floor width 6))))
+         (status-width (max 6 (min 12 (floor width 8))))
+         (line (format nil "~A~VA  ~VA  ~VA  ~A"
+                       marker
+                       name-width name
+                       agent-width agent
+                       status-width status
+                       count-str)))
+    (if (<= (length line) width)
+        (concatenate 'string line
+                     (make-string (- width (length line)) :initial-element #\Space))
+        (subseq line 0 width))))
+
+(defun render-buffer-selector (main-window modeline-window)
+  "Render the buffer selector overlay showing all agent sessions.
+Handles scrolling when there are more buffers than visible rows."
+  (let* ((width (croatoan:width main-window))
+         (height (croatoan:height main-window))
+         (buffers *buffer-ring*)
+         (num-buffers (length buffers))
+         (current (first *buffer-ring*))
+         ;; Rows 0=blank, 1=title, 2=separator, 3=headers, 4=blank, 5..=entries
+         ;; Last row = footer
+         (max-entries (max 1 (- height 7)))
+         ;; Auto-scroll to keep the selected index visible
+         (scroll (cond
+                   ((< *buffer-selector-index* *buffer-selector-scroll*)
+                    *buffer-selector-index*)
+                   ((>= *buffer-selector-index*
+                        (+ *buffer-selector-scroll* max-entries))
+                    (max 0 (1+ (- *buffer-selector-index* max-entries))))
+                   (t *buffer-selector-scroll*))))
+    (setf *buffer-selector-scroll* scroll)
+    (croatoan:clear main-window)
+    ;; Title
+    (when (< 1 height)
+      (setf (croatoan:color-pair main-window) '(:cyan :black))
+      (setf (croatoan:attributes main-window) '(:bold))
+      (croatoan:move main-window 1 2)
+      (let ((title "Agent Sessions"))
+        (croatoan:add-string main-window
+                             (subseq title 0 (min (length title) (- width 4))))))
+    ;; Separator
+    (when (< 2 height)
+      (setf (croatoan:color-pair main-window) '(:white :black))
+      (setf (croatoan:attributes main-window) nil)
+      (croatoan:move main-window 2 2)
+      (let ((sep (make-string (min (- width 4) 50) :initial-element #\─)))
+        (croatoan:add-string main-window sep)))
+    ;; Column headers
+    (when (< 3 height)
+      (setf (croatoan:color-pair main-window) '(:yellow :black))
+      (setf (croatoan:attributes main-window) '(:bold))
+      (let ((header (format-selector-line "  " "NAME" "AGENT" "STATUS" "MSGS" width)))
+        (croatoan:move main-window 3 0)
+        (croatoan:add-string main-window
+                             (subseq header 0 (min (length header) width)))))
+    ;; Buffer entries
+    (loop :for absolute-idx :from scroll
+          :below (min (+ scroll max-entries) num-buffers)
+          :for buf := (nth absolute-idx buffers)
+          :for row := (+ 5 (- absolute-idx scroll))
+          :while (< row (- height 2))
+          :for selected-p := (= absolute-idx *buffer-selector-index*)
+          :for current-p := (eq buf current)
+          :for marker := (cond ((and selected-p current-p) "▸*")
+                               (selected-p "▸ ")
+                               (current-p " *")
+                               (t "  "))
+          :for name := (buffer-name buf)
+          :for agent := (buffer-agent-name buf)
+          :for status := (string-downcase (symbol-name (buffer-status buf)))
+          :for msg-count := (max 0 (1- (buffer-message-count buf)))
+          :for count-str := (format nil "~D" msg-count)
+          :for line := (format-selector-line marker name agent status count-str width)
+          :do (progn
+                (if selected-p
+                    (progn
+                      (setf (croatoan:color-pair main-window) '(:black :cyan))
+                      (setf (croatoan:attributes main-window) '(:bold)))
+                    (progn
+                      (setf (croatoan:color-pair main-window) '(:white :black))
+                      (setf (croatoan:attributes main-window) nil)))
+                ;; Clear row with background color
+                (croatoan:move main-window row 0)
+                (croatoan:add-string main-window
+                                     (make-string width :initial-element #\Space))
+                ;; Write entry
+                (croatoan:move main-window row 0)
+                (croatoan:add-string main-window
+                                     (subseq line 0 (min (length line) width)))))
+    ;; Scroll indicator (when list exceeds visible area)
+    (when (> num-buffers max-entries)
+      (let ((indicator (format nil "[~D-~D of ~D]"
+                               (1+ scroll)
+                               (min (+ scroll max-entries) num-buffers)
+                               num-buffers))
+            (ind-row (+ 5 (min max-entries (- num-buffers scroll)))))
+        (when (< ind-row (- height 1))
+          (setf (croatoan:color-pair main-window) '(:yellow :black))
+          (setf (croatoan:attributes main-window) nil)
+          (croatoan:move main-window ind-row 2)
+          (croatoan:add-string main-window
+                               (subseq indicator 0
+                                       (min (length indicator) (- width 4)))))))
+    ;; Footer with keybinding hints
+    (let ((footer-row (1- height)))
+      (when (plusp footer-row)
+        (setf (croatoan:color-pair main-window) '(:green :black))
+        (setf (croatoan:attributes main-window) nil)
+        (croatoan:move main-window footer-row 2)
+        (let ((footer "[RET] select  [C-g/q] cancel  [n] new  [k] kill"))
+          (croatoan:add-string main-window
+                               (subseq footer 0
+                                       (min (length footer) (- width 4)))))))
+    (croatoan:refresh main-window)
+    ;; Custom modeline for selector
+    (let* ((ml-face (make-modeline-face))
+           (resolved (resolve-face ml-face))
+           (ml-text (format nil " Buffer Selector | ~D session~:[s~;~]"
+                            num-buffers (= num-buffers 1)))
+           (ml-width (croatoan:width modeline-window))
+           (padded (if (<= (length ml-text) ml-width)
+                       (concatenate 'string ml-text
+                                    (make-string (- ml-width (length ml-text))
+                                                 :initial-element #\Space))
+                       (subseq ml-text 0 ml-width))))
+      (apply-face-to-window modeline-window resolved)
+      (croatoan:clear modeline-window)
+      (croatoan:move modeline-window 0 0)
+      (croatoan:add-string modeline-window padded)
+      (croatoan:refresh modeline-window))))

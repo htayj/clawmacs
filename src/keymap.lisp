@@ -101,4 +101,5 @@
     (keymap-bind km '(:ctrl-x #\b) 'next-buffer-command)      ; C-x b = next buffer
     (keymap-bind km '(:ctrl-x #\k) 'kill-buffer-command)      ; C-x k = kill buffer
     (keymap-bind km (list :ctrl-x (code-char 19)) 'save-session-command) ; C-x C-s
+    (keymap-bind km (list :ctrl-x (code-char 2)) 'list-buffers-command) ; C-x C-b = buffer selector
     (setf *default-keymap* km)))

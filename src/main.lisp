@@ -422,6 +422,14 @@ the event loop polls for updates via update-streaming-response."
 ;;; Buffer Management Commands
 ;;; --------------------------------------------------------------------------
 
+(defcommand list-buffers-command (:permission :user-only)
+  "Open the buffer selector to switch between agent sessions."
+  (buffer)
+  (declare (ignore buffer))
+  (setf *buffer-selector-active* t
+        *buffer-selector-index* 0
+        *buffer-selector-scroll* 0))
+
 (defcommand new-buffer-command (:permission :user-only)
   "Create a new chat buffer and switch to it."
   (buffer)
@@ -499,6 +507,15 @@ the event loop polls for updates via update-streaming-response."
 (defvar *cx-pending* nil
   "When non-nil, the next key event is combined with C-x prefix.")
 
+(defvar *buffer-selector-active* nil
+  "When non-nil, the buffer selector overlay is displayed.")
+
+(defvar *buffer-selector-index* 0
+  "The currently highlighted index in the buffer selector.")
+
+(defvar *buffer-selector-scroll* 0
+  "Scroll offset for the buffer selector (first visible entry index).")
+
 (defun normalize-key (event)
   "Extract and normalize a key from a croatoan EVENT.
 Returns a character, a keyword (for special keys), a list (:alt <key>)
@@ -540,6 +557,61 @@ for Meta combinations, or a list (:ctrl-x <key>) for C-x prefix."
 (defvar *deny-message-mode* nil
   "When non-nil, the input area is being used to type a denial message.")
 
+(defun handle-buffer-selector-key (key)
+  "Handle a key event while the buffer selector is active.
+Strips any meta/ctrl-x prefix so the selector has simple key bindings."
+  (let ((base-key (if (and (listp key) (= (length key) 2)
+                           (member (first key) '(:alt :ctrl-x)))
+                      (second key)
+                      key))
+        (num-buffers (length *buffer-ring*)))
+    (cond
+      ;; C-g: cancel selector
+      ((and (characterp base-key) (char= base-key (code-char 7)))
+       (setf *buffer-selector-active* nil))
+      ;; q: cancel selector
+      ((and (characterp base-key) (char= base-key #\q))
+       (setf *buffer-selector-active* nil))
+      ;; Enter: select highlighted buffer and close
+      ((and (characterp base-key) (or (char= base-key #\Return)
+                                       (char= base-key #\Newline)))
+       (let ((selected (nth *buffer-selector-index* *buffer-ring*)))
+         (when selected
+           (switch-to-buffer selected)))
+       (setf *buffer-selector-active* nil))
+      ;; C-p or Up arrow: move highlight up
+      ((or (eq base-key :up)
+           (and (characterp base-key) (char= base-key (code-char 16))))
+       (when (plusp *buffer-selector-index*)
+         (decf *buffer-selector-index*)))
+      ;; C-n or Down arrow: move highlight down
+      ((or (eq base-key :down)
+           (and (characterp base-key) (char= base-key (code-char 14))))
+       (when (< *buffer-selector-index* (1- num-buffers))
+         (incf *buffer-selector-index*)))
+      ;; n: create new session buffer and switch to it
+      ((and (characterp base-key) (char= base-key #\n))
+       (let* ((name (next-buffer-name))
+              (new-buf (make-buffer name
+                                    :agent-name "claude"
+                                    :working-directory (truename "."))))
+         (init-face-registry new-buf)
+         (setf (buffer-keymap new-buf) *default-keymap*)
+         (add-buffer-to-ring new-buf)
+         (switch-to-buffer new-buf))
+       (setf *buffer-selector-active* nil))
+      ;; k: kill highlighted buffer (unless it is the last one)
+      ((and (characterp base-key) (char= base-key #\k))
+       (when (> num-buffers 1)
+         (let ((target (nth *buffer-selector-index* *buffer-ring*)))
+           (when target
+             (kill-buffer-from-ring target)
+             (setf *buffer-selector-index*
+                   (min *buffer-selector-index*
+                        (max 0 (1- (length *buffer-ring*)))))))))
+      ;; Everything else: ignore
+      (t nil))))
+
 (defun handle-key-event (buf event)
   "Dispatch a key event through the buffer's keymap.
 Returns :QUIT if the application should exit, or nil otherwise.
@@ -552,6 +624,12 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
       ;; C-c always quits
       ((and (characterp key) (char= key #\Etx))
        :quit)
+
+      ;; === BUFFER SELECTOR MODE ===
+      ;; Navigation and selection within the buffer list overlay
+      (*buffer-selector-active*
+       (handle-buffer-selector-key key)
+       nil)
 
       ;; === DENY MESSAGE MODE ===
       ;; User is typing a denial reason; Enter submits, normal editing works
@@ -633,8 +711,11 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
                               :working-directory (truename "."))))
       (init-face-registry buf)
       (setf (buffer-keymap buf) *default-keymap*)
-      ;; Initialize buffer ring
+      ;; Initialize buffer ring and selector state
       (setf *buffer-ring* nil *buffer-counter* 0)
+      (setf *buffer-selector-active* nil
+            *buffer-selector-index* 0
+            *buffer-selector-scroll* 0)
       (add-buffer-to-ring buf)
       ;; Set sandbox root to the working directory
       (setf *sandbox-root* (truename "."))
@@ -657,7 +738,9 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
                       ((null event)
                        (when streaming
                          (update-streaming-response buf)
-                         (render-buffer buf main-win modeline-win)))
+                         (if *buffer-selector-active*
+                             (render-buffer-selector main-win modeline-win)
+                             (render-buffer buf main-win modeline-win))))
                       ((and (typep event 'croatoan:event)
                             (typep (croatoan:event-key event) 'croatoan:key)
                             (eq :resize (croatoan:key-name
@@ -667,7 +750,9 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
                          (croatoan:resize main-win (1- new-height) new-width)
                          (croatoan:resize modeline-win 1 new-width)
                          (croatoan:move-window modeline-win (1- new-height) 0)
-                         (render-buffer (current-buffer) main-win modeline-win)))
+                         (if *buffer-selector-active*
+                             (render-buffer-selector main-win modeline-win)
+                             (render-buffer (current-buffer) main-win modeline-win))))
                       (t
                        (let ((result (handle-key-event buf event)))
                          (when (eq result :quit)
@@ -675,4 +760,6 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
                        (let ((cur (current-buffer)))
                          (when (buffer-pending-stream cur)
                            (update-streaming-response cur))
-                         (render-buffer cur main-win modeline-win))))))))))
+                         (if *buffer-selector-active*
+                             (render-buffer-selector main-win modeline-win)
+                             (render-buffer cur main-win modeline-win)))))))))))

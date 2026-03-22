@@ -70,3 +70,21 @@
     (dotimes (i 150)
       (message-insert-char m #\x))
     (is (= 3 (clawmacs::message-visual-height m 80)))))
+
+;;; --------------------------------------------------------------------------
+;;; Buffer Selector Rendering Tests
+;;; --------------------------------------------------------------------------
+
+(test format-selector-line-fits-width
+  "format-selector-line output is exactly the given width."
+  (let ((line (clawmacs::format-selector-line "▸ " "my-session" "claude" "idle" "5" 80)))
+    (is (= 80 (length line)))
+    (is (search "my-session" line))
+    (is (search "claude" line))
+    (is (search "idle" line))
+    (is (search "5" line))))
+
+(test format-selector-line-truncates-at-narrow-width
+  "format-selector-line truncates to fit narrow terminals."
+  (let ((line (clawmacs::format-selector-line "  " "very-long-session-name" "claude" "thinking" "12" 40)))
+    (is (= 40 (length line)))))

@@ -189,6 +189,12 @@
    #:render-input
    #:render-buffer
 
+   ;; Buffer selector
+   #:*buffer-selector-active*
+   #:*buffer-selector-index*
+   #:list-buffers-command
+   #:render-buffer-selector
+
    ;; Main
    #:clawmacs-main
    #:send-to-agent-with-context

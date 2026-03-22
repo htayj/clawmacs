@@ -73,3 +73,9 @@
           (keymap-lookup *default-keymap* '(:ctrl #\Rubout))))
   (is (eq 'clawmacs::backward-kill-word-command
           (keymap-lookup *default-keymap* '(:ctrl :backspace)))))
+
+(test default-keymap-buffer-selector-binding
+  "Default keymap binds C-x C-b to the buffer selector."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::list-buffers-command
+          (keymap-lookup *default-keymap* (list :ctrl-x (code-char 2))))))

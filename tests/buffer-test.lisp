@@ -160,3 +160,133 @@
     (buffer-finalize-input buf)
     (is (null (clawmacs::buffer-previous-command-first-argument buf)))
     (is (string= "ls" (clawmacs::buffer-previous-command-last-argument buf)))))
+
+;;; --------------------------------------------------------------------------
+;;; Buffer Selector Tests
+;;; --------------------------------------------------------------------------
+
+(test buffer-selector-activates
+  "list-buffers-command activates the buffer selector."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*buffer-selector-active* nil)
+        (*buffer-selector-index* 99)
+        (clawmacs::*buffer-selector-scroll* 99))
+    (clawmacs::init-default-keymap)
+    (let ((buf (make-buffer "test")))
+      (clawmacs::init-face-registry buf)
+      (setf (buffer-keymap buf) *default-keymap*)
+      (add-buffer-to-ring buf)
+      (list-buffers-command buf)
+      (is (eq t *buffer-selector-active*))
+      (is (= 0 *buffer-selector-index*))
+      (is (= 0 clawmacs::*buffer-selector-scroll*)))))
+
+(test buffer-selector-navigate-down-and-up
+  "Navigating the buffer selector moves the index."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*buffer-selector-active* t)
+        (*buffer-selector-index* 0)
+        (clawmacs::*buffer-selector-scroll* 0))
+    (let ((buf1 (make-buffer "session-1"))
+          (buf2 (make-buffer "session-2"))
+          (buf3 (make-buffer "session-3")))
+      (add-buffer-to-ring buf3)
+      (add-buffer-to-ring buf2)
+      (add-buffer-to-ring buf1)
+      ;; Navigate down (C-n = ASCII 14)
+      (clawmacs::handle-buffer-selector-key (code-char 14))
+      (is (= 1 *buffer-selector-index*))
+      (clawmacs::handle-buffer-selector-key (code-char 14))
+      (is (= 2 *buffer-selector-index*))
+      ;; Can't go past end
+      (clawmacs::handle-buffer-selector-key (code-char 14))
+      (is (= 2 *buffer-selector-index*))
+      ;; Navigate up (C-p = ASCII 16)
+      (clawmacs::handle-buffer-selector-key (code-char 16))
+      (is (= 1 *buffer-selector-index*)))))
+
+(test buffer-selector-enter-selects-buffer
+  "Pressing Enter in the buffer selector switches to the highlighted buffer."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*buffer-selector-active* t)
+        (*buffer-selector-index* 1)
+        (clawmacs::*buffer-selector-scroll* 0))
+    (let ((buf1 (make-buffer "session-1"))
+          (buf2 (make-buffer "session-2")))
+      (add-buffer-to-ring buf2)
+      (add-buffer-to-ring buf1)
+      ;; Select index 1 (session-2) and press Enter
+      (clawmacs::handle-buffer-selector-key #\Newline)
+      (is (eq nil *buffer-selector-active*))
+      (is (eq buf2 (current-buffer))))))
+
+(test buffer-selector-cancel-with-c-g
+  "C-g closes the buffer selector without switching."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*buffer-selector-active* t)
+        (*buffer-selector-index* 1)
+        (clawmacs::*buffer-selector-scroll* 0))
+    (let ((buf1 (make-buffer "session-1"))
+          (buf2 (make-buffer "session-2")))
+      (add-buffer-to-ring buf2)
+      (add-buffer-to-ring buf1)
+      ;; C-g = ASCII 7
+      (clawmacs::handle-buffer-selector-key (code-char 7))
+      (is (eq nil *buffer-selector-active*))
+      ;; Current buffer unchanged (buf1 is still first)
+      (is (eq buf1 (current-buffer))))))
+
+(test buffer-selector-new-buffer
+  "Pressing n creates a new buffer and closes the selector."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*buffer-selector-active* t)
+        (*buffer-selector-index* 0)
+        (clawmacs::*buffer-selector-scroll* 0))
+    (clawmacs::init-default-keymap)
+    (let ((buf1 (make-buffer "session-1")))
+      (clawmacs::init-face-registry buf1)
+      (setf (buffer-keymap buf1) *default-keymap*)
+      (add-buffer-to-ring buf1)
+      (clawmacs::handle-buffer-selector-key #\n)
+      (is (eq nil *buffer-selector-active*))
+      (is (= 2 (length *buffer-ring*)))
+      (is (string= "session-1" (buffer-name buf1)))
+      ;; The new buffer is now current
+      (is (not (eq buf1 (current-buffer)))))))
+
+(test buffer-selector-kill-buffer
+  "Pressing k kills the highlighted buffer."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*buffer-selector-active* t)
+        (*buffer-selector-index* 1)
+        (clawmacs::*buffer-selector-scroll* 0))
+    (let ((buf1 (make-buffer "session-1"))
+          (buf2 (make-buffer "session-2"))
+          (buf3 (make-buffer "session-3")))
+      (add-buffer-to-ring buf3)
+      (add-buffer-to-ring buf2)
+      (add-buffer-to-ring buf1)
+      ;; Kill index 1 (session-2)
+      (clawmacs::handle-buffer-selector-key #\k)
+      (is (= 2 (length *buffer-ring*)))
+      (is (null (find-buffer-by-name "session-2")))
+      ;; Index clamped
+      (is (<= *buffer-selector-index* (1- (length *buffer-ring*))))))
+
+  ;; Cannot kill the last buffer
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*buffer-selector-active* t)
+        (*buffer-selector-index* 0)
+        (clawmacs::*buffer-selector-scroll* 0))
+    (let ((buf1 (make-buffer "only-buffer")))
+      (add-buffer-to-ring buf1)
+      (clawmacs::handle-buffer-selector-key #\k)
+      (is (= 1 (length *buffer-ring*)))
+      (is (eq buf1 (current-buffer))))))
