@@ -1,6 +1,144 @@
 (in-package :clawmacs)
 
 ;;; --------------------------------------------------------------------------
+;;; Global Face Registry
+;;; --------------------------------------------------------------------------
+
+(defvar *global-face-registry* (make-hash-table :test #'eq)
+  "Hash table mapping keyword names to face objects for theme-level faces.
+These are faces not tied to any specific buffer or sender, such as modeline,
+system messages, minibuffer, approval prompts, and selector overlays.")
+
+(defun global-face (name)
+  "Look up a face by keyword NAME in the global face registry.
+Returns the face object, or nil if not found."
+  (gethash name *global-face-registry*))
+
+(defun (setf global-face) (face name)
+  "Store FACE under keyword NAME in the global face registry."
+  (setf (gethash name *global-face-registry*) face))
+
+(defun init-global-faces ()
+  "Populate the global face registry with all theme-level faces.
+Call once at startup. These faces are customizable via customize-face."
+  (let ((r *global-face-registry*))
+    (clrhash r)
+    ;; Modeline
+    (setf (gethash :modeline r)
+          (make-instance 'face :name :modeline
+            :background (make-color-spec :cga 7)
+            :foreground (make-color-spec :cga 0)
+            :bold-p t :underline-p nil :reverse-p nil))
+    ;; System messages (e.g. shell prefix output, notifications)
+    (setf (gethash :system r)
+          (make-instance 'face :name :system
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 6)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    ;; Minibuffer faces
+    (setf (gethash :minibuffer-prompt r)
+          (make-instance 'face :name :minibuffer-prompt
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 15)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :minibuffer-cursor r)
+          (make-instance 'face :name :minibuffer-cursor
+            :background (make-color-spec :cga 15)
+            :foreground (make-color-spec :cga 0)
+            :bold-p t :underline-p nil :reverse-p nil))
+    (setf (gethash :minibuffer-candidate r)
+          (make-instance 'face :name :minibuffer-candidate
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 7)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :minibuffer-selected r)
+          (make-instance 'face :name :minibuffer-selected
+            :background (make-color-spec :cga 15)
+            :foreground (make-color-spec :cga 0)
+            :bold-p t :underline-p nil :reverse-p nil))
+    ;; Selector overlay faces (buffer selector, model selector)
+    (setf (gethash :selector-title r)
+          (make-instance 'face :name :selector-title
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 14)
+            :bold-p t :underline-p nil :reverse-p nil))
+    (setf (gethash :selector-separator r)
+          (make-instance 'face :name :selector-separator
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 7)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :selector-header r)
+          (make-instance 'face :name :selector-header
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 11)
+            :bold-p t :underline-p nil :reverse-p nil))
+    (setf (gethash :selector-entry r)
+          (make-instance 'face :name :selector-entry
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 7)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :selector-selected r)
+          (make-instance 'face :name :selector-selected
+            :background (make-color-spec :cga 6)
+            :foreground (make-color-spec :cga 0)
+            :bold-p t :underline-p nil :reverse-p nil))
+    (setf (gethash :selector-footer r)
+          (make-instance 'face :name :selector-footer
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 2)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :selector-scroll r)
+          (make-instance 'face :name :selector-scroll
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 11)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    ;; Approval prompt faces
+    (setf (gethash :approval-header r)
+          (make-instance 'face :name :approval-header
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 11)
+            :bold-p t :underline-p nil :reverse-p nil))
+    (setf (gethash :approval-code r)
+          (make-instance 'face :name :approval-code
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 14)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :approval-text r)
+          (make-instance 'face :name :approval-text
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 15)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :approval-diff-add r)
+          (make-instance 'face :name :approval-diff-add
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 2)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :approval-diff-remove r)
+          (make-instance 'face :name :approval-diff-remove
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 1)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :approval-options r)
+          (make-instance 'face :name :approval-options
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 2)
+            :bold-p t :underline-p nil :reverse-p nil))
+    r))
+
+(defun collect-global-faces ()
+  "Collect all faces from the global face registry.
+Returns a list of plists with :face, :owner, :name, and :label keys."
+  (let ((result nil))
+    (maphash (lambda (name face)
+               (push (list :face face
+                           :owner :global
+                           :name name
+                           :label (format nil "global:~(~A~)" name))
+                     result))
+             *global-face-registry*)
+    (sort result #'string< :key (lambda (p) (getf p :label)))))
+
+;;; --------------------------------------------------------------------------
 ;;; Default Face Definitions
 ;;; --------------------------------------------------------------------------
 
@@ -33,15 +171,33 @@ Background: black (#0), foreground: white."
            :underline-p nil
            :reverse-p nil))))
 
+(defun make-default-system-face-set ()
+  "Create the default face set for system messages.
+Uses the global :system face if available, otherwise cyan on black."
+  (let ((sys-face (or (global-face :system)
+                      (make-instance 'face :name :default
+                        :background (make-color-spec :cga 0)
+                        :foreground (make-color-spec :cga 6)
+                        :bold-p nil :underline-p nil :reverse-p nil))))
+    (make-face-set
+     :system
+     (list (make-instance 'face
+             :name :default
+             :parent sys-face
+             :background nil :foreground nil
+             :bold-p nil :underline-p nil :reverse-p nil)))))
+
 (defun make-modeline-face ()
-  "Create the modeline face. Background: CGA white (#7), foreground: black, bold."
-  (make-instance 'face
-    :name :modeline
-    :background (make-color-spec :cga 7)
-    :foreground (make-color-spec :cga 0)
-    :bold-p t
-    :underline-p nil
-    :reverse-p nil))
+  "Return the modeline face from the global registry, or create a default.
+Prefers the stored global face for customizability."
+  (or (global-face :modeline)
+      (make-instance 'face
+        :name :modeline
+        :background (make-color-spec :cga 7)
+        :foreground (make-color-spec :cga 0)
+        :bold-p t
+        :underline-p nil
+        :reverse-p nil)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Croatoan Color Helpers
@@ -81,6 +237,13 @@ support it."
                   (list (when (resolved-face-bold-p resolved-face) :bold)
                         (when (resolved-face-underline-p resolved-face) :underline)
                         (when (resolved-face-reverse-p resolved-face) :reverse))))))
+
+(defun apply-global-face (window face-name)
+  "Apply a face from the global face registry to WINDOW by keyword NAME.
+Resolves the face and sets WINDOW's colors and attributes."
+  (let ((face (global-face face-name)))
+    (when face
+      (apply-face-to-window window (resolve-face face)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Modeline Rendering
@@ -330,20 +493,16 @@ Respects buffer-scroll-offset for history scrolling."
 ;;; --------------------------------------------------------------------------
 
 (defun render-approval-prompt (window buf start-row width)
-  "Render the permission approval prompt in the input area."
+  "Render the permission approval prompt in the input area.
+Uses global faces: :approval-header, :approval-code, :approval-text,
+:approval-diff-add, :approval-diff-remove, :approval-options."
   (let* ((approval (buffer-approval-pending buf))
          (tool-name (cdr (assoc :tool-name approval)))
          (raw-sexpr (cdr (assoc :display-raw approval)))
          (expanded (cdr (assoc :display-expanded approval)))
-         (row start-row)
-         ;; Use a distinct face: yellow on black for warnings
-         (warn-fg '(:yellow))
-         (prompt-fg '(:white)))
-    (declare (ignore warn-fg prompt-fg))
-    ;; Set colors: yellow text for the prompt
-    (setf (croatoan:color-pair window) '(:yellow :black))
-    (setf (croatoan:attributes window) '(:bold))
+         (row start-row))
     ;; Header
+    (apply-global-face window :approval-header)
     (when (< row (croatoan:height window))
       (croatoan:move window row 0)
       (croatoan:add-string window (make-string width :initial-element #\-))
@@ -352,8 +511,7 @@ Respects buffer-scroll-offset for history scrolling."
                            (format nil "-- PERMISSION REQUIRED: ~A " tool-name))
       (incf row))
     ;; Raw sexpr
-    (setf (croatoan:attributes window) nil)
-    (setf (croatoan:color-pair window) '(:cyan :black))
+    (apply-global-face window :approval-code)
     (dolist (line (split-string-by-newline raw-sexpr))
       (when (< row (croatoan:height window))
         (croatoan:move window row 0)
@@ -362,7 +520,7 @@ Respects buffer-scroll-offset for history scrolling."
         (croatoan:add-string window (subseq line 0 (min (length line) width)))
         (incf row)))
     ;; Expanded form
-    (setf (croatoan:color-pair window) '(:white :black))
+    (apply-global-face window :approval-text)
     (dolist (line (split-string-by-newline expanded))
       (when (< row (croatoan:height window))
         (croatoan:move window row 0)
@@ -378,21 +536,20 @@ Respects buffer-scroll-offset for history scrolling."
             (croatoan:move window row 0)
             (croatoan:add-string window (make-string width :initial-element #\Space))
             (croatoan:move window row 0)
-            ;; Color-code diff lines: green for +, red for -, white for context
+            ;; Color-code diff lines using global faces
             (cond
               ((and (plusp (length line)) (char= (char line 0) #\+))
-               (setf (croatoan:color-pair window) '(:green :black)))
+               (apply-global-face window :approval-diff-add))
               ((and (plusp (length line)) (char= (char line 0) #\-))
-               (setf (croatoan:color-pair window) '(:red :black)))
+               (apply-global-face window :approval-diff-remove))
               (t
-               (setf (croatoan:color-pair window) '(:white :black))))
+               (apply-global-face window :approval-text)))
             (croatoan:add-string window (subseq line 0 (min (length line) width)))
             (incf row)))))
     ;; Options
     (when (< row (croatoan:height window))
       (incf row) ; blank line
-      (setf (croatoan:color-pair window) '(:green :black))
-      (setf (croatoan:attributes window) '(:bold))
+      (apply-global-face window :approval-options)
       (croatoan:move window row 0)
       (croatoan:add-string window (make-string width :initial-element #\Space))
       (croatoan:move window row 0)
@@ -430,7 +587,9 @@ Adapts column widths to the terminal WIDTH."
 
 (defun render-buffer-selector (main-window modeline-window)
   "Render the buffer selector overlay showing all agent sessions.
-Handles scrolling when there are more buffers than visible rows."
+Handles scrolling when there are more buffers than visible rows.
+Uses global faces: :selector-title, :selector-separator, :selector-header,
+:selector-entry, :selector-selected, :selector-scroll, :selector-footer."
   (let* ((width (croatoan:width main-window))
          (height (croatoan:height main-window))
          (buffers *buffer-ring*)
@@ -451,23 +610,20 @@ Handles scrolling when there are more buffers than visible rows."
     (croatoan:clear main-window)
     ;; Title
     (when (< 1 height)
-      (setf (croatoan:color-pair main-window) '(:cyan :black))
-      (setf (croatoan:attributes main-window) '(:bold))
+      (apply-global-face main-window :selector-title)
       (croatoan:move main-window 1 2)
       (let ((title "Agent Sessions"))
         (croatoan:add-string main-window
                              (subseq title 0 (min (length title) (- width 4))))))
     ;; Separator
     (when (< 2 height)
-      (setf (croatoan:color-pair main-window) '(:white :black))
-      (setf (croatoan:attributes main-window) nil)
+      (apply-global-face main-window :selector-separator)
       (croatoan:move main-window 2 2)
       (let ((sep (make-string (min (- width 4) 50) :initial-element #\─)))
         (croatoan:add-string main-window sep)))
     ;; Column headers
     (when (< 3 height)
-      (setf (croatoan:color-pair main-window) '(:yellow :black))
-      (setf (croatoan:attributes main-window) '(:bold))
+      (apply-global-face main-window :selector-header)
       (let ((header (format-selector-line "  " "NAME" "AGENT" "STATUS" "MSGS" width)))
         (croatoan:move main-window 3 0)
         (croatoan:add-string main-window
@@ -492,12 +648,8 @@ Handles scrolling when there are more buffers than visible rows."
           :for line := (format-selector-line marker name agent status count-str width)
           :do (progn
                 (if selected-p
-                    (progn
-                      (setf (croatoan:color-pair main-window) '(:black :cyan))
-                      (setf (croatoan:attributes main-window) '(:bold)))
-                    (progn
-                      (setf (croatoan:color-pair main-window) '(:white :black))
-                      (setf (croatoan:attributes main-window) nil)))
+                    (apply-global-face main-window :selector-selected)
+                    (apply-global-face main-window :selector-entry))
                 ;; Clear row with background color
                 (croatoan:move main-window row 0)
                 (croatoan:add-string main-window
@@ -514,8 +666,7 @@ Handles scrolling when there are more buffers than visible rows."
                                num-buffers))
             (ind-row (+ 5 (min max-entries (- num-buffers scroll)))))
         (when (< ind-row (- height 1))
-          (setf (croatoan:color-pair main-window) '(:yellow :black))
-          (setf (croatoan:attributes main-window) nil)
+          (apply-global-face main-window :selector-scroll)
           (croatoan:move main-window ind-row 2)
           (croatoan:add-string main-window
                                (subseq indicator 0
@@ -523,8 +674,7 @@ Handles scrolling when there are more buffers than visible rows."
     ;; Footer with keybinding hints
     (let ((footer-row (1- height)))
       (when (plusp footer-row)
-        (setf (croatoan:color-pair main-window) '(:green :black))
-        (setf (croatoan:attributes main-window) nil)
+        (apply-global-face main-window :selector-footer)
         (croatoan:move main-window footer-row 2)
         (let ((footer "[RET] select  [C-g/q] cancel  [n] new  [k] kill"))
           (croatoan:add-string main-window
@@ -590,23 +740,20 @@ Handles scrolling when there are more models than visible rows."
     (croatoan:clear main-window)
     ;; Title
     (when (< 1 height)
-      (setf (croatoan:color-pair main-window) '(:cyan :black))
-      (setf (croatoan:attributes main-window) '(:bold))
+      (apply-global-face main-window :selector-title)
       (croatoan:move main-window 1 2)
       (let ((title "Select Model"))
         (croatoan:add-string main-window
                              (subseq title 0 (min (length title) (- width 4))))))
     ;; Separator
     (when (< 2 height)
-      (setf (croatoan:color-pair main-window) '(:white :black))
-      (setf (croatoan:attributes main-window) nil)
+      (apply-global-face main-window :selector-separator)
       (croatoan:move main-window 2 2)
       (let ((sep (make-string (min (- width 4) 50) :initial-element #\─)))
         (croatoan:add-string main-window sep)))
     ;; Column headers
     (when (< 3 height)
-      (setf (croatoan:color-pair main-window) '(:yellow :black))
-      (setf (croatoan:attributes main-window) '(:bold))
+      (apply-global-face main-window :selector-header)
       (let ((header (format-model-selector-line "  " "PROVIDER" "MODEL" width)))
         (croatoan:move main-window 3 0)
         (croatoan:add-string main-window
@@ -628,12 +775,8 @@ Handles scrolling when there are more models than visible rows."
           :for line := (format-model-selector-line marker provider model width)
           :do (progn
                 (if selected-p
-                    (progn
-                      (setf (croatoan:color-pair main-window) '(:black :cyan))
-                      (setf (croatoan:attributes main-window) '(:bold)))
-                    (progn
-                      (setf (croatoan:color-pair main-window) '(:white :black))
-                      (setf (croatoan:attributes main-window) nil)))
+                    (apply-global-face main-window :selector-selected)
+                    (apply-global-face main-window :selector-entry))
                 ;; Clear row with background color
                 (croatoan:move main-window row 0)
                 (croatoan:add-string main-window
@@ -650,8 +793,7 @@ Handles scrolling when there are more models than visible rows."
                                num-entries))
             (ind-row (+ 5 (min max-visible (- num-entries scroll)))))
         (when (< ind-row (- height 1))
-          (setf (croatoan:color-pair main-window) '(:yellow :black))
-          (setf (croatoan:attributes main-window) nil)
+          (apply-global-face main-window :selector-scroll)
           (croatoan:move main-window ind-row 2)
           (croatoan:add-string main-window
                                (subseq indicator 0
@@ -659,8 +801,7 @@ Handles scrolling when there are more models than visible rows."
     ;; Footer with keybinding hints
     (let ((footer-row (1- height)))
       (when (plusp footer-row)
-        (setf (croatoan:color-pair main-window) '(:green :black))
-        (setf (croatoan:attributes main-window) nil)
+        (apply-global-face main-window :selector-footer)
         (croatoan:move main-window footer-row 2)
         (let ((footer "[RET] select  [C-g/q] cancel  * = active"))
           (croatoan:add-string main-window
@@ -711,9 +852,9 @@ When active, shows the prompt with input and filtered completion candidates."
     (croatoan:refresh minibuffer-window)))
 
 (defun render-minibuffer-inactive (window width)
-  "Render the inactive minibuffer: a single blank line."
-  (setf (croatoan:color-pair window) '(:white :black))
-  (setf (croatoan:attributes window) nil)
+  "Render the inactive minibuffer: a single blank line.
+Uses global face :minibuffer-prompt."
+  (apply-global-face window :minibuffer-prompt)
   (croatoan:move window 0 0)
   (croatoan:add-string window (make-string width :initial-element #\Space)))
 
@@ -721,14 +862,14 @@ When active, shows the prompt with input and filtered completion candidates."
   "Render the active minibuffer with prompt, input, cursor, and filtered items.
 The first row shows the prompt and user input with a block cursor.
 Subsequent rows show the filtered candidates, with the selected one in
-inverse video (reverse face)."
+inverse video. Uses global faces: :minibuffer-prompt, :minibuffer-cursor,
+:minibuffer-candidate, :minibuffer-selected."
   (let* ((prompt-str (format nil "~A: " *minibuffer-prompt*))
          (input *minibuffer-input*)
          (prompt-line (concatenate 'string prompt-str input))
          (cursor-col (+ (length prompt-str) *minibuffer-point*)))
     ;; ── Prompt line ──
-    (setf (croatoan:color-pair window) '(:white :black))
-    (setf (croatoan:attributes window) nil)
+    (apply-global-face window :minibuffer-prompt)
     (croatoan:move window 0 0)
     (croatoan:add-string window (make-string width :initial-element #\Space))
     (croatoan:move window 0 0)
@@ -739,14 +880,12 @@ inverse video (reverse face)."
       (let ((char-at-cursor (if (< *minibuffer-point* (length input))
                                 (char input *minibuffer-point*)
                                 #\Space)))
-        ;; Reverse video for cursor
-        (setf (croatoan:color-pair window) '(:black :white))
-        (setf (croatoan:attributes window) '(:bold))
+        ;; Cursor face
+        (apply-global-face window :minibuffer-cursor)
         (croatoan:move window 0 cursor-col)
         (croatoan:add-string window (string char-at-cursor))
-        ;; Restore
-        (setf (croatoan:color-pair window) '(:white :black))
-        (setf (croatoan:attributes window) nil)))
+        ;; Restore prompt face
+        (apply-global-face window :minibuffer-prompt)))
     ;; ── Candidate list (with scroll offset) ──
     (let* ((items *minibuffer-filtered-items*)
            (selected *minibuffer-selected-index*)
@@ -762,14 +901,8 @@ inverse video (reverse face)."
             :for selected-p := (= item-idx selected)
             :do (progn
                   (if selected-p
-                      ;; Selected item: inverse video (swap fg/bg)
-                      (progn
-                        (setf (croatoan:color-pair window) '(:black :white))
-                        (setf (croatoan:attributes window) '(:bold)))
-                      ;; Normal item
-                      (progn
-                        (setf (croatoan:color-pair window) '(:white :black))
-                        (setf (croatoan:attributes window) nil)))
+                      (apply-global-face window :minibuffer-selected)
+                      (apply-global-face window :minibuffer-candidate))
                   ;; Clear row with background
                   (croatoan:move window row 0)
                   (croatoan:add-string window

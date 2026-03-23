@@ -32,6 +32,14 @@
    #:make-face-set
    #:get-face
 
+   ;; Global face registry
+   #:*global-face-registry*
+   #:global-face
+   #:init-global-faces
+   #:collect-global-faces
+   #:apply-global-face
+   #:make-default-system-face-set
+
    ;; Lines
    #:line
    #:make-line

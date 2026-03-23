@@ -687,13 +687,16 @@ to navigate. Shows buffer name, agent, status, and message count."
 ;;; --------------------------------------------------------------------------
 
 (defun init-face-registry (buf)
-  "Populate BUF's face registry with default face sets."
+  "Populate BUF's face registry with default face sets.
+Includes user, agent, and system face sets."
   (let* ((registry (buffer-face-registry buf))
          (agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
          (user-fs (make-default-user-face-set))
-         (agent-fs (make-default-agent-face-set agent-kw)))
+         (agent-fs (make-default-agent-face-set agent-kw))
+         (system-fs (make-default-system-face-set)))
     (setf (gethash :user registry) user-fs
-          (gethash agent-kw registry) agent-fs)
+          (gethash agent-kw registry) agent-fs
+          (gethash :system registry) system-fs)
     (setf (message-face-set (buffer-input-message buf)) user-fs)
     buf))
 
@@ -878,10 +881,22 @@ Does nothing for non-boolean fields (foreground, background, parent)."
           (rebuild-customize-face-display))))))
 
 (defun collect-all-faces ()
-  "Collect all unique face objects from all buffer face registries.
-Returns a sorted list of plists with :face, :owner, :name, and :label keys."
+  "Collect all unique face objects from the global face registry and
+all buffer face registries. Returns a sorted list of plists with
+:face, :owner, :name, and :label keys."
   (let ((seen (make-hash-table :test #'eq))
         (result nil))
+    ;; Global faces first
+    (maphash (lambda (name face)
+               (unless (gethash face seen)
+                 (setf (gethash face seen) t)
+                 (push (list :face face
+                             :owner :global
+                             :name name
+                             :label (format nil "global:~(~A~)" name))
+                       result)))
+             *global-face-registry*)
+    ;; Per-buffer faces
     (dolist (buf *buffer-ring*)
       (maphash (lambda (owner face-set)
                  (maphash (lambda (name face)
@@ -2249,6 +2264,7 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
   "Entry point for clawmacs. Initializes the TUI and runs the event loop."
   (init-default-keymap)
   (init-tools)
+  (init-global-faces)
   ;; Load custom system prompt from file if it exists
   (when (probe-file *system-prompt-path*)
     (setf *system-prompt*

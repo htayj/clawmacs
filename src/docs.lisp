@@ -1317,6 +1317,49 @@ documentation in *extended-docs*."
   :see-also (buffer-pending-tool-calls buffer-approval-pending))
 
 ;;; ==========================================================================
+;;; Category: global-face — Global face registry
+;;; ==========================================================================
+
+(defdoc *global-face-registry*
+  :category "global-face"
+  :usage "*global-face-registry* — hash table mapping keywords to face objects"
+  :returns "hash-table"
+  :side-effects "Populated at startup by init-global-faces."
+  :see-also (global-face init-global-faces collect-global-faces collect-all-faces))
+
+(defdoc global-face
+  :category "global-face"
+  :usage "(global-face NAME:keyword) — (global-face :modeline)"
+  :returns "face or nil — the face object, or nil if not found."
+  :see-also (*global-face-registry* init-global-faces apply-global-face))
+
+(defdoc init-global-faces
+  :category "global-face"
+  :usage "(init-global-faces) — called once at startup in clawmacs-main"
+  :returns "hash-table — the populated *global-face-registry*"
+  :side-effects "Clears and repopulates *global-face-registry* with 18 theme faces: modeline, system, minibuffer-prompt, minibuffer-cursor, minibuffer-candidate, minibuffer-selected, selector-title, selector-separator, selector-header, selector-entry, selector-selected, selector-footer, selector-scroll, approval-header, approval-code, approval-text, approval-diff-add, approval-diff-remove, approval-options."
+  :see-also (*global-face-registry* global-face customize-face-command))
+
+(defdoc collect-global-faces
+  :category "global-face"
+  :usage "(collect-global-faces)"
+  :returns "list of plists — each with :face, :owner (:global), :name, :label"
+  :see-also (*global-face-registry* collect-all-faces))
+
+(defdoc apply-global-face
+  :category "global-face"
+  :usage "(apply-global-face WINDOW:croatoan-window NAME:keyword) — (apply-global-face win :modeline)"
+  :returns "nil"
+  :side-effects "Sets the window's color pair and attributes from the resolved global face."
+  :see-also (global-face apply-face-to-window resolve-face))
+
+(defdoc make-default-system-face-set
+  :category "global-face"
+  :usage "(make-default-system-face-set)"
+  :returns "face-set — a face set for system messages with cyan-on-black default."
+  :see-also (make-default-user-face-set make-default-agent-face-set init-face-registry))
+
+;;; ==========================================================================
 ;;; Category: render — Rendering and display
 ;;; ==========================================================================
 
