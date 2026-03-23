@@ -169,11 +169,14 @@
    #:api-json-encode
    #:api-json-decode
 
-   ;; Claude CLI Subprocess
+   ;; Claude CLI Subprocess (stream-json protocol)
    #:*claude-cli-path*
    #:*claude-cli-models*
    #:claude-cli-model-p
    #:claude-cli-build-prompt
+   #:claude-cli-build-ndjson-message
+   #:claude-cli-spawn-args
+   #:claude-cli-next-session-id
    #:claude-cli-request
    #:claude-cli-request-streaming
 

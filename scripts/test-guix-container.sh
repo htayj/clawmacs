@@ -146,8 +146,11 @@ cat > "$TMP_BIN/guix" <<'EOF'
 share=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --share=*)
+    --share=*=/workspace)
       share=${1#--share=}
+      ;;
+    --share=*|--expose=*)
+      # Additional shares/exposes (e.g. ~/.claude, /nix) — skip
       ;;
   esac
   if [ "$1" = "--" ]; then

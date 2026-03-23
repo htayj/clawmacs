@@ -52,10 +52,13 @@ Uses the coding-specific endpoint for subscription-based access.")
   "Path to the persisted OpenAI Codex OAuth credentials (JSON).")
 
 ;;; Claude CLI Subprocess Configuration (for Claude Max subscription models)
+;;; Uses the stream-json subprocess protocol (same as Goose, OpenClaw, etc.)
+;;; instead of the deprecated -p "print mode" flag.
 (defvar *claude-cli-path* "claude"
-  "Path to the Claude Code CLI binary. Used as subprocess for Sonnet/Opus
+  "Path to the Claude Code CLI binary. Used as a subprocess for Sonnet/Opus
 models which require Claude Max subscription routing that the REST API
-does not support. Set to nil to disable CLI subprocess delegation.")
+does not support. Uses the --input-format stream-json protocol for proper
+machine-to-machine communication. Set to nil to disable CLI delegation.")
 
 (defvar *claude-cli-models*
   '("claude-sonnet-4-6" "claude-opus-4-6"
@@ -64,7 +67,7 @@ does not support. Set to nil to disable CLI subprocess delegation.")
     "claude-sonnet-4-20250514" "claude-opus-4-20250514")
   "Anthropic models that require the Claude CLI subprocess because the
 REST API does not support them under Claude Max OAuth subscriptions.
-These models are routed through `claude -p` instead of the REST API.")
+These models are routed through the Claude Code CLI stream-json protocol.")
 
 (defun claude-cli-model-p (model)
   "Return non-nil when MODEL must use the Claude CLI subprocess."
@@ -945,22 +948,46 @@ Claude Code CLI subprocess instead of the REST API."
                             :tools tools))))
 
 ;;; --------------------------------------------------------------------------
-;;; Claude CLI Subprocess Provider
+;;; Claude CLI Subprocess Provider (stream-json protocol)
 ;;; --------------------------------------------------------------------------
 ;;; The Claude Max subscription (5x, 20x) restricts Sonnet/Opus models to the
 ;;; Claude Code CLI process.  The REST API returns 400 "Error" for these models
-;;; even with valid OAuth tokens.  We delegate to `claude -p` (print mode)
-;;; which handles auth, routing, and model access internally.
+;;; even with valid OAuth tokens.
+;;;
+;;; We use the Claude Code CLI's stream-json subprocess protocol — the same
+;;; protocol used by Goose, OpenClaw, and other agentic editors.  This spawns
+;;; `claude --input-format stream-json --output-format stream-json` and
+;;; communicates via NDJSON on stdin/stdout.
+;;;
+;;; Protocol overview:
+;;;   1. Spawn: claude --input-format stream-json --output-format stream-json
+;;;            --verbose --model <model> --system-prompt "..." --max-turns 1
+;;;   2. Send:  {"type":"user","session_id":"...","message":{"role":"user",
+;;;             "content":[{"type":"text","text":"..."}]}}  (newline-terminated)
+;;;   3. Recv:  NDJSON events on stdout until {"type":"result",...}
+;;;
+;;; Each request spawns a fresh subprocess (auth/config load is fast).
+;;; The --dangerously-skip-permissions flag prevents interactive permission
+;;; prompts.  --max-turns 1 restricts to a single response turn.
+
+(defvar *claude-cli-session-counter* 0
+  "Monotonically increasing counter for generating unique session IDs.")
+
+(defun claude-cli-next-session-id ()
+  "Generate a unique session ID for a Claude CLI request."
+  (format nil "clawmacs-~D-~D"
+          (get-universal-time) (incf *claude-cli-session-counter*)))
 
 (defun claude-cli-build-prompt (messages)
   "Flatten MESSAGES into a single prompt string for the Claude CLI.
 Older messages are prepended as context so the model sees the full
-conversation history."
+conversation history.  System messages are excluded since the system
+prompt is passed via --system-prompt."
   (with-output-to-string (s)
     (dolist (msg messages)
       (let ((role (cdr (assoc :role msg)))
             (raw  (cdr (assoc :content msg))))
-        (when (and role raw)
+        (when (and role raw (not (string= role "system")))
           (let ((text (cond
                         ;; Plain string content
                         ((stringp raw) raw)
@@ -975,109 +1002,225 @@ conversation history."
             (format s "~:[~;~%~%~][~A]: ~A" (plusp (file-position s))
                     role text)))))))
 
+(defun claude-cli-build-ndjson-message (messages session-id)
+  "Build an NDJSON message line for the Claude CLI stream-json protocol.
+Flattens all conversation MESSAGES into a single user message with full
+context, tagged with SESSION-ID."
+  (let ((prompt-text (claude-cli-build-prompt messages)))
+    (api-json-encode
+     `((:type . "user")
+       (:session--id . ,session-id)
+       (:message . ((:role . "user")
+                    (:content . ,(vector
+                                  `((:type . "text")
+                                    (:text . ,prompt-text))))))))))
+
+(defun claude-cli-spawn-args (model)
+  "Build the CLI argument list for spawning a Claude subprocess for MODEL."
+  (let ((system-prompt (or (build-system-prompt)
+                           "You are a helpful assistant.")))
+    (list *claude-cli-path*
+          "--input-format" "stream-json"
+          "--output-format" "stream-json"
+          "--verbose"
+          "--model" model
+          "--system-prompt" system-prompt
+          "--dangerously-skip-permissions"
+          "--max-turns" "1")))
+
 (defun claude-cli-request (messages &key (model "claude-sonnet-4-6")
                                          (max-tokens 8192)
                                          tools)
   "Send a non-streaming request via the Claude Code CLI subprocess.
-Returns a canonical Anthropic-format response alist."
-  (declare (ignore tools))
-  (let* ((prompt (claude-cli-build-prompt messages))
-         (args (list *claude-cli-path*
-                     "-p" prompt
-                     "--model" model
-                     "--output-format" "json"
-                     "--max-turns" "1"))
-         (raw-output (with-output-to-string (out)
-                       (uiop:run-program args
-                                         :output out
-                                         :error-output :interactive
-                                         :ignore-error-status t))))
-    ;; Parse the JSON result from claude CLI
-    (let* ((result (api-json-decode raw-output))
-           (text (cdr (assoc :result result)))
-           (stop-reason (or (cdr (assoc :stop--reason result)) "end_turn"))
-           (usage (cdr (assoc :usage result))))
-      ;; Build canonical Anthropic response format
-      `((:id . ,(or (cdr (assoc :session--id result)) "cli"))
-        (:type . "message")
-        (:role . "assistant")
-        (:content . ,(vector (canonical-text-block (or text ""))))
-        (:model . ,model)
-        (:stop--reason . ,stop-reason)
-        (:usage . ,(or usage
-                       `((:input--tokens . 0)
-                         (:output--tokens . ,(length (or text ""))))))))))
+Uses the stream-json protocol: spawns `claude --input-format stream-json`,
+writes an NDJSON message to stdin, and reads NDJSON events from stdout
+until a result event arrives.  Returns a canonical Anthropic-format
+response alist."
+  (declare (ignore max-tokens tools))
+  (let* ((session-id (claude-cli-next-session-id))
+         (ndjson-msg (claude-cli-build-ndjson-message messages session-id))
+         (args (claude-cli-spawn-args model))
+         (proc (uiop:launch-program args
+                                     :input :stream
+                                     :output :stream
+                                     :error-output nil))
+         (stdin (uiop:process-info-input proc))
+         (stdout (uiop:process-info-output proc)))
+    ;; Send the NDJSON message and close stdin to signal completion
+    (unwind-protect
+         (progn
+           (write-string ndjson-msg stdin)
+           (write-char #\Newline stdin)
+           (force-output stdin)
+           (close stdin)
+           (setf stdin nil)
+           ;; Read NDJSON events from stdout until result or error
+           (let ((accumulated-text "")
+                 (usage nil))
+             (loop :for line := (read-line stdout nil nil)
+                   :while line
+                   :when (and (plusp (length line))
+                              (char= (char line 0) #\{))
+                   :do (handler-case
+                           (let* ((event (api-json-decode line))
+                                  (event-type (cdr (assoc :type event))))
+                             (cond
+                               ;; Assistant message with content blocks
+                               ((string= event-type "assistant")
+                                (let* ((message (cdr (assoc :message event)))
+                                       (content (cdr (assoc :content message))))
+                                  (when content
+                                    (loop :for blk :across content
+                                          :when (string= "text"
+                                                          (cdr (assoc :type blk)))
+                                          :do (let ((text (cdr (assoc :text blk))))
+                                                (when text
+                                                  (setf accumulated-text
+                                                        (concatenate 'string
+                                                                     accumulated-text
+                                                                     text))))))))
+                               ;; Result event — final response
+                               ((string= event-type "result")
+                                (setf accumulated-text
+                                      (or (cdr (assoc :result event))
+                                          accumulated-text)
+                                      usage (cdr (assoc :usage event)))
+                                (return))
+                               ;; Error event
+                               ((string= event-type "error")
+                                (error "Claude CLI error: ~A"
+                                       (or (cdr (assoc :error event))
+                                           "Unknown error")))))
+                         (error (e)
+                           ;; Skip malformed lines but propagate real errors
+                           (when (search "Claude CLI error" (format nil "~A" e))
+                             (error e)))))
+             ;; Build canonical Anthropic response format
+             `((:id . ,session-id)
+               (:type . "message")
+               (:role . "assistant")
+               (:content . ,(vector (canonical-text-block (or accumulated-text ""))))
+               (:model . ,model)
+               (:stop--reason . "end_turn")
+               (:usage . ,(or usage
+                              `((:input--tokens . 0)
+                                (:output--tokens . ,(length (or accumulated-text "")))))))))
+      ;; Cleanup
+      (when stdin (ignore-errors (close stdin)))
+      (ignore-errors (close stdout))
+      (ignore-errors (uiop:wait-process proc)))))
 
 (defun claude-cli-request-streaming (messages callback
                                       &key (model "claude-sonnet-4-6")
                                            (max-tokens 8192)
                                            tools)
   "Send a streaming request via the Claude Code CLI subprocess.
-Spawns `claude -p` with stream-json output and parses NDJSON events.
-Returns a stream-state, just like anthropic-request-streaming."
-  (declare (ignore callback tools))
-  (let* ((prompt (claude-cli-build-prompt messages))
-         (args (list *claude-cli-path*
-                     "-p" prompt
-                     "--model" model
-                     "--output-format" "stream-json"
-                     "--verbose"
-                     "--max-turns" "1"))
+Uses the stream-json protocol: spawns `claude --input-format stream-json`,
+writes an NDJSON message to stdin, and parses NDJSON events from stdout
+in a background thread.  Returns a stream-state that the event loop polls."
+  (declare (ignore callback max-tokens tools))
+  (let* ((session-id (claude-cli-next-session-id))
+         (ndjson-msg (claude-cli-build-ndjson-message messages session-id))
+         (args (claude-cli-spawn-args model))
          (state (make-stream-state)))
-    ;; Spawn background thread to run the CLI and parse output
+    ;; Spawn background thread to run the CLI and parse NDJSON output
     (bt:make-thread
      (lambda ()
        (handler-case
-           (let ((raw-output
-                   (with-output-to-string (out)
-                     (uiop:run-program args
-                                       :output out
-                                       :error-output nil
-                                       :ignore-error-status t))))
-             ;; Parse NDJSON lines
-             (with-input-from-string (in raw-output)
-               (loop :for line := (read-line in nil nil)
-                     :while line
-                     :when (and (plusp (length line))
-                                (char= (char line 0) #\{))
-                     :do (handler-case
-                             (let* ((event (api-json-decode line))
-                                    (event-type (cdr (assoc :type event))))
-                               (cond
-                                 ;; Assistant message with content
-                                 ((string= event-type "assistant")
-                                  (let* ((message (cdr (assoc :message event)))
-                                         (content (cdr (assoc :content message))))
-                                    (when content
-                                      (bt:with-lock-held ((stream-state-lock state))
-                                        (loop :for blk :across content
-                                              :when (string= "text"
-                                                              (cdr (assoc :type blk)))
-                                              :do (let ((text (cdr (assoc :text blk))))
-                                                    (when text
-                                                      (setf (stream-state-text state)
-                                                            (concatenate 'string
-                                                                         (stream-state-text state)
-                                                                         text))
-                                                      (push (canonical-text-block
-                                                             (stream-state-text state))
-                                                            (stream-state-content-blocks state)))))))))
-                                 ;; Final result
-                                 ((string= event-type "result")
-                                  (let ((text (cdr (assoc :result event))))
-                                    (bt:with-lock-held ((stream-state-lock state))
-                                      (setf (stream-state-text state) (or text "")
-                                            (stream-state-content-blocks state)
-                                            (list (canonical-text-block (or text "")))
-                                            (stream-state-done-p state) t))))))
-                           (error (e)
-                             (declare (ignore e))
-                             nil)))))
+           (let* ((proc (uiop:launch-program args
+                                              :input :stream
+                                              :output :stream
+                                              :error-output nil))
+                  (stdin (uiop:process-info-input proc))
+                  (stdout (uiop:process-info-output proc)))
+             (unwind-protect
+                  (progn
+                    ;; Send NDJSON message and close stdin
+                    (write-string ndjson-msg stdin)
+                    (write-char #\Newline stdin)
+                    (force-output stdin)
+                    (close stdin)
+                    (setf stdin nil)
+                    ;; Read NDJSON events from stdout
+                    (loop :for line := (read-line stdout nil nil)
+                          :while line
+                          :when (and (plusp (length line))
+                                     (char= (char line 0) #\{))
+                          :do (handler-case
+                                  (let* ((event (api-json-decode line))
+                                         (event-type (cdr (assoc :type event))))
+                                    (cond
+                                      ;; Streaming text deltas (wrapped in stream_event)
+                                      ((string= event-type "stream_event")
+                                       (let* ((inner (cdr (assoc :event event)))
+                                              (inner-type (when inner
+                                                            (cdr (assoc :type inner)))))
+                                         (when (and inner-type
+                                                    (string= inner-type
+                                                             "content_block_delta"))
+                                           (let* ((delta (cdr (assoc :delta inner)))
+                                                  (delta-type (when delta
+                                                                (cdr (assoc :type delta))))
+                                                  (text (when (and delta
+                                                                   (or (null delta-type)
+                                                                       (string= delta-type
+                                                                                "text_delta")))
+                                                          (cdr (assoc :text delta)))))
+                                             (when text
+                                               (bt:with-lock-held ((stream-state-lock state))
+                                                 (setf (stream-state-text state)
+                                                       (concatenate 'string
+                                                                    (stream-state-text state)
+                                                                    text))))))))
+                                      ;; Full assistant message (non-streaming fallback)
+                                      ((string= event-type "assistant")
+                                       (let* ((message (cdr (assoc :message event)))
+                                              (content (cdr (assoc :content message))))
+                                         (when content
+                                           (bt:with-lock-held ((stream-state-lock state))
+                                             (loop :for blk :across content
+                                                   :when (string= "text"
+                                                                   (cdr (assoc :type blk)))
+                                                   :do (let ((text (cdr (assoc :text blk))))
+                                                         (when text
+                                                           (setf (stream-state-text state)
+                                                                 (concatenate 'string
+                                                                              (stream-state-text state)
+                                                                              text))
+                                                           (push (canonical-text-block
+                                                                  (stream-state-text state))
+                                                                 (stream-state-content-blocks
+                                                                  state)))))))))
+                                      ;; Result event — completion
+                                      ((string= event-type "result")
+                                       (let ((text (cdr (assoc :result event))))
+                                         (bt:with-lock-held ((stream-state-lock state))
+                                           (setf (stream-state-text state) (or text "")
+                                                 (stream-state-content-blocks state)
+                                                 (list (canonical-text-block (or text "")))
+                                                 (stream-state-done-p state) t)))
+                                       (return))
+                                      ;; Error event
+                                      ((string= event-type "error")
+                                       (let ((err (or (cdr (assoc :error event))
+                                                      (cdr (assoc :message event))
+                                                      "Unknown CLI error")))
+                                         (bt:with-lock-held ((stream-state-lock state))
+                                           (setf (stream-state-error-p state) err
+                                                 (stream-state-done-p state) t)))
+                                       (return))))
+                                (error (e)
+                                  (declare (ignore e))
+                                  nil))))
+               ;; Cleanup process
+               (when stdin (ignore-errors (close stdin)))
+               (ignore-errors (close stdout))
+               (ignore-errors (uiop:wait-process proc))))
          (error (e)
            (bt:with-lock-held ((stream-state-lock state))
              (setf (stream-state-error-p state) (format nil "~A" e)
                    (stream-state-done-p state) t))))
-       ;; Ensure done flag is set
+       ;; Ensure done flag is always set
        (bt:with-lock-held ((stream-state-lock state))
          (setf (stream-state-done-p state) t)))
      :name "clawmacs-claude-cli-reader")
