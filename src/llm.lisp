@@ -51,6 +51,26 @@ Uses the coding-specific endpoint for subscription-based access.")
   (merge-pathnames #P".config/clawmacs/openai-codex-oauth.json" (user-homedir-pathname))
   "Path to the persisted OpenAI Codex OAuth credentials (JSON).")
 
+;;; Claude CLI Subprocess Configuration (for Claude Max subscription models)
+(defvar *claude-cli-path* "claude"
+  "Path to the Claude Code CLI binary. Used as subprocess for Sonnet/Opus
+models which require Claude Max subscription routing that the REST API
+does not support. Set to nil to disable CLI subprocess delegation.")
+
+(defvar *claude-cli-models*
+  '("claude-sonnet-4-6" "claude-opus-4-6"
+    "claude-sonnet-4-5" "claude-sonnet-4-5-20250929"
+    "claude-opus-4-5" "claude-opus-4-5-20251101"
+    "claude-sonnet-4-20250514" "claude-opus-4-20250514")
+  "Anthropic models that require the Claude CLI subprocess because the
+REST API does not support them under Claude Max OAuth subscriptions.
+These models are routed through `claude -p` instead of the REST API.")
+
+(defun claude-cli-model-p (model)
+  "Return non-nil when MODEL must use the Claude CLI subprocess."
+  (and *claude-cli-path*
+       (member model *claude-cli-models* :test #'string=)))
+
 (defvar *system-prompt-path*
   (merge-pathnames #P".config/clawmacs/system-prompt.txt" (user-homedir-pathname))
   "Path to an optional system prompt file.")
@@ -885,23 +905,34 @@ reasoning_content is present, falls back to reasoning_content."
         openai-messages)))
 
 (defun provider-request (provider messages &key model (max-tokens 8192) tools)
-  "Dispatch a non-streaming request by resolved PROVIDER."
+  "Dispatch a non-streaming request by resolved PROVIDER.
+Anthropic models listed in *claude-cli-models* are routed through the
+Claude Code CLI subprocess instead of the REST API."
   (ecase provider
     (:anthropic
-     (anthropic-request messages :model model :max-tokens max-tokens :tools tools))
+     (if (claude-cli-model-p model)
+         (claude-cli-request messages :model model :max-tokens max-tokens :tools tools)
+         (anthropic-request messages :model model :max-tokens max-tokens :tools tools)))
     (:openai-codex
      (openai-codex-request messages :model model :max-tokens max-tokens :tools tools))
     (:zai
      (zai-request messages :model model :max-tokens max-tokens :tools tools))))
 
 (defun provider-request-streaming (provider messages callback &key model (max-tokens 8192) tools)
-  "Dispatch a streaming request by resolved PROVIDER."
+  "Dispatch a streaming request by resolved PROVIDER.
+Anthropic models listed in *claude-cli-models* are routed through the
+Claude Code CLI subprocess instead of the REST API."
   (ecase provider
     (:anthropic
-     (anthropic-request-streaming messages callback
-                                  :model model
-                                  :max-tokens max-tokens
-                                  :tools tools))
+     (if (claude-cli-model-p model)
+         (claude-cli-request-streaming messages callback
+                                       :model model
+                                       :max-tokens max-tokens
+                                       :tools tools)
+         (anthropic-request-streaming messages callback
+                                      :model model
+                                      :max-tokens max-tokens
+                                      :tools tools)))
     (:openai-codex
      (openai-codex-request-streaming messages callback
                                      :model model
@@ -912,6 +943,145 @@ reasoning_content is present, falls back to reasoning_content."
                             :model model
                             :max-tokens max-tokens
                             :tools tools))))
+
+;;; --------------------------------------------------------------------------
+;;; Claude CLI Subprocess Provider
+;;; --------------------------------------------------------------------------
+;;; The Claude Max subscription (5x, 20x) restricts Sonnet/Opus models to the
+;;; Claude Code CLI process.  The REST API returns 400 "Error" for these models
+;;; even with valid OAuth tokens.  We delegate to `claude -p` (print mode)
+;;; which handles auth, routing, and model access internally.
+
+(defun claude-cli-build-prompt (messages)
+  "Flatten MESSAGES into a single prompt string for the Claude CLI.
+Older messages are prepended as context so the model sees the full
+conversation history."
+  (with-output-to-string (s)
+    (dolist (msg messages)
+      (let ((role (cdr (assoc :role msg)))
+            (raw  (cdr (assoc :content msg))))
+        (when (and role raw)
+          (let ((text (cond
+                        ;; Plain string content
+                        ((stringp raw) raw)
+                        ;; Vector of content blocks – concatenate text blocks
+                        ((and (vectorp raw) (plusp (length raw)))
+                         (with-output-to-string (ts)
+                           (loop :for blk :across raw
+                                 :when (string= "text"
+                                                 (cdr (assoc :type blk)))
+                                 :do (write-string (cdr (assoc :text blk)) ts))))
+                        (t (format nil "~A" raw)))))
+            (format s "~:[~;~%~%~][~A]: ~A" (plusp (file-position s))
+                    role text)))))))
+
+(defun claude-cli-request (messages &key (model "claude-sonnet-4-6")
+                                         (max-tokens 8192)
+                                         tools)
+  "Send a non-streaming request via the Claude Code CLI subprocess.
+Returns a canonical Anthropic-format response alist."
+  (declare (ignore tools))
+  (let* ((prompt (claude-cli-build-prompt messages))
+         (args (list *claude-cli-path*
+                     "-p" prompt
+                     "--model" model
+                     "--output-format" "json"
+                     "--max-turns" "1"))
+         (raw-output (with-output-to-string (out)
+                       (uiop:run-program args
+                                         :output out
+                                         :error-output :interactive
+                                         :ignore-error-status t))))
+    ;; Parse the JSON result from claude CLI
+    (let* ((result (api-json-decode raw-output))
+           (text (cdr (assoc :result result)))
+           (stop-reason (or (cdr (assoc :stop--reason result)) "end_turn"))
+           (usage (cdr (assoc :usage result))))
+      ;; Build canonical Anthropic response format
+      `((:id . ,(or (cdr (assoc :session--id result)) "cli"))
+        (:type . "message")
+        (:role . "assistant")
+        (:content . ,(vector (canonical-text-block (or text ""))))
+        (:model . ,model)
+        (:stop--reason . ,stop-reason)
+        (:usage . ,(or usage
+                       `((:input--tokens . 0)
+                         (:output--tokens . ,(length (or text ""))))))))))
+
+(defun claude-cli-request-streaming (messages callback
+                                      &key (model "claude-sonnet-4-6")
+                                           (max-tokens 8192)
+                                           tools)
+  "Send a streaming request via the Claude Code CLI subprocess.
+Spawns `claude -p` with stream-json output and parses NDJSON events.
+Returns a stream-state, just like anthropic-request-streaming."
+  (declare (ignore callback tools))
+  (let* ((prompt (claude-cli-build-prompt messages))
+         (args (list *claude-cli-path*
+                     "-p" prompt
+                     "--model" model
+                     "--output-format" "stream-json"
+                     "--verbose"
+                     "--max-turns" "1"))
+         (state (make-stream-state)))
+    ;; Spawn background thread to run the CLI and parse output
+    (bt:make-thread
+     (lambda ()
+       (handler-case
+           (let ((raw-output
+                   (with-output-to-string (out)
+                     (uiop:run-program args
+                                       :output out
+                                       :error-output nil
+                                       :ignore-error-status t))))
+             ;; Parse NDJSON lines
+             (with-input-from-string (in raw-output)
+               (loop :for line := (read-line in nil nil)
+                     :while line
+                     :when (and (plusp (length line))
+                                (char= (char line 0) #\{))
+                     :do (handler-case
+                             (let* ((event (api-json-decode line))
+                                    (event-type (cdr (assoc :type event))))
+                               (cond
+                                 ;; Assistant message with content
+                                 ((string= event-type "assistant")
+                                  (let* ((message (cdr (assoc :message event)))
+                                         (content (cdr (assoc :content message))))
+                                    (when content
+                                      (bt:with-lock-held ((stream-state-lock state))
+                                        (loop :for blk :across content
+                                              :when (string= "text"
+                                                              (cdr (assoc :type blk)))
+                                              :do (let ((text (cdr (assoc :text blk))))
+                                                    (when text
+                                                      (setf (stream-state-text state)
+                                                            (concatenate 'string
+                                                                         (stream-state-text state)
+                                                                         text))
+                                                      (push (canonical-text-block
+                                                             (stream-state-text state))
+                                                            (stream-state-content-blocks state)))))))))
+                                 ;; Final result
+                                 ((string= event-type "result")
+                                  (let ((text (cdr (assoc :result event))))
+                                    (bt:with-lock-held ((stream-state-lock state))
+                                      (setf (stream-state-text state) (or text "")
+                                            (stream-state-content-blocks state)
+                                            (list (canonical-text-block (or text "")))
+                                            (stream-state-done-p state) t))))))
+                           (error (e)
+                             (declare (ignore e))
+                             nil)))))
+         (error (e)
+           (bt:with-lock-held ((stream-state-lock state))
+             (setf (stream-state-error-p state) (format nil "~A" e)
+                   (stream-state-done-p state) t))))
+       ;; Ensure done flag is set
+       (bt:with-lock-held ((stream-state-lock state))
+         (setf (stream-state-done-p state) t)))
+     :name "clawmacs-claude-cli-reader")
+    state))
 
 ;;; --------------------------------------------------------------------------
 ;;; API Call

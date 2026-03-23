@@ -169,6 +169,14 @@
    #:api-json-encode
    #:api-json-decode
 
+   ;; Claude CLI Subprocess
+   #:*claude-cli-path*
+   #:*claude-cli-models*
+   #:claude-cli-model-p
+   #:claude-cli-build-prompt
+   #:claude-cli-request
+   #:claude-cli-request-streaming
+
    ;; Z.AI (Zhipu AI)
    #:*zai-model*
    #:*zai-api-url*

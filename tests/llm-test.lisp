@@ -1459,3 +1459,86 @@
                                   nil)
           (let ((entries (clawmacs::available-models-for-selector buf)))
             (is (null entries))))))))
+
+;;; --------------------------------------------------------------------------
+;;; Claude CLI Subprocess Tests
+;;; --------------------------------------------------------------------------
+
+(test claude-cli-model-p-recognizes-cli-models
+  "claude-cli-model-p returns non-nil for models in *claude-cli-models*."
+  (is (clawmacs::claude-cli-model-p "claude-sonnet-4-6"))
+  (is (clawmacs::claude-cli-model-p "claude-opus-4-6"))
+  (is (clawmacs::claude-cli-model-p "claude-sonnet-4-5"))
+  (is (clawmacs::claude-cli-model-p "claude-opus-4-5-20251101")))
+
+(test claude-cli-model-p-rejects-rest-models
+  "claude-cli-model-p returns nil for models NOT in *claude-cli-models*."
+  (is (null (clawmacs::claude-cli-model-p "claude-haiku-4-5-20251001")))
+  (is (null (clawmacs::claude-cli-model-p "claude-3-haiku-20240307")))
+  (is (null (clawmacs::claude-cli-model-p "glm-5")))
+  (is (null (clawmacs::claude-cli-model-p "codex-mini-latest"))))
+
+(test claude-cli-model-p-disabled-when-path-nil
+  "claude-cli-model-p returns nil when *claude-cli-path* is nil."
+  (let ((clawmacs::*claude-cli-path* nil))
+    (is (null (clawmacs::claude-cli-model-p "claude-sonnet-4-6")))))
+
+(test claude-cli-build-prompt-single-message
+  "claude-cli-build-prompt flattens a single user message."
+  (let ((msgs (list `((:role . "user") (:content . "Hello world")))))
+    (is (string= "[user]: Hello world"
+                  (clawmacs::claude-cli-build-prompt msgs)))))
+
+(test claude-cli-build-prompt-multi-turn
+  "claude-cli-build-prompt concatenates multiple messages."
+  (let ((msgs (list `((:role . "user") (:content . "Hi"))
+                    `((:role . "assistant") (:content . "Hello"))
+                    `((:role . "user") (:content . "How are you?")))))
+    (let ((result (clawmacs::claude-cli-build-prompt msgs)))
+      (is (search "[user]: Hi" result))
+      (is (search "[assistant]: Hello" result))
+      (is (search "[user]: How are you?" result)))))
+
+(test claude-cli-build-prompt-vector-content
+  "claude-cli-build-prompt extracts text from vector content blocks."
+  (let ((msgs (list `((:role . "assistant")
+                      (:content . ,(vector `((:type . "text") (:text . "Hi there"))))))))
+    (is (search "Hi there" (clawmacs::claude-cli-build-prompt msgs)))))
+
+(test provider-request-routes-cli-models
+  "provider-request routes CLI models to claude-cli-request."
+  (let ((routed-to nil))
+    (with-function-override (clawmacs::claude-cli-request
+                             (messages &key model max-tokens tools)
+                             (declare (ignore messages max-tokens tools))
+                             (setf routed-to model)
+                             `((:type . "message")
+                               (:content . ,(vector `((:type . "text")
+                                                      (:text . "ok"))))))
+      (clawmacs::provider-request :anthropic nil :model "claude-sonnet-4-6")
+      (is (string= "claude-sonnet-4-6" routed-to)))))
+
+(test provider-request-routes-rest-models
+  "provider-request routes REST-compatible models to anthropic-request."
+  (let ((routed-to nil))
+    (with-function-override (clawmacs::anthropic-request
+                             (messages &key model max-tokens tools)
+                             (declare (ignore messages max-tokens tools))
+                             (setf routed-to model)
+                             `((:type . "message")
+                               (:content . ,(vector `((:type . "text")
+                                                      (:text . "ok"))))))
+      (clawmacs::provider-request :anthropic nil :model "claude-haiku-4-5-20251001")
+      (is (string= "claude-haiku-4-5-20251001" routed-to)))))
+
+(test provider-request-streaming-routes-cli-models
+  "provider-request-streaming routes CLI models to claude-cli-request-streaming."
+  (let ((routed-to nil))
+    (with-function-override (clawmacs::claude-cli-request-streaming
+                             (messages callback &key model max-tokens tools)
+                             (declare (ignore messages callback max-tokens tools))
+                             (setf routed-to model)
+                             (clawmacs::make-stream-state))
+      (clawmacs::provider-request-streaming :anthropic nil nil
+                                            :model "claude-opus-4-6")
+      (is (string= "claude-opus-4-6" routed-to)))))
