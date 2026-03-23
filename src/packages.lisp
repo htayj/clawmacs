@@ -299,6 +299,16 @@
    #:describe-variable-to-string
    #:describe-variable-command
 
+   ;; Type introspection
+   #:list-types
+   #:type-kind
+   #:type-kind-label
+   #:type-slot-info
+   #:type-struct-slot-info
+   #:describe-type-to-string
+   #:undocumented-types
+   #:describe-type-command
+
    ;; Known models
    #:*provider-known-models*
    #:provider-known-models

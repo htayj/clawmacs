@@ -1637,6 +1637,125 @@ documentation in *extended-docs*."
   :side-effects "On selection, creates/switches to a help buffer with the variable description."
   :see-also (describe-variable-to-string list-variables make-help-buffer))
 
+(defdoc list-types
+  :category "help"
+  :usage "(list-types) — (list-types)"
+  :returns "list of symbols — Sorted list of all exported type symbols (classes, structs, conditions) from :clawmacs."
+  :see-also (describe-type-to-string describe-type-command list-functions list-variables))
+
+(defdoc type-kind
+  :category "help"
+  :usage "(type-kind SYM:symbol) — (type-kind 'buffer)"
+  :returns "keyword — :CONDITION, :STRUCTURE, :STANDARD-CLASS, :CLASS, or :UNKNOWN."
+  :see-also (type-kind-label describe-type-to-string list-types))
+
+(defdoc type-kind-label
+  :category "help"
+  :usage "(type-kind-label KIND:keyword) — (type-kind-label :standard-class)"
+  :returns "string — Human-readable label: \"Class (defclass)\", \"Structure (defstruct)\", etc."
+  :see-also (type-kind describe-type-to-string))
+
+(defdoc type-slot-info
+  :category "help"
+  :usage "(type-slot-info CLASS:class) — (type-slot-info (find-class 'buffer))"
+  :returns "list of plists — Each plist has :name, :type, :initform, :initargs, :readers, :writers, :allocation, :documentation."
+  :side-effects "Finalizes class inheritance if not already finalized (via sb-mop:finalize-inheritance)."
+  :see-also (type-struct-slot-info describe-type-to-string))
+
+(defdoc type-struct-slot-info
+  :category "help"
+  :usage "(type-struct-slot-info SYM:symbol) — (type-struct-slot-info 'stream-state)"
+  :returns "list of plists — Each plist has :name, :type, :read-only, :accessor."
+  :see-also (type-slot-info describe-type-to-string))
+
+(defdoc describe-type-to-string
+  :category "help"
+  :usage "(describe-type-to-string TYPE-SYMBOL:symbol) — (describe-type-to-string 'buffer)"
+  :returns "string — Multi-line human-readable description with kind, superclasses, slots/fields, docs."
+  :see-also (describe-type-command list-types type-slot-info type-struct-slot-info extended-doc))
+
+(defdoc undocumented-types
+  :category "help"
+  :usage "(undocumented-types) — (undocumented-types)"
+  :returns "list of symbols — Exported type symbols missing a defdoc entry."
+  :see-also (undocumented-functions undocumented-variables list-types))
+
+(defdoc describe-type-command
+  :category "help"
+  :usage "Bound to C-c T. Opens minibuffer listing all types."
+  :returns "nil"
+  :side-effects "On selection, creates/switches to a help buffer with the type description."
+  :see-also (describe-type-to-string list-types make-help-buffer))
+
+;;; ==========================================================================
+;;; Category: type — Type definitions (classes, structures, conditions)
+;;; ==========================================================================
+
+(defdoc color-spec
+  :category "type"
+  :usage "(make-color-spec :color-type :cga :value 15)"
+  :see-also (make-color-spec color-spec-type color-spec-value face))
+
+(defdoc face
+  :category "type"
+  :usage "(make-instance 'face :name :default :foreground (make-color-spec ...) :bold-p t)"
+  :see-also (resolve-face face-name face-foreground face-background face-bold-p face-parent resolved-face face-set))
+
+(defdoc resolved-face
+  :category "type"
+  :usage "(resolve-face some-face fallback-face) => resolved-face"
+  :see-also (resolve-face resolved-face-foreground resolved-face-background resolved-face-bold-p face))
+
+(defdoc face-set
+  :category "type"
+  :usage "(make-face-set :user user-faces-ht)"
+  :see-also (make-face-set face-set-owner face-set-faces get-face face))
+
+(defdoc line
+  :category "type"
+  :usage "(make-line \"Hello world\")"
+  :see-also (make-line line-content line-next line-prev message))
+
+(defdoc message
+  :category "type"
+  :usage "(make-message :user)"
+  :see-also (make-message message-sender message-text message-first-line message-point-line buffer))
+
+(defdoc buffer
+  :category "type"
+  :usage "(make-buffer \"session-01\" :agent-name \"claude\")"
+  :see-also (make-buffer buffer-name buffer-status buffer-first-message buffer-input-message))
+
+(defdoc keymap
+  :category "type"
+  :usage "(make-keymap :default)"
+  :see-also (make-keymap keymap-bind keymap-lookup keymap-name keymap-bindings keymap-parent *default-keymap*))
+
+(defdoc command-metadata
+  :category "type"
+  :usage "(make-command-metadata :name 'send-message :permission :user-only)"
+  :see-also (defcommand command-metadata-name command-metadata-permission *command-table*))
+
+(defdoc tool-definition
+  :category "type"
+  :usage "(make-tool-definition :name \"file_read\" :description \"Read a file\" ...)"
+  :see-also (register-tool execute-tool tool-definitions-for-api *tool-table*))
+
+(defdoc stream-state
+  :category "type"
+  :usage "(make-stream-state)"
+  :see-also (buffer-pending-stream anthropic-request-streaming zai-request-streaming))
+
+(defdoc permission-denied
+  :category "type"
+  :usage "(error 'permission-denied :command 'some-command)"
+  :see-also (check-permission permission-required *current-caller*))
+
+(defdoc permission-required
+  :category "type"
+  :usage "(error 'permission-required :command 'some-command)"
+  :see-also (check-permission permission-denied *current-caller*))
+
 ;;; ==========================================================================
 ;;; Category: prefix — Prefix command processing
 ;;; ==========================================================================

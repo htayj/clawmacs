@@ -114,6 +114,8 @@
     (keymap-bind km '(:ctrl-c #\f) 'describe-function-command)
     ;; C-c v = describe variable (introspection / help system)
     (keymap-bind km '(:ctrl-c #\v) 'describe-variable-command)
+    ;; C-c T (capital T) = describe type (introspection / help system)
+    (keymap-bind km '(:ctrl-c #\T) 'describe-type-command)
     ;; ----- C-x prefix: global / cross-buffer commands -----
     ;; C-x is reserved for global commands that operate across buffers
     ;; or affect the application as a whole (buffer management, I/O, etc.).

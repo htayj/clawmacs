@@ -995,6 +995,240 @@ Bound to C-c v."
                (switch-to-buffer help-buf))))))))
 
 ;;; --------------------------------------------------------------------------
+;;; Introspection: list-types & describe-type
+;;; --------------------------------------------------------------------------
+
+(defun list-types ()
+  "Return a sorted list of type-name symbols exported from the clawmacs package.
+Includes CLOS classes, structures, and conditions — any exported symbol that
+names a class (via find-class)."
+  (let ((types nil))
+    (do-external-symbols (sym :clawmacs)
+      (when (find-class sym nil)
+        (push sym types)))
+    (sort types #'string< :key #'symbol-name)))
+
+(defun type-kind (sym)
+  "Return a keyword describing the kind of type SYM names.
+Returns :condition, :structure, :standard-class, or :class."
+  (let ((class (find-class sym nil)))
+    (cond
+      ((null class) :unknown)
+      ((subtypep sym 'condition) :condition)
+      ((typep class 'structure-class) :structure)
+      ((typep class 'standard-class) :standard-class)
+      (t :class))))
+
+(defun type-kind-label (kind)
+  "Return a human-readable label for a type-kind keyword."
+  (ecase kind
+    (:condition "Condition")
+    (:structure "Structure (defstruct)")
+    (:standard-class "Class (defclass)")
+    (:class "Built-in Class")
+    (:unknown "Unknown")))
+
+(defun type-slot-info (class)
+  "Return a list of plists describing each slot in CLASS.
+Each plist has :name, :type, :initform, :initargs, :readers, :writers,
+:allocation, and :documentation."
+  #+sbcl
+  (handler-case
+      (progn
+        ;; Ensure the class is finalized so slots are available
+        (unless (sb-mop:class-finalized-p class)
+          (sb-mop:finalize-inheritance class))
+        (mapcar
+         (lambda (slot)
+           (list :name (sb-mop:slot-definition-name slot)
+                 :type (let ((ty (sb-mop:slot-definition-type slot)))
+                         (if (eq ty t) nil ty))
+                 :initform (if (sb-mop:slot-definition-initfunction slot)
+                               (sb-mop:slot-definition-initform slot)
+                               :no-initform)
+                 :initargs (sb-mop:slot-definition-initargs slot)
+                 :readers (when (typep slot 'sb-mop:direct-slot-definition)
+                            (sb-mop:slot-definition-readers slot))
+                 :writers (when (typep slot 'sb-mop:direct-slot-definition)
+                            (sb-mop:slot-definition-writers slot))
+                 :allocation (sb-mop:slot-definition-allocation slot)
+                 :documentation (documentation slot t)))
+         (sb-mop:class-direct-slots class)))
+  (error () nil))
+  #-sbcl nil)
+
+(defun type-struct-slot-info (sym)
+  "Return a list of plists describing each slot in structure type SYM.
+Uses sb-kernel:dd-slots to get defstruct slot details."
+  #+sbcl
+  (handler-case
+      (let* ((layout (sb-kernel:find-layout sym))
+             (dd (when layout (sb-kernel:layout-info layout))))
+        (when dd
+          (mapcar
+           (lambda (dsd)
+             (list :name (sb-kernel:dsd-name dsd)
+                   :type (let ((ty (sb-kernel:dsd-type dsd)))
+                           (if (eq ty t) nil ty))
+                   :read-only (sb-kernel:dsd-read-only dsd)
+                   :accessor (let ((acc-name (sb-kernel:dsd-accessor-name dsd)))
+                               (when (fboundp acc-name) acc-name))))
+           (sb-kernel:dd-slots dd))))
+    (error () nil))
+  #-sbcl nil)
+
+(defun describe-type-to-string (type-symbol)
+  "Return a human-readable string describing the type named by TYPE-SYMBOL.
+Includes: name, kind, superclasses, slots/fields with their types, initforms,
+accessors, and documentation. Also shows class-level and extended documentation."
+  (let ((class (find-class type-symbol nil)))
+    (unless class
+      (return-from describe-type-to-string
+        (format nil "~A does not name a type." type-symbol))))
+  (with-output-to-string (s)
+    ;; Header
+    (format s "~A~%~A~%~%" type-symbol
+            (make-string (min 60 (length (symbol-name type-symbol)))
+                         :initial-element #\-))
+    (let* ((class (find-class type-symbol))
+           (kind (type-kind type-symbol)))
+      ;; Kind
+      (format s "Kind: ~A~%" (type-kind-label kind))
+      ;; Superclasses
+      #+sbcl
+      (handler-case
+          (let* ((supers (sb-mop:class-direct-superclasses class))
+                 (super-names (mapcar #'class-name supers)))
+            (when (and super-names
+                       (not (equal super-names '(structure-object)))
+                       (not (equal super-names '(standard-object))))
+              (format s "Superclasses: ~{~A~^, ~}~%" super-names)))
+        (error () nil))
+      ;; Class documentation
+      (let ((doc (documentation class t)))
+        (when (and doc (plusp (length doc)))
+          (format s "~%~A~%" doc)))
+      ;; Slots / Fields
+      (cond
+        ;; Structure type — use defstruct slot introspection
+        ((eq kind :structure)
+         (let ((slots (type-struct-slot-info type-symbol)))
+           (when slots
+             (format s "~%Fields:~%")
+             (dolist (slot slots)
+               (let ((name (getf slot :name))
+                     (type (getf slot :type))
+                     (read-only (getf slot :read-only))
+                     (accessor (getf slot :accessor)))
+                 (format s "  ~A" name)
+                 (when type (format s " : ~A" type))
+                 (when read-only (format s "  [read-only]"))
+                 (when accessor (format s "  (accessor: ~A)" accessor))
+                 (format s "~%"))))))
+        ;; CLOS class or condition — use MOP
+        ((member kind '(:standard-class :condition))
+         (let ((slots (type-slot-info class)))
+           (when slots
+             (format s "~%Slots:~%")
+             (dolist (slot slots)
+               (let ((name (getf slot :name))
+                     (type (getf slot :type))
+                     (initform (getf slot :initform))
+                     (initargs (getf slot :initargs))
+                     (readers (getf slot :readers))
+                     (writers (getf slot :writers))
+                     (doc (getf slot :documentation)))
+                 (format s "  ~A" name)
+                 (when type (format s " : ~A" type))
+                 (format s "~%")
+                 (when initargs
+                   (format s "    Initargs: ~{~S~^, ~}~%" initargs))
+                 (unless (eq initform :no-initform)
+                   (format s "    Default: ~S~%" initform))
+                 (when readers
+                   (format s "    Readers: ~{~A~^, ~}~%" readers))
+                 (when writers
+                   (format s "    Writers: ~{~A~^, ~}~%" writers))
+                 (when (and doc (plusp (length doc)))
+                   (format s "    ~A~%" doc))))))))
+      ;; Extended documentation
+      (let ((ext (extended-doc type-symbol)))
+        (when ext
+          (let ((usage (getf ext :usage)))
+            (when usage
+              (format s "~%Usage:~%  ~A~%" usage)))
+          (let ((returns (getf ext :returns)))
+            (when returns
+              (format s "~%Returns:~%  ~A~%" returns)))
+          (let ((side-effects (getf ext :side-effects)))
+            (when side-effects
+              (format s "~%Side Effects:~%  ~A~%" side-effects)))
+          (let ((see-also (getf ext :see-also)))
+            (when see-also
+              (format s "~%See Also: ~{~(~A~)~^, ~}~%" see-also)))
+          (let ((category (getf ext :category)))
+            (when category
+              (format s "~%Category: ~A~%" category))))))))
+
+(defun undocumented-types ()
+  "Return a list of exported type symbols that lack a defdoc entry.
+Useful for finding types that still need extended documentation."
+  (let ((missing nil))
+    (dolist (sym (list-types))
+      (unless (gethash sym *extended-docs*)
+        (push sym missing)))
+    (nreverse missing)))
+
+(defcommand describe-type-command (:permission :user-only)
+  "Open a minibuffer selector listing all defined types.
+On selection, displays detailed type description in a help buffer.
+Bound to C-c t (was changed from toggle-tool-results)."
+  (buffer)
+  (declare (ignore buffer))
+  (let* ((type-list (list-types))
+         (items (mapcar (lambda (sym)
+                          (let* ((name (string-downcase (symbol-name sym)))
+                                 (kind (type-kind sym))
+                                 (kind-str (ecase kind
+                                             (:condition "condition")
+                                             (:structure "struct")
+                                             (:standard-class "class")
+                                             (:class "built-in")
+                                             (:unknown "unknown")))
+                                 (class (find-class sym nil))
+                                 (doc-preview
+                                   (let ((doc (when class (documentation class t))))
+                                     (if (and doc (plusp (length doc)))
+                                         (let ((first-line
+                                                 (subseq doc 0
+                                                         (or (position #\Newline doc)
+                                                             (min 50 (length doc))))))
+                                           (if (> (length first-line) 50)
+                                               (concatenate 'string (subseq first-line 0 47) "...")
+                                               first-line))
+                                         "")))
+                                 (display (if (plusp (length doc-preview))
+                                              (format nil "~A  (~A)  ~A" name kind-str doc-preview)
+                                              (format nil "~A  (~A)" name kind-str))))
+                            (list :symbol sym
+                                  :name name
+                                  :display display)))
+                        type-list)))
+    (minibuffer-activate
+     "Describe Type" items
+     (lambda (item)
+       (let* ((sym (getf item :symbol))
+              (desc (describe-type-to-string sym))
+              (buf-name (format nil "*help:~A*"
+                                (string-downcase (symbol-name sym))))
+              ;; Reuse existing help buffer for this type if one exists
+              (existing (find-buffer-by-name buf-name)))
+         (if existing
+             (switch-to-buffer existing)
+             (let ((help-buf (make-help-buffer buf-name desc)))
+               (switch-to-buffer help-buf))))))))
+
+;;; --------------------------------------------------------------------------
 ;;; Event Loop
 ;;; --------------------------------------------------------------------------
 
