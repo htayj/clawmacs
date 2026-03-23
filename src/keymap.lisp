@@ -95,8 +95,14 @@
     ;; M-v arrives as ESC then v, normalized to (:alt #\v) by handle-key-event.
     (keymap-bind km '(:alt #\v) 'scroll-up-command)
     (keymap-bind km (code-char 22) 'scroll-down-command)  ; C-v = ASCII 22
-    ;; C-x prefix commands
-    (keymap-bind km '(:ctrl-x #\t) 'toggle-tool-results-command)
+    ;; ----- C-c prefix: buffer-mode-specific commands -----
+    ;; C-c is reserved for commands that act on or within the current
+    ;; buffer's major mode (e.g. chat-specific toggles, mode actions).
+    ;; Note: C-c C-c quits the application (handled in handle-key-event).
+    (keymap-bind km '(:ctrl-c #\t) 'toggle-tool-results-command) ; C-c t = toggle tool results
+    ;; ----- C-x prefix: global / cross-buffer commands -----
+    ;; C-x is reserved for global commands that operate across buffers
+    ;; or affect the application as a whole (buffer management, I/O, etc.).
     (keymap-bind km '(:ctrl-x #\n) 'new-buffer-command)       ; C-x n = new buffer
     (keymap-bind km '(:ctrl-x #\b) 'next-buffer-command)      ; C-x b = next buffer
     (keymap-bind km '(:ctrl-x #\k) 'kill-buffer-command)      ; C-x k = kill buffer

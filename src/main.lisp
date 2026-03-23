@@ -534,6 +534,10 @@ for the user to paste the callback URL."
 (defvar *cx-pending* nil
   "When non-nil, the next key event is combined with C-x prefix.")
 
+(defvar *cc-pending* nil
+  "When non-nil, the next key event is combined with C-c prefix.
+C-c is reserved for buffer-mode-specific commands (e.g. C-c t).")
+
 (defvar *openai-oauth-pending* nil
   "When non-nil, an alist storing the active OAuth flow state:
 (:code-verifier . string) (:state . string).")
@@ -550,7 +554,8 @@ for the user to paste the callback URL."
 (defun normalize-key (event)
   "Extract and normalize a key from a croatoan EVENT.
 Returns a character, a keyword (for special keys), a list (:alt <key>)
-for Meta combinations, or a list (:ctrl-x <key>) for C-x prefix."
+for Meta combinations, a list (:ctrl-x <key>) for C-x prefix (global
+commands), or a list (:ctrl-c <key>) for C-c prefix (mode-specific commands)."
   (let* ((raw-key (if (typep event 'croatoan:event)
                       (croatoan:event-key event)
                       event))
@@ -574,6 +579,12 @@ for Meta combinations, or a list (:ctrl-x <key>) for C-x prefix."
       ((and (characterp key) (char= key (code-char 24)))
        (setf *cx-pending* t)
        nil)
+      ;; C-c received (ASCII 3 = ETX): set cc-pending, return nil.
+      ;; C-c is the prefix for buffer-mode-specific commands.
+      ;; Double C-c (C-c C-c) quits the application.
+      ((and (characterp key) (char= key #\Etx))
+       (setf *cc-pending* t)
+       nil)
       ;; Meta prefix is active: combine with this key
       (*meta-pending*
        (setf *meta-pending* nil)
@@ -582,6 +593,10 @@ for Meta combinations, or a list (:ctrl-x <key>) for C-x prefix."
       (*cx-pending*
        (setf *cx-pending* nil)
        (list :ctrl-x key))
+      ;; C-c prefix is active: combine with this key
+      (*cc-pending*
+       (setf *cc-pending* nil)
+       (list :ctrl-c key))
       ;; Normal key
       (t key))))
 
@@ -592,7 +607,7 @@ for Meta combinations, or a list (:ctrl-x <key>) for C-x prefix."
   "Handle a key event while the buffer selector is active.
 Strips any meta/ctrl-x prefix so the selector has simple key bindings."
   (let ((base-key (if (and (listp key) (= (length key) 2)
-                           (member (first key) '(:alt :ctrl-x)))
+                           (member (first key) '(:alt :ctrl-x :ctrl-c)))
                       (second key)
                       key))
         (num-buffers (length *buffer-ring*)))
@@ -652,8 +667,8 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
     (when (null key)
       (return-from handle-key-event nil))
     (cond
-      ;; C-c always quits
-      ((and (characterp key) (char= key #\Etx))
+      ;; C-c C-c always quits (double C-c)
+      ((equal key (list :ctrl-c #\Etx))
        :quit)
 
       ;; === BUFFER SELECTOR MODE ===
@@ -787,6 +802,7 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
             *buffer-selector-index* 0
             *buffer-selector-scroll* 0)
       (setf *openai-oauth-pending* nil)
+      (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil)
       (add-buffer-to-ring buf)
       ;; Set sandbox root to the working directory
       (setf *sandbox-root* (truename "."))

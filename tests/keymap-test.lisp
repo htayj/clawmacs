@@ -79,3 +79,12 @@
   (clawmacs::init-default-keymap)
   (is (eq 'clawmacs::list-buffers-command
           (keymap-lookup *default-keymap* (list :ctrl-x (code-char 2))))))
+
+(test default-keymap-toggle-tool-results-uses-c-c-prefix
+  "Toggle tool results is bound under C-c (mode-specific), not C-x (global)."
+  (clawmacs::init-default-keymap)
+  ;; C-c t should be bound
+  (is (eq 'clawmacs::toggle-tool-results-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\t))))
+  ;; C-x t should NOT be bound (it was moved away)
+  (is (null (keymap-lookup *default-keymap* '(:ctrl-x #\t)))))
