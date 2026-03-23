@@ -268,10 +268,13 @@
    #:minibuffer-cancel
    #:handle-minibuffer-key
    #:sort-models-by-recency
+   #:*buffer-selection-history*
+   #:sort-buffers-by-recency
    #:minibuffer-current-height
    #:update-window-layout
    #:render-minibuffer
    #:minibuffer-select-model-command
+   #:minibuffer-select-buffer-command
 
    ;; Known models
    #:*provider-known-models*

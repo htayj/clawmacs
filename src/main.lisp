@@ -525,6 +525,43 @@ to navigate."
 ;;; Buffer Management Commands (continued)
 ;;; --------------------------------------------------------------------------
 
+(defcommand minibuffer-select-buffer-command (:permission :user-only)
+  "Open the minibuffer buffer selector with fuzzy search (helm/ivy/vertico style).
+Activates the minibuffer with all open buffers as candidates, sorted by
+recency then alphabetically. The user can type to fuzzy-filter and use C-n/C-p
+to navigate. Shows buffer name, agent, status, and message count."
+  (buffer)
+  (let* ((current (current-buffer))
+         (items (mapcar (lambda (buf)
+                          (let* ((name (buffer-name buf))
+                                 (agent (buffer-agent-name buf))
+                                 (status (string-downcase
+                                          (symbol-name (buffer-status buf))))
+                                 (msgs (max 0 (1- (buffer-message-count buf))))
+                                 (current-p (eq buf current))
+                                 (marker (if current-p "*" " "))
+                                 (display (format nil "~A ~A  [~A] ~A  msgs:~D"
+                                                  marker name agent status msgs)))
+                            (list :buffer buf
+                                  :name name
+                                  :current-p current-p
+                                  :display display)))
+                        *buffer-ring*))
+         ;; Sort: by recency (from history), then current buffer, then alphabetical
+         (sorted (sort-buffers-by-recency items)))
+    (minibuffer-activate
+     "Switch Buffer" sorted
+     (lambda (item)
+       (let ((selected-buf (getf item :buffer))
+             (name (getf item :name)))
+         (when selected-buf
+           (switch-to-buffer selected-buf)
+           ;; Record in history for recency sorting
+           (setf *buffer-selection-history*
+                 (cons name
+                       (remove name *buffer-selection-history*
+                               :test #'string=)))))))))
+
 (defcommand new-buffer-command (:permission :user-only)
   "Create a new chat buffer and switch to it."
   (buffer)
@@ -670,6 +707,10 @@ Set to nil when inactive.")
 (defvar *model-selection-history* nil
   "List of recently selected model display strings (most recent first).
 Used for recency sorting in the minibuffer model selector.")
+
+(defvar *buffer-selection-history* nil
+  "List of recently selected buffer names (most recent first).
+Used for recency sorting in the minibuffer buffer selector.")
 
 (defun normalize-key (event)
   "Extract and normalize a key from a croatoan EVENT.
@@ -853,6 +894,29 @@ are sorted with the currently active model first, then alphabetically."
                      ;; Neither: active model first, then alphabetical
                      ((and (getf a :active-p) (not (getf b :active-p))) t)
                      ((and (getf b :active-p) (not (getf a :active-p))) nil)
+                     (t (string< a-disp b-disp)))))))
+
+(defun sort-buffers-by-recency (items)
+  "Sort buffer ITEMS by recency (from *buffer-selection-history*) then alphabetically.
+Items that were selected more recently appear first. Items not in the history
+are sorted with the current buffer first, then alphabetically."
+  (stable-sort (copy-list items)
+               (lambda (a b)
+                 (let* ((a-disp (getf a :display))
+                        (b-disp (getf b :display))
+                        (history *buffer-selection-history*)
+                        (a-pos (position a-disp history :test #'string=))
+                        (b-pos (position b-disp history :test #'string=)))
+                   (cond
+                     ;; Both in history: lower position (more recent) first
+                     ((and a-pos b-pos) (< a-pos b-pos))
+                     ;; Only a in history: a first
+                     (a-pos t)
+                     ;; Only b in history: b first
+                     (b-pos nil)
+                     ;; Neither: current buffer first, then alphabetical
+                     ((and (getf a :current-p) (not (getf b :current-p))) t)
+                     ((and (getf b :current-p) (not (getf a :current-p))) nil)
                      (t (string< a-disp b-disp)))))))
 
 (defun handle-minibuffer-key (key)

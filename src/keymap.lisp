@@ -111,8 +111,10 @@
     ;; C-x is reserved for global commands that operate across buffers
     ;; or affect the application as a whole (buffer management, I/O, etc.).
     (keymap-bind km '(:ctrl-x #\n) 'new-buffer-command)       ; C-x n = new buffer
-    (keymap-bind km '(:ctrl-x #\b) 'next-buffer-command)      ; C-x b = next buffer
     (keymap-bind km '(:ctrl-x #\k) 'kill-buffer-command)      ; C-x k = kill buffer
     (keymap-bind km (list :ctrl-x (code-char 19)) 'save-session-command) ; C-x C-s
-    (keymap-bind km (list :ctrl-x (code-char 2)) 'list-buffers-command) ; C-x C-b = buffer selector
+    ;; C-x b = old overlay buffer selector (table view)
+    (keymap-bind km '(:ctrl-x #\b) 'list-buffers-command)
+    ;; C-x C-b = minibuffer buffer selector (helm/ivy/vertico style)
+    (keymap-bind km (list :ctrl-x (code-char 2)) 'minibuffer-select-buffer-command)
     (setf *default-keymap* km)))
