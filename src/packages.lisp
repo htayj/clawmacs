@@ -182,6 +182,8 @@
      #:resolve-buffer-provider-and-model
      #:anthropic-request
      #:build-conversation-messages
+   #:*default-provider*
+   #:*default-model*
     #:*anthropic-model*
    #:api-json-encode
    #:api-json-decode

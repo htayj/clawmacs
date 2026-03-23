@@ -4,6 +4,14 @@
 ;;; Configuration
 ;;; --------------------------------------------------------------------------
 
+(defvar *default-provider* :zai
+  "The default LLM provider to use when no agent-specific override is set.
+Must be a keyword matching a known provider (:anthropic, :openai-codex, :zai).")
+
+(defvar *default-model* "glm-5"
+  "The default model to use when no agent-specific or provider-fallback model
+is configured. Should be a valid model name for *default-provider*.")
+
 (defvar *anthropic-model* "claude-haiku-4-5-20251001"
   "The Anthropic model to use for chat completions.")
 
@@ -712,10 +720,10 @@ currently resolved provider/model is marked :active-p t."
       (load-agent-defaults)))
 
 (defun agent-default (agent-name)
-  "Return AGENT-NAME's default provider, or the built-in fallback."
+  "Return AGENT-NAME's default provider, or *default-provider*."
   (or (getf (agent-default-spec agent-name)
             :provider)
-      :anthropic))
+      *default-provider*))
 
 (defun agent-default-model (agent-name provider)
   "Return AGENT-NAME's stored model when it matches PROVIDER."
@@ -737,15 +745,18 @@ currently resolved provider/model is marked :active-p t."
     normalized-provider))
 
 (defun resolve-buffer-provider-and-model (buf)
-  "Resolve BUF's effective provider and model using overrides and defaults."
+  "Resolve BUF's effective provider and model using overrides and defaults.
+Resolution order for provider: buffer override → agent default → *default-provider*.
+Resolution order for model: buffer override → agent default → provider fallback → *default-model*."
   (ensure-agent-defaults-loaded)
   (let* ((provider (or (buffer-provider-override buf)
                        (agent-default (buffer-agent-name buf))
-                       :anthropic))
+                       *default-provider*))
          (resolved-provider (normalize-provider provider))
          (model (or (buffer-model-override buf)
                     (agent-default-model (buffer-agent-name buf) resolved-provider)
-                    (provider-fallback-model resolved-provider))))
+                    (provider-fallback-model resolved-provider)
+                    *default-model*)))
     (when (blank-string-p model)
       (error "Resolved model must be a non-empty string"))
     (values resolved-provider model)))

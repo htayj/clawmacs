@@ -896,9 +896,23 @@ documentation in *extended-docs*."
 ;;; Category: llm — LLM configuration, authentication, and API
 ;;; ==========================================================================
 
+(defdoc *default-provider*
+  :category "llm"
+  :usage "*default-provider* → :zai"
+  :returns "keyword — The default LLM provider keyword."
+  :see-also (*default-model* *provider-fallback-models* agent-default resolve-buffer-provider-and-model)
+  :side-effects "Changing this affects all new buffers that lack an agent-specific provider override.")
+
+(defdoc *default-model*
+  :category "llm"
+  :usage "*default-model* → \"glm-5\""
+  :returns "string — The default model name."
+  :see-also (*default-provider* *provider-fallback-models* resolve-buffer-provider-and-model)
+  :side-effects "Changing this affects all new buffers that lack both an agent-specific and provider-fallback model.")
+
 (defdoc *anthropic-model*
   :category "llm"
-  :see-also (*claude-cli-models* resolve-buffer-provider-and-model))
+  :see-also (*default-model* *claude-cli-models* resolve-buffer-provider-and-model))
 
 (defdoc *claude-code-credentials-path*
   :category "llm"
