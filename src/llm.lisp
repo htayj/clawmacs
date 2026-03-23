@@ -790,13 +790,22 @@ falls back to plain text content."
      input)))
 
 (defun openai-choice->canonical-response (choice)
-  "Normalize an OpenAI completion CHOICE to canonical response shape."
+  "Normalize an OpenAI completion CHOICE to canonical response shape.
+Handles reasoning models (Z.AI GLM, DeepSeek R1, etc.) that return
+reasoning_content alongside content. When content is blank but
+reasoning_content is present, falls back to reasoning_content."
   (let* ((message (cdr (assoc :message choice)))
          (content-blocks nil)
          (text (cdr (assoc :content message)))
-         (tool-calls (cdr (assoc :tool--calls message))))
-    (unless (blank-string-p text)
-      (push (canonical-text-block text) content-blocks))
+         (reasoning (cdr (assoc :reasoning--content message)))
+         (tool-calls (cdr (assoc :tool--calls message)))
+         ;; Use content if non-blank, otherwise fall back to reasoning
+         (effective-text (cond
+                           ((not (blank-string-p text)) text)
+                           ((not (blank-string-p reasoning)) reasoning)
+                           (t nil))))
+    (when effective-text
+      (push (canonical-text-block effective-text) content-blocks))
     (dolist (tool-call (coerce (or tool-calls #()) 'list))
       (push (openai-tool-call->canonical-block tool-call) content-blocks))
     (canonical-response
@@ -1242,13 +1251,18 @@ Returns the final stream-state when complete."
             (choice (first (coerce (cdr (assoc :choices event)) 'list)))
             (delta (and choice (cdr (assoc :delta choice))))
             (text (and delta (cdr (assoc :content delta))))
+            (reasoning (and delta (cdr (assoc :reasoning--content delta))))
             (tool-calls (and delta (cdr (assoc :tool--calls delta))))
-            (finish-reason (and choice (cdr (assoc :finish--reason choice)))))
+            (finish-reason (and choice (cdr (assoc :finish--reason choice))))
+            ;; Use whichever text field is present in this chunk.
+            ;; Reasoning models (Z.AI GLM, DeepSeek R1) stream
+            ;; reasoning_content first, then content.
+            (effective-text (or text reasoning)))
         (bt:with-lock-held ((stream-state-lock state))
-          (when text
+          (when effective-text
             (ensure-openai-stream-text-block state)
             (setf (stream-state-text state)
-                  (concatenate 'string (stream-state-text state) text)
+                  (concatenate 'string (stream-state-text state) effective-text)
                   (first (stream-state-content-blocks state))
                   (canonical-text-block (stream-state-text state))))
           (dolist (tool-call (coerce (or tool-calls #()) 'list))

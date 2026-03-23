@@ -1267,6 +1267,117 @@
                    (clawmacs::agent-default-model "zhipu" :zai))))))
 
 ;;; --------------------------------------------------------------------------
+;;; Reasoning Content Handling (Z.AI GLM, DeepSeek R1, etc.)
+;;; --------------------------------------------------------------------------
+
+(test reasoning-content-non-streaming-content-preferred
+  "Non-streaming: when both content and reasoning_content are present, content wins."
+  (with-function-override (drakma:http-request (&rest args)
+                            (declare (ignore args))
+                            (values
+                             "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"Hello\",\"reasoning_content\":\"The user wants a greeting...\"}}]}"
+                             200))
+    (with-function-override (clawmacs::read-provider-token (provider)
+                              (declare (ignore provider))
+                              "zai-key")
+      (let ((response (clawmacs::zai-request '() :model "glm-5")))
+        (is (string= "Hello"
+                     (cdr (assoc :text (first (clawmacs::response-content response))))))))))
+
+(test reasoning-content-non-streaming-fallback
+  "Non-streaming: when content is blank but reasoning_content is present, use reasoning."
+  (with-function-override (drakma:http-request (&rest args)
+                            (declare (ignore args))
+                            (values
+                             "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"\",\"reasoning_content\":\"The user wants a greeting. Options: Hello, Hi...\"}}]}"
+                             200))
+    (with-function-override (clawmacs::read-provider-token (provider)
+                              (declare (ignore provider))
+                              "zai-key")
+      (let ((response (clawmacs::zai-request '() :model "glm-5")))
+        (is (string= "The user wants a greeting. Options: Hello, Hi..."
+                     (cdr (assoc :text (first (clawmacs::response-content response))))))
+        ;; finish_reason should be "max_tokens" (mapped from "length")
+        (is (string= "max_tokens" (clawmacs::response-stop-reason response)))))))
+
+(test reasoning-content-non-streaming-no-reasoning
+  "Non-streaming: when only content is present (no reasoning), works normally."
+  (with-function-override (drakma:http-request (&rest args)
+                            (declare (ignore args))
+                            (values
+                             "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"Hello world\"}}]}"
+                             200))
+    (with-function-override (clawmacs::read-provider-token (provider)
+                              (declare (ignore provider))
+                              "zai-key")
+      (let ((response (clawmacs::zai-request '() :model "glm-5")))
+        (is (string= "Hello world"
+                     (cdr (assoc :text (first (clawmacs::response-content response))))))))))
+
+(test reasoning-content-streaming-with-reasoning-then-content
+  "Streaming: reasoning_content chunks accumulate, then content chunks append."
+  (let ((payloads '("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Thinking...\"}}]}"
+                    ""
+                    "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" more thoughts\"}}]}"
+                    ""
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}"
+                    ""
+                    "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}"
+                    ""
+                    "data: [DONE]"
+                    "")))
+    (with-function-override (drakma:http-request (&rest args)
+                              (declare (ignore args))
+                              (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
+                                      200
+                                      nil))
+      (with-function-override (clawmacs::read-provider-token (provider)
+                                (declare (ignore provider))
+                                "zai-key")
+        (let ((state (clawmacs::zai-request-streaming '() (lambda (state) (declare (ignore state)))
+                                                      :model "glm-5")))
+          (loop repeat 100
+                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                        (clawmacs::stream-state-done-p state))
+                do (sleep 0.01))
+          ;; Should have accumulated both reasoning and content
+          (is (string= "Thinking... more thoughtsHello"
+                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                         (clawmacs::stream-state-text state)))))))))
+
+(test reasoning-content-streaming-reasoning-only
+  "Streaming: when only reasoning_content chunks arrive (no content), still works."
+  (let ((payloads '("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Step 1: analyze...\"}}]}"
+                    ""
+                    "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" Step 2: decide...\"}}]}"
+                    ""
+                    "data: {\"choices\":[{\"finish_reason\":\"length\",\"delta\":{\"content\":\"\"}}]}"
+                    ""
+                    "data: [DONE]"
+                    "")))
+    (with-function-override (drakma:http-request (&rest args)
+                              (declare (ignore args))
+                              (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
+                                      200
+                                      nil))
+      (with-function-override (clawmacs::read-provider-token (provider)
+                                (declare (ignore provider))
+                                "zai-key")
+        (let ((state (clawmacs::zai-request-streaming '() (lambda (state) (declare (ignore state)))
+                                                      :model "glm-5")))
+          (loop repeat 100
+                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                        (clawmacs::stream-state-done-p state))
+                do (sleep 0.01))
+          ;; Should have accumulated the reasoning text
+          (is (string= "Step 1: analyze... Step 2: decide..."
+                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                         (clawmacs::stream-state-text state))))
+          (is (string= "max_tokens"
+                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                         (clawmacs::stream-state-stop-reason state)))))))))
+
+;;; --------------------------------------------------------------------------
 ;;; Known Models Tests
 ;;; --------------------------------------------------------------------------
 
