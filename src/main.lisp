@@ -777,10 +777,15 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
           (string-trim '(#\Space #\Tab #\Newline #\Return)
                        (uiop:read-file-string *system-prompt-path*))))
   ;; Boot files are loaded dynamically by build-system-prompt on each API call
+  ;; :process-control-chars nil puts the terminal into raw mode (ncurses:raw)
+  ;; instead of cbreak mode, so C-c is delivered as a keystroke (ASCII 3)
+  ;; rather than generating SIGINT.  This is required for C-c to work as
+  ;; a prefix key (e.g. C-c t, C-c C-c to quit).
   (croatoan:with-screen (scr :input-echoing nil
                              :input-blocking t
                              :cursor-visible t
-                             :enable-colors t)
+                             :enable-colors t
+                             :process-control-chars nil)
     (let* ((screen-height (croatoan:height scr))
            (screen-width (croatoan:width scr))
            (main-win (make-instance 'croatoan:window
