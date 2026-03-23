@@ -14,7 +14,8 @@
                              (:file "llm")
                              (:file "tools")
                              (:file "render")
-                             (:file "main")))))
+                             (:file "main")
+                             (:file "docs")))))
 
 (defsystem "clawmacs/tests"
   :description "Tests for clawmacs"

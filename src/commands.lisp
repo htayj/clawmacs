@@ -133,3 +133,43 @@ Example:
          ,@body)
 
        ',name)))
+
+;;; --------------------------------------------------------------------------
+;;; Extended Documentation System
+;;; --------------------------------------------------------------------------
+
+(defvar *extended-docs* (make-hash-table :test #'eq)
+  "Hash table mapping symbols to extended documentation plists.
+Each entry is a plist with optional keys:
+  :usage        — parameter types and example call
+  :returns      — return type and example value
+  :see-also     — list of related symbols
+  :category     — category string for grouping
+  :side-effects — description of mutations, I/O, or global state changes")
+
+(defmacro defdoc (name &key category usage returns see-also side-effects)
+  "Define extended documentation for SYMBOL.
+Stores a plist in *extended-docs* keyed by the symbol.
+
+Example:
+  (defdoc make-buffer
+    :category \"buffer\"
+    :usage \"(make-buffer NAME &key :agent-name :working-directory)\"
+    :returns \"buffer — A new buffer object with a single empty input message.\"
+    :see-also (buffer buffer-name add-buffer-to-ring)
+    :side-effects \"Allocates a new buffer with an empty input message.\")"
+  `(setf (gethash ',name *extended-docs*)
+         (list ,@(when category `(:category ,category))
+               ,@(when usage `(:usage ,usage))
+               ,@(when returns `(:returns ,returns))
+               ,@(when see-also `(:see-also ',see-also))
+               ,@(when side-effects `(:side-effects ,side-effects)))))
+
+(defun extended-doc (symbol &optional key)
+  "Return the extended documentation for SYMBOL.
+If KEY is provided (e.g. :usage, :returns), return just that property value.
+Without KEY, returns the full plist or NIL if no extended doc exists."
+  (let ((doc (gethash symbol *extended-docs*)))
+    (if key
+        (getf doc key)
+        doc)))

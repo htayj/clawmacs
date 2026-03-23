@@ -793,7 +793,25 @@ Includes: name, type, lambda list, docstring, keybindings, and permissions."
       ;; Docstring
       (let ((doc (or (documentation fn-symbol 'function) "")))
         (when (plusp (length doc))
-          (format s "~%~A~%" doc))))))
+          (format s "~%~A~%" doc)))
+      ;; Extended documentation
+      (let ((ext (extended-doc fn-symbol)))
+        (when ext
+          (let ((usage (getf ext :usage)))
+            (when usage
+              (format s "~%Usage:~%  ~A~%" usage)))
+          (let ((returns (getf ext :returns)))
+            (when returns
+              (format s "~%Returns:~%  ~A~%" returns)))
+          (let ((side-effects (getf ext :side-effects)))
+            (when side-effects
+              (format s "~%Side Effects:~%  ~A~%" side-effects)))
+          (let ((see-also (getf ext :see-also)))
+            (when see-also
+              (format s "~%See Also: ~{~(~A~)~^, ~}~%" see-also)))
+          (let ((category (getf ext :category)))
+            (when category
+              (format s "~%Category: ~A~%" category))))))))
 
 (defun make-help-buffer (name content)
   "Create a help buffer with NAME containing CONTENT as read-only text.
@@ -923,7 +941,19 @@ and docstring."
     ;; Docstring
     (let ((doc (or (documentation var-symbol 'variable) "")))
       (when (plusp (length doc))
-        (format s "~%~A~%" doc)))))
+        (format s "~%~A~%" doc)))
+    ;; Extended documentation
+    (let ((ext (extended-doc var-symbol)))
+      (when ext
+        (let ((side-effects (getf ext :side-effects)))
+          (when side-effects
+            (format s "~%Side Effects:~%  ~A~%" side-effects)))
+        (let ((see-also (getf ext :see-also)))
+          (when see-also
+            (format s "~%See Also: ~{~(~A~)~^, ~}~%" see-also)))
+        (let ((category (getf ext :category)))
+          (when category
+            (format s "~%Category: ~A~%" category)))))))
 
 (defcommand describe-variable-command (:permission :user-only)
   "Open a minibuffer selector listing all exported variables.

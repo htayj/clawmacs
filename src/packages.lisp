@@ -138,6 +138,13 @@
    #:permission-required
    #:list-available-commands
 
+   ;; Extended documentation
+   #:*extended-docs*
+   #:defdoc
+   #:extended-doc
+   #:undocumented-functions
+   #:undocumented-variables
+
    ;; Keymaps
    #:keymap
    #:make-keymap
