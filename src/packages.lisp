@@ -166,6 +166,12 @@
    #:api-json-encode
    #:api-json-decode
 
+   ;; Z.AI (Zhipu AI)
+   #:*zai-model*
+   #:*zai-api-url*
+   #:zai-request
+   #:zai-request-streaming
+
    ;; OpenAI Codex OAuth
    #:*openai-oauth-client-id*
    #:*openai-oauth-auth-url*

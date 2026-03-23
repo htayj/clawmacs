@@ -8,11 +8,12 @@
                                                        (gensym)))))
          (filename (ecase provider
                      (:anthropic "claude-max-token")
-                     (:openai-codex "openai-codex-token"))))
+                     (:openai-codex "openai-codex-token")
+                     (:zai "zai-api-key"))))
     (ensure-directories-exist (merge-pathnames #P".keep" base))
     (merge-pathnames filename base)))
 
-(defmacro with-provider-token-path-overrides ((anthropic-path openai-codex-path) &body body)
+(defmacro with-provider-token-path-overrides ((anthropic-path openai-codex-path &optional zai-path) &body body)
   `(let ((original-provider-token-path
            (symbol-function 'clawmacs::provider-token-path)))
      (unwind-protect
@@ -22,6 +23,7 @@
                     (case provider
                       (:anthropic ,anthropic-path)
                       (:openai-codex ,openai-codex-path)
+                      (:zai ,(or zai-path '(funcall original-provider-token-path provider)))
                       (otherwise
                        (funcall original-provider-token-path provider)))))
             ,@body)
@@ -875,3 +877,257 @@
         (let ((saved (clawmacs::read-openai-codex-oauth-tokens)))
           (is (string= "final-token" (getf saved :access-token)))
           (is (string= "final-refresh" (getf saved :refresh-token))))))))
+
+;;; --------------------------------------------------------------------------
+;;; Z.AI (Zhipu AI) Provider Tests
+;;; --------------------------------------------------------------------------
+
+(test zai-provider-token-path
+  "Z.AI provider token path is zai-api-key."
+  (let ((path (clawmacs::provider-token-path :zai)))
+    (is (search "zai-api-key" (namestring path)))))
+
+(test zai-known-provider-p
+  "Z.AI is recognized as a known provider."
+  (is-true (clawmacs::known-provider-p :zai)))
+
+(test zai-fallback-model-is-glm-5
+  "Z.AI fallback model is glm-5."
+  (is (string= "glm-5"
+               (clawmacs::provider-fallback-model :zai))))
+
+(test zai-normalize-provider-keyword
+  "normalize-provider accepts :zai."
+  (is (eq :zai (clawmacs::normalize-provider :zai))))
+
+(test zai-normalize-provider-string
+  "normalize-provider accepts \"zai\" string."
+  (is (eq :zai (clawmacs::normalize-provider "zai"))))
+
+(test zai-read-provider-token-from-file
+  "read-provider-token reads Z.AI API key from static file."
+  (let ((zai-path (temp-test-token-path :zai))
+        (anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex)))
+    (with-provider-token-path-overrides (anthropic-path openai-codex-path zai-path)
+      (clawmacs::save-provider-token :zai "zai-test-key-abc123")
+      (is (string= "zai-test-key-abc123"
+                   (clawmacs::read-provider-token :zai))))))
+
+(test zai-request-sends-correct-headers-and-body
+  "Z.AI non-streaming sends correct Authorization and Accept-Language headers."
+  (let ((captured-url nil)
+        (captured-headers nil)
+        (captured-body nil)
+        (messages (list (list (cons :role "user")
+                              (cons :content
+                                    (list (list (cons :type "text")
+                                                (cons :text "hello"))))))))
+    (with-function-override (drakma:http-request (url &rest args)
+                              (setf captured-url url
+                                    captured-headers (getf args :additional-headers)
+                                    captured-body (getf args :content))
+                              (values "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"hi from glm\"}}]}"
+                                      200))
+      (with-function-override (clawmacs::read-provider-token (provider)
+                                (declare (ignore provider))
+                                "zai-key-test")
+        (clawmacs::zai-request messages :model "glm-5")))
+    (is (string= "https://api.z.ai/api/coding/paas/v4/chat/completions" captured-url))
+    (is (string= "Bearer zai-key-test"
+                 (cdr (assoc "Authorization" captured-headers :test #'string=))))
+    (is (string= "en-US,en"
+                 (cdr (assoc "Accept-Language" captured-headers :test #'string=))))
+    (let ((body (clawmacs::api-json-decode captured-body)))
+      (is (string= "glm-5" (cdr (assoc :model body)))))))
+
+(test zai-request-normalizes-response
+  "Z.AI non-streaming normalizes the OpenAI-compatible response to canonical shape."
+  (with-function-override (drakma:http-request (&rest args)
+                            (declare (ignore args))
+                            (values
+                             "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"你好世界\"}}]}"
+                             200))
+    (with-function-override (clawmacs::read-provider-token (provider)
+                              (declare (ignore provider))
+                              "zai-key")
+      (let ((response (clawmacs::zai-request '() :model "glm-5")))
+        (is (string= "end_turn" (clawmacs::response-stop-reason response)))
+        (is (equal '(((:type . "text")
+                      (:text . "你好世界")))
+                    (clawmacs::response-content response)))))))
+
+(test zai-request-with-tool-calls
+  "Z.AI non-streaming handles tool_calls responses correctly."
+  (with-function-override (drakma:http-request (&rest args)
+                            (declare (ignore args))
+                            (values
+                             "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"content\":\"let me check\",\"tool_calls\":[{\"id\":\"call_z1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/test.txt\\\"}\"}}]}}]}"
+                             200))
+    (with-function-override (clawmacs::read-provider-token (provider)
+                              (declare (ignore provider))
+                              "zai-key")
+      (let ((response (clawmacs::zai-request '() :model "glm-5")))
+        (is (string= "tool_use" (clawmacs::response-stop-reason response)))
+        (is (equal '(((:type . "text")
+                      (:text . "let me check"))
+                     ((:type . "tool_use")
+                      (:id . "call_z1")
+                      (:name . "read_file")
+                      (:input . ((:path . "/tmp/test.txt")))))
+                    (clawmacs::response-content response)))))))
+
+(test zai-request-includes-system-prompt-message
+  "Z.AI requests prepend the built system prompt as an OpenAI system message."
+  (let ((captured-request-body nil)
+        (messages (list (list (cons :role "user")
+                              (cons :content
+                                    (list (list (cons :type "text")
+                                                (cons :text "hello"))))))))
+    (with-function-override (drakma:http-request (&rest args)
+                              (setf captured-request-body (getf (rest args) :content))
+                              (values "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"ok\"}}]}"
+                                      200))
+      (with-function-override (clawmacs::read-provider-token (provider)
+                                (declare (ignore provider))
+                                "zai-key")
+        (with-function-override (clawmacs::build-system-prompt ()
+                                  "zai boot prompt")
+          (clawmacs::zai-request messages :model "glm-5"))))
+    (let* ((body (clawmacs::api-json-decode captured-request-body))
+           (sent-messages (coerce (cdr (assoc :messages body)) 'list)))
+      (is (string= "system" (cdr (assoc :role (first sent-messages)))))
+      (is (string= "zai boot prompt" (cdr (assoc :content (first sent-messages)))))
+      (is (string= "user" (cdr (assoc :role (second sent-messages))))))))
+
+(test zai-request-uses-max-tokens-not-max-completion-tokens
+  "Z.AI requests use max_tokens (not max_completion_tokens like OpenAI Codex)."
+  (let ((captured-request-body nil))
+    (with-function-override (drakma:http-request (&rest args)
+                              (setf captured-request-body (getf (rest args) :content))
+                              (values "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"ok\"}}]}"
+                                      200))
+      (with-function-override (clawmacs::read-provider-token (provider)
+                                (declare (ignore provider))
+                                "zai-key")
+        (clawmacs::zai-request '() :model "glm-5" :max-tokens 4096)))
+    (let ((body (clawmacs::api-json-decode captured-request-body)))
+      (is (= 4096 (cdr (assoc :max--tokens body))))
+      (is (null (assoc :max--completion--tokens body))))))
+
+(test zai-streaming-normalizes-response-shape
+  "Z.AI streaming adapter accumulates canonical content blocks."
+  (let ((payloads '("data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}"
+                    ""
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"世界\"}}]}"
+                    ""
+                    "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}"
+                    ""
+                    "data: [DONE]"
+                    "")))
+    (with-function-override (drakma:http-request (&rest args)
+                              (declare (ignore args))
+                              (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
+                                      200
+                                      nil))
+      (with-function-override (clawmacs::read-provider-token (provider)
+                                (declare (ignore provider))
+                                "zai-key")
+        (let ((state (clawmacs::zai-request-streaming '() (lambda (state) (declare (ignore state)))
+                                                      :model "glm-5")))
+          (loop repeat 100
+                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                        (clawmacs::stream-state-done-p state))
+                do (sleep 0.01))
+          (is (string= "end_turn"
+                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                         (clawmacs::stream-state-stop-reason state))))
+          (is (equal '(((:type . "text")
+                        (:text . "你好世界")))
+                     (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                       (reverse (clawmacs::stream-state-content-blocks state))))))))))
+
+(test zai-streaming-includes-system-prompt
+  "Z.AI streaming requests prepend the built system prompt."
+  (let* ((captured-request-body nil)
+         (messages (list (list (cons :role "user")
+                               (cons :content
+                                     (list (list (cons :type "text")
+                                                 (cons :text "hello")))))))
+         (payloads '("data: {\"choices\":[{\"finish_reason\":\"stop\"}]}"
+                     ""
+                     "data: [DONE]"
+                     "")))
+    (with-function-override (drakma:http-request (&rest args)
+                              (setf captured-request-body (getf (rest args) :content))
+                              (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
+                                      200
+                                      nil))
+      (with-function-override (clawmacs::read-provider-token (provider)
+                                (declare (ignore provider))
+                                "zai-key")
+        (with-function-override (clawmacs::build-system-prompt ()
+                                  "zai system prompt")
+          (let ((state (clawmacs::zai-request-streaming
+                        messages
+                        (lambda (state) (declare (ignore state)))
+                        :model "glm-5")))
+            (loop repeat 100
+                  until (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                          (clawmacs::stream-state-done-p state))
+                  do (sleep 0.01))))))
+    (let* ((body (clawmacs::api-json-decode captured-request-body))
+           (sent-messages (coerce (cdr (assoc :messages body)) 'list)))
+      (is (string= "system" (cdr (assoc :role (first sent-messages)))))
+      (is (string= "zai system prompt" (cdr (assoc :content (first sent-messages))))))))
+
+(test zai-streaming-with-tool-calls
+  "Z.AI streaming supports tool calls via OpenAI-compatible protocol."
+  (let ((payloads '("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_z2\",\"type\":\"function\",\"function\":{\"name\":\"shell\",\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"}}]}}]}"
+                    ""
+                    "data: {\"choices\":[{\"finish_reason\":\"tool_calls\"}]}"
+                    ""
+                    "data: [DONE]"
+                    "")))
+    (with-function-override (drakma:http-request (&rest args)
+                              (declare (ignore args))
+                              (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
+                                      200
+                                      nil))
+      (with-function-override (clawmacs::read-provider-token (provider)
+                                (declare (ignore provider))
+                                "zai-key")
+        (let ((state (clawmacs::zai-request-streaming '() (lambda (state) (declare (ignore state)))
+                                                      :model "glm-5")))
+          (loop repeat 100
+                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                        (clawmacs::stream-state-done-p state))
+                do (sleep 0.01))
+          (is (string= "tool_use"
+                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                         (clawmacs::stream-state-stop-reason state))))
+          (is (equal '(((:type . "tool_use")
+                        (:id . "call_z2")
+                        (:name . "shell")
+                        (:input . ((:command . "ls")))))
+                     (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                       (reverse (clawmacs::stream-state-content-blocks state))))))))))
+
+(test zai-provider-dispatch-routes-correctly
+  "provider-request dispatches :zai to zai-request."
+  (let ((dispatched-provider nil))
+    (with-function-override (clawmacs::zai-request (messages &key model max-tokens tools)
+                              (declare (ignore messages model max-tokens tools))
+                              (setf dispatched-provider :zai)
+                              '((:stop--reason . "end_turn") (:content . #())))
+      (clawmacs::provider-request :zai '() :model "glm-5")
+      (is (eq :zai dispatched-provider)))))
+
+(test zai-agent-defaults-round-trip
+  "Agent defaults registry handles :zai as a provider."
+  (let ((path (temp-agent-defaults-path)))
+    (with-agent-defaults-path-override (path)
+      (clawmacs::set-agent-default "zhipu" :zai :model "glm-4.7")
+      (is (eq :zai (clawmacs::agent-default "zhipu")))
+      (is (string= "glm-4.7"
+                   (clawmacs::agent-default-model "zhipu" :zai))))))

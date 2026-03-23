@@ -22,6 +22,15 @@
 (defvar *openai-codex-api-url* "https://api.openai.com/v1/chat/completions"
   "The OpenAI Chat Completions API endpoint for Codex models.")
 
+;;; Z.AI (Zhipu AI) Configuration
+(defvar *zai-model* "glm-5"
+  "The Z.AI model to use for chat completions.
+GLM-5 is the flagship model with 200K context window.")
+
+(defvar *zai-api-url* "https://api.z.ai/api/coding/paas/v4/chat/completions"
+  "The Z.AI Chat Completions API endpoint for GLM Coding plan subscribers.
+Uses the coding-specific endpoint for subscription-based access.")
+
 ;;; OpenAI Codex OAuth 2.0 Configuration
 (defvar *openai-oauth-client-id* "app_EMoamEEZ73f0CkXaXp7hrann"
   "OpenAI Codex OAuth 2.0 public client identifier.")
@@ -206,8 +215,9 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
    (case provider
      (:anthropic #P".config/clawmacs/claude-max-token")
      (:openai-codex #P".config/clawmacs/openai-codex-token")
+     (:zai #P".config/clawmacs/zai-api-key")
      (otherwise
-      (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX"
+      (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI"
              provider)))
    (user-homedir-pathname)))
 
@@ -479,12 +489,13 @@ Returns the access token on success."
 
 (defparameter *provider-fallback-models*
   '((:anthropic . "claude-haiku-4-5-20251001")
-    (:openai-codex . "codex-mini-latest"))
+    (:openai-codex . "codex-mini-latest")
+    (:zai . "glm-5"))
   "Built-in fallback model names by provider.")
 
 (defun known-provider-p (provider)
   "Return non-nil when PROVIDER is supported locally."
-  (member provider '(:anthropic :openai-codex) :test #'eq))
+  (member provider '(:anthropic :openai-codex :zai) :test #'eq))
 
 (defun normalize-provider (provider)
   "Normalize PROVIDER to a supported keyword, or nil when absent."
@@ -493,14 +504,14 @@ Returns the access token on success."
     ((keywordp provider)
      (if (known-provider-p provider)
          provider
-         (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX"
+         (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI"
                 provider)))
     ((stringp provider)
      (normalize-provider (intern (string-upcase provider) :keyword)))
     ((symbolp provider)
      (normalize-provider (symbol-name provider)))
     (t
-     (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX"
+     (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI"
             provider))))
 
 (defun blank-string-p (value)
@@ -778,7 +789,9 @@ falls back to plain text content."
     (:anthropic
      (anthropic-request messages :model model :max-tokens max-tokens :tools tools))
     (:openai-codex
-     (openai-codex-request messages :model model :max-tokens max-tokens :tools tools))))
+     (openai-codex-request messages :model model :max-tokens max-tokens :tools tools))
+    (:zai
+     (zai-request messages :model model :max-tokens max-tokens :tools tools))))
 
 (defun provider-request-streaming (provider messages callback &key model (max-tokens 8192) tools)
   "Dispatch a streaming request by resolved PROVIDER."
@@ -792,7 +805,12 @@ falls back to plain text content."
      (openai-codex-request-streaming messages callback
                                      :model model
                                      :max-tokens max-tokens
-                                     :tools tools))))
+                                     :tools tools))
+    (:zai
+     (zai-request-streaming messages callback
+                            :model model
+                            :max-tokens max-tokens
+                            :tools tools))))
 
 ;;; --------------------------------------------------------------------------
 ;;; API Call
@@ -1217,6 +1235,94 @@ Returns the final stream-state when complete."
               (read-openai-sse-stream body-stream state)
            (close body-stream)))
        :name "clawmacs-openai-sse-reader")
+      state)))
+
+;;; --------------------------------------------------------------------------
+;;; Z.AI (Zhipu AI) API — OpenAI-compatible
+;;; --------------------------------------------------------------------------
+
+(defun zai-request (messages &key (model *zai-model*)
+                                   (max-tokens 8192)
+                                   tools)
+  "Call Z.AI Chat Completions API and normalize the response shape.
+Uses the coding plan endpoint (api.z.ai/api/coding/paas/v4) which is
+compatible with the GLM Coding Max-Monthly subscription.
+The API follows the OpenAI Chat Completions format."
+  (let* ((token (or (read-provider-token :zai)
+                    (error 'simple-error
+                           :format-control "No Z.AI API key. Save to ~/.config/clawmacs/zai-api-key")))
+         (request-body
+            (let ((body `((:model . ,model)
+                          (:max--tokens . ,max-tokens)
+                         (:messages . ,(coerce (openai-messages-with-system-prompt messages)
+                                               'vector)))))
+              (when (and tools (plusp (length tools)))
+                (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
+              (api-json-encode body))))
+    (multiple-value-bind (body status-code)
+        (drakma:http-request
+         *zai-api-url*
+         :method :post
+         :content-type "application/json"
+         :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
+                               ("Accept-Language" . "en-US,en"))
+         :content request-body
+         :want-stream nil
+         :force-binary nil)
+      (let ((body-string (http-body-string body)))
+        (unless (= status-code 200)
+          (error "Z.AI API error (~A): ~A" status-code body-string))
+        (let* ((response (api-json-decode body-string))
+               (choices (cdr (assoc :choices response)))
+               (choice (first (coerce choices 'list))))
+          (unless choice
+            (error "Z.AI response did not include a choice"))
+          (openai-choice->canonical-response choice))))))
+
+(defun zai-request-streaming (messages callback
+                               &key (model *zai-model*)
+                                    (max-tokens 8192)
+                                    tools)
+  "Call Z.AI Chat Completions API with SSE streaming enabled.
+Uses the same OpenAI-compatible streaming protocol."
+  (declare (ignore callback))
+  (let* ((token (or (read-provider-token :zai)
+                    (error 'simple-error
+                           :format-control "No Z.AI API key. Save to ~/.config/clawmacs/zai-api-key")))
+         (request-body
+            (let ((body `((:model . ,model)
+                          (:max--tokens . ,max-tokens)
+                          (:stream . t)
+                         (:messages . ,(coerce (openai-messages-with-system-prompt messages)
+                                               'vector)))))
+              (when (and tools (plusp (length tools)))
+                (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
+              (api-json-encode body)))
+         (state (make-stream-state)))
+    (multiple-value-bind (body-stream status-code headers)
+        (drakma:http-request
+         *zai-api-url*
+         :method :post
+         :content-type "application/json"
+         :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
+                               ("Accept-Language" . "en-US,en"))
+         :content request-body
+         :want-stream t)
+      (declare (ignore headers))
+      (unless (= status-code 200)
+        (let ((err (if (streamp body-stream)
+                       (let ((s (make-string-output-stream)))
+                         (loop :for c := (read-char body-stream nil nil)
+                               :while c :do (write-char c s))
+                         (get-output-stream-string s))
+                       (format nil "~A" body-stream))))
+          (error "Z.AI API error (~A): ~A" status-code err)))
+      (bt:make-thread
+       (lambda ()
+         (unwind-protect
+              (read-openai-sse-stream body-stream state)
+           (close body-stream)))
+       :name "clawmacs-zai-sse-reader")
       state)))
 
 ;;; --------------------------------------------------------------------------
