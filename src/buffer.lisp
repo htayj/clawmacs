@@ -303,6 +303,23 @@ TEXT may contain newlines, which are split into separate line objects."
           (setf (buffer-first-message buf) agent-msg)))
     agent-msg))
 
+(declaim (ftype (function (buffer string) message) buffer-insert-system-message))
+(defun buffer-insert-system-message (buf text)
+  "Create a read-only system message with TEXT and insert it before the input message.
+System messages are display-only — they are excluded from API conversation history."
+  (let* ((sys-msg (make-message :system :read-only-p t))
+         (input (buffer-input-message buf)))
+    (set-message-text sys-msg text)
+    (setf (message-timestamp sys-msg) (get-universal-time))
+    (let ((before-input (message-prev input)))
+      (setf (message-prev sys-msg) before-input
+            (message-next sys-msg) input
+            (message-prev input) sys-msg)
+      (if before-input
+          (setf (message-next before-input) sys-msg)
+          (setf (buffer-first-message buf) sys-msg)))
+    sys-msg))
+
 ;;; --------------------------------------------------------------------------
 ;;; Session Persistence
 ;;; --------------------------------------------------------------------------

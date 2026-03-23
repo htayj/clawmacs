@@ -116,6 +116,7 @@
    #:buffer-names
    #:buffer-finalize-input
    #:buffer-insert-agent-message
+   #:buffer-insert-system-message
    #:buffer-message-count
    #:save-session
    #:load-session
@@ -281,6 +282,12 @@
    #:provider-known-models
    #:provider-has-token-p
    #:available-models-for-selector
+
+   ;; Prefix processing
+   #:*prefix-handlers*
+   #:find-prefix-handler
+   #:process-prefix-command
+   #:shell-prefix-handler
 
    ;; Main
    #:clawmacs-main

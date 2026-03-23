@@ -757,22 +757,26 @@ currently resolved provider/model is marked :active-p t."
 (defun build-conversation-messages (buf)
   "Build the Anthropic API messages array from the buffer's chat history.
 Uses raw-content when available (for tool_use/tool_result messages),
-falls back to plain text content."
+falls back to plain text content.
+System messages (sender :system) are excluded — they are display-only
+and should not be sent to the API."
   (let ((messages nil))
     (loop :for msg := (buffer-first-message buf) :then (message-next msg)
           :while (and msg (not (eq msg (buffer-input-message buf))))
-          :do (let* ((sender (message-sender msg))
-                     (role (cond
-                             ((eq sender :user) "user")
-                             ((eq sender :tool-result) "user")
-                             (t "assistant")))
-                     (content (canonicalize-message-content
-                               role
-                               (or (message-raw-content msg)
-                                   (message-text msg)))))
-                (push `((:role . ,role)
-                        (:content . ,(coerce content 'vector)))
-                      messages)))
+          :do (let ((sender (message-sender msg)))
+                ;; Skip system messages — they are display-only (shell output, etc.)
+                (unless (eq sender :system)
+                  (let* ((role (cond
+                                 ((eq sender :user) "user")
+                                 ((eq sender :tool-result) "user")
+                                 (t "assistant")))
+                         (content (canonicalize-message-content
+                                   role
+                                   (or (message-raw-content msg)
+                                       (message-text msg)))))
+                    (push `((:role . ,role)
+                            (:content . ,(coerce content 'vector)))
+                          messages)))))
     (nreverse messages)))
 
 (defun canonical-tool-use-block (id name input)
