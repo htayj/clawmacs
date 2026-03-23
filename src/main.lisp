@@ -536,7 +536,8 @@ for the user to paste the callback URL."
 
 (defvar *cc-pending* nil
   "When non-nil, the next key event is combined with C-c prefix.
-C-c is reserved for buffer-mode-specific commands (e.g. C-c t).")
+C-c is reserved for buffer-mode-specific commands (e.g. C-c t).
+Quit is C-x C-c (global command, uses C-x prefix).")
 
 (defvar *openai-oauth-pending* nil
   "When non-nil, an alist storing the active OAuth flow state:
@@ -571,6 +572,21 @@ commands), or a list (:ctrl-c <key>) for C-c prefix (mode-specific commands)."
        (list :ctrl :backspace))
       ((and alt-p (eql key :backspace))
        (list :alt :backspace))
+      ;; ── Pending prefix resolution (must come BEFORE raw prefix detection) ──
+      ;; When a prefix key was already pressed, the NEXT keystroke completes the
+      ;; chord.  We must check these first, otherwise a raw C-c/C-x/ESC that
+      ;; arrives as the second key would start a *new* prefix instead of
+      ;; completing the chord (e.g. C-x C-c would never produce (:ctrl-x #\Etx)).
+      (*meta-pending*
+       (setf *meta-pending* nil)
+       (list :alt key))
+      (*cx-pending*
+       (setf *cx-pending* nil)
+       (list :ctrl-x key))
+      (*cc-pending*
+       (setf *cc-pending* nil)
+       (list :ctrl-c key))
+      ;; ── Raw prefix detection (first key of a chord) ──
       ;; ESC received: set meta-pending, return nil (consume the ESC)
       ((and (characterp key) (char= key #\Esc))
        (setf *meta-pending* t)
@@ -581,22 +597,9 @@ commands), or a list (:ctrl-c <key>) for C-c prefix (mode-specific commands)."
        nil)
       ;; C-c received (ASCII 3 = ETX): set cc-pending, return nil.
       ;; C-c is the prefix for buffer-mode-specific commands.
-      ;; Double C-c (C-c C-c) quits the application.
       ((and (characterp key) (char= key #\Etx))
        (setf *cc-pending* t)
        nil)
-      ;; Meta prefix is active: combine with this key
-      (*meta-pending*
-       (setf *meta-pending* nil)
-       (list :alt key))
-      ;; C-x prefix is active: combine with this key
-      (*cx-pending*
-       (setf *cx-pending* nil)
-       (list :ctrl-x key))
-      ;; C-c prefix is active: combine with this key
-      (*cc-pending*
-       (setf *cc-pending* nil)
-       (list :ctrl-c key))
       ;; Normal key
       (t key))))
 
@@ -667,8 +670,8 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
     (when (null key)
       (return-from handle-key-event nil))
     (cond
-      ;; C-c C-c always quits (double C-c)
-      ((equal key (list :ctrl-c #\Etx))
+      ;; C-x C-c always quits (Emacs standard quit chord)
+      ((equal key (list :ctrl-x #\Etx))
        :quit)
 
       ;; === BUFFER SELECTOR MODE ===
@@ -780,7 +783,7 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
   ;; :process-control-chars nil puts the terminal into raw mode (ncurses:raw)
   ;; instead of cbreak mode, so C-c is delivered as a keystroke (ASCII 3)
   ;; rather than generating SIGINT.  This is required for C-c to work as
-  ;; a prefix key (e.g. C-c t, C-c C-c to quit).
+  ;; a prefix key (e.g. C-c t).  Quit is C-x C-c.
   (croatoan:with-screen (scr :input-echoing nil
                              :input-blocking t
                              :cursor-visible t
