@@ -257,6 +257,7 @@
    #:*minibuffer-items*
    #:*minibuffer-filtered-items*
    #:*minibuffer-selected-index*
+   #:*minibuffer-scroll-offset*
    #:*minibuffer-callback*
    #:*minibuffer-max-height*
    #:*model-selection-history*
@@ -265,6 +266,8 @@
    #:minibuffer-activate
    #:minibuffer-deactivate
    #:minibuffer-update-filter
+   #:minibuffer-visible-item-count
+   #:minibuffer-ensure-visible
    #:minibuffer-confirm
    #:minibuffer-cancel
    #:handle-minibuffer-key
@@ -276,6 +279,15 @@
    #:render-minibuffer
    #:minibuffer-select-model-command
    #:minibuffer-select-buffer-command
+
+   ;; Introspection / Help
+   #:list-functions
+   #:find-keybindings-for-command
+   #:format-key-binding
+   #:describe-function-to-string
+   #:make-help-buffer
+   #:describe-function-command
+   #:buffer-major-mode
 
    ;; Known models
    #:*provider-known-models*

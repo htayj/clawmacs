@@ -122,7 +122,7 @@ when nil it is resolved from the buffer's agent defaults."
 (defun render-modeline (buf modeline-window)
   "Render the modeline for BUF into MODELINE-WINDOW."
   (let* ((width (croatoan:width modeline-window))
-         (text (format-modeline buf width))
+         (text (format-modeline buf width :major-mode (buffer-major-mode buf)))
          (ml-face (make-modeline-face))
          (resolved (resolve-face ml-face)))
     (apply-face-to-window modeline-window resolved)
@@ -747,14 +747,19 @@ inverse video (reverse face)."
         ;; Restore
         (setf (croatoan:color-pair window) '(:white :black))
         (setf (croatoan:attributes window) nil)))
-    ;; ── Candidate list ──
-    (let ((items *minibuffer-filtered-items*)
-          (selected *minibuffer-selected-index*))
-      (loop :for i :from 0 :below (min (length items) (1- height))
-            :for item := (nth i items)
-            :for row := (1+ i)
+    ;; ── Candidate list (with scroll offset) ──
+    (let* ((items *minibuffer-filtered-items*)
+           (selected *minibuffer-selected-index*)
+           (scroll *minibuffer-scroll-offset*)
+           (visible-rows (1- height))
+           (total (length items)))
+      (loop :for row-idx :from 0 :below visible-rows
+            :for item-idx := (+ scroll row-idx)
+            :while (< item-idx total)
+            :for item := (nth item-idx items)
+            :for row := (1+ row-idx)
             :for display := (minibuffer-item-display item)
-            :for selected-p := (= i selected)
+            :for selected-p := (= item-idx selected)
             :do (progn
                   (if selected-p
                       ;; Selected item: inverse video (swap fg/bg)

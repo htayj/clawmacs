@@ -90,7 +90,12 @@
    (tool-call-results   :initarg :tool-call-results
                          :accessor buffer-tool-call-results
                          :initform nil
-                         :documentation "Accumulated results from approved/denied tool calls."))
+                         :documentation "Accumulated results from approved/denied tool calls.")
+   (major-mode          :initarg :major-mode
+                         :accessor buffer-major-mode
+                         :initform "chat"
+                         :type string
+                         :documentation "The major mode name for modeline display (e.g. \"chat\", \"help\")."))
   (:documentation
    "A chat buffer containing a doubly-linked list of messages.
 The last message is always the input message (read-only-p = nil).

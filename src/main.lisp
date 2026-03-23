@@ -698,6 +698,160 @@ to navigate. Shows buffer name, agent, status, and message count."
     buf))
 
 ;;; --------------------------------------------------------------------------
+;;; Introspection: list-functions & describe-function
+;;; --------------------------------------------------------------------------
+
+(defun list-functions ()
+  "Return a sorted list of function symbols exported from the clawmacs package.
+Includes all exported symbols that have function bindings (functions, generic
+functions, commands, macros)."
+  (let ((functions nil))
+    (do-external-symbols (sym :clawmacs)
+      (when (fboundp sym)
+        (push sym functions)))
+    (sort functions #'string< :key #'symbol-name)))
+
+(defun find-keybindings-for-command (command-sym &optional (keymap *default-keymap*))
+  "Return a list of key specifications bound to COMMAND-SYM in KEYMAP.
+Walks only the direct keymap bindings (not the parent chain)."
+  (let ((bindings nil))
+    (when keymap
+      (maphash (lambda (key cmd)
+                 (when (eq cmd command-sym)
+                   (push key bindings)))
+               (keymap-bindings keymap)))
+    bindings))
+
+(defun format-key-binding (key)
+  "Format a key binding specification as a human-readable string.
+Converts raw characters, keywords, and prefix lists to standard Emacs notation."
+  (cond
+    ((characterp key)
+     (let ((code (char-code key)))
+       (cond
+         ((= code 13) "RET")
+         ((= code 10) "C-j")
+         ((= code 27) "ESC")
+         ((= code 127) "DEL")
+         ((< code 32) (format nil "C-~A" (code-char (+ code 96))))
+         ((char= key #\Space) "SPC")
+         (t (string key)))))
+    ((keywordp key)
+     (string-downcase (symbol-name key)))
+    ((and (listp key) (eq (first key) :ctrl-x))
+     (format nil "C-x ~A" (format-key-binding (second key))))
+    ((and (listp key) (eq (first key) :ctrl-c))
+     (format nil "C-c ~A" (format-key-binding (second key))))
+    ((and (listp key) (eq (first key) :alt))
+     (format nil "M-~A" (format-key-binding (second key))))
+    ((and (listp key) (eq (first key) :ctrl))
+     (format nil "C-~A" (format-key-binding (second key))))
+    (t (format nil "~S" key))))
+
+(defun describe-function-to-string (fn-symbol)
+  "Return a human-readable string describing FN-SYMBOL.
+Includes: name, type, lambda list, docstring, keybindings, and permissions."
+  (unless (and fn-symbol (fboundp fn-symbol))
+    (return-from describe-function-to-string
+      (format nil "~A is not a defined function." fn-symbol)))
+  (with-output-to-string (s)
+    ;; Header
+    (format s "~A~%~A~%~%" fn-symbol
+            (make-string (min 60 (length (symbol-name fn-symbol)))
+                         :initial-element #\-))
+    ;; Type
+    (let* ((cmd-meta (gethash fn-symbol *command-table*))
+           (fn-obj (fdefinition fn-symbol))
+           (type-str (cond
+                       ((macro-function fn-symbol) "Macro")
+                       ((and cmd-meta (typep fn-obj 'generic-function)) "Command")
+                       ((typep fn-obj 'generic-function) "Generic Function")
+                       (t "Function"))))
+      (format s "Type: ~A~%" type-str)
+      ;; Lambda list
+      (let ((lambda-list
+              (handler-case
+                  (cond
+                    ((typep fn-obj 'generic-function)
+                     #+sbcl (sb-mop:generic-function-lambda-list fn-obj)
+                     #-sbcl nil)
+                    (t
+                     #+sbcl (sb-introspect:function-lambda-list fn-symbol)
+                     #-sbcl nil))
+                (error () nil))))
+        (when lambda-list
+          (format s "Arguments: (~{~A~^ ~})~%" lambda-list)))
+      ;; Keybindings (from actual keymap scan)
+      (let ((keybinds (find-keybindings-for-command fn-symbol)))
+        (when keybinds
+          (format s "Keybindings: ~{~A~^, ~}~%"
+                  (mapcar #'format-key-binding keybinds))))
+      ;; Permission (for commands)
+      (when cmd-meta
+        (format s "Permission: ~(~A~)~%"
+                (command-metadata-permission cmd-meta)))
+      ;; Docstring
+      (let ((doc (or (documentation fn-symbol 'function) "")))
+        (when (plusp (length doc))
+          (format s "~%~A~%" doc))))))
+
+(defun make-help-buffer (name content)
+  "Create a help buffer with NAME containing CONTENT as read-only text.
+The buffer is added to the buffer ring with major-mode \"help\".
+Returns the new buffer."
+  (let ((buf (make-buffer name :agent-name "help")))
+    (init-face-registry buf)
+    (setf (buffer-keymap buf) *default-keymap*)
+    (setf (buffer-major-mode buf) "help")
+    ;; Insert content as an agent message (from the \"help\" agent)
+    (buffer-insert-agent-message buf content)
+    (add-buffer-to-ring buf)
+    buf))
+
+(defcommand describe-function-command (:permission :user-only)
+  "Open a minibuffer selector listing all functions.
+On selection, displays detailed function description in a help buffer.
+Bound to C-c f."
+  (buffer)
+  (declare (ignore buffer))
+  (let* ((fn-list (list-functions))
+         (items (mapcar (lambda (sym)
+                          (let* ((name (string-downcase (symbol-name sym)))
+                                 (cmd-meta (gethash sym *command-table*))
+                                 (fn-obj (fdefinition sym))
+                                 (type-str (cond
+                                             ((macro-function sym) "macro")
+                                             ((and cmd-meta
+                                                   (typep fn-obj 'generic-function))
+                                              "command")
+                                             ((typep fn-obj 'generic-function)
+                                              "generic")
+                                             (t "function")))
+                                 (keybinds (find-keybindings-for-command sym))
+                                 (kb-str (if keybinds
+                                             (format nil "  [~{~A~^, ~}]"
+                                                     (mapcar #'format-key-binding keybinds))
+                                             ""))
+                                 (display (format nil "~A  (~A)~A" name type-str kb-str)))
+                            (list :symbol sym
+                                  :name name
+                                  :display display)))
+                        fn-list)))
+    (minibuffer-activate
+     "Describe Function" items
+     (lambda (item)
+       (let* ((sym (getf item :symbol))
+              (desc (describe-function-to-string sym))
+              (buf-name (format nil "*help:~A*"
+                                (string-downcase (symbol-name sym))))
+              ;; Reuse existing help buffer for this function if one exists
+              (existing (find-buffer-by-name buf-name)))
+         (if existing
+             (switch-to-buffer existing)
+             (let ((help-buf (make-help-buffer buf-name desc)))
+               (switch-to-buffer help-buf))))))))
+
+;;; --------------------------------------------------------------------------
 ;;; Event Loop
 ;;; --------------------------------------------------------------------------
 
@@ -771,6 +925,11 @@ Set to nil when inactive.")
 
 (defvar *minibuffer-max-height* 12
   "Maximum number of rows the minibuffer can expand to (including prompt).")
+
+(defvar *minibuffer-scroll-offset* 0
+  "Index of the first visible candidate in the minibuffer.
+When the selected item moves beyond the visible window, this offset
+is adjusted so that the selection is always visible.")
 
 (defvar *model-selection-history* nil
   "List of recently selected model display strings (most recent first).
@@ -868,6 +1027,7 @@ and a CALLBACK function to call with the selected item on confirmation."
         *minibuffer-items* items
         *minibuffer-filtered-items* (copy-list items)
         *minibuffer-selected-index* 0
+        *minibuffer-scroll-offset* 0
         *minibuffer-callback* callback
         *minibuffer-max-height* 12))
 
@@ -880,11 +1040,13 @@ and a CALLBACK function to call with the selected item on confirmation."
         *minibuffer-items* nil
         *minibuffer-filtered-items* nil
         *minibuffer-selected-index* 0
+        *minibuffer-scroll-offset* 0
         *minibuffer-callback* nil))
 
 (defun minibuffer-update-filter ()
   "Re-filter *minibuffer-items* based on *minibuffer-input*.
-Clamps *minibuffer-selected-index* to the new filtered list length."
+Clamps *minibuffer-selected-index* to the new filtered list length
+and resets scroll offset."
   (setf *minibuffer-filtered-items*
         (if (zerop (length *minibuffer-input*))
             (copy-list *minibuffer-items*)
@@ -895,7 +1057,10 @@ Clamps *minibuffer-selected-index* to the new filtered list length."
   ;; Clamp selected index
   (setf *minibuffer-selected-index*
         (max 0 (min *minibuffer-selected-index*
-                    (1- (max 1 (length *minibuffer-filtered-items*)))))))
+                    (1- (max 1 (length *minibuffer-filtered-items*))))))
+  ;; Reset scroll to keep selection visible
+  (setf *minibuffer-scroll-offset* 0)
+  (minibuffer-ensure-visible))
 
 (defun minibuffer-insert-char (char)
   "Insert CHAR at the current point in the minibuffer input and re-filter."
@@ -917,16 +1082,38 @@ Clamps *minibuffer-selected-index* to the new filtered list length."
     (decf *minibuffer-point*)
     (minibuffer-update-filter)))
 
+(defun minibuffer-visible-item-count ()
+  "Return the number of candidate rows visible in the minibuffer.
+This is the total minibuffer height minus 1 (for the prompt line)."
+  (1- (min *minibuffer-max-height*
+           (1+ (length *minibuffer-filtered-items*)))))
+
+(defun minibuffer-ensure-visible ()
+  "Adjust *minibuffer-scroll-offset* so that *minibuffer-selected-index*
+is within the visible window of candidates."
+  (let ((visible (minibuffer-visible-item-count)))
+    (when (plusp visible)
+      ;; If selection is above the visible window, scroll up
+      (when (< *minibuffer-selected-index* *minibuffer-scroll-offset*)
+        (setf *minibuffer-scroll-offset* *minibuffer-selected-index*))
+      ;; If selection is below the visible window, scroll down
+      (when (>= *minibuffer-selected-index*
+                (+ *minibuffer-scroll-offset* visible))
+        (setf *minibuffer-scroll-offset*
+              (1+ (- *minibuffer-selected-index* visible)))))))
+
 (defun minibuffer-next-item ()
   "Move the selection to the next candidate in the filtered list."
   (when (< *minibuffer-selected-index*
            (1- (length *minibuffer-filtered-items*)))
-    (incf *minibuffer-selected-index*)))
+    (incf *minibuffer-selected-index*)
+    (minibuffer-ensure-visible)))
 
 (defun minibuffer-prev-item ()
   "Move the selection to the previous candidate in the filtered list."
   (when (plusp *minibuffer-selected-index*)
-    (decf *minibuffer-selected-index*)))
+    (decf *minibuffer-selected-index*)
+    (minibuffer-ensure-visible)))
 
 (defun minibuffer-confirm ()
   "Confirm the current selection, invoke the callback, and deactivate."
@@ -1324,6 +1511,7 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
             *minibuffer-items* nil
             *minibuffer-filtered-items* nil
             *minibuffer-selected-index* 0
+            *minibuffer-scroll-offset* 0
             *minibuffer-callback* nil
             *minibuffer-max-height* 12)
       (setf *openai-oauth-pending* nil)

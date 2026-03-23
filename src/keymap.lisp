@@ -107,6 +107,8 @@
     (keymap-bind km '(:ctrl-c #\Newline) 'minibuffer-select-model-command) ; C-c C-m (LF variant)
     ;; C-c M (capital M) = old overlay model selector
     (keymap-bind km '(:ctrl-c #\M) 'select-model-command)
+    ;; C-c f = describe function (introspection / help system)
+    (keymap-bind km '(:ctrl-c #\f) 'describe-function-command)
     ;; ----- C-x prefix: global / cross-buffer commands -----
     ;; C-x is reserved for global commands that operate across buffers
     ;; or affect the application as a whole (buffer management, I/O, etc.).
