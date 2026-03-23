@@ -137,3 +137,27 @@
   "format-selector-line truncates to fit narrow terminals."
   (let ((line (clawmacs::format-selector-line "  " "very-long-session-name" "claude" "thinking" "12" 40)))
     (is (= 40 (length line)))))
+
+;;; --------------------------------------------------------------------------
+;;; Model Selector Rendering Tests
+;;; --------------------------------------------------------------------------
+
+(test format-model-selector-line-fits-width
+  "format-model-selector-line output is exactly the given width."
+  (let ((line (clawmacs::format-model-selector-line "▸ " "anthropic" "claude-haiku-4-5-20251001" 80)))
+    (is (= 80 (length line)))
+    (is (search "anthropic" line))
+    (is (search "claude-haiku-4-5-20251001" line))))
+
+(test format-model-selector-line-with-active-marker
+  "format-model-selector-line shows the active marker."
+  (let ((line (clawmacs::format-model-selector-line "▸*" "zai" "glm-5" 80)))
+    (is (= 80 (length line)))
+    (is (search "▸*" line))
+    (is (search "zai" line))
+    (is (search "glm-5" line))))
+
+(test format-model-selector-line-truncates-at-narrow-width
+  "format-model-selector-line truncates for narrow terminals."
+  (let ((line (clawmacs::format-model-selector-line "  " "openai-codex" "codex-mini-latest" 30)))
+    (is (= 30 (length line)))))

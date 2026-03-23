@@ -229,6 +229,20 @@
    #:list-buffers-command
    #:render-buffer-selector
 
+   ;; Model selector
+   #:*model-selector-active*
+   #:*model-selector-index*
+   #:*model-selector-entries*
+   #:select-model-command
+   #:render-model-selector
+   #:handle-model-selector-key
+
+   ;; Known models
+   #:*provider-known-models*
+   #:provider-known-models
+   #:provider-has-token-p
+   #:available-models-for-selector
+
    ;; Main
    #:clawmacs-main
    #:send-to-agent-with-context

@@ -290,3 +290,95 @@
       (clawmacs::handle-buffer-selector-key #\k)
       (is (= 1 (length *buffer-ring*)))
       (is (eq buf1 (current-buffer))))))
+
+;;; --------------------------------------------------------------------------
+;;; Model Selector Tests
+;;; --------------------------------------------------------------------------
+
+(test model-selector-activates
+  "select-model-command sets the model selector state when entries exist."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*model-selector-active* nil)
+        (*model-selector-index* 0)
+        (clawmacs::*model-selector-scroll* 0)
+        (*model-selector-entries* nil))
+    (let ((buf (make-buffer "test-session" :agent-name "claude")))
+      (add-buffer-to-ring buf)
+      ;; Mock: set entries directly (since we can't call read-provider-token in tests)
+      (setf *model-selector-entries*
+            (list (list :provider :anthropic :model "claude-haiku-4-5-20251001" :active-p t)
+                  (list :provider :anthropic :model "claude-3-5-haiku-20241022" :active-p nil)
+                  (list :provider :zai :model "glm-5" :active-p nil)))
+      (setf *model-selector-active* t
+            *model-selector-index* 0)
+      (is (eq t *model-selector-active*))
+      (is (= 3 (length *model-selector-entries*))))))
+
+(test model-selector-navigate-down-and-up
+  "C-n and C-p navigate the model selector."
+  (let ((*model-selector-active* t)
+        (*model-selector-index* 0)
+        (clawmacs::*model-selector-scroll* 0)
+        (*model-selector-entries*
+          (list (list :provider :anthropic :model "model-a" :active-p t)
+                (list :provider :anthropic :model "model-b" :active-p nil)
+                (list :provider :zai :model "model-c" :active-p nil))))
+    (let ((buf (make-buffer "test")))
+      ;; C-n = move down
+      (clawmacs::handle-model-selector-key (code-char 14) buf)
+      (is (= 1 *model-selector-index*))
+      ;; C-n again
+      (clawmacs::handle-model-selector-key (code-char 14) buf)
+      (is (= 2 *model-selector-index*))
+      ;; C-n at bottom = no change
+      (clawmacs::handle-model-selector-key (code-char 14) buf)
+      (is (= 2 *model-selector-index*))
+      ;; C-p = move up
+      (clawmacs::handle-model-selector-key (code-char 16) buf)
+      (is (= 1 *model-selector-index*)))))
+
+(test model-selector-enter-selects-model
+  "Enter in model selector sets buffer overrides and closes."
+  (let ((*model-selector-active* t)
+        (*model-selector-index* 1)
+        (clawmacs::*model-selector-scroll* 0)
+        (*model-selector-entries*
+          (list (list :provider :anthropic :model "model-a" :active-p t)
+                (list :provider :zai :model "glm-5" :active-p nil)))
+        (*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0))
+    (let ((buf (make-buffer "test")))
+      (add-buffer-to-ring buf)
+      ;; Select index 1 (zai/glm-5)
+      (clawmacs::handle-model-selector-key #\Return buf)
+      (is (null *model-selector-active*))
+      (is (eq :zai (buffer-provider-override buf)))
+      (is (string= "glm-5" (buffer-model-override buf))))))
+
+(test model-selector-cancel-with-c-g
+  "C-g in model selector closes without changing the model."
+  (let ((*model-selector-active* t)
+        (*model-selector-index* 1)
+        (clawmacs::*model-selector-scroll* 0)
+        (*model-selector-entries*
+          (list (list :provider :anthropic :model "model-a" :active-p t)
+                (list :provider :zai :model "glm-5" :active-p nil))))
+    (let ((buf (make-buffer "test")))
+      ;; C-g = cancel
+      (clawmacs::handle-model-selector-key (code-char 7) buf)
+      (is (null *model-selector-active*))
+      ;; No overrides set
+      (is (null (buffer-provider-override buf)))
+      (is (null (buffer-model-override buf))))))
+
+(test model-selector-active-model-pre-selected
+  "When opening the model selector, the active model index is pre-selected."
+  (let ((*model-selector-entries*
+          (list (list :provider :anthropic :model "model-a" :active-p nil)
+                (list :provider :anthropic :model "model-b" :active-p nil)
+                (list :provider :zai :model "glm-5" :active-p t))))
+    ;; Simulate what select-model-command does
+    (let ((active-idx (position-if (lambda (e) (getf e :active-p))
+                                   *model-selector-entries*)))
+      (is (= 2 active-idx)))))

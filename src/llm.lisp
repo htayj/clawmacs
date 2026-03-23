@@ -556,6 +556,63 @@ Returns the access token on success."
   "Return the built-in fallback model for PROVIDER."
   (cdr (assoc provider *provider-fallback-models*)))
 
+;;; --------------------------------------------------------------------------
+;;; Known Models Per Provider
+;;; --------------------------------------------------------------------------
+
+(defparameter *provider-known-models*
+  '((:anthropic
+     "claude-haiku-4-5-20251001"
+     "claude-3-5-haiku-20241022"
+     "claude-3-haiku-20240307")
+    (:openai-codex
+     "codex-mini-latest"
+     "o4-mini"
+     "gpt-4.1-mini"
+     "gpt-4.1-nano")
+    (:zai
+     "glm-5"
+     "glm-5-turbo"
+     "glm-4.7"
+     "glm-4.6"
+     "glm-4.5"
+     "glm-4.5-air"))
+  "Known model identifiers grouped by provider.
+The first model in each list is the provider's default.
+These are used by the model selector overlay.")
+
+(defun provider-known-models (provider)
+  "Return the list of known model names for PROVIDER."
+  (cdr (assoc provider *provider-known-models*)))
+
+(defun provider-has-token-p (provider)
+  "Return non-nil when PROVIDER has a usable API key or OAuth token configured."
+  (handler-case
+      (let ((token (read-provider-token provider)))
+        (and token (stringp token) (plusp (length token))))
+    (error () nil)))
+
+(defun available-models-for-selector (buf)
+  "Build the model selector entry list for BUF.
+Returns a list of plists: ((:provider :anthropic :model \"name\" :active-p t/nil) ...)
+Only includes providers that have a valid API key. The entry matching BUF's
+currently resolved provider/model is marked :active-p t."
+  (multiple-value-bind (current-provider current-model)
+      (handler-case (resolve-buffer-provider-and-model buf)
+        (error () (values nil nil)))
+    (let ((entries nil))
+      (dolist (provider-models *provider-known-models*)
+        (let ((provider (car provider-models))
+              (models (cdr provider-models)))
+          (when (provider-has-token-p provider)
+            (dolist (model models)
+              (push (list :provider provider
+                          :model model
+                          :active-p (and (eq provider current-provider)
+                                         (string= model current-model)))
+                    entries)))))
+      (nreverse entries))))
+
 (defun json-key-string (key)
   "Convert a decoded JSON key into a lowercase string."
   (string-downcase

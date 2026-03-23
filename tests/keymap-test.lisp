@@ -88,3 +88,13 @@
           (keymap-lookup *default-keymap* '(:ctrl-c #\t))))
   ;; C-x t should NOT be bound (it was moved away)
   (is (null (keymap-lookup *default-keymap* '(:ctrl-x #\t)))))
+
+(test default-keymap-model-selector-binding
+  "Default keymap binds C-c C-m (C-c Return) to the model selector."
+  (clawmacs::init-default-keymap)
+  ;; C-m = #\Return (ASCII 13)
+  (is (eq 'clawmacs::select-model-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\Return))))
+  ;; Some terminals send #\Newline (LF) for Enter
+  (is (eq 'clawmacs::select-model-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\Newline)))))

@@ -547,3 +547,140 @@ Handles scrolling when there are more buffers than visible rows."
       (croatoan:move modeline-window 0 0)
       (croatoan:add-string modeline-window padded)
       (croatoan:refresh modeline-window))))
+
+;;; --------------------------------------------------------------------------
+;;; Model Selector Rendering
+;;; --------------------------------------------------------------------------
+
+(defun format-model-selector-line (marker provider model width)
+  "Format a single line for the model selector with aligned columns.
+MARKER is a 2-char prefix (e.g. \"▸*\" or \"  \").
+Adapts column widths to the terminal WIDTH."
+  (let* ((provider-width (max 10 (min 20 (floor width 4))))
+         (model-width (max 15 (- width (length marker) provider-width 4)))
+         (line (format nil "~A~VA  ~A"
+                       marker
+                       provider-width provider
+                       model)))
+    (if (<= (length line) width)
+        (concatenate 'string line
+                     (make-string (- width (length line)) :initial-element #\Space))
+        (subseq line 0 width))))
+
+(defun render-model-selector (main-window modeline-window)
+  "Render the model selector overlay showing available models across providers.
+Handles scrolling when there are more models than visible rows."
+  (let* ((width (croatoan:width main-window))
+         (height (croatoan:height main-window))
+         (entries *model-selector-entries*)
+         (num-entries (length entries))
+         (current-buf (current-buffer))
+         ;; Rows: 0=blank, 1=title, 2=separator, 3=headers, 4=blank, 5..=entries
+         ;; Last row = footer
+         (max-visible (max 1 (- height 7)))
+         ;; Auto-scroll to keep selected index visible
+         (scroll (cond
+                   ((< *model-selector-index* *model-selector-scroll*)
+                    *model-selector-index*)
+                   ((>= *model-selector-index*
+                        (+ *model-selector-scroll* max-visible))
+                    (max 0 (1+ (- *model-selector-index* max-visible))))
+                   (t *model-selector-scroll*))))
+    (setf *model-selector-scroll* scroll)
+    (croatoan:clear main-window)
+    ;; Title
+    (when (< 1 height)
+      (setf (croatoan:color-pair main-window) '(:cyan :black))
+      (setf (croatoan:attributes main-window) '(:bold))
+      (croatoan:move main-window 1 2)
+      (let ((title "Select Model"))
+        (croatoan:add-string main-window
+                             (subseq title 0 (min (length title) (- width 4))))))
+    ;; Separator
+    (when (< 2 height)
+      (setf (croatoan:color-pair main-window) '(:white :black))
+      (setf (croatoan:attributes main-window) nil)
+      (croatoan:move main-window 2 2)
+      (let ((sep (make-string (min (- width 4) 50) :initial-element #\─)))
+        (croatoan:add-string main-window sep)))
+    ;; Column headers
+    (when (< 3 height)
+      (setf (croatoan:color-pair main-window) '(:yellow :black))
+      (setf (croatoan:attributes main-window) '(:bold))
+      (let ((header (format-model-selector-line "  " "PROVIDER" "MODEL" width)))
+        (croatoan:move main-window 3 0)
+        (croatoan:add-string main-window
+                             (subseq header 0 (min (length header) width)))))
+    ;; Model entries
+    (loop :for absolute-idx :from scroll
+          :below (min (+ scroll max-visible) num-entries)
+          :for entry := (nth absolute-idx entries)
+          :for row := (+ 5 (- absolute-idx scroll))
+          :while (< row (- height 2))
+          :for selected-p := (= absolute-idx *model-selector-index*)
+          :for active-p := (getf entry :active-p)
+          :for provider := (string-downcase (symbol-name (getf entry :provider)))
+          :for model := (getf entry :model)
+          :for marker := (cond ((and selected-p active-p) "▸*")
+                               (selected-p "▸ ")
+                               (active-p " *")
+                               (t "  "))
+          :for line := (format-model-selector-line marker provider model width)
+          :do (progn
+                (if selected-p
+                    (progn
+                      (setf (croatoan:color-pair main-window) '(:black :cyan))
+                      (setf (croatoan:attributes main-window) '(:bold)))
+                    (progn
+                      (setf (croatoan:color-pair main-window) '(:white :black))
+                      (setf (croatoan:attributes main-window) nil)))
+                ;; Clear row with background color
+                (croatoan:move main-window row 0)
+                (croatoan:add-string main-window
+                                     (make-string width :initial-element #\Space))
+                ;; Write entry
+                (croatoan:move main-window row 0)
+                (croatoan:add-string main-window
+                                     (subseq line 0 (min (length line) width)))))
+    ;; Scroll indicator
+    (when (> num-entries max-visible)
+      (let ((indicator (format nil "[~D-~D of ~D]"
+                               (1+ scroll)
+                               (min (+ scroll max-visible) num-entries)
+                               num-entries))
+            (ind-row (+ 5 (min max-visible (- num-entries scroll)))))
+        (when (< ind-row (- height 1))
+          (setf (croatoan:color-pair main-window) '(:yellow :black))
+          (setf (croatoan:attributes main-window) nil)
+          (croatoan:move main-window ind-row 2)
+          (croatoan:add-string main-window
+                               (subseq indicator 0
+                                       (min (length indicator) (- width 4)))))))
+    ;; Footer with keybinding hints
+    (let ((footer-row (1- height)))
+      (when (plusp footer-row)
+        (setf (croatoan:color-pair main-window) '(:green :black))
+        (setf (croatoan:attributes main-window) nil)
+        (croatoan:move main-window footer-row 2)
+        (let ((footer "[RET] select  [C-g/q] cancel  * = active"))
+          (croatoan:add-string main-window
+                               (subseq footer 0
+                                       (min (length footer) (- width 4)))))))
+    (croatoan:refresh main-window)
+    ;; Custom modeline for selector
+    (let* ((ml-face (make-modeline-face))
+           (resolved (resolve-face ml-face))
+           (pm (resolve-modeline-provider-model current-buf))
+           (ml-text (format nil " [model-selector] ~A | ~D model~:[s~;~] available"
+                            pm num-entries (= num-entries 1)))
+           (ml-width (croatoan:width modeline-window))
+           (padded (if (<= (length ml-text) ml-width)
+                       (concatenate 'string ml-text
+                                    (make-string (- ml-width (length ml-text))
+                                                 :initial-element #\Space))
+                       (subseq ml-text 0 ml-width))))
+      (apply-face-to-window modeline-window resolved)
+      (croatoan:clear modeline-window)
+      (croatoan:move modeline-window 0 0)
+      (croatoan:add-string modeline-window padded)
+      (croatoan:refresh modeline-window))))

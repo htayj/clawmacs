@@ -457,6 +457,32 @@ for the user to paste the callback URL."
         *buffer-selector-index* 0
         *buffer-selector-scroll* 0))
 
+;;; --------------------------------------------------------------------------
+;;; Model Selection Commands
+;;; --------------------------------------------------------------------------
+
+(defcommand select-model-command (:permission :user-only)
+  "Open the model selector to change the LLM model for this session.
+Builds the available model list based on configured API keys."
+  (buffer)
+  (let ((entries (available-models-for-selector buffer)))
+    (cond
+      ((null entries)
+       (let ((sys-msg (buffer-insert-agent-message
+                       buffer "[No API keys configured. Cannot list models.]")))
+         (setf (message-sender sys-msg) :system)))
+      (t
+       ;; Pre-select the currently active model (if found)
+       (let ((active-idx (position-if (lambda (e) (getf e :active-p)) entries)))
+         (setf *model-selector-entries* entries
+               *model-selector-active* t
+               *model-selector-index* (or active-idx 0)
+               *model-selector-scroll* 0))))))
+
+;;; --------------------------------------------------------------------------
+;;; Buffer Management Commands (continued)
+;;; --------------------------------------------------------------------------
+
 (defcommand new-buffer-command (:permission :user-only)
   "Create a new chat buffer and switch to it."
   (buffer)
@@ -551,6 +577,19 @@ Quit is C-x C-c (global command, uses C-x prefix).")
 
 (defvar *buffer-selector-scroll* 0
   "Scroll offset for the buffer selector (first visible entry index).")
+
+(defvar *model-selector-active* nil
+  "When non-nil, the model selector overlay is displayed.")
+
+(defvar *model-selector-index* 0
+  "The currently highlighted index in the model selector.")
+
+(defvar *model-selector-scroll* 0
+  "Scroll offset for the model selector (first visible entry index).")
+
+(defvar *model-selector-entries* nil
+  "List of model entries for the selector, each a plist
+(:provider :keyword :model \"string\" :active-p bool).")
 
 (defun normalize-key (event)
   "Extract and normalize a key from a croatoan EVENT.
@@ -661,6 +700,50 @@ Strips any meta/ctrl-x prefix so the selector has simple key bindings."
       ;; Everything else: ignore
       (t nil))))
 
+(defun handle-model-selector-key (key buf)
+  "Handle a key event while the model selector is active.
+Strips any meta/ctrl-x/ctrl-c prefix so the selector has simple key bindings.
+On Enter, sets the buffer's provider and model overrides to the selected entry."
+  (let ((base-key (if (and (listp key) (= (length key) 2)
+                           (member (first key) '(:alt :ctrl-x :ctrl-c)))
+                      (second key)
+                      key))
+        (num-entries (length *model-selector-entries*)))
+    (cond
+      ;; C-g: cancel selector
+      ((and (characterp base-key) (char= base-key (code-char 7)))
+       (setf *model-selector-active* nil))
+      ;; q: cancel selector
+      ((and (characterp base-key) (char= base-key #\q))
+       (setf *model-selector-active* nil))
+      ;; Enter: select highlighted model and apply to current buffer
+      ((and (characterp base-key) (or (char= base-key #\Return)
+                                       (char= base-key #\Newline)))
+       (let ((selected (nth *model-selector-index* *model-selector-entries*)))
+         (when selected
+           (let ((provider (getf selected :provider))
+                 (model (getf selected :model)))
+             (set-buffer-provider-override buf provider)
+             (set-buffer-model-override buf model)
+             ;; Show confirmation in chat
+             (let ((sys-msg (buffer-insert-agent-message
+                             buf (format nil "[Model changed to ~(~A~)/~A]"
+                                        provider model))))
+               (setf (message-sender sys-msg) :system)))))
+       (setf *model-selector-active* nil))
+      ;; C-p or Up arrow: move highlight up
+      ((or (eq base-key :up)
+           (and (characterp base-key) (char= base-key (code-char 16))))
+       (when (plusp *model-selector-index*)
+         (decf *model-selector-index*)))
+      ;; C-n or Down arrow: move highlight down
+      ((or (eq base-key :down)
+           (and (characterp base-key) (char= base-key (code-char 14))))
+       (when (< *model-selector-index* (1- num-entries))
+         (incf *model-selector-index*)))
+      ;; Everything else: ignore
+      (t nil))))
+
 (defun handle-key-event (buf event)
   "Dispatch a key event through the buffer's keymap.
 Returns :QUIT if the application should exit, or nil otherwise.
@@ -678,6 +761,12 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
       ;; Navigation and selection within the buffer list overlay
       (*buffer-selector-active*
        (handle-buffer-selector-key key)
+       nil)
+
+      ;; === MODEL SELECTOR MODE ===
+      ;; Navigation and selection within the model list overlay
+      (*model-selector-active*
+       (handle-model-selector-key key buf)
        nil)
 
       ;; === OPENAI OAUTH MODE ===
@@ -809,6 +898,10 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
       (setf *buffer-selector-active* nil
             *buffer-selector-index* 0
             *buffer-selector-scroll* 0)
+      (setf *model-selector-active* nil
+            *model-selector-index* 0
+            *model-selector-scroll* 0
+            *model-selector-entries* nil)
       (setf *openai-oauth-pending* nil)
       (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil)
       (add-buffer-to-ring buf)
@@ -833,9 +926,13 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
                       ((null event)
                        (when streaming
                          (update-streaming-response buf)
-                         (if *buffer-selector-active*
-                             (render-buffer-selector main-win modeline-win)
-                             (render-buffer buf main-win modeline-win))))
+                         (cond
+                           (*buffer-selector-active*
+                            (render-buffer-selector main-win modeline-win))
+                           (*model-selector-active*
+                            (render-model-selector main-win modeline-win))
+                           (t
+                            (render-buffer buf main-win modeline-win)))))
                       ((and (typep event 'croatoan:event)
                             (typep (croatoan:event-key event) 'croatoan:key)
                             (eq :resize (croatoan:key-name
@@ -845,9 +942,13 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
                          (croatoan:resize main-win (1- new-height) new-width)
                          (croatoan:resize modeline-win 1 new-width)
                          (croatoan:move-window modeline-win (1- new-height) 0)
-                         (if *buffer-selector-active*
-                             (render-buffer-selector main-win modeline-win)
-                             (render-buffer (current-buffer) main-win modeline-win))))
+                         (cond
+                           (*buffer-selector-active*
+                            (render-buffer-selector main-win modeline-win))
+                           (*model-selector-active*
+                            (render-model-selector main-win modeline-win))
+                           (t
+                            (render-buffer (current-buffer) main-win modeline-win)))))
                       (t
                        (let ((result (handle-key-event buf event)))
                          (when (eq result :quit)
@@ -855,6 +956,10 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
                        (let ((cur (current-buffer)))
                          (when (buffer-pending-stream cur)
                            (update-streaming-response cur))
-                         (if *buffer-selector-active*
-                             (render-buffer-selector main-win modeline-win)
-                             (render-buffer cur main-win modeline-win)))))))))))
+                         (cond
+                           (*buffer-selector-active*
+                            (render-buffer-selector main-win modeline-win))
+                           (*model-selector-active*
+                            (render-model-selector main-win modeline-win))
+                           (t
+                            (render-buffer cur main-win modeline-win))))))))))))

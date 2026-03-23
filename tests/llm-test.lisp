@@ -1265,3 +1265,86 @@
       (is (eq :zai (clawmacs::agent-default "zhipu")))
       (is (string= "glm-4.7"
                    (clawmacs::agent-default-model "zhipu" :zai))))))
+
+;;; --------------------------------------------------------------------------
+;;; Known Models Tests
+;;; --------------------------------------------------------------------------
+
+(test provider-known-models-anthropic
+  "Known Anthropic models list is non-empty and contains the default."
+  (let ((models (clawmacs::provider-known-models :anthropic)))
+    (is (listp models))
+    (is (plusp (length models)))
+    ;; Default fallback model should be in the list
+    (is (member "claude-haiku-4-5-20251001" models :test #'string=))))
+
+(test provider-known-models-openai-codex
+  "Known OpenAI Codex models list is non-empty and contains the default."
+  (let ((models (clawmacs::provider-known-models :openai-codex)))
+    (is (listp models))
+    (is (plusp (length models)))
+    (is (member "codex-mini-latest" models :test #'string=))))
+
+(test provider-known-models-zai
+  "Known Z.AI models list is non-empty and contains the default."
+  (let ((models (clawmacs::provider-known-models :zai)))
+    (is (listp models))
+    (is (plusp (length models)))
+    (is (member "glm-5" models :test #'string=))
+    ;; Should include turbo and older variants
+    (is (member "glm-5-turbo" models :test #'string=))
+    (is (member "glm-4.7" models :test #'string=))))
+
+(test provider-known-models-unknown-returns-nil
+  "Unknown provider returns nil for known models."
+  (is (null (clawmacs::provider-known-models :unknown-provider))))
+
+(test available-models-for-selector-marks-active
+  "available-models-for-selector marks the current buffer's model as active."
+  (let ((path (temp-agent-defaults-path)))
+    (with-agent-defaults-path-override (path)
+      ;; Set agent default so resolution works
+      (clawmacs::set-agent-default "claude" :anthropic :model "claude-haiku-4-5-20251001")
+      (let ((buf (make-buffer "test" :agent-name "claude")))
+        ;; Mock provider-has-token-p to only return t for :anthropic
+        (with-function-override (clawmacs::provider-has-token-p (provider)
+                                  (eq provider :anthropic))
+          (let ((entries (clawmacs::available-models-for-selector buf)))
+            ;; Should have entries for anthropic only
+            (is (plusp (length entries)))
+            (is (every (lambda (e) (eq :anthropic (getf e :provider))) entries))
+            ;; Exactly one entry should be active
+            (let ((active-count (count-if (lambda (e) (getf e :active-p)) entries)))
+              (is (= 1 active-count)))
+            ;; The active entry should be the default model
+            (let ((active (find-if (lambda (e) (getf e :active-p)) entries)))
+              (is (string= "claude-haiku-4-5-20251001" (getf active :model))))))))))
+
+(test available-models-for-selector-multi-provider
+  "available-models-for-selector includes models from multiple providers."
+  (let ((path (temp-agent-defaults-path)))
+    (with-agent-defaults-path-override (path)
+      (clawmacs::set-agent-default "claude" :zai :model "glm-5")
+      (let ((buf (make-buffer "test" :agent-name "claude")))
+        ;; Mock: both anthropic and zai have tokens
+        (with-function-override (clawmacs::provider-has-token-p (provider)
+                                  (member provider '(:anthropic :zai)))
+          (let ((entries (clawmacs::available-models-for-selector buf)))
+            ;; Should have entries from both providers
+            (is (plusp (length entries)))
+            (let ((providers (remove-duplicates
+                              (mapcar (lambda (e) (getf e :provider)) entries))))
+              (is (member :anthropic providers))
+              (is (member :zai providers)))))))))
+
+(test available-models-for-selector-no-tokens
+  "available-models-for-selector returns nil when no provider has a token."
+  (let ((path (temp-agent-defaults-path)))
+    (with-agent-defaults-path-override (path)
+      (let ((buf (make-buffer "test" :agent-name "claude")))
+        ;; Mock: no tokens available
+        (with-function-override (clawmacs::provider-has-token-p (provider)
+                                  (declare (ignore provider))
+                                  nil)
+          (let ((entries (clawmacs::available-models-for-selector buf)))
+            (is (null entries))))))))
