@@ -563,8 +563,8 @@ Returns the access token on success."
 (defparameter *provider-known-models*
   '((:anthropic
      "claude-haiku-4-5-20251001"
-     "claude-sonnet-4.6"
-     "claude-opus-4.6"
+     "claude-sonnet-4-6"
+     "claude-opus-4-6"
      "claude-3-5-haiku-20241022"
      "claude-3-haiku-20240307")
     (:openai-codex

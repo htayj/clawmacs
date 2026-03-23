@@ -65,7 +65,7 @@
     (setf (buffer-token-count buf) 999999
           (buffer-context-limit buf) 999999
           (buffer-status buf) :thinking)
-    (let ((ml (clawmacs::format-modeline buf 40 :provider-model "anthropic/claude-sonnet-4.6")))
+    (let ((ml (clawmacs::format-modeline buf 40 :provider-model "anthropic/claude-sonnet-4-6")))
       (is (= 40 (length ml))))))
 
 (test calculate-input-height-minimum
