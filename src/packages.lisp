@@ -288,6 +288,11 @@
    #:make-help-buffer
    #:describe-function-command
    #:buffer-major-mode
+   #:list-variables
+   #:variable-kind
+   #:truncate-value-string
+   #:describe-variable-to-string
+   #:describe-variable-command
 
    ;; Known models
    #:*provider-known-models*

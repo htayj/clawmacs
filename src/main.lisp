@@ -852,6 +852,119 @@ Bound to C-c f."
                (switch-to-buffer help-buf))))))))
 
 ;;; --------------------------------------------------------------------------
+;;; Introspection: list-variables & describe-variable
+;;; --------------------------------------------------------------------------
+
+(defun list-variables ()
+  "Return a sorted list of variable symbols exported from the clawmacs package.
+Includes all exported symbols that have global variable bindings (special
+variables, constants, parameters)."
+  (let ((variables nil))
+    (do-external-symbols (sym :clawmacs)
+      (when (boundp sym)
+        (push sym variables)))
+    (sort variables #'string< :key #'symbol-name)))
+
+(defun variable-kind (sym)
+  "Return a keyword describing the kind of variable SYM.
+Returns :constant, :parameter, or :variable."
+  (cond
+    ((constantp sym) :constant)
+    ;; Convention: *foo* with earmuffs is a special/dynamic variable.
+    ;; defparameter defines a special variable with a default value — we call
+    ;; those "parameter" to distinguish from plain defvar.  Since CL doesn't
+    ;; store this distinction at runtime, we just rely on the earmuff naming.
+    ((let ((name (symbol-name sym)))
+       (and (> (length name) 2)
+            (char= (char name 0) #\*)
+            (char= (char name (1- (length name))) #\*)))
+     :parameter)
+    (t :variable)))
+
+(defun truncate-value-string (value &optional (max-length 200))
+  "Print VALUE to a string, truncating at MAX-LENGTH characters."
+  (let* ((full (handler-case
+                   (let ((*print-length* 20)
+                         (*print-level* 3)
+                         (*print-circle* t)
+                         (*print-pretty* nil))
+                     (prin1-to-string value))
+                 (error (e)
+                   (format nil "#<error printing value: ~A>" e))))
+         (len (length full)))
+    (if (> len max-length)
+        (concatenate 'string (subseq full 0 max-length) "...")
+        full)))
+
+(defun describe-variable-to-string (var-symbol)
+  "Return a human-readable string describing VAR-SYMBOL.
+Includes: name, kind, type of current value, current value (truncated),
+and docstring."
+  (unless (and var-symbol (boundp var-symbol))
+    (return-from describe-variable-to-string
+      (format nil "~A is not a bound variable." var-symbol)))
+  (with-output-to-string (s)
+    ;; Header
+    (format s "~A~%~A~%~%" var-symbol
+            (make-string (min 60 (length (symbol-name var-symbol)))
+                         :initial-element #\-))
+    ;; Kind
+    (let ((kind (variable-kind var-symbol)))
+      (format s "Kind: ~A~%"
+              (ecase kind
+                (:constant  "Constant (defconstant)")
+                (:parameter "Special Variable (defvar/defparameter)")
+                (:variable  "Variable"))))
+    ;; Value type
+    (let ((val (symbol-value var-symbol)))
+      (format s "Value Type: ~A~%" (type-of val))
+      ;; Current value (truncated)
+      (format s "Current Value: ~A~%" (truncate-value-string val)))
+    ;; Docstring
+    (let ((doc (or (documentation var-symbol 'variable) "")))
+      (when (plusp (length doc))
+        (format s "~%~A~%" doc)))))
+
+(defcommand describe-variable-command (:permission :user-only)
+  "Open a minibuffer selector listing all exported variables.
+On selection, displays detailed variable description in a help buffer.
+Bound to C-c v."
+  (buffer)
+  (declare (ignore buffer))
+  (let* ((var-list (list-variables))
+         (items (mapcar (lambda (sym)
+                          (let* ((name (string-downcase (symbol-name sym)))
+                                 (kind (variable-kind sym))
+                                 (kind-str (ecase kind
+                                             (:constant "const")
+                                             (:parameter "special")
+                                             (:variable "var")))
+                                 (val-preview
+                                   (handler-case
+                                       (let ((val (symbol-value sym)))
+                                         (truncate-value-string val 40))
+                                     (error () "#<unreadable>")))
+                                 (display (format nil "~A  (~A)  = ~A"
+                                                  name kind-str val-preview)))
+                            (list :symbol sym
+                                  :name name
+                                  :display display)))
+                        var-list)))
+    (minibuffer-activate
+     "Describe Variable" items
+     (lambda (item)
+       (let* ((sym (getf item :symbol))
+              (desc (describe-variable-to-string sym))
+              (buf-name (format nil "*help:~A*"
+                                (string-downcase (symbol-name sym))))
+              ;; Reuse existing help buffer for this variable if one exists
+              (existing (find-buffer-by-name buf-name)))
+         (if existing
+             (switch-to-buffer existing)
+             (let ((help-buf (make-help-buffer buf-name desc)))
+               (switch-to-buffer help-buf))))))))
+
+;;; --------------------------------------------------------------------------
 ;;; Event Loop
 ;;; --------------------------------------------------------------------------
 
