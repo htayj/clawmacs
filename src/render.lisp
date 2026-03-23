@@ -86,11 +86,26 @@ support it."
 ;;; Modeline Rendering
 ;;; --------------------------------------------------------------------------
 
-(defun format-modeline (buf width)
-  "Format the modeline string for BUF, fitting within WIDTH columns."
-  (let* ((left (format nil " ~A | ~A | ~A"
+(defun resolve-modeline-provider-model (buf)
+  "Resolve the provider/model string for the modeline.
+Returns a string like \"anthropic/claude-haiku-4-5-20251001\" or \"??\" on error."
+  (handler-case
+      (multiple-value-bind (provider model)
+          (resolve-buffer-provider-and-model buf)
+        (format nil "~(~A~)/~A" provider model))
+    (error () "??")))
+
+(defun format-modeline (buf width &key (major-mode "chat") provider-model)
+  "Format the modeline string for BUF, fitting within WIDTH columns.
+MAJOR-MODE is displayed on the far left (e.g. \"chat\", \"buffer-selector\").
+PROVIDER-MODEL is the provider/model string (e.g. \"anthropic/claude-haiku-4-5\");
+when nil it is resolved from the buffer's agent defaults."
+  (let* ((pm (or provider-model (resolve-modeline-provider-model buf)))
+         (left (format nil " [~A] ~A | ~A | ~A | ~A"
+                       major-mode
                        (buffer-name buf)
                        (buffer-agent-name buf)
+                       pm
                        (namestring (buffer-working-directory buf))))
          (right (format nil "~A/~A | ~A "
                         (buffer-token-count buf)
@@ -519,7 +534,7 @@ Handles scrolling when there are more buffers than visible rows."
     ;; Custom modeline for selector
     (let* ((ml-face (make-modeline-face))
            (resolved (resolve-face ml-face))
-           (ml-text (format nil " Buffer Selector | ~D session~:[s~;~]"
+           (ml-text (format nil " [buffer-selector] Agent Sessions | ~D session~:[s~;~]"
                             num-buffers (= num-buffers 1)))
            (ml-width (croatoan:width modeline-window))
            (padded (if (<= (length ml-text) ml-width)
