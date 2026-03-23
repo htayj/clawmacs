@@ -123,6 +123,14 @@ Call once at startup. These faces are customizable via customize-face."
             :background (make-color-spec :cga 0)
             :foreground (make-color-spec :cga 2)
             :bold-p t :underline-p nil :reverse-p nil))
+    ;; Default text face — fallback for messages without a face set.
+    ;; This should NEVER be the modeline face; it should be a sensible
+    ;; text-on-dark-background face for generic content.
+    (setf (gethash :default-text r)
+          (make-instance 'face :name :default-text
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 7)
+            :bold-p nil :underline-p nil :reverse-p nil))
     r))
 
 (defun collect-global-faces ()
@@ -196,6 +204,19 @@ Prefers the stored global face for customizability."
         :background (make-color-spec :cga 7)
         :foreground (make-color-spec :cga 0)
         :bold-p t
+        :underline-p nil
+        :reverse-p nil)))
+
+(defun make-default-text-face ()
+  "Return the default text face from the global registry, or create a default.
+This is the fallback face for messages that lack a face set — white text on
+black background. This must NOT be the modeline face."
+  (or (global-face :default-text)
+      (make-instance 'face
+        :name :default-text
+        :background (make-color-spec :cga 0)
+        :foreground (make-color-spec :cga 7)
+        :bold-p nil
         :underline-p nil
         :reverse-p nil)))
 
@@ -342,8 +363,8 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
          (display-width (max 1 (- width prefix-len)))
          (face-set (message-face-set msg))
          (face (if face-set
-                   (or (get-face face-set :default) (make-modeline-face))
-                   (make-modeline-face)))
+                   (or (get-face face-set :default) (make-default-text-face))
+                   (make-default-text-face)))
          (resolved (resolve-face face))
          (row start-row)
          (cursor-y nil)

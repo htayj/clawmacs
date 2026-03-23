@@ -1359,6 +1359,13 @@ documentation in *extended-docs*."
   :returns "face-set — a face set for system messages with cyan-on-black default."
   :see-also (make-default-user-face-set make-default-agent-face-set init-face-registry))
 
+(defdoc make-default-text-face
+  :category "global-face"
+  :usage "(make-default-text-face)"
+  :returns "face — the default text face (white on black, no bold) from the global registry."
+  :see-also (make-modeline-face make-default-system-face-set global-face)
+  :side-effects "None — reads from the global face registry.")
+
 ;;; ==========================================================================
 ;;; Category: render — Rendering and display
 ;;; ==========================================================================

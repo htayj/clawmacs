@@ -39,6 +39,7 @@
    #:collect-global-faces
    #:apply-global-face
    #:make-default-system-face-set
+   #:make-default-text-face
 
    ;; Lines
    #:line
