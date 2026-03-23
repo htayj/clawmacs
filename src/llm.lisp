@@ -225,6 +225,23 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
   (merge-pathnames #P".claude/.credentials.json" (user-homedir-pathname))
   "Path to Claude Code's OAuth credentials file.")
 
+(defvar *anthropic-env-var* "CLAUDE_CODE_OAUTH_TOKEN"
+  "Environment variable name for the Anthropic Claude Max OAuth token.
+When set, this takes highest priority over all other Anthropic token sources.")
+
+(defvar *zai-env-var* "ZAI_CODING_MAX_API_KEY"
+  "Environment variable name for the Z.AI Coding Max API key.
+When set, this takes highest priority over the static token file.")
+
+(defun read-env-token (env-var)
+  "Read a token from the environment variable named ENV-VAR.
+Returns the trimmed token string if the variable is set and non-empty, nil otherwise."
+  (let ((value (uiop:getenv env-var)))
+    (when (and value (stringp value))
+      (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) value)))
+        (when (plusp (length trimmed))
+          trimmed)))))
+
 (defun read-claude-code-oauth-token ()
   "Read the Anthropic OAuth access token from Claude Code's credentials file.
 Returns the access token string if the file exists and contains a valid
@@ -240,12 +257,28 @@ claudeAiOauth entry, otherwise nil."
       (error () nil))))
 
 (defun read-provider-token (provider)
-  "Read PROVIDER's token, preferring live OAuth credentials when available,
-falling back to the provider-specific static token file."
-  (or (when (eq provider :anthropic)
+  "Read PROVIDER's token with the following priority per provider:
+
+  :ANTHROPIC     1) CLAUDE_CODE_OAUTH_TOKEN env var
+                 2) Claude Code credentials file (~/.claude/.credentials.json)
+                 3) Static token file (~/.config/clawmacs/claude-max-token)
+
+  :OPENAI-CODEX  1) OpenAI Codex OAuth credentials (auto-refreshing)
+                 2) Static token file (~/.config/clawmacs/openai-codex-token)
+
+  :ZAI           1) ZAI_CODING_MAX_API_KEY env var
+                 2) Static token file (~/.config/clawmacs/zai-api-key)"
+  (or ;; Environment variable sources (highest priority)
+      (when (eq provider :anthropic)
+        (read-env-token *anthropic-env-var*))
+      (when (eq provider :zai)
+        (read-env-token *zai-env-var*))
+      ;; OAuth / credentials file sources
+      (when (eq provider :anthropic)
         (read-claude-code-oauth-token))
       (when (eq provider :openai-codex)
         (read-openai-codex-oauth-token))
+      ;; Static token file (lowest priority)
       (let ((token-path (provider-token-path provider)))
         (when (probe-file token-path)
           (string-trim '(#\Space #\Tab #\Newline #\Return)
@@ -823,7 +856,8 @@ falls back to plain text content."
 MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
 (or nil for no tools)."
   (let* ((token (or (read-token)
-                    (error "No API token. Run 'claude setup-token', save to ~
+                    (error "No API token. Set CLAUDE_CODE_OAUTH_TOKEN env var, ~
+                            run 'claude setup-token', or save to ~
                             ~~/.config/clawmacs/claude-max-token")))
          (request-body
            (let ((body `((:model . ,model)
@@ -1030,7 +1064,8 @@ CALLBACK is called with (stream-state) on each update from the background thread
 Returns the final stream-state when complete."
   (declare (ignore callback))
   (let* ((token (or (read-token)
-                    (error "No API token. Run 'claude setup-token', save to ~
+                    (error "No API token. Set CLAUDE_CODE_OAUTH_TOKEN env var, ~
+                            run 'claude setup-token', or save to ~
                             ~~/.config/clawmacs/claude-max-token")))
          (request-body
            (let ((body `((:model . ,model)
@@ -1250,7 +1285,7 @@ compatible with the GLM Coding Max-Monthly subscription.
 The API follows the OpenAI Chat Completions format."
   (let* ((token (or (read-provider-token :zai)
                     (error 'simple-error
-                           :format-control "No Z.AI API key. Save to ~/.config/clawmacs/zai-api-key")))
+                           :format-control "No Z.AI API key. Set ZAI_CODING_MAX_API_KEY env var or save to ~/.config/clawmacs/zai-api-key")))
          (request-body
             (let ((body `((:model . ,model)
                           (:max--tokens . ,max-tokens)
@@ -1288,7 +1323,7 @@ Uses the same OpenAI-compatible streaming protocol."
   (declare (ignore callback))
   (let* ((token (or (read-provider-token :zai)
                     (error 'simple-error
-                           :format-control "No Z.AI API key. Save to ~/.config/clawmacs/zai-api-key")))
+                           :format-control "No Z.AI API key. Set ZAI_CODING_MAX_API_KEY env var or save to ~/.config/clawmacs/zai-api-key")))
          (request-body
             (let ((body `((:model . ,model)
                           (:max--tokens . ,max-tokens)

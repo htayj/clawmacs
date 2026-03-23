@@ -165,6 +165,140 @@
       (is (string= "fallback-token"
                    (clawmacs::read-provider-token :anthropic))))))
 
+;;; --------------------------------------------------------------------------
+;;; Environment Variable Token Tests
+;;; --------------------------------------------------------------------------
+
+(defmacro with-env-var ((var value) &body body)
+  "Temporarily set environment variable VAR to VALUE (or unset if VALUE is nil)."
+  (let ((gvar (gensym "VAR-"))
+        (gval (gensym "VAL-"))
+        (gold (gensym "OLD-")))
+    `(let* ((,gvar ,var)
+            (,gval ,value)
+            (,gold (uiop:getenv ,gvar)))
+       (unwind-protect
+            (progn
+              (if ,gval
+                  (setf (uiop:getenv ,gvar) ,gval)
+                  (setf (uiop:getenv ,gvar) ""))
+              ,@body)
+         (if ,gold
+             (setf (uiop:getenv ,gvar) ,gold)
+             (setf (uiop:getenv ,gvar) ""))))))
+
+(test read-env-token-returns-value-when-set
+  "read-env-token returns the token from a set environment variable."
+  (with-env-var ("CLAWMACS_TEST_TOKEN" "test-env-token-123")
+    (is (string= "test-env-token-123"
+                 (clawmacs::read-env-token "CLAWMACS_TEST_TOKEN")))))
+
+(test read-env-token-trims-whitespace
+  "read-env-token trims leading and trailing whitespace."
+  (with-env-var ("CLAWMACS_TEST_TOKEN" "  env-token-padded  ")
+    (is (string= "env-token-padded"
+                 (clawmacs::read-env-token "CLAWMACS_TEST_TOKEN")))))
+
+(test read-env-token-returns-nil-for-empty
+  "read-env-token returns nil for an empty environment variable."
+  (with-env-var ("CLAWMACS_TEST_TOKEN" "")
+    (is (null (clawmacs::read-env-token "CLAWMACS_TEST_TOKEN")))))
+
+(test read-env-token-returns-nil-for-whitespace-only
+  "read-env-token returns nil for a whitespace-only environment variable."
+  (with-env-var ("CLAWMACS_TEST_TOKEN" "   ")
+    (is (null (clawmacs::read-env-token "CLAWMACS_TEST_TOKEN")))))
+
+(test read-env-token-returns-nil-for-unset
+  "read-env-token returns nil for an unset environment variable."
+  (is (null (clawmacs::read-env-token "CLAWMACS_DEFINITELY_NOT_SET_12345"))))
+
+(test anthropic-env-var-takes-highest-priority
+  "CLAUDE_CODE_OAUTH_TOKEN env var takes priority over Claude Code credentials and file."
+  (let ((anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex))
+        (creds-path (merge-pathnames
+                     (format nil "clawmacs-creds-env-~A/credentials.json" (gensym))
+                     #P"/tmp/")))
+    (ensure-directories-exist creds-path)
+    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+      ;; Set up all three sources
+      (clawmacs::save-provider-token :anthropic "file-token")
+      (with-open-file (s creds-path
+                         :direction :output
+                         :if-exists :supersede
+                         :if-does-not-exist :create)
+        (write-string "{\"claudeAiOauth\":{\"accessToken\":\"claude-code-token\"}}" s))
+      (let ((clawmacs::*claude-code-credentials-path* creds-path))
+        ;; Env var should win over both
+        (with-env-var ("CLAUDE_CODE_OAUTH_TOKEN" "env-var-token")
+          (is (string= "env-var-token"
+                       (clawmacs::read-provider-token :anthropic))))))))
+
+(test anthropic-env-var-falls-through-when-unset
+  "When CLAUDE_CODE_OAUTH_TOKEN is unset, falls through to Claude Code credentials."
+  (let ((anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex))
+        (creds-path (merge-pathnames
+                     (format nil "clawmacs-creds-env2-~A/credentials.json" (gensym))
+                     #P"/tmp/")))
+    (ensure-directories-exist creds-path)
+    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+      (clawmacs::save-provider-token :anthropic "file-token")
+      (with-open-file (s creds-path
+                         :direction :output
+                         :if-exists :supersede
+                         :if-does-not-exist :create)
+        (write-string "{\"claudeAiOauth\":{\"accessToken\":\"claude-code-token\"}}" s))
+      (let ((clawmacs::*claude-code-credentials-path* creds-path)
+            (clawmacs::*anthropic-env-var* "CLAWMACS_UNSET_ANTHROPIC_ENV_98765"))
+        ;; With env var unset, should use Claude Code credentials
+        (is (string= "claude-code-token"
+                     (clawmacs::read-provider-token :anthropic)))))))
+
+(test zai-env-var-takes-highest-priority
+  "ZAI_CODING_MAX_API_KEY env var takes priority over the static token file."
+  (let ((anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex))
+        (zai-path (temp-test-token-path :zai)))
+    (with-provider-token-path-overrides (anthropic-path openai-codex-path zai-path)
+      ;; Set up file-based token
+      (clawmacs::save-provider-token :zai "file-zai-key")
+      ;; Env var should win
+      (with-env-var ("ZAI_CODING_MAX_API_KEY" "env-zai-key")
+        (is (string= "env-zai-key"
+                     (clawmacs::read-provider-token :zai)))))))
+
+(test zai-env-var-falls-through-to-file
+  "When ZAI_CODING_MAX_API_KEY is unset, falls through to static token file."
+  (let ((anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex))
+        (zai-path (temp-test-token-path :zai)))
+    (with-provider-token-path-overrides (anthropic-path openai-codex-path zai-path)
+      (clawmacs::save-provider-token :zai "file-zai-key")
+      (let ((clawmacs::*zai-env-var* "CLAWMACS_UNSET_ZAI_ENV_98765"))
+        ;; With env var unset, should use file
+        (is (string= "file-zai-key"
+                     (clawmacs::read-provider-token :zai)))))))
+
+(test env-var-does-not-affect-openai-codex
+  "OpenAI Codex provider is not affected by Anthropic/Z.AI env vars."
+  (let ((anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex)))
+    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+      (clawmacs::save-provider-token :openai-codex "codex-file-token")
+      ;; Setting Anthropic env var shouldn't affect OpenAI Codex
+      (with-env-var ("CLAUDE_CODE_OAUTH_TOKEN" "env-anthropic-token")
+        (is (string= "codex-file-token"
+                     (clawmacs::read-provider-token :openai-codex)))))))
+
+(test default-env-var-names-are-correct
+  "Default environment variable names are as documented."
+  (is (string= "CLAUDE_CODE_OAUTH_TOKEN" clawmacs::*anthropic-env-var*))
+  (is (string= "ZAI_CODING_MAX_API_KEY" clawmacs::*zai-env-var*)))
+
+;;; --------------------------------------------------------------------------
+
 (test read-token-uses-anthropic-provider-path
   "read-token delegates to the Anthropic provider-specific file."
   (let ((anthropic-path (temp-test-token-path :anthropic))

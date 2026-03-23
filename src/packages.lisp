@@ -149,6 +149,9 @@
 
     ;; LLM
     #:*claude-code-credentials-path*
+    #:*anthropic-env-var*
+    #:*zai-env-var*
+    #:read-env-token
     #:read-claude-code-oauth-token
     #:provider-token-path
     #:read-provider-token
