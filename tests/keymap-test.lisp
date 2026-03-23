@@ -90,11 +90,15 @@
   (is (null (keymap-lookup *default-keymap* '(:ctrl-x #\t)))))
 
 (test default-keymap-model-selector-binding
-  "Default keymap binds C-c C-m (C-c Return) to the model selector."
+  "Default keymap binds C-c C-m (C-c Return) to the minibuffer model selector,
+and C-c M (capital M) to the old overlay model selector."
   (clawmacs::init-default-keymap)
-  ;; C-m = #\Return (ASCII 13)
-  (is (eq 'clawmacs::select-model-command
+  ;; C-c C-m -> minibuffer model selector (new)
+  (is (eq 'clawmacs::minibuffer-select-model-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\Return))))
   ;; Some terminals send #\Newline (LF) for Enter
+  (is (eq 'clawmacs::minibuffer-select-model-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\Newline))))
+  ;; C-c M (capital M) -> old overlay model selector
   (is (eq 'clawmacs::select-model-command
-          (keymap-lookup *default-keymap* '(:ctrl-c #\Newline)))))
+          (keymap-lookup *default-keymap* '(:ctrl-c #\M)))))

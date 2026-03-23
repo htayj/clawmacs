@@ -479,6 +479,48 @@ Builds the available model list based on configured API keys."
                *model-selector-index* (or active-idx 0)
                *model-selector-scroll* 0))))))
 
+(defcommand minibuffer-select-model-command (:permission :user-only)
+  "Open the minibuffer model selector with fuzzy search (helm/ivy/vertico style).
+Activates the minibuffer with all available models as candidates, sorted by
+recency then alphabetically. The user can type to fuzzy-filter and use C-n/C-p
+to navigate."
+  (buffer)
+  (let ((entries (available-models-for-selector buffer)))
+    (cond
+      ((null entries)
+       (let ((sys-msg (buffer-insert-agent-message
+                       buffer "[No API keys configured. Cannot list models.]")))
+         (setf (message-sender sys-msg) :system)))
+      (t
+       ;; Build display items with provider/model display string
+       (let* ((items (mapcar (lambda (e)
+                               (list :provider (getf e :provider)
+                                     :model (getf e :model)
+                                     :active-p (getf e :active-p)
+                                     :display (format nil "~(~A~)/~A"
+                                                      (getf e :provider)
+                                                      (getf e :model))))
+                             entries))
+              ;; Sort: by recency (from history), then active, then alphabetical
+              (sorted (sort-models-by-recency items)))
+         (minibuffer-activate
+          "Select Model" sorted
+          (lambda (item)
+            (let ((provider (getf item :provider))
+                  (model (getf item :model)))
+              (set-buffer-provider-override buffer provider)
+              (set-buffer-model-override buffer model)
+              ;; Record in history for recency sorting
+              (setf *model-selection-history*
+                    (cons (getf item :display)
+                          (remove (getf item :display) *model-selection-history*
+                                  :test #'string=)))
+              ;; Show confirmation in chat
+              (let ((sys-msg (buffer-insert-agent-message
+                              buffer (format nil "[Model changed to ~(~A~)/~A]"
+                                            provider model))))
+                (setf (message-sender sys-msg) :system))))))))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Management Commands (continued)
 ;;; --------------------------------------------------------------------------
@@ -591,6 +633,44 @@ Quit is C-x C-c (global command, uses C-x prefix).")
   "List of model entries for the selector, each a plist
 (:provider :keyword :model \"string\" :active-p bool).")
 
+;;; --------------------------------------------------------------------------
+;;; Minibuffer State
+;;; --------------------------------------------------------------------------
+
+(defvar *minibuffer-active* nil
+  "When non-nil, the minibuffer is active and the cursor is in it.")
+
+(defvar *minibuffer-prompt* ""
+  "The prompt string displayed in the minibuffer (e.g. \"Select Model\").")
+
+(defvar *minibuffer-input* ""
+  "The current input text in the minibuffer.")
+
+(defvar *minibuffer-point* 0
+  "Cursor position within *minibuffer-input*.")
+
+(defvar *minibuffer-items* nil
+  "Complete list of candidate items for the minibuffer completion.
+Each item is a plist with at least a :display key.")
+
+(defvar *minibuffer-filtered-items* nil
+  "Candidates after fuzzy-filtering by *minibuffer-input*.
+Subset of *minibuffer-items*.")
+
+(defvar *minibuffer-selected-index* 0
+  "Index of the currently selected candidate in *minibuffer-filtered-items*.")
+
+(defvar *minibuffer-callback* nil
+  "Function called with the selected item plist when the user confirms.
+Set to nil when inactive.")
+
+(defvar *minibuffer-max-height* 12
+  "Maximum number of rows the minibuffer can expand to (including prompt).")
+
+(defvar *model-selection-history* nil
+  "List of recently selected model display strings (most recent first).
+Used for recency sorting in the minibuffer model selector.")
+
 (defun normalize-key (event)
   "Extract and normalize a key from a croatoan EVENT.
 Returns a character, a keyword (for special keys), a list (:alt <key>)
@@ -644,6 +724,197 @@ commands), or a list (:ctrl-c <key>) for C-c prefix (mode-specific commands)."
 
 (defvar *deny-message-mode* nil
   "When non-nil, the input area is being used to type a denial message.")
+
+;;; --------------------------------------------------------------------------
+;;; Minibuffer Functions
+;;; --------------------------------------------------------------------------
+
+(defun fuzzy-match-p (query candidate)
+  "Return T if all characters in QUERY appear in CANDIDATE in order (case-insensitive).
+Used for narrowing the minibuffer candidate list as the user types."
+  (let ((q (string-downcase query))
+        (c (string-downcase candidate)))
+    (loop :with ci := 0
+          :for qchar :across q
+          :do (let ((pos (position qchar c :start ci)))
+                (if pos
+                    (setf ci (1+ pos))
+                    (return nil)))
+          :finally (return t))))
+
+(defun minibuffer-item-display (item)
+  "Get the display string for a minibuffer candidate item.
+If ITEM is a string, returns it directly. Otherwise returns the :display plist value."
+  (if (stringp item)
+      item
+      (or (getf item :display) "")))
+
+(defun minibuffer-activate (prompt items callback)
+  "Activate the minibuffer with PROMPT text, a list of candidate ITEMS,
+and a CALLBACK function to call with the selected item on confirmation."
+  (setf *minibuffer-active* t
+        *minibuffer-prompt* prompt
+        *minibuffer-input* ""
+        *minibuffer-point* 0
+        *minibuffer-items* items
+        *minibuffer-filtered-items* (copy-list items)
+        *minibuffer-selected-index* 0
+        *minibuffer-callback* callback
+        *minibuffer-max-height* 12))
+
+(defun minibuffer-deactivate ()
+  "Deactivate the minibuffer, clearing all state."
+  (setf *minibuffer-active* nil
+        *minibuffer-prompt* ""
+        *minibuffer-input* ""
+        *minibuffer-point* 0
+        *minibuffer-items* nil
+        *minibuffer-filtered-items* nil
+        *minibuffer-selected-index* 0
+        *minibuffer-callback* nil))
+
+(defun minibuffer-update-filter ()
+  "Re-filter *minibuffer-items* based on *minibuffer-input*.
+Clamps *minibuffer-selected-index* to the new filtered list length."
+  (setf *minibuffer-filtered-items*
+        (if (zerop (length *minibuffer-input*))
+            (copy-list *minibuffer-items*)
+            (remove-if-not (lambda (item)
+                             (fuzzy-match-p *minibuffer-input*
+                                            (minibuffer-item-display item)))
+                           *minibuffer-items*)))
+  ;; Clamp selected index
+  (setf *minibuffer-selected-index*
+        (max 0 (min *minibuffer-selected-index*
+                    (1- (max 1 (length *minibuffer-filtered-items*)))))))
+
+(defun minibuffer-insert-char (char)
+  "Insert CHAR at the current point in the minibuffer input and re-filter."
+  (setf *minibuffer-input*
+        (concatenate 'string
+                     (subseq *minibuffer-input* 0 *minibuffer-point*)
+                     (string char)
+                     (subseq *minibuffer-input* *minibuffer-point*)))
+  (incf *minibuffer-point*)
+  (minibuffer-update-filter))
+
+(defun minibuffer-delete-backward ()
+  "Delete the character before point in the minibuffer input and re-filter."
+  (when (plusp *minibuffer-point*)
+    (setf *minibuffer-input*
+          (concatenate 'string
+                       (subseq *minibuffer-input* 0 (1- *minibuffer-point*))
+                       (subseq *minibuffer-input* *minibuffer-point*)))
+    (decf *minibuffer-point*)
+    (minibuffer-update-filter)))
+
+(defun minibuffer-next-item ()
+  "Move the selection to the next candidate in the filtered list."
+  (when (< *minibuffer-selected-index*
+           (1- (length *minibuffer-filtered-items*)))
+    (incf *minibuffer-selected-index*)))
+
+(defun minibuffer-prev-item ()
+  "Move the selection to the previous candidate in the filtered list."
+  (when (plusp *minibuffer-selected-index*)
+    (decf *minibuffer-selected-index*)))
+
+(defun minibuffer-confirm ()
+  "Confirm the current selection, invoke the callback, and deactivate."
+  (let ((item (when (plusp (length *minibuffer-filtered-items*))
+                (nth *minibuffer-selected-index* *minibuffer-filtered-items*)))
+        (cb *minibuffer-callback*))
+    (minibuffer-deactivate)
+    (when (and item cb)
+      (funcall cb item))))
+
+(defun minibuffer-cancel ()
+  "Cancel the minibuffer without invoking the callback."
+  (minibuffer-deactivate))
+
+(defun sort-models-by-recency (items)
+  "Sort model ITEMS by recency (from *model-selection-history*) then alphabetically.
+Items that were selected more recently appear first. Items not in the history
+are sorted with the currently active model first, then alphabetically."
+  (stable-sort (copy-list items)
+               (lambda (a b)
+                 (let* ((a-disp (getf a :display))
+                        (b-disp (getf b :display))
+                        (history *model-selection-history*)
+                        (a-pos (position a-disp history :test #'string=))
+                        (b-pos (position b-disp history :test #'string=)))
+                   (cond
+                     ;; Both in history: lower position (more recent) first
+                     ((and a-pos b-pos) (< a-pos b-pos))
+                     ;; Only a in history: a first
+                     (a-pos t)
+                     ;; Only b in history: b first
+                     (b-pos nil)
+                     ;; Neither: active model first, then alphabetical
+                     ((and (getf a :active-p) (not (getf b :active-p))) t)
+                     ((and (getf b :active-p) (not (getf a :active-p))) nil)
+                     (t (string< a-disp b-disp)))))))
+
+(defun handle-minibuffer-key (key)
+  "Handle a key event while the minibuffer is active.
+Supports: C-g (cancel), Return (confirm), C-n/Down and C-p/Up (navigate),
+Backspace (delete), C-a/C-e (move), C-u (kill all), and self-insert."
+  (let ((base-key (if (and (listp key) (= (length key) 2)
+                           (member (first key) '(:alt :ctrl-x :ctrl-c)))
+                      (second key)
+                      key)))
+    (cond
+      ;; C-g: cancel
+      ((and (characterp base-key) (char= base-key (code-char 7)))
+       (minibuffer-cancel))
+      ;; Return/Newline: confirm selection
+      ((and (characterp base-key) (or (char= base-key #\Return)
+                                       (char= base-key #\Newline)))
+       (minibuffer-confirm))
+      ;; C-n or Down arrow: next item
+      ((or (eq base-key :down)
+           (and (characterp base-key) (char= base-key (code-char 14))))
+       (minibuffer-next-item))
+      ;; C-p or Up arrow: previous item
+      ((or (eq base-key :up)
+           (and (characterp base-key) (char= base-key (code-char 16))))
+       (minibuffer-prev-item))
+      ;; Backspace: delete character before point
+      ((or (eq base-key :backspace)
+           (and (characterp base-key) (or (char= base-key #\Backspace)
+                                           (char= base-key #\Rubout))))
+       (minibuffer-delete-backward))
+      ;; C-a: beginning of input
+      ((and (characterp base-key) (char= base-key #\Soh))
+       (setf *minibuffer-point* 0))
+      ;; C-e: end of input
+      ((and (characterp base-key) (char= base-key #\Enq))
+       (setf *minibuffer-point* (length *minibuffer-input*)))
+      ;; C-u: kill all input
+      ((and (characterp base-key) (char= base-key (code-char 21)))
+       (setf *minibuffer-input* ""
+             *minibuffer-point* 0)
+       (minibuffer-update-filter))
+      ;; Self-insert: printable characters
+      ((and (characterp base-key) (graphic-char-p base-key))
+       (minibuffer-insert-char base-key))
+      ;; Everything else: ignore
+      (t nil))))
+
+(defun update-window-layout (scr main-win modeline-win minibuffer-win)
+  "Resize and reposition all windows based on screen dimensions and minibuffer state.
+Layout from top to bottom: main-win, modeline-win (1 row), minibuffer-win."
+  (let* ((h (croatoan:height scr))
+         (w (croatoan:width scr))
+         (mb-h (minibuffer-current-height))
+         (main-h (max 1 (- h 1 mb-h))))
+    (croatoan:resize main-win main-h w)
+    (croatoan:resize modeline-win 1 w)
+    (croatoan:move-window modeline-win main-h 0)
+    (croatoan:resize minibuffer-win mb-h w)
+    (croatoan:move-window minibuffer-win (1+ main-h) 0)
+    ;; Update scroll page size based on available history area
+    (setf *scroll-page-size* (max 1 (- main-h 3)))))
 
 (defun handle-buffer-selector-key (key)
   "Handle a key event while the buffer selector is active.
@@ -756,6 +1027,12 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
       ;; C-x C-c always quits (Emacs standard quit chord)
       ((equal key (list :ctrl-x #\Etx))
        :quit)
+
+      ;; === MINIBUFFER MODE ===
+      ;; When the minibuffer is active, it captures all input
+      (*minibuffer-active*
+       (handle-minibuffer-key key)
+       nil)
 
       ;; === BUFFER SELECTOR MODE ===
       ;; Navigation and selection within the buffer list overlay
@@ -880,14 +1157,19 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
                              :process-control-chars nil)
     (let* ((screen-height (croatoan:height scr))
            (screen-width (croatoan:width scr))
+           ;; Three-window layout: main (chat), modeline (1 row), minibuffer (bottom)
            (main-win (make-instance 'croatoan:window
-                       :height (1- screen-height)
+                       :height (- screen-height 2)
                        :width screen-width
                        :position '(0 0)))
            (modeline-win (make-instance 'croatoan:window
                            :height 1
                            :width screen-width
-                           :position (list (1- screen-height) 0)))
+                           :position (list (- screen-height 2) 0)))
+           (minibuffer-win (make-instance 'croatoan:window
+                             :height 1
+                             :width screen-width
+                             :position (list (1- screen-height) 0)))
             (buf (make-buffer session-name
                               :agent-name agent-name
                               :working-directory (truename "."))))
@@ -902,20 +1184,42 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
             *model-selector-index* 0
             *model-selector-scroll* 0
             *model-selector-entries* nil)
+      ;; Initialize minibuffer state
+      (setf *minibuffer-active* nil
+            *minibuffer-prompt* ""
+            *minibuffer-input* ""
+            *minibuffer-point* 0
+            *minibuffer-items* nil
+            *minibuffer-filtered-items* nil
+            *minibuffer-selected-index* 0
+            *minibuffer-callback* nil
+            *minibuffer-max-height* 12)
       (setf *openai-oauth-pending* nil)
       (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil)
       (add-buffer-to-ring buf)
       ;; Set sandbox root to the working directory
       (setf *sandbox-root* (truename "."))
       ;; Set scroll page size based on available history area
-      (setf *scroll-page-size* (max 1 (- (1- screen-height) 3)))
+      (setf *scroll-page-size* (max 1 (- (- screen-height 2) 3)))
       ;; Flush stdscr's pending clear before our first render
       (croatoan:refresh scr)
-      ;; Initial render
-      (render-buffer (current-buffer) main-win modeline-win)
-      ;; Event loop: current-buffer may change between iterations.
-      ;; Short timeout when streaming is active for polling updates.
-      (loop :named main-loop
+      ;; Local render helper: updates window layout (for dynamic minibuffer height)
+      ;; then renders all three windows. Centralizes the render dispatch.
+      (labels ((do-render (buf)
+                 (update-window-layout scr main-win modeline-win minibuffer-win)
+                 (cond
+                   (*buffer-selector-active*
+                    (render-buffer-selector main-win modeline-win))
+                   (*model-selector-active*
+                    (render-model-selector main-win modeline-win))
+                   (t
+                    (render-buffer buf main-win modeline-win)))
+                 (render-minibuffer minibuffer-win)))
+        ;; Initial render
+        (do-render (current-buffer))
+        ;; Event loop: current-buffer may change between iterations.
+        ;; Short timeout when streaming is active for polling updates.
+        (loop :named main-loop
             :for buf := (current-buffer)
             :for streaming := (buffer-pending-stream buf)
             :do (progn
@@ -923,43 +1227,23 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
                         (if streaming 100 t))
                   (let ((event (croatoan:get-wide-event scr)))
                     (cond
-                      ((null event)
-                       (when streaming
-                         (update-streaming-response buf)
-                         (cond
-                           (*buffer-selector-active*
-                            (render-buffer-selector main-win modeline-win))
-                           (*model-selector-active*
-                            (render-model-selector main-win modeline-win))
-                           (t
-                            (render-buffer buf main-win modeline-win)))))
-                      ((and (typep event 'croatoan:event)
-                            (typep (croatoan:event-key event) 'croatoan:key)
-                            (eq :resize (croatoan:key-name
-                                         (croatoan:event-key event))))
-                       (let ((new-height (croatoan:height scr))
-                             (new-width (croatoan:width scr)))
-                         (croatoan:resize main-win (1- new-height) new-width)
-                         (croatoan:resize modeline-win 1 new-width)
-                         (croatoan:move-window modeline-win (1- new-height) 0)
-                         (cond
-                           (*buffer-selector-active*
-                            (render-buffer-selector main-win modeline-win))
-                           (*model-selector-active*
-                            (render-model-selector main-win modeline-win))
-                           (t
-                            (render-buffer (current-buffer) main-win modeline-win)))))
-                      (t
-                       (let ((result (handle-key-event buf event)))
-                         (when (eq result :quit)
-                           (return-from main-loop)))
-                       (let ((cur (current-buffer)))
-                         (when (buffer-pending-stream cur)
-                           (update-streaming-response cur))
-                         (cond
-                           (*buffer-selector-active*
-                            (render-buffer-selector main-win modeline-win))
-                           (*model-selector-active*
-                            (render-model-selector main-win modeline-win))
-                           (t
-                            (render-buffer cur main-win modeline-win))))))))))))
+                        ;; No event (timeout) -- poll streaming and re-render
+                        ((null event)
+                         (when streaming
+                           (update-streaming-response buf)
+                           (do-render buf)))
+                        ;; Window resize event -- re-layout and re-render
+                        ((and (typep event 'croatoan:event)
+                              (typep (croatoan:event-key event) 'croatoan:key)
+                              (eq :resize (croatoan:key-name
+                                           (croatoan:event-key event))))
+                         (do-render (current-buffer)))
+                        ;; Key event -- dispatch then re-render
+                        (t
+                         (let ((result (handle-key-event buf event)))
+                           (when (eq result :quit)
+                             (return-from main-loop)))
+                         (let ((cur (current-buffer)))
+                           (when (buffer-pending-stream cur)
+                             (update-streaming-response cur))
+                           (do-render cur)))))))))))

@@ -100,10 +100,13 @@
     ;; buffer's major mode (e.g. chat-specific toggles, mode actions).
     ;; Note: C-x C-c quits the application (handled in handle-key-event).
     (keymap-bind km '(:ctrl-c #\t) 'toggle-tool-results-command) ; C-c t = toggle tool results
-    ;; C-c C-m = model selector. C-m = ASCII 13 = #\Return.
+    ;; C-c C-m = minibuffer model selector (helm/ivy/vertico style).
+    ;; C-m = ASCII 13 = #\Return.
     ;; Some terminals send #\Newline (LF, ASCII 10) for Enter, so bind both.
-    (keymap-bind km '(:ctrl-c #\Return) 'select-model-command)  ; C-c C-m
-    (keymap-bind km '(:ctrl-c #\Newline) 'select-model-command) ; C-c C-m (LF variant)
+    (keymap-bind km '(:ctrl-c #\Return) 'minibuffer-select-model-command)  ; C-c C-m
+    (keymap-bind km '(:ctrl-c #\Newline) 'minibuffer-select-model-command) ; C-c C-m (LF variant)
+    ;; C-c M (capital M) = old overlay model selector
+    (keymap-bind km '(:ctrl-c #\M) 'select-model-command)
     ;; ----- C-x prefix: global / cross-buffer commands -----
     ;; C-x is reserved for global commands that operate across buffers
     ;; or affect the application as a whole (buffer management, I/O, etc.).

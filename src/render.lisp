@@ -684,3 +684,94 @@ Handles scrolling when there are more models than visible rows."
       (croatoan:move modeline-window 0 0)
       (croatoan:add-string modeline-window padded)
       (croatoan:refresh modeline-window))))
+
+;;; --------------------------------------------------------------------------
+;;; Minibuffer Rendering
+;;; --------------------------------------------------------------------------
+
+(defun minibuffer-current-height ()
+  "Return the current height of the minibuffer in rows.
+When inactive: 1 row. When active: prompt line + number of filtered items,
+capped at *minibuffer-max-height*."
+  (if *minibuffer-active*
+      (let ((item-count (length *minibuffer-filtered-items*)))
+        (min *minibuffer-max-height*
+             (1+ item-count)))
+      1))
+
+(defun render-minibuffer (minibuffer-window)
+  "Render the minibuffer. When inactive, shows a blank line.
+When active, shows the prompt with input and filtered completion candidates."
+  (let ((width (croatoan:width minibuffer-window))
+        (height (croatoan:height minibuffer-window)))
+    (croatoan:clear minibuffer-window)
+    (if *minibuffer-active*
+        (render-minibuffer-active minibuffer-window width height)
+        (render-minibuffer-inactive minibuffer-window width))
+    (croatoan:refresh minibuffer-window)))
+
+(defun render-minibuffer-inactive (window width)
+  "Render the inactive minibuffer: a single blank line."
+  (setf (croatoan:color-pair window) '(:white :black))
+  (setf (croatoan:attributes window) nil)
+  (croatoan:move window 0 0)
+  (croatoan:add-string window (make-string width :initial-element #\Space)))
+
+(defun render-minibuffer-active (window width height)
+  "Render the active minibuffer with prompt, input, cursor, and filtered items.
+The first row shows the prompt and user input with a block cursor.
+Subsequent rows show the filtered candidates, with the selected one in
+inverse video (reverse face)."
+  (let* ((prompt-str (format nil "~A: " *minibuffer-prompt*))
+         (input *minibuffer-input*)
+         (prompt-line (concatenate 'string prompt-str input))
+         (cursor-col (+ (length prompt-str) *minibuffer-point*)))
+    ;; ── Prompt line ──
+    (setf (croatoan:color-pair window) '(:white :black))
+    (setf (croatoan:attributes window) nil)
+    (croatoan:move window 0 0)
+    (croatoan:add-string window (make-string width :initial-element #\Space))
+    (croatoan:move window 0 0)
+    (croatoan:add-string window
+                         (subseq prompt-line 0 (min (length prompt-line) width)))
+    ;; ── Block cursor ──
+    (when (< cursor-col width)
+      (let ((char-at-cursor (if (< *minibuffer-point* (length input))
+                                (char input *minibuffer-point*)
+                                #\Space)))
+        ;; Reverse video for cursor
+        (setf (croatoan:color-pair window) '(:black :white))
+        (setf (croatoan:attributes window) '(:bold))
+        (croatoan:move window 0 cursor-col)
+        (croatoan:add-string window (string char-at-cursor))
+        ;; Restore
+        (setf (croatoan:color-pair window) '(:white :black))
+        (setf (croatoan:attributes window) nil)))
+    ;; ── Candidate list ──
+    (let ((items *minibuffer-filtered-items*)
+          (selected *minibuffer-selected-index*))
+      (loop :for i :from 0 :below (min (length items) (1- height))
+            :for item := (nth i items)
+            :for row := (1+ i)
+            :for display := (minibuffer-item-display item)
+            :for selected-p := (= i selected)
+            :do (progn
+                  (if selected-p
+                      ;; Selected item: inverse video (swap fg/bg)
+                      (progn
+                        (setf (croatoan:color-pair window) '(:black :white))
+                        (setf (croatoan:attributes window) '(:bold)))
+                      ;; Normal item
+                      (progn
+                        (setf (croatoan:color-pair window) '(:white :black))
+                        (setf (croatoan:attributes window) nil)))
+                  ;; Clear row with background
+                  (croatoan:move window row 0)
+                  (croatoan:add-string window
+                                       (make-string width :initial-element #\Space))
+                  ;; Write candidate text
+                  (croatoan:move window row 0)
+                  (let ((line-text (format nil "  ~A" display)))
+                    (croatoan:add-string
+                     window
+                     (subseq line-text 0 (min (length line-text) width)))))))))

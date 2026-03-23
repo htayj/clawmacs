@@ -240,13 +240,38 @@
    #:list-buffers-command
    #:render-buffer-selector
 
-   ;; Model selector
+   ;; Model selector (overlay)
    #:*model-selector-active*
    #:*model-selector-index*
    #:*model-selector-entries*
    #:select-model-command
    #:render-model-selector
    #:handle-model-selector-key
+
+   ;; Minibuffer
+   #:*minibuffer-active*
+   #:*minibuffer-prompt*
+   #:*minibuffer-input*
+   #:*minibuffer-point*
+   #:*minibuffer-items*
+   #:*minibuffer-filtered-items*
+   #:*minibuffer-selected-index*
+   #:*minibuffer-callback*
+   #:*minibuffer-max-height*
+   #:*model-selection-history*
+   #:fuzzy-match-p
+   #:minibuffer-item-display
+   #:minibuffer-activate
+   #:minibuffer-deactivate
+   #:minibuffer-update-filter
+   #:minibuffer-confirm
+   #:minibuffer-cancel
+   #:handle-minibuffer-key
+   #:sort-models-by-recency
+   #:minibuffer-current-height
+   #:update-window-layout
+   #:render-minibuffer
+   #:minibuffer-select-model-command
 
    ;; Known models
    #:*provider-known-models*
