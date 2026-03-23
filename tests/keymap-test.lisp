@@ -125,3 +125,9 @@ and C-c M (capital M) to the old overlay model selector."
   (clawmacs::init-default-keymap)
   (is (eq 'clawmacs::describe-type-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\T)))))
+
+(test default-keymap-customize-face-binding
+  "Default keymap binds C-c F (capital F) to customize-face-command."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::customize-face-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\F)))))

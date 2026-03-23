@@ -299,6 +299,36 @@
    #:describe-variable-to-string
    #:describe-variable-command
 
+   ;; Customize face
+   #:*customize-face-state*
+   #:*customize-face-fields*
+   #:cga-color-name
+   #:format-color-spec-display
+   #:format-boolean-display
+   #:format-face-parent-display
+   #:customize-face-field-value
+   #:customize-face-set-field-value
+   #:customize-face-field-label
+   #:customize-face-field-display
+   #:customize-face-snapshot
+   #:customize-face-restore-snapshot
+   #:build-customize-face-content
+   #:rebuild-customize-face-display
+   #:customize-face-next-field
+   #:customize-face-prev-field
+   #:customize-face-toggle-field
+   #:collect-all-faces
+   #:make-color-selection-items
+   #:make-boolean-selection-items
+   #:make-parent-selection-items
+   #:customize-face-edit-field
+   #:customize-face-apply
+   #:customize-face-cancel
+   #:customize-face-revert-to-original
+   #:make-customize-face-buffer
+   #:handle-customize-key
+   #:customize-face-command
+
    ;; Type introspection
    #:list-types
    #:type-kind

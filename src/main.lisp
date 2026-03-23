@@ -698,6 +698,407 @@ to navigate. Shows buffer name, agent, status, and message count."
     buf))
 
 ;;; --------------------------------------------------------------------------
+;;; Customize Face
+;;; --------------------------------------------------------------------------
+
+(defvar *customize-face-state* nil
+  "When non-nil, a plist describing the face customization session:
+  :face — the face object being customized
+  :label — display label (e.g. \"user:default\")
+  :field-index — 0-5 (which field is selected)
+  :original-values — alist of original attribute values for revert
+  :buffer — the customize buffer")
+
+(defvar *customize-face-fields*
+  '(:foreground :background :bold-p :underline-p :reverse-p :parent)
+  "List of face attribute field keywords in display order for customize-face.")
+
+(defun cga-color-name (value)
+  "Return a human-readable name for a CGA color value (0-15)."
+  (case value
+    (0 "black") (1 "red") (2 "green") (3 "yellow")
+    (4 "blue") (5 "magenta") (6 "cyan") (7 "white")
+    (8 "bright-black") (9 "bright-red") (10 "bright-green") (11 "bright-yellow")
+    (12 "bright-blue") (13 "bright-magenta") (14 "bright-cyan") (15 "bright-white")
+    (t (format nil "~D" value))))
+
+(defun format-color-spec-display (cs)
+  "Format a color-spec for human-readable display."
+  (if (null cs)
+      "(inherit)"
+      (ecase (color-spec-type cs)
+        (:cga (format nil "~A (CGA ~D)" (cga-color-name (color-spec-value cs))
+                       (color-spec-value cs)))
+        (:256 (format nil "color-~D (256)" (color-spec-value cs)))
+        (:hex (format nil "~A (hex)" (color-spec-value cs))))))
+
+(defun format-boolean-display (val)
+  "Format a boolean face attribute for display.
+NIL means inherit from parent, T means yes."
+  (if val "yes" "(inherit)"))
+
+(defun format-face-parent-display (parent-face)
+  "Format a face's parent for display."
+  (if (null parent-face)
+      "(none)"
+      (format nil "~(~A~)" (face-name parent-face))))
+
+(defun customize-face-field-value (face field)
+  "Get the current value of FIELD on FACE."
+  (ecase field
+    (:foreground (face-foreground face))
+    (:background (face-background face))
+    (:bold-p (slot-value face 'bold-p))
+    (:underline-p (slot-value face 'underline-p))
+    (:reverse-p (slot-value face 'reverse-p))
+    (:parent (face-parent face))))
+
+(defun customize-face-set-field-value (face field value)
+  "Set the value of FIELD on FACE to VALUE."
+  (ecase field
+    (:foreground (setf (face-foreground face) value))
+    (:background (setf (face-background face) value))
+    (:bold-p (setf (face-bold-p face) value))
+    (:underline-p (setf (face-underline-p face) value))
+    (:reverse-p (setf (face-reverse-p face) value))
+    (:parent (setf (face-parent face) value))))
+
+(defun customize-face-field-label (field)
+  "Return the human-readable label for a face attribute field keyword."
+  (ecase field
+    (:foreground "Foreground")
+    (:background "Background")
+    (:bold-p "Bold")
+    (:underline-p "Underline")
+    (:reverse-p "Reverse")
+    (:parent "Parent")))
+
+(defun customize-face-field-display (face field)
+  "Return the display string for FIELD's current value on FACE."
+  (ecase field
+    ((:foreground :background)
+     (format-color-spec-display (customize-face-field-value face field)))
+    ((:bold-p :underline-p :reverse-p)
+     (format-boolean-display (customize-face-field-value face field)))
+    (:parent
+     (format-face-parent-display (customize-face-field-value face field)))))
+
+(defun customize-face-snapshot (face)
+  "Take a snapshot of FACE's current attribute values for revert.
+Returns an alist of (field . value) pairs."
+  (mapcar (lambda (field)
+            (cons field (customize-face-field-value face field)))
+          *customize-face-fields*))
+
+(defun customize-face-restore-snapshot (face snapshot)
+  "Restore FACE's attributes from SNAPSHOT (an alist from customize-face-snapshot)."
+  (dolist (entry snapshot)
+    (customize-face-set-field-value face (car entry) (cdr entry))))
+
+(defun build-customize-face-content (face label field-index)
+  "Build the text content for a customize-face buffer.
+FACE is the face being customized, LABEL is its display name,
+FIELD-INDEX is the currently selected field (0-5)."
+  (with-output-to-string (s)
+    (format s "Customize Face: ~A~%" label)
+    (format s "~A~%~%"
+            (make-string (min 50 (+ 16 (length label)))
+                         :initial-element #\═))
+    ;; Fields
+    (loop :for field :in *customize-face-fields*
+          :for idx :from 0
+          :for selected-p := (= idx field-index)
+          :for marker := (if selected-p "▸" " ")
+          :for field-label := (customize-face-field-label field)
+          :for value-str := (customize-face-field-display face field)
+          :do (format s "~A ~A:~A~A~%"
+                      marker
+                      field-label
+                      (make-string (max 1 (- 14 (length field-label)))
+                                   :initial-element #\Space)
+                      value-str))
+    ;; Resolved preview
+    (format s "~%Resolved attributes:~%")
+    (handler-case
+        (let ((resolved (resolve-face face)))
+          (when resolved
+            (format s "  FG: ~A  BG: ~A~%"
+                    (format-color-spec-display (resolved-face-foreground resolved))
+                    (format-color-spec-display (resolved-face-background resolved)))
+            (format s "  Bold: ~:[no~;yes~]  Underline: ~:[no~;yes~]  Reverse: ~:[no~;yes~]~%"
+                    (resolved-face-bold-p resolved)
+                    (resolved-face-underline-p resolved)
+                    (resolved-face-reverse-p resolved))))
+      (error () (format s "  (cannot resolve — missing foreground or background)~%")))
+    ;; Keybinding help
+    (format s "~%~A~%" (make-string 40 :initial-element #\─))
+    (format s "[RET] Edit  [SPC] Toggle  [C-n/C-p] Navigate~%")
+    (format s "[C-c C-c] Apply  [C-c C-k] Cancel  [r] Revert")))
+
+(defun rebuild-customize-face-display ()
+  "Rebuild the customize buffer content from current *customize-face-state*.
+Updates the form display message in-place."
+  (when *customize-face-state*
+    (let* ((face (getf *customize-face-state* :face))
+           (label (getf *customize-face-state* :label))
+           (field-index (getf *customize-face-state* :field-index))
+           (buf (getf *customize-face-state* :buffer))
+           (content (build-customize-face-content face label field-index)))
+      ;; Find the first message (the form display) and update it
+      (let ((msg (buffer-first-message buf)))
+        (when (and msg (message-read-only-p msg))
+          (set-message-text msg content))))))
+
+(defun customize-face-next-field ()
+  "Move to the next field in the customize form."
+  (when *customize-face-state*
+    (let ((idx (getf *customize-face-state* :field-index)))
+      (when (< idx (1- (length *customize-face-fields*)))
+        (setf (getf *customize-face-state* :field-index) (1+ idx))
+        (rebuild-customize-face-display)))))
+
+(defun customize-face-prev-field ()
+  "Move to the previous field in the customize form."
+  (when *customize-face-state*
+    (let ((idx (getf *customize-face-state* :field-index)))
+      (when (plusp idx)
+        (setf (getf *customize-face-state* :field-index) (1- idx))
+        (rebuild-customize-face-display)))))
+
+(defun customize-face-toggle-field ()
+  "Toggle a boolean field between yes (t) and inherit (nil).
+Does nothing for non-boolean fields (foreground, background, parent)."
+  (when *customize-face-state*
+    (let* ((face (getf *customize-face-state* :face))
+           (field-index (getf *customize-face-state* :field-index))
+           (field (nth field-index *customize-face-fields*)))
+      (when (member field '(:bold-p :underline-p :reverse-p))
+        (let ((current (customize-face-field-value face field)))
+          (customize-face-set-field-value face field (not current))
+          (rebuild-customize-face-display))))))
+
+(defun collect-all-faces ()
+  "Collect all unique face objects from all buffer face registries.
+Returns a sorted list of plists with :face, :owner, :name, and :label keys."
+  (let ((seen (make-hash-table :test #'eq))
+        (result nil))
+    (dolist (buf *buffer-ring*)
+      (maphash (lambda (owner face-set)
+                 (maphash (lambda (name face)
+                            (unless (gethash face seen)
+                              (setf (gethash face seen) t)
+                              (push (list :face face
+                                          :owner owner
+                                          :name name
+                                          :label (format nil "~(~A~):~(~A~)"
+                                                         owner name))
+                                    result)))
+                          (face-set-faces face-set)))
+               (buffer-face-registry buf)))
+    (sort (nreverse result) #'string< :key (lambda (p) (getf p :label)))))
+
+(defun make-color-selection-items ()
+  "Build the list of items for color selection in the minibuffer.
+Includes CGA colors 0-15 with names, plus an inherit option."
+  (let ((items nil))
+    (push (list :color-spec nil :display "(inherit / nil)") items)
+    (loop :for i :from 0 :to 15
+          :do (push (list :color-spec (make-color-spec :cga i)
+                          :display (format nil "CGA ~2D: ~A" i (cga-color-name i)))
+                    items))
+    (nreverse items)))
+
+(defun make-boolean-selection-items ()
+  "Build the list of items for boolean field selection in the minibuffer."
+  (list (list :value t :display "yes")
+        (list :value nil :display "inherit (nil)")))
+
+(defun make-parent-selection-items (current-face)
+  "Build the list of parent face candidates for the minibuffer.
+Excludes CURRENT-FACE to prevent inheritance cycles."
+  (let ((items (list (list :face nil :display "(none)"))))
+    (dolist (entry (collect-all-faces))
+      (let ((face (getf entry :face)))
+        (unless (eq face current-face)
+          (push (list :face face
+                      :display (getf entry :label))
+                items))))
+    (nreverse items)))
+
+(defun customize-face-edit-field ()
+  "Edit the currently selected field using the minibuffer.
+Opens a field-appropriate minibuffer: color picker for foreground/background,
+boolean selector for bold/underline/reverse, face selector for parent."
+  (when *customize-face-state*
+    (let* ((face (getf *customize-face-state* :face))
+           (field-index (getf *customize-face-state* :field-index))
+           (field (nth field-index *customize-face-fields*)))
+      (ecase field
+        ;; Color fields — pick from CGA palette
+        ((:foreground :background)
+         (let ((field-label (customize-face-field-label field)))
+           (minibuffer-activate
+            (format nil "Set ~A" field-label)
+            (make-color-selection-items)
+            (lambda (item)
+              (customize-face-set-field-value face field (getf item :color-spec))
+              (rebuild-customize-face-display)))))
+        ;; Boolean fields — yes / inherit
+        ((:bold-p :underline-p :reverse-p)
+         (let ((field-label (customize-face-field-label field)))
+           (minibuffer-activate
+            (format nil "Set ~A" field-label)
+            (make-boolean-selection-items)
+            (lambda (item)
+              (customize-face-set-field-value face field (getf item :value))
+              (rebuild-customize-face-display)))))
+        ;; Parent field — pick from available faces
+        (:parent
+         (minibuffer-activate
+          "Set Parent"
+          (make-parent-selection-items face)
+          (lambda (item)
+            (customize-face-set-field-value face :parent (getf item :face))
+            (rebuild-customize-face-display))))))))
+
+(defun customize-face-apply ()
+  "Apply face customizations and close the customize buffer.
+Changes are already applied to the face object (modified in-place),
+so this just closes the buffer and confirms."
+  (when *customize-face-state*
+    (let ((buf (getf *customize-face-state* :buffer))
+          (label (getf *customize-face-state* :label)))
+      (setf *customize-face-state* nil)
+      (kill-buffer-from-ring buf)
+      ;; Show confirmation in the new current buffer
+      (let ((sys-msg (buffer-insert-agent-message
+                      (current-buffer)
+                      (format nil "[Face ~A customized successfully]" label))))
+        (setf (message-sender sys-msg) :system)))))
+
+(defun customize-face-cancel ()
+  "Cancel face customization, reverting all changes to original values.
+Closes the customize buffer and switches to the previous buffer."
+  (when *customize-face-state*
+    (let ((face (getf *customize-face-state* :face))
+          (snapshot (getf *customize-face-state* :original-values))
+          (buf (getf *customize-face-state* :buffer)))
+      (customize-face-restore-snapshot face snapshot)
+      (setf *customize-face-state* nil)
+      (kill-buffer-from-ring buf))))
+
+(defun customize-face-revert-to-original ()
+  "Revert all fields to their original values without closing the buffer."
+  (when *customize-face-state*
+    (let ((face (getf *customize-face-state* :face))
+          (snapshot (getf *customize-face-state* :original-values)))
+      (customize-face-restore-snapshot face snapshot)
+      (rebuild-customize-face-display))))
+
+(defun make-customize-face-buffer (face label)
+  "Create a customize buffer for FACE with display LABEL.
+Sets up the customize state and returns the new buffer."
+  (let* ((buf-name (format nil "*customize:~A*" label))
+         (existing (find-buffer-by-name buf-name)))
+    ;; Kill any existing customize buffer for this face
+    (when existing
+      (kill-buffer-from-ring existing))
+    (let* ((snapshot (customize-face-snapshot face))
+           (buf (make-buffer buf-name :agent-name "customize")))
+      (init-face-registry buf)
+      (setf (buffer-keymap buf) *default-keymap*)
+      (setf (buffer-major-mode buf) "customize")
+      ;; Set up customize state
+      (setf *customize-face-state*
+            (list :face face
+                  :label label
+                  :field-index 0
+                  :original-values snapshot
+                  :buffer buf))
+      ;; Build initial content
+      (let ((content (build-customize-face-content face label 0)))
+        (buffer-insert-agent-message buf content))
+      (add-buffer-to-ring buf)
+      buf)))
+
+(defun handle-customize-key (key)
+  "Handle a key event while in customize mode.
+Supports field navigation (C-n/C-p), editing (Return), toggling (Space),
+apply (C-c C-c), cancel (C-c C-k / C-g / q), revert (r), and passes
+through C-x prefix commands for buffer management."
+  (cond
+    ;; C-c C-c: apply changes (C-c prefix then C-c = ETX = ASCII 3)
+    ((equal key '(:ctrl-c #\Etx))
+     (customize-face-apply))
+    ;; C-c C-k: cancel (C-c prefix then C-k = VT = ASCII 11)
+    ((equal key '(:ctrl-c #\Vt))
+     (customize-face-cancel))
+    ;; C-g: cancel
+    ((and (characterp key) (char= key (code-char 7)))
+     (customize-face-cancel))
+    ;; q: cancel
+    ((and (characterp key) (char= key #\q))
+     (customize-face-cancel))
+    ;; C-n or Down arrow: next field
+    ((or (eq key :down)
+         (and (characterp key) (char= key (code-char 14))))
+     (customize-face-next-field))
+    ;; C-p or Up arrow: previous field
+    ((or (eq key :up)
+         (and (characterp key) (char= key (code-char 16))))
+     (customize-face-prev-field))
+    ;; Return: edit selected field via minibuffer
+    ((and (characterp key) (or (char= key #\Return) (char= key #\Newline)))
+     (customize-face-edit-field))
+    ;; Space: toggle boolean field
+    ((and (characterp key) (char= key #\Space))
+     (customize-face-toggle-field))
+    ;; r: revert to original values
+    ((and (characterp key) (char= key #\r))
+     (customize-face-revert-to-original))
+    ;; Pass through C-x prefix commands (buffer management, save, etc.)
+    ((and (listp key) (eq (first key) :ctrl-x))
+     (let ((command (keymap-lookup *default-keymap* key)))
+       (when command (funcall command (current-buffer)))))
+    ;; Scroll keys
+    ((or (eq key :page-up) (eq key :page-down))
+     (let ((command (keymap-lookup *default-keymap* key)))
+       (when command (funcall command (current-buffer)))))
+    ;; Everything else: ignore
+    (t nil)))
+
+(defcommand customize-face-command (:permission :user-only)
+  "Open a face selector in the minibuffer, then customize the selected face.
+Lists all faces from all buffer face registries. When a face is selected,
+opens a customize buffer where face attributes can be edited interactively.
+Bound to C-c F."
+  (buffer)
+  (declare (ignore buffer))
+  (let ((faces (collect-all-faces)))
+    (if (null faces)
+        (let ((sys-msg (buffer-insert-agent-message
+                        (current-buffer)
+                        "[No faces found to customize]")))
+          (setf (message-sender sys-msg) :system))
+        (minibuffer-activate
+         "Customize Face"
+         (mapcar (lambda (entry)
+                   (let* ((face (getf entry :face))
+                          (label (getf entry :label))
+                          (fg (format-color-spec-display (face-foreground face)))
+                          (bg (format-color-spec-display (face-background face)))
+                          (display (format nil "~A  fg:~A  bg:~A" label fg bg)))
+                     (list :face face
+                           :label label
+                           :display display)))
+                 faces)
+         (lambda (item)
+           (let* ((face (getf item :face))
+                  (label (getf item :label))
+                  (buf (make-customize-face-buffer face label)))
+             (switch-to-buffer buf)))))))
+
+;;; --------------------------------------------------------------------------
 ;;; Introspection: list-functions & describe-function
 ;;; --------------------------------------------------------------------------
 
@@ -1740,6 +2141,18 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
       ;; Navigation and selection within the model list overlay
       (*model-selector-active*
        (handle-model-selector-key key buf)
+       nil)
+
+      ;; === CUSTOMIZE MODE ===
+      ;; When the current buffer is a customize buffer, dispatch to
+      ;; the customize key handler for field navigation and editing.
+      ;; Clean up stale state if the customize buffer was killed.
+      ((and *customize-face-state*
+            (let ((cbuf (getf *customize-face-state* :buffer)))
+              (if (member cbuf *buffer-ring*)
+                  (eq buf cbuf)
+                  (progn (setf *customize-face-state* nil) nil))))
+       (handle-customize-key key)
        nil)
 
       ;; === OPENAI OAUTH MODE ===

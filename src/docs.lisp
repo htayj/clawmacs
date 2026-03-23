@@ -2002,3 +2002,187 @@ documentation in *extended-docs*."
   :returns "nil — Returns when the user quits (C-x C-c)."
   :side-effects "Initializes croatoan, creates windows, runs the event loop. Full terminal takeover."
   :see-also (current-buffer *default-keymap* init-tools))
+
+;;; ==========================================================================
+;;; Category: customize — Interactive face customization
+;;; ==========================================================================
+
+(defdoc *customize-face-state*
+  :category "customize"
+  :usage "Plist or nil. When non-nil: (:face FACE :label STRING :field-index INT :original-values ALIST :buffer BUFFER)"
+  :see-also (customize-face-command make-customize-face-buffer handle-customize-key)
+  :side-effects "Set by customize-face-command, cleared by customize-face-apply or customize-face-cancel.")
+
+(defdoc *customize-face-fields*
+  :category "customize"
+  :usage "Constant list: (:foreground :background :bold-p :underline-p :reverse-p :parent)"
+  :see-also (customize-face-field-value customize-face-field-label))
+
+(defdoc cga-color-name
+  :category "customize"
+  :usage "(cga-color-name VALUE:integer) — (cga-color-name 4)"
+  :returns "string — \"blue\""
+  :see-also (format-color-spec-display make-color-spec))
+
+(defdoc format-color-spec-display
+  :category "customize"
+  :usage "(format-color-spec-display CS:(or null color-spec)) — (format-color-spec-display (make-color-spec :cga 4))"
+  :returns "string — \"blue (CGA 4)\" or \"(inherit)\" for nil"
+  :see-also (cga-color-name color-spec))
+
+(defdoc format-boolean-display
+  :category "customize"
+  :usage "(format-boolean-display VAL:(or null boolean)) — (format-boolean-display t)"
+  :returns "string — \"yes\" or \"(inherit)\""
+  :see-also (customize-face-field-display))
+
+(defdoc format-face-parent-display
+  :category "customize"
+  :usage "(format-face-parent-display PARENT:(or null face)) — (format-face-parent-display nil)"
+  :returns "string — \"(none)\" or face name like \"default\""
+  :see-also (customize-face-field-display face-parent))
+
+(defdoc customize-face-field-value
+  :category "customize"
+  :usage "(customize-face-field-value FACE:face FIELD:keyword) — (customize-face-field-value my-face :foreground)"
+  :returns "t — The slot value (color-spec, boolean, face, or nil)"
+  :see-also (customize-face-set-field-value customize-face-field-display))
+
+(defdoc customize-face-set-field-value
+  :category "customize"
+  :usage "(customize-face-set-field-value FACE:face FIELD:keyword VALUE:t) — (customize-face-set-field-value my-face :bold-p t)"
+  :returns "t — The new value"
+  :side-effects "Modifies the face object in-place. Changes take effect immediately."
+  :see-also (customize-face-field-value rebuild-customize-face-display))
+
+(defdoc customize-face-field-label
+  :category "customize"
+  :usage "(customize-face-field-label FIELD:keyword) — (customize-face-field-label :bold-p)"
+  :returns "string — \"Bold\""
+  :see-also (*customize-face-fields* customize-face-field-display))
+
+(defdoc customize-face-field-display
+  :category "customize"
+  :usage "(customize-face-field-display FACE:face FIELD:keyword) — (customize-face-field-display my-face :foreground)"
+  :returns "string — Human-readable display of the field's current value"
+  :see-also (format-color-spec-display format-boolean-display format-face-parent-display))
+
+(defdoc customize-face-snapshot
+  :category "customize"
+  :usage "(customize-face-snapshot FACE:face)"
+  :returns "alist — ((:foreground . #<COLOR-SPEC>) (:background . nil) ...)"
+  :see-also (customize-face-restore-snapshot *customize-face-state*))
+
+(defdoc customize-face-restore-snapshot
+  :category "customize"
+  :usage "(customize-face-restore-snapshot FACE:face SNAPSHOT:alist)"
+  :returns "nil"
+  :side-effects "Restores all face attributes from the snapshot alist."
+  :see-also (customize-face-snapshot customize-face-cancel customize-face-revert-to-original))
+
+(defdoc build-customize-face-content
+  :category "customize"
+  :usage "(build-customize-face-content FACE:face LABEL:string FIELD-INDEX:integer)"
+  :returns "string — Multi-line text content for the customize buffer"
+  :see-also (rebuild-customize-face-display make-customize-face-buffer))
+
+(defdoc rebuild-customize-face-display
+  :category "customize"
+  :usage "(rebuild-customize-face-display)"
+  :returns "nil"
+  :side-effects "Updates the form message in the customize buffer from current state."
+  :see-also (build-customize-face-content *customize-face-state*))
+
+(defdoc customize-face-next-field
+  :category "customize"
+  :usage "(customize-face-next-field)"
+  :returns "nil"
+  :side-effects "Increments field-index in *customize-face-state* and rebuilds display."
+  :see-also (customize-face-prev-field handle-customize-key))
+
+(defdoc customize-face-prev-field
+  :category "customize"
+  :usage "(customize-face-prev-field)"
+  :returns "nil"
+  :side-effects "Decrements field-index in *customize-face-state* and rebuilds display."
+  :see-also (customize-face-next-field handle-customize-key))
+
+(defdoc customize-face-toggle-field
+  :category "customize"
+  :usage "(customize-face-toggle-field)"
+  :returns "nil"
+  :side-effects "Toggles boolean fields between t and nil. No-op for non-boolean fields."
+  :see-also (customize-face-edit-field handle-customize-key))
+
+(defdoc collect-all-faces
+  :category "customize"
+  :usage "(collect-all-faces)"
+  :returns "list — Sorted list of plists with :face, :owner, :name, :label keys"
+  :see-also (customize-face-command make-parent-selection-items))
+
+(defdoc make-color-selection-items
+  :category "customize"
+  :usage "(make-color-selection-items)"
+  :returns "list — Minibuffer items for CGA color palette selection"
+  :see-also (customize-face-edit-field cga-color-name))
+
+(defdoc make-boolean-selection-items
+  :category "customize"
+  :usage "(make-boolean-selection-items)"
+  :returns "list — ((:value t :display \"yes\") (:value nil :display \"inherit (nil)\"))"
+  :see-also (customize-face-edit-field))
+
+(defdoc make-parent-selection-items
+  :category "customize"
+  :usage "(make-parent-selection-items CURRENT-FACE:face)"
+  :returns "list — Minibuffer items for parent face selection, excluding CURRENT-FACE"
+  :see-also (customize-face-edit-field collect-all-faces))
+
+(defdoc customize-face-edit-field
+  :category "customize"
+  :usage "(customize-face-edit-field)"
+  :returns "nil"
+  :side-effects "Opens the minibuffer with field-appropriate options."
+  :see-also (customize-face-toggle-field handle-customize-key minibuffer-activate))
+
+(defdoc customize-face-apply
+  :category "customize"
+  :usage "(customize-face-apply)"
+  :returns "nil"
+  :side-effects "Closes the customize buffer, clears state. Changes persist on the face."
+  :see-also (customize-face-cancel customize-face-revert-to-original))
+
+(defdoc customize-face-cancel
+  :category "customize"
+  :usage "(customize-face-cancel)"
+  :returns "nil"
+  :side-effects "Reverts all face changes from snapshot, closes customize buffer."
+  :see-also (customize-face-apply customize-face-restore-snapshot))
+
+(defdoc customize-face-revert-to-original
+  :category "customize"
+  :usage "(customize-face-revert-to-original)"
+  :returns "nil"
+  :side-effects "Reverts all fields to their original values without closing the buffer."
+  :see-also (customize-face-restore-snapshot customize-face-cancel))
+
+(defdoc make-customize-face-buffer
+  :category "customize"
+  :usage "(make-customize-face-buffer FACE:face LABEL:string) — (make-customize-face-buffer my-face \"user:default\")"
+  :returns "buffer — A new customize buffer added to the buffer ring"
+  :side-effects "Sets *customize-face-state*. Kills existing customize buffer for this face."
+  :see-also (customize-face-command *customize-face-state*))
+
+(defdoc handle-customize-key
+  :category "customize"
+  :usage "(handle-customize-key KEY) — Called from handle-key-event when in customize mode."
+  :returns "nil"
+  :side-effects "Dispatches to field navigation, editing, apply, cancel, or revert."
+  :see-also (*customize-face-state* customize-face-command))
+
+(defdoc customize-face-command
+  :category "customize"
+  :usage "Bound to C-c F. Opens minibuffer face selector → customize buffer."
+  :returns "nil"
+  :side-effects "Activates minibuffer with face candidates. On selection, creates customize buffer."
+  :see-also (collect-all-faces make-customize-face-buffer handle-customize-key))

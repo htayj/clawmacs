@@ -116,6 +116,8 @@
     (keymap-bind km '(:ctrl-c #\v) 'describe-variable-command)
     ;; C-c T (capital T) = describe type (introspection / help system)
     (keymap-bind km '(:ctrl-c #\T) 'describe-type-command)
+    ;; C-c F (capital F) = customize face (interactive face editor)
+    (keymap-bind km '(:ctrl-c #\F) 'customize-face-command)
     ;; ----- C-x prefix: global / cross-buffer commands -----
     ;; C-x is reserved for global commands that operate across buffers
     ;; or affect the application as a whole (buffer management, I/O, etc.).
