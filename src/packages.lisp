@@ -205,6 +205,16 @@
    #:zai-request
    #:zai-request-streaming
 
+   ;; OpenRouter
+   #:*openrouter-model*
+   #:*openrouter-api-url*
+   #:*openrouter-models-url*
+   #:*openrouter-env-var*
+   #:*openrouter-cached-models*
+   #:fetch-openrouter-models
+   #:openrouter-request
+   #:openrouter-request-streaming
+
    ;; OpenAI Codex OAuth
    #:*openai-oauth-client-id*
    #:*openai-oauth-auth-url*

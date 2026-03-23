@@ -6,7 +6,7 @@
 
 (defvar *default-provider* :zai
   "The default LLM provider to use when no agent-specific override is set.
-Must be a keyword matching a known provider (:anthropic, :openai-codex, :zai).")
+Must be a keyword matching a known provider (:anthropic, :openai-codex, :zai, :openrouter).")
 
 (defvar *default-model* "glm-5"
   "The default model to use when no agent-specific or provider-fallback model
@@ -38,6 +38,28 @@ GLM-5 is the flagship model with 200K context window.")
 (defvar *zai-api-url* "https://api.z.ai/api/coding/paas/v4/chat/completions"
   "The Z.AI Chat Completions API endpoint for GLM Coding plan subscribers.
 Uses the coding-specific endpoint for subscription-based access.")
+
+;;; OpenRouter Configuration
+(defvar *openrouter-model* "openai/gpt-4o-mini"
+  "The default OpenRouter model to use for chat completions.
+Model names follow the 'provider/model-name' format (e.g. 'openai/gpt-4o-mini',
+'anthropic/claude-3-5-haiku', 'google/gemini-2.5-pro').")
+
+(defvar *openrouter-api-url* "https://openrouter.ai/api/v1/chat/completions"
+  "The OpenRouter Chat Completions API endpoint.
+OpenRouter normalizes to the OpenAI-compatible chat completions schema.")
+
+(defvar *openrouter-models-url* "https://openrouter.ai/api/v1/models"
+  "The OpenRouter models listing endpoint.
+Returns the full catalog of available models.")
+
+(defvar *openrouter-env-var* "OPENROUTER_API_KEY"
+  "Environment variable name for the OpenRouter API key.
+When set, this takes highest priority over the static token file.")
+
+(defvar *openrouter-cached-models* nil
+  "Cached list of OpenRouter model ID strings fetched from the API.
+Populated on first call to fetch-openrouter-models.  Set to nil to force refresh.")
 
 ;;; OpenAI Codex OAuth 2.0 Configuration
 (defvar *openai-oauth-client-id* "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -313,8 +335,9 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
      (:anthropic #P".config/clawmacs/claude-max-token")
      (:openai-codex #P".config/clawmacs/openai-codex-token")
      (:zai #P".config/clawmacs/zai-api-key")
+     (:openrouter #P".config/clawmacs/openrouter-api-key")
      (otherwise
-      (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI"
+      (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI, :OPENROUTER"
              provider)))
    (user-homedir-pathname)))
 
@@ -364,12 +387,17 @@ claudeAiOauth entry, otherwise nil."
                  2) Static token file (~/.config/clawmacs/openai-codex-token)
 
   :ZAI           1) ZAI_CODING_MAX_API_KEY env var
-                 2) Static token file (~/.config/clawmacs/zai-api-key)"
+                 2) Static token file (~/.config/clawmacs/zai-api-key)
+
+  :OPENROUTER    1) OPENROUTER_API_KEY env var
+                 2) Static token file (~/.config/clawmacs/openrouter-api-key)"
   (or ;; Environment variable sources (highest priority)
       (when (eq provider :anthropic)
         (read-env-token *anthropic-env-var*))
       (when (eq provider :zai)
         (read-env-token *zai-env-var*))
+      (when (eq provider :openrouter)
+        (read-env-token *openrouter-env-var*))
       ;; OAuth / credentials file sources
       (when (eq provider :anthropic)
         (read-claude-code-oauth-token))
@@ -620,12 +648,13 @@ Returns the access token on success."
 (defparameter *provider-fallback-models*
   '((:anthropic . "claude-haiku-4-5-20251001")
     (:openai-codex . "codex-mini-latest")
-    (:zai . "glm-5"))
+    (:zai . "glm-5")
+    (:openrouter . "openai/gpt-4o-mini"))
   "Built-in fallback model names by provider.")
 
 (defun known-provider-p (provider)
   "Return non-nil when PROVIDER is supported locally."
-  (member provider '(:anthropic :openai-codex :zai) :test #'eq))
+  (member provider '(:anthropic :openai-codex :zai :openrouter) :test #'eq))
 
 (defun normalize-provider (provider)
   "Normalize PROVIDER to a supported keyword, or nil when absent."
@@ -634,14 +663,14 @@ Returns the access token on success."
     ((keywordp provider)
      (if (known-provider-p provider)
          provider
-         (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI"
+         (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI, :OPENROUTER"
                 provider)))
     ((stringp provider)
      (normalize-provider (intern (string-upcase provider) :keyword)))
     ((symbolp provider)
      (normalize-provider (symbol-name provider)))
     (t
-     (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI"
+     (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI, :OPENROUTER"
             provider))))
 
 (defun blank-string-p (value)
@@ -675,14 +704,64 @@ Returns the access token on success."
      "glm-4.7"
      "glm-4.6"
      "glm-4.5"
-     "glm-4.5-air"))
+     "glm-4.5-air")
+    (:openrouter
+     "openai/gpt-4o-mini"
+     "openai/gpt-4o"
+     "anthropic/claude-3-5-haiku"
+     "anthropic/claude-3-5-sonnet"
+     "google/gemini-2.5-pro"
+     "google/gemini-2.0-flash-001"
+     "meta-llama/llama-4-maverick"
+     "deepseek/deepseek-r1"))
   "Known model identifiers grouped by provider.
 The first model in each list is the provider's default.
+For :OPENROUTER, models are dynamically fetched by fetch-openrouter-models when
+an API key is configured; this static list is used as a fallback.
 These are used by the model selector overlay.")
 
 (defun provider-known-models (provider)
-  "Return the list of known model names for PROVIDER."
-  (cdr (assoc provider *provider-known-models*)))
+  "Return the list of known model names for PROVIDER.
+For :OPENROUTER, returns the dynamically-fetched model list when available,
+falling back to the static *provider-known-models* entry."
+  (if (and (eq provider :openrouter) *openrouter-cached-models*)
+      *openrouter-cached-models*
+      (cdr (assoc provider *provider-known-models*))))
+
+(defun fetch-openrouter-models ()
+  "Fetch the list of available models from the OpenRouter API.
+Populates *openrouter-cached-models* and returns the model ID list.
+Requires a valid OpenRouter API key to be configured.
+Returns the cached list on subsequent calls; set *openrouter-cached-models* to
+nil to force a refresh. Returns the static fallback list on any error."
+  (when *openrouter-cached-models*
+    (return-from fetch-openrouter-models *openrouter-cached-models*))
+  (handler-case
+      (let ((token (read-provider-token :openrouter)))
+        (unless token
+          (return-from fetch-openrouter-models
+            (cdr (assoc :openrouter *provider-known-models*))))
+        (multiple-value-bind (body status-code)
+            (drakma:http-request
+             *openrouter-models-url*
+             :method :get
+             :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token)))
+             :want-stream nil
+             :force-binary nil)
+          (if (= status-code 200)
+              (let* ((body-string (http-body-string body))
+                     (response (api-json-decode body-string))
+                     (models-data (cdr (assoc :data response)))
+                     (ids (loop :for m :in (coerce models-data 'list)
+                                :for id := (cdr (assoc :id m))
+                                :when (and id (stringp id) (plusp (length id)))
+                                  :collect id)))
+                (when ids
+                  (setf *openrouter-cached-models* ids))
+                (or ids (cdr (assoc :openrouter *provider-known-models*))))
+              (cdr (assoc :openrouter *provider-known-models*)))))
+    (error ()
+      (cdr (assoc :openrouter *provider-known-models*)))))
 
 (defun provider-has-token-p (provider)
   "Return non-nil when PROVIDER has a usable API key or OAuth token configured."
@@ -695,14 +774,17 @@ These are used by the model selector overlay.")
   "Build the model selector entry list for BUF.
 Returns a list of plists: ((:provider :anthropic :model \"name\" :active-p t/nil) ...)
 Only includes providers that have a valid API key. The entry matching BUF's
-currently resolved provider/model is marked :active-p t."
+currently resolved provider/model is marked :active-p t.
+For :OPENROUTER, dynamically-fetched models are used when an API key is present."
   (multiple-value-bind (current-provider current-model)
       (handler-case (resolve-buffer-provider-and-model buf)
         (error () (values nil nil)))
     (let ((entries nil))
       (dolist (provider-models *provider-known-models*)
-        (let ((provider (car provider-models))
-              (models (cdr provider-models)))
+        (let* ((provider (car provider-models))
+               (models (if (eq provider :openrouter)
+                           (fetch-openrouter-models)
+                           (cdr provider-models))))
           (when (provider-has-token-p provider)
             (dolist (model models)
               (push (list :provider provider
@@ -1000,7 +1082,9 @@ Claude Code CLI subprocess instead of the REST API."
     (:openai-codex
      (openai-codex-request messages :model model :max-tokens max-tokens :tools tools))
     (:zai
-     (zai-request messages :model model :max-tokens max-tokens :tools tools))))
+     (zai-request messages :model model :max-tokens max-tokens :tools tools))
+    (:openrouter
+     (openrouter-request messages :model model :max-tokens max-tokens :tools tools))))
 
 (defun provider-request-streaming (provider messages callback &key model (max-tokens 8192) tools)
   "Dispatch a streaming request by resolved PROVIDER.
@@ -1026,7 +1110,12 @@ Claude Code CLI subprocess instead of the REST API."
      (zai-request-streaming messages callback
                             :model model
                             :max-tokens max-tokens
-                            :tools tools))))
+                            :tools tools))
+    (:openrouter
+     (openrouter-request-streaming messages callback
+                                   :model model
+                                   :max-tokens max-tokens
+                                   :tools tools))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Claude CLI Subprocess Provider (stream-json protocol)
@@ -1737,6 +1826,98 @@ Returns the final stream-state when complete."
               (read-openai-sse-stream body-stream state)
            (close body-stream)))
        :name "clawmacs-openai-sse-reader")
+      state)))
+
+;;; --------------------------------------------------------------------------
+;;; OpenRouter API — OpenAI-compatible
+;;; --------------------------------------------------------------------------
+;;; OpenRouter proxies requests to 300+ models (OpenAI, Anthropic, Google,
+;;; Meta, DeepSeek, etc.) through a single OpenAI-compatible endpoint.
+;;; Authentication uses a Bearer API key obtained from openrouter.ai/keys.
+;;; Model names follow the 'provider/model-name' format.
+
+(defun openrouter-request (messages &key (model *openrouter-model*)
+                                          (max-tokens 8192)
+                                          tools)
+  "Call the OpenRouter Chat Completions API and normalize the response shape.
+Uses the OpenAI-compatible chat completions protocol."
+  (let* ((token (or (read-provider-token :openrouter)
+                    (error 'simple-error
+                           :format-control "No OpenRouter API key. Set OPENROUTER_API_KEY env var or save to ~/.config/clawmacs/openrouter-api-key")))
+         (request-body
+            (let ((body `((:model . ,model)
+                          (:max--tokens . ,max-tokens)
+                         (:messages . ,(coerce (openai-messages-with-system-prompt messages)
+                                               'vector)))))
+              (when (and tools (plusp (length tools)))
+                (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
+              (api-json-encode body))))
+    (multiple-value-bind (body status-code)
+        (drakma:http-request
+         *openrouter-api-url*
+         :method :post
+         :content-type "application/json"
+         :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
+                               ("HTTP-Referer" . "https://github.com/clawmacs/clawmacs")
+                               ("X-Title" . "clawmacs"))
+         :content request-body
+         :want-stream nil
+         :force-binary nil)
+      (let ((body-string (http-body-string body)))
+        (unless (= status-code 200)
+          (error "OpenRouter API error (~A): ~A" status-code body-string))
+        (let* ((response (api-json-decode body-string))
+               (choices (cdr (assoc :choices response)))
+               (choice (first (coerce choices 'list))))
+          (unless choice
+            (error "OpenRouter response did not include a choice"))
+          (openai-choice->canonical-response choice))))))
+
+(defun openrouter-request-streaming (messages callback
+                                     &key (model *openrouter-model*)
+                                          (max-tokens 8192)
+                                          tools)
+  "Call the OpenRouter Chat Completions API with SSE streaming enabled.
+Uses the same OpenAI-compatible streaming protocol."
+  (declare (ignore callback))
+  (let* ((token (or (read-provider-token :openrouter)
+                    (error 'simple-error
+                           :format-control "No OpenRouter API key. Set OPENROUTER_API_KEY env var or save to ~/.config/clawmacs/openrouter-api-key")))
+         (request-body
+            (let ((body `((:model . ,model)
+                          (:max--tokens . ,max-tokens)
+                          (:stream . t)
+                         (:messages . ,(coerce (openai-messages-with-system-prompt messages)
+                                               'vector)))))
+              (when (and tools (plusp (length tools)))
+                (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
+              (api-json-encode body)))
+         (state (make-stream-state)))
+    (multiple-value-bind (body-stream status-code headers)
+        (drakma:http-request
+         *openrouter-api-url*
+         :method :post
+         :content-type "application/json"
+         :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
+                               ("HTTP-Referer" . "https://github.com/clawmacs/clawmacs")
+                               ("X-Title" . "clawmacs"))
+         :content request-body
+         :want-stream t)
+      (declare (ignore headers))
+      (unless (= status-code 200)
+        (let ((err (if (streamp body-stream)
+                       (let ((s (make-string-output-stream)))
+                         (loop :for c := (read-char body-stream nil nil)
+                               :while c :do (write-char c s))
+                         (get-output-stream-string s))
+                       (format nil "~A" body-stream))))
+          (error "OpenRouter API error (~A): ~A" status-code err)))
+      (bt:make-thread
+       (lambda ()
+         (unwind-protect
+              (read-openai-sse-stream body-stream state)
+           (close body-stream)))
+       :name "clawmacs-openrouter-sse-reader")
       state)))
 
 ;;; --------------------------------------------------------------------------

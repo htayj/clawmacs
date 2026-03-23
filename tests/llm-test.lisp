@@ -1542,3 +1542,144 @@
       (clawmacs::provider-request-streaming :anthropic nil nil
                                             :model "claude-opus-4-6")
       (is (string= "claude-opus-4-6" routed-to)))))
+
+;;; --------------------------------------------------------------------------
+;;; OpenRouter Tests
+;;; --------------------------------------------------------------------------
+
+(test openrouter-provider-token-path
+  "OpenRouter provider token path is provider-specific."
+  (let ((home (user-homedir-pathname)))
+    (is (equal (merge-pathnames #P".config/clawmacs/openrouter-api-key" home)
+               (clawmacs::provider-token-path :openrouter)))))
+
+(test openrouter-token-round-trip
+  "OpenRouter API keys round-trip through provider-specific helpers."
+  (let ((or-path (merge-pathnames
+                  (format nil ".config/clawmacs/test-openrouter-~A" (gensym))
+                  (user-homedir-pathname))))
+    (unwind-protect
+         (let ((original (symbol-function 'clawmacs::provider-token-path)))
+           (unwind-protect
+                (progn
+                  (setf (symbol-function 'clawmacs::provider-token-path)
+                        (lambda (provider)
+                          (if (eq provider :openrouter)
+                              or-path
+                              (funcall original provider))))
+                  (is (string= "sk-or-test-key"
+                               (clawmacs::save-provider-token :openrouter "sk-or-test-key")))
+                  (is (string= "sk-or-test-key"
+                               (clawmacs::read-provider-token :openrouter))))
+             (setf (symbol-function 'clawmacs::provider-token-path) original)))
+      (ignore-errors (delete-file or-path)))))
+
+(test openrouter-env-var-token
+  "read-provider-token prefers OPENROUTER_API_KEY environment variable."
+  (with-env-var ("OPENROUTER_API_KEY" "sk-or-env-token")
+    (is (string= "sk-or-env-token"
+                 (clawmacs::read-env-token clawmacs::*openrouter-env-var*)))))
+
+(test openrouter-provider-known
+  "known-provider-p recognises :openrouter."
+  (is (clawmacs::known-provider-p :openrouter)))
+
+(test openrouter-normalize-provider
+  "normalize-provider accepts :openrouter and the string form."
+  (is (eq :openrouter (clawmacs::normalize-provider :openrouter)))
+  (is (eq :openrouter (clawmacs::normalize-provider "openrouter")))
+  (is (eq :openrouter (clawmacs::normalize-provider "OPENROUTER"))))
+
+(test openrouter-fallback-model
+  "provider-fallback-model returns a model string for :openrouter."
+  (let ((m (clawmacs::provider-fallback-model :openrouter)))
+    (is (and (stringp m) (plusp (length m))))))
+
+(test openrouter-provider-known-models-static
+  "provider-known-models returns the static fallback list for :openrouter
+when no cached models are present."
+  (let ((clawmacs::*openrouter-cached-models* nil))
+    (let ((models (clawmacs::provider-known-models :openrouter)))
+      (is (listp models))
+      (is (plusp (length models)))
+      ;; First static model is the default
+      (is (string= "openai/gpt-4o-mini" (first models))))))
+
+(test openrouter-provider-known-models-cached
+  "provider-known-models returns the cached list when *openrouter-cached-models* is set."
+  (let ((clawmacs::*openrouter-cached-models* '("custom/model-a" "custom/model-b")))
+    (is (equal '("custom/model-a" "custom/model-b")
+               (clawmacs::provider-known-models :openrouter)))))
+
+(test fetch-openrouter-models-returns-cached
+  "fetch-openrouter-models returns *openrouter-cached-models* without an HTTP call."
+  (let ((clawmacs::*openrouter-cached-models* '("cached/model-1" "cached/model-2")))
+    (is (equal '("cached/model-1" "cached/model-2")
+               (clawmacs::fetch-openrouter-models)))))
+
+(test fetch-openrouter-models-parses-api-response
+  "fetch-openrouter-models populates *openrouter-cached-models* from parsed JSON."
+  (let ((clawmacs::*openrouter-cached-models* nil))
+    (with-function-override (clawmacs::read-provider-token
+                             (provider)
+                             (when (eq provider :openrouter) "sk-or-test"))
+      (with-function-override (drakma:http-request
+                               (url &rest args)
+                               (declare (ignore url args))
+                               (values "{\"data\":[{\"id\":\"openai/gpt-4o\"},{\"id\":\"google/gemini-2.5-pro\"}]}"
+                                       200))
+        (let ((models (clawmacs::fetch-openrouter-models)))
+          (is (member "openai/gpt-4o" models :test #'string=))
+          (is (member "google/gemini-2.5-pro" models :test #'string=))
+          ;; Cache should be populated
+          (is (equal models clawmacs::*openrouter-cached-models*)))))))
+
+(test fetch-openrouter-models-falls-back-on-no-token
+  "fetch-openrouter-models returns static fallback when no API key is configured."
+  (let ((clawmacs::*openrouter-cached-models* nil))
+    (with-function-override (clawmacs::read-provider-token
+                             (provider)
+                             (declare (ignore provider))
+                             nil)
+      (let ((models (clawmacs::fetch-openrouter-models)))
+        (is (listp models))
+        (is (plusp (length models)))))))
+
+(test fetch-openrouter-models-falls-back-on-http-error
+  "fetch-openrouter-models returns static fallback on HTTP errors."
+  (let ((clawmacs::*openrouter-cached-models* nil))
+    (with-function-override (clawmacs::read-provider-token
+                             (provider)
+                             (when (eq provider :openrouter) "sk-or-test"))
+      (with-function-override (drakma:http-request
+                               (url &rest args)
+                               (declare (ignore url args))
+                               (values "Unauthorized" 401))
+        (let ((models (clawmacs::fetch-openrouter-models)))
+          (is (listp models))
+          (is (plusp (length models))))))))
+
+(test provider-request-routes-openrouter
+  "provider-request dispatches :openrouter to openrouter-request."
+  (let ((routed-to nil))
+    (with-function-override (clawmacs::openrouter-request
+                             (messages &key model max-tokens tools)
+                             (declare (ignore messages max-tokens tools))
+                             (setf routed-to model)
+                             `((:stop--reason . "end_turn")
+                               (:content . ,(vector `((:type . "text")
+                                                      (:text . "ok"))))))
+      (clawmacs::provider-request :openrouter nil :model "openai/gpt-4o-mini")
+      (is (string= "openai/gpt-4o-mini" routed-to)))))
+
+(test provider-request-streaming-routes-openrouter
+  "provider-request-streaming dispatches :openrouter to openrouter-request-streaming."
+  (let ((routed-to nil))
+    (with-function-override (clawmacs::openrouter-request-streaming
+                             (messages callback &key model max-tokens tools)
+                             (declare (ignore messages callback max-tokens tools))
+                             (setf routed-to model)
+                             (clawmacs::make-stream-state))
+      (clawmacs::provider-request-streaming :openrouter nil nil
+                                            :model "anthropic/claude-3-5-haiku")
+      (is (string= "anthropic/claude-3-5-haiku" routed-to)))))
