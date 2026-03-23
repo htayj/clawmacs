@@ -30,13 +30,17 @@ or an agent keyword (e.g., :CLAUDE-OPUS) during agent command dispatch.")
 ;;; --------------------------------------------------------------------------
 
 (define-condition permission-denied (error)
-  ((command :initarg :command :reader permission-denied-command))
+  ((command :initarg :command :reader permission-denied-command
+            :documentation "The command symbol that was denied."))
+  (:documentation "Signaled when a command is invoked by a caller who lacks permission.")
   (:report (lambda (c stream)
              (format stream "Permission denied: ~A is not available to ~A"
                      (permission-denied-command c) *current-caller*))))
 
 (define-condition permission-required (error)
-  ((command :initarg :command :reader permission-required-command))
+  ((command :initarg :command :reader permission-required-command
+            :documentation "The command symbol that requires approval."))
+  (:documentation "Signaled when a command requires explicit user approval before execution.")
   (:report (lambda (c stream)
              (format stream "Permission required: ~A needs approval for ~A"
                      *current-caller* (permission-required-command c)))))

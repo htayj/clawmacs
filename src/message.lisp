@@ -8,15 +8,18 @@
   ((content :initarg :content
             :accessor line-content
             :initform ""
-            :type string)
+            :type string
+            :documentation "The text content of this line.")
    (next    :initarg :next
             :accessor line-next
             :initform nil
-            :type (or null line))
+            :type (or null line)
+            :documentation "Next line in the doubly-linked list, or nil if last.")
    (prev    :initarg :prev
             :accessor line-prev
             :initform nil
-            :type (or null line)))
+            :type (or null line)
+            :documentation "Previous line in the doubly-linked list, or nil if first."))
   (:documentation "A single line of text in a message. Lines form a doubly-linked list."))
 
 (declaim (ftype (function (&optional string) line) make-line))
@@ -31,48 +34,60 @@
 (defclass message ()
   ((first-line    :initarg :first-line
                   :accessor message-first-line
-                  :type line)
+                  :type line
+                  :documentation "First line in this message's doubly-linked list of lines.")
    (last-line     :initarg :last-line
                   :accessor message-last-line
-                  :type line)
+                  :type line
+                  :documentation "Last line in this message's doubly-linked list of lines.")
    (point-line    :initarg :point-line
                   :accessor message-point-line
-                  :type line)
+                  :type line
+                  :documentation "The line containing the editing cursor (point).")
    (point-offset  :initarg :point-offset
                   :accessor message-point-offset
                   :initform 0
-                  :type fixnum)
+                  :type fixnum
+                  :documentation "Character offset of the cursor within point-line.")
    (mark-line     :initarg :mark-line
                   :accessor message-mark-line
                   :initform nil
-                  :type (or null line))
+                  :type (or null line)
+                  :documentation "The line containing the mark for selection, or nil.")
    (mark-offset   :initarg :mark-offset
                   :accessor message-mark-offset
                   :initform nil
-                  :type (or null fixnum))
+                  :type (or null fixnum)
+                  :documentation "Character offset of the mark within mark-line, or nil.")
    (sender        :initarg :sender
                   :accessor message-sender
-                  :type keyword)
+                  :type keyword
+                  :documentation "Keyword identifying who sent this message (e.g. :user, :claude, :system).")
    (timestamp     :initarg :timestamp
                   :accessor message-timestamp
                   :initform nil
-                  :type (or null integer))
+                  :type (or null integer)
+                  :documentation "Universal time when this message was finalized, or nil.")
    (face-set      :initarg :face-set
                   :accessor message-face-set
                   :initform nil
-                  :type (or null face-set))
+                  :type (or null face-set)
+                  :documentation "Face set used to render this message, or nil for default.")
    (read-only-p   :initarg :read-only-p
                   :accessor message-read-only-p
                   :initform nil
-                  :type boolean)
+                  :type boolean
+                  :documentation "When non-nil, this message cannot be edited (agent/system messages).")
    (next          :initarg :next
                   :accessor message-next
                   :initform nil
-                  :type (or null message))
+                  :type (or null message)
+                  :documentation "Next message in the buffer's doubly-linked list, or nil if last.")
    (prev          :initarg :prev
                   :accessor message-prev
                   :initform nil
-                  :type (or null message))
+                  :type (or null message)
+                  :documentation "Previous message in the buffer's doubly-linked list, or nil if first.")
    (raw-content   :initarg :raw-content
                   :accessor message-raw-content
                   :initform nil

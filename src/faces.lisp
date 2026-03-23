@@ -33,31 +33,38 @@ VALUE is an integer (CGA/256) or a string (hex)."
 (defclass face ()
   ((name       :initarg :name
                :reader face-name
-               :type keyword)
+               :type keyword
+               :documentation "Keyword identifying this face (e.g. :default, :modeline).")
    (foreground :initarg :foreground
                :accessor face-foreground
                :initform nil
-               :type (or null color-spec))
+               :type (or null color-spec)
+               :documentation "Foreground color, or nil to inherit from parent.")
    (background :initarg :background
                :accessor face-background
                :initform nil
-               :type (or null color-spec))
+               :type (or null color-spec)
+               :documentation "Background color, or nil to inherit from parent.")
    (bold-p     :initarg :bold-p
                :accessor face-bold-p
                :initform nil
-               :type (or null boolean))
+               :type (or null boolean)
+               :documentation "Whether text is bold, or nil to inherit from parent.")
    (underline-p :initarg :underline-p
                 :accessor face-underline-p
                 :initform nil
-                :type (or null boolean))
+                :type (or null boolean)
+                :documentation "Whether text is underlined, or nil to inherit from parent.")
    (reverse-p  :initarg :reverse-p
                :accessor face-reverse-p
                :initform nil
-               :type (or null boolean))
+               :type (or null boolean)
+               :documentation "Whether text uses reverse video, or nil to inherit from parent.")
    (parent     :initarg :parent
                :accessor face-parent
                :initform nil
-               :type (or null face))
+               :type (or null face)
+               :documentation "Parent face for attribute inheritance. resolve-face walks this chain.")
    (transform  :initarg :transform
                :accessor face-transform
                :initform nil
@@ -111,10 +118,12 @@ nil for boolean slots means 'inherit from parent'."
 (defclass face-set ()
   ((owner :initarg :owner
           :reader face-set-owner
-          :type keyword)
+          :type keyword
+          :documentation "Keyword identifying the owner of this face set (e.g. :user, :claude).")
    (faces :initarg :faces
           :reader face-set-faces
-          :type hash-table))
+          :type hash-table
+          :documentation "Hash table mapping face name keywords to face objects."))
   (:documentation "A collection of named faces belonging to a sender."))
 
 (declaim (ftype (function (keyword list) face-set) make-face-set))

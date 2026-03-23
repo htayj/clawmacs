@@ -230,9 +230,7 @@
 
    ;; Rendering
    #:resolve-modeline-provider-model
-   #:render-history
    #:render-modeline
-   #:render-input
    #:render-buffer
 
    ;; Buffer selector

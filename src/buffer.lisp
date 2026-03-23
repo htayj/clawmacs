@@ -7,47 +7,59 @@
 (defclass buffer ()
   ((name              :initarg :name
                       :accessor buffer-name
-                      :type string)
+                      :type string
+                      :documentation "Display name for this buffer (e.g. \"session-01\").")
    (first-message     :initarg :first-message
                       :accessor buffer-first-message
-                      :type message)
+                      :type message
+                      :documentation "First message in the buffer's doubly-linked list.")
    (last-message      :initarg :last-message
                       :accessor buffer-last-message
-                      :type message)
+                      :type message
+                      :documentation "Last message in the buffer (always the editable input message).")
    (agent-name        :initarg :agent-name
                       :accessor buffer-agent-name
                       :initform "agent"
-                      :type string)
+                      :type string
+                      :documentation "Name of the AI agent for this buffer (e.g. \"claude\").")
    (working-directory :initarg :working-directory
                       :accessor buffer-working-directory
                       :initform (truename ".")
-                      :type pathname)
+                      :type pathname
+                      :documentation "Working directory for shell commands and file operations.")
    (token-count       :initarg :token-count
                       :accessor buffer-token-count
                       :initform 0
-                      :type integer)
+                      :type integer
+                      :documentation "Running count of tokens used in this buffer's conversation.")
    (context-limit     :initarg :context-limit
                       :accessor buffer-context-limit
                       :initform 200000
-                      :type integer)
+                      :type integer
+                      :documentation "Maximum token context window size for the model.")
    (status            :initarg :status
                        :accessor buffer-status
                        :initform :idle
-                       :type keyword)
+                       :type keyword
+                       :documentation "Current buffer state: :idle, :thinking, :streaming, :error, :approval, or :oauth.")
    (provider-override :initarg :provider-override
                       :accessor buffer-provider-override
                       :initform nil
-                      :type (or null keyword))
+                      :type (or null keyword)
+                      :documentation "When non-nil, overrides the agent's default provider (e.g. :anthropic).")
    (model-override    :initarg :model-override
                       :accessor buffer-model-override
                       :initform nil
-                      :type (or null string))
+                      :type (or null string)
+                      :documentation "When non-nil, overrides the agent's default model name.")
     (face-registry     :initarg :face-registry
                        :accessor buffer-face-registry
-                       :type hash-table)
+                       :type hash-table
+                       :documentation "Hash table mapping sender keywords to face-set objects for rendering.")
    (keymap            :initarg :keymap
                       :accessor buffer-keymap
-                      :initform nil)
+                      :initform nil
+                      :documentation "Keymap for this buffer. Falls back to *default-keymap*.")
    (scroll-offset    :initarg :scroll-offset
                       :accessor buffer-scroll-offset
                       :initform 0

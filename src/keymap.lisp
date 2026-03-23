@@ -7,14 +7,17 @@
 (defclass keymap ()
   ((name     :initarg :name
              :reader keymap-name
-             :type keyword)
+             :type keyword
+             :documentation "Keyword name identifying this keymap (e.g. :default).")
    (bindings :initarg :bindings
              :reader keymap-bindings
-             :type hash-table)
+             :type hash-table
+             :documentation "Hash table mapping key specs to command symbols.")
    (parent   :initarg :parent
              :reader keymap-parent
              :initform nil
-             :type (or null keymap)))
+             :type (or null keymap)
+             :documentation "Parent keymap for fallback lookups, or nil."))
   (:documentation "A key-to-command mapping with optional parent chain for fallback."))
 
 (declaim (ftype (function (keyword &key (:parent (or null keymap))) keymap) make-keymap))
