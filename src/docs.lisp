@@ -469,6 +469,18 @@ documentation in *extended-docs*."
 ;;; Category: buffer — Buffer structure, ring, and operations
 ;;; ==========================================================================
 
+(defdoc *default-context-limit*
+  :category "buffer"
+  :see-also (make-buffer buffer-context-limit))
+
+(defdoc *default-agent-name*
+  :category "buffer"
+  :see-also (make-buffer buffer-agent-name load-session))
+
+(defdoc *default-show-tool-results*
+  :category "buffer"
+  :see-also (buffer-show-tool-results-p))
+
 (defdoc buffer
   :category "buffer"
   :usage "(make-buffer \"session-01\" :agent-name \"claude\") to create a buffer."
@@ -910,6 +922,10 @@ documentation in *extended-docs*."
   :see-also (*default-provider* *provider-fallback-models* resolve-buffer-provider-and-model)
   :side-effects "Changing this affects all new buffers that lack both an agent-specific and provider-fallback model.")
 
+(defdoc *default-max-tokens*
+  :category "llm"
+  :see-also (*default-model* *default-provider* anthropic-request))
+
 (defdoc *anthropic-model*
   :category "llm"
   :see-also (*default-model* *claude-cli-models* resolve-buffer-provider-and-model))
@@ -1234,6 +1250,30 @@ documentation in *extended-docs*."
 ;;; ==========================================================================
 ;;; Category: tool — Tool registry and execution
 ;;; ==========================================================================
+
+(defdoc *http-fetch-max-chars*
+  :category "tool"
+  :see-also (*http-connection-timeout* *http-user-agent*))
+
+(defdoc *http-connection-timeout*
+  :category "tool"
+  :see-also (*http-fetch-max-chars* *http-user-agent*))
+
+(defdoc *http-user-agent*
+  :category "tool"
+  :see-also (*http-fetch-max-chars* *http-connection-timeout*))
+
+(defdoc *file-read-default-limit*
+  :category "tool"
+  :see-also (*tool-table* register-tool))
+
+(defdoc *shell-exec-default-timeout*
+  :category "tool"
+  :see-also (*tool-table* register-tool))
+
+(defdoc *diff-display-max-lines*
+  :category "tool"
+  :see-also (*tool-table* tool-approval-extra-display))
 
 (defdoc *tool-table*
   :category "tool"

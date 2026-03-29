@@ -17,6 +17,24 @@
 (defvar *tool-table* (make-hash-table :test #'equal)
   "Global table mapping tool name strings to tool-definition structs.")
 
+(defvar *http-fetch-max-chars* 50000
+  "Default maximum characters returned by http_fetch.")
+
+(defvar *http-connection-timeout* 15
+  "Connection timeout in seconds for HTTP requests.")
+
+(defvar *http-user-agent* "Clawmacs/0.1"
+  "User-Agent header for HTTP requests.")
+
+(defvar *file-read-default-limit* 10000
+  "Default maximum lines returned by file_read.")
+
+(defvar *shell-exec-default-timeout* 30
+  "Default timeout in seconds for shell_exec.")
+
+(defvar *diff-display-max-lines* 40
+  "Maximum diff lines shown in the approval UI.")
+
 (defun register-tool (name description schema permission execute-fn
                       &key approval-display-fn)
   "Register a tool in *tool-table*.
@@ -132,7 +150,7 @@ just enough to show what changes."
          (format s "--- old~%+++ new~%")
          ;; Simple approach: show lines unique to old as -, unique to new as +,
          ;; common lines as context
-         (let ((max-lines 40)
+         (let ((max-lines *diff-display-max-lines*)
                (old-set (make-hash-table :test #'equal))
                (new-set (make-hash-table :test #'equal)))
            (dolist (l old-lines) (setf (gethash l old-set) t))
@@ -184,7 +202,7 @@ Works for both existing and not-yet-existing files."
 (defun execute-http-fetch (args)
   "Fetch content from an HTTP/HTTPS URL. Returns the response body as text."
   (let ((url (cdr (assoc :url args)))
-        (max-chars (or (cdr (assoc :max--chars args)) 50000)))
+        (max-chars (or (cdr (assoc :max--chars args)) *http-fetch-max-chars*)))
     (unless url
       (error "url parameter is required"))
     (unless (or (alexandria:starts-with-subseq "http://" url)
@@ -195,8 +213,8 @@ Works for both existing and not-yet-existing files."
                              :method :get
                              :want-stream nil
                              :force-binary nil
-                             :connection-timeout 15
-                             :user-agent "Clawmacs/0.1")
+                             :connection-timeout *http-connection-timeout*
+                             :user-agent *http-user-agent*)
       (let ((body-string (if (stringp body)
                              body
                              (flexi-streams:octets-to-string
@@ -219,7 +237,7 @@ Works for both existing and not-yet-existing files."
   "Read a file within the sandbox. Returns file contents as text."
   (let* ((path (cdr (assoc :path args)))
          (offset (or (cdr (assoc :offset args)) 0))
-         (limit (or (cdr (assoc :limit args)) 10000))
+         (limit (or (cdr (assoc :limit args)) *file-read-default-limit*))
          (resolved (validate-sandbox-path path)))
     (unless path
       (error "path parameter is required"))
@@ -363,7 +381,7 @@ The file must exist. old_text must be found exactly once."
 (defun execute-shell-exec (args)
   "Execute a shell command within the sandbox directory."
   (let* ((command (cdr (assoc :command args)))
-         (timeout (or (cdr (assoc :timeout args)) 30))
+         (timeout (or (cdr (assoc :timeout args)) *shell-exec-default-timeout*))
          (sandbox (or *sandbox-root* (truename "."))))
     (unless command
       (error "command parameter is required"))
@@ -420,7 +438,7 @@ The file must exist. old_text must be found exactly once."
       . ((:url . ((:type . "string")
                   (:description . "The HTTP or HTTPS URL to fetch.")))
          (:max--chars . ((:type . "integer")
-                         (:description . "Maximum characters to return. Default 50000.")
+                         (:description . ,(format nil "Maximum characters to return. Default ~D." *http-fetch-max-chars*))
                          (:minimum . 100)))))
      (:required . #("url")))
    :agent-allowed
@@ -436,7 +454,7 @@ The file must exist. old_text must be found exactly once."
          (:offset . ((:type . "integer")
                      (:description . "Line number to start reading from (0-indexed). Default 0.")))
          (:limit . ((:type . "integer")
-                    (:description . "Maximum number of lines to return. Default 10000.")))))
+                    (:description . ,(format nil "Maximum number of lines to return. Default ~D." *file-read-default-limit*))))))
      (:required . #("path")))
    :agent-allowed
    #'execute-file-read)
@@ -479,7 +497,7 @@ The file must exist. old_text must be found exactly once."
       . ((:command . ((:type . "string")
                       (:description . "The shell command to execute.")))
          (:timeout . ((:type . "integer")
-                      (:description . "Timeout in seconds. Default 30.")))))
+                      (:description . ,(format nil "Timeout in seconds. Default ~D." *shell-exec-default-timeout*))))))
      (:required . #("command")))
    :agent-with-permission
    #'execute-shell-exec)

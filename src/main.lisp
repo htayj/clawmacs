@@ -665,7 +665,7 @@ to navigate. Shows buffer name, agent, status, and message count."
   (declare (ignore buffer))
   (let* ((name (next-buffer-name))
          (new-buf (make-buffer name
-                               :agent-name "claude"
+                               :agent-name *default-agent-name*
                                :working-directory (truename "."))))
     (init-face-registry new-buf)
     (setf (buffer-keymap new-buf) *default-keymap*)
@@ -2148,8 +2148,7 @@ and a CALLBACK function to call with the selected item on confirmation."
         *minibuffer-match-positions* (make-list (length items) :initial-element nil)
         *minibuffer-selected-index* 0
         *minibuffer-scroll-offset* 0
-        *minibuffer-callback* callback
-        *minibuffer-max-height* 12))
+        *minibuffer-callback* callback))
 
 (defun minibuffer-deactivate ()
   "Deactivate the minibuffer, clearing all state."
@@ -2416,7 +2415,7 @@ Strips any meta/ctrl-x prefix so the selector has simple key bindings."
       ((and (characterp base-key) (char= base-key #\n))
        (let* ((name (next-buffer-name))
               (new-buf (make-buffer name
-                                    :agent-name "claude"
+                                    :agent-name *default-agent-name*
                                     :working-directory (truename "."))))
          (init-face-registry new-buf)
          (setf (buffer-keymap new-buf) *default-keymap*)
@@ -2666,7 +2665,7 @@ Environment variables:
     (file-debug-log "startup" "debug log enabled, writing to ~A" *debug-log-file*)))
 
 (defun clawmacs-main (&key (session-name "clawmacs:session-01")
-                           (agent-name "claude"))
+                           (agent-name *default-agent-name*))
   "Entry point for clawmacs. Initializes the TUI and runs the event loop."
   (parse-clawmacs-args)
   (init-default-keymap)
@@ -2726,8 +2725,7 @@ Environment variables:
             *minibuffer-filtered-items* nil
             *minibuffer-selected-index* 0
             *minibuffer-scroll-offset* 0
-            *minibuffer-callback* nil
-            *minibuffer-max-height* 12)
+            *minibuffer-callback* nil)
       (setf *openai-oauth-pending* nil)
       (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil *ch-pending* nil)
       (add-buffer-to-ring buf)

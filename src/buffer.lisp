@@ -4,6 +4,15 @@
 ;;; Buffer
 ;;; --------------------------------------------------------------------------
 
+(defvar *default-context-limit* 200000
+  "Default token context window size for new buffers.")
+
+(defvar *default-agent-name* "claude"
+  "Default agent name for new buffers. Affects modeline display and agent-defaults resolution.")
+
+(defvar *default-show-tool-results* t
+  "When nil, new buffers hide tool-result messages by default.")
+
 (defclass buffer ()
   ((name              :initarg :name
                       :accessor buffer-name
@@ -68,7 +77,7 @@
 0 means auto-scroll (latest messages visible).")
    (show-tool-results-p :initarg :show-tool-results-p
                          :accessor buffer-show-tool-results-p
-                         :initform t
+                         :initform *default-show-tool-results*
                          :type boolean
                          :documentation "When nil, tool-result messages are hidden from display.")
    (pending-stream      :initarg :pending-stream
@@ -126,9 +135,9 @@ Enforces the invariant that it is not read-only."
                                        (:context-limit integer))
                           buffer)
                 make-buffer))
-(defun make-buffer (name &key (agent-name "agent")
+(defun make-buffer (name &key (agent-name *default-agent-name*)
                               (working-directory (truename "."))
-                              (context-limit 200000))
+                              (context-limit *default-context-limit*))
   "Create a new buffer with a single empty input message."
   (let* ((input-msg (make-message :user))
          (registry (make-hash-table :test #'eq))
@@ -386,7 +395,7 @@ Assigns the :system face set from the buffer's face registry if available."
       (write-string (cl-json:encode-json-to-string (serialize-buffer buf)) s))
     path))
 
-(defun load-session (session-name &key (agent-name "claude"))
+(defun load-session (session-name &key (agent-name *default-agent-name*))
   "Load a saved session into a new buffer. Returns the buffer or nil."
   (let ((path (session-path session-name)))
     (unless (probe-file path)

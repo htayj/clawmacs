@@ -12,6 +12,9 @@ Must be a keyword matching a known provider (:anthropic, :openai-codex, :zai, :o
   "The default model to use when no agent-specific or provider-fallback model
 is configured. Should be a valid model name for *default-provider*.")
 
+(defvar *default-max-tokens* 8192
+  "Default maximum tokens for LLM responses across all providers.")
+
 (defvar *anthropic-model* "claude-haiku-4-5-20251001"
   "The Anthropic model to use for chat completions.")
 
@@ -1085,7 +1088,7 @@ reasoning_content is present, falls back to reasoning_content."
               openai-messages)
         openai-messages)))
 
-(defun provider-request (provider messages &key model (max-tokens 8192) tools)
+(defun provider-request (provider messages &key model (max-tokens *default-max-tokens*) tools)
   "Dispatch a non-streaming request by resolved PROVIDER.
 Anthropic models listed in *claude-cli-models* are routed through the
 Claude Code CLI subprocess instead of the REST API."
@@ -1101,7 +1104,7 @@ Claude Code CLI subprocess instead of the REST API."
     (:openrouter
      (openrouter-request messages :model model :max-tokens max-tokens :tools tools))))
 
-(defun provider-request-streaming (provider messages callback &key model (max-tokens 8192) tools)
+(defun provider-request-streaming (provider messages callback &key model (max-tokens *default-max-tokens*) tools)
   "Dispatch a streaming request by resolved PROVIDER.
 Anthropic models listed in *claude-cli-models* are routed through the
 Claude Code CLI subprocess instead of the REST API."
@@ -1218,7 +1221,7 @@ container libraries (e.g. OpenSSL version mismatch)."
           "--max-turns" "1")))
 
 (defun claude-cli-request (messages &key (model "claude-sonnet-4-6")
-                                         (max-tokens 8192)
+                                         (max-tokens *default-max-tokens*)
                                          tools)
   "Send a non-streaming request via the Claude Code CLI subprocess.
 Uses the stream-json protocol: spawns `claude --input-format stream-json`,
@@ -1303,7 +1306,7 @@ response alist."
 
 (defun claude-cli-request-streaming (messages callback
                                       &key (model "claude-sonnet-4-6")
-                                           (max-tokens 8192)
+                                           (max-tokens *default-max-tokens*)
                                            tools)
   "Send a streaming request via the Claude Code CLI subprocess.
 Uses the stream-json protocol: spawns `claude --input-format stream-json`,
@@ -1493,7 +1496,7 @@ in a background thread.  Returns a stream-state that the event loop polls."
 ;;; --------------------------------------------------------------------------
 
 (defun anthropic-request (messages &key (model *anthropic-model*)
-                                        (max-tokens 8192)
+                                        (max-tokens *default-max-tokens*)
                                         tools)
   "Call the Anthropic Messages API. Returns the parsed response alist.
 MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
@@ -1537,7 +1540,7 @@ MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
          (api-json-decode body-string)))))
 
 (defun openai-codex-request (messages &key (model *openai-codex-model*)
-                                           (max-tokens 8192)
+                                           (max-tokens *default-max-tokens*)
                                            tools)
   "Call OpenAI Chat Completions and normalize the response shape."
   (let* ((token (or (read-provider-token :openai-codex)
@@ -1711,7 +1714,7 @@ EVENT is an already-decoded alist (not a JSON string)."
 
 (defun anthropic-request-streaming (messages callback
                                      &key (model *anthropic-model*)
-                                          (max-tokens 8192)
+                                          (max-tokens *default-max-tokens*)
                                           tools)
   "Call the Anthropic Messages API with streaming enabled.
 CALLBACK is called with (stream-state) on each update from the background thread.
@@ -1896,7 +1899,7 @@ Returns the final stream-state when complete."
 
 (defun openai-codex-request-streaming (messages callback
                                        &key (model *openai-codex-model*)
-                                            (max-tokens 8192)
+                                            (max-tokens *default-max-tokens*)
                                             tools)
   "Call OpenAI Chat Completions with SSE streaming enabled."
   (declare (ignore callback))
@@ -1947,7 +1950,7 @@ Returns the final stream-state when complete."
 ;;; Model names follow the 'provider/model-name' format.
 
 (defun openrouter-request (messages &key (model *openrouter-model*)
-                                          (max-tokens 8192)
+                                          (max-tokens *default-max-tokens*)
                                           tools)
   "Call the OpenRouter Chat Completions API and normalize the response shape.
 Uses the OpenAI-compatible chat completions protocol."
@@ -1985,7 +1988,7 @@ Uses the OpenAI-compatible chat completions protocol."
 
 (defun openrouter-request-streaming (messages callback
                                      &key (model *openrouter-model*)
-                                          (max-tokens 8192)
+                                          (max-tokens *default-max-tokens*)
                                           tools)
   "Call the OpenRouter Chat Completions API with SSE streaming enabled.
 Uses the same OpenAI-compatible streaming protocol."
@@ -2035,7 +2038,7 @@ Uses the same OpenAI-compatible streaming protocol."
 ;;; --------------------------------------------------------------------------
 
 (defun zai-request (messages &key (model *zai-model*)
-                                   (max-tokens 8192)
+                                   (max-tokens *default-max-tokens*)
                                    tools)
   "Call Z.AI Chat Completions API and normalize the response shape.
 Uses the coding plan endpoint (api.z.ai/api/coding/paas/v4) which is
@@ -2074,7 +2077,7 @@ The API follows the OpenAI Chat Completions format."
 
 (defun zai-request-streaming (messages callback
                                &key (model *zai-model*)
-                                    (max-tokens 8192)
+                                    (max-tokens *default-max-tokens*)
                                     tools)
   "Call Z.AI Chat Completions API with SSE streaming enabled.
 Uses the same OpenAI-compatible streaming protocol."

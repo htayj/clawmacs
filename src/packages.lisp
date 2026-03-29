@@ -91,6 +91,9 @@
    #:kill-ring-top
 
    ;; Buffer
+   #:*default-context-limit*
+   #:*default-agent-name*
+   #:*default-show-tool-results*
    #:buffer
    #:make-buffer
    #:buffer-name
@@ -184,6 +187,7 @@
      #:build-conversation-messages
    #:*default-provider*
    #:*default-model*
+   #:*default-max-tokens*
     #:*anthropic-model*
    #:api-json-encode
    #:api-json-decode
@@ -238,6 +242,12 @@
    #:openai-codex-oauth-command
 
    ;; Tools
+   #:*http-fetch-max-chars*
+   #:*http-connection-timeout*
+   #:*http-user-agent*
+   #:*file-read-default-limit*
+   #:*shell-exec-default-timeout*
+   #:*diff-display-max-lines*
    #:*tool-table*
    #:tool-definition
    #:register-tool
