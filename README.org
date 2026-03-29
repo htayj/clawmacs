@@ -1,0 +1,221 @@
+#+TITLE: Clawmacs
+#+STARTUP: overview
+
+*WARNING: This project is pre-dogfood and under active development.*
+
+Macros for your agent!
+
+* Introduction
+
+Anyone who has used Emacs before knows the benefit of a tight feedback loop. Write lisp code, eval it, instant results. Clawmacs brings that same philosophy to agentic programming: the tighter the feedback loop between you and the agent, and the more the agent can introspect its own environment, the more powerful the collaboration becomes.
+
+Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment with full access to the running Lisp image. The agent can evaluate code, read and write files, execute shell commands, and inspect the very editor it's running inside --- all with your approval.
+
+* Features
+
+** Multi-Provider LLM Support
+
+Clawmacs supports multiple LLM providers, switchable per buffer:
+
+- *Anthropic* --- Claude models (Haiku, Sonnet, Opus) via REST API or Claude CLI subprocess
+- *Z.AI* (Zhipu AI) --- GLM models
+- *OpenAI Codex* --- with OAuth 2.0 flow
+- *OpenRouter* --- access to hundreds of models with dynamic model discovery
+
+Switch models on the fly with =C-c C-m= (fuzzy minibuffer selector) or =C-c M= (overlay selector).
+
+** Agent Tools
+
+The agent has access to six tools, each with appropriate permission levels:
+
+| Tool         | Permission             | Description                          |
+|--------------+------------------------+--------------------------------------|
+| =lisp_eval=  | agent-allowed          | Evaluate Common Lisp in the running image |
+| =http_fetch= | agent-allowed          | Fetch HTTP/HTTPS URLs                |
+| =file_read=  | agent-allowed          | Read files within the sandbox        |
+| =file_write= | agent-with-permission  | Create or append to files            |
+| =file_edit=  | agent-with-permission  | Search-and-replace editing with diff preview |
+| =shell_exec= | agent-with-permission  | Execute shell commands               |
+
+Tools requiring permission present an approval prompt with =[a]pprove=, =[d]eny=, and =[m]essage= (deny with note) options. File edits show a diff preview; file writes show what will be created or appended.
+
+The =lisp_eval= tool is particularly powerful: the agent can introspect clawmacs itself, query buffer state, evaluate expressions, and modify the running system.
+
+** Emacs-Style Interface
+
+Three-pane layout: main (chat history + input), modeline (status), minibuffer (prompts and completion).
+
+*** Editing Keybindings
+
+| Key           | Action                     |
+|---------------+----------------------------|
+| =C-a= / =C-e=  | Beginning / end of line    |
+| =C-f= / =C-b=  | Forward / backward char    |
+| =M-f= / =M-b=  | Forward / backward word    |
+| =C-d=           | Delete char forward        |
+| =Backspace=     | Delete char backward       |
+| =C-k=           | Kill line                  |
+| =C-u=           | Kill backward line         |
+| =M-d=           | Kill word forward          |
+| =C-w=           | Kill word backward         |
+| =C-y=           | Yank (paste)               |
+| =M-y=           | Yank pop (cycle kill ring) |
+| =C-o=           | Insert newline             |
+| =RET=           | Send message               |
+
+*** Buffer Management
+
+| Key           | Action                       |
+|---------------+------------------------------|
+| =C-x n=        | New buffer                   |
+| =C-x k=        | Kill buffer                  |
+| =C-x b=        | Buffer selector (overlay)    |
+| =C-x C-b=      | Buffer selector (minibuffer) |
+| =C-x C-s=      | Save session                 |
+| =C-x C-c=      | Quit                         |
+
+*** Navigation
+
+| Key              | Action              |
+|------------------+----------------------|
+| =Page-Up= / =M-v= | Scroll up (history)  |
+| =Page-Down= / =C-v= | Scroll down        |
+
+*** Model & Provider
+
+| Key           | Action                             |
+|---------------+------------------------------------|
+| =C-c C-m=      | Select model (fuzzy minibuffer)    |
+| =C-c M=        | Select model (overlay)             |
+| =C-c t=        | Toggle tool result display         |
+| =C-c C-d=      | Toggle API debug mode              |
+
+*** Help & Introspection
+
+| Key           | Action                       |
+|---------------+------------------------------|
+| =C-h b=        | Describe keybindings         |
+| =C-h f=        | Describe function            |
+| =C-h v=        | Describe variable            |
+| =C-h T=        | Describe type                |
+| =C-h F=        | Customize face (interactive) |
+
+** Shell Prefix
+
+Type =!= followed by a shell command (e.g., =!ls -la=) to execute it directly. Output is inserted as a system message in the buffer without being sent to the agent. You can then discuss the output with the agent by sending a follow-up message.
+
+** Streaming Responses
+
+Agent responses stream in real time via background threads. The event loop polls for updates, so you see tokens as they arrive.
+
+** Face System
+
+Clawmacs has a full face (color/attribute) system inspired by Emacs:
+
+- Per-sender color schemes (user messages on blue, agent on black, system in cyan)
+- Global faces for modeline, minibuffer, selectors, approval prompts, diff highlighting
+- Face inheritance chains with full resolution
+- Interactive face customization via =C-h F=
+- Supports CGA (16-color), 256-color, and hex (#RRGGBB) color specs
+
+** Session Persistence
+
+Save and restore conversation sessions with =C-x C-s=. Sessions are serialized to JSON.
+
+** Pluggable UI Backends
+
+The rendering layer is abstracted behind a backend protocol:
+
+- *Croatoan backend* (default) --- ncurses terminal UI
+- *McCLIM backend* (optional) --- X11/Wayland graphical UI with monospace grid rendering
+
+Switch backends in your init file. The McCLIM backend mirrors the terminal UI with the same three-pane layout, keybindings, and color scheme.
+
+** Boot Files
+
+Clawmacs loads optional markdown files at startup to customize the agent's system prompt:
+
+- =AGENTS.md=, =SOUL.md=, =USER.md=, =IDENTITY.md=, =TOOLS.md=
+
+Checked in the working directory first, then =~/.config/clawmacs/=. Compatible with OpenClaw workspace conventions.
+
+* Installation
+
+** Prerequisites
+
+- [[https://guix.gnu.org/][GNU Guix]] (for the containerized environment)
+- An X11 display (for the McCLIM backend)
+
+** Running
+
+#+begin_src sh
+./run.sh
+#+end_src
+
+This launches clawmacs in a Guix container with all dependencies (SBCL, ncurses, OpenSSL, fonts) automatically provisioned. Quicklisp is bootstrapped on first run.
+
+** Provider Credentials
+
+Set at least one provider credential via environment variable:
+
+#+begin_src sh
+export ANTHROPIC_API_KEY="sk-ant-..."
+# or
+export OPENAI_API_KEY="sk-..."
+# or
+export ZAI_API_KEY="..."
+# or
+export OPENROUTER_API_KEY="..."
+#+end_src
+
+** User Init File
+
+Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
+
+#+begin_src lisp
+;; Switch default provider and model
+(setf clawmacs:*default-provider* :anthropic)
+(setf clawmacs:*default-model* "claude-sonnet-4-5-20250514")
+
+;; Use the McCLIM graphical backend
+(asdf:load-system :clawmacs/mcclim)
+(setf clawmacs:*ui-backend* (make-instance 'clawmacs:mcclim-backend))
+#+end_src
+
+* Architecture
+
+#+begin_example
+src/
+  packages.lisp        Package definition and exports
+  faces.lisp           Color specs, faces, face sets, global registry
+  message.lisp         Line/message data structures, editing operations
+  buffer.lisp          Buffer ring, conversation management, sessions
+  commands.lisp        defcommand macro, permission levels
+  keymap.lisp          Keymap data structure, default bindings
+  llm.lisp             Multi-provider LLM integration, streaming, OAuth
+  tools.lisp           Agent tool definitions and execution
+  ui-protocol.lisp     Abstract UI backend protocol
+  render-core.lisp     Pure rendering geometry and formatting functions
+  croatoan-backend.lisp  Terminal backend (ncurses via croatoan)
+  mcclim-backend.lisp  Graphical backend (X11 via McCLIM, optional)
+  main.lisp            Event loop, key dispatch, streaming, commands
+  docs.lisp            Extended documentation entries
+#+end_example
+
+The core architecture follows Emacs patterns: buffers hold messages (not file lines), keymaps dispatch to commands, faces control rendering, and the display is a pluggable backend.
+
+The rendering layer is split: =render-core.lisp= contains pure geometry and formatting functions (line wrapping, modeline formatting, selector line layout) reused by both backends. Each backend translates these into its native drawing calls.
+
+* vs Emacs
+
+Clawmacs is not intended to replace GNU Emacs. It is another of the Emacsen --- built from the same philosophical foundations (extensibility, introspection, Lisp as the extension language) but purpose-built for conversational agent interaction rather than text editing.
+
+Where Emacs operates on files and buffers of text, clawmacs operates on conversations and messages. Where Emacs has =M-x=, clawmacs has an agent that can eval arbitrary Lisp. The feedback loop is the same; the domain is different.
+
+* Future Plans
+
+Despite the name, clawmacs is not intended to be simply an OpenClaw clone. It is designed to bridge the gap between current agentic editors and OpenClaw by providing a truly introspective and recursive agentic editor --- one where the agent can modify the editor itself, inspect its own tool definitions, customize its own rendering, and evolve the environment collaboratively with the user.
+
+* License
+
+[[https://www.gnu.org/licenses/agpl-3.0.html][GNU Affero General Public License v3.0]]
