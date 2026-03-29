@@ -110,6 +110,9 @@
     (keymap-bind km '(:ctrl-c #\Newline) 'minibuffer-select-model-command) ; C-c C-m (LF variant)
     ;; C-c M (capital M) = old overlay model selector
     (keymap-bind km '(:ctrl-c #\M) 'select-model-command)
+    ;; C-c C-d = toggle API debug mode (echo requests/responses in chat)
+    ;; C-d = ASCII 4 = #\Eot (end of transmission)
+    (keymap-bind km (list :ctrl-c (code-char 4)) 'toggle-debug-mode-command)
     ;; C-c f = describe function (introspection / help system)
     (keymap-bind km '(:ctrl-c #\f) 'describe-function-command)
     ;; C-c v = describe variable (introspection / help system)

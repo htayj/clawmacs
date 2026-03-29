@@ -35,6 +35,13 @@ Call once at startup. These faces are customizable via customize-face."
             :background (make-color-spec :cga 0)
             :foreground (make-color-spec :cga 6)
             :bold-p nil :underline-p nil :reverse-p nil))
+    ;; Debug messages — API request/response log when *debug-mode* is t.
+    ;; Bright magenta distinguishes debug output from regular system messages.
+    (setf (gethash :debug r)
+          (make-instance 'face :name :debug
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 13)   ; bright magenta
+            :bold-p nil :underline-p nil :reverse-p nil))
     ;; Minibuffer faces
     (setf (gethash :minibuffer-prompt r)
           (make-instance 'face :name :minibuffer-prompt
@@ -55,6 +62,18 @@ Call once at startup. These faces are customizable via customize-face."
           (make-instance 'face :name :minibuffer-selected
             :background (make-color-spec :cga 15)
             :foreground (make-color-spec :cga 0)
+            :bold-p t :underline-p nil :reverse-p nil))
+    ;; Fuzzy-match highlight faces — matched characters are rendered in bright
+    ;; yellow so they stand out against both dark and light backgrounds.
+    (setf (gethash :minibuffer-match r)
+          (make-instance 'face :name :minibuffer-match
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 11)   ; bright yellow on black
+            :bold-p t :underline-p nil :reverse-p nil))
+    (setf (gethash :minibuffer-selected-match r)
+          (make-instance 'face :name :minibuffer-selected-match
+            :background (make-color-spec :cga 15)
+            :foreground (make-color-spec :cga 3)    ; dark yellow on white
             :bold-p t :underline-p nil :reverse-p nil))
     ;; Selector overlay faces (buffer selector, model selector)
     (setf (gethash :selector-title r)
@@ -879,12 +898,52 @@ Uses global face :minibuffer-prompt."
   (croatoan:move window 0 0)
   (croatoan:add-string window (make-string width :initial-element #\Space)))
 
+(defun render-minibuffer-candidate-row (window row display match-positions selected-p width)
+  "Render a single minibuffer candidate at ROW in WINDOW.
+DISPLAY is the candidate text.  MATCH-POSITIONS is a sorted list of character
+indices (into DISPLAY) that were matched by the current query — these are
+drawn with a highlight face so the user can see exactly what matched.
+SELECTED-P is T for the currently selected candidate.  WIDTH is the column
+count of the window.
+
+Face mapping:
+  base chars in unselected item  → :minibuffer-candidate
+  matched chars in unselected    → :minibuffer-match        (bright yellow)
+  base chars in selected item    → :minibuffer-selected
+  matched chars in selected      → :minibuffer-selected-match"
+  (let* ((base-face  (if selected-p :minibuffer-selected      :minibuffer-candidate))
+         (match-face (if selected-p :minibuffer-selected-match :minibuffer-match))
+         ;; Build a hash set of matched positions for O(1) lookup.
+         (match-set  (when match-positions
+                       (let ((ht (make-hash-table :test #'eql)))
+                         (dolist (p match-positions ht)
+                           (setf (gethash p ht) t))))))
+    ;; Clear row background.
+    (apply-global-face window base-face)
+    (croatoan:move window row 0)
+    (croatoan:add-string window (make-string width :initial-element #\Space))
+    ;; Two-space indent.
+    (apply-global-face window base-face)
+    (croatoan:move window row 0)
+    (croatoan:add-string window "  ")
+    ;; Write each character, switching to the match face for matched positions.
+    (loop :for i :from 0 :below (length display)
+          :for col :from 2
+          :while (< col width)
+          :for ch := (char display i)
+          :for matched-p := (and match-set (gethash i match-set))
+          :do (apply-global-face window (if matched-p match-face base-face))
+              (croatoan:move window row col)
+              (croatoan:add-string window (string ch)))))
+
 (defun render-minibuffer-active (window width height)
   "Render the active minibuffer with prompt, input, cursor, and filtered items.
 The first row shows the prompt and user input with a block cursor.
 Subsequent rows show the filtered candidates, with the selected one in
-inverse video. Uses global faces: :minibuffer-prompt, :minibuffer-cursor,
-:minibuffer-candidate, :minibuffer-selected."
+inverse video. Matched characters within each candidate are highlighted.
+Uses global faces: :minibuffer-prompt, :minibuffer-cursor,
+:minibuffer-candidate, :minibuffer-selected,
+:minibuffer-match, :minibuffer-selected-match."
   (let* ((prompt-str (format nil "~A: " *minibuffer-prompt*))
          (input *minibuffer-input*)
          (prompt-line (concatenate 'string prompt-str input))
@@ -907,30 +966,20 @@ inverse video. Uses global faces: :minibuffer-prompt, :minibuffer-cursor,
         (croatoan:add-string window (string char-at-cursor))
         ;; Restore prompt face
         (apply-global-face window :minibuffer-prompt)))
-    ;; ── Candidate list (with scroll offset) ──
-    (let* ((items *minibuffer-filtered-items*)
-           (selected *minibuffer-selected-index*)
-           (scroll *minibuffer-scroll-offset*)
+    ;; ── Candidate list (with scroll offset and fuzzy-match highlighting) ──
+    (let* ((items     *minibuffer-filtered-items*)
+           (positions *minibuffer-match-positions*)
+           (selected  *minibuffer-selected-index*)
+           (scroll    *minibuffer-scroll-offset*)
            (visible-rows (1- height))
-           (total (length items)))
+           (total     (length items)))
       (loop :for row-idx :from 0 :below visible-rows
             :for item-idx := (+ scroll row-idx)
             :while (< item-idx total)
             :for item := (nth item-idx items)
             :for row := (1+ row-idx)
             :for display := (minibuffer-item-display item)
+            :for match-pos := (nth item-idx positions)
             :for selected-p := (= item-idx selected)
-            :do (progn
-                  (if selected-p
-                      (apply-global-face window :minibuffer-selected)
-                      (apply-global-face window :minibuffer-candidate))
-                  ;; Clear row with background
-                  (croatoan:move window row 0)
-                  (croatoan:add-string window
-                                       (make-string width :initial-element #\Space))
-                  ;; Write candidate text
-                  (croatoan:move window row 0)
-                  (let ((line-text (format nil "  ~A" display)))
-                    (croatoan:add-string
-                     window
-                     (subseq line-text 0 (min (length line-text) width)))))))))
+            :do (render-minibuffer-candidate-row
+                 window row display match-pos selected-p width)))))

@@ -182,6 +182,16 @@ polls for updates via update-streaming-response."
     (handler-case
         (multiple-value-bind (provider model)
             (resolve-buffer-provider-and-model buf)
+          ;; Debug: echo the outgoing request payload before sending
+          (debug-log buf
+            (format nil "[API REQUEST → ~(~A~)/~A  msg:~D  tools:~D]~%~A"
+                    provider model
+                    (length messages)
+                    (if tools (length tools) 0)
+                    (api-json-encode
+                     `((:messages . ,(coerce messages 'vector))
+                       ,@(when (and tools (plusp (length tools)))
+                           `((:tools . ,tools)))))))
           (let* ((state (provider-request-streaming
                        provider
                        messages
@@ -257,6 +267,12 @@ Returns T if still streaming, NIL if done."
                                (write-string (format-tool-call-display tu) s)))))
               (set-message-text msg display)
               (setf (message-raw-content msg) canonical-content))
+            ;; Debug: echo the completed response
+            (debug-log buf
+              (format nil "[API RESPONSE  stop:~A  blocks:~D]~%~A"
+                      (or stop-reason "nil")
+                      (length content-blocks)
+                      (api-json-encode (coerce canonical-content 'vector))))
             ;; Clear streaming state
             (setf (buffer-pending-stream buf) nil
                   (buffer-streaming-message buf) nil)
@@ -681,6 +697,46 @@ to navigate. Shows buffer name, agent, status, and message count."
   (buffer)
   (setf (buffer-show-tool-results-p buffer)
         (not (buffer-show-tool-results-p buffer))))
+
+(defcommand toggle-debug-mode-command (:permission :user-only)
+  "Toggle API debug mode on/off. When enabled, every outgoing API request
+(provider, model, full messages/tools JSON) and every completed response
+(stop-reason, content blocks) is echoed into the chat window as a debug
+message, rendered in magenta so it stands out from normal system output.
+Bound to C-c C-d."
+  (buffer)
+  (setf *debug-mode* (not *debug-mode*))
+  (buffer-insert-system-message
+   buffer
+   (if *debug-mode*
+       "[Debug mode ON — API calls will be shown in chat]"
+       "[Debug mode OFF]")))
+
+;;; --------------------------------------------------------------------------
+;;; Debug Logging
+;;; --------------------------------------------------------------------------
+
+(defun debug-log (buf text)
+  "Insert TEXT as a debug message in BUF when *debug-mode* is enabled.
+Uses the global :debug face (bright magenta) so debug output is visually
+distinct from normal system messages (cyan). Returns the message object,
+or nil if debug mode is off."
+  (when *debug-mode*
+    (let* ((msg (buffer-insert-system-message buf text))
+           (debug-face (or (global-face :debug)
+                           (make-instance 'face :name :debug
+                             :background (make-color-spec :cga 0)
+                             :foreground (make-color-spec :cga 13)
+                             :bold-p nil :underline-p nil :reverse-p nil)))
+           (debug-fs (make-face-set
+                      :debug
+                      (list (make-instance 'face
+                              :name :default
+                              :parent debug-face
+                              :background nil :foreground nil
+                              :bold-p nil :underline-p nil :reverse-p nil)))))
+      (setf (message-face-set msg) debug-fs)
+      msg)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Face Registry Setup
@@ -1648,6 +1704,10 @@ Bound to C-c t (was changed from toggle-tool-results)."
 ;;; Event Loop
 ;;; --------------------------------------------------------------------------
 
+(defvar *debug-mode* nil
+  "When non-nil, all API requests and responses are echoed into the chat
+window as debug messages. Toggle interactively with C-c C-d.")
+
 (defvar *meta-pending* nil
   "When non-nil, the next key event is combined with Meta (ESC prefix).")
 
@@ -1724,6 +1784,12 @@ Set to nil when inactive.")
 When the selected item moves beyond the visible window, this offset
 is adjusted so that the selection is always visible.")
 
+(defvar *minibuffer-match-positions* nil
+  "List of match-position lists parallel to *minibuffer-filtered-items*.
+Each element is a sorted list of character indices (into the corresponding
+item's display string) that were matched by the current query.
+NIL entries mean no query is active or no positions were recorded.")
+
 (defvar *model-selection-history* nil
   "List of recently selected model display strings (most recent first).
 Used for recency sorting in the minibuffer model selector.")
@@ -1790,18 +1856,122 @@ commands), or a list (:ctrl-c <key>) for C-c prefix (mode-specific commands)."
 ;;; Minibuffer Functions
 ;;; --------------------------------------------------------------------------
 
+(defun split-query-tokens (query)
+  "Split QUERY by spaces and return a list of non-empty token strings.
+Used for orderless-style matching where each space-separated word must
+independently match the candidate via subsequence search."
+  (let ((result nil) (start nil))
+    (dotimes (i (1+ (length query)))
+      (let ((ch (when (< i (length query)) (char query i))))
+        (if (or (null ch) (char= ch #\Space))
+            (when start
+              (push (subseq query start i) result)
+              (setf start nil))
+            (unless start
+              (setf start i)))))
+    (nreverse result)))
+
+(defun fuzzy-token-match-p (token candidate)
+  "Return T if all characters in TOKEN appear in CANDIDATE in order (case-insensitive).
+Both TOKEN and CANDIDATE should already be downcased."
+  (loop :with ci := 0
+        :for qchar :across token
+        :do (let ((pos (position qchar candidate :start ci)))
+              (if pos
+                  (setf ci (1+ pos))
+                  (return nil)))
+        :finally (return t)))
+
 (defun fuzzy-match-p (query candidate)
-  "Return T if all characters in QUERY appear in CANDIDATE in order (case-insensitive).
-Used for narrowing the minibuffer candidate list as the user types."
-  (let ((q (string-downcase query))
+  "Return T if QUERY matches CANDIDATE (case-insensitive).
+Supports space-separated tokens (orderless-style): the query is split on
+spaces and every token must independently match CANDIDATE via subsequence
+search.  An empty query (or all-spaces query) matches everything."
+  (let ((tokens (split-query-tokens (string-downcase query)))
         (c (string-downcase candidate)))
+    (every (lambda (tok) (fuzzy-token-match-p tok c)) tokens)))
+
+(defun fuzzy-token-positions (token candidate)
+  "Return a list of character positions in CANDIDATE matched by TOKEN using
+greedy left-to-right subsequence matching.  TOKEN and CANDIDATE must already
+be downcased.  Returns NIL if TOKEN does not match CANDIDATE."
+  (let ((positions nil))
     (loop :with ci := 0
-          :for qchar :across q
-          :do (let ((pos (position qchar c :start ci)))
+          :for qchar :across token
+          :do (let ((pos (position qchar candidate :start ci)))
                 (if pos
-                    (setf ci (1+ pos))
-                    (return nil)))
-          :finally (return t))))
+                    (progn (push pos positions) (setf ci (1+ pos)))
+                    (return-from fuzzy-token-positions nil))))
+    (nreverse positions)))
+
+(defun fuzzy-match-positions (query candidate)
+  "Return a sorted list of character positions in CANDIDATE matched by QUERY.
+Handles space-separated tokens (orderless-style): combines matched positions
+from every token.  Returns NIL if any token fails to match or query is empty."
+  (when (zerop (length (string-trim '(#\Space) query)))
+    (return-from fuzzy-match-positions nil))
+  (let ((tokens (split-query-tokens (string-downcase query)))
+        (c (string-downcase candidate))
+        (all-positions nil))
+    (dolist (tok tokens)
+      (let ((positions (fuzzy-token-positions tok c)))
+        (unless positions
+          (return-from fuzzy-match-positions nil))
+        (setf all-positions (append all-positions positions))))
+    (sort (remove-duplicates all-positions) #'<)))
+
+(defun fuzzy-token-score (token candidate)
+  "Return a relevance score for TOKEN matching CANDIDATE (both already downcased).
+Returns NIL when TOKEN does not match.  Higher scores mean better matches.
+Scoring bonuses:
+  +100 exact match of the full token
+  +50  candidate starts with token (prefix)
+  +30  token appears as a contiguous substring
+  +20  match starts at position 0 (decays by 1 per position)
+  +5   each consecutive matched-character pair
+  +8   each match that starts at a word boundary (after - _ / . or start)"
+  (let ((positions (fuzzy-token-positions token candidate)))
+    (unless positions (return-from fuzzy-token-score nil))
+    (let ((score 1)
+          (tlen (length token))
+          (clen (length candidate)))
+      ;; Exact match
+      (when (string= token candidate) (incf score 100))
+      ;; Prefix match (candidate starts with token)
+      (when (and (<= tlen clen) (string= token (subseq candidate 0 tlen)))
+        (incf score 50))
+      ;; Contiguous substring present
+      (when (search token candidate) (incf score 30))
+      ;; Position bonus: earlier first-match = better (max +20 at position 0)
+      (incf score (max 0 (- 20 (first positions))))
+      ;; Consecutive character run bonus
+      (loop :for i :from 1 :below (length positions)
+            :when (= (nth i positions) (1+ (nth (1- i) positions)))
+            :do (incf score 5))
+      ;; Word-boundary start bonus (each matched char that starts at a boundary)
+      (dolist (pos positions)
+        (when (or (zerop pos)
+                  (and (plusp pos)
+                       (member (char candidate (1- pos))
+                               '(#\- #\_ #\/ #\. #\Space))))
+          (incf score 8)))
+      score)))
+
+(defun fuzzy-score (query candidate)
+  "Return a relevance score for QUERY matching CANDIDATE (case-insensitive).
+Handles space-separated tokens (orderless-style): scores each token
+independently and sums them.  Returns 0 for an empty/blank query, or NIL
+if any token fails to match."
+  (when (zerop (length (string-trim '(#\Space) query)))
+    (return-from fuzzy-score 0))
+  (let ((tokens (split-query-tokens (string-downcase query)))
+        (c (string-downcase candidate)))
+    (unless tokens (return-from fuzzy-score 0))
+    (let ((total 0))
+      (dolist (tok tokens total)
+        (let ((s (fuzzy-token-score tok c)))
+          (unless s (return-from fuzzy-score nil))
+          (incf total s))))))
 
 (defun minibuffer-item-display (item)
   "Get the display string for a minibuffer candidate item.
@@ -1819,6 +1989,7 @@ and a CALLBACK function to call with the selected item on confirmation."
         *minibuffer-point* 0
         *minibuffer-items* items
         *minibuffer-filtered-items* (copy-list items)
+        *minibuffer-match-positions* (make-list (length items) :initial-element nil)
         *minibuffer-selected-index* 0
         *minibuffer-scroll-offset* 0
         *minibuffer-callback* callback
@@ -1832,26 +2003,51 @@ and a CALLBACK function to call with the selected item on confirmation."
         *minibuffer-point* 0
         *minibuffer-items* nil
         *minibuffer-filtered-items* nil
+        *minibuffer-match-positions* nil
         *minibuffer-selected-index* 0
         *minibuffer-scroll-offset* 0
         *minibuffer-callback* nil))
 
 (defun minibuffer-update-filter ()
   "Re-filter *minibuffer-items* based on *minibuffer-input*.
-Clamps *minibuffer-selected-index* to the new filtered list length
-and resets scroll offset."
-  (setf *minibuffer-filtered-items*
-        (if (zerop (length *minibuffer-input*))
-            (copy-list *minibuffer-items*)
-            (remove-if-not (lambda (item)
-                             (fuzzy-match-p *minibuffer-input*
-                                            (minibuffer-item-display item)))
-                           *minibuffer-items*)))
-  ;; Clamp selected index
+When a non-empty query is present the matching candidates are scored and
+sorted by relevance (highest score first) so the best match floats to the
+top automatically.  Matched character positions are precomputed and stored in
+*minibuffer-match-positions* for the renderer to use for highlighting.
+Clamps *minibuffer-selected-index* to the new filtered list length and
+resets the scroll offset."
+  (let ((query *minibuffer-input*))
+    (if (zerop (length query))
+        ;; No query — show all items in their original order, no highlights.
+        (setf *minibuffer-filtered-items* (copy-list *minibuffer-items*)
+              *minibuffer-match-positions* (make-list (length *minibuffer-items*)
+                                                      :initial-element nil))
+        ;; Query present — filter, score, sort, record positions.
+        (let* ((matched (remove-if-not
+                         (lambda (item)
+                           (fuzzy-match-p query (minibuffer-item-display item)))
+                         *minibuffer-items*))
+               ;; Pair each item with its relevance score.
+               (scored (mapcar (lambda (item)
+                                 (cons (or (fuzzy-score query
+                                                        (minibuffer-item-display item))
+                                           0)
+                                       item))
+                               matched))
+               ;; Sort descending by score (stable-sort preserves recency order
+               ;; for items that score equally).
+               (sorted (stable-sort scored #'> :key #'car))
+               (sorted-items (mapcar #'cdr sorted)))
+          (setf *minibuffer-filtered-items* sorted-items
+                *minibuffer-match-positions*
+                (mapcar (lambda (item)
+                          (fuzzy-match-positions query (minibuffer-item-display item)))
+                        sorted-items)))))
+  ;; Clamp selected index to valid range.
   (setf *minibuffer-selected-index*
         (max 0 (min *minibuffer-selected-index*
                     (1- (max 1 (length *minibuffer-filtered-items*))))))
-  ;; Reset scroll to keep selection visible
+  ;; Reset scroll and ensure the selection is visible.
   (setf *minibuffer-scroll-offset* 0)
   (minibuffer-ensure-visible))
 

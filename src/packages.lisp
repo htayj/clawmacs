@@ -284,9 +284,16 @@
    #:*minibuffer-filtered-items*
    #:*minibuffer-selected-index*
    #:*minibuffer-scroll-offset*
+   #:*minibuffer-match-positions*
    #:*minibuffer-callback*
    #:*minibuffer-max-height*
    #:*model-selection-history*
+   #:split-query-tokens
+   #:fuzzy-token-match-p
+   #:fuzzy-token-positions
+   #:fuzzy-match-positions
+   #:fuzzy-token-score
+   #:fuzzy-score
    #:fuzzy-match-p
    #:minibuffer-item-display
    #:minibuffer-activate
@@ -371,6 +378,11 @@
    #:find-prefix-handler
    #:process-prefix-command
    #:shell-prefix-handler
+
+   ;; Debug mode
+   #:*debug-mode*
+   #:debug-log
+   #:toggle-debug-mode-command
 
    ;; Main
    #:clawmacs-main
