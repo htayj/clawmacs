@@ -122,7 +122,7 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
   (:layouts
    (default
     (clim:vertically ()
-      main-pane
+      (:fill main-pane)
       modeline-pane
       minibuffer-pane))))
 
@@ -132,14 +132,20 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
 
 (defun ensure-char-metrics (frame pane)
   "Compute character width and height lazily on first display call.
-The pane's medium must be connected to the backend (CLX) at this point."
+Called from inside display functions where the pane's medium is ready."
   (when (zerop (frame-char-width frame))
-    (let* ((ts (clim:make-text-style :fix :roman :normal))
-           (medium (clim:sheet-medium pane)))
-      (multiple-value-bind (width height)
-          (clim:text-size medium "M" :text-style ts)
-        (setf (frame-char-width frame) width)
-        (setf (frame-char-height frame) height)))))
+    (handler-case
+        (let ((ts (clim:make-text-style :fix :roman :normal)))
+          ;; Use a 10-char string to get accurate advance width per character
+          ;; (single-char text-size may include bearing/rounding artifacts)
+          (multiple-value-bind (width10 height)
+              (clim:text-size pane "MMMMMMMMMM" :text-style ts)
+            (setf (frame-char-width frame) (/ width10 10))
+            (setf (frame-char-height frame) height)))
+      (error ()
+        ;; Medium not ready yet — use defaults, will retry next call
+        (setf (frame-char-width frame) 7
+              (frame-char-height frame) 14)))))
 
 (defun draw-text-at (pane row col text fg-ink bg-ink text-style char-w char-h)
   "Draw TEXT at character grid position (ROW, COL) in PANE.
@@ -165,13 +171,8 @@ Fills a background rectangle first, then draws the text on top."
 
 (defun clear-pane-with-ink (pane ink)
   "Fill the entire PANE with a solid color INK."
-  (let ((region (clim:sheet-region pane)))
-    (clim:draw-rectangle* pane
-                          (clim:bounding-rectangle-min-x region)
-                          (clim:bounding-rectangle-min-y region)
-                          (clim:bounding-rectangle-max-x region)
-                          (clim:bounding-rectangle-max-y region)
-                          :ink ink)))
+  (multiple-value-bind (width height) (pane-pixel-size pane)
+    (clim:draw-rectangle* pane 0 0 width height :ink ink)))
 
 (defun fill-row (pane row cols bg-ink char-w char-h)
   "Fill an entire row with background color."
@@ -180,11 +181,24 @@ Fills a background rectangle first, then draws the text on top."
                         (* cols char-w) (* (1+ row) char-h)
                         :ink bg-ink))
 
+(defun pane-pixel-size (pane)
+  "Return (values width height) — the allocated pixel size of PANE.
+Clamps sheet-region (which grows with output records) to the frame's
+top-level sheet dimensions to prevent exponential growth."
+  (let* ((frame (clim:pane-frame pane))
+         (top-sheet (clim:frame-top-level-sheet frame))
+         (top-region (clim:sheet-region top-sheet))
+         (max-w (floor (clim:bounding-rectangle-width top-region)))
+         (max-h (floor (clim:bounding-rectangle-height top-region)))
+         (region (clim:sheet-region pane)))
+    (values (min max-w (floor (clim:bounding-rectangle-width region)))
+            (min max-h (floor (clim:bounding-rectangle-height region))))))
+
 (defun pane-grid-dimensions (pane char-w char-h)
   "Return (values cols rows) — the character grid size of PANE."
-  (let ((region (clim:sheet-region pane)))
-    (values (max 1 (floor (clim:bounding-rectangle-width region) char-w))
-            (max 1 (floor (clim:bounding-rectangle-height region) char-h)))))
+  (multiple-value-bind (width height) (pane-pixel-size pane)
+    (values (max 1 (floor width char-w))
+            (max 1 (floor height char-h)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Modeline Display
@@ -221,7 +235,10 @@ Fills a background rectangle first, then draws the text on top."
          (char-h (frame-char-height frame)))
     (when (zerop char-w) (return-from display-main-pane))
     (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
-      (let ((modeline-pane (clim:find-pane-named frame 'modeline-pane)))
+      ;; Reserve bottom rows for minibuffer candidates when active
+      (let* ((mb-height (if *minibuffer-active* (1- (minibuffer-current-height)) 0))
+             (main-rows (max 1 (- rows mb-height)))
+             (modeline-pane (clim:find-pane-named frame 'modeline-pane)))
         (cond
           (*buffer-selector-active*
            (mcclim-render-buffer-selector pane modeline-pane rows cols
@@ -230,8 +247,12 @@ Fills a background rectangle first, then draws the text on top."
            (mcclim-render-model-selector pane modeline-pane rows cols
                                          char-w char-h frame))
           (t
-           (mcclim-render-buffer pane (current-buffer) rows cols
-                                 char-w char-h)))))))
+           (mcclim-render-buffer pane (current-buffer) main-rows cols
+                                 char-w char-h)))
+        ;; Draw minibuffer candidates in bottom rows of main pane
+        (when (and *minibuffer-active* (plusp mb-height))
+          (mcclim-render-minibuffer-candidates pane main-rows cols
+                                               char-w char-h))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Rendering
@@ -727,6 +748,25 @@ Returns the number of visual rows consumed."
                     (draw-text-at pane row col (string ch)
                                   base-fg base-bg base-ts char-w char-h))))))
 
+(defun mcclim-render-minibuffer-candidates (pane start-row cols char-w char-h)
+  "Render minibuffer candidate list in the main pane starting at START-ROW."
+  (let* ((items *minibuffer-filtered-items*)
+         (positions *minibuffer-match-positions*)
+         (selected *minibuffer-selected-index*)
+         (scroll *minibuffer-scroll-offset*)
+         (total (length items))
+         (max-rows (1- (minibuffer-current-height))))
+    (loop :for row-idx :from 0 :below max-rows
+          :for item-idx := (+ scroll row-idx)
+          :while (< item-idx total)
+          :for item := (nth item-idx items)
+          :for row := (+ start-row row-idx)
+          :for display := (minibuffer-item-display item)
+          :for match-pos := (nth item-idx positions)
+          :for selected-p := (= item-idx selected)
+          :do (mcclim-render-candidate-row pane row display match-pos
+                                           selected-p cols char-w char-h))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Key Normalization (McCLIM-specific)
 ;;; --------------------------------------------------------------------------
@@ -807,12 +847,25 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
       ;; Normal key
       (t key))))
 
+
 ;;; --------------------------------------------------------------------------
 ;;; Redisplay Helper
 ;;; --------------------------------------------------------------------------
 
+(defun update-pane-sizes (frame)
+  "Resize modeline pane to exactly 1 row based on char metrics."
+  (let ((char-h (frame-char-height frame)))
+    (when (plusp char-h)
+      (let ((ml-pane (clim:find-pane-named frame 'modeline-pane)))
+        (when ml-pane
+          (clim:change-space-requirements ml-pane
+                                          :height char-h
+                                          :min-height char-h
+                                          :max-height char-h))))))
+
 (defun redisplay-all (frame)
-  "Force redisplay of all three panes."
+  "Resize panes and force redisplay of all three panes."
+  (update-pane-sizes frame)
   (dolist (pane-name '(main-pane modeline-pane minibuffer-pane))
     (let ((pane (clim:find-pane-named frame pane-name)))
       (when pane
@@ -822,64 +875,56 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
 ;;; Custom Top-Level Event Loop
 ;;; --------------------------------------------------------------------------
 
-(defmethod clim:default-frame-top-level ((frame clawmacs-gui) &key)
+(defmethod clim:default-frame-top-level ((frame clawmacs-gui) &key &allow-other-keys)
   "Custom event loop for clawmacs — mirrors the croatoan event loop structure.
 Blocking reads when idle, polling with sleep when streaming.
 Called by the standard run-frame-top-level AFTER the frame is adopted/enabled
 and all mediums are connected to the X11 backend."
-  ;; Initialize char metrics now that mediums are fully realized
-  (let ((main-pane (clim:find-pane-named frame 'main-pane)))
-    (ensure-char-metrics frame main-pane))
-  ;; Set initial scroll page size
-  (let* ((main-pane (clim:find-pane-named frame 'main-pane))
-         (char-w (frame-char-width frame))
-         (char-h (frame-char-height frame)))
-    (when (and (plusp char-w) (plusp char-h))
-      (multiple-value-bind (cols rows) (pane-grid-dimensions main-pane char-w char-h)
-        (declare (ignore cols))
-        (setf *scroll-page-size* (max 1 (- rows 3))))))
-  ;; Initial render
-  (redisplay-all frame)
+  ;; Char metrics are initialized lazily by ensure-char-metrics inside
+  ;; the display functions when the medium is ready.
+  ;; Let CLIM handle initial display via its own redisplay machinery,
+  ;; then force a redisplay once we enter the event loop.
   ;; Main event loop
   (loop :until (frame-quit-flag frame)
         :for buf := (current-buffer)
         :for streaming := (buffer-pending-stream buf)
         :do (let ((event (if streaming
-                             (clim:event-read-no-hang
-                              (clim:frame-top-level-sheet frame))
-                             (clim:event-read
-                              (clim:frame-top-level-sheet frame)))))
-              (cond
-                ;; Timeout path: poll streaming, redisplay, sleep briefly
-                ((null event)
-                 (when streaming
-                   (update-streaming-response buf)
-                   (redisplay-all frame))
-                 (sleep 0.1))
-                ;; Key press event
-                ((typep event 'clim:key-press-event)
-                 (let* ((key (mcclim-normalize-key event)))
-                   (when key
-                     (let ((result (handle-key-event buf key)))
-                       (when (eq result :quit)
-                         (setf (frame-quit-flag frame) t)))))
-                 ;; Poll streaming if active after key handling
-                 (let ((cur (current-buffer)))
-                   (when (buffer-pending-stream cur)
-                     (update-streaming-response cur)))
-                 ;; Update scroll page size (window may have resized)
-                 (let* ((main-pane (clim:find-pane-named frame 'main-pane))
-                        (char-w (frame-char-width frame))
-                        (char-h (frame-char-height frame)))
-                   (when (and (plusp char-w) (plusp char-h))
-                     (multiple-value-bind (cols rows)
-                         (pane-grid-dimensions main-pane char-w char-h)
-                       (declare (ignore cols))
-                       (setf *scroll-page-size* (max 1 (- rows 3))))))
-                 (redisplay-all frame))
-                ;; Other events (pointer, etc.) — handle normally
-                (t
-                 (clim:handle-event (clim:event-sheet event) event))))))
+                              (clim:event-read-no-hang
+                               (clim:frame-top-level-sheet frame))
+                              (clim:event-read
+                               (clim:frame-top-level-sheet frame)))))
+               (cond
+                 ;; Timeout path: poll streaming, redisplay, sleep briefly
+                 ((null event)
+                  (when streaming
+                    (update-streaming-response buf)
+                    (redisplay-all frame))
+                  (sleep 0.1))
+                 ;; Key press event
+                 ((typep event 'clim:key-press-event)
+                  (let* ((key (mcclim-normalize-key event)))
+                    (when key
+                      (let ((result (handle-key-event buf key)))
+                        (when (eq result :quit)
+                          (setf (frame-quit-flag frame) t)))))
+                  ;; Poll streaming if active after key handling
+                  (let ((cur (current-buffer)))
+                    (when (buffer-pending-stream cur)
+                      (update-streaming-response cur)))
+                  ;; Update scroll page size (window may have resized)
+                  (let* ((main-pane (clim:find-pane-named frame 'main-pane))
+                         (char-w (frame-char-width frame))
+                         (char-h (frame-char-height frame)))
+                    (when (and (plusp char-w) (plusp char-h))
+                      (multiple-value-bind (cols rows)
+                          (pane-grid-dimensions main-pane char-w char-h)
+                        (declare (ignore cols))
+                        (setf *scroll-page-size* (max 1 (- rows 3))))))
+                  (redisplay-all frame))
+                 ;; Other events (pointer, exposure, etc.) — let CLIM handle
+                 ;; (CLIM replays output records on exposure automatically)
+                 (t
+                  (clim:handle-event (clim:event-sheet event) event))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Backend Class and Entry Point
