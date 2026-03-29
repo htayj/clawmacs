@@ -114,17 +114,13 @@
     ;; C-c C-d = toggle API debug mode (echo requests/responses in chat)
     ;; C-d = ASCII 4 = #\Eot (end of transmission)
     (keymap-bind km (list :ctrl-c (code-char 4)) 'toggle-debug-mode-command)
-    ;; C-c f = describe function (introspection / help system)
-    (keymap-bind km '(:ctrl-c #\f) 'describe-function-command)
-    ;; C-c v = describe variable (introspection / help system)
-    (keymap-bind km '(:ctrl-c #\v) 'describe-variable-command)
-    ;; C-c T (capital T) = describe type (introspection / help system)
-    (keymap-bind km '(:ctrl-c #\T) 'describe-type-command)
-    ;; C-c F (capital F) = customize face (interactive face editor)
-    (keymap-bind km '(:ctrl-c #\F) 'customize-face-command)
-    ;; ----- C-h prefix: help commands -----
+    ;; ----- C-h prefix: help & introspection commands -----
     ;; C-h is the help prefix key (Emacs standard).
-    (keymap-bind km '(:ctrl-h #\b) 'describe-bindings-command) ; C-h b = describe keybindings
+    (keymap-bind km '(:ctrl-h #\b) 'describe-bindings-command)  ; C-h b = describe keybindings
+    (keymap-bind km '(:ctrl-h #\f) 'describe-function-command)  ; C-h f = describe function
+    (keymap-bind km '(:ctrl-h #\v) 'describe-variable-command)  ; C-h v = describe variable
+    (keymap-bind km '(:ctrl-h #\T) 'describe-type-command)      ; C-h T = describe type
+    (keymap-bind km '(:ctrl-h #\F) 'customize-face-command)     ; C-h F = customize face
     ;; ----- C-x prefix: global / cross-buffer commands -----
     ;; C-x is reserved for global commands that operate across buffers
     ;; or affect the application as a whole (buffer management, I/O, etc.).

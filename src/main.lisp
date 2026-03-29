@@ -1142,7 +1142,7 @@ through C-x prefix commands for buffer management."
   "Open a face selector in the minibuffer, then customize the selected face.
 Lists all faces from all buffer face registries. When a face is selected,
 opens a customize buffer where face attributes can be edited interactively.
-Bound to C-c F."
+Bound to C-h F."
   (buffer)
   (declare (ignore buffer))
   (let ((faces (collect-all-faces)))
@@ -1303,7 +1303,7 @@ Returns the new buffer."
 (defcommand describe-function-command (:permission :user-only)
   "Open a minibuffer selector listing all functions.
 On selection, displays detailed function description in a help buffer.
-Bound to C-c f."
+Bound to C-h f."
   (buffer)
   (declare (ignore buffer))
   (let* ((fn-list (list-functions))
@@ -1432,7 +1432,7 @@ and docstring."
 (defcommand describe-variable-command (:permission :user-only)
   "Open a minibuffer selector listing all exported variables.
 On selection, displays detailed variable description in a help buffer.
-Bound to C-c v."
+Bound to C-h v."
   (buffer)
   (declare (ignore buffer))
   (let* ((var-list (list-variables))
@@ -1656,7 +1656,7 @@ Useful for finding types that still need extended documentation."
 (defcommand describe-type-command (:permission :user-only)
   "Open a minibuffer selector listing all defined types.
 On selection, displays detailed type description in a help buffer.
-Bound to C-c t (was changed from toggle-tool-results)."
+Bound to C-h T."
   (buffer)
   (declare (ignore buffer))
   (let* ((type-list (list-types))

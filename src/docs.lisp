@@ -1665,7 +1665,7 @@ documentation in *extended-docs*."
 
 (defdoc describe-function-command
   :category "help"
-  :usage "Bound to C-c f. Opens minibuffer listing all functions."
+  :usage "Bound to C-h f. Opens minibuffer listing all functions."
   :returns "nil"
   :side-effects "On selection, creates/switches to a help buffer with the function description."
   :see-also (describe-function-to-string list-functions make-help-buffer))
@@ -1696,7 +1696,7 @@ documentation in *extended-docs*."
 
 (defdoc describe-variable-command
   :category "help"
-  :usage "Bound to C-c v. Opens minibuffer listing all variables."
+  :usage "Bound to C-h v. Opens minibuffer listing all variables."
   :returns "nil"
   :side-effects "On selection, creates/switches to a help buffer with the variable description."
   :see-also (describe-variable-to-string list-variables make-help-buffer))
@@ -1746,7 +1746,7 @@ documentation in *extended-docs*."
 
 (defdoc describe-type-command
   :category "help"
-  :usage "Bound to C-c T. Opens minibuffer listing all types."
+  :usage "Bound to C-h T. Opens minibuffer listing all types."
   :returns "nil"
   :side-effects "On selection, creates/switches to a help buffer with the type description."
   :see-also (describe-type-to-string list-types make-help-buffer))
@@ -2246,7 +2246,7 @@ documentation in *extended-docs*."
 
 (defdoc customize-face-command
   :category "customize"
-  :usage "Bound to C-c F. Opens minibuffer face selector → customize buffer."
+  :usage "Bound to C-h F. Opens minibuffer face selector → customize buffer."
   :returns "nil"
   :side-effects "Activates minibuffer with face candidates. On selection, creates customize buffer."
   :see-also (collect-all-faces make-customize-face-buffer handle-customize-key))
