@@ -24,7 +24,7 @@ Shows text parts and tool call summaries. Stores raw-content for round-trip."
                        (when (plusp (length text-parts))
                          (write-char #\Newline s))
                        (write-string (format-tool-call-display tu) s))))
-          (agent-msg (buffer-insert-agent-message buf display)))
+          (agent-msg (buffer-insert-agent-message buf (string-trim '(#\Space #\Tab #\Newline #\Return) display))))
     (setf (message-raw-content agent-msg) canonical-content)
     (setf (message-face-set agent-msg)
           (gethash agent-kw (buffer-face-registry buf)))
@@ -245,7 +245,7 @@ Returns T if still streaming, NIL if done."
                                 (concatenate 'string completed in-progress-text)
                                 completed)))))
           (when (plusp (length all-text))
-            (set-message-text msg all-text))))
+            (set-message-text msg (string-trim '(#\Space #\Tab #\Newline #\Return) all-text)))))
       (cond
         ;; Error during streaming
         (err
@@ -272,7 +272,7 @@ Returns T if still streaming, NIL if done."
                              (dolist (tu tool-uses)
                                (write-char #\Newline s)
                                (write-string (format-tool-call-display tu) s)))))
-              (set-message-text msg display)
+              (set-message-text msg (string-trim '(#\Space #\Tab #\Newline #\Return) display))
               (setf (message-raw-content msg) canonical-content))
             ;; Debug: echo the completed response
             (let ((resp-json (api-json-encode (coerce canonical-content 'vector))))
