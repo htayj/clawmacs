@@ -11,6 +11,8 @@ Anyone who has used Emacs before knows the benefit of a tight feedback loop. Wri
 
 Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment with full access to the running Lisp image. The agent can evaluate code, read and write files, execute shell commands, and inspect the very editor it's running inside --- all with your approval.
 
+[[file:docs/img/screenshot.png]]
+
 * Features
 
 ** Multi-Provider LLM Support
