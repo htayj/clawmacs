@@ -408,6 +408,12 @@
    #:*inhibit-user-init*
    #:load-user-init-file
 
+   ;; UI Backend Protocol
+   #:ui-backend
+   #:*ui-backend*
+   #:backend-run
+   #:croatoan-backend
+
    ;; Main
    #:clawmacs-main
    #:send-to-agent-with-context

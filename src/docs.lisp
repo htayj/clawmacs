@@ -2116,6 +2116,35 @@ documentation in *extended-docs*."
   :see-also (*user-init-file* *user-init-directory* *inhibit-user-init* clawmacs-main))
 
 ;;; ==========================================================================
+;;; Category: ui-backend — Pluggable UI backend protocol
+;;; ==========================================================================
+
+(defdoc ui-backend
+  :category "ui-backend"
+  :usage "(defclass my-backend (clawmacs:ui-backend) ()) — Subclass to create a custom UI backend."
+  :returns "CLOS class — Base class for all UI backends."
+  :see-also (backend-run *ui-backend* croatoan-backend))
+
+(defdoc *ui-backend*
+  :category "ui-backend"
+  :usage "(setf clawmacs:*ui-backend* (make-instance 'my-backend)) — Set in ~/.clawmacs.d/init.lisp before startup."
+  :see-also (ui-backend backend-run croatoan-backend)
+  :side-effects "When nil at startup, clawmacs-main sets it to a croatoan-backend instance.")
+
+(defdoc backend-run
+  :category "ui-backend"
+  :usage "(backend-run BACKEND:ui-backend INITIAL-BUFFER:buffer) — Called by clawmacs-main to start the UI."
+  :returns "nil — Returns when the user quits."
+  :side-effects "Takes over the display. Sets *scroll-page-size*. Calls handle-key-event and update-streaming-response."
+  :see-also (ui-backend *ui-backend* croatoan-backend clawmacs-main))
+
+(defdoc croatoan-backend
+  :category "ui-backend"
+  :usage "(make-instance 'croatoan-backend) — The default terminal backend using ncurses via croatoan."
+  :returns "CLOS instance — Three-window terminal layout (main, modeline, minibuffer)."
+  :see-also (ui-backend backend-run *ui-backend*))
+
+;;; ==========================================================================
 ;;; Category: main — Application entry point
 ;;; ==========================================================================
 
@@ -2130,8 +2159,8 @@ documentation in *extended-docs*."
   :category "main"
   :usage "(clawmacs-main) — Called once to start the application."
   :returns "nil — Returns when the user quits (C-x C-c)."
-  :side-effects "Initializes croatoan, creates windows, runs the event loop. Full terminal takeover."
-  :see-also (current-buffer *default-keymap* init-tools))
+  :side-effects "Initializes state, loads user init, then delegates to the UI backend via backend-run."
+  :see-also (current-buffer *default-keymap* init-tools *ui-backend* backend-run))
 
 ;;; ==========================================================================
 ;;; Category: customize — Interactive face customization

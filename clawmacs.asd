@@ -13,7 +13,9 @@
                              (:file "keymap")
                              (:file "llm")
                              (:file "tools")
-                             (:file "render")
+                             (:file "ui-protocol")
+                             (:file "render-core")
+                             (:file "croatoan-backend")
                              (:file "main")
                              (:file "docs")))))
 

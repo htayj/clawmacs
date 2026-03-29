@@ -1,243 +1,20 @@
 (in-package :clawmacs)
 
 ;;; --------------------------------------------------------------------------
-;;; Global Face Registry
+;;; Croatoan Terminal Backend
 ;;; --------------------------------------------------------------------------
 
-(defvar *global-face-registry* (make-hash-table :test #'eq)
-  "Hash table mapping keyword names to face objects for theme-level faces.
-These are faces not tied to any specific buffer or sender, such as modeline,
-system messages, minibuffer, approval prompts, and selector overlays.")
-
-(defun global-face (name)
-  "Look up a face by keyword NAME in the global face registry.
-Returns the face object, or nil if not found."
-  (gethash name *global-face-registry*))
-
-(defun (setf global-face) (face name)
-  "Store FACE under keyword NAME in the global face registry."
-  (setf (gethash name *global-face-registry*) face))
-
-(defun init-global-faces ()
-  "Populate the global face registry with all theme-level faces.
-Call once at startup. These faces are customizable via customize-face."
-  (let ((r *global-face-registry*))
-    (clrhash r)
-    ;; Modeline
-    (setf (gethash :modeline r)
-          (make-instance 'face :name :modeline
-            :background (make-color-spec :cga 7)
-            :foreground (make-color-spec :cga 0)
-            :bold-p t :underline-p nil :reverse-p nil))
-    ;; System messages (e.g. shell prefix output, notifications)
-    (setf (gethash :system r)
-          (make-instance 'face :name :system
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 6)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    ;; Debug messages — API request/response log when *debug-mode* is t.
-    ;; Bright magenta distinguishes debug output from regular system messages.
-    (setf (gethash :debug r)
-          (make-instance 'face :name :debug
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 13)   ; bright magenta
-            :bold-p nil :underline-p nil :reverse-p nil))
-    ;; Minibuffer faces
-    (setf (gethash :minibuffer-prompt r)
-          (make-instance 'face :name :minibuffer-prompt
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 15)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    (setf (gethash :minibuffer-cursor r)
-          (make-instance 'face :name :minibuffer-cursor
-            :background (make-color-spec :cga 15)
-            :foreground (make-color-spec :cga 0)
-            :bold-p t :underline-p nil :reverse-p nil))
-    (setf (gethash :minibuffer-candidate r)
-          (make-instance 'face :name :minibuffer-candidate
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 7)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    (setf (gethash :minibuffer-selected r)
-          (make-instance 'face :name :minibuffer-selected
-            :background (make-color-spec :cga 15)
-            :foreground (make-color-spec :cga 0)
-            :bold-p t :underline-p nil :reverse-p nil))
-    ;; Fuzzy-match highlight faces — matched characters are rendered in bright
-    ;; yellow so they stand out against both dark and light backgrounds.
-    (setf (gethash :minibuffer-match r)
-          (make-instance 'face :name :minibuffer-match
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 11)   ; bright yellow on black
-            :bold-p t :underline-p nil :reverse-p nil))
-    (setf (gethash :minibuffer-selected-match r)
-          (make-instance 'face :name :minibuffer-selected-match
-            :background (make-color-spec :cga 15)
-            :foreground (make-color-spec :cga 3)    ; dark yellow on white
-            :bold-p t :underline-p nil :reverse-p nil))
-    ;; Selector overlay faces (buffer selector, model selector)
-    (setf (gethash :selector-title r)
-          (make-instance 'face :name :selector-title
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 14)
-            :bold-p t :underline-p nil :reverse-p nil))
-    (setf (gethash :selector-separator r)
-          (make-instance 'face :name :selector-separator
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 7)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    (setf (gethash :selector-header r)
-          (make-instance 'face :name :selector-header
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 11)
-            :bold-p t :underline-p nil :reverse-p nil))
-    (setf (gethash :selector-entry r)
-          (make-instance 'face :name :selector-entry
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 7)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    (setf (gethash :selector-selected r)
-          (make-instance 'face :name :selector-selected
-            :background (make-color-spec :cga 6)
-            :foreground (make-color-spec :cga 0)
-            :bold-p t :underline-p nil :reverse-p nil))
-    (setf (gethash :selector-footer r)
-          (make-instance 'face :name :selector-footer
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 2)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    (setf (gethash :selector-scroll r)
-          (make-instance 'face :name :selector-scroll
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 11)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    ;; Approval prompt faces
-    (setf (gethash :approval-header r)
-          (make-instance 'face :name :approval-header
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 11)
-            :bold-p t :underline-p nil :reverse-p nil))
-    (setf (gethash :approval-code r)
-          (make-instance 'face :name :approval-code
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 14)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    (setf (gethash :approval-text r)
-          (make-instance 'face :name :approval-text
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 15)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    (setf (gethash :approval-diff-add r)
-          (make-instance 'face :name :approval-diff-add
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 2)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    (setf (gethash :approval-diff-remove r)
-          (make-instance 'face :name :approval-diff-remove
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 1)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    (setf (gethash :approval-options r)
-          (make-instance 'face :name :approval-options
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 2)
-            :bold-p t :underline-p nil :reverse-p nil))
-    ;; Default text face — fallback for messages without a face set.
-    ;; This should NEVER be the modeline face; it should be a sensible
-    ;; text-on-dark-background face for generic content.
-    (setf (gethash :default-text r)
-          (make-instance 'face :name :default-text
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 7)
-            :bold-p nil :underline-p nil :reverse-p nil))
-    r))
-
-(defun collect-global-faces ()
-  "Collect all faces from the global face registry.
-Returns a list of plists with :face, :owner, :name, and :label keys."
-  (let ((result nil))
-    (maphash (lambda (name face)
-               (push (list :face face
-                           :owner :global
-                           :name name
-                           :label (format nil "global:~(~A~)" name))
-                     result))
-             *global-face-registry*)
-    (sort result #'string< :key (lambda (p) (getf p :label)))))
-
-;;; --------------------------------------------------------------------------
-;;; Default Face Definitions
-;;; --------------------------------------------------------------------------
-
-(defun make-default-user-face-set ()
-  "Create the default face set for user messages.
-Background: CGA blue (#4), foreground: white.
-Spec calls for dark-gray (#8) but 8-color terminals map that to black,
-making user and agent messages indistinguishable. Blue provides clear
-visual distinction until 256-color detection is added."
-  (make-face-set
-   :user
-   (list (make-instance 'face
-           :name :default
-           :background (make-color-spec :cga 4)
-           :foreground (make-color-spec :cga 7)
-           :bold-p nil
-           :underline-p nil
-           :reverse-p nil))))
-
-(defun make-default-agent-face-set (agent-keyword)
-  "Create the default face set for an agent.
-Background: black (#0), foreground: white."
-  (make-face-set
-   agent-keyword
-   (list (make-instance 'face
-           :name :default
-           :background (make-color-spec :cga 0)
-           :foreground (make-color-spec :cga 15)
-           :bold-p nil
-           :underline-p nil
-           :reverse-p nil))))
-
-(defun make-default-system-face-set ()
-  "Create the default face set for system messages.
-Uses the global :system face if available, otherwise cyan on black."
-  (let ((sys-face (or (global-face :system)
-                      (make-instance 'face :name :default
-                        :background (make-color-spec :cga 0)
-                        :foreground (make-color-spec :cga 6)
-                        :bold-p nil :underline-p nil :reverse-p nil))))
-    (make-face-set
-     :system
-     (list (make-instance 'face
-             :name :default
-             :parent sys-face
-             :background nil :foreground nil
-             :bold-p nil :underline-p nil :reverse-p nil)))))
-
-(defun make-modeline-face ()
-  "Return the modeline face from the global registry, or create a default.
-Prefers the stored global face for customizability."
-  (or (global-face :modeline)
-      (make-instance 'face
-        :name :modeline
-        :background (make-color-spec :cga 7)
-        :foreground (make-color-spec :cga 0)
-        :bold-p t
-        :underline-p nil
-        :reverse-p nil)))
-
-(defun make-default-text-face ()
-  "Return the default text face from the global registry, or create a default.
-This is the fallback face for messages that lack a face set — white text on
-black background. This must NOT be the modeline face."
-  (or (global-face :default-text)
-      (make-instance 'face
-        :name :default-text
-        :background (make-color-spec :cga 0)
-        :foreground (make-color-spec :cga 7)
-        :bold-p nil
-        :underline-p nil
-        :reverse-p nil)))
+(defclass croatoan-backend (ui-backend)
+  ((screen :accessor backend-screen :initform nil
+           :documentation "The croatoan screen object.")
+   (main-win :accessor backend-main-win :initform nil
+             :documentation "Main window for chat history and input.")
+   (modeline-win :accessor backend-modeline-win :initform nil
+                 :documentation "Single-row modeline window.")
+   (minibuf-win :accessor backend-minibuf-win :initform nil
+                :documentation "Minibuffer window at bottom of screen."))
+  (:documentation "Default terminal UI backend using croatoan (ncurses).
+Three-window layout: main (chat), modeline (1 row), minibuffer (bottom)."))
 
 ;;; --------------------------------------------------------------------------
 ;;; Croatoan Color Helpers
@@ -289,39 +66,6 @@ Resolves the face and sets WINDOW's colors and attributes."
 ;;; Modeline Rendering
 ;;; --------------------------------------------------------------------------
 
-(defun resolve-modeline-provider-model (buf)
-  "Resolve the provider/model string for the modeline.
-Returns a string like \"anthropic/claude-haiku-4-5-20251001\" or \"??\" on error."
-  (handler-case
-      (multiple-value-bind (provider model)
-          (resolve-buffer-provider-and-model buf)
-        (format nil "~(~A~)/~A" provider model))
-    (error () "??")))
-
-(defun format-modeline (buf width &key (major-mode "chat") provider-model)
-  "Format the modeline string for BUF, fitting within WIDTH columns.
-MAJOR-MODE is displayed on the far left (e.g. \"chat\", \"buffer-selector\").
-PROVIDER-MODEL is the provider/model string (e.g. \"anthropic/claude-haiku-4-5\");
-when nil it is resolved from the buffer's agent defaults."
-  (let* ((pm (or provider-model (resolve-modeline-provider-model buf)))
-         (left (format nil " [~A] ~A | ~A | ~A | ~A"
-                       major-mode
-                       (buffer-name buf)
-                       (buffer-agent-name buf)
-                       pm
-                       (namestring (buffer-working-directory buf))))
-         (right (format nil "~A/~A | ~A "
-                        (buffer-token-count buf)
-                        (buffer-context-limit buf)
-                        (buffer-status buf)))
-         (padding (max 1 (- width (length left) (length right))))
-         (pad-str (make-string padding :initial-element #\Space))
-         (padded (concatenate 'string left pad-str right)))
-    (if (>= (length padded) width)
-        (subseq padded 0 width)
-        (let ((extra (- width (length padded))))
-          (concatenate 'string padded (make-string extra :initial-element #\Space))))))
-
 (defun render-modeline (buf modeline-window)
   "Render the modeline for BUF into MODELINE-WINDOW."
   (let* ((width (croatoan:width modeline-window))
@@ -335,32 +79,8 @@ when nil it is resolved from the buffer's agent defaults."
     (croatoan:refresh modeline-window)))
 
 ;;; --------------------------------------------------------------------------
-;;; Line Wrapping Helpers
-;;; --------------------------------------------------------------------------
-
-(defun wrapped-line-count (content display-width)
-  "Return the number of visual rows needed to display CONTENT within DISPLAY-WIDTH.
-An empty string takes 1 row. A string exactly DISPLAY-WIDTH chars takes 1 row."
-  (if (or (zerop (length content)) (<= (length content) display-width))
-      1
-      (ceiling (length content) display-width)))
-
-(defun message-visual-height (msg width)
-  "Return the total visual rows MSG needs at the given terminal WIDTH.
-Accounts for the sender prefix and line wrapping."
-  (let* ((prefix-len (length (message-sender-prefix msg)))
-         (display-width (max 1 (- width prefix-len))))
-    (loop :for line := (message-first-line msg) :then (line-next line)
-          :while line
-          :sum (wrapped-line-count (line-content line) display-width))))
-
-;;; --------------------------------------------------------------------------
 ;;; Message Rendering
 ;;; --------------------------------------------------------------------------
-
-(defun message-sender-prefix (msg)
-  "Return the display prefix for MSG's sender."
-  (format nil "~A> " (string-downcase (symbol-name (message-sender msg)))))
 
 (defun render-wrapped-row (window row col text width)
   "Write TEXT at (ROW, COL) in WINDOW, not exceeding WIDTH total columns.
@@ -448,22 +168,6 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Rendering
 ;;; --------------------------------------------------------------------------
-
-(defun calculate-input-height (buf terminal-height width)
-  "Calculate the visual height of the input area in rows.
-Minimum 3, maximum (floor terminal-height 3). Accounts for line wrapping.
-During approval prompts, allows up to 2/3 of terminal height."
-  (let* ((input (buffer-input-message buf))
-         (visual-height (message-visual-height input width))
-         (min-height 3)
-         (approval-active (buffer-approval-pending buf))
-         (max-height (if approval-active
-                         (floor (* terminal-height 2) 3)
-                         (floor terminal-height 3))))
-    (if approval-active
-        ;; During approval, give enough room for the full prompt
-        (max min-height (min (max 12 visual-height) max-height))
-        (max min-height (min visual-height max-height)))))
 
 (defun render-buffer (buf main-window modeline-window)
   "Render the entire buffer: history + input into MAIN-WINDOW, modeline.
@@ -597,33 +301,9 @@ Uses global faces: :approval-header, :approval-code, :approval-text,
                            "[a]pprove  [d]eny  [m]essage (deny with note to agent)")
       (incf row))))
 
-(defun split-string-by-newline (str)
-  "Split STR by newlines into a list of strings."
-  (loop :for start := 0 :then (1+ pos)
-        :for pos := (position #\Newline str :start start)
-        :collect (subseq str start (or pos (length str)))
-        :while pos))
-
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Selector Rendering
 ;;; --------------------------------------------------------------------------
-
-(defun format-selector-line (marker name agent status count-str width)
-  "Format a single line for the buffer selector with aligned columns.
-Adapts column widths to the terminal WIDTH."
-  (let* ((name-width (max 8 (min 30 (floor width 4))))
-         (agent-width (max 6 (min 15 (floor width 6))))
-         (status-width (max 6 (min 12 (floor width 8))))
-         (line (format nil "~A~VA  ~VA  ~VA  ~A"
-                       marker
-                       name-width name
-                       agent-width agent
-                       status-width status
-                       count-str)))
-    (if (<= (length line) width)
-        (concatenate 'string line
-                     (make-string (- width (length line)) :initial-element #\Space))
-        (subseq line 0 width))))
 
 (defun render-buffer-selector (main-window modeline-window)
   "Render the buffer selector overlay showing all agent sessions.
@@ -742,21 +422,6 @@ Uses global faces: :selector-title, :selector-separator, :selector-header,
 ;;; Model Selector Rendering
 ;;; --------------------------------------------------------------------------
 
-(defun format-model-selector-line (marker provider model width)
-  "Format a single line for the model selector with aligned columns.
-MARKER is a 2-char prefix (e.g. \"▸*\" or \"  \").
-Adapts column widths to the terminal WIDTH."
-  (let* ((provider-width (max 10 (min 20 (floor width 4))))
-         (model-width (max 15 (- width (length marker) provider-width 4)))
-         (line (format nil "~A~VA  ~A"
-                       marker
-                       provider-width provider
-                       model)))
-    (if (<= (length line) width)
-        (concatenate 'string line
-                     (make-string (- width (length line)) :initial-element #\Space))
-        (subseq line 0 width))))
-
 (defun render-model-selector (main-window modeline-window)
   "Render the model selector overlay showing available models across providers.
 Handles scrolling when there are more models than visible rows."
@@ -870,16 +535,6 @@ Handles scrolling when there are more models than visible rows."
 ;;; Minibuffer Rendering
 ;;; --------------------------------------------------------------------------
 
-(defun minibuffer-current-height ()
-  "Return the current height of the minibuffer in rows.
-When inactive: 1 row. When active: prompt line + number of filtered items,
-capped at *minibuffer-max-height*."
-  (if *minibuffer-active*
-      (let ((item-count (length *minibuffer-filtered-items*)))
-        (min *minibuffer-max-height*
-             (1+ item-count)))
-      1))
-
 (defun render-minibuffer (minibuffer-window)
   "Render the minibuffer. When inactive, shows a blank line.
 When active, shows the prompt with input and filtered completion candidates."
@@ -907,10 +562,10 @@ SELECTED-P is T for the currently selected candidate.  WIDTH is the column
 count of the window.
 
 Face mapping:
-  base chars in unselected item  → :minibuffer-candidate
-  matched chars in unselected    → :minibuffer-match        (bright yellow)
-  base chars in selected item    → :minibuffer-selected
-  matched chars in selected      → :minibuffer-selected-match"
+  base chars in unselected item  -> :minibuffer-candidate
+  matched chars in unselected    -> :minibuffer-match        (bright yellow)
+  base chars in selected item    -> :minibuffer-selected
+  matched chars in selected      -> :minibuffer-selected-match"
   (let* ((base-face  (if selected-p :minibuffer-selected      :minibuffer-candidate))
          (match-face (if selected-p :minibuffer-selected-match :minibuffer-match))
          ;; Build a hash set of matched positions for O(1) lookup.
@@ -948,14 +603,14 @@ Uses global faces: :minibuffer-prompt, :minibuffer-cursor,
          (input *minibuffer-input*)
          (prompt-line (concatenate 'string prompt-str input))
          (cursor-col (+ (length prompt-str) *minibuffer-point*)))
-    ;; ── Prompt line ──
+    ;; -- Prompt line --
     (apply-global-face window :minibuffer-prompt)
     (croatoan:move window 0 0)
     (croatoan:add-string window (make-string width :initial-element #\Space))
     (croatoan:move window 0 0)
     (croatoan:add-string window
                          (subseq prompt-line 0 (min (length prompt-line) width)))
-    ;; ── Block cursor ──
+    ;; -- Block cursor --
     (when (< cursor-col width)
       (let ((char-at-cursor (if (< *minibuffer-point* (length input))
                                 (char input *minibuffer-point*)
@@ -966,7 +621,7 @@ Uses global faces: :minibuffer-prompt, :minibuffer-cursor,
         (croatoan:add-string window (string char-at-cursor))
         ;; Restore prompt face
         (apply-global-face window :minibuffer-prompt)))
-    ;; ── Candidate list (with scroll offset and fuzzy-match highlighting) ──
+    ;; -- Candidate list (with scroll offset and fuzzy-match highlighting) --
     (let* ((items     *minibuffer-filtered-items*)
            (positions *minibuffer-match-positions*)
            (selected  *minibuffer-selected-index*)
@@ -983,3 +638,170 @@ Uses global faces: :minibuffer-prompt, :minibuffer-cursor,
             :for selected-p := (= item-idx selected)
             :do (render-minibuffer-candidate-row
                  window row display match-pos selected-p width)))))
+
+;;; --------------------------------------------------------------------------
+;;; Key Normalization (croatoan-specific)
+;;; --------------------------------------------------------------------------
+
+(defun normalize-key (event)
+  "Extract and normalize a key from a croatoan EVENT.
+Returns a character, a keyword (for special keys), a list (:alt <key>)
+for Meta combinations, a list (:ctrl-x <key>) for C-x prefix (global
+commands), or a list (:ctrl-c <key>) for C-c prefix (mode-specific commands)."
+  (let* ((raw-key (if (typep event 'croatoan:event)
+                      (croatoan:event-key event)
+                      event))
+         (ctrl-p (and (typep raw-key 'croatoan:key)
+                      (croatoan:key-ctrl raw-key)))
+         (alt-p (and (typep raw-key 'croatoan:key)
+                     (croatoan:key-alt raw-key)))
+         (key (if (typep raw-key 'croatoan:key)
+                   (croatoan:key-name raw-key)
+                   raw-key)))
+    (cond
+      ((and ctrl-p (eql key :backspace))
+       (list :ctrl :backspace))
+      ((and alt-p (eql key :backspace))
+       (list :alt :backspace))
+      ;; -- Pending prefix resolution (must come BEFORE raw prefix detection) --
+      ;; When a prefix key was already pressed, the NEXT keystroke completes the
+      ;; chord.  We must check these first, otherwise a raw C-c/C-x/ESC that
+      ;; arrives as the second key would start a *new* prefix instead of
+      ;; completing the chord (e.g. C-x C-c would never produce (:ctrl-x #\Etx)).
+      (*meta-pending*
+       (setf *meta-pending* nil)
+       (list :alt key))
+      (*cx-pending*
+       (setf *cx-pending* nil)
+       (list :ctrl-x key))
+      (*cc-pending*
+       (setf *cc-pending* nil)
+       (list :ctrl-c key))
+      (*ch-pending*
+       (setf *ch-pending* nil)
+       (list :ctrl-h key))
+      ;; -- Raw prefix detection (first key of a chord) --
+      ;; ESC received: set meta-pending, return nil (consume the ESC)
+      ((and (characterp key) (char= key #\Esc))
+       (setf *meta-pending* t)
+       nil)
+      ;; C-x received (ASCII 24): set cx-pending, return nil
+      ((and (characterp key) (char= key (code-char 24)))
+       (setf *cx-pending* t)
+       nil)
+      ;; C-c received (ASCII 3 = ETX): set cc-pending, return nil.
+      ;; C-c is the prefix for buffer-mode-specific commands.
+      ((and (characterp key) (char= key #\Etx))
+       (setf *cc-pending* t)
+       nil)
+      ;; C-h received (ASCII 8 = Backspace): set ch-pending, return nil.
+      ;; C-h is the help prefix (e.g. C-h b = describe bindings).
+      ((and (characterp key) (char= key (code-char 8)))
+       (setf *ch-pending* t)
+       nil)
+      ;; Normal key
+      (t key))))
+
+;;; --------------------------------------------------------------------------
+;;; Window Layout (croatoan-specific)
+;;; --------------------------------------------------------------------------
+
+(defun update-window-layout (scr main-win modeline-win minibuffer-win)
+  "Resize and reposition all windows based on screen dimensions and minibuffer state.
+Layout from top to bottom: main-win, modeline-win (1 row), minibuffer-win."
+  (let* ((h (croatoan:height scr))
+         (w (croatoan:width scr))
+         (mb-h (minibuffer-current-height))
+         (main-h (max 1 (- h 1 mb-h))))
+    (croatoan:resize main-win main-h w)
+    (croatoan:resize modeline-win 1 w)
+    (croatoan:move-window modeline-win main-h 0)
+    (croatoan:resize minibuffer-win mb-h w)
+    (croatoan:move-window minibuffer-win (1+ main-h) 0)
+    ;; Update scroll page size based on available history area
+    (setf *scroll-page-size* (max 1 (- main-h 3)))))
+
+;;; --------------------------------------------------------------------------
+;;; Backend Implementation
+;;; --------------------------------------------------------------------------
+
+(defmethod backend-run ((b croatoan-backend) initial-buffer)
+  "Run the croatoan terminal UI.
+Creates a three-window layout (main, modeline, minibuffer), then enters
+the event loop reading input and rendering until :QUIT is returned."
+  ;; :process-control-chars nil puts the terminal into raw mode (ncurses:raw)
+  ;; instead of cbreak mode, so C-c is delivered as a keystroke (ASCII 3)
+  ;; rather than generating SIGINT.  This is required for C-c to work as
+  ;; a prefix key (e.g. C-c t).  Quit is C-x C-c.
+  (croatoan:with-screen (scr :input-echoing nil
+                             :input-blocking t
+                             :cursor-visible t
+                             :enable-colors t
+                             :process-control-chars nil)
+    (setf (backend-screen b) scr)
+    (let* ((screen-height (croatoan:height scr))
+           (screen-width (croatoan:width scr))
+           ;; Three-window layout: main (chat), modeline (1 row), minibuffer (bottom)
+           (main-win (make-instance 'croatoan:window
+                       :height (- screen-height 2)
+                       :width screen-width
+                       :position '(0 0)))
+           (modeline-win (make-instance 'croatoan:window
+                           :height 1
+                           :width screen-width
+                           :position (list (- screen-height 2) 0)))
+           (minibuffer-win (make-instance 'croatoan:window
+                             :height 1
+                             :width screen-width
+                             :position (list (1- screen-height) 0))))
+      (setf (backend-main-win b) main-win
+            (backend-modeline-win b) modeline-win
+            (backend-minibuf-win b) minibuffer-win)
+      ;; Set scroll page size based on available history area
+      (setf *scroll-page-size* (max 1 (- (- screen-height 2) 3)))
+      ;; Flush stdscr's pending clear before our first render
+      (croatoan:refresh scr)
+      ;; Local render helper: updates window layout (for dynamic minibuffer height)
+      ;; then renders all three windows. Centralizes the render dispatch.
+      (labels ((do-render (buf)
+                 (update-window-layout scr main-win modeline-win minibuffer-win)
+                 (cond
+                   (*buffer-selector-active*
+                    (render-buffer-selector main-win modeline-win))
+                   (*model-selector-active*
+                    (render-model-selector main-win modeline-win))
+                   (t
+                    (render-buffer buf main-win modeline-win)))
+                 (render-minibuffer minibuffer-win)))
+        ;; Initial render
+        (do-render (current-buffer))
+        ;; Event loop: current-buffer may change between iterations.
+        ;; Short timeout when streaming is active for polling updates.
+        (loop :named main-loop
+            :for buf := (current-buffer)
+            :for streaming := (buffer-pending-stream buf)
+            :do (progn
+                  (setf (croatoan:input-blocking scr)
+                        (if streaming 100 t))
+                  (let ((event (croatoan:get-wide-event scr)))
+                    (cond
+                        ;; No event (timeout) -- poll streaming and re-render
+                        ((null event)
+                         (when streaming
+                           (update-streaming-response buf)
+                           (do-render buf)))
+                        ;; Window resize event -- re-layout and re-render
+                        ((and (typep event 'croatoan:event)
+                              (typep (croatoan:event-key event) 'croatoan:key)
+                              (eq :resize (croatoan:key-name
+                                           (croatoan:event-key event))))
+                         (do-render (current-buffer)))
+                        ;; Key event -- normalize, dispatch, then re-render
+                        (t
+                         (let ((result (handle-key-event buf (normalize-key event))))
+                           (when (eq result :quit)
+                             (return-from main-loop)))
+                         (let ((cur (current-buffer)))
+                           (when (buffer-pending-stream cur)
+                             (update-streaming-response cur))
+                           (do-render cur)))))))))))

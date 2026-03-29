@@ -1946,64 +1946,6 @@ Used for recency sorting in the minibuffer model selector.")
   "List of recently selected buffer names (most recent first).
 Used for recency sorting in the minibuffer buffer selector.")
 
-(defun normalize-key (event)
-  "Extract and normalize a key from a croatoan EVENT.
-Returns a character, a keyword (for special keys), a list (:alt <key>)
-for Meta combinations, a list (:ctrl-x <key>) for C-x prefix (global
-commands), or a list (:ctrl-c <key>) for C-c prefix (mode-specific commands)."
-  (let* ((raw-key (if (typep event 'croatoan:event)
-                      (croatoan:event-key event)
-                      event))
-         (ctrl-p (and (typep raw-key 'croatoan:key)
-                      (croatoan:key-ctrl raw-key)))
-         (alt-p (and (typep raw-key 'croatoan:key)
-                     (croatoan:key-alt raw-key)))
-         (key (if (typep raw-key 'croatoan:key)
-                   (croatoan:key-name raw-key)
-                   raw-key)))
-    (cond
-      ((and ctrl-p (eql key :backspace))
-       (list :ctrl :backspace))
-      ((and alt-p (eql key :backspace))
-       (list :alt :backspace))
-      ;; ── Pending prefix resolution (must come BEFORE raw prefix detection) ──
-      ;; When a prefix key was already pressed, the NEXT keystroke completes the
-      ;; chord.  We must check these first, otherwise a raw C-c/C-x/ESC that
-      ;; arrives as the second key would start a *new* prefix instead of
-      ;; completing the chord (e.g. C-x C-c would never produce (:ctrl-x #\Etx)).
-      (*meta-pending*
-       (setf *meta-pending* nil)
-       (list :alt key))
-      (*cx-pending*
-       (setf *cx-pending* nil)
-       (list :ctrl-x key))
-      (*cc-pending*
-       (setf *cc-pending* nil)
-       (list :ctrl-c key))
-      (*ch-pending*
-       (setf *ch-pending* nil)
-       (list :ctrl-h key))
-      ;; ── Raw prefix detection (first key of a chord) ──
-      ;; ESC received: set meta-pending, return nil (consume the ESC)
-      ((and (characterp key) (char= key #\Esc))
-       (setf *meta-pending* t)
-       nil)
-      ;; C-x received (ASCII 24): set cx-pending, return nil
-      ((and (characterp key) (char= key (code-char 24)))
-       (setf *cx-pending* t)
-       nil)
-      ;; C-c received (ASCII 3 = ETX): set cc-pending, return nil.
-      ;; C-c is the prefix for buffer-mode-specific commands.
-      ((and (characterp key) (char= key #\Etx))
-       (setf *cc-pending* t)
-       nil)
-      ;; C-h received (ASCII 8 = Backspace): set ch-pending, return nil.
-      ;; C-h is the help prefix (e.g. C-h b = describe bindings).
-      ((and (characterp key) (char= key (code-char 8)))
-       (setf *ch-pending* t)
-       nil)
-      ;; Normal key
-      (t key))))
 
 (defvar *deny-message-mode* nil
   "When non-nil, the input area is being used to type a denial message.")
@@ -2364,20 +2306,6 @@ Backspace (delete), C-a/C-e (move), C-u (kill all), and self-insert."
       ;; Everything else: ignore
       (t nil))))
 
-(defun update-window-layout (scr main-win modeline-win minibuffer-win)
-  "Resize and reposition all windows based on screen dimensions and minibuffer state.
-Layout from top to bottom: main-win, modeline-win (1 row), minibuffer-win."
-  (let* ((h (croatoan:height scr))
-         (w (croatoan:width scr))
-         (mb-h (minibuffer-current-height))
-         (main-h (max 1 (- h 1 mb-h))))
-    (croatoan:resize main-win main-h w)
-    (croatoan:resize modeline-win 1 w)
-    (croatoan:move-window modeline-win main-h 0)
-    (croatoan:resize minibuffer-win mb-h w)
-    (croatoan:move-window minibuffer-win (1+ main-h) 0)
-    ;; Update scroll page size based on available history area
-    (setf *scroll-page-size* (max 1 (- main-h 3)))))
 
 (defun handle-buffer-selector-key (key)
   "Handle a key event while the buffer selector is active.
@@ -2478,12 +2406,12 @@ On Enter, sets the buffer's provider and model overrides to the selected entry."
       ;; Everything else: ignore
       (t nil))))
 
-(defun handle-key-event (buf event)
-  "Dispatch a key event through the buffer's keymap.
+(defun handle-key-event (buf key)
+  "Dispatch a normalized key through the buffer's keymap.
 Returns :QUIT if the application should exit, or nil otherwise.
-Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
-  (let ((key (normalize-key event))
-        (*current-caller* :user))
+Handles approval mode, deny-message mode, and normal dispatch.
+KEY is already normalized by the backend before calling this."
+  (let ((*current-caller* :user))
     (when (null key)
       (return-from handle-key-event nil))
     (cond
@@ -2666,7 +2594,7 @@ Environment variables:
 
 (defun clawmacs-main (&key (session-name "clawmacs:session-01")
                            (agent-name *default-agent-name*))
-  "Entry point for clawmacs. Initializes the TUI and runs the event loop."
+  "Entry point for clawmacs. Initializes state and delegates to the UI backend."
   (parse-clawmacs-args)
   (init-default-keymap)
   (init-tools)
@@ -2676,106 +2604,40 @@ Environment variables:
     (setf *system-prompt*
           (string-trim '(#\Space #\Tab #\Newline #\Return)
                        (uiop:read-file-string *system-prompt-path*))))
+  ;; User init runs BEFORE backend — so (setf *ui-backend* ...) works
   (load-user-init-file)
-  ;; Boot files are loaded dynamically by build-system-prompt on each API call
-  ;; :process-control-chars nil puts the terminal into raw mode (ncurses:raw)
-  ;; instead of cbreak mode, so C-c is delivered as a keystroke (ASCII 3)
-  ;; rather than generating SIGINT.  This is required for C-c to work as
-  ;; a prefix key (e.g. C-c t).  Quit is C-x C-c.
-  (croatoan:with-screen (scr :input-echoing nil
-                             :input-blocking t
-                             :cursor-visible t
-                             :enable-colors t
-                             :process-control-chars nil)
-    (let* ((screen-height (croatoan:height scr))
-           (screen-width (croatoan:width scr))
-           ;; Three-window layout: main (chat), modeline (1 row), minibuffer (bottom)
-           (main-win (make-instance 'croatoan:window
-                       :height (- screen-height 2)
-                       :width screen-width
-                       :position '(0 0)))
-           (modeline-win (make-instance 'croatoan:window
-                           :height 1
-                           :width screen-width
-                           :position (list (- screen-height 2) 0)))
-           (minibuffer-win (make-instance 'croatoan:window
-                             :height 1
-                             :width screen-width
-                             :position (list (1- screen-height) 0)))
-            (buf (make-buffer session-name
-                              :agent-name agent-name
-                              :working-directory (truename "."))))
-      (init-face-registry buf)
-      (setf (buffer-keymap buf) *default-keymap*)
-      ;; Initialize buffer ring, selector state, and OAuth state
-      (setf *buffer-ring* nil *buffer-counter* 0)
-      (setf *buffer-selector-active* nil
-            *buffer-selector-index* 0
-            *buffer-selector-scroll* 0)
-      (setf *model-selector-active* nil
-            *model-selector-index* 0
-            *model-selector-scroll* 0
-            *model-selector-entries* nil)
-      ;; Initialize minibuffer state
-      (setf *minibuffer-active* nil
-            *minibuffer-prompt* ""
-            *minibuffer-input* ""
-            *minibuffer-point* 0
-            *minibuffer-items* nil
-            *minibuffer-filtered-items* nil
-            *minibuffer-selected-index* 0
-            *minibuffer-scroll-offset* 0
-            *minibuffer-callback* nil)
-      (setf *openai-oauth-pending* nil)
-      (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil *ch-pending* nil)
-      (add-buffer-to-ring buf)
-      ;; Set sandbox root to the working directory
-      (setf *sandbox-root* (truename "."))
-      ;; Set scroll page size based on available history area
-      (setf *scroll-page-size* (max 1 (- (- screen-height 2) 3)))
-      ;; Flush stdscr's pending clear before our first render
-      (croatoan:refresh scr)
-      ;; Local render helper: updates window layout (for dynamic minibuffer height)
-      ;; then renders all three windows. Centralizes the render dispatch.
-      (labels ((do-render (buf)
-                 (update-window-layout scr main-win modeline-win minibuffer-win)
-                 (cond
-                   (*buffer-selector-active*
-                    (render-buffer-selector main-win modeline-win))
-                   (*model-selector-active*
-                    (render-model-selector main-win modeline-win))
-                   (t
-                    (render-buffer buf main-win modeline-win)))
-                 (render-minibuffer minibuffer-win)))
-        ;; Initial render
-        (do-render (current-buffer))
-        ;; Event loop: current-buffer may change between iterations.
-        ;; Short timeout when streaming is active for polling updates.
-        (loop :named main-loop
-            :for buf := (current-buffer)
-            :for streaming := (buffer-pending-stream buf)
-            :do (progn
-                  (setf (croatoan:input-blocking scr)
-                        (if streaming 100 t))
-                  (let ((event (croatoan:get-wide-event scr)))
-                    (cond
-                        ;; No event (timeout) -- poll streaming and re-render
-                        ((null event)
-                         (when streaming
-                           (update-streaming-response buf)
-                           (do-render buf)))
-                        ;; Window resize event -- re-layout and re-render
-                        ((and (typep event 'croatoan:event)
-                              (typep (croatoan:event-key event) 'croatoan:key)
-                              (eq :resize (croatoan:key-name
-                                           (croatoan:event-key event))))
-                         (do-render (current-buffer)))
-                        ;; Key event -- dispatch then re-render
-                        (t
-                         (let ((result (handle-key-event buf event)))
-                           (when (eq result :quit)
-                             (return-from main-loop)))
-                         (let ((cur (current-buffer)))
-                           (when (buffer-pending-stream cur)
-                             (update-streaming-response cur))
-                           (do-render cur)))))))))))
+  ;; Default to croatoan terminal backend
+  (unless *ui-backend*
+    (setf *ui-backend* (make-instance 'croatoan-backend)))
+  ;; Create initial buffer and initialize global state
+  (let ((buf (make-buffer session-name
+                          :agent-name agent-name
+                          :working-directory (truename "."))))
+    (init-face-registry buf)
+    (setf (buffer-keymap buf) *default-keymap*)
+    ;; Initialize buffer ring, selector state, and OAuth state
+    (setf *buffer-ring* nil *buffer-counter* 0)
+    (setf *buffer-selector-active* nil
+          *buffer-selector-index* 0
+          *buffer-selector-scroll* 0)
+    (setf *model-selector-active* nil
+          *model-selector-index* 0
+          *model-selector-scroll* 0
+          *model-selector-entries* nil)
+    ;; Initialize minibuffer state
+    (setf *minibuffer-active* nil
+          *minibuffer-prompt* ""
+          *minibuffer-input* ""
+          *minibuffer-point* 0
+          *minibuffer-items* nil
+          *minibuffer-filtered-items* nil
+          *minibuffer-selected-index* 0
+          *minibuffer-scroll-offset* 0
+          *minibuffer-callback* nil)
+    (setf *openai-oauth-pending* nil)
+    (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil *ch-pending* nil)
+    (add-buffer-to-ring buf)
+    ;; Set sandbox root to the working directory
+    (setf *sandbox-root* (truename "."))
+    ;; Delegate to the backend
+    (backend-run *ui-backend* buf)))
