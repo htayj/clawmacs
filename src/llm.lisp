@@ -655,11 +655,13 @@ Returns the access token on success."
       (getf tokens :access-token))))
 
 (defparameter *provider-fallback-models*
-  '((:anthropic . "claude-haiku-4-5-20251001")
-    (:openai-codex . "codex-mini-latest")
-    (:zai . "glm-5")
-    (:openrouter . "openai/gpt-4o-mini"))
-  "Built-in fallback model names by provider.")
+  '((:anthropic . *anthropic-model*)
+    (:openai-codex . *openai-codex-model*)
+    (:zai . *zai-model*)
+    (:openrouter . *openrouter-model*))
+  "Alist mapping provider keywords to the variable holding their default model.
+Each cdr is a symbol naming a special variable; provider-fallback-model
+dereferences it at call time so that user customizations take effect.")
 
 (defun known-provider-p (provider)
   "Return non-nil when PROVIDER is supported locally."
@@ -688,8 +690,12 @@ Returns the access token on success."
       (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return) value)))))
 
 (defun provider-fallback-model (provider)
-  "Return the built-in fallback model for PROVIDER."
-  (cdr (assoc provider *provider-fallback-models*)))
+  "Return the fallback model for PROVIDER.
+Looks up the provider-specific variable in *provider-fallback-models* and
+returns its current value, so user customizations (e.g. via init.lisp) are
+respected."
+  (let ((entry (cdr (assoc provider *provider-fallback-models*))))
+    (when entry (symbol-value entry))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Known Models Per Provider

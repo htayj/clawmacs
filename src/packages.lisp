@@ -392,6 +392,12 @@
    #:file-debug-log
    #:toggle-debug-mode-command
 
+   ;; User init
+   #:*user-init-directory*
+   #:*user-init-file*
+   #:*inhibit-user-init*
+   #:load-user-init-file
+
    ;; Main
    #:clawmacs-main
    #:send-to-agent-with-context

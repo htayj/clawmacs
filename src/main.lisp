@@ -2611,10 +2611,38 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
        nil)
       (t nil))))
 
+(defvar *user-init-directory*
+  (merge-pathnames #P".clawmacs.d/" (user-homedir-pathname))
+  "Directory for user Lisp configuration files.")
+
+(defvar *user-init-file*
+  (merge-pathnames "init.lisp" *user-init-directory*)
+  "Path to the user init file, loaded at startup if it exists.")
+
+(defvar *inhibit-user-init* nil
+  "When non-nil, skip loading the user init file at startup.")
+
+(defun load-user-init-file ()
+  "Load ~/.clawmacs.d/init.lisp if it exists. Errors are caught and reported."
+  (when *inhibit-user-init*
+    (return-from load-user-init-file nil))
+  (let ((init-path (probe-file *user-init-file*)))
+    (when init-path
+      (handler-case
+          (let ((*package* (find-package :clawmacs)))
+            (load init-path :verbose nil :print nil))
+        (error (e)
+          (format *error-output*
+                  "~&;; Warning: error loading ~A:~%;; ~A~%"
+                  init-path e)
+          (file-debug-log "init" "error loading ~A: ~A" init-path e)
+          nil)))))
+
 (defun parse-clawmacs-args ()
   "Parse command-line arguments and environment variables.
 Recognized flags:
   --debug-log <path>   Enable file-based debug logging to <path>.
+  --no-init            Skip loading the user init file.
 Environment variables:
   CLAWMACS_DEBUG_LOG   Same as --debug-log (CLI flag takes precedence)."
   ;; CLI args (everything after SBCL's -- separator)
@@ -2625,7 +2653,9 @@ Environment variables:
                 ((string= arg "--debug-log")
                  (let ((path (pop args)))
                    (when path
-                     (setf *debug-log-file* (pathname path))))))))
+                     (setf *debug-log-file* (pathname path)))))
+                ((string= arg "--no-init")
+                 (setf *inhibit-user-init* t)))))
   ;; Environment variable fallback
   (unless *debug-log-file*
     (let ((env (uiop:getenv "CLAWMACS_DEBUG_LOG")))
@@ -2647,6 +2677,7 @@ Environment variables:
     (setf *system-prompt*
           (string-trim '(#\Space #\Tab #\Newline #\Return)
                        (uiop:read-file-string *system-prompt-path*))))
+  (load-user-init-file)
   ;; Boot files are loaded dynamically by build-system-prompt on each API call
   ;; :process-control-chars nil puts the terminal into raw mode (ncurses:raw)
   ;; instead of cbreak mode, so C-c is delivered as a keystroke (ASCII 3)

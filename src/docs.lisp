@@ -2050,6 +2050,32 @@ documentation in *extended-docs*."
   :see-also (openai-codex-oauth-start openai-codex-oauth-finish *openai-oauth-pending*))
 
 ;;; ==========================================================================
+;;; Category: init — User init file
+;;; ==========================================================================
+
+(defdoc *user-init-directory*
+  :category "init"
+  :usage "Pathname — defaults to ~/.clawmacs.d/"
+  :see-also (*user-init-file* *inhibit-user-init* load-user-init-file))
+
+(defdoc *user-init-file*
+  :category "init"
+  :usage "Pathname — defaults to ~/.clawmacs.d/init.lisp"
+  :see-also (*user-init-directory* *inhibit-user-init* load-user-init-file))
+
+(defdoc *inhibit-user-init*
+  :category "init"
+  :usage "Boolean — set to T via --no-init flag to skip loading the user init file."
+  :see-also (*user-init-file* load-user-init-file))
+
+(defdoc load-user-init-file
+  :category "init"
+  :usage "(load-user-init-file) — Called once during startup."
+  :returns "T on success, NIL if skipped, inhibited, or on error."
+  :side-effects "Loads and evaluates *user-init-file* in the :clawmacs package. Errors are caught, printed to stderr, and logged via file-debug-log."
+  :see-also (*user-init-file* *user-init-directory* *inhibit-user-init* clawmacs-main))
+
+;;; ==========================================================================
 ;;; Category: main — Application entry point
 ;;; ==========================================================================
 

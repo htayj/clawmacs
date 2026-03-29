@@ -568,9 +568,13 @@ launch_payload() {
   fi
 
   # Claude Code CLI: share credentials and expose Nix store for the binary
+  # User init directory: share ~/.clawmacs.d/ so init.lisp is available
   extra_container_args=""
   if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.claude" ]; then
     extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.claude=$WORKSPACE_HOME/.claude"
+  fi
+  if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.clawmacs.d" ]; then
+    extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.clawmacs.d=$WORKSPACE_HOME/.clawmacs.d"
   fi
   if [ -d "/nix" ]; then
     extra_container_args="$extra_container_args --expose=/nix"
