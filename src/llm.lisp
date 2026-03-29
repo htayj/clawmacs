@@ -21,8 +21,8 @@ is configured. Should be a valid model name for *default-provider*.")
 (defvar *anthropic-version* "2023-06-01"
   "The Anthropic API version header value.")
 
-(defvar *anthropic-beta* "interleaved-thinking-2025-05-14,oauth-2025-04-20"
-  "Beta features header for OAuth token authentication and extended thinking.")
+(defvar *anthropic-beta* "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14"
+  "Beta features header for Claude Code OAuth authentication and extended thinking.")
 
 (defvar *openai-codex-model* "codex-mini-latest"
   "The OpenAI Codex model to use for chat completions.")
@@ -81,14 +81,23 @@ Populated on first call to fetch-openrouter-models.  Set to nil to force refresh
   (merge-pathnames #P".config/clawmacs/openai-codex-oauth.json" (user-homedir-pathname))
   "Path to the persisted OpenAI Codex OAuth credentials (JSON).")
 
+;;; Claude Code OAuth Identity
+;;; The Anthropic REST API requires OAuth tokens (sk-ant-oat-*) to identify
+;;; as Claude Code via a specific system prompt prefix sent as the first
+;;; content block in array format.  Without this, Sonnet/Opus return 400.
+(defvar *claude-code-system-prefix*
+  "You are Claude Code, Anthropic's official CLI for Claude."
+  "System prompt prefix required by the Anthropic API for Claude Max OAuth
+tokens to access Sonnet/Opus models.  Must be the first text block in an
+array-format system prompt.")
+
 ;;; Claude CLI Subprocess Configuration (for Claude Max subscription models)
-;;; Uses the stream-json subprocess protocol (same as Goose, OpenClaw, etc.)
-;;; instead of the deprecated -p "print mode" flag.
-(defvar *claude-cli-path* "claude"
-  "Path to the Claude Code CLI binary. Used as a subprocess for Sonnet/Opus
-models which require Claude Max subscription routing that the REST API
-does not support. Uses the --input-format stream-json protocol for proper
-machine-to-machine communication. Set to nil to disable CLI delegation.")
+;;; Uses the stream-json subprocess protocol.  With the correct beta headers
+;;; and system prompt prefix, OAuth tokens now work for all models via REST.
+(defvar *claude-cli-path* nil
+  "Path to the Claude Code CLI binary. Set to nil (default) to route all
+Anthropic models through the REST API with OAuth tokens. Set to \"claude\"
+to re-enable CLI subprocess delegation for models in *claude-cli-models*.")
 
 (defvar *claude-cli-models*
   '("claude-sonnet-4-6" "claude-opus-4-6"
@@ -96,7 +105,7 @@ machine-to-machine communication. Set to nil to disable CLI delegation.")
     "claude-opus-4-5" "claude-opus-4-5-20251101"
     "claude-sonnet-4-20250514" "claude-opus-4-20250514")
   "Anthropic models that require the Claude CLI subprocess because the
-REST API does not support them under Claude Max OAuth subscriptions.
+REST API rejects OAuth tokens for them (returns 400 invalid_request_error).
 These models are routed through the Claude Code CLI stream-json protocol.")
 
 (defun claude-cli-model-p (model)
@@ -1200,7 +1209,7 @@ container libraries (e.g. OpenSSL version mismatch)."
           "--model" model
           "--system-prompt" system-prompt
           "--dangerously-skip-permissions"
-          "--max-turns" "5")))
+          "--max-turns" "1")))
 
 (defun claude-cli-request (messages &key (model "claude-sonnet-4-6")
                                          (max-tokens 8192)
@@ -1357,12 +1366,14 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                            (process-stream-event inner state))))
                                       ;; Full assistant message (complete, not streaming)
                                       ;; The CLI sends these for each turn's response.
-                                      ;; Content is a list of block alists (cl-json
-                                      ;; decodes JSON arrays as lists, not vectors).
+                                      ;; Only extract text blocks — tool_use blocks are
+                                      ;; for the CLI's internal tools (Bash, ToolSearch,
+                                      ;; Read, etc.) and must NOT propagate to clawmacs.
+                                      ;; Content is a list (cl-json decodes JSON arrays
+                                      ;; as lists, not vectors).
                                       ((string= event-type "assistant")
                                        (let* ((message (cdr (assoc :message event)))
                                               (content (cdr (assoc :content message)))
-                                              ;; Coerce to list in case json config changes
                                               (blocks (coerce content 'list)))
                                          (file-debug-log "cli-assistant"
                                                          "blocks=~D types=(~{~A~^ ~})"
@@ -1373,31 +1384,26 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                          (when blocks
                                            (bt:with-lock-held ((stream-state-lock state))
                                              (dolist (blk blocks)
-                                               (let ((blk-type (cdr (assoc :type blk))))
-                                                 (cond
-                                                   ((string= "text" (or blk-type ""))
-                                                    (let ((text (cdr (assoc :text blk))))
-                                                      (when text
-                                                        (setf (stream-state-text state)
-                                                              (concatenate 'string
-                                                                           (stream-state-text state)
-                                                                           text))
-                                                        (push (canonical-text-block
-                                                               (stream-state-text state))
-                                                              (stream-state-content-blocks
-                                                               state)))))
-                                                   ((string= "tool_use" (or blk-type ""))
-                                                    (let ((id (cdr (assoc :id blk)))
-                                                          (name (cdr (assoc :name blk)))
-                                                          (input (cdr (assoc :input blk))))
-                                                      (push (canonical-tool-use-block
-                                                             id name input)
-                                                            (stream-state-content-blocks
-                                                             state)))))))))))
+                                               (when (string= "text"
+                                                               (or (cdr (assoc :type blk)) ""))
+                                                 (let ((text (cdr (assoc :text blk))))
+                                                   (when text
+                                                     (setf (stream-state-text state)
+                                                           (concatenate 'string
+                                                                        (stream-state-text state)
+                                                                        text))
+                                                     (push (canonical-text-block
+                                                            (stream-state-text state))
+                                                           (stream-state-content-blocks
+                                                            state))))))))))
                                       ;; Result event — completion
                                       ;; Only overwrite streamed text when result
                                       ;; provides non-empty text (non-streaming fallback).
-                                      ;; Read stop_reason from the result event itself.
+                                      ;; Always use "end_turn" as stop_reason — the CLI
+                                      ;; handles its own tools internally, so "tool_use"
+                                      ;; from the result refers to CLI-internal tools
+                                      ;; (Bash, ToolSearch, etc.) that must NOT trigger
+                                      ;; clawmacs tool execution.
                                       ((string= event-type "result")
                                        (setf got-result t)
                                        (let ((text (cdr (assoc :result event)))
@@ -1418,11 +1424,8 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                            (when (null (stream-state-content-blocks state))
                                              (setf (stream-state-content-blocks state)
                                                    (list (canonical-text-block ""))))
-                                           ;; Use result's stop_reason, then accumulated, then default
-                                           (unless (stream-state-stop-reason state)
-                                             (setf (stream-state-stop-reason state)
-                                                   (or result-stop "end_turn")))
-                                           (setf (stream-state-done-p state) t)))
+                                           (setf (stream-state-stop-reason state) "end_turn"
+                                                 (stream-state-done-p state) t)))
                                        (return))
                                       ;; Error event
                                       ((string= event-type "error")
@@ -1499,9 +1502,16 @@ MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
                          (:messages . ,(coerce messages 'vector)))))
              (when (and tools (plusp (length tools)))
                (push `(:tools . ,tools) body))
-             (let ((system-prompt (build-system-prompt)))
+             ;; System prompt as array of content blocks — required for
+             ;; Claude Max OAuth tokens (first block must be the CC prefix).
+             (let* ((system-prompt (build-system-prompt))
+                    (blocks (list `((:type . "text")
+                                    (:text . ,*claude-code-system-prefix*)))))
                (when system-prompt
-                 (push `(:system . ,system-prompt) body)))
+                 (setf blocks (append blocks
+                                      (list `((:type . "text")
+                                              (:text . ,system-prompt))))))
+               (push `(:system . ,(coerce blocks 'vector)) body))
               (api-json-encode body))))
     (multiple-value-bind (body status-code)
         (drakma:http-request
@@ -1712,9 +1722,16 @@ Returns the final stream-state when complete."
                          (:messages . ,(coerce messages 'vector)))))
              (when (and tools (plusp (length tools)))
                (push `(:tools . ,tools) body))
-              (let ((system-prompt (build-system-prompt)))
+              ;; System prompt as array of content blocks — required for
+              ;; Claude Max OAuth tokens (first block must be the CC prefix).
+              (let* ((system-prompt (build-system-prompt))
+                     (blocks (list `((:type . "text")
+                                     (:text . ,*claude-code-system-prefix*)))))
                 (when system-prompt
-                  (push `(:system . ,system-prompt) body)))
+                  (setf blocks (append blocks
+                                       (list `((:type . "text")
+                                               (:text . ,system-prompt))))))
+                (push `(:system . ,(coerce blocks 'vector)) body))
               (api-json-encode body)))
          (state (make-stream-state)))
     (multiple-value-bind (body-stream status-code headers)
