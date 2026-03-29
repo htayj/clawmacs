@@ -1053,18 +1053,16 @@ and all mediums are connected to the X11 backend."
   (loop :until (frame-quit-flag frame)
         :for buf := (current-buffer)
         :for streaming := (buffer-pending-stream buf)
+        :for need-redisplay := nil
         :do (let ((event (if streaming
                               (clim:event-read-no-hang
                                (clim:frame-top-level-sheet frame))
                               (clim:event-read
                                (clim:frame-top-level-sheet frame)))))
                (cond
-                 ;; Timeout path: poll streaming, redisplay, sleep briefly
+                 ;; Timeout path: sleep briefly before next poll
                  ((null event)
-                  (when streaming
-                    (update-streaming-response buf)
-                    (redisplay-all frame))
-                  (sleep 0.1))
+                  (sleep 0.05))
                  ;; Key press event
                  ((typep event 'clim:key-press-event)
                   (let* ((key (mcclim-normalize-key event)))
@@ -1072,24 +1070,30 @@ and all mediums are connected to the X11 backend."
                       (let ((result (handle-key-event buf key)))
                         (when (eq result :quit)
                           (setf (frame-quit-flag frame) t)))))
-                  ;; Poll streaming if active after key handling
-                  (let ((cur (current-buffer)))
-                    (when (buffer-pending-stream cur)
-                      (update-streaming-response cur)))
-                  ;; Update scroll page size (window may have resized)
-                  (let* ((main-pane (clim:find-pane-named frame 'main-pane))
-                         (char-w (frame-char-width frame))
-                         (char-h (frame-char-height frame)))
-                    (when (and (plusp char-w) (plusp char-h))
-                      (multiple-value-bind (cols rows)
-                          (pane-grid-dimensions main-pane char-w char-h)
-                        (declare (ignore cols))
-                        (setf *scroll-page-size* (max 1 (- rows 3))))))
-                  (redisplay-all frame))
+                  (setf need-redisplay t))
                  ;; Other events (pointer, exposure, etc.) — let CLIM handle
-                 ;; (CLIM replays output records on exposure automatically)
                  (t
-                  (clim:handle-event (clim:event-sheet event) event))))))
+                  (clim:handle-event (clim:event-sheet event) event))))
+            ;; Always poll streaming when active — regardless of event type.
+            ;; This prevents X11 events (exposure, pointer) from starving
+            ;; the streaming poll, and ensures the final response is
+            ;; displayed immediately when the stream completes.
+            (let ((cur (current-buffer)))
+              (when (buffer-pending-stream cur)
+                (update-streaming-response cur)
+                (setf need-redisplay t)))
+            ;; Redisplay when something changed
+            (when (or need-redisplay streaming)
+              ;; Update scroll page size (window may have resized)
+              (let* ((main-pane (clim:find-pane-named frame 'main-pane))
+                     (char-w (frame-char-width frame))
+                     (char-h (frame-char-height frame)))
+                (when (and (plusp char-w) (plusp char-h))
+                  (multiple-value-bind (cols rows)
+                      (pane-grid-dimensions main-pane char-w char-h)
+                    (declare (ignore cols))
+                    (setf *scroll-page-size* (max 1 (- rows 3))))))
+              (redisplay-all frame))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Backend Class and Entry Point
