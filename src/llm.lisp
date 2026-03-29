@@ -1200,7 +1200,7 @@ container libraries (e.g. OpenSSL version mismatch)."
           "--model" model
           "--system-prompt" system-prompt
           "--dangerously-skip-permissions"
-          "--max-turns" "1")))
+          "--max-turns" "5")))
 
 (defun claude-cli-request (messages &key (model "claude-sonnet-4-6")
                                          (max-tokens 8192)
@@ -1240,19 +1240,21 @@ response alist."
                                   (event-type (cdr (assoc :type event))))
                              (cond
                                ;; Assistant message with content blocks
+                               ;; Content is a list (cl-json decodes JSON
+                               ;; arrays as lists).
                                ((string= event-type "assistant")
                                 (let* ((message (cdr (assoc :message event)))
                                        (content (cdr (assoc :content message))))
                                   (when content
-                                    (loop :for blk :across content
-                                          :when (string= "text"
-                                                          (cdr (assoc :type blk)))
-                                          :do (let ((text (cdr (assoc :text blk))))
-                                                (when text
-                                                  (setf accumulated-text
-                                                        (concatenate 'string
-                                                                     accumulated-text
-                                                                     text))))))))
+                                    (dolist (blk (coerce content 'list))
+                                      (when (string= "text"
+                                                      (or (cdr (assoc :type blk)) ""))
+                                        (let ((text (cdr (assoc :text blk))))
+                                          (when text
+                                            (setf accumulated-text
+                                                  (concatenate 'string
+                                                               accumulated-text
+                                                               text)))))))))
                                ;; Result event — final response
                                ((string= event-type "result")
                                 (setf accumulated-text
@@ -1353,35 +1355,59 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                                               (string= inner-type
                                                                        "message_stop"))))
                                            (process-stream-event inner state))))
-                                      ;; Full assistant message (non-streaming fallback)
+                                      ;; Full assistant message (complete, not streaming)
+                                      ;; The CLI sends these for each turn's response.
+                                      ;; Content is a list of block alists (cl-json
+                                      ;; decodes JSON arrays as lists, not vectors).
                                       ((string= event-type "assistant")
-                                       (file-debug-log "cli-event" "assistant message received")
                                        (let* ((message (cdr (assoc :message event)))
-                                              (content (cdr (assoc :content message))))
-                                         (when content
+                                              (content (cdr (assoc :content message)))
+                                              ;; Coerce to list in case json config changes
+                                              (blocks (coerce content 'list)))
+                                         (file-debug-log "cli-assistant"
+                                                         "blocks=~D types=(~{~A~^ ~})"
+                                                         (length blocks)
+                                                         (mapcar (lambda (b)
+                                                                   (cdr (assoc :type b)))
+                                                                 blocks))
+                                         (when blocks
                                            (bt:with-lock-held ((stream-state-lock state))
-                                             (loop :for blk :across content
-                                                   :when (string= "text"
-                                                                   (cdr (assoc :type blk)))
-                                                   :do (let ((text (cdr (assoc :text blk))))
-                                                         (when text
-                                                           (setf (stream-state-text state)
-                                                                 (concatenate 'string
-                                                                              (stream-state-text state)
-                                                                              text))
-                                                           (push (canonical-text-block
-                                                                  (stream-state-text state))
-                                                                 (stream-state-content-blocks
-                                                                  state)))))))))
+                                             (dolist (blk blocks)
+                                               (let ((blk-type (cdr (assoc :type blk))))
+                                                 (cond
+                                                   ((string= "text" (or blk-type ""))
+                                                    (let ((text (cdr (assoc :text blk))))
+                                                      (when text
+                                                        (setf (stream-state-text state)
+                                                              (concatenate 'string
+                                                                           (stream-state-text state)
+                                                                           text))
+                                                        (push (canonical-text-block
+                                                               (stream-state-text state))
+                                                              (stream-state-content-blocks
+                                                               state)))))
+                                                   ((string= "tool_use" (or blk-type ""))
+                                                    (let ((id (cdr (assoc :id blk)))
+                                                          (name (cdr (assoc :name blk)))
+                                                          (input (cdr (assoc :input blk))))
+                                                      (push (canonical-tool-use-block
+                                                             id name input)
+                                                            (stream-state-content-blocks
+                                                             state)))))))))))
                                       ;; Result event — completion
                                       ;; Only overwrite streamed text when result
                                       ;; provides non-empty text (non-streaming fallback).
+                                      ;; Read stop_reason from the result event itself.
                                       ((string= event-type "result")
                                        (setf got-result t)
-                                       (let ((text (cdr (assoc :result event))))
+                                       (let ((text (cdr (assoc :result event)))
+                                             (result-stop (cdr (assoc :stop--reason event)))
+                                             (subtype (cdr (assoc :subtype event))))
                                          (file-debug-log "cli-result"
-                                                         "result-text-length=~A blocks=~A stop=~A"
+                                                         "subtype=~A result-text-length=~A result-stop=~A blocks=~A accumulated-stop=~A"
+                                                         subtype
                                                          (if text (length text) 0)
+                                                         result-stop
                                                          (length (stream-state-content-blocks state))
                                                          (stream-state-stop-reason state))
                                          (bt:with-lock-held ((stream-state-lock state))
@@ -1392,9 +1418,10 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                            (when (null (stream-state-content-blocks state))
                                              (setf (stream-state-content-blocks state)
                                                    (list (canonical-text-block ""))))
+                                           ;; Use result's stop_reason, then accumulated, then default
                                            (unless (stream-state-stop-reason state)
                                              (setf (stream-state-stop-reason state)
-                                                   "end_turn"))
+                                                   (or result-stop "end_turn")))
                                            (setf (stream-state-done-p state) t)))
                                        (return))
                                       ;; Error event
