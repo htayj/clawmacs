@@ -2123,12 +2123,12 @@ documentation in *extended-docs*."
   :category "ui-backend"
   :usage "(defclass my-backend (clawmacs:ui-backend) ()) — Subclass to create a custom UI backend."
   :returns "CLOS class — Base class for all UI backends."
-  :see-also (backend-run *ui-backend* croatoan-backend))
+  :see-also (backend-run *ui-backend* croatoan-backend mcclim-backend))
 
 (defdoc *ui-backend*
   :category "ui-backend"
   :usage "(setf clawmacs:*ui-backend* (make-instance 'my-backend)) — Set in ~/.clawmacs.d/init.lisp before startup."
-  :see-also (ui-backend backend-run croatoan-backend)
+  :see-also (ui-backend backend-run croatoan-backend mcclim-backend)
   :side-effects "When nil at startup, clawmacs-main sets it to a croatoan-backend instance.")
 
 (defdoc backend-run
@@ -2136,13 +2136,19 @@ documentation in *extended-docs*."
   :usage "(backend-run BACKEND:ui-backend INITIAL-BUFFER:buffer) — Called by clawmacs-main to start the UI."
   :returns "nil — Returns when the user quits."
   :side-effects "Takes over the display. Sets *scroll-page-size*. Calls handle-key-event and update-streaming-response."
-  :see-also (ui-backend *ui-backend* croatoan-backend clawmacs-main))
+  :see-also (ui-backend *ui-backend* croatoan-backend mcclim-backend clawmacs-main))
 
 (defdoc croatoan-backend
   :category "ui-backend"
   :usage "(make-instance 'croatoan-backend) — The default terminal backend using ncurses via croatoan."
   :returns "CLOS instance — Three-window terminal layout (main, modeline, minibuffer)."
-  :see-also (ui-backend backend-run *ui-backend*))
+  :see-also (ui-backend backend-run *ui-backend* mcclim-backend))
+
+(defdoc mcclim-backend
+  :category "ui-backend"
+  :usage "(make-instance 'mcclim-backend) — McCLIM graphical backend. Load via (asdf:load-system :clawmacs/mcclim)."
+  :returns "CLOS instance — Three-pane GUI layout (main, modeline, minibuffer)."
+  :see-also (ui-backend backend-run *ui-backend* croatoan-backend))
 
 ;;; ==========================================================================
 ;;; Category: main — Application entry point

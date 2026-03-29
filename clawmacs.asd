@@ -19,6 +19,12 @@
                              (:file "main")
                              (:file "docs")))))
 
+(defsystem "clawmacs/mcclim"
+  :description "McCLIM graphical backend for clawmacs"
+  :depends-on ("clawmacs" "mcclim")
+  :components ((:module "src"
+                :components ((:file "mcclim-backend")))))
+
 (defsystem "clawmacs/tests"
   :description "Tests for clawmacs"
   :depends-on ("clawmacs" "fiveam")

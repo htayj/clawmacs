@@ -413,6 +413,7 @@
    #:*ui-backend*
    #:backend-run
    #:croatoan-backend
+   #:mcclim-backend
 
    ;; Main
    #:clawmacs-main

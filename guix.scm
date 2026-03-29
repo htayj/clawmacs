@@ -13,4 +13,5 @@
     "findutils"
     "grep"
     "font-dejavu"
-    "curl"))
+    "curl"
+    "cl-mcclim"))
