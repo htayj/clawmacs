@@ -1,12 +1,106 @@
 (in-package :clawmacs)
 
 ;;; --------------------------------------------------------------------------
-;;; McCLIM Graphical Backend
+;;; McCLIM Graphical Backend — Genera-Style Interface
 ;;;
-;;; A graphical UI backend using McCLIM that mirrors the terminal interface:
-;;; monospace font, dark background, three-pane layout (main, modeline,
-;;; minibuffer). Optional dependency — load via (asdf:load-system :clawmacs/mcclim).
+;;; A graphical UI backend using McCLIM with a Symbolics Genera-inspired
+;;; design: white background, italic buffer title bars, a who-line for
+;;; context-dependent action hints, modeline at the absolute bottom, and
+;;; popup completion overlay instead of an inline minibuffer.
+;;; Three-pane layout: main, who-line, modeline.
+;;; Optional dependency — load via (asdf:load-system :clawmacs/mcclim).
 ;;; --------------------------------------------------------------------------
+
+;;; --------------------------------------------------------------------------
+;;; Genera Theme — McCLIM-only white background override
+;;; --------------------------------------------------------------------------
+
+(defvar *mcclim-bg-ink* (clim:make-rgb-color 1.0 1.0 1.0)
+  "Default background ink for the McCLIM backend. White for Genera theme.")
+
+(defun mcclim-apply-genera-theme ()
+  "Patch *global-face-registry* for Genera-style white background.
+Called once from backend-run before frame creation. Only affects the McCLIM
+backend — the terminal backend keeps its dark theme since it initializes
+its own face registry on startup."
+  (let ((white-bg (make-color-spec :cga 15))
+        (black-fg (make-color-spec :cga 0))
+        (light-blue-bg (make-color-spec :hex "#D0E0F0"))
+        (dark-blue-fg (make-color-spec :cga 4)))
+    ;; Walk all faces: black bg → white bg, white/gray fg → black fg
+    (maphash (lambda (name face)
+               (let ((bg-val (when (face-background face)
+                               (color-spec-value (face-background face))))
+                     (fg-val (when (face-foreground face)
+                               (color-spec-value (face-foreground face)))))
+                 ;; Skip faces with special overrides below
+                 (unless (member name '(:modeline :selector-selected
+                                        :minibuffer-selected :minibuffer-match
+                                        :minibuffer-selected-match
+                                        :approval-diff-add :approval-diff-remove))
+                   ;; Black bg → white bg
+                   (when (and (face-background face)
+                              (eq :cga (color-spec-type (face-background face)))
+                              (eql bg-val 0))
+                     (setf (face-background face) white-bg))
+                   ;; White/gray fg → black fg
+                   (when (and (face-foreground face)
+                              (eq :cga (color-spec-type (face-foreground face)))
+                              (member fg-val '(7 15)))
+                     (setf (face-foreground face) black-fg)))))
+             *global-face-registry*)
+    ;; Special overrides
+    ;; :modeline — keep gray bg, black fg, bold (already correct)
+    ;; :selector-selected — light blue bg, black fg
+    (let ((f (global-face :selector-selected)))
+      (when f
+        (setf (face-background f) light-blue-bg
+              (face-foreground f) black-fg)))
+    ;; :minibuffer-selected — light blue bg, black fg
+    (let ((f (global-face :minibuffer-selected)))
+      (when f
+        (setf (face-background f) light-blue-bg
+              (face-foreground f) black-fg)))
+    ;; :minibuffer-match — dark blue fg on white bg, bold
+    (let ((f (global-face :minibuffer-match)))
+      (when f
+        (setf (face-background f) white-bg
+              (face-foreground f) dark-blue-fg
+              (face-bold-p f) t)))
+    ;; :minibuffer-selected-match — dark blue fg on light blue bg, bold
+    (let ((f (global-face :minibuffer-selected-match)))
+      (when f
+        (setf (face-background f) light-blue-bg
+              (face-foreground f) dark-blue-fg
+              (face-bold-p f) t)))
+    ;; :approval-diff-add — green fg on white bg
+    (let ((f (global-face :approval-diff-add)))
+      (when f
+        (setf (face-background f) white-bg)))
+    ;; :approval-diff-remove — red fg on white bg
+    (let ((f (global-face :approval-diff-remove)))
+      (when f
+        (setf (face-background f) white-bg)))
+    ;; Patch per-buffer face-sets on existing buffers
+    (let ((user-bg (make-color-spec :hex "#D0D8E8"))
+          (agent-bg white-bg))
+      (dolist (buf *buffer-ring*)
+        (maphash (lambda (sender-kw fs)
+                   (let ((default-face (get-face fs :default)))
+                     (when default-face
+                       (if (eq sender-kw :user)
+                           (setf (face-background default-face) user-bg
+                                 (face-foreground default-face) black-fg)
+                           (progn
+                             (setf (face-background default-face) agent-bg)
+                             (when (and (face-foreground default-face)
+                                        (eq :cga (color-spec-type
+                                                  (face-foreground default-face)))
+                                        (member (color-spec-value
+                                                 (face-foreground default-face))
+                                                '(7 15)))
+                               (setf (face-foreground default-face) black-fg)))))))
+                 (buffer-face-registry buf))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Color Mapping — color-spec → CLIM ink
@@ -87,8 +181,8 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
   (let ((face (global-face face-name)))
     (if face
         (resolve-face-inks (resolve-face face))
-        (values (clim:make-rgb-color 0.67 0.67 0.67)
-                (clim:make-rgb-color 0.0 0.0 0.0)
+        (values (clim:make-rgb-color 0.0 0.0 0.0)
+                *mcclim-bg-ink*
                 (clim:make-text-style :fix :roman :normal)))))
 
 ;;; --------------------------------------------------------------------------
@@ -105,26 +199,26 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
               :display-function 'display-main-pane
               :text-style (clim:make-text-style :fix :roman :normal)
               :scroll-bars nil
-              :background (clim:make-rgb-color 0.0 0.0 0.0)
-              :foreground (clim:make-rgb-color 0.67 0.67 0.67))
+              :background (clim:make-rgb-color 1.0 1.0 1.0)
+              :foreground (clim:make-rgb-color 0.0 0.0 0.0))
    (modeline-pane :application
                   :display-function 'display-modeline-pane
                   :text-style (clim:make-text-style :fix :roman :normal)
                   :scroll-bars nil
                   :background (clim:make-rgb-color 0.67 0.67 0.67)
                   :foreground (clim:make-rgb-color 0.0 0.0 0.0))
-   (minibuffer-pane :application
-                    :display-function 'display-minibuffer-pane
-                    :text-style (clim:make-text-style :fix :roman :normal)
-                    :scroll-bars nil
-                    :background (clim:make-rgb-color 0.0 0.0 0.0)
-                    :foreground (clim:make-rgb-color 0.67 0.67 0.67)))
+   (who-line-pane :application
+                  :display-function 'display-who-line-pane
+                  :text-style (clim:make-text-style :fix :roman :normal)
+                  :scroll-bars nil
+                  :background (clim:make-rgb-color 0.93 0.93 0.93)
+                  :foreground (clim:make-rgb-color 0.0 0.0 0.0)))
   (:layouts
    (default
     (clim:vertically ()
       (:fill main-pane)
-      modeline-pane
-      minibuffer-pane))))
+      who-line-pane
+      modeline-pane))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Drawing Primitives
@@ -225,20 +319,44 @@ top-level sheet dimensions to prevent exponential growth."
       (draw-text-at pane 0 0 text fg bg ts char-w char-h))))
 
 ;;; --------------------------------------------------------------------------
+;;; Who-Line Display
+;;; --------------------------------------------------------------------------
+
+(defun display-who-line-pane (frame pane)
+  "Display function for the who-line pane. Shows 2 rows of context-dependent hints."
+  (ensure-char-metrics frame pane)
+  (let* ((char-w (frame-char-width frame))
+         (char-h (frame-char-height frame))
+         (buf (current-buffer)))
+    (when (zerop char-w) (return-from display-who-line-pane))
+    (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
+      (declare (ignore rows))
+      (multiple-value-bind (row1 row2) (format-who-line buf cols)
+        (let ((wl-bg (clim:make-rgb-color 0.93 0.93 0.93))
+              (wl-fg (clim:make-rgb-color 0.0 0.0 0.0))
+              (wl-ts (clim:make-text-style :fix :roman :normal)))
+          (fill-row pane 0 cols wl-bg char-w char-h)
+          (fill-row pane 1 cols wl-bg char-w char-h)
+          (draw-text-at pane 0 0
+                        (subseq row1 0 (min (length row1) cols))
+                        wl-fg wl-bg wl-ts char-w char-h)
+          (draw-text-at pane 1 0
+                        (subseq row2 0 (min (length row2) cols))
+                        wl-fg wl-bg wl-ts char-w char-h))))))
+
+;;; --------------------------------------------------------------------------
 ;;; Main Pane Display
 ;;; --------------------------------------------------------------------------
 
 (defun display-main-pane (frame pane)
-  "Display function for the main pane. Dispatches to buffer/selector rendering."
+  "Display function for the main pane. Dispatches to buffer/selector rendering.
+When the minibuffer is active, draws a centered popup overlay on top."
   (ensure-char-metrics frame pane)
   (let* ((char-w (frame-char-width frame))
          (char-h (frame-char-height frame)))
     (when (zerop char-w) (return-from display-main-pane))
     (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
-      ;; Reserve bottom rows for minibuffer candidates when active
-      (let* ((mb-height (if *minibuffer-active* (1- (minibuffer-current-height)) 0))
-             (main-rows (max 1 (- rows mb-height)))
-             (modeline-pane (clim:find-pane-named frame 'modeline-pane)))
+      (let ((modeline-pane (clim:find-pane-named frame 'modeline-pane)))
         (cond
           (*buffer-selector-active*
            (mcclim-render-buffer-selector pane modeline-pane rows cols
@@ -247,26 +365,41 @@ top-level sheet dimensions to prevent exponential growth."
            (mcclim-render-model-selector pane modeline-pane rows cols
                                          char-w char-h frame))
           (t
-           (mcclim-render-buffer pane (current-buffer) main-rows cols
+           (mcclim-render-buffer pane (current-buffer) rows cols
                                  char-w char-h)))
-        ;; Draw minibuffer candidates in bottom rows of main pane
-        (when (and *minibuffer-active* (plusp mb-height))
-          (mcclim-render-minibuffer-candidates pane main-rows cols
-                                               char-w char-h))))))
+        ;; Popup overlay for minibuffer completion
+        (when *minibuffer-active*
+          (mcclim-render-completion-popup pane cols rows char-w char-h))))))
+
+;;; --------------------------------------------------------------------------
+;;; Buffer Title Bar
+;;; --------------------------------------------------------------------------
+
+(defun mcclim-render-buffer-title (pane buf cols char-w char-h)
+  "Render the buffer name in italics at row 0, with a thin gray rule underneath."
+  (let ((title (buffer-name buf))
+        (italic-ts (clim:make-text-style :fix :italic :normal)))
+    (fill-row pane 0 cols *mcclim-bg-ink* char-w char-h)
+    (draw-text-at pane 0 1 title (clim:make-rgb-color 0.0 0.0 0.0)
+                  *mcclim-bg-ink* italic-ts char-w char-h)
+    ;; Thin rule under title
+    (clim:draw-line* pane 0 (1- char-h) (* cols char-w) (1- char-h)
+                      :ink (clim:make-rgb-color 0.67 0.67 0.67))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Rendering
 ;;; --------------------------------------------------------------------------
 
 (defun mcclim-render-buffer (pane buf rows cols char-w char-h)
-  "Render the full buffer: history + input into PANE."
-  (let* ((total-height rows)
+  "Render the full buffer: title bar at row 0, then history + input below."
+  (let* ((total-height (1- rows))
          (width cols)
          (input-height (calculate-input-height buf total-height width))
          (history-height (- total-height input-height))
-         (input-start-row history-height))
-    ;; Clear pane
-    (clear-pane-with-ink pane (clim:make-rgb-color 0.0 0.0 0.0))
+         (input-start-row (1+ history-height)))
+    ;; Clear pane and render title bar
+    (clear-pane-with-ink pane *mcclim-bg-ink*)
+    (mcclim-render-buffer-title pane buf cols char-w char-h)
     ;; Collect history messages
     (let ((history-messages nil)
           (hide-tool-results (not (buffer-show-tool-results-p buf))))
@@ -300,7 +433,7 @@ top-level sheet dimensions to prevent exponential growth."
                 :do (setf virtual-row msg-bottom)
                     (when (and (< msg-top visible-bottom)
                                (> msg-bottom visible-top))
-                      (let ((screen-row (- msg-top visible-top)))
+                      (let ((screen-row (+ 1 (- msg-top visible-top))))
                         (mcclim-render-message-lines pane msg screen-row width
                                                      char-w char-h
                                                      :max-rows history-height)))))))
@@ -479,7 +612,7 @@ Returns the number of visual rows consumed."
                     (max 0 (1+ (- *buffer-selector-index* max-entries))))
                    (t *buffer-selector-scroll*))))
     (setf *buffer-selector-scroll* scroll)
-    (clear-pane-with-ink pane (clim:make-rgb-color 0.0 0.0 0.0))
+    (clear-pane-with-ink pane *mcclim-bg-ink*)
     ;; Title
     (when (< 1 height)
       (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-title)
@@ -581,7 +714,7 @@ Returns the number of visual rows consumed."
                     (max 0 (1+ (- *model-selector-index* max-visible))))
                    (t *model-selector-scroll*))))
     (setf *model-selector-scroll* scroll)
-    (clear-pane-with-ink pane (clim:make-rgb-color 0.0 0.0 0.0))
+    (clear-pane-with-ink pane *mcclim-bg-ink*)
     ;; Title
     (when (< 1 height)
       (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-title)
@@ -661,63 +794,8 @@ Returns the number of visual rows consumed."
             (draw-text-at modeline-pane 0 0 padded fg bg ts char-w char-h)))))))
 
 ;;; --------------------------------------------------------------------------
-;;; Minibuffer Display
+;;; Candidate Row Rendering (shared by popup completion)
 ;;; --------------------------------------------------------------------------
-
-(defun display-minibuffer-pane (frame pane)
-  "Display function for the minibuffer pane."
-  (ensure-char-metrics frame pane)
-  (let* ((char-w (frame-char-width frame))
-         (char-h (frame-char-height frame)))
-    (when (zerop char-w) (return-from display-minibuffer-pane))
-    (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
-      (if *minibuffer-active*
-          (mcclim-render-minibuffer-active pane cols rows char-w char-h)
-          (mcclim-render-minibuffer-inactive pane cols char-w char-h)))))
-
-(defun mcclim-render-minibuffer-inactive (pane cols char-w char-h)
-  "Render the inactive minibuffer: a blank line."
-  (multiple-value-bind (fg bg ts) (resolve-global-face-inks :minibuffer-prompt)
-    (declare (ignore fg ts))
-    (fill-row pane 0 cols bg char-w char-h)))
-
-(defun mcclim-render-minibuffer-active (pane cols rows char-w char-h)
-  "Render the active minibuffer with prompt, input, cursor, and candidates."
-  (let* ((prompt-str (format nil "~A: " *minibuffer-prompt*))
-         (input *minibuffer-input*)
-         (prompt-line (concatenate 'string prompt-str input))
-         (cursor-col (+ (length prompt-str) *minibuffer-point*)))
-    ;; Prompt line
-    (multiple-value-bind (fg bg ts) (resolve-global-face-inks :minibuffer-prompt)
-      (fill-row pane 0 cols bg char-w char-h)
-      (draw-text-at pane 0 0
-                    (subseq prompt-line 0 (min (length prompt-line) cols))
-                    fg bg ts char-w char-h))
-    ;; Block cursor
-    (when (< cursor-col cols)
-      (let ((char-at-cursor (if (< *minibuffer-point* (length input))
-                                (char input *minibuffer-point*)
-                                #\Space)))
-        (multiple-value-bind (fg bg ts) (resolve-global-face-inks :minibuffer-cursor)
-          (draw-text-at pane 0 cursor-col (string char-at-cursor)
-                        fg bg ts char-w char-h))))
-    ;; Candidate list
-    (let* ((items *minibuffer-filtered-items*)
-           (positions *minibuffer-match-positions*)
-           (selected *minibuffer-selected-index*)
-           (scroll *minibuffer-scroll-offset*)
-           (visible-rows (1- rows))
-           (total (length items)))
-      (loop :for row-idx :from 0 :below visible-rows
-            :for item-idx := (+ scroll row-idx)
-            :while (< item-idx total)
-            :for item := (nth item-idx items)
-            :for row := (1+ row-idx)
-            :for display := (minibuffer-item-display item)
-            :for match-pos := (nth item-idx positions)
-            :for selected-p := (= item-idx selected)
-            :do (mcclim-render-candidate-row pane row display match-pos
-                                             selected-p cols char-w char-h)))))
 
 (defun mcclim-render-candidate-row (pane row display match-positions
                                     selected-p cols char-w char-h)
@@ -748,24 +826,105 @@ Returns the number of visual rows consumed."
                     (draw-text-at pane row col (string ch)
                                   base-fg base-bg base-ts char-w char-h))))))
 
-(defun mcclim-render-minibuffer-candidates (pane start-row cols char-w char-h)
-  "Render minibuffer candidate list in the main pane starting at START-ROW."
+;;; --------------------------------------------------------------------------
+;;; Popup Completion Overlay
+;;; --------------------------------------------------------------------------
+
+(defun mcclim-render-completion-popup (pane cols rows char-w char-h)
+  "Render a centered popup overlay for minibuffer completion on the main pane.
+Drawn on top of existing buffer content when *minibuffer-active* is true."
   (let* ((items *minibuffer-filtered-items*)
          (positions *minibuffer-match-positions*)
          (selected *minibuffer-selected-index*)
          (scroll *minibuffer-scroll-offset*)
          (total (length items))
-         (max-rows (1- (minibuffer-current-height))))
-    (loop :for row-idx :from 0 :below max-rows
+         ;; Popup dimensions
+         (popup-w (min (- cols 4) (max 40 (floor (* cols 3) 5))))
+         (max-item-rows (min (or *minibuffer-max-height* 12) (- rows 4)))
+         (item-rows (min total max-item-rows))
+         (popup-h (+ 1 item-rows))  ; 1 prompt row + items
+         ;; Center position
+         (popup-left (floor (- cols popup-w) 2))
+         (popup-top (floor (- rows popup-h) 2))
+         ;; Colors
+         (popup-bg (clim:make-rgb-color 0.94 0.94 0.94))
+         (border-ink (clim:make-rgb-color 0.4 0.4 0.4))
+         ;; Pixel coordinates for border
+         (px-left (* popup-left char-w))
+         (px-top (* popup-top char-h))
+         (px-right (* (+ popup-left popup-w) char-w))
+         (px-bottom (* (+ popup-top popup-h) char-h)))
+    ;; Draw popup background
+    (clim:draw-rectangle* pane px-left px-top px-right px-bottom
+                          :ink popup-bg)
+    ;; Draw border
+    (clim:draw-rectangle* pane px-left px-top px-right px-bottom
+                          :ink border-ink :filled nil)
+    ;; Prompt row: "prompt: input" with block cursor
+    (let* ((prompt-str (format nil "~A: " *minibuffer-prompt*))
+           (input *minibuffer-input*)
+           (prompt-line (concatenate 'string prompt-str input))
+           (display-width (- popup-w 2))
+           (visible (subseq prompt-line 0 (min (length prompt-line) display-width)))
+           (row popup-top)
+           (col (1+ popup-left)))
+      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :minibuffer-prompt)
+        (declare (ignore bg))
+        ;; Fill prompt row background
+        (clim:draw-rectangle* pane
+                              (+ px-left char-w) (* row char-h)
+                              (- px-right char-w) (* (1+ row) char-h)
+                              :ink popup-bg)
+        (draw-text-at pane row col visible fg popup-bg ts char-w char-h))
+      ;; Block cursor
+      (let ((cursor-col (+ col (length prompt-str) *minibuffer-point*)))
+        (when (< cursor-col (+ popup-left popup-w -1))
+          (let ((char-at-cursor (if (< *minibuffer-point* (length input))
+                                    (char input *minibuffer-point*)
+                                    #\Space)))
+            (multiple-value-bind (fg bg ts) (resolve-global-face-inks :minibuffer-cursor)
+              (draw-text-at pane row cursor-col (string char-at-cursor)
+                            fg bg ts char-w char-h))))))
+    ;; Candidate rows
+    (loop :for row-idx :from 0 :below item-rows
           :for item-idx := (+ scroll row-idx)
           :while (< item-idx total)
           :for item := (nth item-idx items)
-          :for row := (+ start-row row-idx)
+          :for row := (+ popup-top 1 row-idx)
           :for display := (minibuffer-item-display item)
+          :for display-trimmed := (subseq display 0 (min (length display) (- popup-w 4)))
           :for match-pos := (nth item-idx positions)
           :for selected-p := (= item-idx selected)
-          :do (mcclim-render-candidate-row pane row display match-pos
-                                           selected-p cols char-w char-h))))
+          :do
+             ;; Fill row background within popup bounds
+             (let* ((base-face-name (if selected-p :minibuffer-selected :minibuffer-candidate))
+                    (match-face-name (if selected-p :minibuffer-selected-match :minibuffer-match))
+                    (match-set (when match-pos
+                                 (let ((ht (make-hash-table :test #'eql)))
+                                   (dolist (p match-pos ht)
+                                     (setf (gethash p ht) t))))))
+               (multiple-value-bind (base-fg base-bg base-ts)
+                   (resolve-global-face-inks base-face-name)
+                 ;; Fill row within popup
+                 (clim:draw-rectangle* pane
+                                       (+ px-left char-w) (* row char-h)
+                                       (- px-right char-w) (* (1+ row) char-h)
+                                       :ink base-bg)
+                 ;; Indent + characters with match highlighting
+                 (draw-text-at pane row (+ popup-left 1) "  "
+                               base-fg base-bg base-ts char-w char-h)
+                 (loop :for i :from 0 :below (length display-trimmed)
+                       :for col :from (+ popup-left 3)
+                       :for ch := (char display-trimmed i)
+                       :for matched-p := (and match-set (gethash i match-set))
+                       :do (if matched-p
+                               (multiple-value-bind (mfg mbg mts)
+                                   (resolve-global-face-inks match-face-name)
+                                 (draw-text-at pane row col (string ch)
+                                               mfg mbg mts char-w char-h))
+                               (draw-text-at pane row col (string ch)
+                                             base-fg base-bg base-ts
+                                             char-w char-h))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Key Normalization (McCLIM-specific)
@@ -853,7 +1012,7 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
 ;;; --------------------------------------------------------------------------
 
 (defun update-pane-sizes (frame)
-  "Resize modeline pane to exactly 1 row based on char metrics."
+  "Resize modeline (1 row) and who-line (2 rows) panes based on char metrics."
   (let ((char-h (frame-char-height frame)))
     (when (plusp char-h)
       (let ((ml-pane (clim:find-pane-named frame 'modeline-pane)))
@@ -861,12 +1020,18 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
           (clim:change-space-requirements ml-pane
                                           :height char-h
                                           :min-height char-h
-                                          :max-height char-h))))))
+                                          :max-height char-h)))
+      (let ((wl-pane (clim:find-pane-named frame 'who-line-pane)))
+        (when wl-pane
+          (clim:change-space-requirements wl-pane
+                                          :height (* 2 char-h)
+                                          :min-height (* 2 char-h)
+                                          :max-height (* 2 char-h)))))))
 
 (defun redisplay-all (frame)
-  "Resize panes and force redisplay of all three panes."
+  "Resize panes and force redisplay of main, who-line, and modeline."
   (update-pane-sizes frame)
-  (dolist (pane-name '(main-pane modeline-pane minibuffer-pane))
+  (dolist (pane-name '(main-pane who-line-pane modeline-pane))
     (let ((pane (clim:find-pane-named frame pane-name)))
       (when pane
         (clim:redisplay-frame-pane frame pane :force-p t)))))
@@ -932,14 +1097,16 @@ and all mediums are connected to the X11 backend."
 
 (defclass mcclim-backend (ui-backend)
   ((frame :accessor backend-frame :initform nil))
-  (:documentation "McCLIM graphical backend with monospace grid rendering.
-Three-pane GUI layout (main, modeline, minibuffer) that visually mirrors
-the terminal UI. Load via (asdf:load-system :clawmacs/mcclim)."))
+  (:documentation "McCLIM graphical backend with Genera-style interface.
+Three-pane layout (main, who-line, modeline) with white background, italic
+buffer title bars, context-dependent who-line hints, and popup completion.
+Load via (asdf:load-system :clawmacs/mcclim)."))
 
 (defmethod backend-run ((b mcclim-backend) initial-buffer)
   "Run the McCLIM graphical UI.
-Creates a three-pane frame (main, modeline, minibuffer), then enters
+Creates the Genera-style frame (main, who-line, modeline), then enters
 the event loop reading input and rendering until :QUIT."
+  (mcclim-apply-genera-theme)
   (let ((frame (clim:make-application-frame 'clawmacs-gui
                  :backend b
                  :width 900

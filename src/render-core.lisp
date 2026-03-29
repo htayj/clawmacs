@@ -150,6 +150,12 @@ Call once at startup. These faces are customizable via customize-face."
             :background (make-color-spec :cga 0)
             :foreground (make-color-spec :cga 7)
             :bold-p nil :underline-p nil :reverse-p nil))
+    ;; Who-line face — light gray bg, black fg (McCLIM only, Genera-style)
+    (setf (gethash :who-line r)
+          (make-instance 'face :name :who-line
+            :background (make-color-spec :hex "#EDEDED")
+            :foreground (make-color-spec :cga 0)
+            :bold-p nil :underline-p nil :reverse-p nil))
     r))
 
 (defun collect-global-faces ()
@@ -275,6 +281,52 @@ when nil it is resolved from the buffer's agent defaults."
         (subseq padded 0 width)
         (let ((extra (- width (length padded))))
           (concatenate 'string padded (make-string extra :initial-element #\Space))))))
+
+;;; --------------------------------------------------------------------------
+;;; Who-Line Formatting (pure string functions, McCLIM Genera-style)
+;;; --------------------------------------------------------------------------
+
+(defun format-who-line (buf width)
+  "Return two strings (row1 row2) for the who-line, context-dependent hints.
+BUF is the current buffer. WIDTH is the available character columns.
+Mode dispatch priority matches handle-key-event in main.lisp."
+  (declare (ignore buf))
+  (flet ((pad (str)
+           (if (>= (length str) width)
+               (subseq str 0 width)
+               (concatenate 'string str
+                            (make-string (- width (length str))
+                                         :initial-element #\Space)))))
+    (let ((row1 "")
+          (row2 ""))
+      (cond
+        (*minibuffer-active*
+         (setf row1 " C-n/C-p: navigate  RET: confirm  C-g: cancel"
+               row2 " Type to filter candidates"))
+        (*buffer-selector-active*
+         (setf row1 " RET: select  n: new  k: kill  C-g/q: cancel"
+               row2 " C-p/C-n: navigate"))
+        (*model-selector-active*
+         (setf row1 " RET: select  C-g/q: cancel"
+               row2 " C-p/C-n: navigate  *=active"))
+        (*customize-face-state*
+         (setf row1 " C-n/C-p: next/prev  RET: cycle value  C-c C-c: save"
+               row2 " C-g: cancel  Navigate fields with C-n/C-p"))
+        (*openai-oauth-pending*
+         (setf row1 " Paste callback URL, then press RET"
+               row2 " C-g: cancel"))
+        (*deny-message-mode*
+         (setf row1 " Type denial reason, then RET to send"
+               row2 " Normal editing keys available"))
+        ((and (current-buffer) (buffer-approval-pending (current-buffer)))
+         (let* ((approval (buffer-approval-pending (current-buffer)))
+                (tool-name (or (cdr (assoc :tool-name approval)) "")))
+           (setf row1 " a: approve  d: deny  m: deny with message"
+                 row2 (format nil " ~A" tool-name))))
+        (t
+         (setf row1 " RET: send  C-o: newline  C-k: kill  C-y: yank  PgUp/Dn: scroll"
+               row2 " C-x C-b: buffers  C-c C-m: model  C-h b: help  C-x C-c: quit")))
+      (values (pad row1) (pad row2)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Line Wrapping Helpers (pure geometry)
