@@ -327,6 +327,12 @@
    #:describe-variable-to-string
    #:describe-variable-command
 
+   ;; Describe bindings
+   #:*ch-pending*
+   #:categorize-command
+   #:describe-bindings-to-string
+   #:describe-bindings-command
+
    ;; Customize face
    #:*customize-face-state*
    #:*customize-face-fields*

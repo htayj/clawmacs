@@ -84,8 +84,9 @@
     (keymap-bind km '(:alt #\.) 'yank-previous-command-last-arg-command)    ; M-.
     (keymap-bind km '(:alt #\_) 'yank-previous-command-last-arg-command)    ; M-_
     ;; Delete
+    ;; Note: #\Backspace (ASCII 8 = C-h) is now consumed as the help prefix key.
+    ;; Backspace still works via #\Rubout (ASCII 127) and :backspace (ncurses keyword).
     (keymap-bind km (code-char 4) 'delete-char-forward-command) ; C-d = ASCII 4
-    (keymap-bind km #\Backspace 'delete-char-backward-command)
     (keymap-bind km #\Rubout 'delete-char-backward-command)
     (keymap-bind km :backspace 'delete-char-backward-command)
     (keymap-bind km (code-char 4) 'delete-char-forward-command) ; C-d = ASCII 4
@@ -121,6 +122,9 @@
     (keymap-bind km '(:ctrl-c #\T) 'describe-type-command)
     ;; C-c F (capital F) = customize face (interactive face editor)
     (keymap-bind km '(:ctrl-c #\F) 'customize-face-command)
+    ;; ----- C-h prefix: help commands -----
+    ;; C-h is the help prefix key (Emacs standard).
+    (keymap-bind km '(:ctrl-h #\b) 'describe-bindings-command) ; C-h b = describe keybindings
     ;; ----- C-x prefix: global / cross-buffer commands -----
     ;; C-x is reserved for global commands that operate across buffers
     ;; or affect the application as a whole (buffer management, I/O, etc.).

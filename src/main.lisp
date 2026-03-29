@@ -1214,6 +1214,8 @@ Converts raw characters, keywords, and prefix lists to standard Emacs notation."
      (format nil "C-x ~A" (format-key-binding (second key))))
     ((and (listp key) (eq (first key) :ctrl-c))
      (format nil "C-c ~A" (format-key-binding (second key))))
+    ((and (listp key) (eq (first key) :ctrl-h))
+     (format nil "C-h ~A" (format-key-binding (second key))))
     ((and (listp key) (eq (first key) :alt))
      (format nil "M-~A" (format-key-binding (second key))))
     ((and (listp key) (eq (first key) :ctrl))
@@ -1701,6 +1703,103 @@ Bound to C-c t (was changed from toggle-tool-results)."
                (switch-to-buffer help-buf))))))))
 
 ;;; --------------------------------------------------------------------------
+;;; Describe Bindings (C-h b)
+;;; --------------------------------------------------------------------------
+
+(defun categorize-command (command-sym)
+  "Return a category string for COMMAND-SYM based on its name.
+Used to group keybindings in the describe-bindings listing."
+  (let ((name (string-downcase (symbol-name command-sym))))
+    (cond
+      ((or (search "scroll" name) (search "forward-char" name)
+           (search "backward-char" name) (search "forward-word" name)
+           (search "backward-word" name) (search "beginning-of-line" name)
+           (search "end-of-line" name))
+       "Movement")
+      ((or (search "kill" name) (search "delete" name)
+           (search "yank" name) (search "insert-newline" name)
+           (search "self-insert" name))
+       "Editing")
+      ((or (search "buffer" name) (search "save-session" name))
+       "Buffers & Sessions")
+      ((or (search "model" name) (search "select-model" name))
+       "Model Selection")
+      ((or (search "describe" name) (search "help" name)
+           (search "customize" name))
+       "Help & Introspection")
+      ((or (search "debug" name) (search "toggle" name)
+           (search "oauth" name))
+       "Toggles & Misc")
+      ((search "send-message" name)
+       "Chat")
+      (t "Other"))))
+
+(defun describe-bindings-to-string (&optional (keymap *default-keymap*))
+  "Return a formatted string listing all keybindings in KEYMAP, grouped by category.
+Each binding shows the key notation and the command name."
+  (let ((entries nil))
+    ;; Collect all bindings as (key-string command-sym category) triples
+    (maphash (lambda (key cmd)
+               (let ((key-str (format-key-binding key)))
+                 (push (list key-str cmd (categorize-command cmd)) entries)))
+             (keymap-bindings keymap))
+    ;; Group by category
+    (let ((groups (make-hash-table :test #'equal)))
+      (dolist (entry entries)
+        (destructuring-bind (key-str cmd category) entry
+          (declare (ignore cmd))
+          (push (list key-str (third entry) (second entry)) (gethash category groups nil))))
+      ;; Deduplicate: multiple keys may map to the same command.
+      ;; For each category, collect unique (command → list-of-keys) then format.
+      (with-output-to-string (s)
+        (format s "Key Bindings~%")
+        (format s "============~%~%")
+        (format s "Keymap: ~A~%~%" (keymap-name keymap))
+        ;; Define a stable category order
+        (let ((category-order '("Chat" "Movement" "Editing" "Buffers & Sessions"
+                                "Model Selection" "Help & Introspection"
+                                "Toggles & Misc" "Other")))
+          (dolist (category category-order)
+            (let ((cat-entries (gethash category groups)))
+              (when cat-entries
+                (format s "~A~%" category)
+                (format s "~A~%" (make-string (length category) :initial-element #\-))
+                ;; Group by command symbol within the category
+                (let ((cmd-keys (make-hash-table :test #'eq)))
+                  (dolist (entry cat-entries)
+                    (let ((key-str (first entry))
+                          (cmd (third entry)))
+                      (push key-str (gethash cmd cmd-keys nil))))
+                  ;; Sort commands alphabetically and format
+                  (let ((cmd-list nil))
+                    (maphash (lambda (cmd keys)
+                               (push (cons cmd (sort (copy-list keys) #'string<)) cmd-list))
+                             cmd-keys)
+                    (setf cmd-list (sort cmd-list #'string<
+                                         :key (lambda (c)
+                                                (string-downcase (symbol-name (car c))))))
+                    (dolist (item cmd-list)
+                      (let* ((cmd (car item))
+                             (keys (cdr item))
+                             (cmd-name (string-downcase (symbol-name cmd)))
+                             (keys-str (format nil "~{~A~^, ~}" keys)))
+                        (format s "  ~20A  ~A~%" keys-str cmd-name)))))
+                (format s "~%")))))))))
+
+(defcommand describe-bindings-command (:permission :user-only)
+  "Open a help buffer listing all keybindings in the default keymap.
+Bound to C-h b."
+  (buffer)
+  (declare (ignore buffer))
+  (let* ((buf-name "*help:keybindings*")
+         (existing (find-buffer-by-name buf-name)))
+    (if existing
+        (switch-to-buffer existing)
+        (let ((help-buf (make-help-buffer buf-name
+                                          (describe-bindings-to-string))))
+          (switch-to-buffer help-buf)))))
+
+;;; --------------------------------------------------------------------------
 ;;; Event Loop
 ;;; --------------------------------------------------------------------------
 
@@ -1718,6 +1817,10 @@ window as debug messages. Toggle interactively with C-c C-d.")
   "When non-nil, the next key event is combined with C-c prefix.
 C-c is reserved for buffer-mode-specific commands (e.g. C-c t).
 Quit is C-x C-c (global command, uses C-x prefix).")
+
+(defvar *ch-pending* nil
+  "When non-nil, the next key event is combined with C-h prefix.
+C-h is the help prefix (e.g. C-h b = describe bindings).")
 
 (defvar *openai-oauth-pending* nil
   "When non-nil, an alist storing the active OAuth flow state:
@@ -1832,6 +1935,9 @@ commands), or a list (:ctrl-c <key>) for C-c prefix (mode-specific commands)."
       (*cc-pending*
        (setf *cc-pending* nil)
        (list :ctrl-c key))
+      (*ch-pending*
+       (setf *ch-pending* nil)
+       (list :ctrl-h key))
       ;; ── Raw prefix detection (first key of a chord) ──
       ;; ESC received: set meta-pending, return nil (consume the ESC)
       ((and (characterp key) (char= key #\Esc))
@@ -1845,6 +1951,11 @@ commands), or a list (:ctrl-c <key>) for C-c prefix (mode-specific commands)."
       ;; C-c is the prefix for buffer-mode-specific commands.
       ((and (characterp key) (char= key #\Etx))
        (setf *cc-pending* t)
+       nil)
+      ;; C-h received (ASCII 8 = Backspace): set ch-pending, return nil.
+      ;; C-h is the help prefix (e.g. C-h b = describe bindings).
+      ((and (characterp key) (char= key (code-char 8)))
+       (setf *ch-pending* t)
        nil)
       ;; Normal key
       (t key))))
@@ -2517,7 +2628,7 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
             *minibuffer-callback* nil
             *minibuffer-max-height* 12)
       (setf *openai-oauth-pending* nil)
-      (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil)
+      (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil *ch-pending* nil)
       (add-buffer-to-ring buf)
       ;; Set sandbox root to the working directory
       (setf *sandbox-root* (truename "."))
