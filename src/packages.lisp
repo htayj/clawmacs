@@ -387,7 +387,9 @@
 
    ;; Debug mode
    #:*debug-mode*
+   #:*debug-log-file*
    #:debug-log
+   #:file-debug-log
    #:toggle-debug-mode-command
 
    ;; Main

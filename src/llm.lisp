@@ -1297,6 +1297,9 @@ in a background thread.  Returns a stream-state that the event loop polls."
          (ndjson-msg (claude-cli-build-ndjson-message messages session-id))
          (args (claude-cli-spawn-args model))
          (state (make-stream-state)))
+    (file-debug-log "cli-spawn" "session=~A model=~A args=(~{~A~^ ~})"
+                    session-id model args)
+    (file-debug-log "cli-stdin" "~A" ndjson-msg)
     ;; Spawn background thread to run the CLI and parse NDJSON output
     (bt:make-thread
      (lambda ()
@@ -1309,6 +1312,8 @@ in a background thread.  Returns a stream-state that the event loop polls."
                   (stdout (uiop:process-info-output proc))
                   (stderr (uiop:process-info-error-output proc))
                   (got-result nil))
+             (file-debug-log "cli-spawn" "process launched, pid=~A"
+                             (ignore-errors (uiop:process-info-pid proc)))
              (unwind-protect
                   (progn
                     ;; Send NDJSON message and close stdin
@@ -1317,14 +1322,17 @@ in a background thread.  Returns a stream-state that the event loop polls."
                     (force-output stdin)
                     (close stdin)
                     (setf stdin nil)
+                    (file-debug-log "cli-stdin" "message sent, stdin closed")
                     ;; Read NDJSON events from stdout
                     (loop :for line := (read-line stdout nil nil)
                           :while line
+                          :do (file-debug-log "cli-stdout" "~A" line)
                           :when (and (plusp (length line))
                                      (char= (char line 0) #\{))
                           :do (handler-case
                                   (let* ((event (api-json-decode line))
                                          (event-type (cdr (assoc :type event))))
+                                    (file-debug-log "cli-event" "type=~A" event-type)
                                     (cond
                                       ;; Streaming events (wrapped in stream_event)
                                       ;; Delegate to process-stream-event which handles
@@ -1338,6 +1346,8 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                        (let* ((inner (cdr (assoc :event event)))
                                               (inner-type (when inner
                                                             (cdr (assoc :type inner)))))
+                                         (file-debug-log "cli-stream" "inner-type=~A"
+                                                         inner-type)
                                          (when (and inner
                                                     (not (and inner-type
                                                               (string= inner-type
@@ -1345,6 +1355,7 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                            (process-stream-event inner state))))
                                       ;; Full assistant message (non-streaming fallback)
                                       ((string= event-type "assistant")
+                                       (file-debug-log "cli-event" "assistant message received")
                                        (let* ((message (cdr (assoc :message event)))
                                               (content (cdr (assoc :content message))))
                                          (when content
@@ -1368,6 +1379,11 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                       ((string= event-type "result")
                                        (setf got-result t)
                                        (let ((text (cdr (assoc :result event))))
+                                         (file-debug-log "cli-result"
+                                                         "result-text-length=~A blocks=~A stop=~A"
+                                                         (if text (length text) 0)
+                                                         (length (stream-state-content-blocks state))
+                                                         (stream-state-stop-reason state))
                                          (bt:with-lock-held ((stream-state-lock state))
                                            (when (and text (plusp (length text)))
                                              (setf (stream-state-text state) text
@@ -1387,12 +1403,14 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                        (let ((err (or (cdr (assoc :error event))
                                                       (cdr (assoc :message event))
                                                       "Unknown CLI error")))
+                                         (file-debug-log "cli-error" "~A" err)
                                          (bt:with-lock-held ((stream-state-lock state))
                                            (setf (stream-state-error-p state) err
                                                  (stream-state-done-p state) t)))
                                        (return))))
                                 (error (e)
-                                  (declare (ignore e))
+                                  (file-debug-log "cli-parse-error" "~A on line: ~A"
+                                                  e line)
                                   nil)))
                     ;; If CLI exited without result/error event, read stderr
                     (unless got-result
@@ -1403,6 +1421,8 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                           :while ch
                                           :do (write-char ch s)))
                                 (error () nil))))
+                        (file-debug-log "cli-stderr" "~A"
+                                        (or err-text "(empty)"))
                         (bt:with-lock-held ((stream-state-lock state))
                           (setf (stream-state-error-p state)
                                 (if (and err-text (plusp (length err-text)))
@@ -1417,10 +1437,16 @@ in a background thread.  Returns a stream-state that the event loop polls."
                (ignore-errors (close stderr))
                (ignore-errors (uiop:wait-process proc))))
          (error (e)
+           (file-debug-log "cli-fatal" "~A" e)
            (bt:with-lock-held ((stream-state-lock state))
              (setf (stream-state-error-p state) (format nil "~A" e)
                    (stream-state-done-p state) t))))
        ;; Ensure done flag is always set
+       (file-debug-log "cli-done" "thread finishing, done-p=~A error-p=~A blocks=~A stop=~A"
+                       (stream-state-done-p state)
+                       (stream-state-error-p state)
+                       (length (stream-state-content-blocks state))
+                       (stream-state-stop-reason state))
        (bt:with-lock-held ((stream-state-lock state))
          (setf (stream-state-done-p state) t)))
      :name "clawmacs-claude-cli-reader")

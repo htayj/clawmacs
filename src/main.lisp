@@ -183,15 +183,22 @@ polls for updates via update-streaming-response."
         (multiple-value-bind (provider model)
             (resolve-buffer-provider-and-model buf)
           ;; Debug: echo the outgoing request payload before sending
-          (debug-log buf
-            (format nil "[API REQUEST → ~(~A~)/~A  msg:~D  tools:~D]~%~A"
-                    provider model
-                    (length messages)
-                    (if tools (length tools) 0)
-                    (api-json-encode
-                     `((:messages . ,(coerce messages 'vector))
-                       ,@(when (and tools (plusp (length tools)))
-                           `((:tools . ,tools)))))))
+          (let ((req-json (api-json-encode
+                           `((:messages . ,(coerce messages 'vector))
+                             ,@(when (and tools (plusp (length tools)))
+                                 `((:tools . ,tools)))))))
+            (debug-log buf
+              (format nil "[API REQUEST → ~(~A~)/~A  msg:~D  tools:~D]~%~A"
+                      provider model
+                      (length messages)
+                      (if tools (length tools) 0)
+                      req-json))
+            (file-debug-log "api-request"
+                            "provider=~(~A~) model=~A msgs=~D tools=~D payload=~A"
+                            provider model
+                            (length messages)
+                            (if tools (length tools) 0)
+                            req-json))
           (let* ((state (provider-request-streaming
                        provider
                        messages
@@ -268,11 +275,17 @@ Returns T if still streaming, NIL if done."
               (set-message-text msg display)
               (setf (message-raw-content msg) canonical-content))
             ;; Debug: echo the completed response
-            (debug-log buf
-              (format nil "[API RESPONSE  stop:~A  blocks:~D]~%~A"
-                      (or stop-reason "nil")
-                      (length content-blocks)
-                      (api-json-encode (coerce canonical-content 'vector))))
+            (let ((resp-json (api-json-encode (coerce canonical-content 'vector))))
+              (debug-log buf
+                (format nil "[API RESPONSE  stop:~A  blocks:~D]~%~A"
+                        (or stop-reason "nil")
+                        (length content-blocks)
+                        resp-json))
+              (file-debug-log "api-response"
+                              "stop=~A blocks=~D content=~A"
+                              (or stop-reason "nil")
+                              (length content-blocks)
+                              resp-json))
             ;; Clear streaming state
             (setf (buffer-pending-stream buf) nil
                   (buffer-streaming-message buf) nil)
@@ -737,6 +750,31 @@ or nil if debug mode is off."
                               :bold-p nil :underline-p nil :reverse-p nil)))))
       (setf (message-face-set msg) debug-fs)
       msg)))
+
+(defun file-debug-log (category format-string &rest format-args)
+  "Append a timestamped debug entry to *debug-log-file* when set.
+CATEGORY is a short tag (e.g. \"cli-spawn\", \"ndjson\", \"stream-event\").
+Thread-safe: opens, writes, and closes the file on each call."
+  (when *debug-log-file*
+    (ignore-errors
+      (let ((line (format nil "[~A] [~A] ~?~%"
+                          (format-timestamp (get-universal-time))
+                          category
+                          format-string format-args)))
+        (with-open-file (f *debug-log-file*
+                           :direction :output
+                           :if-exists :append
+                           :if-does-not-exist :create
+                           :external-format :utf-8)
+          (write-string line f)
+          (force-output f))))))
+
+(defun format-timestamp (universal-time)
+  "Format UNIVERSAL-TIME as ISO 8601 local time string."
+  (multiple-value-bind (sec min hour day month year)
+      (decode-universal-time universal-time)
+    (format nil "~4,'0D-~2,'0D-~2,'0DT~2,'0D:~2,'0D:~2,'0D"
+            year month day hour min sec)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Face Registry Setup
@@ -1807,6 +1845,13 @@ Bound to C-h b."
   "When non-nil, all API requests and responses are echoed into the chat
 window as debug messages. Toggle interactively with C-c C-d.")
 
+(defvar *debug-log-file* nil
+  "When non-nil, a pathname to a file where detailed debug log entries are
+appended. Set via the --debug-log <path> command-line flag. Unlike
+*debug-mode* (which shows condensed info in the chat buffer), this logs
+raw NDJSON lines, stream state transitions, CLI spawn args, stderr
+output, and other low-level details useful for post-mortem debugging.")
+
 (defvar *meta-pending* nil
   "When non-nil, the next key event is combined with Meta (ESC prefix).")
 
@@ -2566,9 +2611,34 @@ Handles approval mode, deny-message mode, ESC prefix, and normal dispatch."
        nil)
       (t nil))))
 
+(defun parse-clawmacs-args ()
+  "Parse command-line arguments and environment variables.
+Recognized flags:
+  --debug-log <path>   Enable file-based debug logging to <path>.
+Environment variables:
+  CLAWMACS_DEBUG_LOG   Same as --debug-log (CLI flag takes precedence)."
+  ;; CLI args (everything after SBCL's -- separator)
+  (let ((args (uiop:command-line-arguments)))
+    (loop :while args
+          :for arg := (pop args)
+          :do (cond
+                ((string= arg "--debug-log")
+                 (let ((path (pop args)))
+                   (when path
+                     (setf *debug-log-file* (pathname path))))))))
+  ;; Environment variable fallback
+  (unless *debug-log-file*
+    (let ((env (uiop:getenv "CLAWMACS_DEBUG_LOG")))
+      (when (and env (plusp (length env)))
+        (setf *debug-log-file* (pathname env)))))
+  ;; Log startup marker
+  (when *debug-log-file*
+    (file-debug-log "startup" "debug log enabled, writing to ~A" *debug-log-file*)))
+
 (defun clawmacs-main (&key (session-name "clawmacs:session-01")
                            (agent-name "claude"))
   "Entry point for clawmacs. Initializes the TUI and runs the event loop."
+  (parse-clawmacs-args)
   (init-default-keymap)
   (init-tools)
   (init-global-faces)
