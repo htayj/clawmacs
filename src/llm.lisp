@@ -1186,10 +1186,14 @@ context, tagged with SESSION-ID."
                                     (:text . ,prompt-text))))))))))
 
 (defun claude-cli-spawn-args (model)
-  "Build the CLI argument list for spawning a Claude subprocess for MODEL."
+  "Build the CLI argument list for spawning a Claude subprocess for MODEL.
+Wraps with `env -u LD_LIBRARY_PATH` so the Nix-packaged CLI binary uses its
+own RPATH for library resolution instead of picking up incompatible Guix
+container libraries (e.g. OpenSSL version mismatch)."
   (let ((system-prompt (or (build-system-prompt)
                            "You are a helpful assistant.")))
-    (list *claude-cli-path*
+    (list "env" "-u" "LD_LIBRARY_PATH"
+          *claude-cli-path*
           "--input-format" "stream-json"
           "--output-format" "stream-json"
           "--verbose"
@@ -1300,9 +1304,11 @@ in a background thread.  Returns a stream-state that the event loop polls."
            (let* ((proc (uiop:launch-program args
                                               :input :stream
                                               :output :stream
-                                              :error-output nil))
+                                              :error-output :stream))
                   (stdin (uiop:process-info-input proc))
-                  (stdout (uiop:process-info-output proc)))
+                  (stdout (uiop:process-info-output proc))
+                  (stderr (uiop:process-info-error-output proc))
+                  (got-result nil))
              (unwind-protect
                   (progn
                     ;; Send NDJSON message and close stdin
@@ -1320,28 +1326,23 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                   (let* ((event (api-json-decode line))
                                          (event-type (cdr (assoc :type event))))
                                     (cond
-                                      ;; Streaming text deltas (wrapped in stream_event)
+                                      ;; Streaming events (wrapped in stream_event)
+                                      ;; Delegate to process-stream-event which handles
+                                      ;; all Anthropic event types (block start/delta/stop,
+                                      ;; message_delta for stop_reason, etc.)
+                                      ;; Pass the inner alist directly — no JSON roundtrip
+                                      ;; (api-json-encode/decode mangles underscore keys).
+                                      ;; Suppress message_stop — the CLI result event is
+                                      ;; the authoritative completion signal.
                                       ((string= event-type "stream_event")
                                        (let* ((inner (cdr (assoc :event event)))
                                               (inner-type (when inner
                                                             (cdr (assoc :type inner)))))
-                                         (when (and inner-type
-                                                    (string= inner-type
-                                                             "content_block_delta"))
-                                           (let* ((delta (cdr (assoc :delta inner)))
-                                                  (delta-type (when delta
-                                                                (cdr (assoc :type delta))))
-                                                  (text (when (and delta
-                                                                   (or (null delta-type)
-                                                                       (string= delta-type
-                                                                                "text_delta")))
-                                                          (cdr (assoc :text delta)))))
-                                             (when text
-                                               (bt:with-lock-held ((stream-state-lock state))
-                                                 (setf (stream-state-text state)
-                                                       (concatenate 'string
-                                                                    (stream-state-text state)
-                                                                    text))))))))
+                                         (when (and inner
+                                                    (not (and inner-type
+                                                              (string= inner-type
+                                                                       "message_stop"))))
+                                           (process-stream-event inner state))))
                                       ;; Full assistant message (non-streaming fallback)
                                       ((string= event-type "assistant")
                                        (let* ((message (cdr (assoc :message event)))
@@ -1362,16 +1363,27 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                                                  (stream-state-content-blocks
                                                                   state)))))))))
                                       ;; Result event — completion
+                                      ;; Only overwrite streamed text when result
+                                      ;; provides non-empty text (non-streaming fallback).
                                       ((string= event-type "result")
+                                       (setf got-result t)
                                        (let ((text (cdr (assoc :result event))))
                                          (bt:with-lock-held ((stream-state-lock state))
-                                           (setf (stream-state-text state) (or text "")
-                                                 (stream-state-content-blocks state)
-                                                 (list (canonical-text-block (or text "")))
-                                                 (stream-state-done-p state) t)))
+                                           (when (and text (plusp (length text)))
+                                             (setf (stream-state-text state) text
+                                                   (stream-state-content-blocks state)
+                                                   (list (canonical-text-block text))))
+                                           (when (null (stream-state-content-blocks state))
+                                             (setf (stream-state-content-blocks state)
+                                                   (list (canonical-text-block ""))))
+                                           (unless (stream-state-stop-reason state)
+                                             (setf (stream-state-stop-reason state)
+                                                   "end_turn"))
+                                           (setf (stream-state-done-p state) t)))
                                        (return))
                                       ;; Error event
                                       ((string= event-type "error")
+                                       (setf got-result t)
                                        (let ((err (or (cdr (assoc :error event))
                                                       (cdr (assoc :message event))
                                                       "Unknown CLI error")))
@@ -1381,10 +1393,28 @@ in a background thread.  Returns a stream-state that the event loop polls."
                                        (return))))
                                 (error (e)
                                   (declare (ignore e))
-                                  nil))))
+                                  nil)))
+                    ;; If CLI exited without result/error event, read stderr
+                    (unless got-result
+                      (let ((err-text
+                              (handler-case
+                                  (with-output-to-string (s)
+                                    (loop :for ch := (read-char-no-hang stderr nil nil)
+                                          :while ch
+                                          :do (write-char ch s)))
+                                (error () nil))))
+                        (bt:with-lock-held ((stream-state-lock state))
+                          (setf (stream-state-error-p state)
+                                (if (and err-text (plusp (length err-text)))
+                                    (format nil "Claude CLI exited without response: ~A"
+                                            (string-trim '(#\Newline #\Return #\Space)
+                                                         err-text))
+                                    (format nil "Claude CLI exited without response (command: ~{~A~^ ~})"
+                                            args)))))))
                ;; Cleanup process
                (when stdin (ignore-errors (close stdin)))
                (ignore-errors (close stdout))
+               (ignore-errors (close stderr))
                (ignore-errors (uiop:wait-process proc))))
          (error (e)
            (bt:with-lock-held ((stream-state-lock state))
@@ -1498,81 +1528,85 @@ SSE format: 'field: value' or just 'data: {...}'."
                        "")))
         (values field value)))))
 
+(defun process-stream-event (event state)
+  "Process a decoded SSE event alist and update STATE.
+EVENT is an already-decoded alist (not a JSON string)."
+  (let ((event-type (cdr (assoc :type event))))
+    (cond
+      ;; content_block_start: new content block beginning
+      ((string= "content_block_start" (or event-type ""))
+       (let ((block (cdr (assoc :content--block event))))
+         (when block
+           (bt:with-lock-held ((stream-state-lock state))
+             (push block (stream-state-content-blocks state))
+             ;; Reset accumulators for the new block
+             (setf (stream-state-text state) ""
+                   (stream-state-tool-input-json state) "")))))
+
+      ;; content_block_delta: incremental text or tool input JSON
+      ((string= "content_block_delta" (or event-type ""))
+       (let* ((delta (cdr (assoc :delta event)))
+              (delta-type (cdr (assoc :type delta))))
+         (cond
+           ((string= "text_delta" (or delta-type ""))
+            (let ((text (cdr (assoc :text delta))))
+              (when text
+                (bt:with-lock-held ((stream-state-lock state))
+                  (setf (stream-state-text state)
+                        (concatenate 'string (stream-state-text state) text))))))
+           ((string= "input_json_delta" (or delta-type ""))
+            (let ((partial (cdr (assoc :partial--json delta))))
+              (when partial
+                (bt:with-lock-held ((stream-state-lock state))
+                  (setf (stream-state-tool-input-json state)
+                        (concatenate 'string
+                                     (stream-state-tool-input-json state)
+                                     partial)))))))))
+
+      ;; content_block_stop: block finished
+      ((string= "content_block_stop" (or event-type ""))
+       (bt:with-lock-held ((stream-state-lock state))
+         (let* ((blocks (stream-state-content-blocks state))
+                (block (first blocks))
+                (block-type (when block (cdr (assoc :type block)))))
+           (cond
+             ;; Finalize text block
+             ((and block (string= "text" (or block-type "")))
+               (setf (first blocks)
+                     (canonical-text-block (stream-state-text state))))
+              ;; Finalize tool_use block: parse accumulated JSON into input
+              ((and block (string= "tool_use" (or block-type "")))
+               (let ((json-str (stream-state-tool-input-json state)))
+                 (setf (first blocks)
+                       (canonical-tool-use-block
+                        (cdr (assoc :id block))
+                        (cdr (assoc :name block))
+                        (when (plusp (length json-str))
+                          (handler-case
+                              (api-json-decode json-str)
+                            (error () nil))))))))
+            ;; Reset accumulators for next block
+            (setf (stream-state-text state) ""
+                  (stream-state-tool-input-json state) ""))))
+
+      ;; message_delta: stop reason
+      ((string= "message_delta" (or event-type ""))
+       (let ((delta (cdr (assoc :delta event))))
+         (when delta
+           (let ((stop-reason (cdr (assoc :stop--reason delta))))
+             (when stop-reason
+               (bt:with-lock-held ((stream-state-lock state))
+                 (setf (stream-state-stop-reason state) stop-reason)))))))
+
+      ;; message_stop: streaming complete
+      ((string= "message_stop" (or event-type ""))
+       (bt:with-lock-held ((stream-state-lock state))
+         (setf (stream-state-done-p state) t))))))
+
 (defun process-sse-event (data state)
   "Process a single SSE data payload (JSON string) and update STATE."
   (handler-case
-      (let* ((event (api-json-decode data))
-             (event-type (cdr (assoc :type event))))
-        (cond
-          ;; content_block_start: new content block beginning
-          ((string= "content_block_start" (or event-type ""))
-           (let ((block (cdr (assoc :content--block event))))
-             (when block
-               (bt:with-lock-held ((stream-state-lock state))
-                 (push block (stream-state-content-blocks state))
-                 ;; Reset accumulators for the new block
-                 (setf (stream-state-text state) ""
-                       (stream-state-tool-input-json state) "")))))
-
-          ;; content_block_delta: incremental text or tool input JSON
-          ((string= "content_block_delta" (or event-type ""))
-           (let* ((delta (cdr (assoc :delta event)))
-                  (delta-type (cdr (assoc :type delta))))
-             (cond
-               ((string= "text_delta" (or delta-type ""))
-                (let ((text (cdr (assoc :text delta))))
-                  (when text
-                    (bt:with-lock-held ((stream-state-lock state))
-                      (setf (stream-state-text state)
-                            (concatenate 'string (stream-state-text state) text))))))
-               ((string= "input_json_delta" (or delta-type ""))
-                (let ((partial (cdr (assoc :partial--json delta))))
-                  (when partial
-                    (bt:with-lock-held ((stream-state-lock state))
-                      (setf (stream-state-tool-input-json state)
-                            (concatenate 'string
-                                         (stream-state-tool-input-json state)
-                                         partial)))))))))
-
-          ;; content_block_stop: block finished
-          ((string= "content_block_stop" (or event-type ""))
-           (bt:with-lock-held ((stream-state-lock state))
-             (let* ((blocks (stream-state-content-blocks state))
-                    (block (first blocks))
-                    (block-type (when block (cdr (assoc :type block)))))
-               (cond
-                 ;; Finalize text block
-                 ((and block (string= "text" (or block-type "")))
-                   (setf (first blocks)
-                         (canonical-text-block (stream-state-text state))))
-                  ;; Finalize tool_use block: parse accumulated JSON into input
-                  ((and block (string= "tool_use" (or block-type "")))
-                   (let ((json-str (stream-state-tool-input-json state)))
-                     (setf (first blocks)
-                           (canonical-tool-use-block
-                            (cdr (assoc :id block))
-                            (cdr (assoc :name block))
-                            (when (plusp (length json-str))
-                              (handler-case
-                                  (api-json-decode json-str)
-                                (error () nil))))))))
-                ;; Reset accumulators for next block
-                (setf (stream-state-text state) ""
-                      (stream-state-tool-input-json state) ""))))
-
-          ;; message_delta: stop reason
-          ((string= "message_delta" (or event-type ""))
-           (let ((delta (cdr (assoc :delta event))))
-             (when delta
-               (let ((stop-reason (cdr (assoc :stop--reason delta))))
-                 (when stop-reason
-                   (bt:with-lock-held ((stream-state-lock state))
-                     (setf (stream-state-stop-reason state) stop-reason)))))))
-
-          ;; message_stop: streaming complete
-          ((string= "message_stop" (or event-type ""))
-           (bt:with-lock-held ((stream-state-lock state))
-             (setf (stream-state-done-p state) t)))))
+      (process-stream-event (api-json-decode data) state)
     (error (e)
       (declare (ignore e))
       ;; Silently skip malformed SSE events
