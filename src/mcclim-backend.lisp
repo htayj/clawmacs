@@ -763,6 +763,13 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
                    ;; Named key with no character → keyword
                    (t key-name))))))
     (cond
+      ;; C-h prefix — McCLIM delivers Control+h with key-name :backspace
+      ;; (ASCII 8 = BS), so we must check the modifier+character explicitly
+      ;; before the generic backspace handling below.
+      ((and ctrl-p (characterp char) (char-equal char #\h)
+            (not *meta-pending*) (not *cx-pending*) (not *cc-pending*) (not *ch-pending*))
+       (setf *ch-pending* t)
+       nil)
       ;; Ctrl+Backspace
       ((and ctrl-p (eq key :backspace))
        (list :ctrl :backspace))
@@ -796,10 +803,6 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
       ;; C-c prefix (ASCII 3)
       ((and (characterp key) (char= key #\Etx))
        (setf *cc-pending* t)
-       nil)
-      ;; C-h prefix (ASCII 8)
-      ((and (characterp key) (char= key (code-char 8)))
-       (setf *ch-pending* t)
        nil)
       ;; Normal key
       (t key))))
