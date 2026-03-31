@@ -415,6 +415,22 @@
    #:croatoan-backend
    #:mcclim-backend
 
+   ;; Croatoan color support
+   #:*terminal-color-count*
+
+   ;; McCLIM presentation types
+   #:chat-message
+   #:tool-call
+   #:buffer-ref
+   #:model-ref
+
+   ;; Popup GUI
+   #:*popup-frames*
+   #:spawn-mcclim-popup
+   #:cleanup-popup-frames
+   #:close-all-popup-frames
+   #:popup-gui-command
+
    ;; Main
    #:clawmacs-main
    #:send-to-agent-with-context

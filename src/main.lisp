@@ -726,6 +726,23 @@ Bound to C-c C-d."
        "[Debug mode OFF]")))
 
 ;;; --------------------------------------------------------------------------
+;;; Popup GUI Command
+;;; --------------------------------------------------------------------------
+
+(defcommand popup-gui-command (:permission :user-only)
+  "Spawn a read-only McCLIM X11 popup window showing the current buffer.
+Requires clawmacs/mcclim to be loaded. Bound to C-c g."
+  (buffer)
+  (let ((sym (find-symbol "SPAWN-MCCLIM-POPUP" :clawmacs)))
+    (if (and sym (fboundp sym))
+        (progn
+          (funcall sym)
+          (buffer-insert-system-message
+           buffer "[GUI popup spawned — read-only X11 viewer]"))
+        (buffer-insert-system-message
+         buffer "[McCLIM not loaded. Add (asdf:load-system :clawmacs/mcclim) to init.lisp]"))))
+
+;;; --------------------------------------------------------------------------
 ;;; Debug Logging
 ;;; --------------------------------------------------------------------------
 
@@ -2478,10 +2495,11 @@ KEY is already normalized by the backend before calling this."
                 (buffer-status buf) :idle)
           (set-message-text (buffer-input-message buf) ""))
          ;; Normal editing (but not send-message)
-         ((keymap-lookup (buffer-keymap buf) key)
-          (let ((command (keymap-lookup (buffer-keymap buf) key)))
-            (unless (eq command 'send-message)
-              (funcall command buf))))
+         ((let ((cmd (keymap-lookup (buffer-keymap buf) key)))
+            (when cmd
+              (unless (eq cmd 'send-message)
+                (funcall cmd buf))
+              t)))
          ;; Self-insert for pasting URL characters
          ((and (characterp key) (graphic-char-p key))
           (let ((*self-insert-char* key))
@@ -2498,11 +2516,11 @@ KEY is already normalized by the backend before calling this."
             (setf *deny-message-mode* nil)
             (handle-approval-response buf (cons :deny-with-message reason))))
          ;; Normal editing in the input area
-         ((keymap-lookup (buffer-keymap buf) key)
-          (let ((command (keymap-lookup (buffer-keymap buf) key)))
-            ;; Only allow editing commands, not send-message
-            (unless (eq command 'send-message)
-              (funcall command buf))))
+         ((let ((cmd (keymap-lookup (buffer-keymap buf) key)))
+            (when cmd
+              (unless (eq cmd 'send-message)
+                (funcall cmd buf))
+              t)))
          ((and (characterp key) (graphic-char-p key))
           (let ((*self-insert-char* key))
             (self-insert-command buf))))
@@ -2523,13 +2541,13 @@ KEY is already normalized by the backend before calling this."
 
       ;; === NORMAL MODE ===
       ;; Keymap lookup
-      ((keymap-lookup (buffer-keymap buf) key)
-       (let ((command (keymap-lookup (buffer-keymap buf) key)))
-         (funcall command buf)
-         (when (and (characterp key)
-                    (not (member command '(scroll-up-command scroll-down-command))))
-           (setf (buffer-scroll-offset buf) 0))
-         nil))
+      ((let ((command (keymap-lookup (buffer-keymap buf) key)))
+         (when command
+           (funcall command buf)
+           (when (and (characterp key)
+                      (not (member command '(scroll-up-command scroll-down-command))))
+             (setf (buffer-scroll-offset buf) 0))
+           t)))
       ;; Self-insert
       ((and (characterp key) (graphic-char-p key))
        (let ((*self-insert-char* key))

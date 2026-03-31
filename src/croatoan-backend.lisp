@@ -20,29 +20,76 @@ Three-window layout: main (chat), modeline (1 row), minibuffer (bottom)."))
 ;;; Croatoan Color Helpers
 ;;; --------------------------------------------------------------------------
 
+(defvar *terminal-color-count* 8
+  "Number of colors the terminal supports. Detected at startup by
+backend-run from ncurses COLORS. Used by color-spec-to-croatoan to decide
+whether bright CGA 8-15 and 256-color values can be passed directly.")
+
+(defun hex-to-256 (hex-string)
+  "Approximate a #RRGGBB hex color as a 256-color index (16-231 color cube
+or 232-255 grayscale). Returns an integer suitable for ncurses."
+  (let* ((r (parse-integer hex-string :start 1 :end 3 :radix 16))
+         (g (parse-integer hex-string :start 3 :end 5 :radix 16))
+         (b (parse-integer hex-string :start 5 :end 7 :radix 16)))
+    ;; Check if it's close to a grayscale value (232-255 = 24 shades)
+    (if (and (<= (abs (- r g)) 8) (<= (abs (- g b)) 8))
+        ;; Grayscale ramp: index 232 = rgb(8,8,8) .. 255 = rgb(238,238,238)
+        ;; Each step is ~10. Map average luminance to nearest index.
+        (let* ((avg (round (+ r g b) 3))
+               (idx (min 23 (max 0 (round (- avg 8) 10)))))
+          (+ 232 idx))
+        ;; 6x6x6 color cube: indices 16-231
+        ;; Each channel maps 0-255 to 0-5
+        (let ((ri (round (* r 5) 255))
+              (gi (round (* g 5) 255))
+              (bi (round (* b 5) 255)))
+          (+ 16 (* 36 ri) (* 6 gi) bi)))))
+
 (defun color-spec-to-croatoan (cs)
   "Convert a color-spec to a croatoan color keyword or integer.
-CGA 8-15 (bright variants) are mapped to their base 0-7 keyword colors
-because not all terminals support 256-color mode. When 256-color detection
-is added, these can use the integer values directly for terminals that
-support it."
+Croatoan's color-pair setter accepts:
+  - Keywords (:black, :red, etc.) for the 8 standard colors.
+  - Integers for extended 256-color indices (passed through color-to-number).
+Behavior depends on *terminal-color-count*:
+  8 colors:   CGA 8-15 collapse to base 0-7 keywords; 256/:hex → keyword fallback.
+  256 colors: CGA 0-7 as keywords, CGA 8-15 as integers; :256 as integers;
+              :hex approximated to 256."
   (ecase (color-spec-type cs)
     (:cga
      (let ((val (color-spec-value cs)))
+       ;; CGA 0-7 always map to keywords (works on all terminals).
+       ;; CGA 8-15 use integers on 256-color terminals, collapse on 8-color.
        (case val
-         ((0 8)   :black)       ; 8 = dark gray / bright black
-         ((1 9)   :red)         ; 9 = bright red
-         ((2 10)  :green)       ; 10 = bright green
-         ((3 11)  :yellow)      ; 11 = bright yellow
-         ((4 12)  :blue)        ; 12 = bright blue
-         ((5 13)  :magenta)     ; 13 = bright magenta
-         ((6 14)  :cyan)        ; 14 = bright cyan
-         ((7 15)  :white)       ; 15 = bright white
-         (otherwise val))))
+         (0  :black)
+         (1  :red)
+         (2  :green)
+         (3  :yellow)
+         (4  :blue)
+         (5  :magenta)
+         (6  :cyan)
+         (7  :white)
+         ;; Bright variants (CGA 8-15): use (:number N) for Croatoan's
+         ;; color-to-number dispatch on 256-color terminals.
+         (8  (if (>= *terminal-color-count* 256) '(:number 8)  :black))
+         (9  (if (>= *terminal-color-count* 256) '(:number 9)  :red))
+         (10 (if (>= *terminal-color-count* 256) '(:number 10) :green))
+         (11 (if (>= *terminal-color-count* 256) '(:number 11) :yellow))
+         (12 (if (>= *terminal-color-count* 256) '(:number 12) :blue))
+         (13 (if (>= *terminal-color-count* 256) '(:number 13) :magenta))
+         (14 (if (>= *terminal-color-count* 256) '(:number 14) :cyan))
+         (15 (if (>= *terminal-color-count* 256) '(:number 15) :white))
+         (otherwise (if (>= *terminal-color-count* 256) (list :number val) :white)))))
     (:256
-     (color-spec-value cs))
+     (if (>= *terminal-color-count* 256)
+         (list :number (color-spec-value cs))
+         ;; Degrade to nearest base color keyword
+         (let ((val (color-spec-value cs)))
+           (cond ((<= val 15) (color-spec-to-croatoan (make-color-spec :cga val)))
+                 (t :white)))))
     (:hex
-     :white)))
+     (if (>= *terminal-color-count* 256)
+         (list :number (hex-to-256 (color-spec-value cs)))
+         :white))))
 
 (defun apply-face-to-window (window resolved-face)
   "Set WINDOW's color pair and attributes from RESOLVED-FACE."
@@ -659,10 +706,19 @@ commands), or a list (:ctrl-c <key>) for C-c prefix (mode-specific commands)."
                    (croatoan:key-name raw-key)
                    raw-key)))
     (cond
+      ;; -- Modifier flags from Croatoan key structs --
+      ;; Croatoan reports Ctrl/Alt on special keys (backspace, arrows, etc.)
+      ;; via key-ctrl / key-alt flags. Handle all combinations here.
+      ((and ctrl-p alt-p)
+       (list :ctrl :alt key))
       ((and ctrl-p (eql key :backspace))
        (list :ctrl :backspace))
+      (ctrl-p
+       (list :ctrl key))
       ((and alt-p (eql key :backspace))
        (list :alt :backspace))
+      (alt-p
+       (list :alt key))
       ;; -- Pending prefix resolution (must come BEFORE raw prefix detection) --
       ;; When a prefix key was already pressed, the NEXT keystroke completes the
       ;; chord.  We must check these first, otherwise a raw C-c/C-x/ESC that
@@ -739,6 +795,19 @@ the event loop reading input and rendering until :QUIT is returned."
                              :enable-colors t
                              :process-control-chars nil)
     (setf (backend-screen b) scr)
+    ;; Mouse support: scroll wheel (buttons 4 & 5) for history navigation.
+    ;; NOTE: Disabled — the Quicklisp 2024-10 version of Croatoan crashes in
+    ;; make-key when decoding mouse events whose bitmask returns nil from
+    ;; get-mouse-event. The event loop handler below is ready for when
+    ;; Croatoan's mouse decoding is fixed.
+    ;; (ignore-errors (croatoan:set-mouse-event '(:button-4-press :button-5-press)))
+    ;; Detect terminal color support via the ncurses COLORS C global.
+    ;; Croatoan's defcvar exports COLORS (not *COLORS*) from the ncurses package.
+    (setf *terminal-color-count*
+          (max 8 (or (ignore-errors
+                       (cffi:foreign-symbol-pointer "COLORS")
+                       (cffi:mem-ref (cffi:foreign-symbol-pointer "COLORS") :int))
+                     8)))
     (let* ((screen-height (croatoan:height scr))
            (screen-width (croatoan:width scr))
            ;; Three-window layout: main (chat), modeline (1 row), minibuffer (bottom)
@@ -795,6 +864,21 @@ the event loop reading input and rendering until :QUIT is returned."
                               (typep (croatoan:event-key event) 'croatoan:key)
                               (eq :resize (croatoan:key-name
                                            (croatoan:event-key event))))
+                         (do-render (current-buffer)))
+                        ;; Mouse event -- scroll wheel for history navigation.
+                        ;; Croatoan mouse-events have event-key as a key struct
+                        ;; with :name being a keyword like :button-4-press.
+                        ((typep event 'croatoan:mouse-event)
+                         (let* ((raw-key (croatoan:event-key event))
+                                (btn (when (typep raw-key 'croatoan:key)
+                                       (croatoan:key-name raw-key))))
+                           (cond
+                             ;; Scroll wheel up (button 4)
+                             ((member btn '(:button-4-press :button-4-click))
+                              (handle-key-event buf :page-up))
+                             ;; Scroll wheel down (button 5)
+                             ((member btn '(:button-5-press :button-5-click))
+                              (handle-key-event buf :page-down))))
                          (do-render (current-buffer)))
                         ;; Key event -- normalize, dispatch, then re-render
                         (t

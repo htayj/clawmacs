@@ -186,11 +186,32 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
                 (clim:make-text-style :fix :roman :normal)))))
 
 ;;; --------------------------------------------------------------------------
+;;; Presentation Types — semantic mouse interaction
+;;;
+;;; CLIM presentation types make rendered objects clickable. Each type
+;;; defines what kind of object is displayed, and translators define
+;;; what actions are available when the user interacts with them.
+;;; --------------------------------------------------------------------------
+
+(clim:define-presentation-type chat-message ()
+  :description "a chat message")
+
+(clim:define-presentation-type tool-call ()
+  :description "a tool call")
+
+(clim:define-presentation-type buffer-ref ()
+  :description "a buffer reference")
+
+(clim:define-presentation-type model-ref ()
+  :description "a model reference")
+
+;;; --------------------------------------------------------------------------
 ;;; Application Frame
 ;;; --------------------------------------------------------------------------
 
 (clim:define-application-frame clawmacs-gui ()
   ((backend :initarg :backend :accessor frame-backend)
+   (always-poll-p :initarg :always-poll-p :accessor frame-always-poll-p :initform nil)
    (char-width :accessor frame-char-width :initform 0)
    (char-height :accessor frame-char-height :initform 0)
    (quit-flag :accessor frame-quit-flag :initform nil))
@@ -310,13 +331,17 @@ top-level sheet dimensions to prevent exponential growth."
       (mcclim-render-modeline pane buf cols char-w char-h))))
 
 (defun mcclim-render-modeline (pane buf cols char-w char-h)
-  "Render the modeline string into PANE using the modeline face."
+  "Render the modeline string into PANE using the modeline face.
+Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
   (let* ((ml-face (make-modeline-face))
          (resolved (resolve-face ml-face))
          (text (format-modeline buf cols :major-mode (buffer-major-mode buf))))
-    (multiple-value-bind (fg bg ts) (resolve-face-inks resolved)
-      (fill-row pane 0 cols bg char-w char-h)
-      (draw-text-at pane 0 0 text fg bg ts char-w char-h))))
+    (clim:updating-output (pane :unique-id 'modeline-content
+                                :cache-value text
+                                :cache-test #'string=)
+      (multiple-value-bind (fg bg ts) (resolve-face-inks resolved)
+        (fill-row pane 0 cols bg char-w char-h)
+        (draw-text-at pane 0 0 text fg bg ts char-w char-h)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Who-Line Display
@@ -332,17 +357,19 @@ top-level sheet dimensions to prevent exponential growth."
     (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
       (declare (ignore rows))
       (multiple-value-bind (row1 row2) (format-who-line buf cols)
-        (let ((wl-bg (clim:make-rgb-color 0.93 0.93 0.93))
-              (wl-fg (clim:make-rgb-color 0.0 0.0 0.0))
-              (wl-ts (clim:make-text-style :fix :roman :normal)))
-          (fill-row pane 0 cols wl-bg char-w char-h)
-          (fill-row pane 1 cols wl-bg char-w char-h)
-          (draw-text-at pane 0 0
-                        (subseq row1 0 (min (length row1) cols))
-                        wl-fg wl-bg wl-ts char-w char-h)
-          (draw-text-at pane 1 0
-                        (subseq row2 0 (min (length row2) cols))
-                        wl-fg wl-bg wl-ts char-w char-h))))))
+        (let ((cache-key (concatenate 'string row1 "|" row2)))
+          (clim:updating-output (pane :unique-id 'who-line-content
+                                      :cache-value cache-key
+                                      :cache-test #'string=)
+            (multiple-value-bind (wl-fg wl-bg wl-ts) (resolve-global-face-inks :who-line)
+              (fill-row pane 0 cols wl-bg char-w char-h)
+              (fill-row pane 1 cols wl-bg char-w char-h)
+              (draw-text-at pane 0 0
+                            (subseq row1 0 (min (length row1) cols))
+                            wl-fg wl-bg wl-ts char-w char-h)
+              (draw-text-at pane 1 0
+                            (subseq row2 0 (min (length row2) cols))
+                            wl-fg wl-bg wl-ts char-w char-h))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Main Pane Display
@@ -423,8 +450,12 @@ When the minibuffer is active, draws a centered popup overlay on top."
              (scroll-offset (min (buffer-scroll-offset buf) max-scroll))
              (visible-bottom (- total-history-rows scroll-offset))
              (visible-top (- visible-bottom history-height)))
-        (setf (buffer-scroll-offset buf) scroll-offset)
-        ;; Render visible history messages
+        ;; Only write scroll-offset if this is the primary frame (not a popup),
+        ;; to avoid cross-thread writes from read-only popup viewers.
+        (unless (frame-always-poll-p (clim:pane-frame pane))
+          (setf (buffer-scroll-offset buf) scroll-offset))
+        ;; Render visible history messages — wrapped in presentation types
+        ;; so they are clickable objects in CLIM's semantic interaction model.
         (let ((virtual-row 0))
           (loop :for msg :in history-messages
                 :for msg-h :in msg-heights
@@ -433,10 +464,14 @@ When the minibuffer is active, draws a centered popup overlay on top."
                 :do (setf virtual-row msg-bottom)
                     (when (and (< msg-top visible-bottom)
                                (> msg-bottom visible-top))
-                      (let ((screen-row (+ 1 (- msg-top visible-top))))
-                        (mcclim-render-message-lines pane msg screen-row width
-                                                     char-w char-h
-                                                     :max-rows history-height)))))))
+                      (let ((screen-row (+ 1 (- msg-top visible-top)))
+                            (ptype (if (eq :tool-result (message-sender msg))
+                                       'tool-call
+                                       'chat-message)))
+                        (clim:with-output-as-presentation (pane msg ptype)
+                          (mcclim-render-message-lines pane msg screen-row width
+                                                       char-w char-h
+                                                       :max-rows history-height))))))))
     ;; Render input area
     (if (buffer-approval-pending buf)
         (mcclim-render-approval-prompt pane buf input-start-row cols char-w char-h rows)
@@ -631,7 +666,7 @@ Returns the number of visual rows consumed."
           (draw-text-at pane 3 0
                         (subseq header 0 (min (length header) width))
                         fg bg ts char-w char-h))))
-    ;; Buffer entries
+    ;; Buffer entries — wrapped as buffer-name presentations for clickability
     (loop :for absolute-idx :from scroll
           :below (min (+ scroll max-entries) num-buffers)
           :for buf := (nth absolute-idx buffers)
@@ -649,14 +684,15 @@ Returns the number of visual rows consumed."
           :for msg-count := (max 0 (1- (buffer-message-count buf)))
           :for count-str := (format nil "~D" msg-count)
           :for line := (format-selector-line marker name agent status count-str width)
-          :do (multiple-value-bind (fg bg ts)
-                  (resolve-global-face-inks (if selected-p
-                                                :selector-selected
-                                                :selector-entry))
-                (fill-row pane row width bg char-w char-h)
-                (draw-text-at pane row 0
-                              (subseq line 0 (min (length line) width))
-                              fg bg ts char-w char-h)))
+          :do (clim:with-output-as-presentation (pane buf 'buffer-ref)
+                (multiple-value-bind (fg bg ts)
+                    (resolve-global-face-inks (if selected-p
+                                                  :selector-selected
+                                                  :selector-entry))
+                  (fill-row pane row width bg char-w char-h)
+                  (draw-text-at pane row 0
+                                (subseq line 0 (min (length line) width))
+                                fg bg ts char-w char-h))))
     ;; Scroll indicator
     (when (> num-buffers max-entries)
       (let ((indicator (format nil "[~D-~D of ~D]"
@@ -733,7 +769,7 @@ Returns the number of visual rows consumed."
           (draw-text-at pane 3 0
                         (subseq header 0 (min (length header) width))
                         fg bg ts char-w char-h))))
-    ;; Model entries
+    ;; Model entries — wrapped as model-name presentations for clickability
     (loop :for absolute-idx :from scroll
           :below (min (+ scroll max-visible) num-entries)
           :for entry := (nth absolute-idx entries)
@@ -748,14 +784,15 @@ Returns the number of visual rows consumed."
                                (active-p " *")
                                (t "  "))
           :for line := (format-model-selector-line marker provider model width)
-          :do (multiple-value-bind (fg bg ts)
-                  (resolve-global-face-inks (if selected-p
-                                                :selector-selected
-                                                :selector-entry))
-                (fill-row pane row width bg char-w char-h)
-                (draw-text-at pane row 0
-                              (subseq line 0 (min (length line) width))
-                              fg bg ts char-w char-h)))
+          :do (clim:with-output-as-presentation (pane entry 'model-ref)
+                (multiple-value-bind (fg bg ts)
+                    (resolve-global-face-inks (if selected-p
+                                                  :selector-selected
+                                                  :selector-entry))
+                  (fill-row pane row width bg char-w char-h)
+                  (draw-text-at pane row 0
+                                (subseq line 0 (min (length line) width))
+                                fg bg ts char-w char-h))))
     ;; Scroll indicator
     (when (> num-entries max-visible)
       (let ((indicator (format nil "[~D-~D of ~D]"
@@ -794,45 +831,40 @@ Returns the number of visual rows consumed."
             (draw-text-at modeline-pane 0 0 padded fg bg ts char-w char-h)))))))
 
 ;;; --------------------------------------------------------------------------
-;;; Candidate Row Rendering (shared by popup completion)
-;;; --------------------------------------------------------------------------
-
-(defun mcclim-render-candidate-row (pane row display match-positions
-                                    selected-p cols char-w char-h)
-  "Render a single minibuffer candidate with fuzzy match highlighting."
-  (let* ((base-face-name (if selected-p :minibuffer-selected :minibuffer-candidate))
-         (match-face-name (if selected-p :minibuffer-selected-match :minibuffer-match))
-         (match-set (when match-positions
-                      (let ((ht (make-hash-table :test #'eql)))
-                        (dolist (p match-positions ht)
-                          (setf (gethash p ht) t))))))
-    ;; Clear row background
-    (multiple-value-bind (fg bg ts) (resolve-global-face-inks base-face-name)
-      (declare (ignore fg ts))
-      (fill-row pane row cols bg char-w char-h))
-    ;; Write "  " indent + each character with appropriate face
-    (multiple-value-bind (base-fg base-bg base-ts) (resolve-global-face-inks base-face-name)
-      (draw-text-at pane row 0 "  " base-fg base-bg base-ts char-w char-h)
-      (loop :for i :from 0 :below (length display)
-            :for col :from 2
-            :while (< col cols)
-            :for ch := (char display i)
-            :for matched-p := (and match-set (gethash i match-set))
-            :do (if matched-p
-                    (multiple-value-bind (mfg mbg mts)
-                        (resolve-global-face-inks match-face-name)
-                      (draw-text-at pane row col (string ch)
-                                    mfg mbg mts char-w char-h))
-                    (draw-text-at pane row col (string ch)
-                                  base-fg base-bg base-ts char-w char-h))))))
-
-;;; --------------------------------------------------------------------------
 ;;; Popup Completion Overlay
 ;;; --------------------------------------------------------------------------
 
+(defun draw-fuzzy-match-spans (pane row start-col text match-set
+                               base-fg base-bg base-ts
+                               match-fg match-bg match-ts
+                               char-w char-h)
+  "Draw TEXT at (ROW, START-COL) with match-highlighted characters in spans.
+Instead of drawing per-character, collects consecutive same-style characters
+into spans and draws each span as a single draw-text-at call."
+  (let ((len (length text))
+        (span-start 0)
+        (span-matched nil))
+    (labels ((flush-span (end)
+               (when (> end span-start)
+                 (let ((span-text (subseq text span-start end))
+                       (col (+ start-col span-start)))
+                   (if span-matched
+                       (draw-text-at pane row col span-text
+                                     match-fg match-bg match-ts char-w char-h)
+                       (draw-text-at pane row col span-text
+                                     base-fg base-bg base-ts char-w char-h))))))
+      (loop :for i :from 0 :below len
+            :for cur-matched := (and match-set (gethash i match-set))
+            :do (when (and (plusp i) (not (eq (not cur-matched) (not span-matched))))
+                  (flush-span i)
+                  (setf span-start i))
+                (setf span-matched cur-matched))
+      (flush-span len))))
+
 (defun mcclim-render-completion-popup (pane cols rows char-w char-h)
   "Render a centered popup overlay for minibuffer completion on the main pane.
-Drawn on top of existing buffer content when *minibuffer-active* is true."
+Drawn on top of existing buffer content when *minibuffer-active* is true.
+Uses span-batched drawing for fuzzy-match highlighting instead of per-character."
   (let* ((items *minibuffer-filtered-items*)
          (positions *minibuffer-match-positions*)
          (selected *minibuffer-selected-index*)
@@ -846,8 +878,11 @@ Drawn on top of existing buffer content when *minibuffer-active* is true."
          ;; Center position
          (popup-left (floor (- cols popup-w) 2))
          (popup-top (floor (- rows popup-h) 2))
-         ;; Colors
-         (popup-bg (clim:make-rgb-color 0.94 0.94 0.94))
+         ;; Popup background from face system (candidate face bg or light gray)
+         (popup-bg (multiple-value-bind (fg bg ts)
+                       (resolve-global-face-inks :minibuffer-candidate)
+                     (declare (ignore fg ts))
+                     bg))
          (border-ink (clim:make-rgb-color 0.4 0.4 0.4))
          ;; Pixel coordinates for border
          (px-left (* popup-left char-w))
@@ -885,7 +920,7 @@ Drawn on top of existing buffer content when *minibuffer-active* is true."
             (multiple-value-bind (fg bg ts) (resolve-global-face-inks :minibuffer-cursor)
               (draw-text-at pane row cursor-col (string char-at-cursor)
                             fg bg ts char-w char-h))))))
-    ;; Candidate rows
+    ;; Candidate rows — batched span drawing instead of per-character
     (loop :for row-idx :from 0 :below item-rows
           :for item-idx := (+ scroll row-idx)
           :while (< item-idx total)
@@ -896,7 +931,6 @@ Drawn on top of existing buffer content when *minibuffer-active* is true."
           :for match-pos := (nth item-idx positions)
           :for selected-p := (= item-idx selected)
           :do
-             ;; Fill row background within popup bounds
              (let* ((base-face-name (if selected-p :minibuffer-selected :minibuffer-candidate))
                     (match-face-name (if selected-p :minibuffer-selected-match :minibuffer-match))
                     (match-set (when match-pos
@@ -910,21 +944,17 @@ Drawn on top of existing buffer content when *minibuffer-active* is true."
                                        (+ px-left char-w) (* row char-h)
                                        (- px-right char-w) (* (1+ row) char-h)
                                        :ink base-bg)
-                 ;; Indent + characters with match highlighting
+                 ;; Indent
                  (draw-text-at pane row (+ popup-left 1) "  "
                                base-fg base-bg base-ts char-w char-h)
-                 (loop :for i :from 0 :below (length display-trimmed)
-                       :for col :from (+ popup-left 3)
-                       :for ch := (char display-trimmed i)
-                       :for matched-p := (and match-set (gethash i match-set))
-                       :do (if matched-p
-                               (multiple-value-bind (mfg mbg mts)
-                                   (resolve-global-face-inks match-face-name)
-                                 (draw-text-at pane row col (string ch)
-                                               mfg mbg mts char-w char-h))
-                               (draw-text-at pane row col (string ch)
-                                             base-fg base-bg base-ts
-                                             char-w char-h))))))))
+                 ;; Draw text with span-batched fuzzy match highlighting
+                 (multiple-value-bind (match-fg match-bg match-ts)
+                     (resolve-global-face-inks match-face-name)
+                   (draw-fuzzy-match-spans pane row (+ popup-left 3)
+                                           display-trimmed match-set
+                                           base-fg base-bg base-ts
+                                           match-fg match-bg match-ts
+                                           char-w char-h)))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Key Normalization (McCLIM-specific)
@@ -1028,13 +1058,16 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
                                           :min-height (* 2 char-h)
                                           :max-height (* 2 char-h)))))))
 
-(defun redisplay-all (frame)
-  "Resize panes and force redisplay of main, who-line, and modeline."
+(defun redisplay-all (frame &key force-p)
+  "Resize panes and redisplay main, who-line, and modeline.
+When FORCE-P is nil (default), uses incremental redisplay — CLIM compares
+output records and only repaints changed regions. When FORCE-P is t, forces
+a full redraw of all panes (used after resize or mode changes)."
   (update-pane-sizes frame)
   (dolist (pane-name '(main-pane who-line-pane modeline-pane))
     (let ((pane (clim:find-pane-named frame pane-name)))
       (when pane
-        (clim:redisplay-frame-pane frame pane :force-p t)))))
+        (clim:redisplay-frame-pane frame pane :force-p force-p)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Custom Top-Level Event Loop
@@ -1050,50 +1083,108 @@ and all mediums are connected to the X11 backend."
   ;; Let CLIM handle initial display via its own redisplay machinery,
   ;; then force a redisplay once we enter the event loop.
   ;; Main event loop
-  (loop :until (frame-quit-flag frame)
-        :for buf := (current-buffer)
-        :for streaming := (buffer-pending-stream buf)
-        :for need-redisplay := nil
-        :do (let ((event (if streaming
-                              (clim:event-read-no-hang
-                               (clim:frame-top-level-sheet frame))
-                              (clim:event-read
-                               (clim:frame-top-level-sheet frame)))))
-               (cond
-                 ;; Timeout path: sleep briefly before next poll
-                 ((null event)
-                  (sleep 0.05))
-                 ;; Key press event
-                 ((typep event 'clim:key-press-event)
-                  (let* ((key (mcclim-normalize-key event)))
-                    (when key
-                      (let ((result (handle-key-event buf key)))
-                        (when (eq result :quit)
-                          (setf (frame-quit-flag frame) t)))))
-                  (setf need-redisplay t))
-                 ;; Other events (pointer, exposure, etc.) — let CLIM handle
-                 (t
-                  (clim:handle-event (clim:event-sheet event) event))))
-            ;; Always poll streaming when active — regardless of event type.
-            ;; This prevents X11 events (exposure, pointer) from starving
-            ;; the streaming poll, and ensures the final response is
-            ;; displayed immediately when the stream completes.
-            (let ((cur (current-buffer)))
-              (when (buffer-pending-stream cur)
-                (update-streaming-response cur)
-                (setf need-redisplay t)))
-            ;; Redisplay when something changed
-            (when (or need-redisplay streaming)
-              ;; Update scroll page size (window may have resized)
-              (let* ((main-pane (clim:find-pane-named frame 'main-pane))
-                     (char-w (frame-char-width frame))
-                     (char-h (frame-char-height frame)))
-                (when (and (plusp char-w) (plusp char-h))
-                  (multiple-value-bind (cols rows)
-                      (pane-grid-dimensions main-pane char-w char-h)
-                    (declare (ignore cols))
-                    (setf *scroll-page-size* (max 1 (- rows 3))))))
-              (redisplay-all frame))))
+  (let ((poll-mode (frame-always-poll-p frame)))
+    (loop :until (frame-quit-flag frame)
+          :for buf := (current-buffer)
+          :for streaming := (buffer-pending-stream buf)
+          :for need-redisplay := nil
+          :do (let ((event (if (or streaming poll-mode)
+                                (clim:event-read-no-hang
+                                 (clim:frame-top-level-sheet frame))
+                                (clim:event-read
+                                 (clim:frame-top-level-sheet frame)))))
+                 (cond
+                   ;; Timeout path: sleep before next poll
+                   ((null event)
+                    (sleep (if (and poll-mode (not streaming)) 0.2 0.05)))
+                   ;; Key press event — suppress in popup to avoid corrupting
+                   ;; shared prefix key state (*meta-pending* etc.)
+                   ((typep event 'clim:key-press-event)
+                    (unless poll-mode
+                      (let* ((key (mcclim-normalize-key event)))
+                        (when key
+                          (let ((result (handle-key-event buf key)))
+                            (when (eq result :quit)
+                              (setf (frame-quit-flag frame) t))))))
+                    (setf need-redisplay t))
+                   ;; Other events (pointer, exposure, etc.) — let CLIM handle
+                   (t
+                    (clim:handle-event (clim:event-sheet event) event))))
+              ;; Always poll streaming when active — regardless of event type.
+              ;; This prevents X11 events (exposure, pointer) from starving
+              ;; the streaming poll, and ensures the final response is
+              ;; displayed immediately when the stream completes.
+              (unless poll-mode
+                (let ((cur (current-buffer)))
+                  (when (buffer-pending-stream cur)
+                    (update-streaming-response cur)
+                    (setf need-redisplay t))))
+              ;; Redisplay when something changed
+              (when (or need-redisplay streaming poll-mode)
+                ;; Update scroll page size (window may have resized)
+                ;; — but only for the primary frame, not popups
+                (unless poll-mode
+                  (let* ((main-pane (clim:find-pane-named frame 'main-pane))
+                         (char-w (frame-char-width frame))
+                         (char-h (frame-char-height frame)))
+                    (when (and (plusp char-w) (plusp char-h))
+                      (multiple-value-bind (cols rows)
+                          (pane-grid-dimensions main-pane char-w char-h)
+                        (declare (ignore cols))
+                        (setf *scroll-page-size* (max 1 (- rows 3)))))))
+                ;; Use incremental redisplay: modeline and who-line use
+                ;; updating-output with cache keys, so CLIM skips unchanged panes.
+                ;; Force full redraw only on exposure/resize events.
+                (redisplay-all frame)))))
+
+;;; --------------------------------------------------------------------------
+;;; Popup Frame Lifecycle (read-only X11 viewer from terminal mode)
+;;; --------------------------------------------------------------------------
+
+(defvar *popup-frames* nil
+  "List of (frame . thread) pairs for active popup viewers.")
+
+(defun cleanup-popup-frames ()
+  "Remove entries from *popup-frames* whose threads are no longer alive."
+  (setf *popup-frames*
+        (remove-if-not (lambda (pair)
+                         (bt:thread-alive-p (cdr pair)))
+                       *popup-frames*)))
+
+(defun close-all-popup-frames ()
+  "Signal all popup frames to quit and wait for their threads to finish."
+  (dolist (pair *popup-frames*)
+    (let ((frame (car pair)))
+      (setf (frame-quit-flag frame) t)))
+  ;; Give threads a moment to exit, then clean up
+  (sleep 0.5)
+  (cleanup-popup-frames))
+
+(defun spawn-mcclim-popup ()
+  "Spawn a read-only McCLIM popup window in a background thread.
+Uses dark theme (black background) and polls for redisplay at ~200ms.
+Keyboard input is suppressed to avoid corrupting shared prefix key state."
+  (cleanup-popup-frames)
+  (let ((thread
+          (bt:make-thread
+           (lambda ()
+             (let ((*mcclim-bg-ink* (clim:make-rgb-color 0.0 0.0 0.0)))
+               (handler-case
+                   (let ((frame (clim:make-application-frame
+                                 'clawmacs-gui
+                                 :backend nil
+                                 :always-poll-p t
+                                 :width 900
+                                 :height 700)))
+                     (push (cons frame (bt:current-thread)) *popup-frames*)
+                     (clim:run-frame-top-level frame))
+                 (error (c)
+                   (ignore-errors
+                     (format *error-output*
+                             "~&Popup frame error: ~A~%" c))))))
+           :name "clawmacs-popup")))
+    (declare (ignore thread))
+    t))
 
 ;;; --------------------------------------------------------------------------
 ;;; Backend Class and Entry Point

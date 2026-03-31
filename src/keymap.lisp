@@ -90,6 +90,9 @@
     (keymap-bind km #\Rubout 'delete-char-backward-command)
     (keymap-bind km :backspace 'delete-char-backward-command)
     (keymap-bind km (code-char 4) 'delete-char-forward-command) ; C-d = ASCII 4
+    ;; Home / End — cursor to beginning / end of line
+    (keymap-bind km :home 'beginning-of-line-command)
+    (keymap-bind km :end 'end-of-line-command)
     ;; Scroll: Page Up / Page Down
     ;; Croatoan delivers special keys as KEY structs; we extract :name
     ;; in handle-key-event, so bind by the keyword name.
@@ -111,6 +114,8 @@
     (keymap-bind km '(:ctrl-c #\Newline) 'minibuffer-select-model-command) ; C-c C-m (LF variant)
     ;; C-c M (capital M) = old overlay model selector
     (keymap-bind km '(:ctrl-c #\M) 'select-model-command)
+    ;; C-c g = spawn read-only McCLIM popup window
+    (keymap-bind km '(:ctrl-c #\g) 'popup-gui-command)
     ;; C-c C-d = toggle API debug mode (echo requests/responses in chat)
     ;; C-d = ASCII 4 = #\Eot (end of transmission)
     (keymap-bind km (list :ctrl-c (code-char 4)) 'toggle-debug-mode-command)
