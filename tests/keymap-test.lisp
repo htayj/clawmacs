@@ -48,6 +48,12 @@
   (is (eq 'clawmacs::delete-char-forward-command
           (keymap-lookup *default-keymap* (code-char 4)))))
 
+(test default-keymap-redraw-screen-binding
+  "Default keymap binds Ctrl+l to request a full redraw."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::redraw-screen-command
+          (keymap-lookup *default-keymap* (code-char 12)))))
+
 (test default-keymap-backspace-bindings
   "Default keymap binds backspace variants to backward char delete."
   (clawmacs::init-default-keymap)

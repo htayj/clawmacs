@@ -69,6 +69,23 @@
       (is (search "openai-codex/gpt-5.4" pm))
       (is (search "[think:high]" pm)))))
 
+(test format-who-line-default-includes-redraw-hint
+  "Default who-line help mentions the redraw keybinding."
+  (let ((*minibuffer-active* nil)
+        (*buffer-selector-active* nil)
+        (*model-selector-active* nil)
+        (*think-selector-active* nil)
+        (*customize-face-state* nil)
+        (*openai-oauth-pending* nil)
+        (*deny-message-mode* nil)
+        (clawmacs::*buffer-ring* nil))
+    (let ((buf (make-buffer "s1" :agent-name "agent"
+                            :working-directory #P"/tmp/")))
+      (multiple-value-bind (row1 row2)
+          (clawmacs::format-who-line buf 120)
+        (declare (ignore row1))
+        (is (search "C-l: redraw" row2))))))
+
 (test format-modeline-truncates-to-width
   "format-modeline truncates when content exceeds width."
   (let* ((buf (make-buffer "very-long-session-name" :agent-name "long-agent-name"

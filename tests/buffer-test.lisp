@@ -184,6 +184,23 @@
     (is (null (clawmacs::buffer-previous-command-first-argument buf)))
     (is (string= "ls" (clawmacs::buffer-previous-command-last-argument buf)))))
 
+(test handle-key-event-control-l-requests-redraw-in-minibuffer-mode
+  "Ctrl+l requests a redraw even when modal UI state like the minibuffer is active."
+  (let ((*minibuffer-active* t)
+        (*buffer-selector-active* nil)
+        (*model-selector-active* nil)
+        (*think-selector-active* nil)
+        (*customize-face-state* nil)
+        (*openai-oauth-pending* nil)
+        (*deny-message-mode* nil)
+        (*cc-pending* nil)
+        (*cx-pending* nil)
+        (*ch-pending* nil)
+        (*meta-pending* nil))
+    (let ((buf (make-buffer "test")))
+      (is (eq :redraw
+              (clawmacs::handle-key-event buf (code-char 12)))))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Selector Tests
 ;;; --------------------------------------------------------------------------

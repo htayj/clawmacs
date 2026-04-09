@@ -939,7 +939,10 @@ the event loop reading input and rendering until :QUIT is returned."
       (croatoan:refresh scr)
       ;; Local render helper: updates window layout (for dynamic minibuffer height)
       ;; then renders all three windows. Centralizes the render dispatch.
-      (labels ((do-render (buf)
+      (labels ((do-render (buf &key force-p)
+                 (when force-p
+                   (croatoan:clear scr)
+                   (croatoan:refresh scr))
                  (update-window-layout scr main-win modeline-win minibuffer-win)
                  (cond
                    (*buffer-selector-active*
@@ -997,10 +1000,10 @@ the event loop reading input and rendering until :QUIT is returned."
                         (t
                          (let ((result (handle-key-event buf (normalize-key event))))
                            (when (eq result :quit)
-                             (return-from main-loop)))
-                         (let ((cur (current-buffer)))
-                           (when (buffer-pending-stream cur)
-                             (update-streaming-response cur))
-                           (when *openai-oauth-pending*
-                             (update-openai-oauth-login))
-                           (do-render cur)))))))))))
+                             (return-from main-loop))
+                           (let ((cur (current-buffer)))
+                             (when (buffer-pending-stream cur)
+                               (update-streaming-response cur))
+                             (when *openai-oauth-pending*
+                               (update-openai-oauth-login))
+                             (do-render cur :force-p (eq result :redraw)))))))))))))

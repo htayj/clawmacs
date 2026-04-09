@@ -1185,6 +1185,7 @@ and all mediums are connected to the X11 backend."
           :for buf := (current-buffer)
           :for streaming := (buffer-pending-stream buf)
           :for need-redisplay := nil
+          :for force-redisplay := nil
           :do (let ((event (if (or streaming poll-mode)
                                 (clim:event-read-no-hang
                                  (clim:frame-top-level-sheet frame))
@@ -1202,7 +1203,9 @@ and all mediums are connected to the X11 backend."
                         (when key
                           (let ((result (handle-key-event buf key)))
                             (when (eq result :quit)
-                              (setf (frame-quit-flag frame) t))))))
+                              (setf (frame-quit-flag frame) t))
+                            (when (eq result :redraw)
+                              (setf force-redisplay t))))))
                     (setf need-redisplay t))
                    ;; Other events (pointer, exposure, etc.) — let CLIM handle
                    (t
@@ -1232,7 +1235,7 @@ and all mediums are connected to the X11 backend."
                 ;; Use incremental redisplay: modeline and who-line use
                 ;; updating-output with cache keys, so CLIM skips unchanged panes.
                 ;; Force full redraw only on exposure/resize events.
-                (redisplay-all frame)))))
+                (redisplay-all frame :force-p force-redisplay))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Popup Frame Lifecycle (read-only X11 viewer from terminal mode)

@@ -2159,6 +2159,13 @@ documentation in *extended-docs*."
   :side-effects "Flips buffer-show-tool-results-p."
   :see-also (buffer-show-tool-results-p))
 
+(defdoc redraw-screen-command
+  :category "buffer-command"
+  :usage "Bound to C-l. Requests a full screen redraw in the active UI backend."
+  :returns ":redraw"
+  :side-effects "Causes the backend event loop to force a repaint of the current interface."
+  :see-also (backend-run clawmacs-main))
+
 (defdoc openai-codex-oauth-command
   :category "buffer-command"
   :usage "Starts the OpenAI Codex OAuth login flow."

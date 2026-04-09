@@ -414,6 +414,7 @@
    #:debug-log
    #:file-debug-log
    #:toggle-debug-mode-command
+   #:redraw-screen-command
 
    ;; User init
    #:*user-init-directory*

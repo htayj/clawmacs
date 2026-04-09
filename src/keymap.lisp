@@ -102,6 +102,8 @@
     ;; M-v arrives as ESC then v, normalized to (:alt #\v) by handle-key-event.
     (keymap-bind km '(:alt #\v) 'scroll-up-command)
     (keymap-bind km (code-char 22) 'scroll-down-command)  ; C-v = ASCII 22
+    ;; Redraw
+    (keymap-bind km (code-char 12) 'redraw-screen-command) ; C-l = ASCII 12
     ;; ----- C-c prefix: buffer-mode-specific commands -----
     ;; C-c is reserved for commands that act on or within the current
     ;; buffer's major mode (e.g. chat-specific toggles, mode actions).

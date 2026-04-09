@@ -893,6 +893,12 @@ Bound to C-c C-d."
        "[Debug mode ON — API calls will be shown in chat]"
        "[Debug mode OFF]")))
 
+(defcommand redraw-screen-command (:permission :user-only)
+  "Request a full screen redraw. Bound to C-l."
+  (buffer)
+  (declare (ignore buffer))
+  :redraw)
+
 ;;; --------------------------------------------------------------------------
 ;;; Popup GUI Command
 ;;; --------------------------------------------------------------------------
@@ -2639,6 +2645,11 @@ On Enter, sets the buffer's provider and model overrides to the selected entry."
 Returns :QUIT if the application should exit, or nil otherwise.
 Handles approval mode, deny-message mode, and normal dispatch.
 KEY is already normalized by the backend before calling this."
+  (flet ((redraw-key-p (candidate)
+           (or (and (characterp candidate)
+                    (char= candidate (code-char 12)))
+               (equal candidate '(:ctrl #\l))
+               (equal candidate '(:ctrl #\L)))))
   (let ((*current-caller* :user))
     (when (null key)
       (return-from handle-key-event nil))
@@ -2646,6 +2657,10 @@ KEY is already normalized by the backend before calling this."
       ;; C-x C-c always quits (Emacs standard quit chord)
       ((equal key (list :ctrl-x #\Etx))
        :quit)
+
+      ;; C-l requests a full redraw in every mode.
+      ((redraw-key-p key)
+       (redraw-screen-command buf))
 
       ;; === MINIBUFFER MODE ===
       ;; When the minibuffer is active, it captures all input
@@ -2735,7 +2750,9 @@ KEY is already normalized by the backend before calling this."
       ;; Keymap lookup
       ((let ((command (keymap-lookup (buffer-keymap buf) key)))
          (when command
-           (funcall command buf)
+           (let ((result (funcall command buf)))
+             (when (eq result :redraw)
+               (return-from handle-key-event :redraw)))
            (when (and (characterp key)
                       (not (member command '(scroll-up-command scroll-down-command))))
              (setf (buffer-scroll-offset buf) 0))
@@ -2743,10 +2760,10 @@ KEY is already normalized by the backend before calling this."
       ;; Self-insert
       ((and (characterp key) (graphic-char-p key))
        (let ((*self-insert-char* key))
-         (self-insert-command buf))
+       (self-insert-command buf))
        (setf (buffer-scroll-offset buf) 0)
        nil)
-      (t nil))))
+      (t nil)))))
 
 (defvar *user-init-directory*
   (merge-pathnames #P".clawmacs.d/" (user-homedir-pathname))
