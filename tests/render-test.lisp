@@ -58,6 +58,17 @@
         (is (< agent-pos pm-pos))
         (is (< pm-pos wd-pos))))))
 
+(test resolve-modeline-provider-model-includes-think-level
+  "Modeline provider/model text includes think level when a buffer override is set."
+  (let ((buf (make-buffer "s1" :agent-name "myagent"
+                          :working-directory #P"/home/")))
+    (setf (buffer-provider-override buf) :openai-codex
+          (buffer-model-override buf) "gpt-5.4")
+    (set-buffer-think-level-override buf "high")
+    (let ((pm (clawmacs::resolve-modeline-provider-model buf)))
+      (is (search "openai-codex/gpt-5.4" pm))
+      (is (search "[think:high]" pm)))))
+
 (test format-modeline-truncates-to-width
   "format-modeline truncates when content exceeds width."
   (let* ((buf (make-buffer "very-long-session-name" :agent-name "long-agent-name"
@@ -173,3 +184,19 @@
   "format-model-selector-line truncates for narrow terminals."
   (let ((line (clawmacs::format-model-selector-line "  " "openai-codex" "codex-mini-latest" 30)))
     (is (= 30 (length line)))))
+
+;;; --------------------------------------------------------------------------
+;;; Think Selector Rendering Tests
+;;; --------------------------------------------------------------------------
+
+(test format-think-selector-line-fits-width
+  "format-think-selector-line output is exactly the given width."
+  (let ((line (clawmacs::format-think-selector-line "▸ " "high" 40)))
+    (is (= 40 (length line)))
+    (is (search "▸ " line))
+    (is (search "high" line))))
+
+(test format-think-selector-line-truncates-at-narrow-width
+  "format-think-selector-line truncates for narrow terminals."
+  (let ((line (clawmacs::format-think-selector-line "  " "default" 8)))
+    (is (= 8 (length line)))))

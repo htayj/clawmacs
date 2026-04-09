@@ -180,22 +180,26 @@ polls for updates via update-streaming-response."
                    (tool-definitions-for-api)))
          (messages (build-conversation-messages buf)))
     (handler-case
-        (multiple-value-bind (provider model)
+        (multiple-value-bind (provider model think-level)
             (resolve-buffer-provider-and-model buf)
           ;; Debug: echo the outgoing request payload before sending
           (let ((req-json (api-json-encode
                            `((:messages . ,(coerce messages 'vector))
+                             ,@(when think-level
+                                 `((:reasoning . ((:effort . ,think-level)))))
                              ,@(when (and tools (plusp (length tools)))
                                  `((:tools . ,tools)))))))
             (debug-log buf
-              (format nil "[API REQUEST → ~(~A~)/~A  msg:~D  tools:~D]~%~A"
+              (format nil "[API REQUEST → ~(~A~)/~A~@[ think=~A~]  msg:~D  tools:~D]~%~A"
                       provider model
+                      think-level
                       (length messages)
                       (if tools (length tools) 0)
                       req-json))
             (file-debug-log "api-request"
-                            "provider=~(~A~) model=~A msgs=~D tools=~D payload=~A"
+                            "provider=~(~A~) model=~A think=~A msgs=~D tools=~D payload=~A"
                             provider model
+                            (or think-level "default")
                             (length messages)
                             (if tools (length tools) 0)
                             req-json))
@@ -204,7 +208,8 @@ polls for updates via update-streaming-response."
                        messages
                        (lambda (s) (declare (ignore s)))
                        :model model
-                       :tools tools))
+                       :tools tools
+                       :reasoning-effort think-level))
                  ;; Create placeholder message that will be updated as tokens arrive
                  (agent-msg (buffer-insert-agent-message buf "")))
           (setf (message-face-set agent-msg)
@@ -585,6 +590,109 @@ If so, call the handler and return T. Otherwise return NIL."
 ;;; Model Selection Commands
 ;;; --------------------------------------------------------------------------
 
+(defun model-selector-display (provider model)
+  "Return the display string used for model selection history and UI."
+  (format nil "~(~A~)/~A" provider model))
+
+(defun build-model-selector-items (entries)
+  "Convert selector ENTRIES into minibuffer items with display strings."
+  (mapcar (lambda (entry)
+            (let ((provider (getf entry :provider))
+                  (model (getf entry :model)))
+              (list :provider provider
+                    :model model
+                    :active-p (getf entry :active-p)
+                    :display (model-selector-display provider model))))
+          entries))
+
+(defun model-selection-status-suffix (think-status think-level)
+  "Return a short status suffix describing the resulting think level."
+  (case think-status
+    (:kept
+     (format nil "; kept think ~A" think-level))
+    (:reset
+     "; think reset to default")
+    (t
+     (if think-level
+         (format nil "; think ~A" think-level)
+         "; think default"))))
+
+(defun apply-buffer-model-selection (buffer provider model)
+  "Apply PROVIDER and MODEL to BUFFER, reconcile think level, and report status."
+  (set-buffer-provider-override buffer provider)
+  (set-buffer-model-override buffer model)
+  (multiple-value-bind (think-status think-level)
+      (reconcile-buffer-think-level-override buffer
+                                             :provider provider
+                                             :model model)
+    (values think-status think-level)))
+
+(defun record-model-selection-history (display)
+  "Record DISPLAY as the most recently selected model."
+  (setf *model-selection-history*
+        (cons display
+              (remove display *model-selection-history* :test #'string=))))
+
+(defun insert-model-selection-message (buffer provider model think-status think-level)
+  "Insert a confirmation message for a model selection."
+  (buffer-insert-system-message
+   buffer
+   (format nil "[Model changed to ~A~A]"
+           (model-selector-display provider model)
+           (model-selection-status-suffix think-status think-level))))
+
+(defun available-think-levels-for-selector (buffer)
+  "Build think-level selector entries for BUFFER's active model."
+  (multiple-value-bind (provider model current-think)
+      (handler-case (resolve-buffer-provider-and-model buffer)
+        (error () (values nil nil nil)))
+    (let ((levels (and provider model
+                       (provider-model-supported-think-levels provider model))))
+      (when levels
+        (cons (list :provider provider
+                    :model model
+                    :level nil
+                    :default-p t
+                    :active-p (null current-think)
+                    :display "default")
+              (mapcar (lambda (level)
+                        (list :provider provider
+                              :model model
+                              :level level
+                              :default-p nil
+                              :active-p (and current-think
+                                             (string= level current-think))
+                              :display level))
+                      levels))))))
+
+(defun insert-think-selection-message (buffer provider model think-level)
+  "Insert a confirmation message for a think-level selection."
+  (buffer-insert-system-message
+   buffer
+   (if think-level
+       (format nil "[Think level set to ~A for ~A]"
+               think-level
+               (model-selector-display provider model))
+       (format nil "[Think level reset to default for ~A]"
+               (model-selector-display provider model)))))
+
+(defun apply-buffer-think-level-selection (buffer entry)
+  "Apply think-level ENTRY to BUFFER and insert a confirmation message."
+  (let ((provider (getf entry :provider))
+        (model (getf entry :model))
+        (level (getf entry :level)))
+    (if level
+        (set-buffer-think-level-override buffer level)
+        (clear-buffer-think-level-override buffer))
+    (insert-think-selection-message buffer provider model level)))
+
+(defun preselect-minibuffer-active-item (items)
+  "Move the minibuffer selection to the active item in ITEMS when present."
+  (let ((active-idx (position-if (lambda (item) (getf item :active-p)) items)))
+    (when active-idx
+      (setf *minibuffer-selected-index* active-idx)
+      (minibuffer-ensure-visible))))
+
 (defcommand select-model-command (:permission :user-only)
   "Open the model selector to change the LLM model for this session.
 Builds the available model list based on configured API keys."
@@ -616,15 +724,7 @@ to navigate."
                        buffer "[No API keys configured. Cannot list models.]")))
          (setf (message-sender sys-msg) :system)))
       (t
-       ;; Build display items with provider/model display string
-       (let* ((items (mapcar (lambda (e)
-                               (list :provider (getf e :provider)
-                                     :model (getf e :model)
-                                     :active-p (getf e :active-p)
-                                     :display (format nil "~(~A~)/~A"
-                                                      (getf e :provider)
-                                                      (getf e :model))))
-                             entries))
+       (let* ((items (build-model-selector-items entries))
               ;; Sort: by recency (from history), then active, then alphabetical
               (sorted (sort-models-by-recency items)))
          (minibuffer-activate
@@ -632,18 +732,59 @@ to navigate."
           (lambda (item)
             (let ((provider (getf item :provider))
                   (model (getf item :model)))
-              (set-buffer-provider-override buffer provider)
-              (set-buffer-model-override buffer model)
-              ;; Record in history for recency sorting
-              (setf *model-selection-history*
-                    (cons (getf item :display)
-                          (remove (getf item :display) *model-selection-history*
-                                  :test #'string=)))
-              ;; Show confirmation in chat
-              (let ((sys-msg (buffer-insert-agent-message
-                              buffer (format nil "[Model changed to ~(~A~)/~A]"
-                                            provider model))))
-                (setf (message-sender sys-msg) :system))))))))))
+              (multiple-value-bind (think-status think-level)
+                  (apply-buffer-model-selection buffer provider model)
+                (record-model-selection-history (getf item :display))
+                (insert-model-selection-message buffer
+                                                provider
+                                                model
+                                                think-status
+                                                think-level))))))))))
+
+(defcommand select-think-level-command (:permission :user-only)
+  "Open the think-level selector for the active model."
+  (buffer)
+  (let ((entries (available-think-levels-for-selector buffer)))
+    (cond
+      ((null entries)
+       (multiple-value-bind (provider model)
+           (handler-case (resolve-buffer-provider-and-model buffer)
+             (error () (values nil nil)))
+         (buffer-insert-system-message
+          buffer
+          (if (and provider model)
+              (format nil "[Think levels not available for ~A.]"
+                      (model-selector-display provider model))
+              "[Think levels are not available for the active model.]"))))
+      (t
+       (let ((active-idx (position-if (lambda (entry) (getf entry :active-p))
+                                      entries)))
+         (setf *think-selector-entries* entries
+               *think-selector-active* t
+               *think-selector-index* (or active-idx 0)
+               *think-selector-scroll* 0))))))
+
+(defcommand minibuffer-select-think-level-command (:permission :user-only)
+  "Open the minibuffer think-level selector for the active model."
+  (buffer)
+  (let ((entries (available-think-levels-for-selector buffer)))
+    (cond
+      ((null entries)
+       (multiple-value-bind (provider model)
+           (handler-case (resolve-buffer-provider-and-model buffer)
+             (error () (values nil nil)))
+         (buffer-insert-system-message
+          buffer
+          (if (and provider model)
+              (format nil "[Think levels not available for ~A.]"
+                      (model-selector-display provider model))
+              "[Think levels are not available for the active model.]"))))
+      (t
+       (minibuffer-activate
+        "Select Think Level" entries
+        (lambda (item)
+          (apply-buffer-think-level-selection buffer item)))
+       (preselect-minibuffer-active-item entries)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Management Commands (continued)
@@ -1937,6 +2078,19 @@ C-h is the help prefix (e.g. C-h b = describe bindings).")
   "List of model entries for the selector, each a plist
 (:provider :keyword :model \"string\" :active-p bool).")
 
+(defvar *think-selector-active* nil
+  "When non-nil, the think-level selector overlay is displayed.")
+
+(defvar *think-selector-index* 0
+  "The currently highlighted index in the think-level selector.")
+
+(defvar *think-selector-scroll* 0
+  "Scroll offset for the think-level selector (first visible entry index).")
+
+(defvar *think-selector-entries* nil
+  "List of think-level entries for the selector, each a plist
+(:provider :keyword :model \"string\" :level (or null string) :active-p bool).")
+
 ;;; --------------------------------------------------------------------------
 ;;; Minibuffer State
 ;;; --------------------------------------------------------------------------
@@ -2429,13 +2583,15 @@ On Enter, sets the buffer's provider and model overrides to the selected entry."
          (when selected
            (let ((provider (getf selected :provider))
                  (model (getf selected :model)))
-             (set-buffer-provider-override buf provider)
-             (set-buffer-model-override buf model)
-             ;; Show confirmation in chat
-             (let ((sys-msg (buffer-insert-agent-message
-                             buf (format nil "[Model changed to ~(~A~)/~A]"
-                                        provider model))))
-               (setf (message-sender sys-msg) :system)))))
+             (multiple-value-bind (think-status think-level)
+                 (apply-buffer-model-selection buf provider model)
+               (record-model-selection-history
+                (model-selector-display provider model))
+               (insert-model-selection-message buf
+                                               provider
+                                               model
+                                               think-status
+                                               think-level)))))
        (setf *model-selector-active* nil))
       ;; C-p or Up arrow: move highlight up
       ((or (eq base-key :up)
@@ -2448,6 +2604,34 @@ On Enter, sets the buffer's provider and model overrides to the selected entry."
        (when (< *model-selector-index* (1- num-entries))
          (incf *model-selector-index*)))
       ;; Everything else: ignore
+      (t nil))))
+
+(defun handle-think-selector-key (key buf)
+  "Handle a key event while the think-level selector is active."
+  (let ((base-key (if (and (listp key) (= (length key) 2)
+                           (member (first key) '(:alt :ctrl-x :ctrl-c)))
+                      (second key)
+                      key))
+        (num-entries (length *think-selector-entries*)))
+    (cond
+      ((and (characterp base-key) (char= base-key (code-char 7)))
+       (setf *think-selector-active* nil))
+      ((and (characterp base-key) (char= base-key #\q))
+       (setf *think-selector-active* nil))
+      ((and (characterp base-key) (or (char= base-key #\Return)
+                                      (char= base-key #\Newline)))
+       (let ((selected (nth *think-selector-index* *think-selector-entries*)))
+         (when selected
+           (apply-buffer-think-level-selection buf selected)))
+       (setf *think-selector-active* nil))
+      ((or (eq base-key :up)
+           (and (characterp base-key) (char= base-key (code-char 16))))
+       (when (plusp *think-selector-index*)
+         (decf *think-selector-index*)))
+      ((or (eq base-key :down)
+           (and (characterp base-key) (char= base-key (code-char 14))))
+       (when (< *think-selector-index* (1- num-entries))
+         (incf *think-selector-index*)))
       (t nil))))
 
 (defun handle-key-event (buf key)
@@ -2479,6 +2663,12 @@ KEY is already normalized by the backend before calling this."
       ;; Navigation and selection within the model list overlay
       (*model-selector-active*
        (handle-model-selector-key key buf)
+       nil)
+
+      ;; === THINK SELECTOR MODE ===
+      ;; Navigation and selection within the think-level overlay
+      (*think-selector-active*
+       (handle-think-selector-key key buf)
        nil)
 
       ;; === CUSTOMIZE MODE ===
@@ -2644,6 +2834,10 @@ Environment variables:
           *model-selector-index* 0
           *model-selector-scroll* 0
           *model-selector-entries* nil)
+    (setf *think-selector-active* nil
+          *think-selector-index* 0
+          *think-selector-scroll* 0
+          *think-selector-entries* nil)
     ;; Initialize minibuffer state
     (setf *minibuffer-active* nil
           *minibuffer-prompt* ""
@@ -2651,6 +2845,7 @@ Environment variables:
           *minibuffer-point* 0
           *minibuffer-items* nil
           *minibuffer-filtered-items* nil
+          *minibuffer-match-positions* nil
           *minibuffer-selected-index* 0
           *minibuffer-scroll-offset* 0
           *minibuffer-callback* nil)

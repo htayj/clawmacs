@@ -108,6 +108,15 @@ and C-c M (capital M) to the old overlay model selector."
   (is (eq 'clawmacs::select-model-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\M)))))
 
+(test default-keymap-think-selector-binding
+  "Default keymap binds C-c C-r to the minibuffer think selector,
+and C-c R to the old overlay think selector."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::minibuffer-select-think-level-command
+          (keymap-lookup *default-keymap* (list :ctrl-c (code-char 18)))))
+  (is (eq 'clawmacs::select-think-level-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\R)))))
+
 (test default-keymap-describe-function-binding
   "Default keymap binds C-c f to describe-function-command."
   (clawmacs::init-default-keymap)

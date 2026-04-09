@@ -560,6 +560,12 @@ documentation in *extended-docs*."
   :returns "string or nil — \"claude-opus-4-6\" or nil to use default."
   :see-also (set-buffer-model-override clear-buffer-model-override buffer-provider-override))
 
+(defdoc buffer-think-level-override
+  :category "buffer"
+  :usage "(buffer-think-level-override BUF:buffer) — (buffer-think-level-override (current-buffer))"
+  :returns "string or nil — \"high\" or nil to use the model default."
+  :see-also (set-buffer-think-level-override clear-buffer-think-level-override buffer-model-override))
+
 (defdoc set-buffer-provider-override
   :category "buffer"
   :usage "(set-buffer-provider-override BUF:buffer PROVIDER:keyword) — (set-buffer-provider-override buf :anthropic)"
@@ -573,6 +579,13 @@ documentation in *extended-docs*."
   :returns "buffer — The modified buffer."
   :side-effects "Sets the buffer's model override."
   :see-also (buffer-model-override clear-buffer-model-override set-buffer-provider-override))
+
+(defdoc set-buffer-think-level-override
+  :category "buffer"
+  :usage "(set-buffer-think-level-override BUF:buffer THINK-LEVEL:string) — (set-buffer-think-level-override buf \"high\")"
+  :returns "buffer — The modified buffer."
+  :side-effects "Sets the buffer's think-level override."
+  :see-also (buffer-think-level-override clear-buffer-think-level-override))
 
 (defdoc clear-buffer-provider-override
   :category "buffer"
@@ -588,12 +601,19 @@ documentation in *extended-docs*."
   :side-effects "Clears the buffer's model override to nil."
   :see-also (set-buffer-model-override buffer-model-override clear-buffer-provider/model-overrides))
 
+(defdoc clear-buffer-think-level-override
+  :category "buffer"
+  :usage "(clear-buffer-think-level-override BUF:buffer) — (clear-buffer-think-level-override buf)"
+  :returns "buffer — The modified buffer."
+  :side-effects "Clears the buffer's think-level override to nil."
+  :see-also (set-buffer-think-level-override buffer-think-level-override clear-buffer-provider/model-overrides))
+
 (defdoc clear-buffer-provider/model-overrides
   :category "buffer"
   :usage "(clear-buffer-provider/model-overrides BUF:buffer) — (clear-buffer-provider/model-overrides buf)"
   :returns "buffer — The modified buffer."
-  :side-effects "Clears both provider and model overrides."
-  :see-also (clear-buffer-provider-override clear-buffer-model-override))
+  :side-effects "Clears provider, model, and think-level overrides."
+  :see-also (clear-buffer-provider-override clear-buffer-model-override clear-buffer-think-level-override))
 
 (defdoc buffer-face-registry
   :category "buffer"
@@ -1146,8 +1166,21 @@ documentation in *extended-docs*."
 (defdoc resolve-buffer-provider-and-model
   :category "llm"
   :usage "(resolve-buffer-provider-and-model BUF:buffer) — (resolve-buffer-provider-and-model (current-buffer))"
-  :returns "values provider:keyword model:string — e.g. :ANTHROPIC, \"claude-haiku-4-5-20251001\""
-  :see-also (buffer-provider-override buffer-model-override agent-default))
+  :returns "values provider:keyword model:string think-level:(or null string) — e.g. :ANTHROPIC, \"claude-haiku-4-5-20251001\", nil"
+  :see-also (buffer-provider-override buffer-model-override buffer-think-level-override agent-default))
+
+(defdoc provider-model-supported-think-levels
+  :category "llm"
+  :usage "(provider-model-supported-think-levels PROVIDER:keyword MODEL:string) — (provider-model-supported-think-levels :openai-codex \"gpt-5.4\")"
+  :returns "list of strings or nil — e.g. (\"none\" \"low\" \"medium\" \"high\" \"xhigh\")"
+  :see-also (resolve-buffer-provider-and-model select-think-level-command))
+
+(defdoc reconcile-buffer-think-level-override
+  :category "llm"
+  :usage "(reconcile-buffer-think-level-override BUF:buffer &key PROVIDER MODEL)"
+  :returns "values status:keyword think-level:(or null string)"
+  :side-effects "Clears stale think-level overrides that are unsupported by the active model."
+  :see-also (buffer-think-level-override provider-model-supported-think-levels))
 
 (defdoc anthropic-request
   :category "llm"
@@ -1431,7 +1464,7 @@ documentation in *extended-docs*."
 (defdoc resolve-modeline-provider-model
   :category "render"
   :usage "(resolve-modeline-provider-model BUF:buffer) — (resolve-modeline-provider-model (current-buffer))"
-  :returns "string — \"anthropic/claude-haiku-4-5-20251001\" or \"??\" on error."
+  :returns "string — \"anthropic/claude-haiku-4-5-20251001\" or \"openai-codex/gpt-5.4 [think:high]\", or \"??\" on error."
   :see-also (render-modeline resolve-buffer-provider-and-model))
 
 (defdoc render-modeline
@@ -1506,6 +1539,39 @@ documentation in *extended-docs*."
   :returns "nil"
   :side-effects "Processes key input in the overlay model selector (navigate, confirm, cancel)."
   :see-also (select-model-command *model-selector-active*))
+
+(defdoc *think-selector-active*
+  :category "selector"
+  :see-also (*think-selector-index* *think-selector-entries* select-think-level-command))
+
+(defdoc *think-selector-index*
+  :category "selector"
+  :see-also (*think-selector-active* select-think-level-command))
+
+(defdoc *think-selector-entries*
+  :category "selector"
+  :see-also (*think-selector-active* select-think-level-command provider-model-supported-think-levels))
+
+(defdoc select-think-level-command
+  :category "selector"
+  :usage "Bound to C-c R. Opens the overlay think-level selector."
+  :returns "nil"
+  :side-effects "Sets *think-selector-active* to T and populates *think-selector-entries*."
+  :see-also (*think-selector-active* minibuffer-select-think-level-command provider-model-supported-think-levels))
+
+(defdoc render-think-selector
+  :category "selector"
+  :usage "(render-think-selector WINDOW ENTRIES:list SELECTED-INDEX:fixnum)"
+  :returns "nil"
+  :side-effects "Renders the overlay think-level selector table."
+  :see-also (select-think-level-command *think-selector-entries*))
+
+(defdoc handle-think-selector-key
+  :category "selector"
+  :usage "(handle-think-selector-key BUF KEY)"
+  :returns "nil"
+  :side-effects "Processes key input in the overlay think-level selector (navigate, confirm, cancel)."
+  :see-also (select-think-level-command *think-selector-active*))
 
 ;;; ==========================================================================
 ;;; Category: minibuffer — Minibuffer completion system
@@ -1664,6 +1730,13 @@ documentation in *extended-docs*."
   :returns "nil"
   :side-effects "Activates the minibuffer with available models. On confirm, sets buffer overrides."
   :see-also (minibuffer-activate select-model-command available-models-for-selector *model-selection-history*))
+
+(defdoc minibuffer-select-think-level-command
+  :category "minibuffer"
+  :usage "Bound to C-c C-r. Opens the minibuffer think-level selector."
+  :returns "nil"
+  :side-effects "Activates the minibuffer with think levels for the active model. On confirm, sets or clears the think override."
+  :see-also (minibuffer-activate select-think-level-command provider-model-supported-think-levels))
 
 (defdoc minibuffer-select-buffer-command
   :category "minibuffer"

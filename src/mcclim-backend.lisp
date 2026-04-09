@@ -391,6 +391,9 @@ When the minibuffer is active, draws a centered popup overlay on top."
           (*model-selector-active*
            (mcclim-render-model-selector pane modeline-pane rows cols
                                          char-w char-h frame))
+          (*think-selector-active*
+           (mcclim-render-think-selector pane modeline-pane rows cols
+                                         char-w char-h frame))
           (t
            (mcclim-render-buffer pane (current-buffer) rows cols
                                  char-w char-h)))
@@ -817,6 +820,100 @@ Returns the number of visual rows consumed."
            (resolved (resolve-face ml-face))
            (pm (resolve-modeline-provider-model current-buf))
            (ml-text (format nil " [model-selector] ~A | ~D model~:[s~;~] available"
+                            pm num-entries (= num-entries 1))))
+      (multiple-value-bind (cols-ml _rows-ml)
+          (pane-grid-dimensions modeline-pane char-w char-h)
+        (declare (ignore _rows-ml))
+        (multiple-value-bind (fg bg ts) (resolve-face-inks resolved)
+          (let ((padded (if (<= (length ml-text) cols-ml)
+                            (concatenate 'string ml-text
+                                         (make-string (- cols-ml (length ml-text))
+                                                      :initial-element #\Space))
+                            (subseq ml-text 0 cols-ml))))
+            (fill-row modeline-pane 0 cols-ml bg char-w char-h)
+            (draw-text-at modeline-pane 0 0 padded fg bg ts char-w char-h)))))))
+
+;;; --------------------------------------------------------------------------
+;;; Think Selector Rendering
+;;; --------------------------------------------------------------------------
+
+(defun mcclim-render-think-selector (pane modeline-pane rows cols
+                                     char-w char-h frame)
+  "Render the think-level selector overlay."
+  (declare (ignore frame))
+  (let* ((width cols)
+         (height rows)
+         (entries *think-selector-entries*)
+         (num-entries (length entries))
+         (current-buf (current-buffer))
+         (max-visible (max 1 (- height 7)))
+         (scroll (cond
+                   ((< *think-selector-index* *think-selector-scroll*)
+                    *think-selector-index*)
+                   ((>= *think-selector-index*
+                        (+ *think-selector-scroll* max-visible))
+                    (max 0 (1+ (- *think-selector-index* max-visible))))
+                   (t *think-selector-scroll*))))
+    (setf *think-selector-scroll* scroll)
+    (clear-pane-with-ink pane *mcclim-bg-ink*)
+    (when (< 1 height)
+      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-title)
+        (draw-text-at pane 1 2 "Select Think Level" fg bg ts char-w char-h)))
+    (when (< 2 height)
+      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-separator)
+        (draw-text-at pane 2 2
+                      (make-string (min (- width 4) 50) :initial-element #\─)
+                      fg bg ts char-w char-h)))
+    (when (< 3 height)
+      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-header)
+        (let ((header (format-think-selector-line "  " "THINK LEVEL" width)))
+          (fill-row pane 3 width bg char-w char-h)
+          (draw-text-at pane 3 0
+                        (subseq header 0 (min (length header) width))
+                        fg bg ts char-w char-h))))
+    (loop :for absolute-idx :from scroll
+          :below (min (+ scroll max-visible) num-entries)
+          :for entry := (nth absolute-idx entries)
+          :for row := (+ 5 (- absolute-idx scroll))
+          :while (< row (- height 2))
+          :for selected-p := (= absolute-idx *think-selector-index*)
+          :for active-p := (getf entry :active-p)
+          :for label := (getf entry :display)
+          :for marker := (cond ((and selected-p active-p) "▸*")
+                               (selected-p "▸ ")
+                               (active-p " *")
+                               (t "  "))
+          :for line := (format-think-selector-line marker label width)
+          :do (clim:with-output-as-presentation (pane entry 'model-ref)
+                (multiple-value-bind (fg bg ts)
+                    (resolve-global-face-inks (if selected-p
+                                                  :selector-selected
+                                                  :selector-entry))
+                  (fill-row pane row width bg char-w char-h)
+                  (draw-text-at pane row 0
+                                (subseq line 0 (min (length line) width))
+                                fg bg ts char-w char-h))))
+    (when (> num-entries max-visible)
+      (let ((indicator (format nil "[~D-~D of ~D]"
+                               (1+ scroll)
+                               (min (+ scroll max-visible) num-entries)
+                               num-entries))
+            (ind-row (+ 5 (min max-visible (- num-entries scroll)))))
+        (when (< ind-row (- height 1))
+          (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-scroll)
+            (draw-text-at pane ind-row 2
+                          (subseq indicator 0 (min (length indicator) (- width 4)))
+                          fg bg ts char-w char-h)))))
+    (let ((footer-row (1- height)))
+      (when (plusp footer-row)
+        (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-footer)
+          (draw-text-at pane footer-row 2
+                        "[RET] select  [C-g/q] cancel  default = clear  * = active"
+                        fg bg ts char-w char-h))))
+    (let* ((ml-face (make-modeline-face))
+           (resolved (resolve-face ml-face))
+           (pm (resolve-modeline-provider-model current-buf))
+           (ml-text (format nil " [think-selector] ~A | ~D level~:[s~;~] available"
                             pm num-entries (= num-entries 1))))
       (multiple-value-bind (cols-ml _rows-ml)
           (pane-grid-dimensions modeline-pane char-w char-h)

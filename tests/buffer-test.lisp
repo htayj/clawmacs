@@ -45,15 +45,18 @@
      (is (eq :echo (message-sender agent-msg))))
     (is (not (message-read-only-p (buffer-input-message buf))))))
 
-(test buffer-provider-and-model-overrides
+(test buffer-provider-model-and-think-overrides
   "Buffer overrides can be set and read back."
   (let ((buf (make-buffer "test")))
     (is (null (buffer-provider-override buf)))
     (is (null (buffer-model-override buf)))
+    (is (null (buffer-think-level-override buf)))
     (setf (buffer-provider-override buf) :openai-codex
           (buffer-model-override buf) "gpt-5.4")
+    (set-buffer-think-level-override buf "HIGH")
     (is (eq :openai-codex (buffer-provider-override buf)))
-    (is (string= "gpt-5.4" (buffer-model-override buf)))))
+    (is (string= "gpt-5.4" (buffer-model-override buf)))
+    (is (string= "high" (buffer-think-level-override buf)))))
 
 (test buffer-override-helpers-only-mutate-target-buffer
   "Per-buffer override helpers update only the provided buffer."
@@ -61,19 +64,24 @@
         (second-buffer (make-buffer "second")))
     (set-buffer-provider-override first-buffer :openai-codex)
     (set-buffer-model-override first-buffer "gpt-5.3-codex")
+    (set-buffer-think-level-override first-buffer "high")
     (is (eq :openai-codex (buffer-provider-override first-buffer)))
     (is (string= "gpt-5.3-codex" (buffer-model-override first-buffer)))
+    (is (string= "high" (buffer-think-level-override first-buffer)))
     (is (null (buffer-provider-override second-buffer)))
-    (is (null (buffer-model-override second-buffer)))))
+    (is (null (buffer-model-override second-buffer)))
+    (is (null (buffer-think-level-override second-buffer)))))
 
 (test serialize-buffer-includes-overrides
-  "Serialized sessions include provider/model overrides."
+  "Serialized sessions include provider/model/think overrides."
   (let ((buf (make-buffer "test" :agent-name "echo")))
     (setf (buffer-provider-override buf) :anthropic
           (buffer-model-override buf) "claude-3.7")
+    (set-buffer-think-level-override buf "medium")
     (let ((data (clawmacs::serialize-buffer buf)))
       (is (eq :anthropic (cdr (assoc :provider-override data))))
-      (is (string= "claude-3.7" (cdr (assoc :model-override data)))))))
+      (is (string= "claude-3.7" (cdr (assoc :model-override data))))
+      (is (string= "medium" (cdr (assoc :think-level-override data)))))))
 
 (test load-session-missing-overrides-default-to-nil
   "Sessions without override fields load nil overrides."
@@ -97,25 +105,40 @@
       (let ((buf (load-session session-name)))
        (is (not (null buf)))
        (is (null (buffer-provider-override buf)))
-        (is (null (buffer-model-override buf)))))))
+        (is (null (buffer-model-override buf)))
+       (is (null (buffer-think-level-override buf)))))))
 
 (test save-and-load-session-round-trips-overrides
   "Saved sessions preserve override values and types when reloaded."
   (let* ((session-name "override-round-trip")
          (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
          (buf (make-buffer session-name :agent-name "echo")))
-    (setf (buffer-provider-override buf) :anthropic
-          (buffer-model-override buf) "claude-3.7")
+    (setf (buffer-provider-override buf) :openai-codex
+          (buffer-model-override buf) "gpt-5.4")
+    (set-buffer-think-level-override buf "high")
     (message-insert-char (buffer-input-message buf) #\h)
     (message-insert-char (buffer-input-message buf) #\i)
     (buffer-finalize-input buf)
     (save-session buf)
     (let* ((cl-json:*json-array-type* 'list)
            (loaded (load-session session-name)))
-      (is (eq :anthropic (buffer-provider-override loaded)))
+      (is (eq :openai-codex (buffer-provider-override loaded)))
       (is (typep (buffer-provider-override loaded) 'keyword))
-      (is (string= "claude-3.7" (buffer-model-override loaded)))
-      (is (typep (buffer-model-override loaded) 'string)))))
+      (is (string= "gpt-5.4" (buffer-model-override loaded)))
+      (is (typep (buffer-model-override loaded) 'string))
+      (is (string= "high" (buffer-think-level-override loaded)))
+      (is (typep (buffer-think-level-override loaded) 'string)))))
+
+(test clear-buffer-overrides-clears-think-level
+  "Clearing buffer overrides also clears think-level state."
+  (let ((buf (make-buffer "test")))
+    (set-buffer-provider-override buf :openai-codex)
+    (set-buffer-model-override buf "gpt-5.4")
+    (set-buffer-think-level-override buf "high")
+    (clear-buffer-provider/model-overrides buf)
+    (is (null (buffer-provider-override buf)))
+    (is (null (buffer-model-override buf)))
+    (is (null (buffer-think-level-override buf)))))
 
 (test load-session-normalizes-legacy-raw-content
   "Legacy saved session raw-content is normalized to canonical blocks on load."
@@ -354,7 +377,40 @@
       (clawmacs::handle-model-selector-key #\Return buf)
       (is (null *model-selector-active*))
       (is (eq :zai (buffer-provider-override buf)))
-      (is (string= "glm-5" (buffer-model-override buf))))))
+      (is (string= "glm-5" (buffer-model-override buf)))
+      (is (null (buffer-think-level-override buf))))))
+
+(test model-selector-enter-keeps-supported-think-level
+  "Switching models keeps the current think level when the new model supports it."
+  (let ((*model-selector-active* t)
+        (*model-selector-index* 1)
+        (clawmacs::*model-selector-scroll* 0)
+        (*model-selector-entries*
+          (list (list :provider :openai-codex :model "gpt-5.4" :active-p t)
+                (list :provider :openai-codex :model "gpt-5.2" :active-p nil))))
+    (let ((buf (make-buffer "test")))
+      (set-buffer-provider-override buf :openai-codex)
+      (set-buffer-model-override buf "gpt-5.4")
+      (set-buffer-think-level-override buf "high")
+      (clawmacs::handle-model-selector-key #\Return buf)
+      (is (string= "gpt-5.2" (buffer-model-override buf)))
+      (is (string= "high" (buffer-think-level-override buf))))))
+
+(test model-selector-enter-resets-unsupported-think-level
+  "Switching models clears the current think level when unsupported by the new model."
+  (let ((*model-selector-active* t)
+        (*model-selector-index* 1)
+        (clawmacs::*model-selector-scroll* 0)
+        (*model-selector-entries*
+          (list (list :provider :openai-codex :model "gpt-5.4" :active-p t)
+                (list :provider :openai-codex :model "gpt-5.1-codex-max" :active-p nil))))
+    (let ((buf (make-buffer "test")))
+      (set-buffer-provider-override buf :openai-codex)
+      (set-buffer-model-override buf "gpt-5.4")
+      (set-buffer-think-level-override buf "xhigh")
+      (clawmacs::handle-model-selector-key #\Return buf)
+      (is (string= "gpt-5.1-codex-max" (buffer-model-override buf)))
+      (is (null (buffer-think-level-override buf))))))
 
 (test model-selector-cancel-with-c-g
   "C-g in model selector closes without changing the model."
@@ -382,3 +438,77 @@
     (let ((active-idx (position-if (lambda (e) (getf e :active-p))
                                    *model-selector-entries*)))
       (is (= 2 active-idx)))))
+
+;;; --------------------------------------------------------------------------
+;;; Think Selector Tests
+;;; --------------------------------------------------------------------------
+
+(test think-selector-activates
+  "select-think-level-command sets selector state for supported active models."
+  (let ((*think-selector-active* nil)
+        (*think-selector-index* 99)
+        (clawmacs::*think-selector-scroll* 99)
+        (*think-selector-entries* nil))
+    (let ((buf (make-buffer "test-session" :agent-name "spark")))
+      (set-buffer-provider-override buf :openai-codex)
+      (set-buffer-model-override buf "gpt-5.4")
+      (select-think-level-command buf)
+      (is (eq t *think-selector-active*))
+      (is (= 0 *think-selector-index*))
+      (is (= 6 (length *think-selector-entries*)))
+      (is (string= "default" (getf (first *think-selector-entries*) :display))))))
+
+(test think-selector-active-level-pre-selected
+  "When opening the think selector, the active think level index is pre-selected."
+  (let ((*think-selector-active* nil)
+        (*think-selector-index* 0)
+        (clawmacs::*think-selector-scroll* 0)
+        (*think-selector-entries* nil))
+    (let ((buf (make-buffer "test-session" :agent-name "spark")))
+      (set-buffer-provider-override buf :openai-codex)
+      (set-buffer-model-override buf "gpt-5.4")
+      (set-buffer-think-level-override buf "high")
+      (select-think-level-command buf)
+      (is (= 4 *think-selector-index*)))))
+
+(test think-selector-enter-selects-level
+  "Enter in think selector sets the buffer think level and closes."
+  (let ((*think-selector-active* t)
+        (*think-selector-index* 3)
+        (clawmacs::*think-selector-scroll* 0))
+    (let ((buf (make-buffer "test")))
+      (set-buffer-provider-override buf :openai-codex)
+      (set-buffer-model-override buf "gpt-5.3-codex")
+      (setf *think-selector-entries* (clawmacs::available-think-levels-for-selector buf))
+      ;; Index 3 = high for gpt-5.3-codex: default, low, medium, high, xhigh
+      (clawmacs::handle-think-selector-key #\Return buf)
+      (is (null *think-selector-active*))
+      (is (string= "high" (buffer-think-level-override buf))))))
+
+(test think-selector-default-clears-level
+  "Selecting the default think entry clears the buffer think override."
+  (let ((*think-selector-active* t)
+        (*think-selector-index* 0)
+        (clawmacs::*think-selector-scroll* 0))
+    (let ((buf (make-buffer "test")))
+      (set-buffer-provider-override buf :openai-codex)
+      (set-buffer-model-override buf "gpt-5.4")
+      (set-buffer-think-level-override buf "high")
+      (setf *think-selector-entries* (clawmacs::available-think-levels-for-selector buf))
+      (clawmacs::handle-think-selector-key #\Return buf)
+      (is (null *think-selector-active*))
+      (is (null (buffer-think-level-override buf))))))
+
+(test think-selector-cancel-with-c-g
+  "C-g in think selector closes without changing the think level."
+  (let ((*think-selector-active* t)
+        (*think-selector-index* 1)
+        (clawmacs::*think-selector-scroll* 0))
+    (let ((buf (make-buffer "test")))
+      (set-buffer-provider-override buf :openai-codex)
+      (set-buffer-model-override buf "gpt-5.4")
+      (set-buffer-think-level-override buf "medium")
+      (setf *think-selector-entries* (clawmacs::available-think-levels-for-selector buf))
+      (clawmacs::handle-think-selector-key (code-char 7) buf)
+      (is (null *think-selector-active*))
+      (is (string= "medium" (buffer-think-level-override buf))))))

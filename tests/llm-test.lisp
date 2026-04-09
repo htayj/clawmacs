@@ -362,11 +362,13 @@
      "{\"spark\":{\"provider\":\"anthropic\"}}")
     (setf (buffer-provider-override buf) :openai-codex
           (buffer-model-override buf) "gpt-5.3-codex")
+    (set-buffer-think-level-override buf "high")
     (with-agent-defaults-path-override (path)
-      (multiple-value-bind (provider model)
+      (multiple-value-bind (provider model think-level)
           (clawmacs::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
-        (is (string= "gpt-5.3-codex" model))))))
+        (is (string= "gpt-5.3-codex" model))
+        (is (string= "high" think-level))))))
 
 (test resolve-buffer-provider-and-model-agent-default-provider
   "Agent defaults are used when no buffer override is present."
@@ -376,10 +378,11 @@
      path
      "{\"spark\":{\"provider\":\"openai-codex\"}}")
     (with-agent-defaults-path-override (path)
-      (multiple-value-bind (provider model)
+      (multiple-value-bind (provider model think-level)
           (clawmacs::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
-        (is (string= "gpt-5.3-codex" model))))))
+        (is (string= "gpt-5.3-codex" model))
+        (is (null think-level))))))
 
 (test resolve-buffer-provider-and-model-agent-default-model
   "Persisted agent default models are used when no buffer model override exists."
@@ -389,21 +392,23 @@
      path
      "{\"spark\":{\"provider\":\"openai-codex\",\"model\":\"gpt-5.3-codex\"}}")
     (with-agent-defaults-path-override (path)
-      (multiple-value-bind (provider model)
+      (multiple-value-bind (provider model think-level)
           (clawmacs::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
-        (is (string= "gpt-5.3-codex" model))))))
+        (is (string= "gpt-5.3-codex" model))
+        (is (null think-level))))))
 
 (test resolve-buffer-provider-and-model-unknown-agent-falls-back
   "Unknown agents fall back to the current built-in provider/model defaults."
   (let ((path (temp-agent-defaults-path))
         (buf (make-buffer "test" :agent-name "unknown-agent")))
     (with-agent-defaults-path-override (path)
-      (multiple-value-bind (provider model)
+      (multiple-value-bind (provider model think-level)
           (clawmacs::resolve-buffer-provider-and-model buf)
         (is (eq clawmacs::*default-provider* provider))
         (is (string= (clawmacs::provider-fallback-model clawmacs::*default-provider*)
-                     model))))))
+                     model))
+        (is (null think-level))))))
 
 (test resolve-buffer-provider-and-model-openai-codex-fallback-model
   "OpenAI Codex resolves to its built-in fallback model."
@@ -413,10 +418,37 @@
      path
      "{\"spark\":{\"provider\":\"openai-codex\"}}")
     (with-agent-defaults-path-override (path)
-      (multiple-value-bind (provider model)
+      (multiple-value-bind (provider model think-level)
           (clawmacs::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
-        (is (string= "gpt-5.3-codex" model))))))
+        (is (string= "gpt-5.3-codex" model))
+        (is (null think-level))))))
+
+(test resolve-buffer-provider-and-model-unsupported-think-returns-nil
+  "Unsupported think overrides do not resolve for the active model."
+  (let ((path (temp-agent-defaults-path))
+        (buf (make-buffer "test" :agent-name "spark")))
+    (setf (buffer-provider-override buf) :openai-codex
+          (buffer-model-override buf) "gpt-5.1-codex-max")
+    (set-buffer-think-level-override buf "xhigh")
+    (with-agent-defaults-path-override (path)
+      (multiple-value-bind (provider model think-level)
+          (clawmacs::resolve-buffer-provider-and-model buf)
+        (is (eq :openai-codex provider))
+        (is (string= "gpt-5.1-codex-max" model))
+        (is (null think-level))))))
+
+(test reconcile-buffer-think-level-override-resets-unsupported-model
+  "Reconciliation clears a think level that no longer applies to the model."
+  (let ((buf (make-buffer "test")))
+    (setf (buffer-provider-override buf) :openai-codex
+          (buffer-model-override buf) "gpt-5.1-codex-max")
+    (set-buffer-think-level-override buf "xhigh")
+    (multiple-value-bind (status think-level)
+        (clawmacs::reconcile-buffer-think-level-override buf)
+      (is (eq :reset status))
+      (is (null think-level))
+      (is (null (buffer-think-level-override buf))))))
 
 (test resolve-buffer-provider-and-model-rejects-blank-persisted-model
   "Blank persisted default models are rejected when they become the resolved model."
@@ -460,10 +492,11 @@
       (clawmacs::set-agent-default "spark" :openai-codex :model "gpt-5.3-codex")
       (setf clawmacs::*agent-defaults-registry* nil)
       (is (eq :openai-codex (clawmacs::agent-default "spark")))
-       (multiple-value-bind (provider model)
+       (multiple-value-bind (provider model think-level)
            (clawmacs::resolve-buffer-provider-and-model buf)
          (is (eq :openai-codex provider))
-         (is (string= "gpt-5.3-codex" model))))))
+         (is (string= "gpt-5.3-codex" model))
+         (is (null think-level))))))
 
 (test clear-buffer-overrides-restores-agent-default-resolution
   "Clearing buffer overrides returns resolution to agent defaults."
@@ -473,11 +506,14 @@
       (set-agent-default "spark" :openai-codex :model "gpt-5.3-codex")
       (set-buffer-provider-override buf :anthropic)
       (set-buffer-model-override buf "claude-override")
+      (set-buffer-think-level-override buf "high")
       (clear-buffer-provider/model-overrides buf)
-      (multiple-value-bind (provider model)
+      (multiple-value-bind (provider model think-level)
           (resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
-        (is (string= "gpt-5.3-codex" model))))))
+        (is (string= "gpt-5.3-codex" model))
+        (is (null think-level))
+        (is (null (buffer-think-level-override buf)))))))
 
 (test canonicalize-message-content-wraps-plain-text
   "Plain text content is normalized to one canonical text block."
@@ -559,11 +595,14 @@
       (is (string= "claude-test" captured)))))
 
 (test provider-request-dispatches-openai-codex-adapter
-  "OpenAI Codex requests use the Codex adapter and preserve the model."
-  (let ((captured nil))
-    (with-function-override (clawmacs::openai-codex-request (messages &key model max-tokens tools)
-                              (declare (ignore messages max-tokens tools))
-                              (setf captured model)
+  "OpenAI Codex requests use the Codex adapter and preserve model + reasoning."
+  (let ((captured-model nil)
+        (captured-reasoning nil))
+    (with-function-override (clawmacs::openai-codex-request
+                             (messages &key model max-tokens tools reasoning-effort)
+                             (declare (ignore messages max-tokens tools))
+                             (setf captured-model model
+                                   captured-reasoning reasoning-effort)
                               '((:stop--reason . "stop")
                                 (:content . #())))
       (is (equal '((:stop--reason . "stop")
@@ -571,20 +610,25 @@
                  (clawmacs::provider-request
                   :openai-codex
                   '(((:role . "user") (:content . #())))
-                  :model "gpt-5.3-codex")))
-      (is (string= "gpt-5.3-codex" captured)))))
+                  :model "gpt-5.3-codex"
+                  :reasoning-effort "high")))
+      (is (string= "gpt-5.3-codex" captured-model))
+      (is (string= "high" captured-reasoning)))))
 
 (test provider-request-streaming-dispatches-by-provider
-  "Streaming adapter dispatch follows the selected provider and model."
+  "Streaming adapter dispatch follows the selected provider, model, and reasoning."
   (let ((anthropic-model nil)
-        (openai-model nil))
+        (openai-model nil)
+        (openai-reasoning nil))
     (with-function-override (clawmacs::anthropic-request-streaming (messages callback &key model max-tokens tools)
                               (declare (ignore messages callback max-tokens tools))
                               (setf anthropic-model model)
                               :anthropic-stream)
-      (with-function-override (clawmacs::openai-codex-request-streaming (messages callback &key model max-tokens tools)
+      (with-function-override (clawmacs::openai-codex-request-streaming
+                                (messages callback &key model max-tokens tools reasoning-effort)
                                 (declare (ignore messages callback max-tokens tools))
-                                (setf openai-model model)
+                                (setf openai-model model
+                                      openai-reasoning reasoning-effort)
                                 :openai-stream)
         (is (eq :anthropic-stream
                 (clawmacs::provider-request-streaming
@@ -597,31 +641,37 @@
                  :openai-codex
                  '(((:role . "user") (:content . #())))
                  (lambda (state) (declare (ignore state)))
-                 :model "codex-stream")))
+                 :model "codex-stream"
+                 :reasoning-effort "medium")))
         (is (string= "claude-stream" anthropic-model))
-        (is (string= "codex-stream" openai-model))))))
+        (is (string= "codex-stream" openai-model))
+        (is (string= "medium" openai-reasoning))))))
 
 (test start-streaming-response-uses-resolved-provider-and-model
-  "Live streaming resolves provider/model first and passes both to the adapter."
+  "Live streaming resolves provider/model/think first and passes them to the adapter."
   (let ((buf (make-buffer "routing-test" :agent-name "spark"))
         (captured-provider nil)
-        (captured-model nil))
+        (captured-model nil)
+        (captured-reasoning nil))
     (with-function-override (clawmacs::resolve-buffer-provider-and-model (buffer)
                               (declare (ignore buffer))
-                              (values :openai-codex "gpt-5.3-codex"))
+                              (values :openai-codex "gpt-5.3-codex" "high"))
       (with-function-override (clawmacs::tool-definitions-for-api ()
                                 #())
         (with-function-override (clawmacs::build-conversation-messages (buffer)
                                   (declare (ignore buffer))
                                   '(((:role . "user") (:content . #()))))
-          (with-function-override (clawmacs::provider-request-streaming (provider messages callback &key model max-tokens tools)
+          (with-function-override (clawmacs::provider-request-streaming
+                                    (provider messages callback &key model max-tokens tools reasoning-effort)
                                     (declare (ignore messages callback max-tokens tools))
                                     (setf captured-provider provider
-                                          captured-model model)
+                                          captured-model model
+                                          captured-reasoning reasoning-effort)
                                     (clawmacs::make-stream-state))
             (clawmacs::start-streaming-response buf)
             (is (eq :openai-codex captured-provider))
-            (is (string= "gpt-5.3-codex" captured-model))))))))
+            (is (string= "gpt-5.3-codex" captured-model))
+            (is (string= "high" captured-reasoning))))))))
 
 (test start-streaming-response-surfaces-resolver-errors-in-buffer
   "Resolver failures are caught and rendered into the buffer as agent errors."
@@ -716,12 +766,35 @@
       (is (search "\"store\":false" captured-request-body))
       (is (search "\"stream\":false" captured-request-body))
       (is (not (search "max_output_tokens" captured-request-body)))
+      (is (null (assoc :reasoning body)))
       (is (string= "boot prompt" (cdr (assoc :instructions body))))
       (is (not (assoc :messages body)))
       (is (string= "message" (cdr (assoc :type message-item))))
       (is (string= "user" (cdr (assoc :role message-item))))
       (is (string= "input_text" (cdr (assoc :type content-item))))
       (is (string= "hello" (cdr (assoc :text content-item)))))))
+
+(test openai-codex-request-includes-reasoning-effort
+  "OpenAI Codex requests include reasoning.effort when set."
+  (let ((captured-request-body nil))
+    (with-function-override (drakma:http-request (&rest args)
+                              (setf captured-request-body (getf (rest args) :content))
+                              (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
+                                      200))
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                '(:source :token-override
+                                  :mode :api-key
+                                  :token "openai-token"
+                                  :base-url "https://api.openai.com/v1"
+                                  :refreshable-p nil))
+        (clawmacs::openai-codex-request '()
+                                        :model "gpt-5.4"
+                                        :reasoning-effort "xhigh")))
+    (let* ((body (clawmacs::api-json-decode captured-request-body))
+           (reasoning (cdr (assoc :reasoning body)))
+           (effort (cdr (assoc :effort reasoning))))
+      (is (string= "xhigh" effort)))))
 
 (test openai-codex-request-retries-on-401-after-refresh
   "OpenAI Codex retries once after a 401 when ChatGPT auth is refreshable."
@@ -875,10 +948,36 @@
       (is (search "\"store\":false" captured-request-body))
       (is (search "\"stream\":true" captured-request-body))
       (is (not (search "max_output_tokens" captured-request-body)))
+      (is (null (assoc :reasoning body)))
       (is (string= "boot prompt" (cdr (assoc :instructions body))))
       (is (string= "message" (cdr (assoc :type message-item))))
       (is (string= "input_text" (cdr (assoc :type content-item))))
-      (is (string= "hello" (cdr (assoc :text content-item)))))))
+      (is (string= "hello" (cdr (assoc :text content-item)))))
+    (setf captured-request-body nil)
+    (with-function-override (drakma:http-request (&rest args)
+                              (setf captured-request-body (getf (rest args) :content))
+                              (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
+                                      200
+                                      nil))
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                '(:source :token-override
+                                  :mode :api-key
+                                  :token "openai-token"
+                                  :base-url "https://api.openai.com/v1"
+                                  :refreshable-p nil))
+        (let ((state (clawmacs::openai-codex-request-streaming
+                      '()
+                      (lambda (state) (declare (ignore state)))
+                      :model "gpt-5.4"
+                      :reasoning-effort "high")))
+          (loop repeat 100
+                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                        (clawmacs::stream-state-done-p state))
+                do (sleep 0.01)))))
+    (let* ((body (clawmacs::api-json-decode captured-request-body))
+           (reasoning (cdr (assoc :reasoning body))))
+      (is (string= "high" (cdr (assoc :effort reasoning)))))))
 
 (test openai-codex-streaming-decodes-utf8-punctuation-from-octets
   "OpenAI Codex streaming decodes UTF-8 punctuation correctly from octet streams."
@@ -1661,6 +1760,27 @@
     (is (member "gpt-5.2" models :test #'string=))
     (is (member clawmacs::*openai-codex-model* models :test #'string=))
     (is (= 6 (length models)))))
+
+(test normalize-provider-openai-codex-storage-forms
+  "normalize-provider accepts both kebab-case and JSON camelCase storage forms."
+  (is (eq :openai-codex
+          (clawmacs::normalize-provider "openai-codex")))
+  (is (eq :openai-codex
+          (clawmacs::normalize-provider "openaiCodex"))))
+
+(test provider-model-supported-think-levels-openai-codex
+  "OpenAI-Codex think levels are model-specific."
+  (let ((gpt-54 (clawmacs::provider-model-supported-think-levels
+                 :openai-codex "gpt-5.4"))
+        (gpt-53-codex (clawmacs::provider-model-supported-think-levels
+                       :openai-codex "gpt-5.3-codex"))
+        (gpt-51-max (clawmacs::provider-model-supported-think-levels
+                     :openai-codex "gpt-5.1-codex-max")))
+    (is (equal '("none" "low" "medium" "high" "xhigh") gpt-54))
+    (is (equal '("low" "medium" "high" "xhigh") gpt-53-codex))
+    (is (equal '("none" "low" "medium" "high") gpt-51-max))
+    (is (null (clawmacs::provider-model-supported-think-levels
+               :anthropic "claude-haiku-4-5-20251001")))))
 
 (test provider-known-models-zai
   "Known Z.AI models list is non-empty and contains the default."

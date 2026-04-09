@@ -114,6 +114,10 @@
     (keymap-bind km '(:ctrl-c #\Newline) 'minibuffer-select-model-command) ; C-c C-m (LF variant)
     ;; C-c M (capital M) = old overlay model selector
     (keymap-bind km '(:ctrl-c #\M) 'select-model-command)
+    ;; C-c C-r = minibuffer think selector
+    (keymap-bind km (list :ctrl-c (code-char 18)) 'minibuffer-select-think-level-command)
+    ;; C-c R (capital R) = old overlay think selector
+    (keymap-bind km '(:ctrl-c #\R) 'select-think-level-command)
     ;; C-c g = spawn read-only McCLIM popup window
     (keymap-bind km '(:ctrl-c #\g) 'popup-gui-command)
     ;; C-c C-d = toggle API debug mode (echo requests/responses in chat)

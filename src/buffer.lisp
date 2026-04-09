@@ -61,6 +61,11 @@
                       :initform nil
                       :type (or null string)
                       :documentation "When non-nil, overrides the agent's default model name.")
+   (think-level-override :initarg :think-level-override
+                         :accessor buffer-think-level-override
+                         :initform nil
+                         :type (or null string)
+                         :documentation "When non-nil, overrides the model's default reasoning effort.")
     (face-registry     :initarg :face-registry
                        :accessor buffer-face-registry
                        :type hash-table
@@ -170,6 +175,21 @@ Enforces the invariant that it is not read-only."
   (setf (buffer-model-override buf) model)
   buf)
 
+(defun normalize-think-level-override (value)
+  "Normalize VALUE for storage as a think-level override."
+  (when value
+    (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                (string value))))
+      (when (plusp (length trimmed))
+        (string-downcase trimmed)))))
+
+(declaim (ftype (function (buffer string) buffer) set-buffer-think-level-override))
+(defun set-buffer-think-level-override (buf think-level)
+  "Set BUF's think-level override to THINK-LEVEL and return BUF."
+  (setf (buffer-think-level-override buf)
+        (normalize-think-level-override think-level))
+  buf)
+
 (declaim (ftype (function (buffer) buffer) clear-buffer-provider-override))
 (defun clear-buffer-provider-override (buf)
   "Clear BUF's provider override and return BUF."
@@ -182,11 +202,18 @@ Enforces the invariant that it is not read-only."
   (setf (buffer-model-override buf) nil)
   buf)
 
+(declaim (ftype (function (buffer) buffer) clear-buffer-think-level-override))
+(defun clear-buffer-think-level-override (buf)
+  "Clear BUF's think-level override and return BUF."
+  (setf (buffer-think-level-override buf) nil)
+  buf)
+
 (declaim (ftype (function (buffer) buffer) clear-buffer-provider/model-overrides))
 (defun clear-buffer-provider/model-overrides (buf)
-  "Clear BUF's provider and model overrides and return BUF."
+  "Clear BUF's provider, model, and think-level overrides and return BUF."
   (clear-buffer-provider-override buf)
   (clear-buffer-model-override buf)
+  (clear-buffer-think-level-override buf)
   buf)
 
 ;;; --------------------------------------------------------------------------
@@ -383,6 +410,7 @@ Assigns the :system face set from the buffer's face registry if available."
       (:agent-name . ,(buffer-agent-name buf))
       (:provider-override . ,(buffer-provider-override buf))
       (:model-override . ,(buffer-model-override buf))
+      (:think-level-override . ,(buffer-think-level-override buf))
       (:messages . ,(coerce (nreverse messages) 'vector)))))
 
 (defun save-session (buf)
@@ -407,14 +435,18 @@ Assigns the :system face set from the buffer's face registry if available."
              (agent (or (cdr (assoc :agent-name data)) agent-name))
              (provider-override (cdr (assoc :provider-override data)))
              (model-override (cdr (assoc :model-override data)))
+             (think-level-override (cdr (assoc :think-level-override data)))
              (messages (cdr (assoc :messages data)))
              (buf (make-buffer name :agent-name agent
                                      :working-directory (truename "."))))
         (setf (buffer-provider-override buf)
               (and provider-override
-                   (intern (string-upcase provider-override) :keyword))
+                   (ignore-errors
+                     (normalize-provider provider-override)))
               (buffer-model-override buf)
-              model-override)
+              model-override
+              (buffer-think-level-override buf)
+              (normalize-think-level-override think-level-override))
         ;; Replay messages into the buffer
         (loop :for msg-data :across messages
               :for sender-str := (cdr (assoc :sender msg-data))
@@ -437,6 +469,8 @@ Assigns the :system face set from the buffer's face registry if available."
                       (if before
                           (setf (message-next before) msg)
                           (setf (buffer-first-message buf) msg)))))
+        (ignore-errors
+          (reconcile-buffer-think-level-override buf))
         buf))))
 
 (defun list-saved-sessions ()

@@ -1403,6 +1403,12 @@ dereferences it at call time so that user customizations take effect.")
   "Return non-nil when PROVIDER is supported locally."
   (member provider '(:anthropic :openai-codex :zai :openrouter) :test #'eq))
 
+(defun canonicalize-provider-name (provider-name)
+  "Return a normalized comparison key for PROVIDER-NAME."
+  (string-downcase
+   (remove-if-not #'alphanumericp
+                  (string provider-name))))
+
 (defun normalize-provider (provider)
   "Normalize PROVIDER to a supported keyword, or nil when absent."
   (cond
@@ -1413,7 +1419,14 @@ dereferences it at call time so that user customizations take effect.")
          (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI, :OPENROUTER"
                 provider)))
     ((stringp provider)
-     (normalize-provider (intern (string-upcase provider) :keyword)))
+     (let ((normalized-name (canonicalize-provider-name provider)))
+       (or (find normalized-name
+                 '(:anthropic :openai-codex :zai :openrouter)
+                 :key (lambda (candidate)
+                        (canonicalize-provider-name (symbol-name candidate)))
+                 :test #'string=)
+           (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI, :OPENROUTER"
+                  provider))))
     ((symbolp provider)
      (normalize-provider (symbol-name provider)))
     (t
@@ -1473,6 +1486,18 @@ For :OPENROUTER, models are dynamically fetched by fetch-openrouter-models when
 an API key is configured; this static list is used as a fallback.
 These are used by the model selector overlay.")
 
+(defparameter *openai-codex-model-think-levels*
+  '(("gpt-5.4" "none" "low" "medium" "high" "xhigh")
+    ("gpt-5.3-codex" "low" "medium" "high" "xhigh")
+    ("gpt-5.2-codex" "low" "medium" "high" "xhigh")
+    ("gpt-5.2" "none" "low" "medium" "high" "xhigh")
+    ("gpt-5.1-codex" "none" "low" "medium" "high")
+    ("gpt-5.1-codex-max" "none" "low" "medium" "high")
+    ("gpt-5.1-codex-mini" "none" "low" "medium" "high"))
+  "Supported reasoning effort values for known OpenAI-Codex models.
+Values are ordered from lowest to highest effort, excluding the synthetic
+\"default\" selector entry handled by the UI.")
+
 (defun provider-known-models (provider)
   "Return the list of known model names for PROVIDER.
 For :OPENROUTER, returns the dynamically-fetched model list when available,
@@ -1527,6 +1552,50 @@ nil to force a refresh. Returns the static fallback list on any error."
           (let ((token (read-provider-token provider)))
             (and token (stringp token) (plusp (length token)))))
     (error () nil)))
+
+(defun provider-model-supported-think-levels (provider model)
+  "Return the supported think levels for PROVIDER and MODEL, or NIL."
+  (when (and (eq provider :openai-codex)
+             (stringp model))
+    (copy-list (cdr (assoc model *openai-codex-model-think-levels*
+                           :test #'string=)))))
+
+(defun think-level-supported-p (provider model think-level)
+  "Return non-nil when THINK-LEVEL is supported by PROVIDER and MODEL."
+  (member think-level
+          (provider-model-supported-think-levels provider model)
+          :test #'string=))
+
+(defun resolved-buffer-think-level (buf provider model)
+  "Return BUF's validated think-level override for PROVIDER and MODEL, or NIL."
+  (let ((think-level (normalize-think-level-override
+                      (buffer-think-level-override buf))))
+    (when (and think-level
+               (think-level-supported-p provider model think-level))
+      think-level)))
+
+(defun reconcile-buffer-think-level-override (buf &key provider model)
+  "Reconcile BUF's think-level override against PROVIDER and MODEL.
+Returns two values: status keyword and resulting think level."
+  (multiple-value-bind (resolved-provider resolved-model)
+      (if (and provider model)
+          (values provider model)
+          (resolve-buffer-provider-and-model buf))
+    (let* ((old-think (normalize-think-level-override
+                       (buffer-think-level-override buf)))
+           (new-think (resolved-buffer-think-level buf
+                                                   resolved-provider
+                                                   resolved-model)))
+      (setf (buffer-think-level-override buf) new-think)
+      (values (cond
+                ((and old-think new-think
+                      (string= old-think new-think))
+                 :kept)
+                ((and old-think (null new-think))
+                 :reset)
+                (t
+                 :default))
+              new-think))))
 
 (defun available-models-for-selector (buf)
   "Build the model selector entry list for BUF.
@@ -1651,9 +1720,11 @@ For :OPENROUTER, dynamically-fetched models are used when an API key is present.
     normalized-provider))
 
 (defun resolve-buffer-provider-and-model (buf)
-  "Resolve BUF's effective provider and model using overrides and defaults.
+  "Resolve BUF's effective provider, model, and think level.
 Resolution order for provider: buffer override → agent default → *default-provider*.
-Resolution order for model: buffer override → agent default → provider fallback → *default-model*."
+Resolution order for model: buffer override → agent default → provider fallback → *default-model*.
+Think level is buffer-scoped only and is returned only when supported by the
+resolved provider/model."
   (ensure-agent-defaults-loaded)
   (let* ((provider (or (buffer-provider-override buf)
                        (agent-default (buffer-agent-name buf))
@@ -1662,10 +1733,11 @@ Resolution order for model: buffer override → agent default → provider fallb
          (model (or (buffer-model-override buf)
                     (agent-default-model (buffer-agent-name buf) resolved-provider)
                     (provider-fallback-model resolved-provider)
-                    *default-model*)))
+                    *default-model*))
+         (think-level (resolved-buffer-think-level buf resolved-provider model)))
     (when (blank-string-p model)
       (error "Resolved model must be a non-empty string"))
-    (values resolved-provider model)))
+    (values resolved-provider model think-level)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Conversation Building
@@ -1968,22 +2040,26 @@ reasoning_content is present, falls back to reasoning_content."
     (canonical-response (if saw-tool-use "tool_use" "end_turn")
                         (nreverse content-blocks))))
 
-(defun openai-codex-responses-request-body (messages model max-tokens tools &key stream)
+(defun openai-codex-responses-request-body (messages model max-tokens tools
+                                            &key stream reasoning-effort)
   "Build the request body for an OpenAI Responses API call."
   (declare (ignore max-tokens))
   (let* ((system-prompt (or (build-system-prompt) ""))
          (input-items (conversation-messages->responses-input messages))
-         (response-tools (or (anthropic-tools->responses-tools tools) #())))
-    (api-json-encode
-     `((:model . ,model)
-       (:instructions . ,system-prompt)
-       (:input . ,(coerce input-items 'vector))
-       (:tools . ,response-tools)
-       (:tool--choice . "auto")
-       (:parallel--tool--calls . t)
-       (:store . ,+json-false+)
-       (:stream . ,(if stream t +json-false+))
-       (:include . #())))))
+         (response-tools (or (anthropic-tools->responses-tools tools) #()))
+         (body `((:model . ,model)
+                 (:instructions . ,system-prompt)
+                 (:input . ,(coerce input-items 'vector))
+                 (:tools . ,response-tools)
+                 (:tool--choice . "auto")
+                 (:parallel--tool--calls . t)
+                 (:store . ,+json-false+)
+                 (:stream . ,(if stream t +json-false+))
+                 (:include . #()))))
+    (when reasoning-effort
+      (setf body (append body
+                         (list `(:reasoning . ((:effort . ,reasoning-effort)))))))
+    (api-json-encode body)))
 
 (defun openai-codex-request-headers (auth &key stream)
   "Build request headers for AUTH, optionally enabling streaming."
@@ -2045,7 +2121,11 @@ reasoning_content is present, falls back to reasoning_content."
         (setf (car cell) (canonical-text-block text))
         (push (canonical-text-block text) (stream-state-content-blocks state)))))
 
-(defun provider-request (provider messages &key model (max-tokens *default-max-tokens*) tools)
+(defun provider-request (provider messages
+                         &key model
+                              (max-tokens *default-max-tokens*)
+                              tools
+                              reasoning-effort)
   "Dispatch a non-streaming request by resolved PROVIDER.
 Anthropic models listed in *claude-cli-models* are routed through the
 Claude Code CLI subprocess instead of the REST API."
@@ -2055,13 +2135,21 @@ Claude Code CLI subprocess instead of the REST API."
          (claude-cli-request messages :model model :max-tokens max-tokens :tools tools)
          (anthropic-request messages :model model :max-tokens max-tokens :tools tools)))
     (:openai-codex
-     (openai-codex-request messages :model model :max-tokens max-tokens :tools tools))
+     (openai-codex-request messages
+                           :model model
+                           :max-tokens max-tokens
+                           :tools tools
+                           :reasoning-effort reasoning-effort))
     (:zai
      (zai-request messages :model model :max-tokens max-tokens :tools tools))
     (:openrouter
      (openrouter-request messages :model model :max-tokens max-tokens :tools tools))))
 
-(defun provider-request-streaming (provider messages callback &key model (max-tokens *default-max-tokens*) tools)
+(defun provider-request-streaming (provider messages callback
+                                   &key model
+                                        (max-tokens *default-max-tokens*)
+                                        tools
+                                        reasoning-effort)
   "Dispatch a streaming request by resolved PROVIDER.
 Anthropic models listed in *claude-cli-models* are routed through the
 Claude Code CLI subprocess instead of the REST API."
@@ -2080,7 +2168,8 @@ Claude Code CLI subprocess instead of the REST API."
      (openai-codex-request-streaming messages callback
                                      :model model
                                      :max-tokens max-tokens
-                                     :tools tools))
+                                     :tools tools
+                                     :reasoning-effort reasoning-effort))
     (:zai
      (zai-request-streaming messages callback
                             :model model
@@ -2498,13 +2587,15 @@ MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
 
 (defun openai-codex-request (messages &key (model *openai-codex-model*)
                                            (max-tokens *default-max-tokens*)
-                                           tools)
+                                           tools
+                                           reasoning-effort)
   "Call the OpenAI Responses API for Codex and normalize the response shape."
   (let* ((auth (or (resolve-openai-codex-auth)
                    (error 'simple-error
                           :format-control "No OpenAI Codex auth. Save a bearer token to ~/.config/clawmacs/openai-codex-token or sign in via ~/.codex/auth.json")))
          (request-body (openai-codex-responses-request-body
-                        messages model max-tokens tools)))
+                        messages model max-tokens tools
+                        :reasoning-effort reasoning-effort)))
     (multiple-value-bind (body status-code ignored effective-auth)
         (openai-codex-http-request auth request-body)
       (declare (ignore ignored effective-auth))
@@ -2917,7 +3008,8 @@ Returns the final stream-state when complete."
 (defun openai-codex-request-streaming (messages callback
                                        &key (model *openai-codex-model*)
                                             (max-tokens *default-max-tokens*)
-                                            tools)
+                                            tools
+                                            reasoning-effort)
   "Call the OpenAI Responses API with SSE streaming enabled."
   (declare (ignore callback))
   (let* ((auth (or (resolve-openai-codex-auth)
@@ -2925,7 +3017,9 @@ Returns the final stream-state when complete."
                           :format-control "No OpenAI Codex auth. Save a bearer token to ~/.config/clawmacs/openai-codex-token or sign in via ~/.codex/auth.json")))
          (request-body
            (openai-codex-responses-request-body
-            messages model max-tokens tools :stream t))
+            messages model max-tokens tools
+            :stream t
+            :reasoning-effort reasoning-effort))
          (state (make-stream-state)))
     (multiple-value-bind (body-stream status-code ignored effective-auth)
         (openai-codex-http-request auth request-body :stream t)

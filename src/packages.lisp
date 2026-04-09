@@ -107,10 +107,13 @@
     #:buffer-status
     #:buffer-provider-override
     #:buffer-model-override
+    #:buffer-think-level-override
     #:set-buffer-provider-override
     #:set-buffer-model-override
+    #:set-buffer-think-level-override
     #:clear-buffer-provider-override
     #:clear-buffer-model-override
+    #:clear-buffer-think-level-override
     #:clear-buffer-provider/model-overrides
      #:buffer-face-registry
    #:buffer-keymap
@@ -183,6 +186,8 @@
      #:set-agent-default
      #:ensure-agent-defaults-loaded
      #:resolve-buffer-provider-and-model
+     #:provider-model-supported-think-levels
+     #:reconcile-buffer-think-level-override
      #:anthropic-request
      #:build-conversation-messages
    #:*default-provider*
@@ -285,6 +290,12 @@
    #:select-model-command
    #:render-model-selector
    #:handle-model-selector-key
+   #:*think-selector-active*
+   #:*think-selector-index*
+   #:*think-selector-entries*
+   #:select-think-level-command
+   #:render-think-selector
+   #:handle-think-selector-key
 
    ;; Minibuffer
    #:*minibuffer-active*
@@ -322,6 +333,7 @@
    #:update-window-layout
    #:render-minibuffer
    #:minibuffer-select-model-command
+   #:minibuffer-select-think-level-command
    #:minibuffer-select-buffer-command
 
    ;; Introspection / Help

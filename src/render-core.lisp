@@ -253,9 +253,9 @@ black background. This must NOT be the modeline face."
   "Resolve the provider/model string for the modeline.
 Returns a string like \"anthropic/claude-haiku-4-5-20251001\" or \"??\" on error."
   (handler-case
-      (multiple-value-bind (provider model)
+      (multiple-value-bind (provider model think-level)
           (resolve-buffer-provider-and-model buf)
-        (format nil "~(~A~)/~A" provider model))
+        (format nil "~(~A~)/~A~@[ [think:~A]~]" provider model think-level))
     (error () "??")))
 
 (defun format-modeline (buf width &key (major-mode "chat") provider-model)
@@ -309,6 +309,9 @@ Mode dispatch priority matches handle-key-event in main.lisp."
         (*model-selector-active*
          (setf row1 " RET: select  C-g/q: cancel"
                row2 " C-p/C-n: navigate  *=active"))
+        (*think-selector-active*
+         (setf row1 " RET: select  C-g/q: cancel"
+               row2 " C-p/C-n: navigate  default=clear  *=active"))
         (*customize-face-state*
          (setf row1 " C-n/C-p: next/prev  RET: cycle value  C-c C-c: save"
                row2 " C-g: cancel  Navigate fields with C-n/C-p"))
@@ -325,7 +328,7 @@ Mode dispatch priority matches handle-key-event in main.lisp."
                  row2 (format nil " ~A" tool-name))))
         (t
          (setf row1 " RET: send  C-o: newline  C-k: kill  C-y: yank  PgUp/Dn: scroll"
-               row2 " C-x C-b: buffers  C-c C-m: model  C-h b: help  C-x C-c: quit")))
+               row2 " C-x C-b: buffers  C-c C-m: model  C-c C-r: think  C-x C-c: quit")))
       (values (pad row1) (pad row2)))))
 
 ;;; --------------------------------------------------------------------------
@@ -418,6 +421,15 @@ Adapts column widths to the terminal WIDTH."
                        marker
                        provider-width provider
                        model)))
+    (if (<= (length line) width)
+        (concatenate 'string line
+                     (make-string (- width (length line)) :initial-element #\Space))
+        (subseq line 0 width))))
+
+(defun format-think-selector-line (marker label width)
+  "Format a single line for the think-level selector.
+LABEL is typically \"default\", \"low\", or another reasoning-effort value."
+  (let ((line (format nil "~A~A" marker label)))
     (if (<= (length line) width)
         (concatenate 'string line
                      (make-string (- width (length line)) :initial-element #\Space))

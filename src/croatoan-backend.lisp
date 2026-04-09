@@ -579,6 +579,105 @@ Handles scrolling when there are more models than visible rows."
       (croatoan:refresh modeline-window))))
 
 ;;; --------------------------------------------------------------------------
+;;; Think Selector Rendering
+;;; --------------------------------------------------------------------------
+
+(defun render-think-selector (main-window modeline-window)
+  "Render the think-level selector overlay for the active model."
+  (let* ((width (croatoan:width main-window))
+         (height (croatoan:height main-window))
+         (entries *think-selector-entries*)
+         (num-entries (length entries))
+         (current-buf (current-buffer))
+         (max-visible (max 1 (- height 7)))
+         (scroll (cond
+                   ((< *think-selector-index* *think-selector-scroll*)
+                    *think-selector-index*)
+                   ((>= *think-selector-index*
+                        (+ *think-selector-scroll* max-visible))
+                    (max 0 (1+ (- *think-selector-index* max-visible))))
+                   (t *think-selector-scroll*))))
+    (setf *think-selector-scroll* scroll)
+    (croatoan:clear main-window)
+    (when (< 1 height)
+      (apply-global-face main-window :selector-title)
+      (croatoan:move main-window 1 2)
+      (let ((title "Select Think Level"))
+        (croatoan:add-string main-window
+                             (subseq title 0 (min (length title) (- width 4))))))
+    (when (< 2 height)
+      (apply-global-face main-window :selector-separator)
+      (croatoan:move main-window 2 2)
+      (let ((sep (make-string (min (- width 4) 50) :initial-element #\─)))
+        (croatoan:add-string main-window sep)))
+    (when (< 3 height)
+      (apply-global-face main-window :selector-header)
+      (let ((header (format-think-selector-line "  " "THINK LEVEL" width)))
+        (croatoan:move main-window 3 0)
+        (croatoan:add-string main-window
+                             (subseq header 0 (min (length header) width)))))
+    (loop :for absolute-idx :from scroll
+          :below (min (+ scroll max-visible) num-entries)
+          :for entry := (nth absolute-idx entries)
+          :for row := (+ 5 (- absolute-idx scroll))
+          :while (< row (- height 2))
+          :for selected-p := (= absolute-idx *think-selector-index*)
+          :for active-p := (getf entry :active-p)
+          :for label := (getf entry :display)
+          :for marker := (cond ((and selected-p active-p) "▸*")
+                               (selected-p "▸ ")
+                               (active-p " *")
+                               (t "  "))
+          :for line := (format-think-selector-line marker label width)
+          :do (progn
+                (if selected-p
+                    (apply-global-face main-window :selector-selected)
+                    (apply-global-face main-window :selector-entry))
+                (croatoan:move main-window row 0)
+                (croatoan:add-string main-window
+                                     (make-string width :initial-element #\Space))
+                (croatoan:move main-window row 0)
+                (croatoan:add-string main-window
+                                     (subseq line 0 (min (length line) width)))))
+    (when (> num-entries max-visible)
+      (let ((indicator (format nil "[~D-~D of ~D]"
+                               (1+ scroll)
+                               (min (+ scroll max-visible) num-entries)
+                               num-entries))
+            (ind-row (+ 5 (min max-visible (- num-entries scroll)))))
+        (when (< ind-row (- height 1))
+          (apply-global-face main-window :selector-scroll)
+          (croatoan:move main-window ind-row 2)
+          (croatoan:add-string main-window
+                               (subseq indicator 0
+                                       (min (length indicator) (- width 4)))))))
+    (let ((footer-row (1- height)))
+      (when (plusp footer-row)
+        (apply-global-face main-window :selector-footer)
+        (croatoan:move main-window footer-row 2)
+        (let ((footer "[RET] select  [C-g/q] cancel  default = clear  * = active"))
+          (croatoan:add-string main-window
+                               (subseq footer 0
+                                       (min (length footer) (- width 4)))))))
+    (croatoan:refresh main-window)
+    (let* ((ml-face (make-modeline-face))
+           (resolved (resolve-face ml-face))
+           (pm (resolve-modeline-provider-model current-buf))
+           (ml-text (format nil " [think-selector] ~A | ~D level~:[s~;~] available"
+                            pm num-entries (= num-entries 1)))
+           (ml-width (croatoan:width modeline-window))
+           (padded (if (<= (length ml-text) ml-width)
+                       (concatenate 'string ml-text
+                                    (make-string (- ml-width (length ml-text))
+                                                 :initial-element #\Space))
+                       (subseq ml-text 0 ml-width))))
+      (apply-face-to-window modeline-window resolved)
+      (croatoan:clear modeline-window)
+      (croatoan:move modeline-window 0 0)
+      (croatoan:add-string modeline-window padded)
+      (croatoan:refresh modeline-window))))
+
+;;; --------------------------------------------------------------------------
 ;;; Minibuffer Rendering
 ;;; --------------------------------------------------------------------------
 
@@ -847,6 +946,8 @@ the event loop reading input and rendering until :QUIT is returned."
                     (render-buffer-selector main-win modeline-win))
                    (*model-selector-active*
                     (render-model-selector main-win modeline-win))
+                   (*think-selector-active*
+                    (render-think-selector main-win modeline-win))
                    (t
                     (render-buffer buf main-win modeline-win)))
                  (render-minibuffer minibuffer-win)))
