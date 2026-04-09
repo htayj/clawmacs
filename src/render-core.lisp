@@ -142,6 +142,68 @@ Call once at startup. These faces are customizable via customize-face."
             :background (make-color-spec :cga 0)
             :foreground (make-color-spec :cga 2)
             :bold-p t :underline-p nil :reverse-p nil))
+    ;; Tool call faces
+    (setf (gethash :tool-call r)
+          (make-instance 'face :name :tool-call
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 14)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :tool-call-paren r)
+          (make-instance 'face :name :tool-call-paren
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 12)
+            :bold-p t :underline-p nil :reverse-p nil))
+    (setf (gethash :tool-call-keyword r)
+          (make-instance 'face :name :tool-call-keyword
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 11)
+            :bold-p t :underline-p nil :reverse-p nil))
+    (setf (gethash :tool-call-string r)
+          (make-instance 'face :name :tool-call-string
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 10)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :tool-call-comment r)
+          (make-instance 'face :name :tool-call-comment
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 6)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :tool-call-number r)
+          (make-instance 'face :name :tool-call-number
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 13)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    ;; Tool result faces
+    (setf (gethash :tool-result r)
+          (make-instance 'face :name :tool-result
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 10)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :tool-result-paren r)
+          (make-instance 'face :name :tool-result-paren
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 12)
+            :bold-p t :underline-p nil :reverse-p nil))
+    (setf (gethash :tool-result-keyword r)
+          (make-instance 'face :name :tool-result-keyword
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 11)
+            :bold-p t :underline-p nil :reverse-p nil))
+    (setf (gethash :tool-result-string r)
+          (make-instance 'face :name :tool-result-string
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 14)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :tool-result-comment r)
+          (make-instance 'face :name :tool-result-comment
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 6)
+            :bold-p nil :underline-p nil :reverse-p nil))
+    (setf (gethash :tool-result-number r)
+          (make-instance 'face :name :tool-result-number
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 13)
+            :bold-p nil :underline-p nil :reverse-p nil))
     ;; Default text face — fallback for messages without a face set.
     ;; This should NEVER be the modeline face; it should be a sensible
     ;; text-on-dark-background face for generic content.
@@ -358,6 +420,136 @@ Accounts for the sender prefix and line wrapping."
 (defun message-sender-prefix (msg)
   "Return the display prefix for MSG's sender."
   (format nil "~A> " (string-downcase (symbol-name (message-sender msg)))))
+
+(defun tool-call-message-p (msg)
+  "Return non-nil when MSG contains one or more tool_use blocks."
+  (and (message-raw-content msg)
+       (some (lambda (block)
+               (string= "tool_use" (or (cdr (assoc :type block)) "")))
+             (message-raw-content msg))))
+
+(defun tool-line-base-face-name (msg line-content)
+  "Return the base global face name for a tool display line, or nil."
+  (let ((trimmed (string-left-trim '(#\Space #\Tab) line-content)))
+    (cond
+      ((eq :tool-result (message-sender msg))
+       :tool-result)
+      ((and (tool-call-message-p msg)
+            (plusp (length trimmed))
+            (char= (char trimmed 0) #\())
+       :tool-call)
+      (t nil))))
+
+(defun tool-line-face-name (base-face-name category)
+  "Map BASE-FACE-NAME and CATEGORY to a concrete global face keyword."
+  (ecase base-face-name
+    (:tool-call
+     (ecase category
+       (:base :tool-call)
+       (:paren :tool-call-paren)
+       (:keyword :tool-call-keyword)
+       (:string :tool-call-string)
+       (:comment :tool-call-comment)
+       (:number :tool-call-number)))
+    (:tool-result
+     (ecase category
+       (:base :tool-result)
+       (:paren :tool-result-paren)
+       (:keyword :tool-result-keyword)
+       (:string :tool-result-string)
+       (:comment :tool-result-comment)
+       (:number :tool-result-number)))))
+
+(defun lisp-token-face-category (token)
+  "Return the syntax face category for TOKEN."
+  (cond
+    ((zerop (length token)) :base)
+    ((char= (char token 0) #\:) :keyword)
+    ((ignore-errors
+       (multiple-value-bind (value pos)
+           (read-from-string token nil nil)
+         (and (= pos (length token))
+              (numberp value))))
+     :number)
+    (t :base)))
+
+(defun lisp-line-face-vector (text base-face-name)
+  "Return a per-character face-name vector for TEXT using BASE-FACE-NAME."
+  (let* ((len (length text))
+         (base-face (tool-line-face-name base-face-name :base))
+         (paren-face (tool-line-face-name base-face-name :paren))
+         (keyword-face (tool-line-face-name base-face-name :keyword))
+         (string-face (tool-line-face-name base-face-name :string))
+         (comment-face (tool-line-face-name base-face-name :comment))
+         (number-face (tool-line-face-name base-face-name :number))
+         (faces (make-array len :initial-element base-face)))
+    (labels ((assign-range (start end face-name)
+               (loop :for idx :from start :below end
+                     :do (setf (aref faces idx) face-name)))
+             (delimiter-char-p (char)
+               (or (member char '(#\Space #\Tab #\( #\) #\[ #\] #\" #\; #\' #\` #\,)
+                           :test #'char=)
+                   (char= char #\Newline))))
+      (loop :for idx := 0 :then next-idx
+            :while (< idx len)
+            :for char := (char text idx)
+            :for next-idx :=
+              (cond
+                ((char= char #\;)
+                 (assign-range idx len comment-face)
+                 len)
+                ((char= char #\")
+                 (let ((scan (1+ idx)))
+                   (loop :while (< scan len)
+                         :for cur := (char text scan)
+                         :do (if (char= cur #\\)
+                                 (incf scan 2)
+                                 (progn
+                                   (incf scan)
+                                   (when (char= cur #\")
+                                     (return)))))
+                   (assign-range idx (min scan len) string-face)
+                   (min scan len)))
+                ((member char '(#\( #\) #\[ #\] #\' #\` #\,) :test #'char=)
+                 (setf (aref faces idx) paren-face)
+                 (1+ idx))
+                ((or (char= char #\Space) (char= char #\Tab))
+                 (1+ idx))
+                (t
+                 (let ((end idx))
+                   (loop :while (and (< end len)
+                                     (not (delimiter-char-p (char text end))))
+                         :do (incf end))
+                   (let* ((token (subseq text idx end))
+                          (face-name
+                            (case (lisp-token-face-category token)
+                              (:keyword keyword-face)
+                              (:number number-face)
+                              (t base-face))))
+                     (assign-range idx end face-name))
+                   end))))
+      faces)))
+
+(defun tool-line-display-spans (text base-face-name &key (start 0) end prefix)
+  "Return contiguous face runs for TEXT between START and END.
+When PREFIX is provided, prepend it using the base face for BASE-FACE-NAME."
+  (let* ((limit (or end (length text)))
+         (base-face (tool-line-face-name base-face-name :base))
+         (faces (lisp-line-face-vector text base-face-name))
+         (spans nil))
+    (when prefix
+      (push (cons base-face prefix) spans))
+    (when (< start limit)
+      (let ((span-start start)
+            (span-face (aref faces start)))
+        (loop :for idx :from start :below limit
+              :for face-name := (aref faces idx)
+              :do (unless (eq face-name span-face)
+                    (push (cons span-face (subseq text span-start idx)) spans)
+                    (setf span-start idx
+                          span-face face-name)))
+        (push (cons span-face (subseq text span-start limit)) spans)))
+    (nreverse spans)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Geometry (pure functions)

@@ -1326,26 +1326,32 @@ documentation in *extended-docs*."
 
 (defdoc *http-fetch-max-chars*
   :category "tool"
+  :returns "integer - Default character limit for the dormant http_fetch helper implementation."
   :see-also (*http-connection-timeout* *http-user-agent*))
 
 (defdoc *http-connection-timeout*
   :category "tool"
+  :returns "integer - Connection timeout for the dormant http_fetch helper implementation."
   :see-also (*http-fetch-max-chars* *http-user-agent*))
 
 (defdoc *http-user-agent*
   :category "tool"
+  :returns "string - User-Agent header used by the dormant http_fetch helper implementation."
   :see-also (*http-fetch-max-chars* *http-connection-timeout*))
 
 (defdoc *file-read-default-limit*
   :category "tool"
+  :returns "integer - Default line limit for the dormant file_read helper implementation."
   :see-also (*tool-table* register-tool))
 
 (defdoc *shell-exec-default-timeout*
   :category "tool"
+  :returns "integer - Default timeout for the dormant shell_exec helper implementation."
   :see-also (*tool-table* register-tool))
 
 (defdoc *diff-display-max-lines*
   :category "tool"
+  :returns "integer - Maximum diff lines shown when approval UIs render non-default tool edits."
   :see-also (*tool-table* tool-approval-extra-display))
 
 (defdoc *tool-table*
@@ -1367,14 +1373,14 @@ documentation in *extended-docs*."
 
 (defdoc execute-tool
   :category "tool"
-  :usage "(execute-tool NAME:string ARGS:alist) — (execute-tool \"shell_exec\" '((:command . \"ls\")))"
+  :usage "(execute-tool NAME:string ARGS:alist) — (execute-tool \"lisp_eval\" '((:code . \"(+ 1 2)\")))"
   :returns "string — The tool execution result as a JSON string."
-  :side-effects "Executes the tool's function. May perform I/O, file operations, shell commands."
+  :side-effects "Executes the tool's function. Side effects depend on the registered tool implementation."
   :see-also (register-tool tool-requires-permission-p *tool-table*))
 
 (defdoc tool-requires-permission-p
   :category "tool"
-  :usage "(tool-requires-permission-p NAME:string) — (tool-requires-permission-p \"file_write\")"
+  :usage "(tool-requires-permission-p NAME:string) — (tool-requires-permission-p \"lisp_eval\")"
   :returns "boolean — T if the tool requires user approval."
   :see-also (execute-tool register-tool))
 
@@ -1387,7 +1393,7 @@ documentation in *extended-docs*."
 (defdoc format-tool-call-sexpr
   :category "tool"
   :usage "(format-tool-call-sexpr NAME:string ARGS:alist)"
-  :returns "string — S-expression formatted tool call. \"(file_read :path \\\"/etc/hosts\\\")\""
+  :returns "string — S-expression formatted tool call. \"(lisp_eval :code \\\"(+ 1 2)\\\")\""
   :see-also (format-tool-call-expanded tool-approval-extra-display))
 
 (defdoc format-tool-call-expanded
@@ -1406,7 +1412,7 @@ documentation in *extended-docs*."
   :category "tool"
   :usage "(init-tools) — Called once at startup."
   :returns "nil"
-  :side-effects "Registers all built-in tools (http_fetch, file_read, file_write, file_edit, shell_exec, lisp_eval) in *tool-table*."
+  :side-effects "Removes previously registered built-in tool entries and re-registers only the default built-in tool, lisp_eval."
   :see-also (*tool-table* register-tool))
 
 ;;; ==========================================================================
@@ -1464,7 +1470,7 @@ documentation in *extended-docs*."
   :category "global-face"
   :usage "(init-global-faces) — called once at startup in clawmacs-main"
   :returns "hash-table — the populated *global-face-registry*"
-  :side-effects "Clears and repopulates *global-face-registry* with 18 theme faces: modeline, system, minibuffer-prompt, minibuffer-cursor, minibuffer-candidate, minibuffer-selected, selector-title, selector-separator, selector-header, selector-entry, selector-selected, selector-footer, selector-scroll, approval-header, approval-code, approval-text, approval-diff-add, approval-diff-remove, approval-options."
+  :side-effects "Clears and repopulates *global-face-registry* with theme faces for modeline, system/debug messages, minibuffer and selector UI, approval prompts, default text, who-line, and tool-call/tool-result Lisp syntax highlighting."
   :see-also (*global-face-registry* global-face customize-face-command))
 
 (defdoc collect-global-faces
@@ -1986,7 +1992,7 @@ documentation in *extended-docs*."
 
 (defdoc tool-definition
   :category "type"
-  :usage "(make-tool-definition :name \"file_read\" :description \"Read a file\" ...)"
+  :usage "(make-tool-definition :name \"lisp_eval\" :description \"Evaluate Lisp\" ...)"
   :see-also (register-tool execute-tool tool-definitions-for-api *tool-table*))
 
 (defdoc stream-state

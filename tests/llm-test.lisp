@@ -72,6 +72,19 @@
             ,@body)
        (setf (symbol-function ',name) original-function))))
 
+(defmacro with-tool-table-restored (&body body)
+  `(let ((snapshot (make-hash-table :test (hash-table-test clawmacs::*tool-table*))))
+     (maphash (lambda (key value)
+                (setf (gethash key snapshot) value))
+              clawmacs::*tool-table*)
+     (unwind-protect
+          (progn
+            ,@body)
+       (clrhash clawmacs::*tool-table*)
+       (maphash (lambda (key value)
+                  (setf (gethash key clawmacs::*tool-table*) value))
+                snapshot))))
+
 (defun write-codex-auth-json (path payload)
   (ensure-directories-exist path)
   (with-open-file (stream path
@@ -113,6 +126,63 @@
   "Unknown providers signal a clear error."
   (signals error
     (clawmacs::provider-token-path :unknown-provider)))
+
+(test init-tools-registers-only-lisp-eval-by-default
+  "init-tools removes dormant built-ins and exposes only lisp_eval by default."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs::init-tools)
+    (let* ((*current-caller* :user)
+           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tool-names (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)))
+      (is (equal '("lisp_eval") tool-names))
+      (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*))))
+      (is (null (gethash "http_fetch" clawmacs::*tool-table*)))
+      (is (null (gethash "file_read" clawmacs::*tool-table*)))
+      (is (null (gethash "file_write" clawmacs::*tool-table*)))
+      (is (null (gethash "file_edit" clawmacs::*tool-table*)))
+      (is (null (gethash "shell_exec" clawmacs::*tool-table*)))
+      (is-false (clawmacs::tool-requires-permission-p "lisp_eval")))))
+
+(test init-tools-preserves-custom-tools
+  "init-tools resets built-ins without wiping user-added tools."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs::register-tool
+     "custom_probe"
+     "Custom probe tool."
+     '((:type . "object")
+       (:properties . ((:payload . ((:type . "string"))))))
+     :agent-allowed
+     (lambda (args)
+       (declare (ignore args))
+       "{\"ok\":true}"))
+    (clawmacs::init-tools)
+    (let* ((*current-caller* :user)
+           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
+                             #'string<)))
+      (is (equal '("custom_probe" "lisp_eval") tool-names))
+      (is (not (null (gethash "custom_probe" clawmacs::*tool-table*))))
+      (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*)))))))
+
+(test build-system-prompt-emphasizes-lisp-eval-workflow
+  "The default system prompt teaches REPL-first search, docs, and calling guidance."
+  (with-function-override (clawmacs::load-boot-files ()
+                            nil)
+    (let ((prompt (clawmacs::build-system-prompt)))
+      (is (search "only built-in tool available by default is `lisp_eval`" prompt))
+      (is (search "Do not merely describe searches, inspections, calls, or updates" prompt))
+      (is (search "(apropos-list \"SUBSTRING\" :clawmacs)" prompt))
+      (is (search "(multiple-value-list (find-symbol \"NAME\" :clawmacs))" prompt))
+      (is (search "(describe-function-to-string 'SYMBOL)" prompt))
+      (is (search "(documentation 'SYMBOL 'function)" prompt))
+      (is (search "Use `funcall` or `apply` when the callee or argument list is dynamic." prompt))
+      (is (search "Prefer `(format nil ...)` over" prompt))
+      (is-false (search "fetching URLs, reading/writing files, running shell commands" prompt))
+      (is-false (search "http_fetch" prompt))
+      (is-false (search "shell_exec" prompt))
+      (is-false (search "file_read" prompt)))))
 
 (test provider-token-round-trip-anthropic
   "Anthropic tokens round-trip through provider-specific helpers."

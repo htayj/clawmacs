@@ -38,18 +38,13 @@ OpenAI Codex auth follows Codex's own credential layout:
 
 ** Agent Tools
 
-The agent has access to six tools, each with appropriate permission levels:
+The default built-in agent tool surface is intentionally narrow:
 
 | Tool         | Permission             | Description                          |
 |--------------+------------------------+--------------------------------------|
 | =lisp_eval=  | agent-allowed          | Evaluate Common Lisp in the running image |
-| =http_fetch= | agent-allowed          | Fetch HTTP/HTTPS URLs                |
-| =file_read=  | agent-allowed          | Read files within the sandbox        |
-| =file_write= | agent-with-permission  | Create or append to files            |
-| =file_edit=  | agent-with-permission  | Search-and-replace editing with diff preview |
-| =shell_exec= | agent-with-permission  | Execute shell commands               |
 
-Tools requiring permission present an approval prompt with =[a]pprove=, =[d]eny=, and =[m]essage= (deny with note) options. File edits show a diff preview; file writes show what will be created or appended.
+By default, agents are expected to search for symbols, inspect documentation, call functions, and update runtime state through =lisp_eval=. Custom tools may still be registered explicitly, but they are not part of the default built-in tool set.
 
 The =lisp_eval= tool is particularly powerful: the agent can introspect clawmacs itself, query buffer state, evaluate expressions, and modify the running system.
 

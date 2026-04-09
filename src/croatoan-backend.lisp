@@ -140,6 +140,31 @@ Fills the rest of the row with spaces for background color."
       (when (plusp max-chars)
         (croatoan:add-string window (subseq text 0 (min (length text) max-chars)))))))
 
+(defun render-faced-row (window row col spans width base-face-name)
+  "Write SPANS at (ROW, COL) using global faces derived from BASE-FACE-NAME."
+  (when (< row (croatoan:height window))
+    (let* ((base-face (or (global-face base-face-name)
+                          (make-default-text-face)))
+           (base-resolved (resolve-face base-face))
+           (cursor-col col))
+      (apply-face-to-window window base-resolved)
+      (croatoan:move window row 0)
+      (croatoan:add-string window (make-string width :initial-element #\Space))
+      (dolist (span spans)
+        (when (< cursor-col width)
+          (let* ((face-name (car span))
+                 (text (cdr span))
+                 (max-chars (- width cursor-col)))
+            (when (plusp max-chars)
+              (let* ((visible (subseq text 0 (min (length text) max-chars)))
+                     (face (or (global-face face-name) base-face))
+                     (resolved (resolve-face face)))
+                (apply-face-to-window window resolved)
+                (croatoan:move window row cursor-col)
+                (croatoan:add-string window visible)
+                (incf cursor-col (length visible)))))))
+      (apply-face-to-window window base-resolved))))
+
 (defun render-message-lines (window msg start-row width &key show-cursor)
   "Render MSG's lines into WINDOW starting at START-ROW with line wrapping.
 Returns the number of visual rows consumed.
@@ -161,6 +186,7 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
           :while (and line (< row (croatoan:height window)))
           :do
              (let* ((content (line-content line))
+                    (tool-face-name (tool-line-base-face-name msg content))
                     (content-len (length content))
                     (num-wraps (wrapped-line-count content display-width)))
                ;; Render each visual row of this line
@@ -172,11 +198,24 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
                           (col prefix-len))
                      ;; Show prefix only on the very first visual row of the message
                      (when (and (= line-idx 0) (= wrap-idx 0))
-                       (render-wrapped-row window row 0
-                                           (concatenate 'string prefix chunk) width)
+                       (if tool-face-name
+                           (render-faced-row window row 0
+                                             (tool-line-display-spans
+                                              content tool-face-name
+                                              :start chunk-start :end chunk-end
+                                              :prefix prefix)
+                                             width tool-face-name)
+                           (render-wrapped-row window row 0
+                                               (concatenate 'string prefix chunk) width))
                        (setf col nil)) ; already rendered
                      (when col
-                       (render-wrapped-row window row col chunk width))
+                       (if tool-face-name
+                           (render-faced-row window row col
+                                             (tool-line-display-spans
+                                              content tool-face-name
+                                              :start chunk-start :end chunk-end)
+                                             width tool-face-name)
+                           (render-wrapped-row window row col chunk width)))
                      ;; Track cursor position
                      (when (and show-cursor (eq line (message-point-line msg)))
                        (let ((point-off (message-point-offset msg)))

@@ -26,7 +26,13 @@ its own face registry on startup."
   (let ((white-bg (make-color-spec :cga 15))
         (black-fg (make-color-spec :cga 0))
         (light-blue-bg (make-color-spec :hex "#D0E0F0"))
-        (dark-blue-fg (make-color-spec :cga 4)))
+        (dark-blue-fg (make-color-spec :cga 4))
+        (dark-green-fg (make-color-spec :cga 2))
+        (dark-red-fg (make-color-spec :cga 1))
+        (dark-yellow-fg (make-color-spec :cga 3))
+        (dark-magenta-fg (make-color-spec :cga 5))
+        (dark-cyan-fg (make-color-spec :cga 6))
+        (gray-fg (make-color-spec :cga 8)))
     ;; Walk all faces: black bg → white bg, white/gray fg → black fg
     (maphash (lambda (name face)
                (let ((bg-val (when (face-background face)
@@ -37,7 +43,13 @@ its own face registry on startup."
                  (unless (member name '(:modeline :selector-selected
                                         :minibuffer-selected :minibuffer-match
                                         :minibuffer-selected-match
-                                        :approval-diff-add :approval-diff-remove))
+                                        :approval-diff-add :approval-diff-remove
+                                        :tool-call :tool-call-paren
+                                        :tool-call-keyword :tool-call-string
+                                        :tool-call-comment :tool-call-number
+                                        :tool-result :tool-result-paren
+                                        :tool-result-keyword :tool-result-string
+                                        :tool-result-comment :tool-result-number))
                    ;; Black bg → white bg
                    (when (and (face-background face)
                               (eq :cga (color-spec-type (face-background face)))
@@ -81,6 +93,24 @@ its own face registry on startup."
     (let ((f (global-face :approval-diff-remove)))
       (when f
         (setf (face-background f) white-bg)))
+    ;; Tool call/result faces — use darker inks for contrast on white.
+    (dolist (spec `((:tool-call ,white-bg ,dark-blue-fg t)
+                    (:tool-call-paren ,white-bg ,dark-blue-fg t)
+                    (:tool-call-keyword ,white-bg ,dark-red-fg t)
+                    (:tool-call-string ,white-bg ,dark-green-fg nil)
+                    (:tool-call-comment ,white-bg ,dark-cyan-fg nil)
+                    (:tool-call-number ,white-bg ,dark-magenta-fg nil)
+                    (:tool-result ,white-bg ,dark-green-fg t)
+                    (:tool-result-paren ,white-bg ,dark-blue-fg t)
+                    (:tool-result-keyword ,white-bg ,dark-yellow-fg t)
+                    (:tool-result-string ,white-bg ,dark-cyan-fg nil)
+                    (:tool-result-comment ,white-bg ,gray-fg nil)
+                    (:tool-result-number ,white-bg ,dark-magenta-fg nil)))
+      (let ((f (global-face (first spec))))
+        (when f
+          (setf (face-background f) (second spec)
+                (face-foreground f) (third spec)
+                (face-bold-p f) (fourth spec)))))
     ;; Patch per-buffer face-sets on existing buffers
     (let ((user-bg (make-color-spec :hex "#D0D8E8"))
           (agent-bg white-bg))
@@ -296,6 +326,15 @@ Fills a background rectangle first, then draws the text on top."
                         (* cols char-w) (* (1+ row) char-h)
                         :ink bg-ink))
 
+(defun draw-faced-spans (pane row start-col spans char-w char-h)
+  "Draw SPANS starting at (ROW, START-COL) using global face definitions."
+  (let ((col start-col))
+    (dolist (span spans)
+      (multiple-value-bind (fg bg ts)
+          (resolve-global-face-inks (car span))
+        (draw-text-at pane row col (cdr span) fg bg ts char-w char-h))
+      (incf col (length (cdr span))))))
+
 (defun pane-pixel-size (pane)
   "Return (values width height) — the allocated pixel size of PANE.
 Clamps sheet-region (which grows with output records) to the frame's
@@ -506,43 +545,55 @@ Returns the number of visual rows consumed."
         (loop :for line := (message-first-line msg) :then (line-next line)
               :for line-idx :from 0
               :while (and line (< row max-rows))
-              :do
-                 (let* ((content (line-content line))
-                        (content-len (length content))
-                        (num-wraps (wrapped-line-count content display-width)))
-                   (dotimes (wrap-idx num-wraps)
-                     (when (< row max-rows)
-                       (let* ((chunk-start (* wrap-idx display-width))
-                              (chunk-end (min (* (1+ wrap-idx) display-width) content-len))
-                              (chunk (subseq content chunk-start chunk-end)))
-                         ;; Fill entire row background
-                         (fill-row pane row width bg char-w char-h)
-                         ;; Show prefix on first visual row of message
-                         (when (and (= line-idx 0) (= wrap-idx 0))
-                           (draw-text-at pane row 0
-                                         (concatenate 'string prefix chunk)
-                                         fg bg ts char-w char-h)
-                           (when underline-p
-                             (draw-underline-at pane row 0
-                                                (+ prefix-len (length chunk))
-                                                fg char-w char-h))
-                           (setf chunk nil))
-                         (when chunk
-                           (draw-text-at pane row prefix-len chunk
-                                         fg bg ts char-w char-h)
-                           (when underline-p
-                             (draw-underline-at pane row prefix-len (length chunk)
-                                                fg char-w char-h)))
-                         ;; Track cursor position
-                         (when (and show-cursor (eq line (message-point-line msg)))
-                           (let ((point-off (message-point-offset msg)))
-                             (when (and (>= point-off chunk-start)
-                                        (or (< point-off chunk-end)
-                                            (and (= wrap-idx (1- num-wraps))
-                                                 (= point-off chunk-end))))
-                               (setf cursor-y row
-                                     cursor-x (+ prefix-len (- point-off chunk-start))))))
-                         (incf row))))))
+              :do (let* ((content (line-content line))
+                         (tool-face-name (tool-line-base-face-name msg content))
+                         (content-len (length content))
+                         (num-wraps (wrapped-line-count content display-width)))
+                    (dotimes (wrap-idx num-wraps)
+                      (when (< row max-rows)
+                        (let* ((chunk-start (* wrap-idx display-width))
+                               (chunk-end (min (* (1+ wrap-idx) display-width) content-len))
+                               (chunk (subseq content chunk-start chunk-end))
+                               (first-row-p (and (= line-idx 0) (= wrap-idx 0))))
+                          (if tool-face-name
+                              (multiple-value-bind (_tool-fg tool-bg _tool-ts)
+                                  (resolve-global-face-inks tool-face-name)
+                                (declare (ignore _tool-fg _tool-ts))
+                                (fill-row pane row width tool-bg char-w char-h)
+                                (draw-faced-spans
+                                 pane row (if first-row-p 0 prefix-len)
+                                 (tool-line-display-spans
+                                  content tool-face-name
+                                  :start chunk-start :end chunk-end
+                                  :prefix (and first-row-p prefix))
+                                 char-w char-h))
+                              (progn
+                                (fill-row pane row width bg char-w char-h)
+                                (when first-row-p
+                                  (draw-text-at pane row 0
+                                                (concatenate 'string prefix chunk)
+                                                fg bg ts char-w char-h)
+                                  (when underline-p
+                                    (draw-underline-at pane row 0
+                                                       (+ prefix-len (length chunk))
+                                                       fg char-w char-h))
+                                  (setf chunk nil))
+                                (when chunk
+                                  (draw-text-at pane row prefix-len chunk
+                                                fg bg ts char-w char-h)
+                                  (when underline-p
+                                    (draw-underline-at pane row prefix-len (length chunk)
+                                                       fg char-w char-h)))))
+                          (when (and show-cursor (eq line (message-point-line msg)))
+                            (let ((point-off (message-point-offset msg)))
+                              (when (and (>= point-off chunk-start)
+                                         (or (< point-off chunk-end)
+                                             (and (= wrap-idx (1- num-wraps))
+                                                  (= point-off chunk-end))))
+                                (setf cursor-y row
+                                      cursor-x (+ prefix-len
+                                                  (- point-off chunk-start))))))
+                          (incf row))))))
         ;; Render cursor as reverse-video block
         (when (and show-cursor cursor-y cursor-x)
           (let* ((cx (min cursor-x (1- width)))
@@ -1235,7 +1286,7 @@ and all mediums are connected to the X11 backend."
                 ;; Use incremental redisplay: modeline and who-line use
                 ;; updating-output with cache keys, so CLIM skips unchanged panes.
                 ;; Force full redraw only on exposure/resize events.
-                (redisplay-all frame :force-p force-redisplay))))))
+                (redisplay-all frame :force-p force-redisplay)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Popup Frame Lifecycle (read-only X11 viewer from terminal mode)

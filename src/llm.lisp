@@ -157,72 +157,74 @@ These models are routed through the Claude Code CLI stream-json protocol.")
 
 (defvar *system-prompt*
   "You are a helpful assistant running inside clawmacs, a Lisp-native terminal chat interface.
-You have access to tools for fetching URLs, reading/writing files, running shell commands,
-and evaluating Common Lisp code. Be concise and direct in your responses.
+The only built-in tool available by default is `lisp_eval`, which evaluates one Common Lisp
+form inside the running clawmacs image. Use `lisp_eval` for concrete work. Keep private
+reasoning private, and use normal assistant text only for direct user-facing replies and
+concise explanations.
 
-## Introspection
+## Default workflow
 
-You can discover and inspect all functions, variables, and types available in the clawmacs
-system by using the lisp_eval tool. This is useful for understanding the editor's capabilities,
-checking configuration, and modifying behavior at runtime.
+- Do not merely describe searches, inspections, calls, or updates. Perform them with
+  `lisp_eval` first, then report the result.
+- Use `lisp_eval` for environment inspection, symbol search, documentation lookup,
+  function calls, data transformation, and runtime changes.
+- `lisp_eval` evaluates one form per call. When a task needs multiple steps, wrap them
+  in a single form such as `progn`, `let`, or `let*`.
+- The tool's `:package` argument defaults to `CLAWMACS`. Set it explicitly when you need
+  another package instead of relying on `in-package`.
 
-### Discovering symbols
+## Searching the image
 
-- `(list-functions)` — returns a sorted list of all exported function symbols.
-- `(list-variables)` — returns a sorted list of all exported variable symbols.
-- `(list-types)` — returns a sorted list of all exported type symbols (classes, structs, conditions).
-- `(undocumented-functions)` — returns functions missing extended documentation.
-- `(undocumented-variables)` — returns variables missing extended documentation.
-- `(undocumented-types)` — returns types missing extended documentation.
+- `(list-functions)` - returns a sorted list of exported function symbols.
+- `(list-variables)` - returns a sorted list of exported variable symbols.
+- `(list-types)` - returns a sorted list of exported type symbols.
+- `(apropos \"SUBSTRING\")` - searches all visible symbols.
+- `(apropos-list \"SUBSTRING\" :clawmacs)` - searches the `:clawmacs` package and returns matches.
+- `(multiple-value-list (find-symbol \"NAME\" :clawmacs))` - checks whether a symbol exists and
+  whether it is external or internal.
+- `(undocumented-functions)`, `(undocumented-variables)`, and `(undocumented-types)` help find
+  symbols that are missing extended docs.
 
-### Inspecting symbols
+## Finding documentation
 
-- `(describe-function-to-string 'SYMBOL)` — returns a human-readable description of a function,
-  including its type, arguments, keybindings, documentation, usage, return values, side effects,
-  and related symbols.
-- `(describe-variable-to-string 'SYMBOL)` — returns a human-readable description of a variable,
-  including its kind (constant, special, variable), current value, type, and documentation.
-- `(describe-type-to-string 'SYMBOL)` — returns a human-readable description of a type,
-  including its kind (class, struct, condition), slots/fields, inheritance, and documentation.
-- `(extended-doc 'SYMBOL :PROPERTY)` — returns a specific documentation property for a symbol.
-  Properties: :category, :usage, :returns, :see-also, :side-effects.
+- `(describe-function-to-string 'SYMBOL)` - returns detailed function docs, usage, and related symbols.
+- `(describe-variable-to-string 'SYMBOL)` - returns detailed variable docs and current-value info.
+- `(describe-type-to-string 'SYMBOL)` - returns type, class, struct, or condition docs.
+- `(extended-doc 'SYMBOL :PROPERTY)` - returns a specific extended-doc property such as `:usage`,
+  `:returns`, `:side-effects`, or `:see-also`.
+- `(documentation 'SYMBOL 'function)` and `(documentation 'SYMBOL 'variable)` read the standard
+  docstring when you only need the built-in documentation entry.
 
-### Getting variable values
+## Calling and inspecting
 
-- `(symbol-value 'VARIABLE)` or simply reference the variable name, e.g. `*default-model*`.
-- Example: `(lisp_eval :code \"*default-model*\")` returns the current default model string.
-- Example: `(lisp_eval :code \"*default-provider*\")` returns the current default provider keyword.
+- Call known functions directly once you identify the right entry point.
+- Use `funcall` or `apply` when the callee or argument list is dynamic.
+- Use `symbol-value`, `boundp`, and `fboundp` to inspect runtime state before mutating it.
+- Return a string or data structure from the evaluated form. Prefer `(format nil ...)` over
+  `format t`, because printed stdout is not captured by `lisp_eval`.
 
-### Setting variable values
+## Updating runtime state
 
-- `(setf VARIABLE VALUE)` — set a variable's value.
-- Example: `(setf *default-model* \"claude-sonnet-4-6\")` changes the default model.
-- Example: `(setf *default-provider* :anthropic)` changes the default provider.
-- For special (dynamic) variables prefixed with `*earmuffs*`, use setf as shown above.
-- For constants (defined with defconstant), values cannot be changed at runtime.
-
-### Defining new functions and variables
-
-- `(defun NAME (ARGS) \"docstring\" BODY)` — define a new function.
-- `(defvar NAME VALUE \"docstring\")` — define a new special variable (only sets if unbound).
-- `(defparameter NAME VALUE \"docstring\")` — define a new special variable (always sets).
-- `(setf (gethash KEY *tool-table*) ...)` — register new tools.
+- Use `(setf ...)` to change variables and slots when the task requires it.
+- Use `defun`, `defvar`, and `defparameter` for runtime definitions when appropriate.
 - New definitions persist for the lifetime of the clawmacs process.
+- Inspect before mutating, and return the new value or a short confirmation summary from the form.
+- Do not use `lisp_eval` to dump chain-of-thought. Use it to act on the running system.
 
-### Searching for symbols
+## Useful examples
 
-- `(apropos \"SUBSTRING\")` — find all symbols containing a substring.
-- `(apropos-list \"SUBSTRING\" :clawmacs)` — find symbols in the clawmacs package.
-- Example: `(apropos-list \"buffer\" :clawmacs)` finds all buffer-related symbols.
-- Example: `(apropos-list \"model\" :clawmacs)` finds all model-related symbols.
+- `*default-model*`
+- `(symbol-value '*default-provider*)`
+- `(apropos-list \"buffer\" :clawmacs)`
+- `(describe-function-to-string 'start-streaming-response)`
+- `(let* ((syms (apropos-list \"model\" :clawmacs)))
+     (format nil \"~{~A~^, ~}\" syms))`
 
 ### Common configuration variables
 
-- `*default-model*` — the fallback model name (string).
-- `*default-provider*` — the fallback provider keyword (:anthropic, :zai, :openai, etc.).
-- `*system-prompt*` — this system prompt (can be modified at runtime).
-- `*sandbox-root*` — the root directory for file operations.
-- `*prefix-handlers*` — alist of chat input prefix handlers (e.g., \"!\" for shell commands)."
+- `*default-model*` - the fallback model name.
+- `*default-provider*` - the fallback provider keyword.
+- `*system-prompt*` - this system prompt."
   "The system prompt sent with every API request.
 Built from boot MD files and/or *system-prompt-path* on startup.")
 
@@ -3256,17 +3258,40 @@ Uses the same OpenAI-compatible streaming protocol."
   "Format a tool_use block for display in the chat."
   (let ((name (cdr (assoc :name tool-use-block)))
         (input (cdr (assoc :input tool-use-block))))
-    (format nil "[tool: ~A ~A]" name
-            (with-output-to-string (s)
-              (loop :for (k . v) :in input
-                    :for first := t :then nil
-                    :do (unless first (write-string " " s))
-                        (format s "~A=~S"
-                                (string-downcase (symbol-name k)) v))))))
+    (format-tool-call-sexpr name input)))
+
+(defun format-lisp-eval-result-display (result-text)
+  "Format RESULT-TEXT from lisp_eval as a Lisp-friendly display block."
+  (handler-case
+      (let* ((payload (api-json-decode result-text))
+             (code (cdr (assoc :code payload)))
+             (values-count (or (cdr (assoc :values payload)) 0))
+             (result (cdr (assoc :result payload)))
+             (error-text (cdr (assoc :error payload)))
+             (denied-p (cdr (assoc :denied payload)))
+             (reason (cdr (assoc :reason payload))))
+        (with-output-to-string (s)
+          (write-string ";; lisp_eval" s)
+          (when code
+            (format s "~%~A" code))
+          (cond
+            (denied-p
+             (format s "~%;; denied~%~S" (or reason "User denied")))
+            (error-text
+             (format s "~%;; error~%~A"
+                     (format nil "(error ~S)" error-text)))
+            (t
+             (format s "~%;; => ~D value~:P" values-count)
+             (when result
+               (format s "~%~A" result))))))
+    (error ()
+      nil)))
 
 (defun format-tool-result-display (tool-name result-text)
   "Format a tool result for display in the chat."
-  (let ((preview (if (> (length result-text) 200)
-                     (concatenate 'string (subseq result-text 0 200) "...")
-                     result-text)))
-    (format nil "[~A result: ~A]" tool-name preview)))
+  (or (and (string= tool-name "lisp_eval")
+           (format-lisp-eval-result-display result-text))
+      (let ((preview (if (> (length result-text) 200)
+                         (concatenate 'string (subseq result-text 0 200) "...")
+                         result-text)))
+        (format nil "[~A result: ~A]" tool-name preview))))

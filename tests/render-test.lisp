@@ -160,6 +160,50 @@
       (message-insert-char m #\x))
     (is (= 3 (clawmacs::message-visual-height m 80)))))
 
+(test init-global-faces-registers-tool-highlight-faces
+  "Global theme initialization includes dedicated tool-call/result faces."
+  (clawmacs::init-global-faces)
+  (dolist (name '(:tool-call :tool-call-paren :tool-call-keyword
+                   :tool-call-string :tool-call-comment :tool-call-number
+                   :tool-result :tool-result-paren :tool-result-keyword
+                   :tool-result-string :tool-result-comment :tool-result-number))
+    (is (typep (clawmacs::global-face name) 'face))))
+
+(test tool-displays-use-lisp-shaped-text
+  "Tool call/result display strings are formatted for Lisp-oriented rendering."
+  (let* ((tool-use '((:type . "tool_use")
+                     (:id . "toolu_1")
+                     (:name . "lisp_eval")
+                     (:input . ((:code . "(+ 1 2)")
+                                (:package . "CLAWMACS")))))
+         (tool-call (clawmacs::format-tool-call-display tool-use))
+         (tool-result (clawmacs::format-tool-result-display
+                       "lisp_eval"
+                       (clawmacs::api-json-encode
+                        '((:code . "(+ 1 2)")
+                          (:result . "3")
+                          (:values . 1))))))
+    (is (string= "(lisp_eval :code \"(+ 1 2)\" :package \"CLAWMACS\")"
+                 tool-call))
+    (is (search ";; lisp_eval" tool-result))
+    (is (search "(+ 1 2)" tool-result))
+    (is (search ";; => 1 value" tool-result))
+    (is (search "3" tool-result))))
+
+(test tool-line-display-spans-highlight-lisp-syntax
+  "Tool line syntax spans distinguish punctuation, keywords, strings, and numbers."
+  (let* ((spans (clawmacs::tool-line-display-spans
+                 "(lisp_eval :code \"(+ 1 2)\" :limit 7)"
+                 :tool-call))
+         (faces (mapcar #'car spans))
+         (texts (mapcar #'cdr spans)))
+    (is (member :tool-call-paren faces))
+    (is (member :tool-call-keyword faces))
+    (is (member :tool-call-string faces))
+    (is (member :tool-call-number faces))
+    (is (equal "(" (first texts)))
+    (is (search "\"(+ 1 2)\"" (format nil "~{~A~}" texts)))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Selector Rendering Tests
 ;;; --------------------------------------------------------------------------

@@ -35,6 +35,12 @@
 (defvar *diff-display-max-lines* 40
   "Maximum diff lines shown in the approval UI.")
 
+(defparameter *built-in-tool-names*
+  '("http_fetch" "file_read" "file_write" "file_edit" "shell_exec" "lisp_eval")
+  "Names reserved for clawmacs built-in tools.
+INIT-TOOLS removes these entries before re-registering the default built-ins,
+so user-added tools stored in *tool-table* are left intact.")
+
 (defun register-tool (name description schema permission execute-fn
                       &key approval-display-fn)
   "Register a tool in *tool-table*.
@@ -87,7 +93,7 @@ Returns a string result or signals an error."
 
 (defun format-tool-call-sexpr (name args)
   "Format a tool call as a raw s-expression string.
-E.g., (shell_exec :command \"ls -la\")"
+E.g., (lisp_eval :code \"(list-functions)\")"
   (with-output-to-string (s)
     (format s "(~A" name)
     (loop :for (k . v) :in args
@@ -97,9 +103,8 @@ E.g., (shell_exec :command \"ls -la\")"
 
 (defun format-tool-call-expanded (name args)
   "Format a tool call with expanded parameter descriptions.
-E.g., (shell_exec
-        :command \"ls -la\"  ; The shell command to execute
-        :timeout 30)         ; Timeout in seconds"
+E.g., (lisp_eval
+        :code \"(list-functions)\")  ; The Common Lisp code to evaluate"
   (let ((def (gethash name *tool-table*))
         (schema-props nil))
     ;; Extract property descriptions from schema
@@ -428,79 +433,12 @@ The file must exist. old_text must be found exactly once."
 ;;; --------------------------------------------------------------------------
 
 (defun init-tools ()
-  "Register all built-in tools."
+  "Register the default clawmacs built-in tools.
+This removes any previously registered built-in entries, then re-registers
+only lisp_eval. User-added tools remain untouched."
 
-  (register-tool
-   "http_fetch"
-   "Fetch content from an HTTP or HTTPS URL. Returns the response body as text with metadata."
-   `((:type . "object")
-     (:properties
-      . ((:url . ((:type . "string")
-                  (:description . "The HTTP or HTTPS URL to fetch.")))
-         (:max--chars . ((:type . "integer")
-                         (:description . ,(format nil "Maximum characters to return. Default ~D." *http-fetch-max-chars*))
-                         (:minimum . 100)))))
-     (:required . #("url")))
-   :agent-allowed
-   #'execute-http-fetch)
-
-  (register-tool
-   "file_read"
-   "Read a file from the working directory. Returns the file contents with line offset support for reading large files in chunks."
-   `((:type . "object")
-     (:properties
-      . ((:path . ((:type . "string")
-                   (:description . "File path relative to the working directory.")))
-         (:offset . ((:type . "integer")
-                     (:description . "Line number to start reading from (0-indexed). Default 0.")))
-         (:limit . ((:type . "integer")
-                    (:description . ,(format nil "Maximum number of lines to return. Default ~D." *file-read-default-limit*))))))
-     (:required . #("path")))
-   :agent-allowed
-   #'execute-file-read)
-
-  (register-tool
-   "file_write"
-   "Write content to a file in the working directory. If the file does not exist, creates it. If it exists, appends the content to the end. Never overwrites. Use file_edit to modify existing content."
-   `((:type . "object")
-     (:properties
-      . ((:path . ((:type . "string")
-                   (:description . "File path relative to the working directory.")))
-         (:content . ((:type . "string")
-                      (:description . "The content to write (created or appended).")))))
-     (:required . #("path" "content")))
-   :agent-with-permission
-   #'execute-file-write
-   :approval-display-fn #'file-write-approval-display)
-
-  (register-tool
-   "file_edit"
-   "Edit an existing file by replacing the first occurrence of old_text with new_text. The old_text must match exactly and appear only once. Use this for precise modifications to existing files."
-   `((:type . "object")
-     (:properties
-      . ((:path . ((:type . "string")
-                   (:description . "File path relative to the working directory.")))
-         (:old--text . ((:type . "string")
-                        (:description . "The exact text to find and replace. Must appear exactly once in the file.")))
-         (:new--text . ((:type . "string")
-                        (:description . "The replacement text. Use empty string to delete the matched text.")))))
-     (:required . #("path" "old_text" "new_text")))
-   :agent-with-permission
-   #'execute-file-edit
-   :approval-display-fn #'file-edit-approval-display)
-
-  (register-tool
-   "shell_exec"
-   "Execute a shell command in the working directory. Returns stdout, stderr, and exit code."
-   `((:type . "object")
-     (:properties
-      . ((:command . ((:type . "string")
-                      (:description . "The shell command to execute.")))
-         (:timeout . ((:type . "integer")
-                      (:description . ,(format nil "Timeout in seconds. Default ~D." *shell-exec-default-timeout*))))))
-     (:required . #("command")))
-   :agent-with-permission
-   #'execute-shell-exec)
+  (dolist (name *built-in-tool-names*)
+    (remhash name *tool-table*))
 
   (register-tool
    "lisp_eval"
