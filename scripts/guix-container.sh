@@ -364,7 +364,7 @@ e2e_invocation_requires_credential() {
     shift
   done
 
-  if [ "$only_target" = "readline" ]; then
+  if [ "$only_target" = "readline" ] || [ "$only_target" = "offline" ]; then
     return 1
   fi
 
@@ -462,6 +462,26 @@ validate_canonical_override() {
   override_path_has_allowed_prefix "$canonical_path" || fail 117 "invalid override path"
 }
 
+prepend_ld_library_path() {
+  lib_dir="$1"
+
+  if [ -z "$lib_dir" ] || [ ! -d "$lib_dir" ]; then
+    return 0
+  fi
+
+  case ":${LD_LIBRARY_PATH:-}:" in
+    *:"$lib_dir":*)
+      return 0
+      ;;
+  esac
+
+  if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+    export LD_LIBRARY_PATH="$lib_dir:$LD_LIBRARY_PATH"
+  else
+    export LD_LIBRARY_PATH="$lib_dir"
+  fi
+}
+
 validate_runtime_openssl_path() {
   if is_test_toggle_enabled CLAWMACS_TEST_MISSING_OPENSSL_PATH; then
     fail 121 "missing required runtime OpenSSL path"
@@ -492,10 +512,20 @@ validate_runtime_openssl_path() {
     return 0
   fi
 
-  if [ -n "${LD_LIBRARY_PATH:-}" ]; then
-    export LD_LIBRARY_PATH="$RESOLVED_SSL_LIB_PATH:$LD_LIBRARY_PATH"
-  else
-    export LD_LIBRARY_PATH="$RESOLVED_SSL_LIB_PATH"
+  prepend_ld_library_path "$RESOLVED_SSL_LIB_PATH"
+}
+
+resolve_runtime_ncurses_path() {
+  resolved_ncurses_file=''
+
+  resolved_ncurses_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --share="$REPO_ROOT=/workspace" -- bash -lc 'ldconfig -p 2>/dev/null | while IFS= read -r line; do case "$line" in *" => "*) lib=${line%% *}; case "$lib" in libncursesw.so*) printf "%s\n" "${line##* => }"; break ;; esac ;; esac; done' 2>/dev/null || true)
+
+  if [ -z "$resolved_ncurses_file" ]; then
+    resolved_ncurses_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --share="$REPO_ROOT=/workspace" -- bash -lc 'for lib in /run/current-system/profile/lib/libncursesw.so* /run/current-system/profile/lib64/libncursesw.so* /gnu/store/*/lib/libncursesw.so* /gnu/store/*/lib64/libncursesw.so* /lib/libncursesw.so* /lib64/libncursesw.so* /usr/lib/libncursesw.so* /usr/lib64/libncursesw.so*; do if [ -e "$lib" ]; then printf "%s\n" "$lib"; break; fi; done' 2>/dev/null || true)
+  fi
+
+  if [ -n "$resolved_ncurses_file" ]; then
+    prepend_ld_library_path "${resolved_ncurses_file%/*}"
   fi
 }
 
@@ -543,6 +573,7 @@ run_preflight() {
   validate_provider_credential "$@"
   validate_override_path
   validate_runtime_openssl_path
+  resolve_runtime_ncurses_path
   validate_quicklisp_bootstrap
 }
 
