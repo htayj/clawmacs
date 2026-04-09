@@ -301,6 +301,32 @@ Returns T if still streaming, NIL if done."
         ;; Still streaming
         (t t)))))
 
+(defun update-openai-oauth-login ()
+  "Poll the active OpenAI OAuth login flow and surface its result in the buffer."
+  (let ((flow *openai-oauth-pending*))
+    (unless flow
+      (return-from update-openai-oauth-login nil))
+    (let* ((snapshot (openai-oauth-flow-snapshot flow))
+           (buf (openai-oauth-flow-buffer flow)))
+      (unless (getf snapshot :done-p)
+        (return-from update-openai-oauth-login t))
+      (setf *openai-oauth-pending* nil)
+      (when buf
+        (setf (buffer-status buf) :idle)
+        (let ((sys-msg
+                (buffer-insert-agent-message
+                 buf
+                 (cond
+                   ((getf snapshot :success-p)
+                    "[OpenAI Codex OAuth: Login successful. Credentials saved to ~/.codex/auth.json.]")
+                   ((getf snapshot :cancelled-p)
+                    "[OAuth cancelled]")
+                   (t
+                    (format nil "[OAuth error: ~A]"
+                            (or (getf snapshot :error) "Unknown error")))))))
+          (setf (message-sender sys-msg) :system)))
+      nil)))
+
 (declaim (ftype (function (buffer) buffer) send-to-agent-with-context))
 (defun send-to-agent-with-context (buf)
   "Start a streaming conversation with the LLM. Non-blocking --
@@ -520,23 +546,24 @@ If so, call the handler and return T. Otherwise return NIL."
 ;;; --------------------------------------------------------------------------
 
 (defcommand openai-codex-oauth-command (:permission :user-only)
-  "Start the OpenAI Codex OAuth login flow. Opens a browser URL and waits
-for the user to paste the callback URL."
+  "Start the OpenAI Codex OAuth login flow using a localhost browser callback."
   (buffer)
   (handler-case
-      (multiple-value-bind (auth-url code-verifier state)
-          (openai-codex-oauth-start)
+      (progn
+        (when *openai-oauth-pending*
+          (error "An OpenAI Codex OAuth login is already in progress"))
         (setf *openai-oauth-pending*
-              `((:code-verifier . ,code-verifier) (:state . ,state)))
-        ;; Display auth URL as a system message
-        (let ((sys-msg (buffer-insert-agent-message
-                        buffer
-                        (format nil "[OpenAI Codex OAuth]~%~%Open this URL in your browser:~%~%  ~A~%~%After signing in, your browser will redirect to a localhost URL.~%Copy that full URL from the address bar and paste it here.~%(It starts with ~A?...)~%~%Press Enter to submit, C-g to cancel."
-                                auth-url *openai-oauth-redirect-uri*))))
-          (setf (message-sender sys-msg) :system))
-        ;; Clear input area for pasting
-        (set-message-text (buffer-input-message buffer) "")
-        (setf (buffer-status buffer) :oauth))
+              (start-openai-codex-oauth-login :buffer buffer))
+        (let* ((snapshot (openai-oauth-flow-snapshot *openai-oauth-pending*))
+               (auth-url (getf snapshot :auth-url))
+               (redirect-uri (getf snapshot :redirect-uri)))
+          (let ((sys-msg
+                  (buffer-insert-agent-message
+                   buffer
+                   (format nil "[OpenAI Codex OAuth]~%~%A browser login was started for shared Codex auth.~%If the browser did not open, use this URL:~%~%  ~A~%~%The callback server is listening at:~%  ~A~%~%Press C-g to cancel."
+                           auth-url redirect-uri))))
+            (setf (message-sender sys-msg) :system))
+          (setf (buffer-status buffer) :oauth)))
     (error (e)
       (let ((sys-msg (buffer-insert-agent-message
                       buffer (format nil "[OAuth error: ~A]" e))))
@@ -2467,43 +2494,18 @@ KEY is already normalized by the backend before calling this."
        nil)
 
       ;; === OPENAI OAUTH MODE ===
-      ;; User is pasting the callback URL; Enter/Return submits, C-g cancels
+      ;; OAuth is pending in a background localhost callback server; only C-g cancels.
       (*openai-oauth-pending*
        (cond
          ;; C-g: cancel OAuth flow
          ((and (characterp key) (char= key (code-char 7)))
+          (cancel-openai-codex-oauth-login *openai-oauth-pending*)
           (setf *openai-oauth-pending* nil
                 (buffer-status buf) :idle)
           (let ((sys-msg (buffer-insert-agent-message buf "[OAuth cancelled]")))
             (setf (message-sender sys-msg) :system)))
-         ;; Return or C-j: submit callback URL
-         ((and (characterp key) (or (char= key #\Return)
-                                     (char= key #\Newline)))
-          (let ((callback-url (message-text (buffer-input-message buf))))
-            (handler-case
-                (let* ((code-verifier (cdr (assoc :code-verifier *openai-oauth-pending*)))
-                       (expected-state (cdr (assoc :state *openai-oauth-pending*))))
-                  (openai-codex-oauth-finish callback-url code-verifier expected-state)
-                  (let ((sys-msg (buffer-insert-agent-message
-                                  buf "[OpenAI Codex OAuth: Login successful! Token saved.]")))
-                    (setf (message-sender sys-msg) :system)))
-              (error (e)
-                (let ((sys-msg (buffer-insert-agent-message
-                                buf (format nil "[OAuth error: ~A]" e))))
-                  (setf (message-sender sys-msg) :system)))))
-          (setf *openai-oauth-pending* nil
-                (buffer-status buf) :idle)
-          (set-message-text (buffer-input-message buf) ""))
-         ;; Normal editing (but not send-message)
-         ((let ((cmd (keymap-lookup (buffer-keymap buf) key)))
-            (when cmd
-              (unless (eq cmd 'send-message)
-                (funcall cmd buf))
-              t)))
-         ;; Self-insert for pasting URL characters
-         ((and (characterp key) (graphic-char-p key))
-          (let ((*self-insert-char* key))
-            (self-insert-command buf))))
+         ;; Ignore other input while the browser flow is pending.
+         (t nil))
        nil)
 
       ;; === DENY MESSAGE MODE ===

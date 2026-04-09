@@ -970,9 +970,13 @@ documentation in *extended-docs*."
   :category "llm"
   :see-also (openai-codex-oauth-start *openai-oauth-client-id*))
 
+(defdoc *codex-auth-path*
+  :category "llm"
+  :see-also (read-openai-codex-oauth-tokens save-openai-codex-oauth-tokens))
+
 (defdoc *openai-codex-oauth-path*
   :category "llm"
-  :see-also (save-openai-codex-oauth-tokens read-openai-codex-oauth-tokens))
+  :see-also (*codex-auth-path* save-openai-codex-oauth-tokens read-openai-codex-oauth-tokens))
 
 (defdoc *claude-cli-path*
   :category "llm"
@@ -1043,7 +1047,7 @@ documentation in *extended-docs*."
 (defdoc generate-oauth-state
   :category "llm"
   :usage "(generate-oauth-state) — (generate-oauth-state)"
-  :returns "string — A 32-character random state for CSRF protection."
+  :returns "string — A base64url random state token for CSRF protection."
   :see-also (openai-codex-oauth-start extract-oauth-callback-params))
 
 (defdoc url-encode-param
@@ -1054,7 +1058,7 @@ documentation in *extended-docs*."
 
 (defdoc extract-oauth-callback-params
   :category "llm"
-  :usage "(extract-oauth-callback-params URL:string) — (extract-oauth-callback-params \"http://localhost:1455/callback?code=abc&state=xyz\")"
+  :usage "(extract-oauth-callback-params URL:string) — (extract-oauth-callback-params \"http://localhost:1455/auth/callback?code=abc&state=xyz\")"
   :returns "values code:string state:string — The authorization code and state parameter."
   :see-also (openai-codex-oauth-finish openai-codex-oauth-start))
 
@@ -1067,7 +1071,7 @@ documentation in *extended-docs*."
 (defdoc exchange-openai-oauth-code
   :category "llm"
   :usage "(exchange-openai-oauth-code CODE:string CODE-VERIFIER:string)"
-  :returns "plist — (:access-token ... :refresh-token ... :expires-in ...)"
+  :returns "plist — (:id-token ... :access-token ... :refresh-token ... :account-id ...)"
   :side-effects "Makes an HTTP POST to the OAuth token endpoint."
   :see-also (openai-codex-oauth-start openai-codex-oauth-finish save-openai-codex-oauth-tokens))
 
@@ -1075,34 +1079,34 @@ documentation in *extended-docs*."
   :category "llm"
   :usage "(save-openai-codex-oauth-tokens ACCESS-TOKEN REFRESH-TOKEN EXPIRES-IN)"
   :returns "string — The access token."
-  :side-effects "Writes OAuth credentials to disk with 600 permissions."
-  :see-also (read-openai-codex-oauth-tokens exchange-openai-oauth-code *openai-codex-oauth-path*))
+  :side-effects "Writes shared Codex auth.json credentials to disk with 600 permissions."
+  :see-also (read-openai-codex-oauth-tokens exchange-openai-oauth-code *codex-auth-path* *openai-codex-oauth-path*))
 
 (defdoc read-openai-codex-oauth-tokens
   :category "llm"
   :usage "(read-openai-codex-oauth-tokens) — (read-openai-codex-oauth-tokens)"
-  :returns "plist or nil — (:access-token ... :refresh-token ... :expires-at ...)"
-  :see-also (save-openai-codex-oauth-tokens read-openai-codex-oauth-token *openai-codex-oauth-path*))
+  :returns "plist or nil — (:auth-mode ... :openai-api-key ... :id-token ... :access-token ... :refresh-token ... :account-id ... :last-refresh ...)"
+  :see-also (save-openai-codex-oauth-tokens read-openai-codex-oauth-token *codex-auth-path* *openai-codex-oauth-path*))
 
 (defdoc refresh-openai-codex-oauth-token
   :category "llm"
   :usage "(refresh-openai-codex-oauth-token REFRESH-TOKEN:string)"
-  :returns "string or nil — The new access token, or nil on failure."
-  :side-effects "Makes HTTP POST to refresh the token. Saves new credentials to disk."
+  :returns "string or nil — The refreshed ChatGPT access token, or nil on failure."
+  :side-effects "Refreshes shared Codex auth.json credentials and saves the updated payload to disk."
   :see-also (read-openai-codex-oauth-token save-openai-codex-oauth-tokens))
 
 (defdoc read-openai-codex-oauth-token
   :category "llm"
   :usage "(read-openai-codex-oauth-token) — (read-openai-codex-oauth-token)"
-  :returns "string or nil — A valid access token, auto-refreshed if expired."
-  :side-effects "May refresh the token via HTTP if expired."
+  :returns "string or nil — A valid ChatGPT access token, auto-refreshed when stale."
+  :side-effects "May refresh shared Codex auth.json via HTTP when the ChatGPT token is stale."
   :see-also (read-openai-codex-oauth-tokens refresh-openai-codex-oauth-token))
 
 (defdoc openai-codex-oauth-finish
   :category "llm"
   :usage "(openai-codex-oauth-finish CALLBACK-URL CODE-VERIFIER EXPECTED-STATE)"
   :returns "string — The access token."
-  :side-effects "Exchanges the authorization code for tokens and saves them to disk."
+  :side-effects "Exchanges the authorization code for tokens, optionally exchanges the ID token for an API key, and saves the shared Codex auth.json payload."
   :see-also (openai-codex-oauth-start extract-oauth-callback-params openai-codex-oauth-command))
 
 (defdoc load-agent-defaults
@@ -2086,7 +2090,7 @@ documentation in *extended-docs*."
   :category "buffer-command"
   :usage "Starts the OpenAI Codex OAuth login flow."
   :returns "nil"
-  :side-effects "Generates PKCE pair, displays auth URL, sets buffer to :oauth status."
+  :side-effects "Starts a localhost callback server, launches the browser login when possible, and sets the current buffer to :oauth status."
   :see-also (openai-codex-oauth-start openai-codex-oauth-finish *openai-oauth-pending*))
 
 ;;; ==========================================================================

@@ -225,6 +225,7 @@
    #:*openai-oauth-token-url*
    #:*openai-oauth-redirect-uri*
    #:*openai-oauth-scopes*
+   #:*codex-auth-path*
    #:*openai-codex-oauth-path*
    #:generate-code-verifier
    #:compute-code-challenge

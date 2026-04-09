@@ -781,10 +781,18 @@ Layout from top to bottom: main-win, modeline-win (1 row), minibuffer-win."
 ;;; Backend Implementation
 ;;; --------------------------------------------------------------------------
 
+(defun ensure-croatoan-locale ()
+  "Initialize the libc locale from the process environment for ncurses.
+Croatoan's Unicode path expects setlocale to be called explicitly; SBCL no
+longer does this for us."
+  (ncurses:setlocale ncurses:+lc-all+ ""))
+
 (defmethod backend-run ((b croatoan-backend) initial-buffer)
   "Run the croatoan terminal UI.
 Creates a three-window layout (main, modeline, minibuffer), then enters
 the event loop reading input and rendering until :QUIT is returned."
+  (declare (ignore initial-buffer))
+  (ensure-croatoan-locale)
   ;; :process-control-chars nil puts the terminal into raw mode (ncurses:raw)
   ;; instead of cbreak mode, so C-c is delivered as a keystroke (ASCII 3)
   ;; rather than generating SIGINT.  This is required for C-c to work as
@@ -845,20 +853,24 @@ the event loop reading input and rendering until :QUIT is returned."
         ;; Initial render
         (do-render (current-buffer))
         ;; Event loop: current-buffer may change between iterations.
-        ;; Short timeout when streaming is active for polling updates.
+        ;; Short timeout when streaming or OAuth login is active for polling updates.
         (loop :named main-loop
             :for buf := (current-buffer)
             :for streaming := (buffer-pending-stream buf)
+            :for oauth-pending := *openai-oauth-pending*
             :do (progn
                   (setf (croatoan:input-blocking scr)
-                        (if streaming 100 t))
+                        (if (or streaming oauth-pending) 100 t))
                   (let ((event (croatoan:get-wide-event scr)))
                     (cond
-                        ;; No event (timeout) -- poll streaming and re-render
+                        ;; No event (timeout) -- poll streaming/login and re-render
                         ((null event)
                          (when streaming
-                           (update-streaming-response buf)
-                           (do-render buf)))
+                           (update-streaming-response buf))
+                         (when oauth-pending
+                           (update-openai-oauth-login))
+                         (when (or streaming oauth-pending)
+                           (do-render (current-buffer))))
                         ;; Window resize event -- re-layout and re-render
                         ((and (typep event 'croatoan:event)
                               (typep (croatoan:event-key event) 'croatoan:key)
@@ -888,4 +900,6 @@ the event loop reading input and rendering until :QUIT is returned."
                          (let ((cur (current-buffer)))
                            (when (buffer-pending-stream cur)
                              (update-streaming-response cur))
+                           (when *openai-oauth-pending*
+                             (update-openai-oauth-login))
                            (do-render cur)))))))))))

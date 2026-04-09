@@ -1,5 +1,9 @@
 (in-package :clawmacs)
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  #+sbcl
+  (require :sb-bsd-sockets))
+
 ;;; --------------------------------------------------------------------------
 ;;; Configuration
 ;;; --------------------------------------------------------------------------
@@ -30,8 +34,11 @@ is configured. Should be a valid model name for *default-provider*.")
 (defvar *openai-codex-model* "codex-mini-latest"
   "The OpenAI Codex model to use for chat completions.")
 
-(defvar *openai-codex-api-url* "https://api.openai.com/v1/chat/completions"
-  "The OpenAI Chat Completions API endpoint for Codex models.")
+(defvar *openai-codex-api-base-url* "https://api.openai.com/v1"
+  "The OpenAI API base URL used for API-key style Codex requests.")
+
+(defvar *openai-codex-chatgpt-base-url* "https://chatgpt.com/backend-api/codex"
+  "The ChatGPT backend base URL used for Codex ChatGPT OAuth requests.")
 
 ;;; Z.AI (Zhipu AI) Configuration
 (defvar *zai-model* "glm-5"
@@ -74,15 +81,36 @@ Populated on first call to fetch-openrouter-models.  Set to nil to force refresh
 (defvar *openai-oauth-token-url* "https://auth.openai.com/oauth/token"
   "OpenAI OAuth 2.0 token exchange endpoint.")
 
-(defvar *openai-oauth-redirect-uri* "http://localhost:1455/callback"
-  "OAuth redirect URI. No server needed; user pastes the callback URL.")
+(defvar *openai-oauth-default-port* 1455
+  "Preferred localhost port for the OpenAI Codex OAuth callback server.")
 
-(defvar *openai-oauth-scopes* "openid profile email offline_access"
-  "OAuth scopes to request from OpenAI.")
+(defvar *openai-oauth-callback-path* "/auth/callback"
+  "HTTP path served by the local OpenAI Codex OAuth callback server.")
+
+(defvar *openai-oauth-redirect-uri*
+  (format nil "http://localhost:~D~A"
+          *openai-oauth-default-port*
+          *openai-oauth-callback-path*)
+  "Default OAuth redirect URI used when the preferred callback port is available.")
+
+(defvar *openai-oauth-scopes*
+  "openid profile email offline_access api.connectors.read api.connectors.invoke"
+  "OAuth scopes requested from OpenAI, aligned with Codex.")
+
+(defvar *openai-oauth-originator* "codex_cli_rs"
+  "Originator value sent in the OpenAI Codex OAuth browser flow and API requests.")
+
+(defparameter +default-codex-auth-path+
+  (merge-pathnames #P".codex/auth.json" (user-homedir-pathname))
+  "Default path to the shared Codex auth.json credential store.")
+
+(defvar *codex-auth-path* +default-codex-auth-path+
+  "Path to the shared Codex auth.json credential store.")
 
 (defvar *openai-codex-oauth-path*
-  (merge-pathnames #P".config/clawmacs/openai-codex-oauth.json" (user-homedir-pathname))
-  "Path to the persisted OpenAI Codex OAuth credentials (JSON).")
+  +default-codex-auth-path+
+  "Deprecated compatibility path variable for OpenAI Codex auth storage.
+When left at its default value, clawmacs uses *CODEX-AUTH-PATH*.")
 
 ;;; Claude Code OAuth Identity
 ;;; The Anthropic REST API requires OAuth tokens (sk-ant-oat-*) to identify
@@ -257,6 +285,19 @@ E.g., \"tool_use\" -> \"TOOL--USE\" -> (interned as :TOOL--USE) -> \"tool_use\".
 Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
   (cl-json:encode-json-to-string object))
 
+(defclass json-false-literal ()
+  ()
+  (:documentation "Marker object that encodes as a literal JSON false value."))
+
+(defparameter +json-false+ (make-instance 'json-false-literal)
+  "Shared marker object that encodes as a literal JSON false value.")
+
+(defmethod cl-json:encode-json ((object json-false-literal)
+                                &optional (stream cl-json:*json-output*))
+  "Encode OBJECT as a literal JSON false value."
+  (declare (ignore object))
+  (write-string "false" stream))
+
 (declaim (ftype (function (t) (or null list)) normalize-legacy-raw-content))
 
 (defun canonical-text-block (text)
@@ -388,39 +429,6 @@ claudeAiOauth entry, otherwise nil."
             token))
       (error () nil))))
 
-(defun read-provider-token (provider)
-  "Read PROVIDER's token with the following priority per provider:
-
-  :ANTHROPIC     1) CLAUDE_CODE_OAUTH_TOKEN env var
-                 2) Claude Code credentials file (~/.claude/.credentials.json)
-                 3) Static token file (~/.config/clawmacs/claude-max-token)
-
-  :OPENAI-CODEX  1) OpenAI Codex OAuth credentials (auto-refreshing)
-                 2) Static token file (~/.config/clawmacs/openai-codex-token)
-
-  :ZAI           1) ZAI_CODING_MAX_API_KEY env var
-                 2) Static token file (~/.config/clawmacs/zai-api-key)
-
-  :OPENROUTER    1) OPENROUTER_API_KEY env var
-                 2) Static token file (~/.config/clawmacs/openrouter-api-key)"
-  (or ;; Environment variable sources (highest priority)
-      (when (eq provider :anthropic)
-        (read-env-token *anthropic-env-var*))
-      (when (eq provider :zai)
-        (read-env-token *zai-env-var*))
-      (when (eq provider :openrouter)
-        (read-env-token *openrouter-env-var*))
-      ;; OAuth / credentials file sources
-      (when (eq provider :anthropic)
-        (read-claude-code-oauth-token))
-      (when (eq provider :openai-codex)
-        (read-openai-codex-oauth-token))
-      ;; Static token file (lowest priority)
-      (let ((token-path (provider-token-path provider)))
-        (when (probe-file token-path)
-          (string-trim '(#\Space #\Tab #\Newline #\Return)
-                       (uiop:read-file-string token-path))))))
-
 (defun save-provider-token (provider token)
   "Save TOKEN to PROVIDER's provider-specific token file."
   (let ((token-path (provider-token-path provider)))
@@ -438,6 +446,478 @@ claudeAiOauth entry, otherwise nil."
 ;;; OpenAI Codex OAuth 2.0 (PKCE Flow)
 ;;; --------------------------------------------------------------------------
 
+(defconstant +unix-to-universal-time-offset+ 2208988800
+  "Seconds between the Unix epoch and Common Lisp universal time epoch.")
+
+(defconstant +openai-oauth-refresh-staleness-days+ 8
+  "Fallback staleness threshold used when JWT expiry cannot be parsed.")
+
+(defconstant +openai-oauth-refresh-leeway-seconds+ 300
+  "Refresh ChatGPT OAuth tokens this many seconds before JWT expiry.")
+
+(defun trimmed-file-string (pathname)
+  "Read PATHNAME and trim surrounding ASCII whitespace.
+Returns NIL when the file is missing or blank."
+  (when (probe-file pathname)
+    (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                (uiop:read-file-string pathname))))
+      (when (plusp (length trimmed))
+        trimmed))))
+
+(defun read-provider-file-token (provider)
+  "Read PROVIDER's static token file without consulting env vars or OAuth."
+  (trimmed-file-string (provider-token-path provider)))
+
+(defun url-like-string-p (string)
+  "Return non-nil when STRING looks like an HTTP(S) URL."
+  (and (stringp string)
+       (or (and (<= 7 (length string))
+                (string= "http://" string :end2 7))
+           (and (<= 8 (length string))
+                (string= "https://" string :end2 8)))))
+
+(defun jwt-like-string-p (string)
+  "Return non-nil when STRING looks like a JWT."
+  (and (stringp string)
+       (= 2 (count #\. string))
+       (plusp (length string))))
+
+(defun openai-codex-api-key-override-valid-p (token)
+  "Return non-nil when TOKEN is a plausible API-key style override."
+  (and (stringp token)
+       (plusp (length token))
+       (not (url-like-string-p token))
+       (not (search "/auth/callback" token :test #'char=))
+       (not (search "code=" token :test #'char=))
+       (not (search "state=" token :test #'char=))
+       (not (jwt-like-string-p token))))
+
+(defun openai-codex-chatgpt-access-token-valid-p (token)
+  "Return non-nil when TOKEN is a plausible ChatGPT OAuth access token."
+  (and (stringp token)
+       (plusp (length token))
+       (not (url-like-string-p token))
+       (jwt-like-string-p token)))
+
+(defun current-codex-auth-path ()
+  "Return the effective auth.json path, honoring the deprecated override variable."
+  (cond
+    ((not (equal *codex-auth-path* +default-codex-auth-path+))
+     *codex-auth-path*)
+    ((not (equal *openai-codex-oauth-path* +default-codex-auth-path+))
+     *openai-codex-oauth-path*)
+    (t
+     *codex-auth-path*)))
+
+(defun write-private-file (pathname contents)
+  "Write CONTENTS to PATHNAME and best-effort chmod the result to 0600."
+  (ensure-directories-exist pathname)
+  (with-open-file (stream pathname
+                          :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create)
+    (write-string contents stream))
+  (ignore-errors
+    (uiop:run-program (list "chmod" "600" (namestring pathname))))
+  pathname)
+
+(defun openai-oauth-redirect-uri (&optional (port *openai-oauth-default-port*))
+  "Return the localhost callback URI for PORT."
+  (format nil "http://localhost:~D~A" port *openai-oauth-callback-path*))
+
+(defun current-rfc3339-timestamp ()
+  "Return the current UTC time as a simple RFC 3339 timestamp."
+  (multiple-value-bind (second minute hour day month year)
+      (decode-universal-time (get-universal-time) 0)
+    (format nil "~4,'0D-~2,'0D-~2,'0DT~2,'0D:~2,'0D:~2,'0DZ"
+            year month day hour minute second)))
+
+(defun unix-time->universal-time (unix-time)
+  "Convert UNIX-TIME seconds to Common Lisp universal time."
+  (+ unix-time +unix-to-universal-time-offset+))
+
+(defun alist-string-value (alist key)
+  "Return the non-blank string value for KEY in ALIST."
+  (let ((value (cdr (assoc key alist))))
+    (when (and (stringp value) (plusp (length value)))
+      value)))
+
+(defun openai-codex-auth-json-tokens (auth-json)
+  "Return the decoded tokens object from AUTH-JSON."
+  (cdr (assoc :tokens auth-json)))
+
+(defun normalize-openai-codex-auth-mode (value)
+  "Normalize a persisted auth mode VALUE to :CHATGPT or :API-KEY."
+  (cond
+    ((or (null value) (eq value :chatgpt)) :chatgpt)
+    ((eq value :api-key) :api-key)
+    ((stringp value)
+     (let ((normalized (string-downcase value)))
+       (cond
+         ((string= normalized "chatgpt") :chatgpt)
+         ((or (string= normalized "api_key")
+              (string= normalized "api-key")
+              (string= normalized "apikey"))
+          :api-key)
+         (t :chatgpt))))
+    (t :chatgpt)))
+
+(defun openai-codex-resolved-auth-mode (auth-json)
+  "Resolve AUTH-JSON's effective auth mode the same way Codex does."
+  (let ((explicit-mode (cdr (assoc :auth--mode auth-json)))
+        (api-key (alist-string-value auth-json :openai--api--key)))
+    (cond
+      (explicit-mode
+       (normalize-openai-codex-auth-mode explicit-mode))
+      (api-key
+       :api-key)
+      (t
+       :chatgpt))))
+
+(defun read-openai-codex-auth-json ()
+  "Read the shared Codex auth.json store."
+  (let ((auth-path (current-codex-auth-path)))
+    (when (probe-file auth-path)
+      (handler-case
+          (api-json-decode (uiop:read-file-string auth-path))
+        (error () nil)))))
+
+(defun openai-codex-auth-payload (&key auth-mode openai-api-key
+                                       id-token access-token refresh-token account-id
+                                       last-refresh)
+  "Build an auth.json payload compatible with Codex."
+  (let ((payload nil)
+        (tokens nil))
+    (when (or id-token access-token refresh-token account-id)
+      (setf tokens `((:id--token . ,id-token)
+                     (:access--token . ,access-token)
+                     (:refresh--token . ,refresh-token)
+                     (:account--id . ,account-id))))
+    (when auth-mode
+      (push `(:auth--mode . ,(ecase auth-mode
+                               (:chatgpt "chatgpt")
+                               (:api-key "api_key")))
+            payload))
+    (push `(:openai--api--key . ,openai-api-key) payload)
+    (when tokens
+      (push `(:tokens . ,tokens) payload))
+    (push `(:last--refresh . ,(or last-refresh (current-rfc3339-timestamp))) payload)
+    (nreverse payload)))
+
+(defun save-openai-codex-auth-json (auth-json)
+  "Persist AUTH-JSON to the shared Codex auth store."
+  (write-private-file (current-codex-auth-path)
+                      (api-json-encode auth-json))
+  auth-json)
+
+(defun base64url-char-value (char)
+  "Decode one base64url CHAR to its 6-bit integer value."
+  (cond
+    ((and (char>= char #\A) (char<= char #\Z))
+     (- (char-code char) (char-code #\A)))
+    ((and (char>= char #\a) (char<= char #\z))
+     (+ 26 (- (char-code char) (char-code #\a))))
+    ((and (char>= char #\0) (char<= char #\9))
+     (+ 52 (- (char-code char) (char-code #\0))))
+    ((char= char #\-) 62)
+    ((char= char #\_) 63)
+    (t
+     (error "Invalid base64url character ~S" char))))
+
+(defun base64url-decode-to-octets (string)
+  "Decode base64url STRING into a fresh octet vector."
+  (let ((buffer 0)
+        (bits 0)
+        (bytes (make-array 0
+                           :element-type '(unsigned-byte 8)
+                           :adjustable t
+                           :fill-pointer 0)))
+    (loop :for char :across string
+          :unless (char= char #\=)
+            :do (progn
+                  (setf buffer (logior (ash buffer 6)
+                                       (base64url-char-value char))
+                        bits (+ bits 6))
+                  (loop :while (>= bits 8)
+                        :do (decf bits 8)
+                            (vector-push-extend (ldb (byte 8 bits) buffer) bytes)
+                            (setf buffer (ldb (byte bits 0) buffer)))))
+    bytes))
+
+(defun jwt-payload-string (jwt)
+  "Return JWT's decoded payload as a UTF-8 string."
+  (let* ((parts (split-string-by-char jwt #\.))
+         (payload (second parts)))
+    (unless (and (= (length parts) 3)
+                 payload
+                 (plusp (length payload)))
+      (error "Invalid JWT format"))
+    (flexi-streams:octets-to-string
+     (base64url-decode-to-octets payload)
+     :external-format :utf-8)))
+
+(defun parse-jwt-expiration (jwt)
+  "Return JWT's `exp` claim as universal time, or NIL when unavailable."
+  (handler-case
+      (let* ((payload (api-json-decode (jwt-payload-string jwt)))
+             (exp (cdr (assoc :exp payload))))
+        (when (integerp exp)
+          (unix-time->universal-time exp)))
+    (error () nil)))
+
+(defun json-string-field-value (json-string field-name)
+  "Extract a simple quoted FIELD-NAME value from JSON-STRING."
+  (let* ((needle (format nil "\"~A\"" field-name))
+         (field-pos (search needle json-string)))
+    (when field-pos
+      (let* ((colon-pos (position #\: json-string :start (+ field-pos (length needle))))
+             (value-start (and colon-pos
+                               (position #\" json-string :start (1+ colon-pos)))))
+        (when value-start
+          (let ((value-end (position #\" json-string :start (1+ value-start))))
+            (when value-end
+              (subseq json-string (1+ value-start) value-end))))))))
+
+(defun parse-rfc3339-timestamp (string)
+  "Parse a simple RFC 3339 UTC or offset timestamp STRING to universal time."
+  (when (and string (>= (length string) 20))
+    (let* ((year (parse-integer string :start 0 :end 4))
+           (month (parse-integer string :start 5 :end 7))
+           (day (parse-integer string :start 8 :end 10))
+           (hour (parse-integer string :start 11 :end 13))
+           (minute (parse-integer string :start 14 :end 16))
+           (second (parse-integer string :start 17 :end 19))
+           (zone-pos (or (position #\Z string :start 19)
+                         (position #\+ string :start 19)
+                         (position #\- string :start 19)))
+           (base (encode-universal-time second minute hour day month year 0)))
+      (cond
+        ((or (null zone-pos) (char= (char string zone-pos) #\Z))
+         base)
+        (t
+         (let* ((sign (char string zone-pos))
+                (offset-hour (parse-integer string :start (1+ zone-pos) :end (+ zone-pos 3)))
+                (offset-minute (parse-integer string :start (+ zone-pos 4) :end (+ zone-pos 6)))
+                (offset-seconds (+ (* offset-hour 3600) (* offset-minute 60))))
+           (if (char= sign #\+)
+               (- base offset-seconds)
+               (+ base offset-seconds))))))))
+
+(defun openai-codex-id-token-account-id (id-token)
+  "Extract the ChatGPT account/workspace ID from ID-TOKEN when present."
+  (handler-case
+      (json-string-field-value (jwt-payload-string id-token) "chatgpt_account_id")
+    (error () nil)))
+
+(defun read-openai-codex-oauth-tokens ()
+  "Read the shared OpenAI Codex auth store as a convenience plist."
+  (let* ((auth-json (read-openai-codex-auth-json))
+         (tokens (and auth-json (openai-codex-auth-json-tokens auth-json)))
+         (access-token (and tokens (alist-string-value tokens :access--token))))
+    (when auth-json
+      (list :auth-mode (openai-codex-resolved-auth-mode auth-json)
+            :openai-api-key (alist-string-value auth-json :openai--api--key)
+            :id-token (and tokens (alist-string-value tokens :id--token))
+            :access-token access-token
+            :refresh-token (and tokens (alist-string-value tokens :refresh--token))
+            :account-id (and tokens (alist-string-value tokens :account--id))
+            :last-refresh (alist-string-value auth-json :last--refresh)
+            :expires-at (and access-token (parse-jwt-expiration access-token))))))
+
+(defun openai-codex-chatgpt-auth-stale-p (auth-json)
+  "Return non-nil when AUTH-JSON should be proactively refreshed."
+  (let* ((tokens (openai-codex-auth-json-tokens auth-json))
+         (access-token (and tokens (alist-string-value tokens :access--token))))
+    (cond
+      ((and access-token
+            (let ((expires-at (parse-jwt-expiration access-token)))
+              (and expires-at
+                   (<= expires-at
+                       (+ (get-universal-time)
+                          +openai-oauth-refresh-leeway-seconds+)))))
+       t)
+      (t
+       (let ((last-refresh (parse-rfc3339-timestamp
+                            (alist-string-value auth-json :last--refresh))))
+         (and last-refresh
+              (< last-refresh
+                 (- (get-universal-time)
+                    (* +openai-oauth-refresh-staleness-days+ 24 60 60)))))))))
+
+(defun request-openai-codex-token-refresh (refresh-token)
+  "Request a refreshed ChatGPT OAuth token set using REFRESH-TOKEN."
+  (multiple-value-bind (body status-code)
+      (drakma:http-request
+       *openai-oauth-token-url*
+       :method :post
+       :content-type "application/json"
+       :content (api-json-encode
+                 `((:client--id . ,*openai-oauth-client-id*)
+                   (:grant--type . "refresh_token")
+                   (:refresh--token . ,refresh-token)))
+       :want-stream nil
+       :force-binary nil)
+    (let ((body-string (http-body-string body)))
+      (unless (= status-code 200)
+        (error "OAuth refresh failed (~A): ~A" status-code body-string))
+      (let ((response (api-json-decode body-string)))
+        (list :id-token (alist-string-value response :id--token)
+              :access-token (alist-string-value response :access--token)
+              :refresh-token (or (alist-string-value response :refresh--token)
+                                 refresh-token))))))
+
+(defun refresh-openai-codex-auth-json (&optional auth-json)
+  "Refresh AUTH-JSON in-place via the token endpoint and persist the result."
+  (let* ((current-auth (or auth-json (read-openai-codex-auth-json)))
+         (tokens (and current-auth (openai-codex-auth-json-tokens current-auth)))
+         (refresh-token (and tokens (alist-string-value tokens :refresh--token))))
+    (unless (and refresh-token (plusp (length refresh-token)))
+      (return-from refresh-openai-codex-auth-json nil))
+    (handler-case
+        (let* ((refreshed (request-openai-codex-token-refresh refresh-token))
+               (existing-id-token (alist-string-value tokens :id--token))
+               (new-id-token (or (getf refreshed :id-token) existing-id-token))
+               (account-id (or (and tokens (alist-string-value tokens :account--id))
+                               (and new-id-token
+                                    (openai-codex-id-token-account-id new-id-token))))
+               (updated
+                 (openai-codex-auth-payload
+                  :auth-mode :chatgpt
+                  :openai-api-key (alist-string-value current-auth :openai--api--key)
+                  :id-token new-id-token
+                  :access-token (getf refreshed :access-token)
+                  :refresh-token (getf refreshed :refresh-token)
+                  :account-id account-id
+                  :last-refresh (current-rfc3339-timestamp))))
+          (save-openai-codex-auth-json updated)
+          updated)
+      (error ()
+        nil))))
+
+(defun save-openai-codex-oauth-tokens (access-token refresh-token expires-in
+                                        &key id-token account-id openai-api-key
+                                          (auth-mode :chatgpt))
+  "Persist an OpenAI Codex auth payload in the shared Codex auth.json store.
+The legacy EXPIRES-IN argument is accepted for compatibility and ignored."
+  (declare (ignore expires-in))
+  (save-openai-codex-auth-json
+   (openai-codex-auth-payload
+    :auth-mode auth-mode
+    :openai-api-key openai-api-key
+    :id-token id-token
+    :access-token access-token
+    :refresh-token refresh-token
+    :account-id account-id
+    :last-refresh (current-rfc3339-timestamp)))
+  access-token)
+
+(defun read-openai-codex-oauth-token ()
+  "Read a valid ChatGPT OAuth access token from the shared Codex auth store."
+  (let* ((auth-json (read-openai-codex-auth-json))
+         (tokens (and auth-json (openai-codex-auth-json-tokens auth-json)))
+         (access-token (and tokens (alist-string-value tokens :access--token))))
+    (cond
+      ((null auth-json) nil)
+      ((and (eq (openai-codex-resolved-auth-mode auth-json) :chatgpt)
+            (openai-codex-chatgpt-auth-stale-p auth-json))
+       (let ((refreshed (refresh-openai-codex-auth-json auth-json)))
+         (or (and refreshed
+                  (alist-string-value (openai-codex-auth-json-tokens refreshed)
+                                      :access--token))
+             access-token)))
+      (t
+       access-token))))
+
+(defun openai-codex-auth-descriptor-from-auth-json (auth-json)
+  "Resolve AUTH-JSON into a request descriptor."
+  (let ((mode (openai-codex-resolved-auth-mode auth-json)))
+    (ecase mode
+      (:api-key
+       (let ((api-key (alist-string-value auth-json :openai--api--key)))
+         (when (openai-codex-api-key-override-valid-p api-key)
+           (list :source :codex-api-key
+                 :mode :api-key
+                 :token api-key
+                 :base-url *openai-codex-api-base-url*
+                 :account-id nil
+                 :refreshable-p nil
+                 :auth-json auth-json))))
+      (:chatgpt
+       (let* ((tokens (openai-codex-auth-json-tokens auth-json))
+              (access-token (and tokens (alist-string-value tokens :access--token)))
+              (account-id (or (and tokens (alist-string-value tokens :account--id))
+                              (let ((id-token (and tokens (alist-string-value tokens :id--token))))
+                                (and id-token
+                                     (openai-codex-id-token-account-id id-token))))))
+         (unless (and (openai-codex-chatgpt-access-token-valid-p access-token)
+                      account-id)
+           (error "Codex ChatGPT auth requires a JWT access_token and account_id in auth.json"))
+         (list :source :codex-chatgpt
+               :mode :chatgpt
+               :token access-token
+               :base-url *openai-codex-chatgpt-base-url*
+               :account-id account-id
+               :refreshable-p t
+               :auth-json auth-json))))))
+
+(defun resolve-openai-codex-auth (&key (refresh-if-needed t))
+  "Resolve the effective OpenAI Codex auth descriptor.
+Precedence: clawmacs override token file, then shared ~/.codex/auth.json."
+  (let ((override-token (read-provider-file-token :openai-codex)))
+    (when (openai-codex-api-key-override-valid-p override-token)
+      (return-from resolve-openai-codex-auth
+        (list :source :token-override
+              :mode :api-key
+              :token override-token
+              :base-url *openai-codex-api-base-url*
+              :account-id nil
+              :refreshable-p nil))))
+  (let ((auth-json (read-openai-codex-auth-json)))
+    (when auth-json
+      (let ((effective-auth
+              (if (and refresh-if-needed
+                       (eq (openai-codex-resolved-auth-mode auth-json) :chatgpt)
+                       (openai-codex-chatgpt-auth-stale-p auth-json))
+                  (or (refresh-openai-codex-auth-json auth-json)
+                      auth-json)
+                  auth-json)))
+        (openai-codex-auth-descriptor-from-auth-json effective-auth)))))
+
+(defun refresh-openai-codex-oauth-token (refresh-token)
+  "Refresh the OpenAI Codex ChatGPT OAuth token and return the new access token."
+  (declare (ignore refresh-token))
+  (let ((updated (refresh-openai-codex-auth-json)))
+    (and updated
+         (alist-string-value (openai-codex-auth-json-tokens updated)
+                             :access--token))))
+
+(defun read-provider-token (provider)
+  "Read PROVIDER's token with provider-specific precedence rules.
+
+  :ANTHROPIC     1) CLAUDE_CODE_OAUTH_TOKEN env var
+                 2) Claude Code credentials file (~/.claude/.credentials.json)
+                 3) Static token file (~/.config/clawmacs/claude-max-token)
+
+  :OPENAI-CODEX  1) Static token override (~/.config/clawmacs/openai-codex-token)
+                 2) Shared Codex auth.json (~/.codex/auth.json)
+
+  :ZAI           1) ZAI_CODING_MAX_API_KEY env var
+                 2) Static token file (~/.config/clawmacs/zai-api-key)
+
+  :OPENROUTER    1) OPENROUTER_API_KEY env var
+                 2) Static token file (~/.config/clawmacs/openrouter-api-key)"
+  (or (when (eq provider :anthropic)
+        (read-env-token *anthropic-env-var*))
+      (when (eq provider :zai)
+        (read-env-token *zai-env-var*))
+      (when (eq provider :openrouter)
+        (read-env-token *openrouter-env-var*))
+      (when (eq provider :anthropic)
+        (read-claude-code-oauth-token))
+      (when (eq provider :openai-codex)
+        (getf (resolve-openai-codex-auth) :token))
+      (read-provider-file-token provider)))
+
 (defun generate-random-string (length)
   "Generate a random string of LENGTH alphanumeric characters.
 Uses /dev/urandom for cryptographic randomness."
@@ -454,8 +934,23 @@ Uses /dev/urandom for cryptographic randomness."
   (generate-random-string 43))
 
 (defun generate-oauth-state ()
-  "Generate a 32-character random state for CSRF protection."
-  (generate-random-string 32))
+  "Generate a base64url OAuth state token for CSRF protection."
+  (let ((bytes (make-array 32 :element-type '(unsigned-byte 8))))
+    (with-open-file (urandom "/dev/urandom" :element-type '(unsigned-byte 8))
+      (read-sequence bytes urandom))
+    (with-output-to-string (out)
+      (let ((alphabet "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+            (buffer 0)
+            (bits 0))
+        (loop :for byte :across bytes
+              :do (setf buffer (logior (ash buffer 8) byte)
+                        bits (+ bits 8))
+                  (loop :while (>= bits 6)
+                        :do (decf bits 6)
+                            (write-char (char alphabet (ldb (byte 6 bits) buffer)) out)
+                            (setf buffer (ldb (byte bits 0) buffer))))
+        (when (plusp bits)
+          (write-char (char alphabet (ash buffer (- 6 bits))) out))))))
 
 (defun hex-string-to-bytes (hex-string)
   "Convert a HEX-STRING to a byte array."
@@ -501,13 +996,42 @@ Uses openssl for SHA-256 and base64, then converts to base64url encoding."
         :collect (subseq string start (or end (length string)))
         :while end))
 
+(defun hex-digit-value (char)
+  "Decode one hexadecimal digit CHAR to its integer value."
+  (cond
+    ((and (char>= char #\0) (char<= char #\9))
+     (- (char-code char) (char-code #\0)))
+    ((and (char>= char #\A) (char<= char #\F))
+     (+ 10 (- (char-code char) (char-code #\A))))
+    ((and (char>= char #\a) (char<= char #\f))
+     (+ 10 (- (char-code char) (char-code #\a))))
+    (t
+     (error "Invalid hex digit ~S" char))))
+
+(defun url-decode-param (string)
+  "Percent-decode STRING from a URL query parameter."
+  (with-output-to-string (out)
+    (loop :for i :from 0 :below (length string)
+          :for char := (char string i)
+          :do (cond
+                ((char= char #\+)
+                 (write-char #\Space out))
+                ((and (char= char #\%)
+                      (<= (+ i 2) (1- (length string))))
+                 (let ((byte (+ (* 16 (hex-digit-value (char string (1+ i))))
+                                (hex-digit-value (char string (+ i 2))))))
+                   (write-char (code-char byte) out)
+                   (incf i 2)))
+                (t
+                 (write-char char out))))))
+
 (defun parse-query-string (query)
   "Parse a URL QUERY string into an alist of (key . value) string pairs."
   (loop :for part :in (split-string-by-char query #\&)
         :for eq-pos := (position #\= part)
         :when eq-pos
-          :collect (cons (subseq part 0 eq-pos)
-                         (subseq part (1+ eq-pos)))))
+          :collect (cons (url-decode-param (subseq part 0 eq-pos))
+                         (url-decode-param (subseq part (1+ eq-pos))))))
 
 (defun extract-oauth-callback-params (url)
   "Extract authorization code and state from an OAuth callback URL.
@@ -516,7 +1040,7 @@ Returns (values code state). Signals an error if the code is missing."
          (query-start (position #\? trimmed)))
     (unless query-start
       (error "Invalid callback URL (no query parameters).~%Expected: ~A?code=...&state=..."
-             *openai-oauth-redirect-uri*))
+             (openai-oauth-redirect-uri)))
     (let* ((query (subseq trimmed (1+ query-start)))
            (params (parse-query-string query))
            (code (cdr (assoc "code" params :test #'string=)))
@@ -525,25 +1049,31 @@ Returns (values code state). Signals an error if the code is missing."
         (error "No authorization code in callback URL. Check that you copied the full URL."))
       (values code state))))
 
-(defun openai-codex-oauth-start ()
+(defun build-openai-codex-authorize-url (redirect-uri code-challenge state)
+  "Build a Codex-compatible browser authorization URL."
+  (format nil
+          "~A?response_type=code&client_id=~A&redirect_uri=~A&scope=~A&code_challenge=~A&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&state=~A&originator=~A"
+          *openai-oauth-auth-url*
+          *openai-oauth-client-id*
+          (url-encode-param redirect-uri)
+          (url-encode-param *openai-oauth-scopes*)
+          (url-encode-param code-challenge)
+          (url-encode-param state)
+          (url-encode-param *openai-oauth-originator*)))
+
+(defun openai-codex-oauth-start (&key (redirect-uri (openai-oauth-redirect-uri)))
   "Initiate an OpenAI Codex OAuth PKCE flow.
 Generates PKCE pair and state, builds the authorization URL.
 Returns (values auth-url code-verifier state)."
   (let* ((code-verifier (generate-code-verifier))
          (code-challenge (compute-code-challenge code-verifier))
          (state (generate-oauth-state))
-         (auth-url (format nil "~A?client_id=~A&redirect_uri=~A&response_type=code&scope=~A&code_challenge=~A&code_challenge_method=S256&state=~A"
-                           *openai-oauth-auth-url*
-                           *openai-oauth-client-id*
-                           (url-encode-param *openai-oauth-redirect-uri*)
-                           (url-encode-param *openai-oauth-scopes*)
-                           code-challenge
-                           state)))
+         (auth-url (build-openai-codex-authorize-url redirect-uri code-challenge state)))
     (values auth-url code-verifier state)))
 
-(defun exchange-openai-oauth-code (code code-verifier)
+(defun exchange-openai-oauth-code (code code-verifier &key (redirect-uri (openai-oauth-redirect-uri)))
   "Exchange an OAuth authorization CODE for access/refresh tokens using CODE-VERIFIER.
-Returns a plist (:access-token ... :refresh-token ... :expires-in ...)."
+Returns a plist (:id-token ... :access-token ... :refresh-token ... :account-id ...)."
   (multiple-value-bind (body status-code)
       (drakma:http-request
        *openai-oauth-token-url*
@@ -552,96 +1082,45 @@ Returns a plist (:access-token ... :refresh-token ... :expires-in ...)."
        :content (format nil "grant_type=authorization_code&client_id=~A&code=~A&redirect_uri=~A&code_verifier=~A"
                         (url-encode-param *openai-oauth-client-id*)
                         (url-encode-param code)
-                        (url-encode-param *openai-oauth-redirect-uri*)
+                        (url-encode-param redirect-uri)
                         (url-encode-param code-verifier))
        :want-stream nil
        :force-binary nil)
     (let ((body-string (http-body-string body)))
       (unless (= status-code 200)
         (error "OAuth token exchange failed (~A): ~A" status-code body-string))
-      (let ((response (api-json-decode body-string)))
-        (list :access-token (cdr (assoc :access--token response))
-              :refresh-token (cdr (assoc :refresh--token response))
-              :expires-in (cdr (assoc :expires--in response)))))))
+      (let* ((response (api-json-decode body-string))
+             (id-token (alist-string-value response :id--token)))
+        (list :id-token id-token
+              :access-token (alist-string-value response :access--token)
+              :refresh-token (alist-string-value response :refresh--token)
+              :account-id (and id-token
+                               (openai-codex-id-token-account-id id-token)))))))
 
-(defun save-openai-codex-oauth-tokens (access-token refresh-token expires-in)
-  "Save OAuth tokens with computed expiry timestamp to the credential file.
-Returns the access token."
-  (let* ((expires-at (+ (get-universal-time) (or expires-in 3600)))
-         (data `((:access--token . ,access-token)
-                 (:refresh--token . ,refresh-token)
-                 (:expires--at . ,expires-at))))
-    (ensure-directories-exist *openai-codex-oauth-path*)
-    (with-open-file (s *openai-codex-oauth-path*
-                       :direction :output
-                       :if-exists :supersede
-                       :if-does-not-exist :create)
-      (write-string (api-json-encode data) s))
-    (ignore-errors
-      (uiop:run-program (list "chmod" "600" (namestring *openai-codex-oauth-path*))))
-    access-token))
+(defun obtain-openai-codex-api-key (id-token)
+  "Exchange ID-TOKEN for an API-key style token when the backend allows it."
+  (multiple-value-bind (body status-code)
+      (drakma:http-request
+       *openai-oauth-token-url*
+       :method :post
+       :content-type "application/x-www-form-urlencoded"
+       :content (format nil
+                        "grant_type=~A&client_id=~A&requested_token=~A&subject_token=~A&subject_token_type=~A"
+                        (url-encode-param "urn:ietf:params:oauth:grant-type:token-exchange")
+                        (url-encode-param *openai-oauth-client-id*)
+                        (url-encode-param "openai-api-key")
+                        (url-encode-param id-token)
+                        (url-encode-param "urn:ietf:params:oauth:token-type:id_token"))
+       :want-stream nil
+       :force-binary nil)
+    (let ((body-string (http-body-string body)))
+      (when (= status-code 200)
+        (alist-string-value (api-json-decode body-string) :access--token)))))
 
-(defun read-openai-codex-oauth-tokens ()
-  "Read persisted OAuth credentials from the credential file.
-Returns a plist (:access-token ... :refresh-token ... :expires-at ...)
-or nil if the file does not exist or cannot be parsed."
-  (when (probe-file *openai-codex-oauth-path*)
-    (handler-case
-        (let* ((json (uiop:read-file-string *openai-codex-oauth-path*))
-               (data (api-json-decode json)))
-          (list :access-token (cdr (assoc :access--token data))
-                :refresh-token (cdr (assoc :refresh--token data))
-                :expires-at (cdr (assoc :expires--at data))))
-      (error () nil))))
-
-(defun refresh-openai-codex-oauth-token (refresh-token)
-  "Refresh the OpenAI Codex access token using REFRESH-TOKEN.
-Saves the new credentials and returns the new access token, or nil on failure."
-  (handler-case
-      (multiple-value-bind (body status-code)
-          (drakma:http-request
-           *openai-oauth-token-url*
-           :method :post
-           :content-type "application/x-www-form-urlencoded"
-           :content (format nil "grant_type=refresh_token&client_id=~A&refresh_token=~A"
-                            (url-encode-param *openai-oauth-client-id*)
-                            (url-encode-param refresh-token))
-           :want-stream nil
-           :force-binary nil)
-        (let ((body-string (http-body-string body)))
-          (when (= status-code 200)
-            (let ((response (api-json-decode body-string)))
-              (save-openai-codex-oauth-tokens
-               (cdr (assoc :access--token response))
-               (or (cdr (assoc :refresh--token response)) refresh-token)
-               (cdr (assoc :expires--in response)))
-              (cdr (assoc :access--token response))))))
-    (error () nil)))
-
-(defun read-openai-codex-oauth-token ()
-  "Read a valid OpenAI Codex access token from the OAuth credential store.
-Auto-refreshes if the token is expired or expiring within 5 minutes.
-Returns the access token string or nil."
-  (let ((creds (read-openai-codex-oauth-tokens)))
-    (when creds
-      (let ((access-token (getf creds :access-token))
-            (refresh-token (getf creds :refresh-token))
-            (expires-at (getf creds :expires-at)))
-        (cond
-          ;; Token is still valid (with 5 minute buffer)
-          ((and access-token expires-at
-                (> expires-at (+ (get-universal-time) 300)))
-           access-token)
-          ;; Token expired but we have a refresh token
-          ((and refresh-token (stringp refresh-token) (plusp (length refresh-token)))
-           (or (refresh-openai-codex-oauth-token refresh-token)
-               access-token))
-          ;; Return whatever we have
-          (t access-token))))))
-
-(defun openai-codex-oauth-finish (callback-url code-verifier expected-state)
+(defun openai-codex-oauth-finish (callback-url code-verifier expected-state
+                                   &key (redirect-uri (openai-oauth-redirect-uri)))
   "Complete the OAuth flow by exchanging the authorization code for tokens.
-CALLBACK-URL is the full redirect URL the user pasted.
+CALLBACK-URL is the full localhost redirect URL received by the callback server.
 CODE-VERIFIER is the PKCE verifier from the initial request.
 EXPECTED-STATE is the state parameter for CSRF validation.
 Returns the access token on success."
@@ -650,12 +1129,266 @@ Returns the access token on success."
     (when (and expected-state state (not (string= state expected-state)))
       (error "OAuth state mismatch (possible CSRF). Expected ~A, got ~A"
              expected-state state))
-    (let ((tokens (exchange-openai-oauth-code code code-verifier)))
+    (let* ((tokens (exchange-openai-oauth-code code code-verifier
+                                               :redirect-uri redirect-uri))
+           (id-token (getf tokens :id-token))
+           (api-key (and id-token
+                         (ignore-errors
+                           (obtain-openai-codex-api-key id-token)))))
       (save-openai-codex-oauth-tokens
        (getf tokens :access-token)
        (getf tokens :refresh-token)
-       (getf tokens :expires-in))
+       nil
+       :id-token id-token
+       :account-id (getf tokens :account-id)
+       :openai-api-key api-key
+       :auth-mode :chatgpt)
       (getf tokens :access-token))))
+
+(defstruct openai-oauth-flow
+  "State for an in-progress localhost OpenAI Codex OAuth login."
+  buffer
+  auth-url
+  redirect-uri
+  port
+  code-verifier
+  state
+  listener
+  thread
+  (done-p nil :type boolean)
+  (success-p nil :type boolean)
+  (cancelled-p nil :type boolean)
+  error
+  token
+  (lock (bt:make-lock "openai-oauth-flow")))
+
+(defun html-escape (string)
+  "Escape STRING for safe insertion into a tiny HTML page."
+  (with-output-to-string (out)
+    (loop :for char :across (or string "")
+          :do (case char
+                (#\& (write-string "&amp;" out))
+                (#\< (write-string "&lt;" out))
+                (#\> (write-string "&gt;" out))
+                (#\" (write-string "&quot;" out))
+                (#\' (write-string "&#39;" out))
+                (otherwise
+                 (write-char char out))))))
+
+(defun openai-oauth-success-page ()
+  "Return the minimal success HTML shown in the browser after login."
+  "<!doctype html><html><head><meta charset=\"utf-8\"><title>Codex Login Complete</title></head><body><h1>Login complete</h1><p>You can return to clawmacs.</p></body></html>")
+
+(defun openai-oauth-error-page (message)
+  "Return a minimal HTML error page for OAuth failures."
+  (format nil "<!doctype html><html><head><meta charset=\"utf-8\"><title>Codex Login Failed</title></head><body><h1>Login failed</h1><pre>~A</pre></body></html>"
+          (html-escape message)))
+
+(defun openai-oauth-send-http-response (stream status reason body)
+  "Write a small HTTP response with BODY to STREAM."
+  (format stream "HTTP/1.1 ~D ~A~C~C" status reason #\Return #\Linefeed)
+  (format stream "Content-Type: text/html; charset=utf-8~C~C" #\Return #\Linefeed)
+  (format stream "Content-Length: ~D~C~C" (length body) #\Return #\Linefeed)
+  (format stream "Connection: close~C~C~C~C" #\Return #\Linefeed #\Return #\Linefeed)
+  (write-string body stream)
+  (finish-output stream))
+
+(defun openai-oauth-flow-set-result (flow &key success cancelled error token)
+  "Record FLOW's completion state under its lock."
+  (bt:with-lock-held ((openai-oauth-flow-lock flow))
+    (when (openai-oauth-flow-done-p flow)
+      (return-from openai-oauth-flow-set-result flow))
+    (setf (openai-oauth-flow-done-p flow) t
+          (openai-oauth-flow-success-p flow) success
+          (openai-oauth-flow-cancelled-p flow) cancelled
+          (openai-oauth-flow-error flow) error
+          (openai-oauth-flow-token flow) token))
+  flow)
+
+(defun openai-oauth-flow-snapshot (flow)
+  "Return a plist snapshot of FLOW for safe polling from the UI."
+  (bt:with-lock-held ((openai-oauth-flow-lock flow))
+    (list :done-p (openai-oauth-flow-done-p flow)
+          :success-p (openai-oauth-flow-success-p flow)
+          :cancelled-p (openai-oauth-flow-cancelled-p flow)
+          :error (openai-oauth-flow-error flow)
+          :token (openai-oauth-flow-token flow)
+          :auth-url (openai-oauth-flow-auth-url flow)
+          :redirect-uri (openai-oauth-flow-redirect-uri flow)
+          :port (openai-oauth-flow-port flow))))
+
+(defun maybe-open-url-in-browser (url)
+  "Best-effort browser opener for URL. Returns non-nil when a command launched."
+  (or (let ((browser (uiop:getenv "BROWSER")))
+        (when (and browser (plusp (length browser)))
+          (ignore-errors
+            (uiop:launch-program (list browser url)
+                                 :input nil :output nil :error-output nil
+                                 :ignore-error-status t))))
+      (ignore-errors
+        (uiop:launch-program (list "xdg-open" url)
+                             :input nil :output nil :error-output nil
+                             :ignore-error-status t))
+      (ignore-errors
+        (uiop:launch-program (list "open" url)
+                             :input nil :output nil :error-output nil
+                             :ignore-error-status t))))
+
+(defun bind-openai-oauth-listener (&optional (preferred-port *openai-oauth-default-port*))
+  "Bind a localhost TCP listener, preferring PREFERRED-PORT and falling back to an ephemeral port."
+  #+sbcl
+  (labels ((try-bind (port)
+             (let ((listener (make-instance 'sb-bsd-sockets:inet-socket
+                                            :type :stream
+                                            :protocol :tcp)))
+               (setf (sb-bsd-sockets:sockopt-reuse-address listener) t)
+               (handler-case
+                   (progn
+                     (sb-bsd-sockets:socket-bind listener #(127 0 0 1) port)
+                     (sb-bsd-sockets:socket-listen listener 5)
+                     (multiple-value-bind (address actual-port)
+                         (sb-bsd-sockets:socket-name listener)
+                       (declare (ignore address))
+                       (values listener actual-port)))
+                 (error (e)
+                   (ignore-errors (sb-bsd-sockets:socket-close listener))
+                   (error e))))))
+    (handler-case
+        (try-bind preferred-port)
+      (error ()
+        (try-bind 0))))
+  #-sbcl
+  (error "Local OpenAI Codex OAuth login currently requires SBCL"))
+
+(defun openai-oauth-read-request-target (stream)
+  "Read a single HTTP request from STREAM and return its method and target."
+  (let ((request-line (read-line stream nil nil)))
+    (when request-line
+      (loop :for line := (read-line stream nil nil)
+            :for trimmed := (and line (string-trim '(#\Return) line))
+            :while (and trimmed (plusp (length trimmed))))
+      (let ((parts (split-string-by-char request-line #\Space)))
+        (values (first parts) (second parts))))))
+
+(defun openai-oauth-request-path (target)
+  "Return TARGET's path portion without its query string."
+  (let ((query-pos (position #\? target)))
+    (subseq target 0 (or query-pos (length target)))))
+
+(defun run-openai-oauth-server (flow)
+  "Serve one localhost OAuth callback request for FLOW."
+  #+sbcl
+  (handler-case
+      (let ((listener (openai-oauth-flow-listener flow)))
+        (loop
+          (multiple-value-bind (client-socket peer-address)
+              (sb-bsd-sockets:socket-accept listener)
+            (declare (ignore peer-address))
+            (unwind-protect
+                 (let ((stream (sb-bsd-sockets:socket-make-stream
+                                client-socket
+                                :input t
+                                :output t
+                                :element-type 'character
+                                :external-format :utf-8
+                                :buffering :line)))
+                   (unwind-protect
+                        (multiple-value-bind (method target)
+                            (openai-oauth-read-request-target stream)
+                          (cond
+                            ((or (null method) (null target))
+                             (openai-oauth-send-http-response
+                              stream 400 "Bad Request"
+                              (openai-oauth-error-page "Malformed callback request"))
+                             (openai-oauth-flow-set-result flow :error "Malformed callback request")
+                             (return))
+                            ((not (string= method "GET"))
+                             (openai-oauth-send-http-response
+                              stream 405 "Method Not Allowed"
+                              (openai-oauth-error-page "Only GET callbacks are supported"))
+                             (return))
+                            ((not (string= (openai-oauth-request-path target)
+                                           *openai-oauth-callback-path*))
+                             (openai-oauth-send-http-response
+                              stream 404 "Not Found"
+                              (openai-oauth-error-page "Unknown callback path"))
+                             (return))
+                            (t
+                             (handler-case
+                                 (let* ((callback-url
+                                          (format nil "~A~A"
+                                                  (openai-oauth-flow-redirect-uri flow)
+                                                  (let ((query-pos (position #\? target)))
+                                                    (if query-pos
+                                                        (subseq target query-pos)
+                                                        ""))))
+                                        (token
+                                          (openai-codex-oauth-finish
+                                           callback-url
+                                           (openai-oauth-flow-code-verifier flow)
+                                           (openai-oauth-flow-state flow)
+                                           :redirect-uri
+                                           (openai-oauth-flow-redirect-uri flow))))
+                                   (openai-oauth-flow-set-result flow
+                                                                 :success t
+                                                                 :token token)
+                                   (openai-oauth-send-http-response
+                                    stream 200 "OK" (openai-oauth-success-page))
+                                   (return))
+                               (error (e)
+                                 (openai-oauth-flow-set-result
+                                  flow :error (format nil "~A" e))
+                                 (openai-oauth-send-http-response
+                                  stream 400 "Bad Request"
+                                  (openai-oauth-error-page (format nil "~A" e)))
+                                 (return))))))
+                     (ignore-errors
+                       (close stream))))
+              (ignore-errors
+                (sb-bsd-sockets:socket-close client-socket))))))
+    (error (e)
+      (unless (openai-oauth-flow-cancelled-p flow)
+        (openai-oauth-flow-set-result flow :error (format nil "~A" e)))))
+  #-sbcl
+  (declare (ignore flow)))
+
+(defun start-openai-codex-oauth-login (&key buffer (open-browser-p t))
+  "Start the localhost OpenAI Codex OAuth PKCE flow and return the flow object."
+  (multiple-value-bind (listener actual-port)
+      (bind-openai-oauth-listener)
+    (let* ((redirect-uri (openai-oauth-redirect-uri actual-port))
+           (auth-url nil)
+           (code-verifier nil)
+           (state nil))
+      (multiple-value-setq (auth-url code-verifier state)
+        (openai-codex-oauth-start :redirect-uri redirect-uri))
+      (let ((flow (make-openai-oauth-flow :buffer buffer
+                                          :auth-url auth-url
+                                          :redirect-uri redirect-uri
+                                          :port actual-port
+                                          :code-verifier code-verifier
+                                          :state state
+                                          :listener listener)))
+        (setf (openai-oauth-flow-thread flow)
+              (bt:make-thread
+               (lambda ()
+                 (unwind-protect
+                      (run-openai-oauth-server flow)
+                   (ignore-errors
+                     #+sbcl
+                     (sb-bsd-sockets:socket-close (openai-oauth-flow-listener flow)))))
+               :name "clawmacs-openai-oauth"))
+        (when open-browser-p
+          (maybe-open-url-in-browser auth-url))
+        flow))))
+
+(defun cancel-openai-codex-oauth-login (flow)
+  "Cancel FLOW and shut down its listener."
+  (openai-oauth-flow-set-result flow :cancelled t)
+  (ignore-errors
+    #+sbcl
+    (sb-bsd-sockets:socket-close (openai-oauth-flow-listener flow)))
+  flow)
 
 (defparameter *provider-fallback-models*
   '((:anthropic . *anthropic-model*)
@@ -713,6 +1446,7 @@ respected."
      "claude-3-haiku-20240307")
     (:openai-codex
      "codex-mini-latest"
+     "gpt-5.3-codex"
      "o4-mini"
      "gpt-4.1-mini"
      "gpt-4.1-nano")
@@ -784,8 +1518,13 @@ nil to force a refresh. Returns the static fallback list on any error."
 (defun provider-has-token-p (provider)
   "Return non-nil when PROVIDER has a usable API key or OAuth token configured."
   (handler-case
-      (let ((token (read-provider-token provider)))
-        (and token (stringp token) (plusp (length token))))
+      (if (eq provider :openai-codex)
+          (let ((auth (resolve-openai-codex-auth)))
+            (and auth
+                 (stringp (getf auth :token))
+                 (plusp (length (getf auth :token)))))
+          (let ((token (read-provider-token provider)))
+            (and token (stringp token) (plusp (length token)))))
     (error () nil)))
 
 (defun available-models-for-selector (buf)
@@ -974,11 +1713,29 @@ and should not be sent to the API."
       body
       (flexi-streams:octets-to-string body :external-format :utf-8)))
 
+(defun utf8-character-input-stream (stream)
+  "Return STREAM as a UTF-8 character input stream."
+  (if (nth-value 0 (subtypep (stream-element-type stream) 'character))
+      stream
+      (flexi-streams:make-flexi-stream stream :external-format :utf-8)))
+
+(defun read-stream-as-utf8-string (stream)
+  "Read STREAM fully as UTF-8 text and return the resulting string."
+  (let ((text-stream (utf8-character-input-stream stream)))
+    (unwind-protect
+         (let ((s (make-string-output-stream)))
+           (loop :for c := (read-char text-stream nil nil)
+                 :while c :do (write-char c s))
+           (get-output-stream-string s))
+      (when (not (eq text-stream stream))
+        (ignore-errors (close text-stream))))))
+
 (defun openai-finish-reason->stop-reason (finish-reason)
   "Normalize OpenAI FINISH-REASON to clawmacs stop reasons."
   (cond
     ((null finish-reason) nil)
     ((string= finish-reason "tool_calls") "tool_use")
+    ((string= finish-reason "length") "max_tokens")
     ((string= finish-reason "stop") "end_turn")
     (t finish-reason)))
 
@@ -1087,6 +1844,205 @@ reasoning_content is present, falls back to reasoning_content."
                 (:content . ,system-prompt))
               openai-messages)
         openai-messages)))
+
+(defun canonical-text-content-item (role text)
+  "Return a Responses API content item for ROLE/TEXT."
+  `((:type . ,(if (string= role "assistant")
+                  "output_text"
+                  "input_text"))
+    (:text . ,text)))
+
+(defun tool-result-output-string (content)
+  "Normalize tool result CONTENT to a string for function_call_output."
+  (cond
+    ((null content) "")
+    ((stringp content) content)
+    (t (api-json-encode content))))
+
+(defun content-blocks->responses-input-items (role content-blocks)
+  "Convert canonical ROLE/CONTENT-BLOCKS into Responses API input items."
+  (let ((text (content-text-blocks content-blocks))
+        (tool-uses (content-tool-use-blocks content-blocks))
+        (tool-results (remove-if-not (lambda (block)
+                                       (string= "tool_result"
+                                                (content-block-type block)))
+                                     content-blocks)))
+    (append
+     (when (not (blank-string-p text))
+       (list `((:type . "message")
+               (:role . ,role)
+               (:content . ,(vector (canonical-text-content-item role text))))))
+     (when (string= role "assistant")
+       (loop :for tool-use :in tool-uses
+             :collect `((:type . "function_call")
+                        (:call--id . ,(cdr (assoc :id tool-use)))
+                        (:name . ,(cdr (assoc :name tool-use)))
+                        (:arguments . ,(api-json-encode
+                                        (or (cdr (assoc :input tool-use))
+                                            '()))))))
+     (when (string= role "user")
+       (loop :for block :in tool-results
+             :collect `((:type . "function_call_output")
+                        (:call--id . ,(or (cdr (assoc :tool--use--id block))
+                                          (cdr (assoc :tool-use-id block))))
+                        (:output . ,(tool-result-output-string
+                                     (cdr (assoc :content block))))))))))
+
+(defun conversation-messages->responses-input (messages)
+  "Translate canonical conversation MESSAGES into Responses API input items."
+  (loop :for message :in messages
+        :append
+        (multiple-value-bind (role content-blocks)
+            (message-role-content-blocks message)
+          (content-blocks->responses-input-items role content-blocks))))
+
+(defun anthropic-tools->responses-tools (tools)
+  "Translate Anthropic-style TOOLS to OpenAI Responses function tools."
+  (when (and tools (plusp (length tools)))
+    (coerce
+     (loop :for tool :across tools
+           :collect `((:type . "function")
+                      (:name . ,(cdr (assoc :name tool)))
+                      (:description . ,(cdr (assoc :description tool)))
+                      (:parameters . ,(cdr (assoc :input--schema tool)))))
+     'vector)))
+
+(defun responses-output-item-text (item)
+  "Extract displayable assistant text from a Responses ITEM."
+  (let ((content (cdr (assoc :content item))))
+    (when content
+      (let ((text
+              (with-output-to-string (out)
+                (dolist (part (coerce content 'list))
+                  (let ((part-type (cdr (assoc :type part)))
+                        (part-text (cdr (assoc :text part))))
+                    (when (and part-text
+                               (member part-type
+                                       '("output_text" "text" "input_text")
+                                       :test #'string=))
+                      (write-string part-text out)))))))
+        (unless (blank-string-p text)
+          text)))))
+
+(defun responses-function-call->canonical-block (item)
+  "Convert a Responses API function_call ITEM to a canonical tool_use block."
+  (let ((arguments (cdr (assoc :arguments item))))
+    (canonical-tool-use-block
+     (cdr (assoc :call--id item))
+     (cdr (assoc :name item))
+     (when (and arguments (not (blank-string-p arguments)))
+       (handler-case
+           (api-json-decode arguments)
+         (error ()
+           nil))))))
+
+(defun responses-item->canonical-blocks (item)
+  "Convert one Responses API output ITEM into canonical content blocks."
+  (let ((item-type (cdr (assoc :type item))))
+    (cond
+      ((and (string= item-type "message")
+            (string= (cdr (assoc :role item)) "assistant"))
+       (let ((text (responses-output-item-text item)))
+         (when text
+           (list (canonical-text-block text)))))
+      ((string= item-type "function_call")
+       (list (responses-function-call->canonical-block item)))
+      (t
+       nil))))
+
+(defun responses-api-response->canonical-response (response)
+  "Normalize an OpenAI Responses API RESPONSE to the canonical clawmacs shape."
+  (let ((content-blocks nil)
+        (saw-tool-use nil))
+    (dolist (item (coerce (or (cdr (assoc :output response)) #()) 'list))
+      (dolist (block (responses-item->canonical-blocks item))
+        (when (string= (cdr (assoc :type block)) "tool_use")
+          (setf saw-tool-use t))
+        (push block content-blocks)))
+    (let ((fallback-text (cdr (assoc :output--text response))))
+      (when (and (null content-blocks)
+                 (stringp fallback-text)
+                 (plusp (length fallback-text)))
+        (push (canonical-text-block fallback-text) content-blocks)))
+    (canonical-response (if saw-tool-use "tool_use" "end_turn")
+                        (nreverse content-blocks))))
+
+(defun openai-codex-responses-request-body (messages model max-tokens tools &key stream)
+  "Build the request body for an OpenAI Responses API call."
+  (declare (ignore max-tokens))
+  (let* ((system-prompt (or (build-system-prompt) ""))
+         (input-items (conversation-messages->responses-input messages))
+         (response-tools (or (anthropic-tools->responses-tools tools) #())))
+    (api-json-encode
+     `((:model . ,model)
+       (:instructions . ,system-prompt)
+       (:input . ,(coerce input-items 'vector))
+       (:tools . ,response-tools)
+       (:tool--choice . "auto")
+       (:parallel--tool--calls . t)
+       (:store . ,+json-false+)
+       (:stream . ,(if stream t +json-false+))
+       (:include . #())))))
+
+(defun openai-codex-request-headers (auth &key stream)
+  "Build request headers for AUTH, optionally enabling streaming."
+  (let ((headers `(("Authorization" . ,(format nil "Bearer ~A" (getf auth :token)))
+                   ("originator" . ,*openai-oauth-originator*))))
+    (when (getf auth :account-id)
+      (push `("ChatGPT-Account-ID" . ,(getf auth :account-id)) headers))
+    (when stream
+      (push '("Accept" . "text/event-stream") headers))
+    headers))
+
+(defun openai-codex-responses-endpoint (auth)
+  "Return AUTH's full Responses API endpoint URL."
+  (format nil "~A/responses"
+          (string-right-trim "/" (getf auth :base-url))))
+
+(defun refresh-openai-codex-auth-descriptor ()
+  "Force-refresh the shared ChatGPT OAuth auth descriptor and resolve it again."
+  (let ((updated (refresh-openai-codex-auth-json)))
+    (and updated
+         (openai-codex-auth-descriptor-from-auth-json updated))))
+
+(defun openai-codex-http-request (auth request-body &key stream (allow-refresh t))
+  "Perform one OpenAI Codex HTTP request, refreshing ChatGPT auth once on 401."
+  (multiple-value-bind (body status-code headers)
+      (drakma:http-request
+       (openai-codex-responses-endpoint auth)
+       :method :post
+       :content-type "application/json"
+       :additional-headers (openai-codex-request-headers auth :stream stream)
+       :external-format-in :utf-8
+       :content request-body
+       :want-stream stream
+       :force-binary t)
+    (declare (ignore headers))
+    (if (and (= status-code 401)
+             allow-refresh
+             (getf auth :refreshable-p))
+        (let ((refreshed (refresh-openai-codex-auth-descriptor)))
+          (if refreshed
+              (openai-codex-http-request refreshed request-body
+                                         :stream stream
+                                         :allow-refresh nil)
+              (values body status-code nil auth)))
+        (values body status-code nil auth))))
+
+(defun stream-state-text-block-cell (state)
+  "Return the cons cell holding STATE's text block, or NIL."
+  (loop :for cell :on (stream-state-content-blocks state)
+        :when (let ((block (car cell)))
+                (and block
+                     (string= "text" (cdr (assoc :type block)))))
+          :return cell))
+
+(defun set-stream-state-text-block (state text)
+  "Set or create STATE's canonical text block to TEXT."
+  (let ((cell (stream-state-text-block-cell state)))
+    (if cell
+        (setf (car cell) (canonical-text-block text))
+        (push (canonical-text-block text) (stream-state-content-blocks state)))))
 
 (defun provider-request (provider messages &key model (max-tokens *default-max-tokens*) tools)
   "Dispatch a non-streaming request by resolved PROVIDER.
@@ -1542,36 +2498,20 @@ MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
 (defun openai-codex-request (messages &key (model *openai-codex-model*)
                                            (max-tokens *default-max-tokens*)
                                            tools)
-  "Call OpenAI Chat Completions and normalize the response shape."
-  (let* ((token (or (read-provider-token :openai-codex)
-                    (error 'simple-error
-                           :format-control "No API token. Save to ~/.config/clawmacs/openai-codex-token")))
-         (request-body
-            (let ((body `((:model . ,model)
-                          (:max--completion--tokens . ,max-tokens)
-                         (:messages . ,(coerce (openai-messages-with-system-prompt messages)
-                                               'vector)))))
-              (when (and tools (plusp (length tools)))
-                (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
-              (api-json-encode body))))
-    (multiple-value-bind (body status-code)
-        (drakma:http-request
-         *openai-codex-api-url*
-         :method :post
-         :content-type "application/json"
-         :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token)))
-         :content request-body
-         :want-stream nil
-         :force-binary nil)
+  "Call the OpenAI Responses API for Codex and normalize the response shape."
+  (let* ((auth (or (resolve-openai-codex-auth)
+                   (error 'simple-error
+                          :format-control "No OpenAI Codex auth. Save a bearer token to ~/.config/clawmacs/openai-codex-token or sign in via ~/.codex/auth.json")))
+         (request-body (openai-codex-responses-request-body
+                        messages model max-tokens tools)))
+    (multiple-value-bind (body status-code ignored effective-auth)
+        (openai-codex-http-request auth request-body)
+      (declare (ignore ignored effective-auth))
       (let ((body-string (http-body-string body)))
         (unless (= status-code 200)
           (error "API error (~A): ~A" status-code body-string))
-        (let* ((response (api-json-decode body-string))
-               (choices (cdr (assoc :choices response)))
-               (choice (first (coerce choices 'list))))
-          (unless choice
-            (error "OpenAI response did not include a choice"))
-          (openai-choice->canonical-response choice))))))
+        (responses-api-response->canonical-response
+         (api-json-decode body-string))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Streaming API Call
@@ -1897,49 +2837,113 @@ Returns the final stream-state when complete."
   (bt:with-lock-held ((stream-state-lock state))
     (setf (stream-state-done-p state) t)))
 
+(defun responses-stream-tool-use-present-p (state)
+  "Return non-nil when STATE already contains a tool_use block."
+  (some (lambda (block)
+          (string= "tool_use" (cdr (assoc :type block))))
+        (stream-state-content-blocks state)))
+
+(defun process-openai-codex-responses-sse-event (data state)
+  "Process one Responses API SSE DATA payload into STATE."
+  (let* ((event (api-json-decode data))
+         (event-type (cdr (assoc :type event))))
+    (cond
+      ((string= event-type "response.output_text.delta")
+       (let ((delta (cdr (assoc :delta event))))
+         (when delta
+           (bt:with-lock-held ((stream-state-lock state))
+             (setf (stream-state-text state)
+                   (concatenate 'string (stream-state-text state) delta))
+             (set-stream-state-text-block state (stream-state-text state))))))
+      ((string= event-type "response.output_item.done")
+       (let ((item (cdr (assoc :item event))))
+         (when item
+           (let ((item-type (cdr (assoc :type item))))
+             (bt:with-lock-held ((stream-state-lock state))
+               (cond
+                 ((and (string= item-type "message")
+                       (string= (cdr (assoc :role item)) "assistant"))
+                  (let ((text (responses-output-item-text item)))
+                    (when text
+                      (setf (stream-state-text state) text)
+                      (set-stream-state-text-block state text))))
+                 ((string= item-type "function_call")
+                  (push (responses-function-call->canonical-block item)
+                        (stream-state-content-blocks state))
+                  (setf (stream-state-stop-reason state) "tool_use"))))))))
+      ((string= event-type "response.completed")
+       (bt:with-lock-held ((stream-state-lock state))
+         (unless (stream-state-stop-reason state)
+           (setf (stream-state-stop-reason state)
+                 (if (responses-stream-tool-use-present-p state)
+                     "tool_use"
+                     "end_turn")))
+         (setf (stream-state-done-p state) t)))
+      ((or (string= event-type "response.failed")
+           (string= event-type "error"))
+       (let ((message (or (cdr (assoc :message event))
+                          (cdr (assoc :error event))
+                          "Unknown Responses API error")))
+         (bt:with-lock-held ((stream-state-lock state))
+           (setf (stream-state-error-p state) message
+                 (stream-state-done-p state) t)))))))
+
+(defun read-openai-codex-responses-sse-stream (stream state)
+  "Read Responses API SSE events from STREAM into STATE."
+  (handler-case
+      (loop :with data-buffer := nil
+            :for line := (read-line stream nil nil)
+            :while line
+            :do (let ((trimmed (string-trim '(#\Return) line)))
+                  (cond
+                    ((zerop (length trimmed))
+                     (when data-buffer
+                       (process-openai-codex-responses-sse-event
+                        (format nil "~{~A~}" (nreverse data-buffer))
+                        state)
+                       (setf data-buffer nil)))
+                    (t
+                     (multiple-value-bind (field value) (parse-sse-line trimmed)
+                       (when (and field (string= "data" field))
+                         (push value data-buffer)))))))
+    (error (e)
+      (bt:with-lock-held ((stream-state-lock state))
+        (setf (stream-state-error-p state) (format nil "~A" e)
+              (stream-state-done-p state) t))))
+  (bt:with-lock-held ((stream-state-lock state))
+    (setf (stream-state-done-p state) t)))
+
 (defun openai-codex-request-streaming (messages callback
                                        &key (model *openai-codex-model*)
                                             (max-tokens *default-max-tokens*)
                                             tools)
-  "Call OpenAI Chat Completions with SSE streaming enabled."
+  "Call the OpenAI Responses API with SSE streaming enabled."
   (declare (ignore callback))
-  (let* ((token (or (read-provider-token :openai-codex)
-                    (error 'simple-error
-                           :format-control "No API token. Save to ~/.config/clawmacs/openai-codex-token")))
+  (let* ((auth (or (resolve-openai-codex-auth)
+                   (error 'simple-error
+                          :format-control "No OpenAI Codex auth. Save a bearer token to ~/.config/clawmacs/openai-codex-token or sign in via ~/.codex/auth.json")))
          (request-body
-            (let ((body `((:model . ,model)
-                          (:max--completion--tokens . ,max-tokens)
-                          (:stream . t)
-                         (:messages . ,(coerce (openai-messages-with-system-prompt messages)
-                                               'vector)))))
-              (when (and tools (plusp (length tools)))
-                (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
-              (api-json-encode body)))
+           (openai-codex-responses-request-body
+            messages model max-tokens tools :stream t))
          (state (make-stream-state)))
-    (multiple-value-bind (body-stream status-code headers)
-        (drakma:http-request
-         *openai-codex-api-url*
-         :method :post
-         :content-type "application/json"
-         :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token)))
-         :content request-body
-         :want-stream t)
-      (declare (ignore headers))
+    (multiple-value-bind (body-stream status-code ignored effective-auth)
+        (openai-codex-http-request auth request-body :stream t)
+      (declare (ignore ignored effective-auth))
       (unless (= status-code 200)
         (let ((err (if (streamp body-stream)
-                       (let ((s (make-string-output-stream)))
-                         (loop :for c := (read-char body-stream nil nil)
-                               :while c :do (write-char c s))
-                         (get-output-stream-string s))
+                       (unwind-protect
+                            (read-stream-as-utf8-string body-stream)
+                         (ignore-errors (close body-stream)))
                        (format nil "~A" body-stream))))
           (error "API error (~A): ~A" status-code err)))
+      (let ((sse-stream (utf8-character-input-stream body-stream)))
       (bt:make-thread
        (lambda ()
          (unwind-protect
-              (read-openai-sse-stream body-stream state)
-           (close body-stream)))
-       :name "clawmacs-openai-sse-reader")
-      state)))
+              (read-openai-codex-responses-sse-stream sse-stream state)
+           (close sse-stream)))
+       :name "clawmacs-openai-codex-responses")
+      state))))
 
 ;;; --------------------------------------------------------------------------
 ;;; OpenRouter API — OpenAI-compatible

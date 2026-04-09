@@ -82,6 +82,18 @@
     ;; 21 lines, terminal height 30, max = 10
     (is (= 10 (clawmacs::calculate-input-height buf 30 80)))))
 
+(test ensure-croatoan-locale-calls-setlocale
+  "Croatoan backend initializes libc locale before starting ncurses."
+  (let ((captured-category nil)
+        (captured-locale nil))
+    (with-function-override (ncurses:setlocale (category locale)
+                              (setf captured-category category
+                                    captured-locale locale)
+                              "C.UTF-8")
+      (is (string= "C.UTF-8" (clawmacs::ensure-croatoan-locale))))
+    (is (= ncurses:+lc-all+ captured-category))
+    (is (string= "" captured-locale))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Line Wrapping Tests
 ;;; --------------------------------------------------------------------------

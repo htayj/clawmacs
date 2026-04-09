@@ -313,7 +313,7 @@ Mode dispatch priority matches handle-key-event in main.lisp."
          (setf row1 " C-n/C-p: next/prev  RET: cycle value  C-c C-c: save"
                row2 " C-g: cancel  Navigate fields with C-n/C-p"))
         (*openai-oauth-pending*
-         (setf row1 " Paste callback URL, then press RET"
+         (setf row1 " Browser login in progress"
                row2 " C-g: cancel"))
         (*deny-message-mode*
          (setf row1 " Type denial reason, then RET to send"

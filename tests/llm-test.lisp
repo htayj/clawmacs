@@ -42,6 +42,18 @@
          (clawmacs::*agent-defaults-registry* nil))
      ,@body))
 
+(defun temp-codex-auth-path ()
+  (let ((base (make-pathname :directory (list :absolute "tmp"
+                                              (format nil "clawmacs-codex-auth-~A"
+                                                      (gensym))))))
+    (ensure-directories-exist (merge-pathnames #P".keep" base))
+    (merge-pathnames "auth.json" base)))
+
+(defmacro with-codex-auth-path-override ((path) &body body)
+  `(let ((clawmacs::*codex-auth-path* ,path)
+         (clawmacs::*openai-codex-oauth-path* ,path))
+     ,@body))
+
 (defun write-agent-defaults-file (path json)
   (ensure-directories-exist path)
   (with-open-file (stream path
@@ -59,6 +71,35 @@
                     ,@implementation))
             ,@body)
        (setf (symbol-function ',name) original-function))))
+
+(defun write-codex-auth-json (path payload)
+  (ensure-directories-exist path)
+  (with-open-file (stream path
+                          :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create)
+    (write-string (clawmacs::api-json-encode payload) stream)))
+
+(defun make-codex-chatgpt-auth-payload (&key
+                                          (access-token "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig")
+                                          (refresh-token "chatgpt-refresh")
+                                          (account-id "acct_123")
+                                          (id-token "id-token-placeholder")
+                                          openai-api-key
+                                          (last-refresh "2026-04-08T12:00:00Z"))
+  `((:auth--mode . "chatgpt")
+    (:openai--api--key . ,openai-api-key)
+    (:tokens . ((:id--token . ,id-token)
+                (:access--token . ,access-token)
+                (:refresh--token . ,refresh-token)
+                (:account--id . ,account-id)))
+    (:last--refresh . ,last-refresh)))
+
+(defun make-codex-api-key-auth-payload (&key
+                                          (api-key "sk-test-api-key")
+                                          (last-refresh "2026-04-08T12:00:00Z"))
+  `((:openai--api--key . ,api-key)
+    (:last--refresh . ,last-refresh)))
 
 (test provider-token-paths
   "Provider token paths are provider-specific."
@@ -354,14 +395,15 @@
         (is (string= "gpt-5.3-codex" model))))))
 
 (test resolve-buffer-provider-and-model-unknown-agent-falls-back
-  "Unknown agents fall back to the Anthropic built-in default."
+  "Unknown agents fall back to the current built-in provider/model defaults."
   (let ((path (temp-agent-defaults-path))
         (buf (make-buffer "test" :agent-name "unknown-agent")))
     (with-agent-defaults-path-override (path)
       (multiple-value-bind (provider model)
           (clawmacs::resolve-buffer-provider-and-model buf)
-        (is (eq :anthropic provider))
-        (is (string= "claude-haiku-4-5-20251001" model))))))
+        (is (eq clawmacs::*default-provider* provider))
+        (is (string= (clawmacs::provider-fallback-model clawmacs::*default-provider*)
+                     model))))))
 
 (test resolve-buffer-provider-and-model-openai-codex-fallback-model
   "OpenAI Codex resolves to its built-in fallback model."
@@ -407,7 +449,8 @@
          (is (null initial-registry))
          (is (eq :openai-codex (clawmacs::agent-default "spark")))
          (is (not (null clawmacs::*agent-defaults-registry*)))
-         (is (eq :anthropic (clawmacs::agent-default "missing-agent")))))))
+         (is (eq clawmacs::*default-provider*
+                 (clawmacs::agent-default "missing-agent")))))))
 
 (test set-agent-default-persists-across-reload
   "set-agent-default persists provider and model across a registry reload."
@@ -611,15 +654,19 @@
                    (clawmacs::response-content response)))))))
 
 (test openai-codex-request-normalizes-response-shape
-  "OpenAI Codex adapter returns canonical stop reason and content blocks."
-  (with-function-override (drakma:http-request (&rest args)
-                            (declare (ignore args))
-                            (values
-                             "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"content\":\"hi from codex\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/codex.txt\\\"}\"}}]}}]}"
-                             200))
-    (with-function-override (clawmacs::read-provider-token (provider)
-                              (declare (ignore provider))
-                              "openai-token")
+  "OpenAI Codex non-streaming normalizes Responses output items."
+  (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                            (declare (ignore refresh-if-needed))
+                            '(:source :token-override
+                              :mode :api-key
+                              :token "openai-token"
+                              :base-url "https://api.openai.com/v1"
+                              :refreshable-p nil))
+    (with-function-override (drakma:http-request (&rest args)
+                              (declare (ignore args))
+                              (values
+                               "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi from codex\"}]},{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/codex.txt\\\"}\"}]}"
+                               200))
       (let ((response (clawmacs::openai-codex-request '() :model "gpt-5.3-codex")))
         (is (string= "tool_use" (clawmacs::response-stop-reason response)))
         (is (equal '(((:type . "text")
@@ -628,33 +675,92 @@
                       (:id . "call_1")
                       (:name . "read_file")
                       (:input . ((:path . "/tmp/codex.txt")))))
-                    (clawmacs::response-content response)))))))
+                   (clawmacs::response-content response)))))))
 
-(test openai-codex-request-includes-system-prompt-message
-  "OpenAI Codex non-streaming requests prepend the built system prompt."
+(test openai-codex-request-uses-responses-api-and-chatgpt-headers
+  "OpenAI Codex requests target /responses and use instructions + ChatGPT headers."
   (let* ((captured-request-body nil)
+         (captured-url nil)
+         (captured-headers nil)
          (messages (list (list (cons :role "user")
                                (cons :content
                                      (list (list (cons :type "text")
                                                  (cons :text "hello")))))))
-         (expected-system (list (cons :role "system")
-                                (cons :content "boot prompt")))
-         (expected-user (list (cons :role "user")
-                              (cons :content "hello"))))
+         (auth '(:source :codex-chatgpt
+                 :mode :chatgpt
+                 :token "chatgpt-token"
+                 :base-url "https://chatgpt.com/backend-api/codex"
+                 :account-id "acct_123"
+                 :refreshable-p t)))
     (with-function-override (drakma:http-request (&rest args)
-                              (setf captured-request-body (getf (rest args) :content))
-                              (values "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"ok\"}}]}"
+                              (setf captured-url (first args)
+                                    captured-request-body (getf (rest args) :content)
+                                    captured-headers (getf (rest args) :additional-headers))
+                              (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
                                       200))
-      (with-function-override (clawmacs::read-provider-token (provider)
-                                (declare (ignore provider))
-                                "openai-token")
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                auth)
         (with-function-override (clawmacs::build-system-prompt ()
                                   "boot prompt")
           (clawmacs::openai-codex-request messages :model "gpt-5.3-codex"))))
     (let* ((body (clawmacs::api-json-decode captured-request-body))
-           (sent-messages (coerce (cdr (assoc :messages body)) 'list)))
-      (is (equal expected-system (first sent-messages)))
-      (is (equal expected-user (second sent-messages))))))
+           (input-items (coerce (cdr (assoc :input body)) 'list))
+           (message-item (first input-items))
+           (content-item (first (coerce (cdr (assoc :content message-item)) 'list))))
+      (is (string= "https://chatgpt.com/backend-api/codex/responses" captured-url))
+      (is (string= "Bearer chatgpt-token"
+                   (cdr (assoc "Authorization" captured-headers :test #'string=))))
+      (is (string= "acct_123"
+                   (cdr (assoc "ChatGPT-Account-ID" captured-headers :test #'string=))))
+      (is (search "\"store\":false" captured-request-body))
+      (is (search "\"stream\":false" captured-request-body))
+      (is (not (search "max_output_tokens" captured-request-body)))
+      (is (string= "boot prompt" (cdr (assoc :instructions body))))
+      (is (not (assoc :messages body)))
+      (is (string= "message" (cdr (assoc :type message-item))))
+      (is (string= "user" (cdr (assoc :role message-item))))
+      (is (string= "input_text" (cdr (assoc :type content-item))))
+      (is (string= "hello" (cdr (assoc :text content-item)))))))
+
+(test openai-codex-request-retries-on-401-after-refresh
+  "OpenAI Codex retries once after a 401 when ChatGPT auth is refreshable."
+  (let ((captured-authz nil)
+        (calls 0)
+        (refresh-called-p nil))
+    (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                              (declare (ignore refresh-if-needed))
+                              '(:source :codex-chatgpt
+                                :mode :chatgpt
+                                :token "expired-token"
+                                :base-url "https://chatgpt.com/backend-api/codex"
+                                :account-id "acct_123"
+                                :refreshable-p t))
+      (with-function-override (clawmacs::refresh-openai-codex-auth-descriptor ()
+                                (setf refresh-called-p t)
+                                '(:source :codex-chatgpt
+                                  :mode :chatgpt
+                                  :token "fresh-token"
+                                  :base-url "https://chatgpt.com/backend-api/codex"
+                                  :account-id "acct_123"
+                                  :refreshable-p t))
+        (with-function-override (drakma:http-request (url &rest args)
+                                  (declare (ignore url))
+                                  (push (cdr (assoc "Authorization"
+                                                    (getf args :additional-headers)
+                                                    :test #'string=))
+                                        captured-authz)
+                                  (incf calls)
+                                  (if (= calls 1)
+                                      (values "unauthorized" 401)
+                                      (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
+                                              200)))
+          (let ((response (clawmacs::openai-codex-request '() :model "gpt-5.3-codex")))
+            (is (string= "end_turn" (clawmacs::response-stop-reason response)))
+            (is-true refresh-called-p)
+            (is (= 2 calls))
+            (is (equal '("Bearer expired-token" "Bearer fresh-token")
+                       (nreverse captured-authz)))))))))
 
 (test anthropic-streaming-normalizes-response-shape
   "Anthropic streaming adapter accumulates canonical content blocks."
@@ -690,29 +796,33 @@
                        (reverse (clawmacs::stream-state-content-blocks state))))))))))
 
 (test openai-codex-streaming-normalizes-response-shape
-  "OpenAI Codex streaming adapter accumulates canonical content blocks."
-  (let ((payloads '("data: {\"choices\":[{\"delta\":{\"content\":\"hi from \"}}]}"
+  "OpenAI Codex streaming adapter accumulates Responses output deltas."
+  (let ((captured-force-binary nil)
+        (payloads '("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi from \"}"
                     ""
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"codex\"}}]}"
+                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"codex\"}"
                     ""
-                    "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}"
-                    ""
-                    "data: [DONE]"
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}"
                     "")))
     (with-function-override (drakma:http-request (&rest args)
-                              (declare (ignore args))
+                              (setf captured-force-binary (getf (rest args) :force-binary))
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::read-provider-token (provider)
-                                (declare (ignore provider))
-                                "openai-token")
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                '(:source :token-override
+                                  :mode :api-key
+                                  :token "openai-token"
+                                  :base-url "https://api.openai.com/v1"
+                                  :refreshable-p nil))
         (let ((state (clawmacs::openai-codex-request-streaming '() (lambda (state) (declare (ignore state)))
                                                               :model "gpt-5.3-codex")))
           (loop repeat 100
                 until (bt:with-lock-held ((clawmacs::stream-state-lock state))
                         (clawmacs::stream-state-done-p state))
                 do (sleep 0.01))
+          (is-true captured-force-binary)
           (is (string= "end_turn"
                        (bt:with-lock-held ((clawmacs::stream-state-lock state))
                          (clawmacs::stream-state-stop-reason state))))
@@ -721,29 +831,31 @@
                      (bt:with-lock-held ((clawmacs::stream-state-lock state))
                        (reverse (clawmacs::stream-state-content-blocks state))))))))))
 
-(test openai-codex-streaming-includes-system-prompt-message
-  "OpenAI Codex streaming requests prepend the built system prompt."
+(test openai-codex-streaming-uses-responses-instructions
+  "OpenAI Codex streaming requests send instructions + input, not chat messages."
   (let* ((captured-request-body nil)
+         (captured-external-format-in nil)
+         (captured-force-binary nil)
          (messages (list (list (cons :role "user")
                                (cons :content
                                      (list (list (cons :type "text")
                                                  (cons :text "hello")))))))
-         (expected-system (list (cons :role "system")
-                                (cons :content "boot prompt")))
-         (expected-user (list (cons :role "user")
-                              (cons :content "hello")))
-         (payloads '("data: {\"choices\":[{\"finish_reason\":\"stop\"}]}"
-                     ""
-                     "data: [DONE]"
+         (payloads '("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}"
                      "")))
     (with-function-override (drakma:http-request (&rest args)
-                              (setf captured-request-body (getf (rest args) :content))
+                              (setf captured-request-body (getf (rest args) :content)
+                                    captured-external-format-in (getf (rest args) :external-format-in)
+                                    captured-force-binary (getf (rest args) :force-binary))
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::read-provider-token (provider)
-                                (declare (ignore provider))
-                                "openai-token")
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                '(:source :token-override
+                                  :mode :api-key
+                                  :token "openai-token"
+                                  :base-url "https://api.openai.com/v1"
+                                  :refreshable-p nil))
         (with-function-override (clawmacs::build-system-prompt ()
                                   "boot prompt")
           (let ((state (clawmacs::openai-codex-request-streaming
@@ -755,26 +867,74 @@
                           (clawmacs::stream-state-done-p state))
                   do (sleep 0.01)))))
     (let* ((body (clawmacs::api-json-decode captured-request-body))
-           (sent-messages (coerce (cdr (assoc :messages body)) 'list)))
-      (is (equal expected-system (first sent-messages)))
-      (is (equal expected-user (second sent-messages)))))))
+           (input-items (coerce (cdr (assoc :input body)) 'list))
+           (message-item (first input-items))
+           (content-item (first (coerce (cdr (assoc :content message-item)) 'list))))
+      (is (eq :utf-8 captured-external-format-in))
+      (is-true captured-force-binary)
+      (is (search "\"store\":false" captured-request-body))
+      (is (search "\"stream\":true" captured-request-body))
+      (is (not (search "max_output_tokens" captured-request-body)))
+      (is (string= "boot prompt" (cdr (assoc :instructions body))))
+      (is (string= "message" (cdr (assoc :type message-item))))
+      (is (string= "input_text" (cdr (assoc :type content-item))))
+      (is (string= "hello" (cdr (assoc :text content-item)))))))
+
+(test openai-codex-streaming-decodes-utf8-punctuation-from-octets
+  "OpenAI Codex streaming decodes UTF-8 punctuation correctly from octet streams."
+  (let* ((captured-force-binary nil)
+         (expected "Test received — I’m here.")
+         (payload (format nil
+                          "data: {\"type\":\"response.output_text.delta\",\"delta\":\"~A\"}~%~%data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}~%~%"
+                          expected))
+         (octets (flexi-streams:string-to-octets payload :external-format :utf-8)))
+    (with-function-override (drakma:http-request (&rest args)
+                              (setf captured-force-binary (getf (rest args) :force-binary))
+                              (values (flexi-streams:make-in-memory-input-stream octets)
+                                      200
+                                      nil))
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                '(:source :token-override
+                                  :mode :api-key
+                                  :token "openai-token"
+                                  :base-url "https://api.openai.com/v1"
+                                  :refreshable-p nil))
+        (let ((state (clawmacs::openai-codex-request-streaming '() (lambda (state) (declare (ignore state)))
+                                                              :model "gpt-5.3-codex")))
+          (loop repeat 100
+                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                        (clawmacs::stream-state-done-p state))
+                do (sleep 0.01))
+          (is-true captured-force-binary)
+          (is (string= "end_turn"
+                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                         (clawmacs::stream-state-stop-reason state))))
+          (is (equal `(((:type . "text")
+                        (:text . ,expected)))
+                     (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                       (reverse (clawmacs::stream-state-content-blocks state))))))))))
 
 (test openai-codex-streaming-supports-multiple-tool-calls
-  "OpenAI Codex streaming keeps two streamed tool calls separate and canonical."
-  (let ((payloads '("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/one.txt\\\"}\"}},{\"index\":1,\"id\":\"call_2\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/two.txt\\\",\\\"content\\\":\\\"hello\\\"}\"}}]}}]}"
+  "OpenAI Codex streaming keeps two Responses function calls separate and canonical."
+  (let ((payloads '("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/one.txt\\\"}\"}}"
                     ""
-                    "data: {\"choices\":[{\"finish_reason\":\"tool_calls\"}]}"
+                    "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_2\",\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/two.txt\\\",\\\"content\\\":\\\"hello\\\"}\"}}"
                     ""
-                    "data: [DONE]"
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}"
                     "")))
     (with-function-override (drakma:http-request (&rest args)
                               (declare (ignore args))
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::read-provider-token (provider)
-                                (declare (ignore provider))
-                                "openai-token")
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                '(:source :token-override
+                                  :mode :api-key
+                                  :token "openai-token"
+                                  :base-url "https://api.openai.com/v1"
+                                  :refreshable-p nil))
         (let ((state (clawmacs::openai-codex-request-streaming '() (lambda (state) (declare (ignore state)))
                                                               :model "gpt-5.3-codex")))
           (loop repeat 100
@@ -813,10 +973,12 @@
     (is (not (string= v1 v2)))))
 
 (test generate-oauth-state-length
-  "OAuth state is 32 alphanumeric characters."
+  "OAuth state is a base64url token."
   (let ((state (clawmacs::generate-oauth-state)))
-    (is (= 32 (length state)))
-    (is (every #'alphanumericp state))))
+    (is (> (length state) 30))
+    (is (not (find #\+ state)))
+    (is (not (find #\/ state)))
+    (is (not (find #\= state)))))
 
 (test compute-code-challenge-is-base64url
   "Code challenge is base64url encoded (no +, /, or = characters)."
@@ -849,7 +1011,7 @@
   "Callback URL parameters are correctly extracted."
   (multiple-value-bind (code state)
       (clawmacs::extract-oauth-callback-params
-       "http://localhost:1455/callback?code=abc123&state=xyz789")
+       "http://localhost:1455/auth/callback?code=abc123&state=xyz789")
     (is (string= "abc123" code))
     (is (string= "xyz789" state))))
 
@@ -857,7 +1019,7 @@
   "Callback URL with only code (no state) still works."
   (multiple-value-bind (code state)
       (clawmacs::extract-oauth-callback-params
-       "http://localhost:1455/callback?code=onlycode")
+       "http://localhost:1455/auth/callback?code=onlycode")
     (is (string= "onlycode" code))
     (is (null state))))
 
@@ -865,13 +1027,13 @@
   "Callback URL without query parameters signals an error."
   (signals error
     (clawmacs::extract-oauth-callback-params
-     "http://localhost:1455/callback")))
+     "http://localhost:1455/auth/callback")))
 
 (test extract-oauth-callback-params-rejects-missing-code
   "Callback URL without a code parameter signals an error."
   (signals error
     (clawmacs::extract-oauth-callback-params
-     "http://localhost:1455/callback?state=xyz789")))
+     "http://localhost:1455/auth/callback?state=xyz789")))
 
 (test openai-codex-oauth-start-returns-valid-url
   "oauth-start returns an authorization URL with all required PKCE parameters."
@@ -880,90 +1042,173 @@
     (is (search "https://auth.openai.com/oauth/authorize?" url))
     (is (search "client_id=app_EMoamEEZ73f0CkXaXp7hrann" url))
     (is (search "response_type=code" url))
+    (is (search "redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback" url))
+    (is (search "scope=openid%20profile%20email%20offline_access%20api.connectors.read%20api.connectors.invoke" url))
     (is (search "code_challenge_method=S256" url))
     (is (search "code_challenge=" url))
+    (is (search "id_token_add_organizations=true" url))
+    (is (search "codex_cli_simplified_flow=true" url))
+    (is (search "originator=codex_cli_rs" url))
+    (is (search "api.connectors.read" url))
     (is (= 43 (length verifier)))
-    (is (= 32 (length state)))
     (is (search (format nil "state=~A" state) url))))
 
-(defun temp-oauth-path ()
-  (let ((base (make-pathname :directory (list :absolute "tmp"
-                                              (format nil "clawmacs-oauth-~A"
-                                                      (gensym))))))
-    (ensure-directories-exist (merge-pathnames #P".keep" base))
-    (merge-pathnames "openai-codex-oauth.json" base)))
-
 (test save-and-read-openai-codex-oauth-tokens-round-trip
-  "OAuth tokens round-trip through save and read."
-  (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path)))
-    (clawmacs::save-openai-codex-oauth-tokens "access-tok" "refresh-tok" 3600)
-    (let ((creds (clawmacs::read-openai-codex-oauth-tokens)))
-      (is (string= "access-tok" (getf creds :access-token)))
-      (is (string= "refresh-tok" (getf creds :refresh-token)))
-      (is (numberp (getf creds :expires-at)))
-      (is (> (getf creds :expires-at) (get-universal-time))))))
+  "OpenAI Codex auth.json round-trips through the compatibility helpers."
+  (let ((path (temp-codex-auth-path)))
+    (with-codex-auth-path-override (path)
+      (clawmacs::save-openai-codex-oauth-tokens
+       "access-tok" "refresh-tok" nil
+       :id-token "id-tok"
+       :account-id "acct_123"
+       :openai-api-key "sk-api"
+       :auth-mode :chatgpt)
+      (let ((creds (clawmacs::read-openai-codex-oauth-tokens)))
+        (is (eq :chatgpt (getf creds :auth-mode)))
+        (is (string= "access-tok" (getf creds :access-token)))
+        (is (string= "refresh-tok" (getf creds :refresh-token)))
+        (is (string= "acct_123" (getf creds :account-id)))
+        (is (string= "sk-api" (getf creds :openai-api-key)))))))
 
 (test read-openai-codex-oauth-tokens-returns-nil-when-missing
   "Reading from a nonexistent path returns nil."
-  (let ((clawmacs::*openai-codex-oauth-path*
-          #P"/tmp/nonexistent-clawmacs-oauth/oauth.json"))
+  (with-codex-auth-path-override (#P"/tmp/nonexistent-clawmacs-oauth/auth.json")
     (is (null (clawmacs::read-openai-codex-oauth-tokens)))))
 
 (test read-openai-codex-oauth-token-returns-valid-token
-  "read-openai-codex-oauth-token returns access token when not expired."
-  (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path)))
-    (clawmacs::save-openai-codex-oauth-tokens "fresh-token" "refresh-tok" 7200)
-    (is (string= "fresh-token"
-                 (clawmacs::read-openai-codex-oauth-token)))))
+  "read-openai-codex-oauth-token returns the ChatGPT access token from auth.json."
+  (let ((path (temp-codex-auth-path)))
+    (with-codex-auth-path-override (path)
+      (write-codex-auth-json path
+                             (make-codex-chatgpt-auth-payload
+                              :access-token "fresh-token"
+                              :refresh-token "refresh-tok"))
+      (with-function-override (clawmacs::openai-codex-chatgpt-auth-stale-p (auth-json)
+                                (declare (ignore auth-json))
+                                nil)
+        (is (string= "fresh-token"
+                     (clawmacs::read-openai-codex-oauth-token)))))))
 
 (test read-openai-codex-oauth-token-refreshes-when-expired
-  "read-openai-codex-oauth-token auto-refreshes an expired token."
-  (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path))
+  "read-openai-codex-oauth-token refreshes stale ChatGPT auth via auth.json."
+  (let ((path (temp-codex-auth-path))
         (refresh-called-p nil))
-    ;; Save an expired token (expires_at in the past)
-    (let* ((expired-at (- (get-universal-time) 100))
-           (data `((:access--token . "old-token")
-                   (:refresh--token . "good-refresh")
-                   (:expires--at . ,expired-at))))
-      (ensure-directories-exist clawmacs::*openai-codex-oauth-path*)
-      (with-open-file (s clawmacs::*openai-codex-oauth-path*
-                         :direction :output
-                         :if-exists :supersede
-                         :if-does-not-exist :create)
-        (write-string (clawmacs::api-json-encode data) s)))
-    ;; Override refresh to return a new token
-    (with-function-override (clawmacs::refresh-openai-codex-oauth-token (refresh-token)
-                              (setf refresh-called-p t)
-                              (is (string= "good-refresh" refresh-token))
-                              "refreshed-token")
-      (is (string= "refreshed-token"
-                   (clawmacs::read-openai-codex-oauth-token)))
-      (is-true refresh-called-p))))
+    (with-codex-auth-path-override (path)
+      (write-codex-auth-json path
+                             (make-codex-chatgpt-auth-payload
+                              :access-token "old-token"
+                              :refresh-token "good-refresh"))
+      (with-function-override (clawmacs::openai-codex-chatgpt-auth-stale-p (auth-json)
+                                (declare (ignore auth-json))
+                                t)
+        (with-function-override (clawmacs::refresh-openai-codex-auth-json (&optional auth-json)
+                                  (declare (ignore auth-json))
+                                  (setf refresh-called-p t)
+                                  (make-codex-chatgpt-auth-payload
+                                   :access-token "refreshed-token"
+                                   :refresh-token "good-refresh"))
+          (is (string= "refreshed-token"
+                       (clawmacs::read-openai-codex-oauth-token)))
+          (is-true refresh-called-p))))))
 
-(test read-provider-token-prefers-oauth-for-openai-codex
-  "read-provider-token checks OAuth credentials first for :OPENAI-CODEX."
-  (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path))
+(test read-provider-token-prefers-static-override-for-openai-codex
+  "OpenAI Codex uses the clawmacs token file before shared auth.json."
+  (let ((path (temp-codex-auth-path))
         (anthropic-path (temp-test-token-path :anthropic))
         (openai-codex-path (temp-test-token-path :openai-codex)))
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
-      ;; Save a static token file
+    (with-codex-auth-path-override (path)
+      (write-codex-auth-json path
+                             (make-codex-chatgpt-auth-payload
+                              :access-token "oauth-token"))
+      (with-provider-token-path-overrides (anthropic-path openai-codex-path)
       (clawmacs::save-provider-token :openai-codex "static-token")
-      ;; Save an OAuth token
-      (clawmacs::save-openai-codex-oauth-tokens "oauth-token" "refresh" 3600)
-      ;; OAuth token wins
-      (is (string= "oauth-token"
-                   (clawmacs::read-provider-token :openai-codex))))))
+        (is (string= "static-token"
+                     (clawmacs::read-provider-token :openai-codex)))))))
 
-(test read-provider-token-falls-back-to-file-for-openai-codex
-  "read-provider-token falls back to token file when no OAuth credentials exist."
-  (let ((clawmacs::*openai-codex-oauth-path*
-          #P"/tmp/nonexistent-clawmacs-oauth/oauth.json")
+(test read-provider-token-ignores-url-like-openai-codex-override
+  "A URL-like OpenAI Codex override token is ignored in favor of shared auth.json."
+  (let ((path (temp-codex-auth-path))
         (anthropic-path (temp-test-token-path :anthropic))
         (openai-codex-path (temp-test-token-path :openai-codex)))
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
-      (clawmacs::save-provider-token :openai-codex "fallback-token")
-      (is (string= "fallback-token"
-                   (clawmacs::read-provider-token :openai-codex))))))
+    (with-codex-auth-path-override (path)
+      (write-codex-auth-json path
+                             (make-codex-chatgpt-auth-payload
+                              :access-token "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig"
+                              :account-id "acct_456"))
+      (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+        (clawmacs::save-provider-token
+         :openai-codex
+         "http://localhost:1455/auth/callback?code=abc&state=xyz")
+        (is (string= "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig"
+                     (clawmacs::read-provider-token :openai-codex)))))))
+
+(test read-provider-token-falls-back-to-codex-auth-json-for-openai-codex
+  "OpenAI Codex falls back to shared auth.json when no override token exists."
+  (let ((path (temp-codex-auth-path))
+        (anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex)))
+    (with-codex-auth-path-override (path)
+      (write-codex-auth-json path
+                             (make-codex-chatgpt-auth-payload
+                              :access-token "oauth-token"))
+      (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+        (is (string= "oauth-token"
+                     (clawmacs::read-provider-token :openai-codex)))))))
+
+(test resolve-openai-codex-auth-api-key-mode-uses-openai-base-url
+  "API-key auth.json resolves to the OpenAI base URL."
+  (let ((path (temp-codex-auth-path)))
+    (with-codex-auth-path-override (path)
+      (write-codex-auth-json path
+                             (make-codex-api-key-auth-payload
+                              :api-key "sk-api"))
+      (let ((auth (clawmacs::resolve-openai-codex-auth)))
+        (is (eq :api-key (getf auth :mode)))
+        (is (string= "sk-api" (getf auth :token)))
+        (is (string= "https://api.openai.com/v1" (getf auth :base-url)))))))
+
+(test resolve-openai-codex-auth-chatgpt-mode-uses-chatgpt-base-url
+  "ChatGPT auth.json resolves to the ChatGPT Codex backend and preserves account id."
+  (let ((path (temp-codex-auth-path)))
+    (with-codex-auth-path-override (path)
+      (write-codex-auth-json path
+                             (make-codex-chatgpt-auth-payload
+                              :access-token "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig"
+                              :refresh-token "chatgpt-refresh"
+                              :account-id "acct_456"))
+      (with-function-override (clawmacs::openai-codex-chatgpt-auth-stale-p (auth-json)
+                                (declare (ignore auth-json))
+                                nil)
+        (let ((auth (clawmacs::resolve-openai-codex-auth)))
+          (is (eq :chatgpt (getf auth :mode)))
+          (is (eq :codex-chatgpt (getf auth :source)))
+          (is (string= "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig"
+                       (getf auth :token)))
+          (is (string= "acct_456" (getf auth :account-id)))
+          (is (string= "https://chatgpt.com/backend-api/codex"
+                       (getf auth :base-url)))))))))
+
+(test resolve-openai-codex-auth-chatgpt-missing-account-id-errors
+  "ChatGPT auth requires an account id in the shared auth store."
+  (let ((path (temp-codex-auth-path)))
+    (with-codex-auth-path-override (path)
+      (write-codex-auth-json path
+                             (make-codex-chatgpt-auth-payload
+                              :account-id nil))
+      (signals error
+        (clawmacs::resolve-openai-codex-auth)))))
+
+(test provider-has-token-p-openai-codex-accepts-codex-auth-json
+  "provider-has-token-p treats shared Codex auth.json as valid OpenAI Codex auth."
+  (let ((path (temp-codex-auth-path))
+        (anthropic-path (temp-test-token-path :anthropic))
+        (openai-codex-path (temp-test-token-path :openai-codex)))
+    (with-codex-auth-path-override (path)
+      (write-codex-auth-json path
+                             (make-codex-api-key-auth-payload
+                              :api-key "sk-selector"))
+      (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+        (is-true (clawmacs::provider-has-token-p :openai-codex))))))
 
 (test exchange-openai-oauth-code-makes-correct-request
   "Token exchange sends the correct form parameters to the token endpoint."
@@ -972,45 +1217,59 @@
     (with-function-override (drakma:http-request (url &rest args)
                               (setf captured-url url
                                     captured-content (getf args :content))
-                              (values "{\"access_token\":\"new-access\",\"refresh_token\":\"new-refresh\",\"expires_in\":3600}"
+                              (values "{\"id_token\":\"id-token\",\"access_token\":\"new-access\",\"refresh_token\":\"new-refresh\"}"
                                       200))
       (let ((tokens (clawmacs::exchange-openai-oauth-code "auth-code-123" "verifier-xyz")))
         (is (string= "https://auth.openai.com/oauth/token" captured-url))
         (is (search "grant_type=authorization_code" captured-content))
         (is (search "code=auth-code-123" captured-content))
         (is (search "code_verifier=verifier-xyz" captured-content))
+        (is (string= "id-token" (getf tokens :id-token)))
         (is (string= "new-access" (getf tokens :access-token)))
-        (is (string= "new-refresh" (getf tokens :refresh-token)))
-        (is (= 3600 (getf tokens :expires-in)))))))
+        (is (string= "new-refresh" (getf tokens :refresh-token)))))))
 
 (test openai-codex-oauth-finish-validates-state
   "oauth-finish rejects mismatched state parameters."
-  (with-function-override (clawmacs::exchange-openai-oauth-code (code verifier)
-                            (declare (ignore code verifier))
-                            (list :access-token "tok" :refresh-token "ref" :expires-in 3600))
-    (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path)))
+  (with-function-override (clawmacs::exchange-openai-oauth-code (code verifier &key redirect-uri)
+                            (declare (ignore code verifier redirect-uri))
+                            (list :id-token "id-token"
+                                  :access-token "tok"
+                                  :refresh-token "ref"
+                                  :account-id "acct_123"))
+    (let ((path (temp-codex-auth-path)))
+      (with-codex-auth-path-override (path)
       (signals error
         (clawmacs::openai-codex-oauth-finish
-         "http://localhost:1455/callback?code=abc&state=wrong"
+         "http://localhost:1455/auth/callback?code=abc&state=wrong"
          "verifier"
-         "expected-state")))))
+         "expected-state"))))))
 
 (test openai-codex-oauth-finish-succeeds-with-matching-state
-  "oauth-finish completes and saves tokens when state matches."
-  (with-function-override (clawmacs::exchange-openai-oauth-code (code verifier)
+  "oauth-finish completes and persists a Codex-compatible auth.json payload."
+  (with-function-override (clawmacs::exchange-openai-oauth-code (code verifier &key redirect-uri)
                             (is (string= "auth-code" code))
                             (is (string= "my-verifier" verifier))
-                            (list :access-token "final-token" :refresh-token "final-refresh" :expires-in 7200))
-    (let ((clawmacs::*openai-codex-oauth-path* (temp-oauth-path)))
-      (let ((result (clawmacs::openai-codex-oauth-finish
-                     "http://localhost:1455/callback?code=auth-code&state=good-state"
-                     "my-verifier"
-                     "good-state")))
-        (is (string= "final-token" result))
-        ;; Verify it was persisted
-        (let ((saved (clawmacs::read-openai-codex-oauth-tokens)))
-          (is (string= "final-token" (getf saved :access-token)))
-          (is (string= "final-refresh" (getf saved :refresh-token))))))))
+                            (is (string= (clawmacs::openai-oauth-redirect-uri) redirect-uri))
+                            (list :id-token "id-token"
+                                  :access-token "final-token"
+                                  :refresh-token "final-refresh"
+                                  :account-id "acct_789"))
+    (with-function-override (clawmacs::obtain-openai-codex-api-key (id-token)
+                              (is (string= "id-token" id-token))
+                              "sk-exchanged")
+      (let ((path (temp-codex-auth-path)))
+        (with-codex-auth-path-override (path)
+          (let ((result (clawmacs::openai-codex-oauth-finish
+                         "http://localhost:1455/auth/callback?code=auth-code&state=good-state"
+                         "my-verifier"
+                         "good-state")))
+            (is (string= "final-token" result))
+            (let ((saved (clawmacs::read-openai-codex-oauth-tokens)))
+              (is (eq :chatgpt (getf saved :auth-mode)))
+              (is (string= "final-token" (getf saved :access-token)))
+              (is (string= "final-refresh" (getf saved :refresh-token)))
+              (is (string= "acct_789" (getf saved :account-id)))
+              (is (string= "sk-exchanged" (getf saved :openai-api-key))))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Z.AI (Zhipu AI) Provider Tests
@@ -1394,7 +1653,8 @@
   (let ((models (clawmacs::provider-known-models :openai-codex)))
     (is (listp models))
     (is (plusp (length models)))
-    (is (member "codex-mini-latest" models :test #'string=))))
+    (is (member "codex-mini-latest" models :test #'string=))
+    (is (member "gpt-5.3-codex" models :test #'string=))))
 
 (test provider-known-models-zai
   "Known Z.AI models list is non-empty and contains the default."
@@ -1439,7 +1699,7 @@
       (let ((buf (make-buffer "test" :agent-name "claude")))
         ;; Mock: both anthropic and zai have tokens
         (with-function-override (clawmacs::provider-has-token-p (provider)
-                                  (member provider '(:anthropic :zai)))
+                                  (not (null (member provider '(:anthropic :zai)))))
           (let ((entries (clawmacs::available-models-for-selector buf)))
             ;; Should have entries from both providers
             (is (plusp (length entries)))
@@ -1466,10 +1726,11 @@
 
 (test claude-cli-model-p-recognizes-cli-models
   "claude-cli-model-p returns non-nil for models in *claude-cli-models*."
-  (is (clawmacs::claude-cli-model-p "claude-sonnet-4-6"))
-  (is (clawmacs::claude-cli-model-p "claude-opus-4-6"))
-  (is (clawmacs::claude-cli-model-p "claude-sonnet-4-5"))
-  (is (clawmacs::claude-cli-model-p "claude-opus-4-5-20251101")))
+  (let ((clawmacs::*claude-cli-path* "claude"))
+    (is (clawmacs::claude-cli-model-p "claude-sonnet-4-6"))
+    (is (clawmacs::claude-cli-model-p "claude-opus-4-6"))
+    (is (clawmacs::claude-cli-model-p "claude-sonnet-4-5"))
+    (is (clawmacs::claude-cli-model-p "claude-opus-4-5-20251101"))))
 
 (test claude-cli-model-p-rejects-rest-models
   "claude-cli-model-p returns nil for models NOT in *claude-cli-models*."
@@ -1507,7 +1768,8 @@
 
 (test provider-request-routes-cli-models
   "provider-request routes CLI models to claude-cli-request."
-  (let ((routed-to nil))
+  (let ((routed-to nil)
+        (clawmacs::*claude-cli-path* "claude"))
     (with-function-override (clawmacs::claude-cli-request
                              (messages &key model max-tokens tools)
                              (declare (ignore messages max-tokens tools))
@@ -1533,7 +1795,8 @@
 
 (test provider-request-streaming-routes-cli-models
   "provider-request-streaming routes CLI models to claude-cli-request-streaming."
-  (let ((routed-to nil))
+  (let ((routed-to nil)
+        (clawmacs::*claude-cli-path* "claude"))
     (with-function-override (clawmacs::claude-cli-request-streaming
                              (messages callback &key model max-tokens tools)
                              (declare (ignore messages callback max-tokens tools))

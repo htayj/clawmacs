@@ -22,10 +22,19 @@ Clawmacs supports multiple LLM providers, switchable per buffer:
 
 - *Anthropic* --- Claude models (Haiku, Sonnet, Opus) via REST API or Claude CLI subprocess
 - *Z.AI* (Zhipu AI) --- GLM models
-- *OpenAI Codex* --- with OAuth 2.0 flow
+- *OpenAI Codex* --- with shared Codex OAuth/API-key auth and the Responses API
 - *OpenRouter* --- access to hundreds of models with dynamic model discovery
 
 Switch models on the fly with =C-c C-m= (fuzzy minibuffer selector) or =C-c M= (overlay selector).
+
+** OpenAI Codex Auth
+
+OpenAI Codex auth follows Codex's own credential layout:
+
+- =~/.config/clawmacs/openai-codex-token= is the highest-precedence raw bearer override.
+- Otherwise clawmacs reads and refreshes shared Codex credentials from =~/.codex/auth.json=.
+- The browser login flow uses a localhost callback at =http://localhost:1455/auth/callback= and falls back to another local port if 1455 is busy.
+- ChatGPT-backed Codex auth uses =https://chatgpt.com/backend-api/codex=, while API-key auth uses =https://api.openai.com/v1=.
 
 ** Agent Tools
 
