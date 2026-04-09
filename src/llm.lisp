@@ -31,7 +31,7 @@ is configured. Should be a valid model name for *default-provider*.")
 (defvar *anthropic-beta* "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14"
   "Beta features header for Claude Code OAuth authentication and extended thinking.")
 
-(defvar *openai-codex-model* "codex-mini-latest"
+(defvar *openai-codex-model* "gpt-5.3-codex"
   "The OpenAI Codex model to use for chat completions.")
 
 (defvar *openai-codex-api-base-url* "https://api.openai.com/v1"
@@ -1445,11 +1445,12 @@ respected."
      "claude-3-5-haiku-20241022"
      "claude-3-haiku-20240307")
     (:openai-codex
-     "codex-mini-latest"
      "gpt-5.3-codex"
-     "o4-mini"
-     "gpt-4.1-mini"
-     "gpt-4.1-nano")
+     "gpt-5.4"
+     "gpt-5.2-codex"
+     "gpt-5.1-codex-max"
+     "gpt-5.1-codex-mini"
+     "gpt-5.2")
     (:zai
      "glm-5"
      "glm-5-turbo"

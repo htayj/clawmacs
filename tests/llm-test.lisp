@@ -379,7 +379,7 @@
       (multiple-value-bind (provider model)
           (clawmacs::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
-        (is (string= "codex-mini-latest" model))))))
+        (is (string= "gpt-5.3-codex" model))))))
 
 (test resolve-buffer-provider-and-model-agent-default-model
   "Persisted agent default models are used when no buffer model override exists."
@@ -416,7 +416,7 @@
       (multiple-value-bind (provider model)
           (clawmacs::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
-        (is (string= "codex-mini-latest" model))))))
+        (is (string= "gpt-5.3-codex" model))))))
 
 (test resolve-buffer-provider-and-model-rejects-blank-persisted-model
   "Blank persisted default models are rejected when they become the resolved model."
@@ -1653,8 +1653,14 @@
   (let ((models (clawmacs::provider-known-models :openai-codex)))
     (is (listp models))
     (is (plusp (length models)))
-    (is (member "codex-mini-latest" models :test #'string=))
-    (is (member "gpt-5.3-codex" models :test #'string=))))
+    (is (member "gpt-5.3-codex" models :test #'string=))
+    (is (member "gpt-5.4" models :test #'string=))
+    (is (member "gpt-5.2-codex" models :test #'string=))
+    (is (member "gpt-5.1-codex-max" models :test #'string=))
+    (is (member "gpt-5.1-codex-mini" models :test #'string=))
+    (is (member "gpt-5.2" models :test #'string=))
+    (is (member clawmacs::*openai-codex-model* models :test #'string=))
+    (is (= 6 (length models)))))
 
 (test provider-known-models-zai
   "Known Z.AI models list is non-empty and contains the default."
