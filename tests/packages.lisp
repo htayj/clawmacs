@@ -22,6 +22,10 @@
   :description "Command system tests"
   :in clawmacs-suite)
 
+(def-suite package-manager-suite
+  :description "Package loader tests"
+  :in clawmacs-suite)
+
 (def-suite llm-suite
   :description "LLM helper tests"
   :in clawmacs-suite)

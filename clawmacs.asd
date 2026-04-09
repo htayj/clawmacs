@@ -6,6 +6,7 @@
   :components ((:module "src"
                 :serial t
                 :components ((:file "packages")
+                             (:file "package-manager")
                              (:file "faces")
                              (:file "message")
                              (:file "buffer")
@@ -32,6 +33,7 @@
   :components ((:module "tests"
                 :serial t
                  :components ((:file "packages")
+                              (:file "package-manager-test")
                               (:file "faces-test")
                               (:file "message-test")
                               (:file "buffer-test")

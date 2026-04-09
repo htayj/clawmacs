@@ -2241,6 +2241,22 @@ documentation in *extended-docs*."
   :see-also (openai-codex-oauth-start openai-codex-oauth-finish *openai-oauth-pending*))
 
 ;;; ==========================================================================
+;;; Category: packages — User-installed package loading
+;;; ==========================================================================
+
+(defdoc *packages-directory*
+  :category "packages"
+  :usage "Pathname — defaults to ~/.clawmacs.d/packages/"
+  :see-also (clawmacs-use-package *user-init-file*))
+
+(defdoc clawmacs-use-package
+  :category "packages"
+  :usage "(clawmacs-use-package :src-type :git :repo \"https://example.com/user/repo.git\")"
+  :returns "Boolean — non-nil on successful install/load, NIL on warning or failure."
+  :side-effects "Creates the package install directory when needed, runs git clone for missing packages, reads manifest.lisp from the package root, and loads the manifest entrypoint."
+  :see-also (*packages-directory* *user-init-file* load-user-init-file))
+
+;;; ==========================================================================
 ;;; Category: init — User init file
 ;;; ==========================================================================
 

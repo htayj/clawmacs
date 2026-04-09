@@ -195,6 +195,24 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
 (setf clawmacs:*ui-backend* (make-instance 'clawmacs:mcclim-backend))
 #+end_src
 
+** Packages
+
+Install and load a package from a git repository in =~/.clawmacs.d/init.lisp=:
+
+#+begin_src lisp
+(clawmacs-use-package :src-type :git
+                      :repo "https://example.com/user/cool-plugin.git")
+#+end_src
+
+Packages are cloned into =~/.clawmacs.d/packages/= and must contain a
+=manifest.lisp= file at the repo root. The manifest is a property list that
+declares the package name and entrypoint file:
+
+#+begin_src lisp
+(:name "cool-plugin"
+ :entrypoint "cool-plugin.lisp")
+#+end_src
+
 * Architecture
 
 #+begin_example

@@ -12,6 +12,7 @@
     "coreutils"
     "findutils"
     "grep"
+    "git"
     "font-dejavu"
     "curl"
     "cl-mcclim"))

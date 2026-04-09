@@ -427,6 +427,10 @@
    #:toggle-debug-mode-command
    #:redraw-screen-command
 
+   ;; Package loader
+   #:*packages-directory*
+   #:clawmacs-use-package
+
    ;; User init
    #:*user-init-directory*
    #:*user-init-file*
