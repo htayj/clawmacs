@@ -407,6 +407,82 @@ If so, call the handler and return T. Otherwise return NIL."
              (remove "!" *prefix-handlers* :key #'car :test #'string=)))
 
 ;;; --------------------------------------------------------------------------
+;;; Interactive Command Dispatch
+;;; --------------------------------------------------------------------------
+
+(defun command-display-name (command)
+  "Return the display name used for COMMAND in the UI."
+  (string-downcase (symbol-name command)))
+
+(defun command-keybinding-hints (command)
+  "Return formatted keybinding strings for COMMAND in the default keymap."
+  (let ((bindings (find-keybindings-for-command command)))
+    (sort (mapcar #'format-key-binding bindings) #'string<)))
+
+(defun make-command-selector-items ()
+  "Build minibuffer items for interactive command selection."
+  (mapcar (lambda (command)
+            (let* ((name (command-display-name command))
+                   (keys (command-keybinding-hints command))
+                   (display (if keys
+                                (format nil "~A  [~{~A~^, ~}]" name keys)
+                                name)))
+              (list :command command
+                    :display display
+                    :match-text name)))
+          (sort (copy-list (list-interactive-commands))
+                #'string<
+                :key #'command-display-name)))
+
+(defun prompt-command-arguments (buffer command specs &optional (collected nil)
+                                                   (initial-input ""))
+  "Prompt for SPECS sequentially in the minibuffer, then invoke COMMAND."
+  (if (endp specs)
+      (apply (symbol-function command) buffer (nreverse collected))
+      (let* ((spec (first specs))
+             (arg-name (getf spec :name))
+             (prompt (getf spec :prompt))
+             (reader (resolve-command-interactive-reader (getf spec :reader))))
+        (minibuffer-prompt
+         prompt
+         (lambda (input)
+           (handler-case
+               (let ((value (funcall reader input)))
+                 (prompt-command-arguments buffer command (rest specs)
+                                           (cons value collected)))
+             (error (e)
+               (buffer-insert-system-message
+                buffer
+                (format nil "[Invalid ~A for ~A: ~A]"
+                        (command-display-name arg-name)
+                        (command-display-name command)
+                        e))
+               (prompt-command-arguments buffer command specs
+                                         collected input))))
+         :initial-input initial-input))))
+
+(defun invoke-command (buffer command)
+  "Invoke COMMAND from the UI, prompting for interactive arguments when needed."
+  (let* ((metadata (gethash command *command-table*))
+         (required-args (and metadata (command-required-arguments command)))
+         (interactive-spec (and metadata
+                                (command-metadata-interactive-spec metadata))))
+    (cond
+      ((null metadata)
+       (error "Unknown command: ~A" command))
+      ((null required-args)
+       (funcall command buffer))
+      ((consp interactive-spec)
+       (prompt-command-arguments buffer command interactive-spec)
+       nil)
+      (t
+       (buffer-insert-system-message
+        buffer
+        (format nil "[Command ~A is not interactive]"
+                (command-display-name command)))
+       nil))))
+
+;;; --------------------------------------------------------------------------
 ;;; Commands
 ;;; --------------------------------------------------------------------------
 
@@ -519,7 +595,7 @@ If so, call the handler and return T. Otherwise return NIL."
     (when arg
       (message-insert-string (buffer-input-message buffer) arg))))
 
-(defcommand self-insert-command (:permission :user-only)
+(defcommand self-insert-command (:permission :user-only :interactive nil)
   "Insert a character at point. The character is passed via *self-insert-char*."
   (buffer)
   (when *self-insert-char*
@@ -868,6 +944,19 @@ to navigate. Shows buffer name, agent, status, and message count."
     (let ((sys-msg (buffer-insert-agent-message
                     buffer (format nil "[Session saved to ~A]" path))))
       (setf (message-sender sys-msg) :system))))
+
+(defcommand execute-extended-command (:permission :user-only
+                                      :keys ((:alt #\x)))
+  "Select and run an interactive command via the minibuffer. Bound to M-x."
+  (buffer)
+  (let ((items (make-command-selector-items)))
+    (if (null items)
+        (buffer-insert-system-message buffer "[No interactive commands available]")
+        (minibuffer-activate
+         "M-x"
+         items
+         (lambda (item)
+           (invoke-command buffer (getf item :command)))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Display Toggle Commands
@@ -1325,7 +1414,7 @@ Sets up the customize state and returns the new buffer."
   "Handle a key event while in customize mode.
 Supports field navigation (C-n/C-p), editing (Return), toggling (Space),
 apply (C-c C-c), cancel (C-c C-k / C-g / q), revert (r), and passes
-through C-x prefix commands for buffer management."
+through global command bindings like C-x and M-x."
   (cond
     ;; C-c C-c: apply changes (C-c prefix then C-c = ETX = ASCII 3)
     ((equal key '(:ctrl-c #\Etx))
@@ -1356,14 +1445,16 @@ through C-x prefix commands for buffer management."
     ;; r: revert to original values
     ((and (characterp key) (char= key #\r))
      (customize-face-revert-to-original))
-    ;; Pass through C-x prefix commands (buffer management, save, etc.)
-    ((and (listp key) (eq (first key) :ctrl-x))
+    ;; Pass through global bindings like C-x commands and M-x.
+    ((and (listp key) (member (first key) '(:ctrl-x :alt)))
      (let ((command (keymap-lookup *default-keymap* key)))
-       (when command (funcall command (current-buffer)))))
+       (when command
+         (invoke-command (current-buffer) command))))
     ;; Scroll keys
     ((or (eq key :page-up) (eq key :page-down))
      (let ((command (keymap-lookup *default-keymap* key)))
-       (when command (funcall command (current-buffer)))))
+       (when command
+         (invoke-command (current-buffer) command))))
     ;; Everything else: ignore
     (t nil)))
 
@@ -1954,7 +2045,8 @@ Used to group keybindings in the describe-bindings listing."
       ((or (search "model" name) (search "select-model" name))
        "Model Selection")
       ((or (search "describe" name) (search "help" name)
-           (search "customize" name))
+           (search "customize" name)
+           (search "execute-extended" name))
        "Help & Introspection")
       ((or (search "debug" name) (search "toggle" name)
            (search "oauth" name))
@@ -2103,6 +2195,9 @@ C-h is the help prefix (e.g. C-h b = describe bindings).")
 
 (defvar *minibuffer-active* nil
   "When non-nil, the minibuffer is active and the cursor is in it.")
+
+(defvar *minibuffer-mode* :completion
+  "The current minibuffer mode: :COMPLETION or :PROMPT.")
 
 (defvar *minibuffer-prompt* ""
   "The prompt string displayed in the minibuffer (e.g. \"Select Model\").")
@@ -2282,23 +2377,40 @@ If ITEM is a string, returns it directly. Otherwise returns the :display plist v
       item
       (or (getf item :display) "")))
 
-(defun minibuffer-activate (prompt items callback)
+(defun minibuffer-item-match-text (item)
+  "Return the text used to fuzzy-match ITEM in the minibuffer."
+  (if (stringp item)
+      item
+      (or (getf item :match-text)
+          (minibuffer-item-display item))))
+
+(defun minibuffer-activate (prompt items callback
+                            &key (mode :completion) (initial-input ""))
   "Activate the minibuffer with PROMPT text, a list of candidate ITEMS,
-and a CALLBACK function to call with the selected item on confirmation."
+and a CALLBACK function to call on confirmation."
   (setf *minibuffer-active* t
+        *minibuffer-mode* mode
         *minibuffer-prompt* prompt
-        *minibuffer-input* ""
-        *minibuffer-point* 0
+        *minibuffer-input* initial-input
+        *minibuffer-point* (length initial-input)
         *minibuffer-items* items
-        *minibuffer-filtered-items* (copy-list items)
-        *minibuffer-match-positions* (make-list (length items) :initial-element nil)
+        *minibuffer-filtered-items* nil
+        *minibuffer-match-positions* nil
         *minibuffer-selected-index* 0
         *minibuffer-scroll-offset* 0
-        *minibuffer-callback* callback))
+        *minibuffer-callback* callback)
+  (minibuffer-update-filter))
+
+(defun minibuffer-prompt (prompt callback &key (initial-input ""))
+  "Activate the minibuffer in prompt mode and submit raw input to CALLBACK."
+  (minibuffer-activate prompt nil callback
+                       :mode :prompt
+                       :initial-input initial-input))
 
 (defun minibuffer-deactivate ()
   "Deactivate the minibuffer, clearing all state."
   (setf *minibuffer-active* nil
+        *minibuffer-mode* :completion
         *minibuffer-prompt* ""
         *minibuffer-input* ""
         *minibuffer-point* 0
@@ -2318,32 +2430,38 @@ top automatically.  Matched character positions are precomputed and stored in
 Clamps *minibuffer-selected-index* to the new filtered list length and
 resets the scroll offset."
   (let ((query *minibuffer-input*))
-    (if (zerop (length query))
-        ;; No query — show all items in their original order, no highlights.
-        (setf *minibuffer-filtered-items* (copy-list *minibuffer-items*)
-              *minibuffer-match-positions* (make-list (length *minibuffer-items*)
-                                                      :initial-element nil))
-        ;; Query present — filter, score, sort, record positions.
-        (let* ((matched (remove-if-not
-                         (lambda (item)
-                           (fuzzy-match-p query (minibuffer-item-display item)))
-                         *minibuffer-items*))
-               ;; Pair each item with its relevance score.
-               (scored (mapcar (lambda (item)
-                                 (cons (or (fuzzy-score query
-                                                        (minibuffer-item-display item))
-                                           0)
-                                       item))
-                               matched))
-               ;; Sort descending by score (stable-sort preserves recency order
-               ;; for items that score equally).
-               (sorted (stable-sort scored #'> :key #'car))
-               (sorted-items (mapcar #'cdr sorted)))
-          (setf *minibuffer-filtered-items* sorted-items
-                *minibuffer-match-positions*
-                (mapcar (lambda (item)
-                          (fuzzy-match-positions query (minibuffer-item-display item)))
-                        sorted-items)))))
+    (cond
+      ((eq *minibuffer-mode* :prompt)
+       (setf *minibuffer-filtered-items* nil
+             *minibuffer-match-positions* nil))
+      ((zerop (length query))
+       ;; No query — show all items in their original order, no highlights.
+       (setf *minibuffer-filtered-items* (copy-list *minibuffer-items*)
+             *minibuffer-match-positions* (make-list (length *minibuffer-items*)
+                                                     :initial-element nil)))
+      (t
+       ;; Query present — filter, score, sort, record positions.
+       (let* ((matched (remove-if-not
+                        (lambda (item)
+                          (fuzzy-match-p query (minibuffer-item-match-text item)))
+                        *minibuffer-items*))
+              ;; Pair each item with its relevance score.
+              (scored (mapcar (lambda (item)
+                                (cons (or (fuzzy-score query
+                                                       (minibuffer-item-match-text item))
+                                          0)
+                                      item))
+                              matched))
+              ;; Sort descending by score (stable-sort preserves original order
+              ;; for items that score equally).
+              (sorted (stable-sort scored #'> :key #'car))
+              (sorted-items (mapcar #'cdr sorted)))
+         (setf *minibuffer-filtered-items* sorted-items
+               *minibuffer-match-positions*
+               (mapcar (lambda (item)
+                         (fuzzy-match-positions query
+                                                (minibuffer-item-match-text item)))
+                       sorted-items))))))
   ;; Clamp selected index to valid range.
   (setf *minibuffer-selected-index*
         (max 0 (min *minibuffer-selected-index*
@@ -2409,10 +2527,17 @@ is within the visible window of candidates."
   "Confirm the current selection, invoke the callback, and deactivate."
   (let ((item (when (plusp (length *minibuffer-filtered-items*))
                 (nth *minibuffer-selected-index* *minibuffer-filtered-items*)))
+        (mode *minibuffer-mode*)
+        (input *minibuffer-input*)
         (cb *minibuffer-callback*))
     (minibuffer-deactivate)
-    (when (and item cb)
-      (funcall cb item))))
+    (when cb
+      (case mode
+        (:prompt
+         (funcall cb input))
+        (t
+         (when item
+           (funcall cb item)))))))
 
 (defun minibuffer-cancel ()
   "Cancel the minibuffer without invoking the callback."
@@ -2718,7 +2843,7 @@ KEY is already normalized by the backend before calling this."
       (*deny-message-mode*
        (cond
          ((and (characterp key) (char= key #\Newline))
-          ;; Submit denial message
+         ;; Submit denial message
           (let ((reason (message-text (buffer-input-message buf))))
             (setf *deny-message-mode* nil)
             (handle-approval-response buf (cons :deny-with-message reason))))
@@ -2726,7 +2851,7 @@ KEY is already normalized by the backend before calling this."
          ((let ((cmd (keymap-lookup (buffer-keymap buf) key)))
             (when cmd
               (unless (eq cmd 'send-message)
-                (funcall cmd buf))
+                (invoke-command buf cmd))
               t)))
          ((and (characterp key) (graphic-char-p key))
           (let ((*self-insert-char* key))
@@ -2750,7 +2875,7 @@ KEY is already normalized by the backend before calling this."
       ;; Keymap lookup
       ((let ((command (keymap-lookup (buffer-keymap buf) key)))
          (when command
-           (let ((result (funcall command buf)))
+           (let ((result (invoke-command buf command)))
              (when (eq result :redraw)
                (return-from handle-key-event :redraw)))
            (when (and (characterp key)
@@ -2857,6 +2982,7 @@ Environment variables:
           *think-selector-entries* nil)
     ;; Initialize minibuffer state
     (setf *minibuffer-active* nil
+          *minibuffer-mode* :completion
           *minibuffer-prompt* ""
           *minibuffer-input* ""
           *minibuffer-point* 0

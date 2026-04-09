@@ -25,7 +25,7 @@ Clawmacs supports multiple LLM providers, switchable per buffer:
 - *OpenAI Codex* --- with shared Codex OAuth/API-key auth and the Responses API
 - *OpenRouter* --- access to hundreds of models with dynamic model discovery
 
-Switch models on the fly with =C-c C-m= (fuzzy minibuffer selector) or =C-c M= (overlay selector).
+Switch models on the fly with =C-c C-m= (fuzzy minibuffer selector) or =C-c M= (overlay selector). Run interactive commands with =M-x=, including minibuffer prompting for command arguments.
 
 ** OpenAI Codex Auth
 
@@ -106,6 +106,7 @@ Three-pane layout: main (chat history + input), modeline (status), minibuffer (p
 
 | Key           | Action                       |
 |---------------+------------------------------|
+| =M-x=          | Execute command              |
 | =C-h b=        | Describe keybindings         |
 | =C-h f=        | Describe function            |
 | =C-h v=        | Describe variable            |
@@ -222,7 +223,7 @@ The rendering layer is split: =render-core.lisp= contains pure geometry and form
 
 Clawmacs is not intended to replace GNU Emacs. It is another of the Emacsen --- built from the same philosophical foundations (extensibility, introspection, Lisp as the extension language) but purpose-built for conversational agent interaction rather than text editing.
 
-Where Emacs operates on files and buffers of text, clawmacs operates on conversations and messages. Where Emacs has =M-x=, clawmacs has an agent that can eval arbitrary Lisp. The feedback loop is the same; the domain is different.
+Where Emacs operates on files and buffers of text, clawmacs operates on conversations and messages. Clawmacs now has both =M-x= for user-facing interactive commands and an agent that can eval arbitrary Lisp. The feedback loop is the same; the domain is different.
 
 * Future Plans
 

@@ -102,6 +102,8 @@
     ;; M-v arrives as ESC then v, normalized to (:alt #\v) by handle-key-event.
     (keymap-bind km '(:alt #\v) 'scroll-up-command)
     (keymap-bind km (code-char 22) 'scroll-down-command)  ; C-v = ASCII 22
+    ;; Execute command
+    (keymap-bind km '(:alt #\x) 'execute-extended-command) ; M-x
     ;; Redraw
     (keymap-bind km (code-char 12) 'redraw-screen-command) ; C-l = ASCII 12
     ;; ----- C-c prefix: buffer-mode-specific commands -----

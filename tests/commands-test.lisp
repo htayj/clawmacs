@@ -14,6 +14,24 @@
       (is (eq :user-only (command-metadata-permission meta)))
       (is (string= "A test command." (command-metadata-docstring meta))))))
 
+(test command-metadata-captures-lambda-list-and-interactive-spec
+  "defcommand stores the command lambda list and interactive arg metadata."
+  (let ((*command-table* (make-hash-table :test #'eq)))
+    (eval '(clawmacs:defcommand interactive-cmd
+               (:permission :user-only
+                :interactive ((count :prompt "Count" :reader parse-integer)
+                              (label :prompt "Label")))
+             "Interactive command."
+             (buffer count label)
+             (declare (ignore buffer count label))
+             :ok))
+    (let ((meta (gethash 'interactive-cmd *command-table*)))
+      (is (equal '(buffer count label)
+                 (command-metadata-lambda-list meta)))
+      (is (equal '((:name count :prompt "Count" :reader parse-integer)
+                   (:name label :prompt "Label" :reader nil))
+                 (command-metadata-interactive-spec meta))))))
+
 (test permission-denied-for-agent-on-user-only
   "An agent calling a :user-only command signals permission-denied."
   (let ((*command-table* (make-hash-table :test #'eq))
@@ -63,3 +81,43 @@
       (let ((cmds (list-available-commands)))
         (is (not (member 'user-cmd cmds)))
         (is (member 'agent-cmd cmds))))))
+
+(test list-interactive-commands-excludes-programmatic-commands
+  "Interactive command listing only returns commands exposed to the UI."
+  (let ((*command-table* (make-hash-table :test #'eq)))
+    (eval '(clawmacs:defcommand zero-arg-cmd (:permission :user-only)
+             "Default interactive." (buffer) (declare (ignore buffer)) :ok))
+    (eval '(clawmacs:defcommand prompted-cmd
+               (:permission :user-only
+                :interactive ((count :prompt "Count" :reader parse-integer)))
+             "Prompted interactive." (buffer count)
+             (declare (ignore buffer count)) :ok))
+    (eval '(clawmacs:defcommand hidden-cmd
+               (:permission :user-only :interactive nil)
+             "Hidden." (buffer) (declare (ignore buffer)) :ok))
+    (let ((cmds (list-interactive-commands)))
+      (is (member 'zero-arg-cmd cmds))
+      (is (member 'prompted-cmd cmds))
+      (is (not (member 'hidden-cmd cmds))))))
+
+(test defcommand-rejects-unsupported-lambda-lists
+  "Interactive commands must use required positional arguments only."
+  (signals error
+    (macroexpand-1
+     '(clawmacs:defcommand unsupported-cmd (:permission :user-only)
+       "Bad lambda list."
+       (buffer &optional count)
+       (declare (ignore buffer count))
+       nil))))
+
+(test defcommand-rejects-interactive-arg-mismatches
+  "Interactive arg specs must line up with the command parameters."
+  (signals error
+    (macroexpand-1
+     '(clawmacs:defcommand mismatched-cmd
+          (:permission :user-only
+           :interactive ((count :prompt "Count" :reader parse-integer)))
+        "Mismatched."
+        (buffer count label)
+        (declare (ignore buffer count label))
+        nil))))

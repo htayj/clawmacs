@@ -147,11 +147,17 @@
    #:command-metadata-permission
    #:command-metadata-docstring
    #:command-metadata-keybindings
+   #:command-metadata-lambda-list
+   #:command-metadata-interactive-spec
    #:defcommand
    #:check-permission
    #:permission-denied
    #:permission-required
    #:list-available-commands
+   #:command-required-arguments
+   #:command-interactive-p
+   #:list-interactive-commands
+   #:resolve-command-interactive-reader
 
    ;; Extended documentation
    #:*extended-docs*
@@ -299,6 +305,7 @@
 
    ;; Minibuffer
    #:*minibuffer-active*
+   #:*minibuffer-mode*
    #:*minibuffer-prompt*
    #:*minibuffer-input*
    #:*minibuffer-point*
@@ -318,7 +325,9 @@
    #:fuzzy-score
    #:fuzzy-match-p
    #:minibuffer-item-display
+   #:minibuffer-item-match-text
    #:minibuffer-activate
+   #:minibuffer-prompt
    #:minibuffer-deactivate
    #:minibuffer-update-filter
    #:minibuffer-visible-item-count
@@ -332,6 +341,8 @@
    #:minibuffer-current-height
    #:update-window-layout
    #:render-minibuffer
+   #:invoke-command
+   #:execute-extended-command
    #:minibuffer-select-model-command
    #:minibuffer-select-think-level-command
    #:minibuffer-select-buffer-command

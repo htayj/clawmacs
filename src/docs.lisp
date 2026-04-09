@@ -781,7 +781,7 @@ documentation in *extended-docs*."
 (defdoc command-metadata
   :category "command"
   :usage "Created automatically by defcommand."
-  :returns "Structure — Holds name, permission, docstring, and keybindings for a command."
+  :returns "Structure — Holds name, permission, docstring, keybindings, lambda list, and interactive metadata for a command."
   :see-also (defcommand *command-table* command-metadata-name command-metadata-permission))
 
 (defdoc command-metadata-name
@@ -808,12 +808,24 @@ documentation in *extended-docs*."
   :returns "list — Key specifications declared in the defcommand form."
   :see-also (command-metadata find-keybindings-for-command))
 
+(defdoc command-metadata-lambda-list
+  :category "command"
+  :usage "(command-metadata-lambda-list META:command-metadata)"
+  :returns "list — The command's required positional lambda list."
+  :see-also (command-required-arguments defcommand))
+
+(defdoc command-metadata-interactive-spec
+  :category "command"
+  :usage "(command-metadata-interactive-spec META:command-metadata)"
+  :returns "T, NIL, or a list of interactive argument specs."
+  :see-also (command-interactive-p list-interactive-commands defcommand))
+
 (defdoc defcommand
   :category "command"
-  :usage "(defcommand NAME (&key PERMISSION KEYS) DOCSTRING (BUFFER-VAR) &body BODY)"
+  :usage "(defcommand NAME (&key PERMISSION KEYS INTERACTIVE) DOCSTRING (BUFFER &rest REQUIRED-ARGS) &body BODY)"
   :returns "symbol — The command name."
-  :side-effects "Registers metadata in *command-table*, defines a generic function, :around method for access control, and primary method."
-  :see-also (*command-table* command-metadata check-permission list-available-commands))
+  :side-effects "Registers metadata in *command-table*, defines a generic function, :around method for access control, and primary method. INTERACTIVE controls M-x visibility and minibuffer prompting."
+  :see-also (*command-table* command-metadata check-permission list-available-commands list-interactive-commands))
 
 (defdoc check-permission
   :category "command"
@@ -839,6 +851,30 @@ documentation in *extended-docs*."
   :usage "(list-available-commands) — (list-available-commands)"
   :returns "list of symbols — Commands available to *current-caller*."
   :see-also (*command-table* *current-caller* defcommand))
+
+(defdoc command-required-arguments
+  :category "command"
+  :usage "(command-required-arguments COMMAND-NAME:symbol)"
+  :returns "list — The non-buffer required argument names for the command."
+  :see-also (command-metadata-lambda-list command-interactive-p))
+
+(defdoc command-interactive-p
+  :category "command"
+  :usage "(command-interactive-p COMMAND-NAME:symbol)"
+  :returns "T, NIL, or a list of interactive arg specs."
+  :see-also (list-interactive-commands command-metadata-interactive-spec))
+
+(defdoc list-interactive-commands
+  :category "command"
+  :usage "(list-interactive-commands) — (list-interactive-commands)"
+  :returns "list of symbols — Commands available to the UI via M-x."
+  :see-also (list-available-commands command-interactive-p))
+
+(defdoc resolve-command-interactive-reader
+  :category "command"
+  :usage "(resolve-command-interactive-reader READER)"
+  :returns "function — A callable reader for minibuffer text."
+  :see-also (defcommand command-metadata-interactive-spec))
 
 ;;; ==========================================================================
 ;;; Category: docs — Extended documentation system
@@ -1581,6 +1617,10 @@ documentation in *extended-docs*."
   :category "minibuffer"
   :see-also (minibuffer-activate minibuffer-deactivate handle-minibuffer-key))
 
+(defdoc *minibuffer-mode*
+  :category "minibuffer"
+  :see-also (minibuffer-activate minibuffer-prompt minibuffer-confirm))
+
 (defdoc *minibuffer-prompt*
   :category "minibuffer"
   :see-also (minibuffer-activate *minibuffer-input*))
@@ -1637,12 +1677,25 @@ documentation in *extended-docs*."
   :returns "string — The display string for the item."
   :see-also (minibuffer-activate fuzzy-match-p))
 
+(defdoc minibuffer-item-match-text
+  :category "minibuffer"
+  :usage "(minibuffer-item-match-text ITEM)"
+  :returns "string — The text used for fuzzy matching."
+  :see-also (minibuffer-item-display minibuffer-update-filter))
+
 (defdoc minibuffer-activate
   :category "minibuffer"
-  :usage "(minibuffer-activate PROMPT:string ITEMS:list CALLBACK:function)"
+  :usage "(minibuffer-activate PROMPT:string ITEMS:list CALLBACK:function &key MODE INITIAL-INPUT)"
   :returns "nil"
   :side-effects "Sets all minibuffer state variables. Makes the minibuffer active and visible."
   :see-also (minibuffer-deactivate minibuffer-confirm minibuffer-cancel *minibuffer-active*))
+
+(defdoc minibuffer-prompt
+  :category "minibuffer"
+  :usage "(minibuffer-prompt PROMPT:string CALLBACK:function &key INITIAL-INPUT)"
+  :returns "nil"
+  :side-effects "Activates the minibuffer in prompt mode and submits raw input to CALLBACK."
+  :see-also (minibuffer-activate minibuffer-confirm))
 
 (defdoc minibuffer-deactivate
   :category "minibuffer"
@@ -1691,6 +1744,20 @@ documentation in *extended-docs*."
   :returns "nil"
   :side-effects "Updates minibuffer input, selection, or confirms/cancels based on key."
   :see-also (minibuffer-activate minibuffer-confirm minibuffer-cancel))
+
+(defdoc invoke-command
+  :category "minibuffer"
+  :usage "(invoke-command BUFFER COMMAND)"
+  :returns "The direct command result, or NIL when invocation switches to minibuffer prompts."
+  :side-effects "Runs an interactive command immediately or prompts for its arguments in the minibuffer."
+  :see-also (execute-extended-command list-interactive-commands))
+
+(defdoc execute-extended-command
+  :category "minibuffer"
+  :usage "(execute-extended-command BUFFER)"
+  :returns "nil"
+  :side-effects "Opens the M-x minibuffer, lets the user choose an interactive command, and invokes it."
+  :see-also (invoke-command list-interactive-commands))
 
 (defdoc sort-models-by-recency
   :category "minibuffer"

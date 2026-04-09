@@ -1,6 +1,69 @@
 (in-package :clawmacs/tests)
 (in-suite buffer-suite)
 
+(defvar *mx-test-command-log* nil
+  "Records interactive command invocations during buffer tests.")
+
+(clawmacs:defcommand mx-test-noarg-command (:permission :user-only)
+  "Test command used to verify M-x invocation without arguments."
+  (buffer)
+  (declare (ignore buffer))
+  (setf *mx-test-command-log* '(:noarg)))
+
+(clawmacs:defcommand mx-test-arg-command
+    (:permission :user-only
+     :interactive ((count :prompt "Count" :reader parse-integer)
+                   (label :prompt "Label")))
+  "Test command used to verify M-x argument prompting."
+  (buffer count label)
+  (declare (ignore buffer))
+  (setf *mx-test-command-log* (list :args count label)))
+
+(defmacro with-interactive-command-test-buffer ((buffer-var) &body body)
+  `(let ((*buffer-ring* nil)
+         (clawmacs::*buffer-counter* 0)
+         (*buffer-selector-active* nil)
+         (*model-selector-active* nil)
+         (*think-selector-active* nil)
+         (*customize-face-state* nil)
+         (*openai-oauth-pending* nil)
+         (*deny-message-mode* nil)
+         (*cc-pending* nil)
+         (*cx-pending* nil)
+         (*ch-pending* nil)
+         (*meta-pending* nil)
+         (*minibuffer-active* nil)
+         (*minibuffer-mode* :completion)
+         (*minibuffer-prompt* "")
+         (*minibuffer-input* "")
+         (*minibuffer-point* 0)
+         (*minibuffer-items* nil)
+         (*minibuffer-filtered-items* nil)
+         (*minibuffer-match-positions* nil)
+         (*minibuffer-selected-index* 0)
+         (*minibuffer-scroll-offset* 0)
+         (*minibuffer-callback* nil)
+         (*mx-test-command-log* nil))
+     (clawmacs::init-default-keymap)
+     (let ((,buffer-var (make-buffer "test-session")))
+       (clawmacs::init-face-registry ,buffer-var)
+       (setf (buffer-keymap ,buffer-var) *default-keymap*)
+       (add-buffer-to-ring ,buffer-var)
+       ,@body)))
+
+(defun select-minibuffer-command (command)
+  "Move the minibuffer selection to COMMAND and confirm it."
+  (let ((index (position-if (lambda (item)
+                              (eq command (getf item :command)))
+                            *minibuffer-filtered-items*)))
+    (is (not (null index)))
+    (setf *minibuffer-selected-index* index)
+    (minibuffer-confirm)))
+
+(defun latest-buffer-message (buf)
+  "Return the message immediately before BUF's input message."
+  (message-prev (buffer-input-message buf)))
+
 (test buffer-creation
   "A new buffer has one message (the input message)."
   (let ((buf (make-buffer "test-session"
@@ -187,6 +250,7 @@
 (test handle-key-event-control-l-requests-redraw-in-minibuffer-mode
   "Ctrl+l requests a redraw even when modal UI state like the minibuffer is active."
   (let ((*minibuffer-active* t)
+        (*minibuffer-mode* :completion)
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
         (*think-selector-active* nil)
@@ -200,6 +264,96 @@
     (let ((buf (make-buffer "test")))
       (is (eq :redraw
               (clawmacs::handle-key-event buf (code-char 12)))))))
+
+;;; --------------------------------------------------------------------------
+;;; M-x Tests
+;;; --------------------------------------------------------------------------
+
+(test default-keymap-binds-m-x-to-execute-extended-command
+  "The default keymap exposes M-x as execute-extended-command."
+  (clawmacs::init-default-keymap)
+  (is (eq 'execute-extended-command
+          (keymap-lookup *default-keymap* '(:alt #\x)))))
+
+(test execute-extended-command-opens-the-command-picker
+  "M-x opens the minibuffer with interactive commands."
+  (with-interactive-command-test-buffer (buf)
+    (clawmacs::handle-key-event buf '(:alt #\x))
+    (is (eq t *minibuffer-active*))
+    (is (eq :completion *minibuffer-mode*))
+    (is (string= "M-x" *minibuffer-prompt*))
+    (is (position-if (lambda (item)
+                       (eq 'mx-test-noarg-command (getf item :command)))
+                     *minibuffer-filtered-items*))
+    (is (position-if (lambda (item)
+                       (eq 'mx-test-arg-command (getf item :command)))
+                     *minibuffer-filtered-items*))))
+
+(test execute-extended-command-runs-noarg-commands-immediately
+  "Selecting a no-arg command from M-x invokes it without another prompt."
+  (with-interactive-command-test-buffer (buf)
+    (clawmacs::handle-key-event buf '(:alt #\x))
+    (select-minibuffer-command 'mx-test-noarg-command)
+    (is (null *minibuffer-active*))
+    (is (equal '(:noarg) *mx-test-command-log*))))
+
+(test execute-extended-command-prompts-for-each-argument
+  "Selecting a parameterized command prompts for each interactive argument."
+  (with-interactive-command-test-buffer (buf)
+    (clawmacs::handle-key-event buf '(:alt #\x))
+    (select-minibuffer-command 'mx-test-arg-command)
+    (is (eq t *minibuffer-active*))
+    (is (eq :prompt *minibuffer-mode*))
+    (is (string= "Count" *minibuffer-prompt*))
+    (setf *minibuffer-input* "7"
+          *minibuffer-point* 1)
+    (minibuffer-confirm)
+    (is (eq t *minibuffer-active*))
+    (is (eq :prompt *minibuffer-mode*))
+    (is (string= "Label" *minibuffer-prompt*))
+    (setf *minibuffer-input* "demo"
+          *minibuffer-point* 4)
+    (minibuffer-confirm)
+    (is (null *minibuffer-active*))
+    (is (equal '(:args 7 "demo") *mx-test-command-log*))))
+
+(test execute-extended-command-reprompts-on-invalid-argument
+  "Reader errors keep the command pending and preserve the user's input."
+  (with-interactive-command-test-buffer (buf)
+    (clawmacs::handle-key-event buf '(:alt #\x))
+    (select-minibuffer-command 'mx-test-arg-command)
+    (setf *minibuffer-input* "oops"
+          *minibuffer-point* 4)
+    (minibuffer-confirm)
+    (is (eq t *minibuffer-active*))
+    (is (eq :prompt *minibuffer-mode*))
+    (is (string= "Count" *minibuffer-prompt*))
+    (is (string= "oops" *minibuffer-input*))
+    (is (null *mx-test-command-log*))
+    (let ((msg (latest-buffer-message buf)))
+      (is (not (null msg)))
+      (is (eq :system (message-sender msg)))
+      (is (search "Invalid count" (message-text msg))))))
+
+(test execute-extended-command-cancels-parameter-prompts-with-c-g
+  "Cancelling a prompted command abandons the invocation cleanly."
+  (with-interactive-command-test-buffer (buf)
+    (clawmacs::handle-key-event buf '(:alt #\x))
+    (select-minibuffer-command 'mx-test-arg-command)
+    (handle-minibuffer-key (code-char 7))
+    (is (null *minibuffer-active*))
+    (is (null *mx-test-command-log*))))
+
+(test key-dispatch-prompts-for-parameterized-commands
+  "Key-dispatched commands use the same interactive prompt path as M-x."
+  (with-interactive-command-test-buffer (buf)
+    (let ((km (make-keymap :test :parent *default-keymap*)))
+      (keymap-bind km #\? 'mx-test-arg-command)
+      (setf (buffer-keymap buf) km)
+      (clawmacs::handle-key-event buf #\?)
+      (is (eq t *minibuffer-active*))
+      (is (eq :prompt *minibuffer-mode*))
+      (is (string= "Count" *minibuffer-prompt*)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Selector Tests
