@@ -10,6 +10,7 @@ QUICKLISP_ENV_LOADED=0
 WORKSPACE_HOME=/workspace/.cache/home
 WORKSPACE_QUICKLISP_SETUP=/workspace/.cache/home/quicklisp/setup.lisp
 WORKSPACE_XDG_CACHE=/workspace/.cache
+MCP_TUI_DRIVER_GIT_URL='https://github.com/michaellee8/mcp-tui-driver'
 HOST_HOME=''
 HOST_QUICKLISP_SETUP=''
 RESOLVED_SSL_LIB_PATH=''
@@ -543,6 +544,71 @@ validate_e2e_args() {
   fi
 }
 
+payload_uses_mcp_driver() {
+  command_name="${1:-}"
+  command_target="${2:-}"
+
+  case "$command_name" in
+    python3|python)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  case "$command_target" in
+    test-e2e.py|*/test-e2e.py)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+probe_payload_mcp_driver() {
+  container_mcp_bin="$1"
+
+  run_in_container 'set -eu; mcp_bin="$1"; home_path="$2"; xdg_cache_path="$3"; HOME="$home_path" XDG_CACHE_HOME="$xdg_cache_path" "$mcp_bin" --help >/dev/null 2>&1' "$container_mcp_bin" "$WORKSPACE_HOME" "$WORKSPACE_XDG_CACHE"
+}
+
+install_payload_mcp_driver() {
+  cargo_target_dir="$WORKSPACE_XDG_CACHE/cargo-target"
+
+  stderr "installing mcp-tui-driver into workspace cache"
+  run_in_container 'set -eu; repo_url="$1"; home_path="$2"; xdg_cache_path="$3"; cargo_target_dir="$4"; export HOME="$home_path" XDG_CACHE_HOME="$xdg_cache_path" CARGO_HOME="$home_path/.cargo" CARGO_TARGET_DIR="$cargo_target_dir" CC=gcc CXX=g++ CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc; mkdir -p "$CARGO_HOME/bin" "$cargo_target_dir"; cargo install --locked --force --git "$repo_url" mcp-tui-driver' "$MCP_TUI_DRIVER_GIT_URL" "$WORKSPACE_HOME" "$WORKSPACE_XDG_CACHE" "$cargo_target_dir"
+}
+
+ensure_payload_mcp_driver() {
+  if [ "$MODE" != "e2e" ]; then
+    return 0
+  fi
+
+  if ! payload_uses_mcp_driver "$@"; then
+    return 0
+  fi
+
+  if [ -n "${CLAWMACS_MCP_BIN:-}" ]; then
+    return 0
+  fi
+
+  host_mcp_bin="$HOST_HOME/.cargo/bin/mcp-tui-driver"
+  container_mcp_bin="$WORKSPACE_HOME/.cargo/bin/mcp-tui-driver"
+  export CLAWMACS_MCP_BIN="$container_mcp_bin"
+
+  if [ -x "$host_mcp_bin" ] && probe_payload_mcp_driver "$container_mcp_bin"; then
+    return 0
+  fi
+
+  if ! install_payload_mcp_driver; then
+    fail 123 "missing required binary: mcp-tui-driver"
+  fi
+
+  if [ ! -x "$host_mcp_bin" ] || ! probe_payload_mcp_driver "$container_mcp_bin"; then
+    fail 123 "missing required binary: mcp-tui-driver"
+  fi
+}
+
 binary_visible() {
   binary="$1"
   toggle="$2"
@@ -597,6 +663,8 @@ launch_payload() {
   if [ ! -f "$HOST_QUICKLISP_SETUP" ]; then
     fail 112 "quicklisp bootstrap failed"
   fi
+
+  ensure_payload_mcp_driver "$@"
 
   # Claude Code CLI: share credentials and expose Nix store for the binary
   # User init directory: share ~/.clawmacs.d/ so init.lisp is available

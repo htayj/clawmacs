@@ -46,8 +46,8 @@ chmod 644 "$TMP_MCP_NONEXEC"
 REAL_SHA256SUM=$(command -v sha256sum)
 EXPECTED_SHA=$(printf 'quicklisp\n' | "$REAL_SHA256SUM" | cut -d' ' -f1)
 export REAL_SHA256SUM
-CLAWMACS_TEST_CONTAINER_PATH="$TMP_CONTAINER_BIN"
-export CLAWMACS_TEST_CONTAINER_PATH
+TEST_CONTAINER_PATH="$TMP_CONTAINER_BIN"
+export TEST_CONTAINER_PATH
 
 write_bootstrap_env() {
   sha="$1"
@@ -65,7 +65,7 @@ cat > "$TMP_BIN/sbcl" <<'EOF'
 if [ "${CLAWMACS_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
   exit 98
 fi
-exec "$CLAWMACS_TEST_CONTAINER_PATH/sbcl" "$@"
+exec "$TEST_CONTAINER_PATH/sbcl" "$@"
 EOF
 chmod +x "$TMP_BIN/sbcl"
 
@@ -131,15 +131,45 @@ cat > "$TMP_BIN/python3" <<'EOF'
 if [ "${CLAWMACS_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
   exit 98
 fi
-exec "$CLAWMACS_TEST_CONTAINER_PATH/python3" "$@"
+exec "$TEST_CONTAINER_PATH/python3" "$@"
 EOF
 chmod +x "$TMP_BIN/python3"
+
+cat > "$TMP_BIN/cargo" <<'EOF'
+#!/bin/sh
+if [ "${CLAWMACS_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
+  exit 98
+fi
+exec "$TEST_CONTAINER_PATH/cargo" "$@"
+EOF
+chmod +x "$TMP_BIN/cargo"
 
 cat > "$TMP_CONTAINER_BIN/python3" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
 chmod +x "$TMP_CONTAINER_BIN/python3"
+
+cat > "$TMP_CONTAINER_BIN/cargo" <<'EOF'
+#!/bin/sh
+if [ "${TEST_CARGO_FAIL:-0}" = "1" ]; then
+  exit 1
+fi
+
+if [ "${1:-}" = "install" ]; then
+  target_bin="${CARGO_HOME:-$HOME/.cargo}/bin/mcp-tui-driver"
+  mkdir -p "$(dirname "$target_bin")"
+  cat > "$target_bin" <<'SCRIPT'
+#!/bin/sh
+exit 0
+SCRIPT
+  chmod +x "$target_bin"
+  exit 0
+fi
+
+exit 0
+EOF
+chmod +x "$TMP_CONTAINER_BIN/cargo"
 
 cat > "$TMP_BIN/guix" <<'EOF'
 #!/bin/sh
@@ -192,16 +222,16 @@ $arg"
       done
       IFS=$old_ifs
     fi
-    if [ -n "${CLAWMACS_TEST_CONTAINER_PATH:-}" ]; then
-      PATH="$CLAWMACS_TEST_CONTAINER_PATH:$PATH"
+    if [ -n "${TEST_CONTAINER_PATH:-}" ]; then
+      PATH="$TEST_CONTAINER_PATH:$PATH"
       export PATH
     fi
     sh -c "$command" sh "$@"
     exit $?
   fi
   shift 3
-  if [ -n "${CLAWMACS_TEST_CONTAINER_PATH:-}" ]; then
-    PATH="$CLAWMACS_TEST_CONTAINER_PATH:$PATH"
+  if [ -n "${TEST_CONTAINER_PATH:-}" ]; then
+    PATH="$TEST_CONTAINER_PATH:$PATH"
     export PATH
   fi
   sh -c "$command"
@@ -216,7 +246,7 @@ cat > "$TMP_BIN/curl" <<'EOF'
 if [ "${CLAWMACS_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
   exit 98
 fi
-exec "$CLAWMACS_TEST_CONTAINER_PATH/curl" "$@"
+exec "$TEST_CONTAINER_PATH/curl" "$@"
 EOF
 chmod +x "$TMP_BIN/curl"
 
@@ -264,7 +294,7 @@ cat > "$TMP_BIN/sha256sum" <<'EOF'
 if [ "${CLAWMACS_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
   exit 98
 fi
-exec "$CLAWMACS_TEST_CONTAINER_PATH/sha256sum" "$@"
+exec "$TEST_CONTAINER_PATH/sha256sum" "$@"
 EOF
 chmod +x "$TMP_BIN/sha256sum"
 
@@ -514,6 +544,40 @@ fi
 if ! grep -q 'existing' "$REPO_ROOT/.cache/home/quicklisp/setup.lisp"; then
   echo "FAIL bootstrap-failure-preserves-existing-cache: expected existing setup content" >&2
   cat "$TMP_DIR/bootstrap-preserve.stderr" >&2
+  exit 1
+fi
+
+rm -rf "$REPO_ROOT/.cache/home/.cargo"
+set +e
+env PATH="$TMP_BIN:$PATH" \
+  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
+  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
+  "$LAUNCHER" --mode e2e -- python3 test-e2e.py --only offline 2>"$TMP_DIR/e2e-mcp-install.stderr"
+actual_code=$?
+set -e
+if [ "$actual_code" -ne 0 ]; then
+  echo "FAIL e2e-mcp-install: expected exit 0 got $actual_code" >&2
+  cat "$TMP_DIR/e2e-mcp-install.stderr" >&2
+  exit 1
+fi
+if [ ! -x "$REPO_ROOT/.cache/home/.cargo/bin/mcp-tui-driver" ]; then
+  echo "FAIL e2e-mcp-install: expected cached mcp-tui-driver" >&2
+  cat "$TMP_DIR/e2e-mcp-install.stderr" >&2
+  exit 1
+fi
+
+rm -rf "$REPO_ROOT/.cache/home/.cargo"
+set +e
+env PATH="$TMP_BIN:$PATH" \
+  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
+  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
+  TEST_CARGO_FAIL=1 \
+  "$LAUNCHER" --mode e2e -- python3 test-e2e.py --only offline 2>"$TMP_DIR/e2e-mcp-install-fail.stderr"
+actual_code=$?
+set -e
+if [ "$actual_code" -ne 123 ]; then
+  echo "FAIL e2e-mcp-install-fail: expected exit 123 got $actual_code" >&2
+  cat "$TMP_DIR/e2e-mcp-install-fail.stderr" >&2
   exit 1
 fi
 
