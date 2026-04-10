@@ -9,7 +9,7 @@ Macros for your agent!
 
 Anyone who has used Emacs before knows the benefit of a tight feedback loop. Write lisp code, eval it, instant results. Clawmacs brings that same philosophy to agentic programming: the tighter the feedback loop between you and the agent, and the more the agent can introspect its own environment, the more powerful the collaboration becomes.
 
-Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment with full access to the running Lisp image. The agent can evaluate code, read and write files, execute shell commands, and inspect the very editor it's running inside --- all with your approval.
+Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment with full access to the running Lisp image. By default the agent acts through =lisp_eval=: it can inspect the editor, search symbols, read docs, call functions, and update runtime state directly inside the live Common Lisp process.
 
 #+ATTR_ORG: :width 800
 [[file:docs/img/genera-style.png]]
@@ -25,7 +25,7 @@ Clawmacs supports multiple LLM providers, switchable per buffer:
 - *OpenAI Codex* --- with shared Codex OAuth/API-key auth and the Responses API
 - *OpenRouter* --- access to hundreds of models with dynamic model discovery
 
-Switch models on the fly with =C-c C-m= (fuzzy minibuffer selector) or =C-c M= (overlay selector). Run interactive commands with =M-x=, including minibuffer prompting for command arguments.
+Switch agents on the fly with =C-c A=. Switch models on the fly with =C-c C-m= (fuzzy minibuffer selector) or =C-c M= (overlay selector). Run interactive commands with =M-x=, including minibuffer prompting for command arguments.
 
 ** OpenAI Codex Auth
 
@@ -92,6 +92,7 @@ Three-pane layout: main (chat history + input), modeline (status), minibuffer (p
 
 | Key           | Action                             |
 |---------------+------------------------------------|
+| =C-c A=        | Select agent (fuzzy minibuffer)    |
 | =C-c C-m=      | Select model (fuzzy minibuffer)    |
 | =C-c M=        | Select model (overlay)             |
 | =C-c t=        | Toggle tool result display         |
@@ -184,6 +185,15 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
 ;; Switch default provider and model
 (setf clawmacs:*default-provider* :anthropic)
 (setf clawmacs:*default-model* "claude-sonnet-4-5-20250514")
+
+;; Register custom agents for the C-c A selector
+(clawmacs:register-agent-definition
+ "writer"
+ :provider :openai-codex
+ :model "gpt-5.4"
+ :think-level "high"
+ :tools-prompt "Use lisp_eval for concrete work. Inspect first, then modify."
+ :soul-prompt "You are a concise writing partner focused on structure and tone.")
 
 ;; Use the McCLIM graphical backend
 (asdf:load-system :clawmacs/mcclim)

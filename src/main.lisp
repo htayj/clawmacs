@@ -178,7 +178,8 @@ polls for updates via update-streaming-response."
   (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
          (tools (let ((*current-caller* agent-kw))
                    (tool-definitions-for-api)))
-         (messages (build-conversation-messages buf)))
+         (messages (build-conversation-messages buf))
+         (system-prompt (build-agent-system-prompt (buffer-agent-name buf))))
     (handler-case
         (multiple-value-bind (provider model think-level)
             (resolve-buffer-provider-and-model buf)
@@ -209,6 +210,7 @@ polls for updates via update-streaming-response."
                        (lambda (s) (declare (ignore s)))
                        :model model
                        :tools tools
+                       :system-prompt system-prompt
                        :reasoning-effort think-level))
                  ;; Create placeholder message that will be updated as tokens arrive
                  (agent-msg (buffer-insert-agent-message buf "")))
@@ -769,6 +771,93 @@ If so, call the handler and return T. Otherwise return NIL."
       (setf *minibuffer-selected-index* active-idx)
       (minibuffer-ensure-visible))))
 
+(defun ensure-buffer-agent-face-set (buf &optional (agent-name (buffer-agent-name buf)))
+  "Ensure BUF has a face set for AGENT-NAME and return it."
+  (let* ((registry (buffer-face-registry buf))
+         (agent-kw (intern (string-upcase agent-name) :keyword)))
+    (or (gethash agent-kw registry)
+        (setf (gethash agent-kw registry)
+              (make-default-agent-face-set agent-kw)))))
+
+(defun resolve-agent-display-config (agent-name)
+  "Return AGENT-NAME's effective provider, model, and think level for UI display."
+  (let ((buf (make-buffer "agent-config-preview" :agent-name agent-name)))
+    (resolve-buffer-provider-and-model buf)))
+
+(defun format-agent-selection-message (agent-name)
+  "Return a confirmation message after switching to AGENT-NAME."
+  (handler-case
+      (multiple-value-bind (provider model think-level)
+          (resolve-agent-display-config agent-name)
+        (format nil "[Agent changed to ~A (~(~A~)/~A~@[; think ~A~])]"
+                agent-name provider model think-level))
+    (error ()
+      (format nil "[Agent changed to ~A]" agent-name))))
+
+(defun switch-buffer-to-agent (buffer agent-name)
+  "Switch BUFFER to AGENT-NAME, clear overrides, ensure faces, and confirm."
+  (normalize-agent-name-key agent-name)
+  (let* ((definition (find-agent-definition agent-name))
+         (resolved-name (if definition
+                            (agent-definition-name definition)
+                            (string-trim '(#\Space #\Tab #\Newline #\Return) agent-name))))
+    (setf (buffer-agent-name buffer) resolved-name)
+    (clear-buffer-provider/model-overrides buffer)
+    (ensure-buffer-agent-face-set buffer resolved-name)
+    (buffer-insert-system-message buffer (format-agent-selection-message resolved-name))
+    buffer))
+
+(defun make-agent-selector-item (agent-name active-agent-name)
+  "Build one minibuffer item for AGENT-NAME."
+  (let ((active-p (string= agent-name active-agent-name)))
+    (handler-case
+        (multiple-value-bind (provider model think-level)
+            (resolve-agent-display-config agent-name)
+          (list :agent-name agent-name
+                :active-p active-p
+                :display (format nil "~A ~A  [~(~A~)/~A~@[ think:~A~]]"
+                                 (if active-p "*" " ")
+                                 agent-name
+                                 provider
+                                 model
+                                 think-level)
+                :match-text (format nil "~A ~(~A~) ~A~@[ ~A~]"
+                                    agent-name provider model think-level)))
+      (error ()
+        (list :agent-name agent-name
+              :active-p active-p
+              :display (format nil "~A ~A" (if active-p "*" " ") agent-name)
+              :match-text agent-name)))))
+
+(defun sort-agent-selector-items (items)
+  "Sort agent selector ITEMS with the active agent first, then alphabetically."
+  (stable-sort (copy-list items)
+               (lambda (a b)
+                 (cond
+                   ((and (getf a :active-p) (not (getf b :active-p))) t)
+                   ((and (getf b :active-p) (not (getf a :active-p))) nil)
+                   (t (string< (getf a :agent-name)
+                               (getf b :agent-name)))))))
+
+(defcommand minibuffer-select-agent-command (:permission :user-only)
+  "Open the minibuffer agent selector for the current buffer."
+  (buffer)
+  (let* ((active-agent (buffer-agent-name buffer))
+         (known-agents (list-known-agent-names))
+         (items (sort-agent-selector-items
+                 (mapcar (lambda (agent-name)
+                           (make-agent-selector-item agent-name active-agent))
+                         known-agents))))
+    (cond
+      ((null items)
+       (buffer-insert-system-message buffer "[No known agents available.]"))
+      (t
+       (minibuffer-activate
+        "Select Agent" items
+        (lambda (item)
+          (switch-buffer-to-agent buffer (getf item :agent-name))))
+       (preselect-minibuffer-active-item items)))))
+
 (defcommand select-model-command (:permission :user-only)
   "Open the model selector to change the LLM model for this session.
 Builds the available model list based on configured API keys."
@@ -1064,13 +1153,11 @@ Thread-safe: opens, writes, and closes the file on each call."
   "Populate BUF's face registry with default face sets.
 Includes user, agent, and system face sets."
   (let* ((registry (buffer-face-registry buf))
-         (agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
          (user-fs (make-default-user-face-set))
-         (agent-fs (make-default-agent-face-set agent-kw))
          (system-fs (make-default-system-face-set)))
     (setf (gethash :user registry) user-fs
-          (gethash agent-kw registry) agent-fs
           (gethash :system registry) system-fs)
+    (ensure-buffer-agent-face-set buf)
     (setf (message-face-set (buffer-input-message buf)) user-fs)
     buf))
 

@@ -184,14 +184,26 @@
     #:read-claude-code-oauth-token
     #:provider-token-path
     #:read-provider-token
-     #:save-provider-token
+    #:save-provider-token
      #:read-token
+     #:agent-definition
+     #:make-agent-definition
+     #:agent-definition-name
+     #:agent-definition-provider
+     #:agent-definition-model
+     #:agent-definition-think-level
+     #:agent-definition-tools-prompt
+     #:agent-definition-soul-prompt
+     #:register-agent-definition
+     #:find-agent-definition
+     #:list-agent-definitions
      #:load-agent-defaults
      #:save-agent-defaults
      #:agent-default
      #:set-agent-default
      #:ensure-agent-defaults-loaded
      #:resolve-buffer-provider-and-model
+     #:build-agent-system-prompt
      #:provider-model-supported-think-levels
      #:reconcile-buffer-think-level-override
      #:anthropic-request
@@ -199,6 +211,7 @@
    #:*default-provider*
    #:*default-model*
    #:*default-max-tokens*
+   #:*default-tools-prompt*
     #:*anthropic-model*
    #:api-json-encode
    #:api-json-decode
@@ -358,6 +371,7 @@
    #:render-minibuffer
    #:invoke-command
    #:execute-extended-command
+   #:minibuffer-select-agent-command
    #:minibuffer-select-model-command
    #:minibuffer-select-think-level-command
    #:minibuffer-select-buffer-command
@@ -478,6 +492,7 @@
    ;; Main
    #:clawmacs-main
    #:send-to-agent-with-context
+   #:switch-buffer-to-agent
     #:scroll-up-command
     #:scroll-down-command
     #:*scroll-page-size*))

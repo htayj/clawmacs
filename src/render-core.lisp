@@ -390,7 +390,7 @@ Mode dispatch priority matches handle-key-event in main.lisp."
                  row2 (format nil " ~A" tool-name))))
         (t
          (setf row1 " RET: send  C-o: newline  C-k: kill  C-y: yank  PgUp/Dn: scroll"
-               row2 " C-x C-b: buffers  C-c C-m: model  C-c C-r: think  C-l: redraw  C-x C-c: quit")))
+               row2 " C-x C-b: buffers  C-c A: agent  C-c C-m: model  C-c C-r: think  C-l: redraw  C-x C-c: quit")))
       (values (pad row1) (pad row2)))))
 
 ;;; --------------------------------------------------------------------------

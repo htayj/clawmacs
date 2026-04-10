@@ -100,6 +100,12 @@ and C-x b to the old overlay buffer selector."
   ;; C-x t should NOT be bound (it was moved away)
   (is (null (keymap-lookup *default-keymap* '(:ctrl-x #\t)))))
 
+(test default-keymap-agent-selector-binding
+  "Default keymap binds C-c A to the minibuffer agent selector."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::minibuffer-select-agent-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\A)))))
+
 (test default-keymap-model-selector-binding
   "Default keymap binds C-c C-m (C-c Return) to the minibuffer model selector,
 and C-c M (capital M) to the old overlay model selector."

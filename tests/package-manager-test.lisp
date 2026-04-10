@@ -175,3 +175,29 @@
           (*package-init-continued* nil))
       (clawmacs:load-user-init-file)
       (is (not (null *package-init-continued*))))))
+
+(test load-user-init-file-can-register-agent-definitions
+  "User init forms can register programmatic agent definitions."
+  (let* ((init-root (uiop:ensure-directory-pathname
+                     (temp-package-test-directory "agent-init")))
+         (init-path (merge-pathnames "init.lisp" init-root)))
+    (ensure-directories-exist (merge-pathnames #P".keep" init-root))
+    (write-test-file
+     init-path
+     "(register-agent-definition \"writer\"
+   :provider :openai-codex
+   :model \"gpt-5.4\"
+   :think-level \"high\"
+   :tools-prompt \"writer tools\"
+   :soul-prompt \"writer soul\")")
+    (let ((clawmacs::*user-init-file* init-path)
+          (clawmacs::*inhibit-user-init* nil)
+          (clawmacs::*agent-definition-registry* (make-hash-table :test #'equal)))
+      (clawmacs:load-user-init-file)
+      (let ((definition (clawmacs:find-agent-definition "writer")))
+        (is (not (null definition)))
+        (is (eq :openai-codex (clawmacs:agent-definition-provider definition)))
+        (is (string= "gpt-5.4" (clawmacs:agent-definition-model definition)))
+        (is (string= "high" (clawmacs:agent-definition-think-level definition)))
+        (is (string= "writer tools" (clawmacs:agent-definition-tools-prompt definition)))
+        (is (string= "writer soul" (clawmacs:agent-definition-soul-prompt definition)))))))

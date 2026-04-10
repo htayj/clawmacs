@@ -42,6 +42,10 @@
          (clawmacs::*agent-defaults-registry* nil))
      ,@body))
 
+(defmacro with-agent-definition-registry-override (() &body body)
+  `(let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal)))
+     ,@body))
+
 (defun temp-codex-auth-path ()
   (let ((base (make-pathname :directory (list :absolute "tmp"
                                               (format nil "clawmacs-codex-auth-~A"
@@ -187,6 +191,65 @@
       (is-false (search "http_fetch" prompt))
       (is-false (search "shell_exec" prompt))
       (is-false (search "file_read" prompt)))))
+
+(test register-agent-definition-round-trips-through-registry
+  "Programmatic agent definitions can be registered, replaced, found, and listed."
+  (with-agent-definition-registry-override ()
+    (let ((first (clawmacs:register-agent-definition
+                  "Pair"
+                  :provider :openai-codex
+                  :model "gpt-5.4"
+                  :think-level "high"
+                  :tools-prompt "pair tools"
+                  :soul-prompt "pair soul")))
+      (is (string= "Pair" (clawmacs:agent-definition-name first)))
+      (is (eq :openai-codex (clawmacs:agent-definition-provider first)))
+      (is (string= "high" (clawmacs:agent-definition-think-level first))))
+    (clawmacs:register-agent-definition "Writer" :soul-prompt "writer soul")
+    (clawmacs:register-agent-definition "pair" :provider :anthropic :model "claude-test")
+    (let* ((found (clawmacs:find-agent-definition "PAIR"))
+           (listed (clawmacs:list-agent-definitions)))
+      (is (eq :anthropic (clawmacs:agent-definition-provider found)))
+      (is (string= "claude-test" (clawmacs:agent-definition-model found)))
+      (is (equal '("pair" "Writer")
+                 (mapcar #'clawmacs:agent-definition-name listed))))))
+
+(test build-agent-system-prompt-composes-boot-tools-and-soul
+  "Agent prompts are composed in boot -> tools -> soul order."
+  (with-agent-definition-registry-override ()
+    (clawmacs:register-agent-definition
+     "pair"
+     :tools-prompt "PAIR TOOLS"
+     :soul-prompt "PAIR SOUL")
+    (with-function-override (clawmacs::load-boot-files ()
+                              "BOOT PREFIX")
+      (is (string= "BOOT PREFIX
+
+---
+
+PAIR TOOLS
+
+---
+
+PAIR SOUL"
+                   (clawmacs:build-agent-system-prompt "pair"))))))
+
+(test build-agent-system-prompt-falls-back-to-default-components
+  "Missing agent prompt slots fall back to the default tools and soul prompts."
+  (with-agent-definition-registry-override ()
+    (let ((clawmacs::*system-prompt* "DEFAULT SOUL"))
+      (clawmacs:register-agent-definition "writer" :soul-prompt "WRITER SOUL")
+      (with-function-override (clawmacs::load-boot-files ()
+                                nil)
+        (let ((prompt (clawmacs:build-agent-system-prompt "writer")))
+          (is (search "only built-in tool available by default is `lisp_eval`" prompt))
+          (is (search "WRITER SOUL" prompt))
+          (is-false (search "DEFAULT SOUL" prompt))))
+      (with-function-override (clawmacs::load-boot-files ()
+                                nil)
+        (let ((prompt (clawmacs:build-agent-system-prompt "missing")))
+          (is (search "only built-in tool available by default is `lisp_eval`" prompt))
+          (is (search "DEFAULT SOUL" prompt)))))))
 
 (test provider-token-round-trip-anthropic
   "Anthropic tokens round-trip through provider-specific helpers."
@@ -444,6 +507,26 @@
         (is (string= "gpt-5.3-codex" model))
         (is (string= "high" think-level))))))
 
+(test resolve-buffer-provider-and-model-agent-definition-wins-over-persisted-defaults
+  "Programmatic agent definitions outrank persisted compatibility defaults."
+  (let ((path (temp-agent-defaults-path))
+        (buf (make-buffer "test" :agent-name "spark")))
+    (write-agent-defaults-file
+     path
+     "{\"spark\":{\"provider\":\"anthropic\",\"model\":\"claude-persisted\"}}")
+    (with-agent-defaults-path-override (path)
+      (with-agent-definition-registry-override ()
+        (clawmacs:register-agent-definition
+         "spark"
+         :provider :openai-codex
+         :model "gpt-5.4"
+         :think-level "high")
+        (multiple-value-bind (provider model think-level)
+            (clawmacs::resolve-buffer-provider-and-model buf)
+          (is (eq :openai-codex provider))
+          (is (string= "gpt-5.4" model))
+          (is (string= "high" think-level)))))))
+
 (test resolve-buffer-provider-and-model-agent-default-provider
   "Agent defaults are used when no buffer override is present."
   (let ((path (temp-agent-defaults-path))
@@ -655,8 +738,8 @@
 (test provider-request-dispatches-anthropic-adapter
   "Anthropic provider requests use the Anthropic adapter and preserve the model."
   (let ((captured nil))
-    (with-function-override (clawmacs::anthropic-request (messages &key model max-tokens tools)
-                              (declare (ignore messages max-tokens tools))
+    (with-function-override (clawmacs::anthropic-request (messages &key model max-tokens tools system-prompt)
+                              (declare (ignore messages max-tokens tools system-prompt))
                               (setf captured model)
                               '((:stop--reason . "end_turn")
                                 (:content . #())))
@@ -673,8 +756,8 @@
   (let ((captured-model nil)
         (captured-reasoning nil))
     (with-function-override (clawmacs::openai-codex-request
-                             (messages &key model max-tokens tools reasoning-effort)
-                             (declare (ignore messages max-tokens tools))
+                             (messages &key model max-tokens tools reasoning-effort system-prompt)
+                             (declare (ignore messages max-tokens tools system-prompt))
                              (setf captured-model model
                                    captured-reasoning reasoning-effort)
                               '((:stop--reason . "stop")
@@ -694,13 +777,13 @@
   (let ((anthropic-model nil)
         (openai-model nil)
         (openai-reasoning nil))
-    (with-function-override (clawmacs::anthropic-request-streaming (messages callback &key model max-tokens tools)
-                              (declare (ignore messages callback max-tokens tools))
+    (with-function-override (clawmacs::anthropic-request-streaming (messages callback &key model max-tokens tools system-prompt)
+                              (declare (ignore messages callback max-tokens tools system-prompt))
                               (setf anthropic-model model)
                               :anthropic-stream)
       (with-function-override (clawmacs::openai-codex-request-streaming
-                                (messages callback &key model max-tokens tools reasoning-effort)
-                                (declare (ignore messages callback max-tokens tools))
+                                (messages callback &key model max-tokens tools reasoning-effort system-prompt)
+                                (declare (ignore messages callback max-tokens tools system-prompt))
                                 (setf openai-model model
                                       openai-reasoning reasoning-effort)
                                 :openai-stream)
@@ -726,7 +809,8 @@
   (let ((buf (make-buffer "routing-test" :agent-name "spark"))
         (captured-provider nil)
         (captured-model nil)
-        (captured-reasoning nil))
+        (captured-reasoning nil)
+        (captured-system-prompt nil))
     (with-function-override (clawmacs::resolve-buffer-provider-and-model (buffer)
                               (declare (ignore buffer))
                               (values :openai-codex "gpt-5.3-codex" "high"))
@@ -735,17 +819,21 @@
         (with-function-override (clawmacs::build-conversation-messages (buffer)
                                   (declare (ignore buffer))
                                   '(((:role . "user") (:content . #()))))
+          (with-function-override (clawmacs::build-agent-system-prompt (agent-name)
+                                    (format nil "prompt for ~A" agent-name))
           (with-function-override (clawmacs::provider-request-streaming
-                                    (provider messages callback &key model max-tokens tools reasoning-effort)
+                                    (provider messages callback &key model max-tokens tools reasoning-effort system-prompt)
                                     (declare (ignore messages callback max-tokens tools))
                                     (setf captured-provider provider
                                           captured-model model
-                                          captured-reasoning reasoning-effort)
+                                          captured-reasoning reasoning-effort
+                                          captured-system-prompt system-prompt)
                                     (clawmacs::make-stream-state))
             (clawmacs::start-streaming-response buf)
             (is (eq :openai-codex captured-provider))
             (is (string= "gpt-5.3-codex" captured-model))
-            (is (string= "high" captured-reasoning))))))))
+            (is (string= "high" captured-reasoning))
+            (is (string= "prompt for spark" captured-system-prompt)))))))))
 
 (test start-streaming-response-surfaces-resolver-errors-in-buffer
   "Resolver failures are caught and rendered into the buffer as agent errors."
@@ -1682,8 +1770,8 @@
 (test zai-provider-dispatch-routes-correctly
   "provider-request dispatches :zai to zai-request."
   (let ((dispatched-provider nil))
-    (with-function-override (clawmacs::zai-request (messages &key model max-tokens tools)
-                              (declare (ignore messages model max-tokens tools))
+    (with-function-override (clawmacs::zai-request (messages &key model max-tokens tools system-prompt)
+                              (declare (ignore messages model max-tokens tools system-prompt))
                               (setf dispatched-provider :zai)
                               '((:stop--reason . "end_turn") (:content . #())))
       (clawmacs::provider-request :zai '() :model "glm-5")
@@ -1971,8 +2059,8 @@
   (let ((routed-to nil)
         (clawmacs::*claude-cli-path* "claude"))
     (with-function-override (clawmacs::claude-cli-request
-                             (messages &key model max-tokens tools)
-                             (declare (ignore messages max-tokens tools))
+                             (messages &key model max-tokens tools system-prompt)
+                             (declare (ignore messages max-tokens tools system-prompt))
                              (setf routed-to model)
                              `((:type . "message")
                                (:content . ,(vector `((:type . "text")
@@ -1984,8 +2072,8 @@
   "provider-request routes REST-compatible models to anthropic-request."
   (let ((routed-to nil))
     (with-function-override (clawmacs::anthropic-request
-                             (messages &key model max-tokens tools)
-                             (declare (ignore messages max-tokens tools))
+                             (messages &key model max-tokens tools system-prompt)
+                             (declare (ignore messages max-tokens tools system-prompt))
                              (setf routed-to model)
                              `((:type . "message")
                                (:content . ,(vector `((:type . "text")
@@ -1998,8 +2086,8 @@
   (let ((routed-to nil)
         (clawmacs::*claude-cli-path* "claude"))
     (with-function-override (clawmacs::claude-cli-request-streaming
-                             (messages callback &key model max-tokens tools)
-                             (declare (ignore messages callback max-tokens tools))
+                             (messages callback &key model max-tokens tools system-prompt)
+                             (declare (ignore messages callback max-tokens tools system-prompt))
                              (setf routed-to model)
                              (clawmacs::make-stream-state))
       (clawmacs::provider-request-streaming :anthropic nil nil
@@ -2126,8 +2214,8 @@ when no cached models are present."
   "provider-request dispatches :openrouter to openrouter-request."
   (let ((routed-to nil))
     (with-function-override (clawmacs::openrouter-request
-                             (messages &key model max-tokens tools)
-                             (declare (ignore messages max-tokens tools))
+                             (messages &key model max-tokens tools system-prompt)
+                             (declare (ignore messages max-tokens tools system-prompt))
                              (setf routed-to model)
                              `((:stop--reason . "end_turn")
                                (:content . ,(vector `((:type . "text")
@@ -2139,8 +2227,8 @@ when no cached models are present."
   "provider-request-streaming dispatches :openrouter to openrouter-request-streaming."
   (let ((routed-to nil))
     (with-function-override (clawmacs::openrouter-request-streaming
-                             (messages callback &key model max-tokens tools)
-                             (declare (ignore messages callback max-tokens tools))
+                             (messages callback &key model max-tokens tools system-prompt)
+                             (declare (ignore messages callback max-tokens tools system-prompt))
                              (setf routed-to model)
                              (clawmacs::make-stream-state))
       (clawmacs::provider-request-streaming :openrouter nil nil

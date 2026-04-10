@@ -486,6 +486,80 @@
       (is (eq buf1 (current-buffer))))))
 
 ;;; --------------------------------------------------------------------------
+;;; Agent Selector Tests
+;;; --------------------------------------------------------------------------
+
+(test minibuffer-agent-selector-activates
+  "C-c A opens the minibuffer agent selector with the active agent preselected."
+  (with-interactive-command-test-buffer (buf)
+    (let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal))
+          (clawmacs::*agent-defaults-registry* (clawmacs::make-agent-defaults-registry)))
+      (setf (buffer-agent-name buf) "writer")
+      (register-agent-definition "writer" :provider :anthropic :model "claude-writer")
+      (register-agent-definition "pair" :provider :openai-codex :model "gpt-5.4")
+      (clawmacs::handle-key-event buf '(:ctrl-c #\A))
+      (is (eq t *minibuffer-active*))
+      (is (string= "Select Agent" *minibuffer-prompt*))
+      (is (string= "writer" (getf (first *minibuffer-filtered-items*) :agent-name)))
+      (is (getf (first *minibuffer-filtered-items*) :active-p))
+      (is (= 0 *minibuffer-selected-index*)))))
+
+(test minibuffer-agent-selector-switches-buffer-and-clears-overrides
+  "Selecting an agent updates the buffer, clears overrides, and ensures a face set."
+  (with-interactive-command-test-buffer (buf)
+    (let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal))
+          (clawmacs::*agent-defaults-registry* (clawmacs::make-agent-defaults-registry)))
+      (register-agent-definition "writer" :provider :anthropic :model "claude-writer")
+      (register-agent-definition "pair"
+                                 :provider :openai-codex
+                                 :model "gpt-5.4"
+                                 :think-level "high")
+      (setf (buffer-agent-name buf) "writer"
+            (buffer-provider-override buf) :zai
+            (buffer-model-override buf) "glm-5")
+      (set-buffer-think-level-override buf "medium")
+      (clawmacs::handle-key-event buf '(:ctrl-c #\A))
+      (let ((index (position-if (lambda (item)
+                                  (string= "pair" (getf item :agent-name)))
+                                *minibuffer-filtered-items*)))
+        (is (not (null index)))
+        (setf *minibuffer-selected-index* index)
+        (minibuffer-confirm))
+      (is (null *minibuffer-active*))
+      (is (string= "pair" (buffer-agent-name buf)))
+      (is (null (buffer-provider-override buf)))
+      (is (null (buffer-model-override buf)))
+      (is (null (buffer-think-level-override buf)))
+      (is (not (null (gethash :PAIR (buffer-face-registry buf)))))
+      (let ((msg (latest-buffer-message buf)))
+        (is (not (null msg)))
+        (is (eq :system (message-sender msg)))
+        (is (search "Agent changed to pair" (message-text msg)))
+        (is (search "openai-codex/gpt-5.4" (message-text msg)))
+        (is (search "think high" (message-text msg)))))))
+
+(test minibuffer-agent-selector-cancel-leaves-buffer-unchanged
+  "Cancelling the agent selector leaves the buffer state untouched."
+  (with-interactive-command-test-buffer (buf)
+    (let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal))
+          (clawmacs::*agent-defaults-registry* (clawmacs::make-agent-defaults-registry)))
+      (register-agent-definition "writer" :provider :anthropic :model "claude-writer")
+      (register-agent-definition "pair" :provider :openai-codex :model "gpt-5.4")
+      (setf (buffer-agent-name buf) "writer"
+            (buffer-provider-override buf) :zai
+            (buffer-model-override buf) "glm-5")
+      (set-buffer-think-level-override buf "medium")
+      (let ((before-count (buffer-message-count buf)))
+        (clawmacs::handle-key-event buf '(:ctrl-c #\A))
+        (handle-minibuffer-key (code-char 7))
+        (is (null *minibuffer-active*))
+        (is (string= "writer" (buffer-agent-name buf)))
+        (is (eq :zai (buffer-provider-override buf)))
+        (is (string= "glm-5" (buffer-model-override buf)))
+        (is (string= "medium" (buffer-think-level-override buf)))
+        (is (= before-count (buffer-message-count buf)))))))
+
+;;; --------------------------------------------------------------------------
 ;;; Model Selector Tests
 ;;; --------------------------------------------------------------------------
 

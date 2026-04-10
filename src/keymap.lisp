@@ -111,6 +111,8 @@
     ;; buffer's major mode (e.g. chat-specific toggles, mode actions).
     ;; Note: C-x C-c quits the application (handled in handle-key-event).
     (keymap-bind km '(:ctrl-c #\t) 'toggle-tool-results-command) ; C-c t = toggle tool results
+    ;; C-c A = minibuffer agent selector
+    (keymap-bind km '(:ctrl-c #\A) 'minibuffer-select-agent-command)
     ;; C-c C-m = minibuffer model selector (helm/ivy/vertico style).
     ;; C-m = ASCII 13 = #\Return.
     ;; Some terminals send #\Newline (LF, ASCII 10) for Enter, so bind both.

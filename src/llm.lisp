@@ -155,12 +155,22 @@ These models are routed through the Claude Code CLI stream-json protocol.")
 (defvar *agent-defaults-registry* nil
   "Memoized agent defaults registry.")
 
-(defvar *system-prompt*
-  "You are a helpful assistant running inside clawmacs, a Lisp-native terminal chat interface.
+(defvar *agent-definition-registry* (make-hash-table :test #'equal)
+  "Programmatic agent definitions keyed by downcased agent name.")
+
+(defstruct agent-definition
+  "Programmatic agent definition used for per-buffer routing and prompt composition."
+  name
+  provider
+  model
+  think-level
+  tools-prompt
+  soul-prompt)
+
+(defvar *default-tools-prompt*
+  "You are running inside clawmacs, a Lisp-native terminal chat interface.
 The only built-in tool available by default is `lisp_eval`, which evaluates one Common Lisp
-form inside the running clawmacs image. Use `lisp_eval` for concrete work. Keep private
-reasoning private, and use normal assistant text only for direct user-facing replies and
-concise explanations.
+form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 
 ## Default workflow
 
@@ -243,9 +253,15 @@ concise explanations.
 
 - `*default-model*` - the fallback model name.
 - `*default-provider*` - the fallback provider keyword.
-- `*system-prompt*` - this system prompt."
-  "The system prompt sent with every API request.
-Built from boot MD files and/or *system-prompt-path* on startup.")
+- `*system-prompt*` - the default soul prompt.
+- `*default-tools-prompt*` - the default clawmacs operating prompt."
+  "Default clawmacs operating instructions inserted ahead of the soul prompt.")
+
+(defvar *system-prompt*
+  "You are a helpful assistant. Keep private reasoning private. Use normal assistant text only
+for direct user-facing replies and concise explanations after you have done the work."
+  "Default soul prompt inserted after the clawmacs tools prompt.
+Users may override this via *system-prompt-path* or init.lisp.")
 
 (defvar *boot-file-names*
   '("AGENTS.md" "SOUL.md" "USER.md" "IDENTITY.md" "TOOLS.md")
@@ -272,14 +288,32 @@ Project-local files take precedence over global ones."
     (when parts
       (format nil "~{~A~^~%~%---~%~%~}" (nreverse parts)))))
 
+(defun agent-definition-tools-prompt-or-default (agent-name)
+  "Return AGENT-NAME's tools prompt, falling back to *DEFAULT-TOOLS-PROMPT*."
+  (let ((definition (find-agent-definition agent-name)))
+    (or (and definition
+             (agent-definition-tools-prompt definition))
+        *default-tools-prompt*)))
+
+(defun agent-definition-soul-prompt-or-default (agent-name)
+  "Return AGENT-NAME's soul prompt, falling back to *SYSTEM-PROMPT*."
+  (let ((definition (find-agent-definition agent-name)))
+    (or (and definition
+             (agent-definition-soul-prompt definition))
+        *system-prompt*)))
+
+(defun build-agent-system-prompt (agent-name)
+  "Build the full system prompt for AGENT-NAME.
+Composition order: boot-file prefix, tools prompt, then soul prompt."
+  (let ((parts (remove-if #'null
+                          (list (load-boot-files)
+                                (agent-definition-tools-prompt-or-default agent-name)
+                                (agent-definition-soul-prompt-or-default agent-name)))))
+    (format nil "~{~A~^~%~%---~%~%~}" parts)))
+
 (defun build-system-prompt ()
-  "Build the full system prompt from boot files + default/custom prompt.
-Boot file content is prepended to the system prompt."
-  (let ((boot-content (load-boot-files))
-        (base-prompt *system-prompt*))
-    (if boot-content
-        (format nil "~A~%~%---~%~%~A" boot-content base-prompt)
-        base-prompt)))
+  "Compatibility wrapper that builds the default agent prompt."
+  (build-agent-system-prompt *default-agent-name*))
 
 ;;; --------------------------------------------------------------------------
 ;;; JSON Helpers (underscore-preserving round-trip)
@@ -1459,6 +1493,72 @@ dereferences it at call time so that user customizations take effect.")
   (or (null value)
       (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return) value)))))
 
+(defun normalize-agent-name-key (agent-name)
+  "Normalize AGENT-NAME for registry lookup."
+  (unless (stringp agent-name)
+    (error "Agent name must be a string, got ~S" agent-name))
+  (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) agent-name)))
+    (when (blank-string-p trimmed)
+      (error "Agent name must be a non-empty string"))
+    (string-downcase trimmed)))
+
+(defun register-agent-definition (name &key provider model think-level tools-prompt soul-prompt)
+  "Register or update an agent definition for NAME.
+NAME is stored as given for display, while lookups are keyed case-insensitively."
+  (let* ((trimmed-name (string-trim '(#\Space #\Tab #\Newline #\Return) name))
+         (registry-key (normalize-agent-name-key trimmed-name))
+         (normalized-provider (normalize-provider provider))
+         (normalized-think-level (normalize-think-level-override think-level))
+         (definition (make-agent-definition :name trimmed-name
+                                            :provider normalized-provider
+                                            :model model
+                                            :think-level normalized-think-level
+                                            :tools-prompt tools-prompt
+                                            :soul-prompt soul-prompt)))
+    (when (and model (blank-string-p model))
+      (error "Agent model must be a non-empty string"))
+    (setf (gethash registry-key *agent-definition-registry*) definition)
+    definition))
+
+(defun find-agent-definition (agent-name)
+  "Return the registered agent definition for AGENT-NAME, or NIL."
+  (when agent-name
+    (gethash (normalize-agent-name-key agent-name)
+             *agent-definition-registry*)))
+
+(defun list-agent-definitions ()
+  "Return all registered agent definitions sorted by name."
+  (let ((definitions nil))
+    (maphash (lambda (name definition)
+               (declare (ignore name))
+               (push definition definitions))
+             *agent-definition-registry*)
+    (sort definitions #'string<
+          :key (lambda (definition)
+                 (string-downcase (agent-definition-name definition))))))
+
+(defun agent-definition-provider-for-name (agent-name)
+  "Return AGENT-NAME's programmatic default provider, or NIL."
+  (let ((definition (find-agent-definition agent-name)))
+    (and definition
+         (agent-definition-provider definition))))
+
+(defun agent-definition-model-for-name (agent-name provider)
+  "Return AGENT-NAME's programmatic model when it matches PROVIDER."
+  (let ((definition (find-agent-definition agent-name)))
+    (when (and definition
+               (eq provider (agent-definition-provider definition)))
+      (agent-definition-model definition))))
+
+(defun agent-definition-think-level-for-name (agent-name provider model)
+  "Return AGENT-NAME's programmatic think level when PROVIDER/MODEL support it."
+  (let ((definition (find-agent-definition agent-name)))
+    (when definition
+      (let ((think-level (agent-definition-think-level definition)))
+        (when (and think-level
+                   (think-level-supported-p provider model think-level))
+          think-level)))))
+
 (defun provider-fallback-model (provider)
   "Return the fallback model for PROVIDER.
 Looks up the provider-specific variable in *provider-fallback-models* and
@@ -1717,15 +1817,45 @@ For :OPENROUTER, dynamically-fetched models are used when an API key is present.
 
 (defun agent-default (agent-name)
   "Return AGENT-NAME's default provider, or *default-provider*."
-  (or (getf (agent-default-spec agent-name)
+  (or (agent-definition-provider-for-name agent-name)
+      (getf (agent-default-spec agent-name)
             :provider)
       *default-provider*))
 
 (defun agent-default-model (agent-name provider)
   "Return AGENT-NAME's stored model when it matches PROVIDER."
-  (let ((spec (agent-default-spec agent-name)))
-    (when (eq provider (getf spec :provider))
-      (getf spec :model))))
+  (or (agent-definition-model-for-name agent-name provider)
+      (let ((spec (agent-default-spec agent-name)))
+        (when (eq provider (getf spec :provider))
+          (getf spec :model)))))
+
+(defun agent-known-persisted-default-names ()
+  "Return the agent names that exist in the persisted defaults registry."
+  (ensure-agent-defaults-loaded)
+  (let ((names nil))
+    (maphash (lambda (name spec)
+               (declare (ignore spec))
+               (push name names))
+             (registry-agents *agent-defaults-registry*))
+    names))
+
+(defun list-known-agent-names ()
+  "Return known agent names from programmatic definitions and compatibility defaults."
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (definition (list-agent-definitions))
+      (setf (gethash (normalize-agent-name-key (agent-definition-name definition)) table)
+            (agent-definition-name definition)))
+    (dolist (name (agent-known-persisted-default-names))
+      (setf (gethash (normalize-agent-name-key name) table) name))
+    (when *default-agent-name*
+      (setf (gethash (normalize-agent-name-key *default-agent-name*) table)
+            *default-agent-name*))
+    (let ((names nil))
+      (maphash (lambda (name-key name)
+                 (declare (ignore name-key))
+                 (push name names))
+               table)
+      (sort names #'string< :key #'string-downcase))))
 
 (defun set-agent-default (agent-name provider &key model)
   "Set AGENT-NAME's default provider and optional MODEL, then persist it."
@@ -1742,10 +1872,12 @@ For :OPENROUTER, dynamically-fetched models are used when an API key is present.
 
 (defun resolve-buffer-provider-and-model (buf)
   "Resolve BUF's effective provider, model, and think level.
-Resolution order for provider: buffer override → agent default → *default-provider*.
-Resolution order for model: buffer override → agent default → provider fallback → *default-model*.
-Think level is buffer-scoped only and is returned only when supported by the
-resolved provider/model."
+Resolution order for provider: buffer override → agent definition → legacy agent
+default → *default-provider*.
+Resolution order for model: buffer override → agent definition → legacy agent
+default → provider fallback → *default-model*.
+Think level resolution: buffer override → agent definition → nil, with support
+checked against the resolved provider/model."
   (ensure-agent-defaults-loaded)
   (let* ((provider (or (buffer-provider-override buf)
                        (agent-default (buffer-agent-name buf))
@@ -1755,7 +1887,10 @@ resolved provider/model."
                     (agent-default-model (buffer-agent-name buf) resolved-provider)
                     (provider-fallback-model resolved-provider)
                     *default-model*))
-         (think-level (resolved-buffer-think-level buf resolved-provider model)))
+         (think-level (or (resolved-buffer-think-level buf resolved-provider model)
+                          (agent-definition-think-level-for-name (buffer-agent-name buf)
+                                                                 resolved-provider
+                                                                 model))))
     (when (blank-string-p model)
       (error "Resolved model must be a non-empty string"))
     (values resolved-provider model think-level)))
@@ -1929,10 +2064,9 @@ reasoning_content is present, falls back to reasoning_content."
                (list `((:role . ,role)
                        (:content . ,text)))))))))
 
-(defun openai-messages-with-system-prompt (messages)
-  "Translate MESSAGES and prepend the built system prompt when present."
-  (let ((openai-messages (conversation-messages->openai-messages messages))
-        (system-prompt (build-system-prompt)))
+(defun openai-messages-with-system-prompt (messages &key (system-prompt (build-system-prompt)))
+  "Translate MESSAGES and prepend SYSTEM-PROMPT when present."
+  (let ((openai-messages (conversation-messages->openai-messages messages)))
     (if system-prompt
         (cons `((:role . "system")
                 (:content . ,system-prompt))
@@ -2062,11 +2196,11 @@ reasoning_content is present, falls back to reasoning_content."
                         (nreverse content-blocks))))
 
 (defun openai-codex-responses-request-body (messages model max-tokens tools
-                                            &key stream reasoning-effort)
+                                            &key stream reasoning-effort
+                                                 (system-prompt (or (build-system-prompt) "")))
   "Build the request body for an OpenAI Responses API call."
   (declare (ignore max-tokens))
-  (let* ((system-prompt (or (build-system-prompt) ""))
-         (input-items (conversation-messages->responses-input messages))
+  (let* ((input-items (conversation-messages->responses-input messages))
          (response-tools (or (anthropic-tools->responses-tools tools) #()))
          (body `((:model . ,model)
                  (:instructions . ,system-prompt)
@@ -2146,31 +2280,50 @@ reasoning_content is present, falls back to reasoning_content."
                          &key model
                               (max-tokens *default-max-tokens*)
                               tools
-                              reasoning-effort)
+                              reasoning-effort
+                              (system-prompt (build-system-prompt)))
   "Dispatch a non-streaming request by resolved PROVIDER.
 Anthropic models listed in *claude-cli-models* are routed through the
 Claude Code CLI subprocess instead of the REST API."
   (ecase provider
     (:anthropic
      (if (claude-cli-model-p model)
-         (claude-cli-request messages :model model :max-tokens max-tokens :tools tools)
-         (anthropic-request messages :model model :max-tokens max-tokens :tools tools)))
+         (claude-cli-request messages
+                             :model model
+                             :max-tokens max-tokens
+                             :tools tools
+                             :system-prompt system-prompt)
+         (anthropic-request messages
+                            :model model
+                            :max-tokens max-tokens
+                            :tools tools
+                            :system-prompt system-prompt)))
     (:openai-codex
      (openai-codex-request messages
                            :model model
                            :max-tokens max-tokens
                            :tools tools
-                           :reasoning-effort reasoning-effort))
+                           :reasoning-effort reasoning-effort
+                           :system-prompt system-prompt))
     (:zai
-     (zai-request messages :model model :max-tokens max-tokens :tools tools))
+     (zai-request messages
+                  :model model
+                  :max-tokens max-tokens
+                  :tools tools
+                  :system-prompt system-prompt))
     (:openrouter
-     (openrouter-request messages :model model :max-tokens max-tokens :tools tools))))
+     (openrouter-request messages
+                         :model model
+                         :max-tokens max-tokens
+                         :tools tools
+                         :system-prompt system-prompt))))
 
 (defun provider-request-streaming (provider messages callback
                                    &key model
                                         (max-tokens *default-max-tokens*)
                                         tools
-                                        reasoning-effort)
+                                        reasoning-effort
+                                        (system-prompt (build-system-prompt)))
   "Dispatch a streaming request by resolved PROVIDER.
 Anthropic models listed in *claude-cli-models* are routed through the
 Claude Code CLI subprocess instead of the REST API."
@@ -2180,27 +2333,32 @@ Claude Code CLI subprocess instead of the REST API."
          (claude-cli-request-streaming messages callback
                                        :model model
                                        :max-tokens max-tokens
-                                       :tools tools)
+                                       :tools tools
+                                       :system-prompt system-prompt)
          (anthropic-request-streaming messages callback
                                       :model model
                                       :max-tokens max-tokens
-                                      :tools tools)))
+                                      :tools tools
+                                      :system-prompt system-prompt)))
     (:openai-codex
      (openai-codex-request-streaming messages callback
                                      :model model
                                      :max-tokens max-tokens
                                      :tools tools
-                                     :reasoning-effort reasoning-effort))
+                                     :reasoning-effort reasoning-effort
+                                     :system-prompt system-prompt))
     (:zai
      (zai-request-streaming messages callback
                             :model model
                             :max-tokens max-tokens
-                            :tools tools))
+                            :tools tools
+                            :system-prompt system-prompt))
     (:openrouter
      (openrouter-request-streaming messages callback
                                    :model model
                                    :max-tokens max-tokens
-                                   :tools tools))))
+                                   :tools tools
+                                   :system-prompt system-prompt))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Claude CLI Subprocess Provider (stream-json protocol)
@@ -2270,26 +2428,27 @@ context, tagged with SESSION-ID."
                                   `((:type . "text")
                                     (:text . ,prompt-text))))))))))
 
-(defun claude-cli-spawn-args (model)
+(defun claude-cli-spawn-args (model &key (system-prompt (or (build-system-prompt)
+                                                            "You are a helpful assistant.")))
   "Build the CLI argument list for spawning a Claude subprocess for MODEL.
 Wraps with `env -u LD_LIBRARY_PATH` so the Nix-packaged CLI binary uses its
 own RPATH for library resolution instead of picking up incompatible Guix
 container libraries (e.g. OpenSSL version mismatch)."
-  (let ((system-prompt (or (build-system-prompt)
-                           "You are a helpful assistant.")))
-    (list "env" "-u" "LD_LIBRARY_PATH"
-          *claude-cli-path*
-          "--input-format" "stream-json"
-          "--output-format" "stream-json"
-          "--verbose"
-          "--model" model
-          "--system-prompt" system-prompt
-          "--dangerously-skip-permissions"
-          "--max-turns" "1")))
+  (list "env" "-u" "LD_LIBRARY_PATH"
+        *claude-cli-path*
+        "--input-format" "stream-json"
+        "--output-format" "stream-json"
+        "--verbose"
+        "--model" model
+        "--system-prompt" system-prompt
+        "--dangerously-skip-permissions"
+        "--max-turns" "1"))
 
 (defun claude-cli-request (messages &key (model "claude-sonnet-4-6")
                                          (max-tokens *default-max-tokens*)
-                                         tools)
+                                         tools
+                                         (system-prompt (or (build-system-prompt)
+                                                            "You are a helpful assistant.")))
   "Send a non-streaming request via the Claude Code CLI subprocess.
 Uses the stream-json protocol: spawns `claude --input-format stream-json`,
 writes an NDJSON message to stdin, and reads NDJSON events from stdout
@@ -2298,7 +2457,7 @@ response alist."
   (declare (ignore max-tokens tools))
   (let* ((session-id (claude-cli-next-session-id))
          (ndjson-msg (claude-cli-build-ndjson-message messages session-id))
-         (args (claude-cli-spawn-args model))
+         (args (claude-cli-spawn-args model :system-prompt system-prompt))
          (proc (uiop:launch-program args
                                      :input :stream
                                      :output :stream
@@ -2374,7 +2533,9 @@ response alist."
 (defun claude-cli-request-streaming (messages callback
                                       &key (model "claude-sonnet-4-6")
                                            (max-tokens *default-max-tokens*)
-                                           tools)
+                                           tools
+                                           (system-prompt (or (build-system-prompt)
+                                                              "You are a helpful assistant.")))
   "Send a streaming request via the Claude Code CLI subprocess.
 Uses the stream-json protocol: spawns `claude --input-format stream-json`,
 writes an NDJSON message to stdin, and parses NDJSON events from stdout
@@ -2382,7 +2543,7 @@ in a background thread.  Returns a stream-state that the event loop polls."
   (declare (ignore callback max-tokens tools))
   (let* ((session-id (claude-cli-next-session-id))
          (ndjson-msg (claude-cli-build-ndjson-message messages session-id))
-         (args (claude-cli-spawn-args model))
+         (args (claude-cli-spawn-args model :system-prompt system-prompt))
          (state (make-stream-state)))
     (file-debug-log "cli-spawn" "session=~A model=~A args=(~{~A~^ ~})"
                     session-id model args)
@@ -2564,7 +2725,8 @@ in a background thread.  Returns a stream-state that the event loop polls."
 
 (defun anthropic-request (messages &key (model *anthropic-model*)
                                         (max-tokens *default-max-tokens*)
-                                        tools)
+                                        tools
+                                        (system-prompt (build-system-prompt)))
   "Call the Anthropic Messages API. Returns the parsed response alist.
 MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
 (or nil for no tools)."
@@ -2580,8 +2742,7 @@ MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
                (push `(:tools . ,tools) body))
              ;; System prompt as array of content blocks — required for
              ;; Claude Max OAuth tokens (first block must be the CC prefix).
-             (let* ((system-prompt (build-system-prompt))
-                    (blocks (list `((:type . "text")
+             (let* ((blocks (list `((:type . "text")
                                     (:text . ,*claude-code-system-prefix*)))))
                (when system-prompt
                  (setf blocks (append blocks
@@ -2609,13 +2770,15 @@ MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
 (defun openai-codex-request (messages &key (model *openai-codex-model*)
                                            (max-tokens *default-max-tokens*)
                                            tools
-                                           reasoning-effort)
+                                           reasoning-effort
+                                           (system-prompt (or (build-system-prompt) "")))
   "Call the OpenAI Responses API for Codex and normalize the response shape."
   (let* ((auth (or (resolve-openai-codex-auth)
                    (error 'simple-error
                           :format-control "No OpenAI Codex auth. Save a bearer token to ~/.config/clawmacs/openai-codex-token or sign in via ~/.codex/auth.json")))
          (request-body (openai-codex-responses-request-body
                         messages model max-tokens tools
+                        :system-prompt system-prompt
                         :reasoning-effort reasoning-effort)))
     (multiple-value-bind (body status-code ignored effective-auth)
         (openai-codex-http-request auth request-body)
@@ -2768,7 +2931,8 @@ EVENT is an already-decoded alist (not a JSON string)."
 (defun anthropic-request-streaming (messages callback
                                      &key (model *anthropic-model*)
                                           (max-tokens *default-max-tokens*)
-                                          tools)
+                                          tools
+                                          (system-prompt (build-system-prompt)))
   "Call the Anthropic Messages API with streaming enabled.
 CALLBACK is called with (stream-state) on each update from the background thread.
 Returns the final stream-state when complete."
@@ -2786,8 +2950,7 @@ Returns the final stream-state when complete."
                (push `(:tools . ,tools) body))
               ;; System prompt as array of content blocks — required for
               ;; Claude Max OAuth tokens (first block must be the CC prefix).
-              (let* ((system-prompt (build-system-prompt))
-                     (blocks (list `((:type . "text")
+              (let* ((blocks (list `((:type . "text")
                                      (:text . ,*claude-code-system-prefix*)))))
                 (when system-prompt
                   (setf blocks (append blocks
@@ -3030,7 +3193,8 @@ Returns the final stream-state when complete."
                                        &key (model *openai-codex-model*)
                                             (max-tokens *default-max-tokens*)
                                             tools
-                                            reasoning-effort)
+                                            reasoning-effort
+                                            (system-prompt (or (build-system-prompt) "")))
   "Call the OpenAI Responses API with SSE streaming enabled."
   (declare (ignore callback))
   (let* ((auth (or (resolve-openai-codex-auth)
@@ -3040,6 +3204,7 @@ Returns the final stream-state when complete."
            (openai-codex-responses-request-body
             messages model max-tokens tools
             :stream t
+            :system-prompt system-prompt
             :reasoning-effort reasoning-effort))
          (state (make-stream-state)))
     (multiple-value-bind (body-stream status-code ignored effective-auth)
@@ -3071,7 +3236,8 @@ Returns the final stream-state when complete."
 
 (defun openrouter-request (messages &key (model *openrouter-model*)
                                           (max-tokens *default-max-tokens*)
-                                          tools)
+                                          tools
+                                          (system-prompt (build-system-prompt)))
   "Call the OpenRouter Chat Completions API and normalize the response shape.
 Uses the OpenAI-compatible chat completions protocol."
   (let* ((token (or (read-provider-token :openrouter)
@@ -3080,7 +3246,9 @@ Uses the OpenAI-compatible chat completions protocol."
          (request-body
             (let ((body `((:model . ,model)
                           (:max--tokens . ,max-tokens)
-                         (:messages . ,(coerce (openai-messages-with-system-prompt messages)
+                         (:messages . ,(coerce (openai-messages-with-system-prompt
+                                               messages
+                                               :system-prompt system-prompt)
                                                'vector)))))
               (when (and tools (plusp (length tools)))
                 (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
@@ -3109,7 +3277,8 @@ Uses the OpenAI-compatible chat completions protocol."
 (defun openrouter-request-streaming (messages callback
                                      &key (model *openrouter-model*)
                                           (max-tokens *default-max-tokens*)
-                                          tools)
+                                          tools
+                                          (system-prompt (build-system-prompt)))
   "Call the OpenRouter Chat Completions API with SSE streaming enabled.
 Uses the same OpenAI-compatible streaming protocol."
   (declare (ignore callback))
@@ -3120,7 +3289,9 @@ Uses the same OpenAI-compatible streaming protocol."
             (let ((body `((:model . ,model)
                           (:max--tokens . ,max-tokens)
                           (:stream . t)
-                         (:messages . ,(coerce (openai-messages-with-system-prompt messages)
+                         (:messages . ,(coerce (openai-messages-with-system-prompt
+                                               messages
+                                               :system-prompt system-prompt)
                                                'vector)))))
               (when (and tools (plusp (length tools)))
                 (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
@@ -3159,7 +3330,8 @@ Uses the same OpenAI-compatible streaming protocol."
 
 (defun zai-request (messages &key (model *zai-model*)
                                    (max-tokens *default-max-tokens*)
-                                   tools)
+                                   tools
+                                   (system-prompt (build-system-prompt)))
   "Call Z.AI Chat Completions API and normalize the response shape.
 Uses the coding plan endpoint (api.z.ai/api/coding/paas/v4) which is
 compatible with the GLM Coding Max-Monthly subscription.
@@ -3170,7 +3342,9 @@ The API follows the OpenAI Chat Completions format."
          (request-body
             (let ((body `((:model . ,model)
                           (:max--tokens . ,max-tokens)
-                         (:messages . ,(coerce (openai-messages-with-system-prompt messages)
+                         (:messages . ,(coerce (openai-messages-with-system-prompt
+                                               messages
+                                               :system-prompt system-prompt)
                                                'vector)))))
               (when (and tools (plusp (length tools)))
                 (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
@@ -3198,7 +3372,8 @@ The API follows the OpenAI Chat Completions format."
 (defun zai-request-streaming (messages callback
                                &key (model *zai-model*)
                                     (max-tokens *default-max-tokens*)
-                                    tools)
+                                    tools
+                                    (system-prompt (build-system-prompt)))
   "Call Z.AI Chat Completions API with SSE streaming enabled.
 Uses the same OpenAI-compatible streaming protocol."
   (declare (ignore callback))
@@ -3209,7 +3384,9 @@ Uses the same OpenAI-compatible streaming protocol."
             (let ((body `((:model . ,model)
                           (:max--tokens . ,max-tokens)
                           (:stream . t)
-                         (:messages . ,(coerce (openai-messages-with-system-prompt messages)
+                         (:messages . ,(coerce (openai-messages-with-system-prompt
+                                               messages
+                                               :system-prompt system-prompt)
                                                'vector)))))
               (when (and tools (plusp (length tools)))
                 (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
