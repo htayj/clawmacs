@@ -942,6 +942,302 @@ def test_37_ctrl_d(s):
 
 
 # ==========================================================================
+# Helper Functions
+# ==========================================================================
+
+def wait_for_text(s, text, timeout=5):
+    """Poll until text appears on screen or timeout."""
+    deadline = time.time() + timeout
+    last_screen = ""
+    while time.time() < deadline:
+        screen = s.text()
+        last_screen = screen
+        if text in screen:
+            return screen
+        time.sleep(0.25)
+    raise AssertionError(
+        f"Timed out waiting for '{text}'; last screen:\n{last_screen[:500]}"
+    )
+
+
+def cancel_minibuffer(s):
+    """Press C-g to close active minibuffer."""
+    s.press("Ctrl+g")
+    time.sleep(0.3)
+
+
+def kill_current_buffer(s):
+    """Press C-x k to kill the current buffer and return to previous."""
+    s.press("Ctrl+x")
+    s.press("k")
+    time.sleep(0.3)
+
+
+def switch_to_buffer(s, query, expected_name=None):
+    """Open the minibuffer buffer selector and switch to QUERY."""
+    s.press("Ctrl+x")
+    s.press("Ctrl+b")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "Switch Buffer", "buffer selector prompt")
+    if query:
+        s.type_text(query)
+        time.sleep(0.3)
+        screen = s.text()
+    if expected_name:
+        assert_contains(screen, expected_name, "buffer candidate visible")
+    s.press("Enter")
+    time.sleep(0.5)
+
+
+# ==========================================================================
+# New Tests — Tier 1: Offline (No LLM Required)
+# ==========================================================================
+
+def test_38_shell_prefix(s):
+    """Test: ! prefix executes shell command inline."""
+    set_input(s, "!echo e2e-shell-test")
+    s.press("Enter")
+    time.sleep(1.5)
+    screen = s.text()
+    assert_contains(screen, "e2e-shell-test", "shell output visible")
+    assert_contains(screen, "$ echo e2e-shell-test", "command echo format")
+    s.screenshot("38-shell-prefix")
+    clear_input(s)
+
+
+def test_39_debug_mode_toggle(s):
+    """Test: C-c C-d toggles debug mode on and off."""
+    s.press("Ctrl+c")
+    s.press("Ctrl+d")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "Debug mode ON", "debug mode turned on")
+    s.screenshot("39-debug-mode-on")
+    # Toggle back off
+    s.press("Ctrl+c")
+    s.press("Ctrl+d")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "Debug mode OFF", "debug mode turned off")
+    s.screenshot("39-debug-mode-off")
+
+
+def test_40_save_session(s):
+    """Test: C-x C-s saves the current session."""
+    s.press("Ctrl+x")
+    s.press("Ctrl+s")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "Session saved to", "save session message")
+    s.screenshot("40-save-session")
+
+
+def test_41_buffer_state_persistence(s):
+    """Test: Input text persists when switching away and back."""
+    set_input(s, "persistent-text-check")
+    time.sleep(0.3)
+    # Create new buffer B
+    s.press("Ctrl+x")
+    s.press("n")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_not_contains(screen, "persistent-text-check", "new buffer has no old text")
+    # Switch back to buffer A
+    switch_to_buffer(s, "session-01", "session-01")
+    screen = s.text()
+    assert_contains(screen, "persistent-text-check", "text preserved after switch")
+    s.screenshot("41-buffer-persistence")
+    # Switch to B and kill it to clean up
+    switch_to_buffer(s, "session-02", "session-02")
+    kill_current_buffer(s)
+    # Clear input in buffer A
+    clear_input(s)
+
+
+def test_42_minibuffer_buffer_selector(s):
+    """Test: C-x C-b opens minibuffer buffer selector with fuzzy filtering."""
+    s.press("Ctrl+x")
+    s.press("Ctrl+b")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "Switch Buffer", "buffer selector prompt")
+    assert_contains(screen, "session-0", "session candidate visible")
+    s.screenshot("42-minibuffer-buffer-selector")
+    # Type to fuzzy-filter
+    s.type_text("01")
+    time.sleep(0.3)
+    screen = s.text()
+    assert_contains(screen, "session-01", "fuzzy filter matches session-01")
+    s.screenshot("42-minibuffer-filtered")
+    # Cancel
+    cancel_minibuffer(s)
+    time.sleep(0.3)
+    screen = s.text()
+    assert_not_contains(screen, "Switch Buffer", "minibuffer closed after C-g")
+
+
+def test_43_describe_bindings(s):
+    """Test: C-h b opens describe bindings help buffer."""
+    s.press("Ctrl+h")
+    time.sleep(0.3)
+    s.press("b")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "Key Bindings", "bindings header visible")
+    assert_contains(screen, "send-message", "send-message command listed")
+    s.screenshot("43-describe-bindings")
+    # Kill help buffer to return
+    kill_current_buffer(s)
+    time.sleep(0.3)
+    screen = s.text()
+    assert_contains(screen, "session-", "back to session buffer")
+
+
+def test_44_describe_function(s):
+    """Test: C-h f opens describe function minibuffer."""
+    s.press("Ctrl+h")
+    time.sleep(0.3)
+    s.press("f")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "Describe Function", "describe function prompt")
+    s.screenshot("44-describe-function-prompt")
+    # Type a function name and select it
+    s.type_text("send-message")
+    time.sleep(0.3)
+    screen = s.text()
+    assert_contains(screen, "send-message", "send-message in candidates")
+    s.press("Enter")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "command", "type indicator shows command")
+    s.screenshot("44-describe-function-result")
+    # Kill help buffer
+    kill_current_buffer(s)
+
+
+def test_45_describe_variable(s):
+    """Test: C-h v opens describe variable minibuffer."""
+    s.press("Ctrl+h")
+    time.sleep(0.3)
+    s.press("v")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "Describe Variable", "describe variable prompt")
+    s.screenshot("45-describe-variable-prompt")
+    s.type_text("default-model")
+    time.sleep(0.3)
+    screen = s.text()
+    assert_contains(screen, "default-model", "default-model in candidates")
+    s.screenshot("45-describe-variable-filtered")
+    cancel_minibuffer(s)
+    time.sleep(0.3)
+    screen = s.text()
+    assert_not_contains(screen, "Describe Variable", "minibuffer closed")
+
+
+def test_46_describe_type(s):
+    """Test: C-h T opens describe type minibuffer."""
+    s.press("Ctrl+h")
+    time.sleep(0.3)
+    s.press("T")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "Describe Type", "describe type prompt")
+    s.screenshot("46-describe-type-prompt")
+    s.type_text("buffer")
+    time.sleep(0.3)
+    screen = s.text()
+    assert_contains(screen, "buffer", "buffer in candidates")
+    s.screenshot("46-describe-type-filtered")
+    cancel_minibuffer(s)
+    time.sleep(0.3)
+    screen = s.text()
+    assert_not_contains(screen, "Describe Type", "minibuffer closed")
+
+
+def test_47_customize_face(s):
+    """Test: C-h F opens customize face minibuffer with fg:/bg: display."""
+    s.press("Ctrl+h")
+    time.sleep(0.3)
+    s.press("F")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "Customize Face", "customize face prompt")
+    assert_contains(screen, "fg:", "face fg: display format")
+    s.screenshot("47-customize-face")
+    cancel_minibuffer(s)
+    time.sleep(0.3)
+    screen = s.text()
+    assert_not_contains(screen, "Customize Face", "minibuffer closed")
+
+
+# ==========================================================================
+# New Tests — Tier 2: LLM Required
+# ==========================================================================
+
+def test_48_tool_lisp_eval(s):
+    """Test: Agent uses lisp_eval tool (auto-approved) and returns result."""
+    set_input(s, "Use the lisp_eval tool to evaluate (+ 40 2)")
+    s.press("Enter")
+    screen = wait_for_text(s, "42", timeout=30)
+    assert_contains(screen, "42", "lisp_eval result visible")
+    s.screenshot("48-tool-lisp-eval")
+
+
+def test_49_tool_spec_lookup(s):
+    """Test: Agent uses lisp_eval to query the bundled Common Lisp spec."""
+    set_input(
+        s,
+        "Use the lisp_eval tool to evaluate "
+        "(describe-common-lisp-symbol-to-string 'format :max-chars 800)"
+    )
+    s.press("Enter")
+    screen = wait_for_text(s, "Reference: CL Community Spec", timeout=30)
+    assert_contains(screen, "format", "spec lookup result visible")
+    assert_contains(screen, "Reference: CL Community Spec", "spec reference visible")
+    s.screenshot("49-tool-spec-lookup")
+
+
+def test_50_multi_turn(s):
+    """Test: Multi-turn conversation preserves history."""
+    # Create a fresh buffer
+    s.press("Ctrl+x")
+    s.press("n")
+    time.sleep(0.5)
+    # Turn 1
+    set_input(s, "Say only the word 'alpha'")
+    s.press("Enter")
+    screen = wait_for_text(s, "alpha", timeout=30)
+    assert_contains(screen, "alpha", "first turn response")
+    s.screenshot("50-multi-turn-1")
+    # Turn 2
+    set_input(s, "Now say only the word 'beta'")
+    s.press("Enter")
+    screen = wait_for_text(s, "beta", timeout=30)
+    assert_contains(screen, "alpha", "first turn still visible")
+    assert_contains(screen, "beta", "second turn response")
+    s.screenshot("50-multi-turn-2")
+    # Clean up
+    kill_current_buffer(s)
+
+
+def test_51_toggle_tool_results(s):
+    """Test: C-c t toggles tool result visibility without error."""
+    s.press("Ctrl+c")
+    s.press("t")
+    time.sleep(0.5)
+    s.screenshot("51-toggle-tool-results-on")
+    # Toggle back
+    s.press("Ctrl+c")
+    s.press("t")
+    time.sleep(0.5)
+    s.screenshot("51-toggle-tool-results-off")
+    # Primary check: run_test wrapper verifies no [Error: on screen
+
+
+# ==========================================================================
 # Main
 # ==========================================================================
 
@@ -949,7 +1245,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run clawmacs e2e tests")
     parser.add_argument(
         "--only",
-        choices=["all", "readline"],
+        choices=["all", "readline", "offline"],
         default="all",
         help="run only a subset of tests",
     )
@@ -985,29 +1281,30 @@ def main():
         sys.exit(1)
     print("clawmacs ready.\n")
 
-    # Run tests sequentially (they build on each other's state)
-    tests = [
-        ("01-initial-render", test_01_initial_render),
-        ("02-text-input", test_02_text_input),
-        ("03-line-editing", test_03_line_editing_c_a_c_e),
-        ("04-kill-yank", test_04_kill_yank),
-        ("05-multiline-input", test_05_multiline_input),
-        ("06-send-message", test_06_send_message),
-        ("07-line-wrapping", test_07_line_wrapping),
-        ("08-scroll", test_08_scroll),
-        ("09-meta-scroll", test_09_meta_scroll),
-        ("10-new-buffer", test_10_new_buffer),
-        ("11-switch-buffer", test_11_switch_buffer),
-        ("12-kill-buffer", test_12_kill_buffer),
-        ("13-backspace", test_13_backspace),
-        ("14-point-face", test_14_point_face),
-        ("15-permission-approve", test_15_permission_approve),
-        ("16-permission-deny", test_16_permission_deny),
-        ("17-permission-deny-message", test_17_permission_deny_with_message),
-        ("18-file-write-diff", test_18_file_write_diff),
-        ("19-file-write-append", test_19_file_write_append),
-        ("20-file-edit", test_20_file_edit_search_replace),
-        ("21-modeline", test_21_modeline_content),
+    # Offline tests (no LLM required)
+    offline_tests = [
+        ("38-shell-prefix", test_38_shell_prefix),
+        ("39-debug-mode", test_39_debug_mode_toggle),
+        ("40-save-session", test_40_save_session),
+        ("41-buffer-persistence", test_41_buffer_state_persistence),
+        ("42-minibuffer-selector", test_42_minibuffer_buffer_selector),
+        ("43-describe-bindings", test_43_describe_bindings),
+        ("44-describe-function", test_44_describe_function),
+        ("45-describe-variable", test_45_describe_variable),
+        ("46-describe-type", test_46_describe_type),
+        ("47-customize-face", test_47_customize_face),
+    ]
+
+    # LLM-required new tests
+    llm_new_tests = [
+        ("48-tool-lisp-eval", test_48_tool_lisp_eval),
+        ("49-tool-spec-lookup", test_49_tool_spec_lookup),
+        ("50-multi-turn", test_50_multi_turn),
+        ("51-toggle-tool-results", test_51_toggle_tool_results),
+    ]
+
+    # Readline tests
+    readline_tests = [
         ("22-ctrl-b", test_22_ctrl_b),
         ("23-ctrl-f", test_23_ctrl_f),
         ("24-alt-b", test_24_alt_b),
@@ -1026,25 +1323,36 @@ def main():
         ("37-ctrl-d", test_37_ctrl_d),
     ]
 
-    if args.only == "readline":
+    # Run tests sequentially (they build on each other's state)
+    if args.only == "offline":
+        tests = offline_tests + readline_tests
+    elif args.only == "readline":
+        tests = readline_tests
+    else:
+        # --only all (default): full suite
         tests = [
-            ("22-ctrl-b", test_22_ctrl_b),
-            ("23-ctrl-f", test_23_ctrl_f),
-            ("24-alt-b", test_24_alt_b),
-            ("25-alt-f", test_25_alt_f),
-            ("26-ctrl-a", test_26_ctrl_a),
-            ("27-ctrl-e", test_27_ctrl_e),
-            ("28-ctrl-u", test_28_ctrl_u),
-            ("29-ctrl-k", test_29_ctrl_k),
-            ("30-alt-d", test_30_alt_d),
-            ("31-ctrl-w", test_31_ctrl_w),
-            ("32-ctrl-y", test_32_ctrl_y),
-            ("33-alt-y", test_33_alt_y),
-            ("34-alt-ctrl-y", test_34_alt_ctrl_y),
-            ("35-alt-dot", test_35_alt_dot),
-            ("36-alt-underscore", test_36_alt_underscore),
-            ("37-ctrl-d", test_37_ctrl_d),
-        ]
+            ("01-initial-render", test_01_initial_render),
+            ("02-text-input", test_02_text_input),
+            ("03-line-editing", test_03_line_editing_c_a_c_e),
+            ("04-kill-yank", test_04_kill_yank),
+            ("05-multiline-input", test_05_multiline_input),
+            ("06-send-message", test_06_send_message),
+            ("07-line-wrapping", test_07_line_wrapping),
+            ("08-scroll", test_08_scroll),
+            ("09-meta-scroll", test_09_meta_scroll),
+            ("10-new-buffer", test_10_new_buffer),
+            ("11-switch-buffer", test_11_switch_buffer),
+            ("12-kill-buffer", test_12_kill_buffer),
+            ("13-backspace", test_13_backspace),
+            ("14-point-face", test_14_point_face),
+            ("15-permission-approve", test_15_permission_approve),
+            ("16-permission-deny", test_16_permission_deny),
+            ("17-permission-deny-message", test_17_permission_deny_with_message),
+            ("18-file-write-diff", test_18_file_write_diff),
+            ("19-file-write-append", test_19_file_write_append),
+            ("20-file-edit", test_20_file_edit_search_replace),
+            ("21-modeline", test_21_modeline_content),
+        ] + offline_tests + llm_new_tests + readline_tests
 
     for name, fn in tests:
         run_test(name, fn, session)
