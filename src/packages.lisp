@@ -271,6 +271,21 @@
    #:tool-approval-extra-display
    #:init-tools
 
+   ;; Standard reference / library discovery
+   #:*common-lisp-spec-root*
+   #:common-lisp-spec-available-p
+   #:find-common-lisp-spec-entry
+   #:describe-common-lisp-symbol-to-string
+   #:search-common-lisp-spec-to-string
+   #:list-project-systems
+   #:describe-system-to-string
+   #:list-system-packages
+   #:list-package-functions
+   #:list-package-variables
+   #:list-package-types
+   #:describe-library-symbol-to-string
+   #:search-system-docs
+
    ;; Approval
    #:buffer-approval-pending
    #:buffer-approval-result

@@ -18,6 +18,7 @@
                              (:file "render-core")
                              (:file "croatoan-backend")
                              (:file "main")
+                             (:file "reference")
                              (:file "docs")))))
 
 (defsystem "clawmacs/mcclim"
@@ -34,6 +35,7 @@
                 :serial t
                  :components ((:file "packages")
                               (:file "package-manager-test")
+                              (:file "reference-test")
                               (:file "faces-test")
                               (:file "message-test")
                               (:file "buffer-test")

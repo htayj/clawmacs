@@ -182,11 +182,20 @@ concise explanations.
 - `(apropos-list \"SUBSTRING\" :clawmacs)` - searches the `:clawmacs` package and returns matches.
 - `(multiple-value-list (find-symbol \"NAME\" :clawmacs))` - checks whether a symbol exists and
   whether it is external or internal.
+- `(list-project-systems)` - lists clawmacs and the ASDF systems it imports.
+- `(describe-system-to-string \"SYSTEM\")` - summarizes an imported system from its local ASD,
+  package definitions, and docs.
+- `(list-system-packages \"SYSTEM\")` - lists package names defined by an imported system.
 - `(undocumented-functions)`, `(undocumented-variables)`, and `(undocumented-types)` help find
   symbols that are missing extended docs.
 
 ## Finding documentation
 
+- The bundled standard-language reference is `cl-community-spec`, a vendored offline snapshot of the
+  open CL Community Spec. Use it for ANSI Common Lisp questions.
+- `(describe-common-lisp-symbol-to-string 'SYMBOL)` - returns the local `cl-community-spec` entry for
+  a standard Common Lisp symbol.
+- `(search-common-lisp-spec-to-string \"QUERY\")` - searches the bundled `cl-community-spec` index.
 - `(describe-function-to-string 'SYMBOL)` - returns detailed function docs, usage, and related symbols.
 - `(describe-variable-to-string 'SYMBOL)` - returns detailed variable docs and current-value info.
 - `(describe-type-to-string 'SYMBOL)` - returns type, class, struct, or condition docs.
@@ -194,6 +203,12 @@ concise explanations.
   `:returns`, `:side-effects`, or `:see-also`.
 - `(documentation 'SYMBOL 'function)` and `(documentation 'SYMBOL 'variable)` read the standard
   docstring when you only need the built-in documentation entry.
+- `(describe-library-symbol-to-string \"SYSTEM\" 'SYMBOL)` - summarizes a library symbol using local
+  package introspection, docstrings, and source/docs hits.
+- `(search-system-docs \"SYSTEM\" \"QUERY\")` - searches local README/docs/source files for imported
+  libraries and for clawmacs itself.
+- Use `describe-common-lisp-symbol-to-string` for standard `COMMON-LISP` symbols, and use the
+  system/package helpers for imported libraries or SBCL-specific APIs.
 
 ## Calling and inspecting
 
@@ -216,6 +231,10 @@ concise explanations.
 - `*default-model*`
 - `(symbol-value '*default-provider*)`
 - `(apropos-list \"buffer\" :clawmacs)`
+- `(describe-common-lisp-symbol-to-string 'handler-case)`
+- `(search-common-lisp-spec-to-string \"dynamic extent\")`
+- `(describe-system-to-string \"croatoan\")`
+- `(search-system-docs \"alexandria\" \"hash table\")`
 - `(describe-function-to-string 'start-streaming-response)`
 - `(let* ((syms (apropos-list \"model\" :clawmacs)))
      (format nil \"~{~A~^, ~}\" syms))`

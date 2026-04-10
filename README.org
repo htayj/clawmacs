@@ -46,7 +46,7 @@ The default built-in agent tool surface is intentionally narrow:
 
 By default, agents are expected to search for symbols, inspect documentation, call functions, and update runtime state through =lisp_eval=. Custom tools may still be registered explicitly, but they are not part of the default built-in tool set.
 
-The =lisp_eval= tool is particularly powerful: the agent can introspect clawmacs itself, query buffer state, evaluate expressions, and modify the running system.
+The =lisp_eval= tool is particularly powerful: the agent can introspect clawmacs itself, query buffer state, evaluate expressions, and modify the running system. Standard Common Lisp reference lookup is available through a vendored offline snapshot of =cl-community-spec=, and imported library discovery is handled locally through ASDF metadata, package exports, docstrings, and source/doc search helpers.
 
 ** Emacs-Style Interface
 

@@ -1822,6 +1822,36 @@ documentation in *extended-docs*."
 ;;; Category: help — Introspection and help system
 ;;; ==========================================================================
 
+(defdoc *common-lisp-spec-root*
+  :category "help"
+  :usage "*common-lisp-spec-root*"
+  :returns "pathname — Directory containing the vendored CL Community Spec snapshot and `pages/` subtree."
+  :see-also (common-lisp-spec-available-p describe-common-lisp-symbol-to-string search-common-lisp-spec-to-string))
+
+(defdoc common-lisp-spec-available-p
+  :category "help"
+  :usage "(common-lisp-spec-available-p) — (common-lisp-spec-available-p)"
+  :returns "boolean — Non-nil when the vendored CL Community Spec pages and index are available."
+  :see-also (*common-lisp-spec-root* describe-common-lisp-symbol-to-string search-common-lisp-spec-to-string))
+
+(defdoc find-common-lisp-spec-entry
+  :category "help"
+  :usage "(find-common-lisp-spec-entry DESIGNATOR) — (find-common-lisp-spec-entry 'format)"
+  :returns "plist or nil — Includes :term, :page, :path, and :url for an exact CL Community Spec match."
+  :see-also (describe-common-lisp-symbol-to-string search-common-lisp-spec-to-string common-lisp-spec-available-p))
+
+(defdoc describe-common-lisp-symbol-to-string
+  :category "help"
+  :usage "(describe-common-lisp-symbol-to-string DESIGNATOR &key MAX-CHARS) — (describe-common-lisp-symbol-to-string 'handler-case)"
+  :returns "string — Plain-text rendering of the vendored CL Community Spec page."
+  :see-also (find-common-lisp-spec-entry search-common-lisp-spec-to-string documentation))
+
+(defdoc search-common-lisp-spec-to-string
+  :category "help"
+  :usage "(search-common-lisp-spec-to-string QUERY &key LIMIT) — (search-common-lisp-spec-to-string \"dynamic extent\")"
+  :returns "string — Ranked CL Community Spec search results with page names and upstream URLs."
+  :see-also (describe-common-lisp-symbol-to-string find-common-lisp-spec-entry))
+
 (defdoc list-functions
   :category "help"
   :usage "(list-functions) — (list-functions)"
@@ -1940,6 +1970,54 @@ documentation in *extended-docs*."
   :returns "nil"
   :side-effects "On selection, creates/switches to a help buffer with the type description."
   :see-also (describe-type-to-string list-types make-help-buffer))
+
+(defdoc list-project-systems
+  :category "help"
+  :usage "(list-project-systems) — (list-project-systems)"
+  :returns "list of strings — clawmacs plus the systems imported in clawmacs.asd."
+  :see-also (describe-system-to-string list-system-packages search-system-docs))
+
+(defdoc describe-system-to-string
+  :category "help"
+  :usage "(describe-system-to-string SYSTEM) — (describe-system-to-string \"croatoan\")"
+  :returns "string — Local ASDF summary with root path, metadata, packages, and docs."
+  :see-also (list-project-systems list-system-packages search-system-docs))
+
+(defdoc list-system-packages
+  :category "help"
+  :usage "(list-system-packages SYSTEM) — (list-system-packages \"alexandria\")"
+  :returns "list of strings — Package names defined by the system's package source files."
+  :see-also (describe-system-to-string list-package-functions describe-library-symbol-to-string))
+
+(defdoc list-package-functions
+  :category "help"
+  :usage "(list-package-functions PACKAGE) — (list-package-functions \"CLAWMACS\")"
+  :returns "list of symbols — Exported function symbols from PACKAGE."
+  :see-also (list-package-variables list-package-types describe-library-symbol-to-string))
+
+(defdoc list-package-variables
+  :category "help"
+  :usage "(list-package-variables PACKAGE) — (list-package-variables \"CLAWMACS\")"
+  :returns "list of symbols — Exported bound variable symbols from PACKAGE."
+  :see-also (list-package-functions list-package-types describe-library-symbol-to-string))
+
+(defdoc list-package-types
+  :category "help"
+  :usage "(list-package-types PACKAGE) — (list-package-types \"CLAWMACS\")"
+  :returns "list of symbols — Exported class and type symbols from PACKAGE."
+  :see-also (list-package-functions list-package-variables describe-library-symbol-to-string))
+
+(defdoc describe-library-symbol-to-string
+  :category "help"
+  :usage "(describe-library-symbol-to-string SYSTEM SYMBOL &optional PACKAGE) — (describe-library-symbol-to-string \"clawmacs\" 'describe-function-to-string \"CLAWMACS\")"
+  :returns "string — Runtime docstrings plus local source/doc hits for a library symbol."
+  :see-also (list-system-packages list-package-functions search-system-docs))
+
+(defdoc search-system-docs
+  :category "help"
+  :usage "(search-system-docs SYSTEM QUERY &key LIMIT) — (search-system-docs \"croatoan\" \"thread\")"
+  :returns "string — Matching README/docs/source hits with relative paths and line numbers."
+  :see-also (describe-system-to-string describe-library-symbol-to-string list-project-systems))
 
 ;;; ==========================================================================
 ;;; Category: type — Type definitions (classes, structures, conditions)

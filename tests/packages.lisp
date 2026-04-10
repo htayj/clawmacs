@@ -26,6 +26,10 @@
   :description "Package loader tests"
   :in clawmacs-suite)
 
+(def-suite reference-suite
+  :description "Common Lisp spec and local library discovery tests"
+  :in clawmacs-suite)
+
 (def-suite llm-suite
   :description "LLM helper tests"
   :in clawmacs-suite)
