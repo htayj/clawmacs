@@ -1,6 +1,7 @@
 (defsystem "clawmacs"
   :description "A Lisp-native Emacs-inspired LLM chat interface"
   :version "0.1.0"
+  :licence "AGPL-3.0-only"
   :depends-on ("croatoan" "alexandria" "drakma" "cl-json" "bordeaux-threads")
   :serial t
   :components ((:module "src"
@@ -23,12 +24,14 @@
 
 (defsystem "clawmacs/mcclim"
   :description "McCLIM graphical backend for clawmacs"
+  :licence "AGPL-3.0-only"
   :depends-on ("clawmacs" "mcclim")
   :components ((:module "src"
                 :components ((:file "mcclim-backend")))))
 
 (defsystem "clawmacs/tests"
   :description "Tests for clawmacs"
+  :licence "AGPL-3.0-only"
   :depends-on ("clawmacs" "fiveam")
   :serial t
   :components ((:module "tests"

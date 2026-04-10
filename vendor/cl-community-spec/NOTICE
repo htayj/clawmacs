@@ -1,0 +1,17 @@
+Vendored `cl-community-spec` snapshot
+=====================================
+
+Source repository:
+- https://github.com/fonol/cl-community-spec
+
+Published site snapshot source:
+- https://cl-community-spec.github.io/
+
+License:
+- MIT. See `LICENSE` in this directory for the full upstream license text.
+
+Compliance note:
+- This repository keeps the upstream MIT license text alongside the vendored
+  `pages/` subtree and `searchable_terms.json`.
+- If you redistribute any substantial portion of this vendored snapshot outside
+  this directory, preserve the upstream `LICENSE` text with it.

@@ -244,4 +244,10 @@ Despite the name, clawmacs is not intended to be simply an OpenClaw clone. It is
 
 * License
 
-[[https://www.gnu.org/licenses/agpl-3.0.html][GNU Affero General Public License v3.0]]
+Clawmacs itself is licensed under the [[https://www.gnu.org/licenses/agpl-3.0.html][GNU Affero General Public License v3.0 only]].
+See [LICENSE](/home/tay/projects/clawmacs/LICENSE) for the full text.
+
+Third-party vendored material may use different licenses. In particular,
+[vendor/cl-community-spec](/home/tay/projects/clawmacs/vendor/cl-community-spec)
+is kept under its upstream MIT license; see
+[vendor/cl-community-spec/LICENSE](/home/tay/projects/clawmacs/vendor/cl-community-spec/LICENSE).
