@@ -84,8 +84,11 @@
     (keymap-bind km '(:alt #\.) 'yank-previous-command-last-arg-command)    ; M-.
     (keymap-bind km '(:alt #\_) 'yank-previous-command-last-arg-command)    ; M-_
     ;; Delete
-    ;; Note: #\Backspace (ASCII 8 = C-h) is now consumed as the help prefix key.
-    ;; Backspace still works via #\Rubout (ASCII 127) and :backspace (ncurses keyword).
+    ;; Bind direct Backspace variants for backends that distinguish them.
+    ;; In the croatoan input path raw ASCII 8 is still consumed as the C-h help
+    ;; prefix before keymap lookup, but other backends or normalized events may
+    ;; still deliver #\Backspace directly.
+    (keymap-bind km #\Backspace 'delete-char-backward-command)
     (keymap-bind km (code-char 4) 'delete-char-forward-command) ; C-d = ASCII 4
     (keymap-bind km #\Rubout 'delete-char-backward-command)
     (keymap-bind km :backspace 'delete-char-backward-command)
@@ -131,11 +134,17 @@
     (keymap-bind km (list :ctrl-c (code-char 4)) 'toggle-debug-mode-command)
     ;; ----- C-h prefix: help & introspection commands -----
     ;; C-h is the help prefix key (Emacs standard).
+    ;; Keep C-c aliases for compatibility with older bindings and terminals
+    ;; where users prefer avoiding the C-h / Backspace ambiguity.
     (keymap-bind km '(:ctrl-h #\b) 'describe-bindings-command)  ; C-h b = describe keybindings
     (keymap-bind km '(:ctrl-h #\f) 'describe-function-command)  ; C-h f = describe function
     (keymap-bind km '(:ctrl-h #\v) 'describe-variable-command)  ; C-h v = describe variable
     (keymap-bind km '(:ctrl-h #\T) 'describe-type-command)      ; C-h T = describe type
     (keymap-bind km '(:ctrl-h #\F) 'customize-face-command)     ; C-h F = customize face
+    (keymap-bind km '(:ctrl-c #\f) 'describe-function-command)  ; compatibility alias
+    (keymap-bind km '(:ctrl-c #\v) 'describe-variable-command)  ; compatibility alias
+    (keymap-bind km '(:ctrl-c #\T) 'describe-type-command)      ; compatibility alias
+    (keymap-bind km '(:ctrl-c #\F) 'customize-face-command)     ; compatibility alias
     ;; ----- C-x prefix: global / cross-buffer commands -----
     ;; C-x is reserved for global commands that operate across buffers
     ;; or affect the application as a whole (buffer management, I/O, etc.).
