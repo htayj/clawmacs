@@ -1,3 +1,4 @@
+/reference
 reference/
 session-*.md
 screenshot-*.png
@@ -7,3 +8,51 @@ e2e-*.txt
 .cache/
 .direnv/
 debug.log
+
+# Editor backup / autosave files
+*~
+\#*\#
+.\#*
+
+# Local agent/tool state
+.codex
+.codex/
+.claude/
+.serena/
+CLAUDE.md
+
+# Local scratch files
+/notes.org
+/todo.org
+/test.md
+/test.txt
+
+# Local runtime / dependency artifacts
+__pycache__/
+node_modules/
+package.json
+package-lock.json
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build artifacts
+*.fasl
+*.fasl-temp
+*.core
+
+# Other editor / OS junk
+*.swp
+*.swo
+.DS_Store
+
+# Uncommitted design drafts
+docs/superpowers/plans/2026-03-16-guix-shell-container.md
+docs/superpowers/plans/2026-03-16-provider-auth-and-model-routing.md
+docs/superpowers/specs/2026-03-16-guix-shell-container-design.md
+docs/superpowers/specs/2026-03-16-provider-auth-and-model-routing-design.md
