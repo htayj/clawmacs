@@ -84,7 +84,17 @@
                (sexed-insert-form-after
                 "(foo (bar) (baz))"
                 '(:head "bar")
-                "(quux)"))))
+                "(quux)")))
+  (is (string= (format nil "(defun foo () :ok)~%(defun bar () :ok)")
+               (sexed-insert-after-form
+                "(defun foo () :ok)"
+                '(:head "defun")
+                "(defun bar () :ok)")))
+  (is (string= (format nil "(defun foo () :ok)~%(defun bar () :ok)")
+               (sexed-insert-before-form
+                "(defun bar () :ok)"
+                '(:head "defun")
+                "(defun foo () :ok)"))))
 
 (test sexed-structural-list-edits
   "Splice, raise, slurp, and barf operate on selected s-expression spans."

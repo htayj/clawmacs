@@ -621,16 +621,43 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
          (and (not (sexed-whitespace-char-p next))
               (not (char= next #\)))))))
 
-(defun sexed-normalize-insertion (text position insertion)
+(defun sexed-top-level-insertion-prefix-needed-p (text position insertion)
+  "Return T when a top-level INSERTION needs a leading newline."
+  (and (plusp (length insertion))
+       (not (char= (char insertion 0) #\Newline))
+       (> position 0)
+       (not (char= (char text (1- position)) #\Newline))))
+
+(defun sexed-top-level-insertion-suffix-needed-p (text position insertion)
+  "Return T when a top-level INSERTION needs a trailing newline."
+  (and (plusp (length insertion))
+       (not (char= (char insertion (1- (length insertion))) #\Newline))
+       (< position (length text))
+       (not (char= (char text position) #\Newline))))
+
+(defun sexed-normalize-insertion (text position insertion &key top-level-p)
   "Add separator whitespace around INSERTION when adjacent forms touch."
-  (concatenate 'string
-               (if (sexed-insertion-prefix-needed-p text position insertion)
-                   " "
-                   "")
-               insertion
-               (if (sexed-insertion-suffix-needed-p text position insertion)
-                   " "
-                   "")))
+  (if top-level-p
+      (concatenate 'string
+                   (if (sexed-top-level-insertion-prefix-needed-p text
+                                                                   position
+                                                                   insertion)
+                       (string #\Newline)
+                       "")
+                   insertion
+                   (if (sexed-top-level-insertion-suffix-needed-p text
+                                                                   position
+                                                                   insertion)
+                       (string #\Newline)
+                       ""))
+      (concatenate 'string
+                   (if (sexed-insertion-prefix-needed-p text position insertion)
+                       " "
+                       "")
+                   insertion
+                   (if (sexed-insertion-suffix-needed-p text position insertion)
+                       " "
+                       ""))))
 
 (defun sexed-replace-form (text selector new-text)
   "Return TEXT with SELECTOR's form replaced by NEW-TEXT."
@@ -663,7 +690,8 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
     (let* ((node (sexed-resolve-selector nodes text selector))
            (insertion (sexed-normalize-insertion text
                                                  (sexed-node-start node)
-                                                 new-text))
+                                                 new-text
+                                                 :top-level-p (zerop (sexed-node-depth node))))
            (result (sexed-replace-span text
                                        (sexed-node-start node)
                                        (sexed-node-start node)
@@ -678,7 +706,8 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
     (let* ((node (sexed-resolve-selector nodes text selector))
            (insertion (sexed-normalize-insertion text
                                                  (sexed-node-end node)
-                                                 new-text))
+                                                 new-text
+                                                 :top-level-p (zerop (sexed-node-depth node))))
            (result (sexed-replace-span text
                                        (sexed-node-end node)
                                        (sexed-node-end node)
