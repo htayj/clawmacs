@@ -2080,10 +2080,32 @@ and should not be sent to the API."
     (:name . ,name)
     (:input . ,input)))
 
-(defun canonical-response (stop-reason content-blocks)
+(defun canonical-response (stop-reason content-blocks &optional cache-performance)
   "Return a provider-agnostic response payload."
   `((:stop--reason . ,stop-reason)
-    (:content . ,(coerce content-blocks 'vector))))
+    (:content . ,(coerce content-blocks 'vector))
+    (:cache--performance . ,cache-performance)))
+
+(defun usage-cache-performance (usage)
+  "Normalize provider USAGE payloads into cache metrics."
+  (when usage
+    (let* ((prompt-tokens
+             (or (cdr (assoc :prompt--tokens usage))
+                 (cdr (assoc :input--tokens usage))))
+           (details
+             (or (cdr (assoc :prompt--tokens--details usage))
+                 (cdr (assoc :input--tokens--details usage))))
+           (cached-tokens
+             (or (and details (cdr (assoc :cached--tokens details)))
+                 (and details (cdr (assoc :cached--input--tokens details)))
+                 0)))
+      (when prompt-tokens
+        `((:prompt--tokens . ,prompt-tokens)
+          (:cached--tokens . ,cached-tokens))))))
+
+(defun openai-response-cache-performance (response)
+  "Extract normalized cache metrics from an OpenAI-compatible RESPONSE payload."
+  (usage-cache-performance (cdr (assoc :usage response))))
 
 (defun http-body-string (body)
   "Return BODY as a UTF-8 string."
@@ -2129,31 +2151,6 @@ and should not be sent to the API."
      (cdr (assoc :id tool-call))
      (cdr (assoc :name function))
      input)))
-
-(defun openai-choice->canonical-response (choice)
-  "Normalize an OpenAI completion CHOICE to canonical response shape.
-Handles reasoning models (Z.AI GLM, DeepSeek R1, etc.) that return
-reasoning_content alongside content. When content is blank but
-reasoning_content is present, falls back to reasoning_content."
-  (let* ((message (cdr (assoc :message choice)))
-         (content-blocks nil)
-         (text (cdr (assoc :content message)))
-         (reasoning (cdr (assoc :reasoning--content message)))
-         (tool-calls (cdr (assoc :tool--calls message)))
-         ;; Use content if non-blank, otherwise fall back to reasoning
-         (effective-text (cond
-                           ((not (blank-string-p text)) text)
-                           ((not (blank-string-p reasoning)) reasoning)
-                           (t nil))))
-    (when effective-text
-      (push (canonical-text-block effective-text) content-blocks))
-    (when reasoning
-      (push (canonical-reasoning-block reasoning) content-blocks))
-    (dolist (tool-call (coerce (or tool-calls #()) 'list))
-      (push (openai-tool-call->canonical-block tool-call) content-blocks))
-    (canonical-response
-     (openai-finish-reason->stop-reason (cdr (assoc :finish--reason choice)))
-     (nreverse content-blocks))))
 
 (defun message-role-content-blocks (message)
   "Extract a decoded provider message into ROLE and canonical content blocks."
@@ -2286,6 +2283,31 @@ reasoning_content is present, falls back to reasoning_content."
                       (:parameters . ,(cdr (assoc :input--schema tool)))))
      'vector)))
 
+(defun openai-choice->canonical-response (choice &optional cache-performance)
+  "Normalize an OpenAI completion CHOICE to canonical response shape.
+Handles reasoning models (Z.AI GLM, DeepSeek R1, etc.) that return
+reasoning_content alongside content. When content is blank but
+reasoning_content is present, falls back to reasoning_content."
+  (let* ((message (cdr (assoc :message choice)))
+         (content-blocks nil)
+         (text (cdr (assoc :content message)))
+         (reasoning (cdr (assoc :reasoning--content message)))
+         (tool-calls (cdr (assoc :tool--calls message)))
+         (effective-text (cond
+                           ((not (blank-string-p text)) text)
+                           ((not (blank-string-p reasoning)) reasoning)
+                           (t nil))))
+    (when effective-text
+      (push (canonical-text-block effective-text) content-blocks))
+    (when reasoning
+      (push (canonical-reasoning-block reasoning) content-blocks))
+    (dolist (tool-call (coerce (or tool-calls #()) 'list))
+      (push (openai-tool-call->canonical-block tool-call) content-blocks))
+    (canonical-response
+     (openai-finish-reason->stop-reason (cdr (assoc :finish--reason choice)))
+     (nreverse content-blocks)
+     cache-performance)))
+
 (defun responses-output-item-text (item)
   "Extract displayable assistant text from a Responses ITEM."
   (let ((content (cdr (assoc :content item))))
@@ -2332,7 +2354,9 @@ reasoning_content is present, falls back to reasoning_content."
 (defun responses-api-response->canonical-response (response)
   "Normalize an OpenAI Responses API RESPONSE to the canonical clawmacs shape."
   (let ((content-blocks nil)
-        (saw-tool-use nil))
+        (saw-tool-use nil)
+        (cache-performance
+          (usage-cache-performance (cdr (assoc :usage response)))))
     (dolist (item (coerce (or (cdr (assoc :output response)) #()) 'list))
       (dolist (block (responses-item->canonical-blocks item))
         (when (string= (cdr (assoc :type block)) "tool_use")
@@ -2344,7 +2368,8 @@ reasoning_content is present, falls back to reasoning_content."
                  (plusp (length fallback-text)))
         (push (canonical-text-block fallback-text) content-blocks)))
     (canonical-response (if saw-tool-use "tool_use" "end_turn")
-                        (nreverse content-blocks))))
+                        (nreverse content-blocks)
+                        cache-performance)))
 
 (defun openai-codex-responses-request-body (messages model max-tokens tools
                                             &key stream reasoning-effort
@@ -2820,7 +2845,9 @@ Uses the OpenAI-compatible chat completions protocol."
                (choice (first (coerce choices 'list))))
           (unless choice
             (error "OpenRouter response did not include a choice"))
-          (openai-choice->canonical-response choice))))))
+          (openai-choice->canonical-response
+           choice
+           (openai-response-cache-performance response)))))))
 
 (defun openrouter-request-streaming (messages callback
                                      &key (model *openrouter-model*)
@@ -2915,7 +2942,9 @@ The API follows the OpenAI Chat Completions format."
                (choice (first (coerce choices 'list))))
           (unless choice
             (error "Z.AI response did not include a choice"))
-          (openai-choice->canonical-response choice))))))
+          (openai-choice->canonical-response
+           choice
+           (openai-response-cache-performance response)))))))
 
 (defun zai-request-streaming (messages callback
                                &key (model *zai-model*)
@@ -2973,6 +3002,27 @@ Uses the same OpenAI-compatible streaming protocol."
 (defun response-stop-reason (response)
   "Extract stop_reason from an API response."
   (cdr (assoc :stop--reason response)))
+(defun response-cache-performance (response)
+  "Extract cache-performance metrics from an API response."
+  (cdr (assoc :cache--performance response)))
+
+(defun cache-performance-prompt-tokens (cache-performance)
+  "Return prompt tokens represented by CACHE-PERFORMANCE."
+  (or (and cache-performance (cdr (assoc :prompt--tokens cache-performance)))
+      0))
+
+(defun cache-performance-cached-tokens (cache-performance)
+  "Return cached prompt tokens represented by CACHE-PERFORMANCE."
+  (or (and cache-performance (cdr (assoc :cached--tokens cache-performance)))
+      0))
+
+(defun response-cache-hit-rate (response)
+  "Return RESPONSE cache hit rate percentage, or NIL when unavailable."
+  (let* ((cache-performance (response-cache-performance response))
+         (prompt-tokens (cache-performance-prompt-tokens cache-performance))
+         (cached-tokens (cache-performance-cached-tokens cache-performance)))
+    (when (plusp prompt-tokens)
+      (* 100.0 (/ cached-tokens prompt-tokens)))))
 
 (defun response-content (response)
   "Extract content blocks from an API response as a list."

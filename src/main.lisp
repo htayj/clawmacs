@@ -60,6 +60,7 @@
   tool-events
   reasoning-blocks
   project-write-events
+  cache-performance
   agent-name
   provider
   model
@@ -832,6 +833,7 @@ PROMPT is the user turn text used for the returned PROMPT-RUN-RESULT."
                                        content-blocks))
                    (tool-uses (content-tool-use-blocks canonical-content))
                    (stop-reason (response-stop-reason response))
+                   (cache-performance (response-cache-performance response))
                    (agent-kw (intern (string-upcase (buffer-agent-name buf))
                                      :keyword)))
               (insert-agent-message-from-content buf canonical-content agent-kw)
@@ -863,6 +865,7 @@ PROMPT is the user turn text used for the returned PROMPT-RUN-RESULT."
                      :tool-events tool-events
                      :reasoning-blocks (content-reasoning-blocks canonical-content)
                      :project-write-events (nreverse *project-write-events*)
+                      :cache-performance cache-performance
                      :agent-name (buffer-agent-name buf)
                      :provider final-provider
                      :model final-model
@@ -4583,6 +4586,8 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
     (:project--write--events . ,(coerce (prompt-run-result-project-write-events
                                          result)
                                         'vector))
+    (:cache--performance . ,(or (prompt-run-result-cache-performance result)
+                                #()))
     (:reasoning . ,(coerce (prompt-run-result-reasoning-blocks result) 'vector))))
 
 (defun write-string-with-final-newline (text stream)
@@ -4592,6 +4597,22 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
                (plusp (length text))
                (char= #\Newline (char text (1- (length text)))))
     (terpri stream)))
+
+(defun write-prompt-cache-performance (result stream)
+  "Write cache performance metadata for RESULT to STREAM."
+  (let* ((cache-performance (prompt-run-result-cache-performance result))
+         (prompt-tokens (cache-performance-prompt-tokens cache-performance))
+         (cached-tokens (cache-performance-cached-tokens cache-performance))
+         (hit-rate (if (plusp prompt-tokens)
+                       (* 100.0 (/ cached-tokens prompt-tokens))
+                       nil)))
+    (if (plusp prompt-tokens)
+        (format stream
+                ";; cache: prompt-tokens=~D cached-tokens=~D hit-rate=~,1F%%~%"
+                prompt-tokens
+                cached-tokens
+                hit-rate)
+        (format stream ";; cache: unavailable~%"))))
 
 (defun write-prompt-metadata (result stream)
   "Write prompt metadata comments to STREAM."
@@ -4606,7 +4627,8 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
   (format stream ";; stop-reason: ~A~%"
           (or (prompt-run-result-stop-reason result) "nil"))
   (format stream ";; project-writes: ~D~%"
-          (length (prompt-run-result-project-write-events result))))
+          (length (prompt-run-result-project-write-events result)))
+  (write-prompt-cache-performance result stream))
 
 (defun write-prompt-tool-event (event stream index &key (label "tool"))
   "Write one prompt tool EVENT to STREAM in Lisp-oriented display form."

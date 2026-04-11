@@ -2989,6 +2989,61 @@ PAIR PERSONALITY"
 ;;; Known Models Tests
 ;;; --------------------------------------------------------------------------
 
+(test openai-choice-cache-performance-captured
+  "OpenAI-compatible usage payloads are normalized into cache performance metrics."
+  (let* ((choice '((:finish--reason . "stop")
+                   (:message . ((:content . "hello")))))
+         (usage '((:prompt--tokens . 200)
+                  (:prompt--tokens--details . ((:cached--tokens . 50)))))
+         (response (clawmacs::openai-choice->canonical-response
+                    choice
+                    (clawmacs::usage-cache-performance usage))))
+    (is (equal '((:prompt--tokens . 200)
+                 (:cached--tokens . 50))
+               (clawmacs::response-cache-performance response)))
+    (is (= 25.0 (clawmacs::response-cache-hit-rate response)))))
+
+(test responses-api-cache-performance-captured
+  "Responses API usage payloads are retained in canonical responses."
+  (let* ((response
+          (clawmacs::responses-api-response->canonical-response
+           '((:output . #())
+             (:output--text . "done")
+             (:usage . ((:input--tokens . 120)
+                        (:input--tokens--details
+                         . ((:cached--input--tokens . 30))))))))
+         (cache (clawmacs::response-cache-performance response)))
+    (is (equal '((:prompt--tokens . 120)
+                 (:cached--tokens . 30))
+               cache))
+    (is (= 25.0 (clawmacs::response-cache-hit-rate response)))))
+
+(test prompt-write-prompt-metadata-includes-cache-performance
+  "Prompt metadata output includes cache metrics for user visibility."
+  (let* ((result (clawmacs::make-prompt-run-result
+                  :agent-name "agent"
+                  :provider :zai
+                  :model "glm-5"
+                  :iterations 1
+                  :project-write-events nil
+                  :cache-performance '((:prompt--tokens . 100)
+                                       (:cached--tokens . 40))))
+         (text (with-output-to-string (stream)
+                 (clawmacs::write-prompt-metadata result stream))))
+    (is (search "cache: prompt-tokens=100 cached-tokens=40 hit-rate=40.0%" text))))
+
+(test prompt-run-result-json-includes-cache-performance
+  "Prompt JSON output records cache performance for deterministic tests."
+  (let* ((result (clawmacs::make-prompt-run-result
+                  :prompt "test"
+                  :final-text "ok"
+                  :cache-performance '((:prompt--tokens . 80)
+                                       (:cached--tokens . 20))))
+         (json (clawmacs::prompt-run-result-json result)))
+    (is (equal '((:prompt--tokens . 80)
+                 (:cached--tokens . 20))
+               (cdr (assoc :cache--performance json))))))
+
 (test provider-known-models-openai-codex
   "Known OpenAI Codex models list is non-empty and contains the default."
   (let ((models (clawmacs::provider-known-models :openai-codex)))
