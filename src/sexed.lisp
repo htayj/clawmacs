@@ -599,6 +599,35 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
                replacement
                (subseq text end)))
 
+(defun sexed-insertion-prefix-needed-p (text position insertion)
+  "Return T when INSERTION needs a leading space at POSITION in TEXT."
+  (and (plusp (length insertion))
+       (not (sexed-whitespace-char-p (char insertion 0)))
+       (> position 0)
+       (let ((previous (char text (1- position))))
+         (and (not (sexed-whitespace-char-p previous))
+              (not (char= previous #\())))))
+
+(defun sexed-insertion-suffix-needed-p (text position insertion)
+  "Return T when INSERTION needs a trailing space at POSITION in TEXT."
+  (and (plusp (length insertion))
+       (not (sexed-whitespace-char-p (char insertion (1- (length insertion)))))
+       (< position (length text))
+       (let ((next (char text position)))
+         (and (not (sexed-whitespace-char-p next))
+              (not (char= next #\)))))))
+
+(defun sexed-normalize-insertion (text position insertion)
+  "Add separator whitespace around INSERTION when adjacent forms touch."
+  (concatenate 'string
+               (if (sexed-insertion-prefix-needed-p text position insertion)
+                   " "
+                   "")
+               insertion
+               (if (sexed-insertion-suffix-needed-p text position insertion)
+                   " "
+                   "")))
+
 (defun sexed-replace-form (text selector new-text)
   "Return TEXT with SELECTOR's form replaced by NEW-TEXT."
   (sexed-ensure-balanced new-text "Replacement text")
@@ -628,10 +657,13 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   (multiple-value-bind (nodes)
       (sexed-parse-balanced text)
     (let* ((node (sexed-resolve-selector nodes text selector))
+           (insertion (sexed-normalize-insertion text
+                                                 (sexed-node-start node)
+                                                 new-text))
            (result (sexed-replace-span text
                                        (sexed-node-start node)
                                        (sexed-node-start node)
-                                       new-text)))
+                                       insertion)))
       (sexed-ensure-balanced result "Edited text"))))
 
 (defun sexed-insert-after-form (text selector new-text)
@@ -640,11 +672,22 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   (multiple-value-bind (nodes)
       (sexed-parse-balanced text)
     (let* ((node (sexed-resolve-selector nodes text selector))
+           (insertion (sexed-normalize-insertion text
+                                                 (sexed-node-end node)
+                                                 new-text))
            (result (sexed-replace-span text
                                        (sexed-node-end node)
                                        (sexed-node-end node)
-                                       new-text)))
+                                       insertion)))
       (sexed-ensure-balanced result "Edited text"))))
+
+(defun sexed-insert-form-before (text selector new-text)
+  "Alias for SEXED-INSERT-BEFORE-FORM with natural command ordering."
+  (sexed-insert-before-form text selector new-text))
+
+(defun sexed-insert-form-after (text selector new-text)
+  "Alias for SEXED-INSERT-AFTER-FORM with natural command ordering."
+  (sexed-insert-after-form text selector new-text))
 
 (defun sexed-wrap-form (text selector prefix suffix)
   "Return TEXT with SELECTOR's form wrapped by PREFIX and SUFFIX."
@@ -846,6 +889,14 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
                      (lambda (text)
                        (sexed-insert-after-form text selector new-text))))
 
+(defun sexed-insert-file-form-before (path selector new-text)
+  "Alias for SEXED-INSERT-BEFORE-FILE-FORM with natural command ordering."
+  (sexed-insert-before-file-form path selector new-text))
+
+(defun sexed-insert-file-form-after (path selector new-text)
+  "Alias for SEXED-INSERT-AFTER-FILE-FORM with natural command ordering."
+  (sexed-insert-after-file-form path selector new-text))
+
 (defun sexed-wrap-file-form (path selector prefix suffix)
   "Wrap SELECTOR in PATH with PREFIX and SUFFIX and return a summary plist."
   (sexed-update-file path
@@ -910,6 +961,14 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
                         (lambda (text)
                           (sexed-insert-after-form text selector new-text))))
 
+(defun sexed-insert-message-form-before (message selector new-text)
+  "Alias for SEXED-INSERT-BEFORE-MESSAGE-FORM with natural command ordering."
+  (sexed-insert-before-message-form message selector new-text))
+
+(defun sexed-insert-message-form-after (message selector new-text)
+  "Alias for SEXED-INSERT-AFTER-MESSAGE-FORM with natural command ordering."
+  (sexed-insert-after-message-form message selector new-text))
+
 (defun sexed-wrap-message-form (message selector prefix suffix)
   "Wrap SELECTOR in editable MESSAGE with PREFIX and SUFFIX."
   (sexed-update-message message
@@ -939,3 +998,80 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   (sexed-update-message message
                         (lambda (text)
                           (sexed-barf-forward text selector :count count))))
+
+(defun sexed-scratch-message ()
+  "Return the editable scratch buffer message, creating the scratch buffer first."
+  (buffer-input-message (ensure-scratch-buffer)))
+
+(defun sexed-scratch-text ()
+  "Return scratch buffer text, creating the scratch buffer first."
+  (scratch-buffer-text (ensure-scratch-buffer)))
+
+(defun sexed-scratch-outline-to-string (&rest options)
+  "Return a sexed outline for the scratch buffer."
+  (apply #'sexed-outline-to-string (sexed-scratch-text) options))
+
+(defun sexed-scratch-form-text (selector)
+  "Return source text for SELECTOR in the scratch buffer."
+  (sexed-form-text (sexed-scratch-text) selector))
+
+(defun sexed-scratch-result (summary)
+  "Add final scratch text to SUMMARY."
+  (append summary (list :final-text (sexed-scratch-text))))
+
+(defun sexed-replace-scratch-form (selector new-text)
+  "Replace SELECTOR in the scratch buffer with NEW-TEXT."
+  (sexed-scratch-result
+   (sexed-replace-message-form (sexed-scratch-message) selector new-text)))
+
+(defun sexed-delete-scratch-form (selector)
+  "Delete SELECTOR from the scratch buffer."
+  (sexed-scratch-result
+   (sexed-delete-message-form (sexed-scratch-message) selector)))
+
+(defun sexed-insert-before-scratch-form (selector new-text)
+  "Insert NEW-TEXT before SELECTOR in the scratch buffer."
+  (sexed-scratch-result
+   (sexed-insert-before-message-form (sexed-scratch-message) selector new-text)))
+
+(defun sexed-insert-after-scratch-form (selector new-text)
+  "Insert NEW-TEXT after SELECTOR in the scratch buffer."
+  (sexed-scratch-result
+   (sexed-insert-after-message-form (sexed-scratch-message) selector new-text)))
+
+(defun sexed-insert-scratch-form-before (selector new-text)
+  "Alias for SEXED-INSERT-BEFORE-SCRATCH-FORM with natural command ordering."
+  (sexed-insert-before-scratch-form selector new-text))
+
+(defun sexed-insert-scratch-form-after (selector new-text)
+  "Alias for SEXED-INSERT-AFTER-SCRATCH-FORM with natural command ordering."
+  (sexed-insert-after-scratch-form selector new-text))
+
+(defun sexed-wrap-scratch-form (selector prefix suffix)
+  "Wrap SELECTOR in the scratch buffer with PREFIX and SUFFIX."
+  (sexed-scratch-result
+   (sexed-wrap-message-form (sexed-scratch-message) selector prefix suffix)))
+
+(defun sexed-splice-scratch-form (selector)
+  "Splice SELECTOR in the scratch buffer."
+  (sexed-scratch-result
+   (sexed-splice-message-form (sexed-scratch-message) selector)))
+
+(defun sexed-raise-scratch-form (selector child-selector)
+  "Raise CHILD-SELECTOR out of SELECTOR in the scratch buffer."
+  (sexed-scratch-result
+   (sexed-raise-message-form (sexed-scratch-message) selector child-selector)))
+
+(defun sexed-slurp-forward-scratch-form (selector &key (count 1))
+  "Slurp following forms into SELECTOR in the scratch buffer."
+  (sexed-scratch-result
+   (sexed-slurp-forward-message-form (sexed-scratch-message)
+                                     selector
+                                     :count count)))
+
+(defun sexed-barf-forward-scratch-form (selector &key (count 1))
+  "Barf trailing child forms out of SELECTOR in the scratch buffer."
+  (sexed-scratch-result
+   (sexed-barf-forward-message-form (sexed-scratch-message)
+                                    selector
+                                    :count count)))

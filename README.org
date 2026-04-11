@@ -61,12 +61,20 @@ would leave unbalanced text.
  "src/foo.lisp"
  '(:head "defun" :name "foo")
  "(defun foo () :ok)")
+
+(ensure-scratch-buffer)
+(setf (scratch-buffer-text) "(workspace (todo alpha) (todo beta))")
+(sexed-replace-scratch-form '(:head "todo" :nth 1) "(done beta)")
+(sexed-insert-after-scratch-form '(:head "done") "(note \"checked\")")
+(scratch-buffer-text)
 #+end_src
 
 Selectors are plists such as =(:head "defun" :name "foo")=, =(:head "let*" :nth 0)=,
 or =(:id 7)=. The =:nth= selector is zero-based. Pure functions such as
-=sexed-replace-form= return edited strings; file and message adapters validate
-the full result before mutating files or editable clawmacs messages.
+=sexed-replace-form= return edited strings; file, message, and scratch adapters
+validate the full result before mutating files or editable clawmacs messages.
+Insert helpers add separator whitespace when adjacent forms would otherwise
+touch.
 
 ** Emacs-Style Interface
 

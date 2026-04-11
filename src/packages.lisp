@@ -319,6 +319,8 @@
    #:sexed-delete-form
    #:sexed-insert-before-form
    #:sexed-insert-after-form
+   #:sexed-insert-form-before
+   #:sexed-insert-form-after
    #:sexed-wrap-form
    #:sexed-splice-form
    #:sexed-raise-form
@@ -330,6 +332,8 @@
    #:sexed-delete-file-form
    #:sexed-insert-before-file-form
    #:sexed-insert-after-file-form
+   #:sexed-insert-file-form-before
+   #:sexed-insert-file-form-after
    #:sexed-wrap-file-form
    #:sexed-splice-file-form
    #:sexed-raise-file-form
@@ -339,11 +343,28 @@
    #:sexed-delete-message-form
    #:sexed-insert-before-message-form
    #:sexed-insert-after-message-form
+   #:sexed-insert-message-form-before
+   #:sexed-insert-message-form-after
    #:sexed-wrap-message-form
    #:sexed-splice-message-form
    #:sexed-raise-message-form
    #:sexed-slurp-forward-message-form
    #:sexed-barf-forward-message-form
+   #:sexed-scratch-message
+   #:sexed-scratch-text
+   #:sexed-scratch-outline-to-string
+   #:sexed-scratch-form-text
+   #:sexed-replace-scratch-form
+   #:sexed-delete-scratch-form
+   #:sexed-insert-before-scratch-form
+   #:sexed-insert-after-scratch-form
+   #:sexed-insert-scratch-form-before
+   #:sexed-insert-scratch-form-after
+   #:sexed-wrap-scratch-form
+   #:sexed-splice-scratch-form
+   #:sexed-raise-scratch-form
+   #:sexed-slurp-forward-scratch-form
+   #:sexed-barf-forward-scratch-form
 
    ;; Approval
    #:buffer-approval-pending

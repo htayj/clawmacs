@@ -66,6 +66,24 @@
     (signals error
       (sexed-replace-form text '(:head "+") "(list 1 2"))))
 
+(test sexed-insert-edits-add-separating-whitespace
+  "Insert helpers add whitespace when adjacent forms would otherwise touch."
+  (is (string= "(foo (bar) (quux) (baz))"
+               (sexed-insert-after-form
+                "(foo (bar) (baz))"
+                '(:head "bar")
+                "(quux)")))
+  (is (string= "(foo (quux) (bar))"
+               (sexed-insert-before-form
+                "(foo(bar))"
+                '(:head "bar")
+                "(quux)")))
+  (is (string= "(foo (bar) (quux) (baz))"
+               (sexed-insert-form-after
+                "(foo (bar) (baz))"
+                '(:head "bar")
+                "(quux)"))))
+
 (test sexed-structural-list-edits
   "Splice, raise, slurp, and barf operate on selected s-expression spans."
   (is (string= "(foo bar baz quux)"
@@ -106,6 +124,10 @@
     (clawmacs::set-message-text message "(note (list 1 2))")
     (sexed-replace-message-form message '(:head "list") "(vector 1 2)")
     (is (string= "(note (vector 1 2))" (message-text message)))
+    (sexed-insert-message-form-after message
+                                     '(:head "vector")
+                                     "(status ok)")
+    (is (string= "(note (vector 1 2) (status ok))" (message-text message)))
     (signals error
       (sexed-replace-message-form read-only '(:id 0) "(ok)"))))
 
@@ -121,3 +143,28 @@
                                   "(done one)")
       (is (string= "(scratch (done one))"
                    (scratch-buffer-text scratch))))))
+
+(test sexed-scratch-adapters-hide-message-plumbing
+  "Scratch adapters let agents edit scratch text without touching message internals."
+  (let ((*buffer-ring* nil)
+        (*scratch-buffer-initial-text* ""))
+    (clawmacs::init-default-keymap)
+    (clawmacs::init-global-faces)
+    (ensure-scratch-buffer)
+    (setf (scratch-buffer-text)
+          "(workspace (todo alpha) (todo beta) (notes (keep old)))")
+    (is (search "todo beta"
+                (sexed-scratch-outline-to-string :head "todo")))
+    (let ((replace-result
+            (sexed-replace-scratch-form '(:head "todo" :nth 1)
+                                        "(done beta)")))
+      (is (eq :ok (getf replace-result :status)))
+      (is (search "(done beta)" (getf replace-result :final-text))))
+    (let ((insert-result
+            (sexed-insert-after-scratch-form
+             '(:head "done")
+             "(note \"sexed edited scratch\")")))
+      (is (eq :ok (getf insert-result :status)))
+      (is (string= "(workspace (todo alpha) (done beta) (note \"sexed edited scratch\") (notes (keep old)))"
+                   (scratch-buffer-text)))
+      (is-true (getf insert-result :balanced)))))

@@ -2065,15 +2065,27 @@ documentation in *extended-docs*."
   :category "sexed"
   :usage "(sexed-insert-before-form TEXT SELECTOR NEW-TEXT)"
   :returns "string — Edited TEXT with NEW-TEXT inserted before SELECTOR."
-  :side-effects "None. Signals an error if NEW-TEXT or the result is unbalanced."
+  :side-effects "None. Adds separator whitespace if needed; signals an error if NEW-TEXT or the result is unbalanced."
   :see-also (sexed-insert-after-form sexed-insert-before-file-form sexed-insert-before-message-form))
 
 (defdoc sexed-insert-after-form
   :category "sexed"
   :usage "(sexed-insert-after-form TEXT SELECTOR NEW-TEXT)"
   :returns "string — Edited TEXT with NEW-TEXT inserted after SELECTOR."
-  :side-effects "None. Signals an error if NEW-TEXT or the result is unbalanced."
+  :side-effects "None. Adds separator whitespace if needed; signals an error if NEW-TEXT or the result is unbalanced."
   :see-also (sexed-insert-before-form sexed-insert-after-file-form sexed-insert-after-message-form))
+
+(defdoc sexed-insert-form-before
+  :category "sexed"
+  :usage "(sexed-insert-form-before TEXT SELECTOR NEW-TEXT)"
+  :returns "string — Alias for sexed-insert-before-form."
+  :see-also (sexed-insert-before-form))
+
+(defdoc sexed-insert-form-after
+  :category "sexed"
+  :usage "(sexed-insert-form-after TEXT SELECTOR NEW-TEXT)"
+  :returns "string — Alias for sexed-insert-after-form."
+  :see-also (sexed-insert-after-form))
 
 (defdoc sexed-wrap-form
   :category "sexed"
@@ -2152,6 +2164,18 @@ documentation in *extended-docs*."
   :side-effects "Rewrites PATH after validating the edited source."
   :see-also (sexed-insert-after-form sexed-insert-after-message-form))
 
+(defdoc sexed-insert-file-form-before
+  :category "sexed"
+  :usage "(sexed-insert-file-form-before PATH SELECTOR NEW-TEXT)"
+  :returns "plist — Alias for sexed-insert-before-file-form."
+  :see-also (sexed-insert-before-file-form))
+
+(defdoc sexed-insert-file-form-after
+  :category "sexed"
+  :usage "(sexed-insert-file-form-after PATH SELECTOR NEW-TEXT)"
+  :returns "plist — Alias for sexed-insert-after-file-form."
+  :see-also (sexed-insert-after-file-form))
+
 (defdoc sexed-wrap-file-form
   :category "sexed"
   :usage "(sexed-wrap-file-form PATH SELECTOR PREFIX SUFFIX)"
@@ -2215,6 +2239,18 @@ documentation in *extended-docs*."
   :side-effects "Replaces MESSAGE text after validation. Signals an error for read-only messages."
   :see-also (sexed-insert-after-form sexed-insert-after-file-form))
 
+(defdoc sexed-insert-message-form-before
+  :category "sexed"
+  :usage "(sexed-insert-message-form-before MESSAGE SELECTOR NEW-TEXT)"
+  :returns "plist — Alias for sexed-insert-before-message-form."
+  :see-also (sexed-insert-before-message-form))
+
+(defdoc sexed-insert-message-form-after
+  :category "sexed"
+  :usage "(sexed-insert-message-form-after MESSAGE SELECTOR NEW-TEXT)"
+  :returns "plist — Alias for sexed-insert-after-message-form."
+  :see-also (sexed-insert-after-message-form))
+
 (defdoc sexed-wrap-message-form
   :category "sexed"
   :usage "(sexed-wrap-message-form MESSAGE SELECTOR PREFIX SUFFIX)"
@@ -2249,6 +2285,109 @@ documentation in *extended-docs*."
   :returns "plist — :status, :bytes-written, and :balanced."
   :side-effects "Replaces MESSAGE text after validation. Signals an error for read-only messages."
   :see-also (sexed-barf-forward sexed-barf-forward-file-form))
+
+(defdoc sexed-scratch-message
+  :category "sexed"
+  :usage "(sexed-scratch-message)"
+  :returns "message — The editable scratch buffer input message."
+  :side-effects "Creates the scratch buffer when absent."
+  :see-also (ensure-scratch-buffer sexed-replace-scratch-form))
+
+(defdoc sexed-scratch-text
+  :category "sexed"
+  :usage "(sexed-scratch-text)"
+  :returns "string — Current scratch buffer text."
+  :side-effects "Creates the scratch buffer when absent."
+  :see-also (scratch-buffer-text sexed-scratch-form-text))
+
+(defdoc sexed-scratch-outline-to-string
+  :category "sexed"
+  :usage "(sexed-scratch-outline-to-string &rest OPTIONS)"
+  :returns "string — sexed outline for the scratch buffer."
+  :side-effects "Creates and reads the scratch buffer."
+  :see-also (sexed-outline-to-string sexed-scratch-form-text))
+
+(defdoc sexed-scratch-form-text
+  :category "sexed"
+  :usage "(sexed-scratch-form-text SELECTOR)"
+  :returns "string — Exact source text for SELECTOR in the scratch buffer."
+  :side-effects "Creates and reads the scratch buffer."
+  :see-also (sexed-form-text sexed-scratch-outline-to-string))
+
+(defdoc sexed-replace-scratch-form
+  :category "sexed"
+  :usage "(sexed-replace-scratch-form SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :bytes-written, :balanced, and :final-text."
+  :side-effects "Edits scratch text after validation."
+  :see-also (sexed-replace-message-form sexed-scratch-text))
+
+(defdoc sexed-delete-scratch-form
+  :category "sexed"
+  :usage "(sexed-delete-scratch-form SELECTOR)"
+  :returns "plist — :status, :bytes-written, :balanced, and :final-text."
+  :side-effects "Edits scratch text after validation."
+  :see-also (sexed-delete-message-form sexed-replace-scratch-form))
+
+(defdoc sexed-insert-before-scratch-form
+  :category "sexed"
+  :usage "(sexed-insert-before-scratch-form SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :bytes-written, :balanced, and :final-text."
+  :side-effects "Edits scratch text after validation and adds separator whitespace if needed."
+  :see-also (sexed-insert-before-message-form sexed-insert-after-scratch-form))
+
+(defdoc sexed-insert-after-scratch-form
+  :category "sexed"
+  :usage "(sexed-insert-after-scratch-form SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :bytes-written, :balanced, and :final-text."
+  :side-effects "Edits scratch text after validation and adds separator whitespace if needed."
+  :see-also (sexed-insert-after-message-form sexed-insert-before-scratch-form))
+
+(defdoc sexed-insert-scratch-form-before
+  :category "sexed"
+  :usage "(sexed-insert-scratch-form-before SELECTOR NEW-TEXT)"
+  :returns "plist — Alias for sexed-insert-before-scratch-form."
+  :see-also (sexed-insert-before-scratch-form))
+
+(defdoc sexed-insert-scratch-form-after
+  :category "sexed"
+  :usage "(sexed-insert-scratch-form-after SELECTOR NEW-TEXT)"
+  :returns "plist — Alias for sexed-insert-after-scratch-form."
+  :see-also (sexed-insert-after-scratch-form))
+
+(defdoc sexed-wrap-scratch-form
+  :category "sexed"
+  :usage "(sexed-wrap-scratch-form SELECTOR PREFIX SUFFIX)"
+  :returns "plist — :status, :bytes-written, :balanced, and :final-text."
+  :side-effects "Edits scratch text after validation."
+  :see-also (sexed-wrap-message-form))
+
+(defdoc sexed-splice-scratch-form
+  :category "sexed"
+  :usage "(sexed-splice-scratch-form SELECTOR)"
+  :returns "plist — :status, :bytes-written, :balanced, and :final-text."
+  :side-effects "Edits scratch text after validation."
+  :see-also (sexed-splice-message-form))
+
+(defdoc sexed-raise-scratch-form
+  :category "sexed"
+  :usage "(sexed-raise-scratch-form SELECTOR CHILD-SELECTOR)"
+  :returns "plist — :status, :bytes-written, :balanced, and :final-text."
+  :side-effects "Edits scratch text after validation."
+  :see-also (sexed-raise-message-form))
+
+(defdoc sexed-slurp-forward-scratch-form
+  :category "sexed"
+  :usage "(sexed-slurp-forward-scratch-form SELECTOR &key COUNT)"
+  :returns "plist — :status, :bytes-written, :balanced, and :final-text."
+  :side-effects "Edits scratch text after validation."
+  :see-also (sexed-slurp-forward-message-form))
+
+(defdoc sexed-barf-forward-scratch-form
+  :category "sexed"
+  :usage "(sexed-barf-forward-scratch-form SELECTOR &key COUNT)"
+  :returns "plist — :status, :bytes-written, :balanced, and :final-text."
+  :side-effects "Edits scratch text after validation."
+  :see-also (sexed-barf-forward-message-form))
 
 ;;; ==========================================================================
 ;;; Category: type — Type definitions (classes, structures, conditions)

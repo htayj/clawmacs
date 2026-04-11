@@ -195,9 +195,24 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
   text only after validating that the full result remains balanced.
 - `(sexed-file-outline-to-string \"PATH\" :head \"defun\")` and
   `(sexed-replace-file-form \"PATH\" SELECTOR NEW-TEXT)` are sandbox-aware file adapters.
-- For scratch or message text, use `(sexed-replace-message-form (buffer-input-message (scratch-buffer)) SELECTOR NEW-TEXT)`.
+- For scratch buffer edits, prefer scratch adapters:
+  `(sexed-replace-scratch-form SELECTOR NEW-TEXT)`,
+  `(sexed-insert-after-scratch-form SELECTOR NEW-TEXT)`, and
+  `(sexed-scratch-form-text SELECTOR)`.
+- To reset scratch contents, use `(setf (scratch-buffer-text) \"...\")`. Do not try to set
+  `(buffer-input-message BUFFER)`; it returns the editable message object, not the text.
+- Message adapters such as `sexed-replace-message-form` take a `message` object. Pure functions
+  such as `sexed-replace-form` take a string.
+- Insert helpers add separator whitespace when adjacent forms would otherwise touch.
 - Selectors are plists such as `(:head \"defun\" :name \"foo\")`, `(:head \"let\" :nth 0)`,
   or `(:id 7)`. `:nth` is zero-based.
+- Scratch example:
+  `(progn
+     (ensure-scratch-buffer)
+     (setf (scratch-buffer-text) \"(workspace (todo alpha) (todo beta))\")
+     (sexed-replace-scratch-form '(:head \"todo\" :nth 1) \"(done beta)\")
+     (sexed-insert-after-scratch-form '(:head \"done\") \"(note \\\"checked\\\")\")
+     (scratch-buffer-text))`
 
 ## Updating runtime state
 
