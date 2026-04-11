@@ -45,6 +45,14 @@
                           :if-does-not-exist :create)
     (write-string contents stream)))
 
+(test count-occurrences-counts-non-overlapping-substrings
+  "COUNT-OCCURRENCES gives agents a small string-counting helper."
+  (is (= 2 (count-occurrences "needle" "needle haystack needle")))
+  (is (= 2 (count-occurrences "aa" "aaaa")))
+  (is (= 0 (count-occurrences "missing" "haystack")))
+  (signals error
+    (count-occurrences "" "haystack")))
+
 (defun run-git-command (directory &rest args)
   (multiple-value-bind (stdout stderr exit-code)
       (uiop:run-program (append (list "git") args)

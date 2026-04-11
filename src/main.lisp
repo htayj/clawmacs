@@ -50,8 +50,29 @@
   (auto-approve-tools-p nil :type boolean)
   (max-tool-iterations *prompt-max-tool-iterations* :type integer)
   debug-log-path
+  (isolated-p nil :type boolean)
   (inhibit-user-init-p nil :type boolean)
   (help-p nil :type boolean))
+
+(define-condition prompt-run-error (error)
+  ((message :initarg :message :reader prompt-run-error-message)
+   (tool-events :initarg :tool-events
+                :initform nil
+                :reader prompt-run-error-tool-events)
+   (iterations :initarg :iterations
+               :initform 0
+               :reader prompt-run-error-iterations)
+   (provider :initarg :provider
+             :initform nil
+             :reader prompt-run-error-provider)
+   (model :initarg :model
+          :initform nil
+          :reader prompt-run-error-model)
+   (think-level :initarg :think-level
+                :initform nil
+                :reader prompt-run-error-think-level))
+  (:report (lambda (condition stream)
+             (format stream "~A" (prompt-run-error-message condition)))))
 
 (defun insert-agent-message-from-content (buf content-blocks agent-kw)
   "Insert an agent message from API content blocks.
@@ -545,41 +566,57 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
          (final-think-level nil)
          (iterations 0))
     (maybe-apply-prompt-routing-overrides buf provider model think-level)
-    (loop
-      (when (>= iterations max-tool-iterations)
-        (error "Exceeded maximum tool iterations (~D)" max-tool-iterations))
-      (incf iterations)
-      (multiple-value-bind (response provider* model* think-level*)
-          (prompt-request-once buf)
-        (setf final-provider provider*
-              final-model model*
-              final-think-level think-level*)
-        (let* ((content-blocks (response-content response))
-               (canonical-content (canonicalize-message-content
-                                   "assistant"
-                                   content-blocks))
-               (tool-uses (content-tool-use-blocks canonical-content))
-               (stop-reason (response-stop-reason response))
-               (agent-kw (intern (string-upcase (buffer-agent-name buf))
-                                 :keyword)))
-          (insert-agent-message-from-content buf canonical-content agent-kw)
-          (if tool-uses
-              (setf tool-events
-                    (append tool-events
-                            (execute-prompt-tool-calls
-                             buf tool-uses auto-approve-tools-p)))
-              (return
-                (make-prompt-run-result
-                 :prompt prompt
-                 :final-text (content-text-blocks canonical-content)
-                 :tool-events tool-events
-                 :reasoning-blocks (content-reasoning-blocks canonical-content)
-                 :agent-name (buffer-agent-name buf)
-                 :provider final-provider
-                 :model final-model
-                 :think-level final-think-level
-                 :iterations iterations
-                 :stop-reason stop-reason))))))))
+    (labels ((fail (format-string &rest format-args)
+               (error 'prompt-run-error
+                      :message (apply #'format nil format-string format-args)
+                      :tool-events tool-events
+                      :iterations iterations
+                      :provider final-provider
+                      :model final-model
+                      :think-level final-think-level)))
+      (loop
+        (when (>= iterations max-tool-iterations)
+          (fail "Exceeded maximum tool iterations (~D)"
+                max-tool-iterations))
+        (incf iterations)
+        (multiple-value-bind (response provider* model* think-level*)
+            (handler-case
+                (prompt-request-once buf)
+              (error (condition)
+                (fail "Prompt provider request failed: ~A" condition)))
+          (setf final-provider provider*
+                final-model model*
+                final-think-level think-level*)
+          (let* ((content-blocks (response-content response))
+                 (canonical-content (canonicalize-message-content
+                                     "assistant"
+                                     content-blocks))
+                 (tool-uses (content-tool-use-blocks canonical-content))
+                 (stop-reason (response-stop-reason response))
+                 (agent-kw (intern (string-upcase (buffer-agent-name buf))
+                                   :keyword)))
+            (insert-agent-message-from-content buf canonical-content agent-kw)
+            (if tool-uses
+                (setf tool-events
+                      (append tool-events
+                              (handler-case
+                                  (execute-prompt-tool-calls
+                                   buf tool-uses auto-approve-tools-p)
+                                (error (condition)
+                                  (fail "Prompt tool loop failed: ~A"
+                                        condition)))))
+                (return
+                  (make-prompt-run-result
+                   :prompt prompt
+                   :final-text (content-text-blocks canonical-content)
+                   :tool-events tool-events
+                   :reasoning-blocks (content-reasoning-blocks canonical-content)
+                   :agent-name (buffer-agent-name buf)
+                   :provider final-provider
+                   :model final-model
+                   :think-level final-think-level
+                   :iterations iterations
+                   :stop-reason stop-reason)))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Prefix Processing
@@ -3466,6 +3503,7 @@ Options:
   --auto-approve-tools      Allow permission-gated tools without an interactive prompt.
   --max-tool-iterations N   Stop after N tool-call turns (default: 20).
   --debug-log PATH          Write low-level debug logs to PATH.
+  --isolated                Use temporary prompt config/project/session dirs.
   --clean-build             Clear cached Lisp build artifacts before loading.
   --force-clean-build       Alias for --clean-build.
   --no-init                 Skip ~/.clawmacs.d/init.lisp.
@@ -3569,6 +3607,9 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
                      (require-option-value arg remaining)
                    (setf (prompt-options-debug-log-path options) value
                          remaining rest)))
+                ((or (string= arg "--isolated")
+                     (string= arg "--isolate"))
+                 (setf (prompt-options-isolated-p options) t))
                 ((or (string= arg "--clean-build")
                      (string= arg "--force-clean-build"))
                  nil)
@@ -3597,6 +3638,41 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
   (when *debug-log-file*
     (file-debug-log "startup" "prompt debug log enabled, writing to ~A"
                     *debug-log-file*)))
+
+(defun prompt-isolation-root ()
+  "Create and return a temporary root for isolated prompt execution."
+  (let ((root (merge-pathnames
+               (format nil "clawmacs-prompt-isolated-~D-~D/"
+                       (get-universal-time)
+                       (get-internal-real-time))
+               #P"/tmp/")))
+    (ensure-directories-exist (merge-pathnames #P".keep" root))
+    root))
+
+(defun apply-prompt-isolation ()
+  "Redirect prompt-mode mutable config paths into a temporary directory."
+  (let* ((root (prompt-isolation-root))
+         (config-dir (merge-pathnames #P".clawmacs.d/" root)))
+    (ensure-directories-exist (merge-pathnames #P".keep" config-dir))
+    (setf *user-init-directory* config-dir
+          *user-init-file* (merge-pathnames #P"init.lisp" config-dir)
+          *project-definitions-directory*
+          (merge-pathnames #P"projects.d/" root)
+          *sessions-dir*
+          (merge-pathnames #P"sessions/" root)
+          *agent-defaults-path*
+          (merge-pathnames #P"agent-defaults.json" root)
+          *packages-directory*
+          (merge-pathnames #P"packages/" root)
+          *personality-prompt-path*
+          (merge-pathnames #P"personality-prompt.txt" root))
+    (ensure-directories-exist
+     (merge-pathnames #P".keep" *project-definitions-directory*))
+    (ensure-directories-exist
+     (merge-pathnames #P".keep" *sessions-dir*))
+    (ensure-directories-exist
+     (merge-pathnames #P".keep" *packages-directory*))
+    root))
 
 (defun prompt-tool-event-json (event)
   "Return EVENT as a JSON-ready alist."
@@ -3653,6 +3729,14 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
                     (prompt-tool-event-name event))
             (format stream "~A~%~%" (prompt-tool-event-display event))))
 
+(defun write-prompt-tool-event-list (events stream)
+  "Write prompt tool EVENTS to STREAM."
+  (loop :for event :in events
+        :for index :from 1
+        :do (format stream ";; partial tool ~D: ~A~%" index
+                    (prompt-tool-event-name event))
+            (format stream "~A~%~%" (prompt-tool-event-display event))))
+
 (defun write-prompt-reasoning (result stream)
   "Write provider-supplied reasoning blocks to STREAM when present."
   (let ((blocks (prompt-run-result-reasoning-blocks result)))
@@ -3682,15 +3766,23 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
 (defun clawmacs-prompt-main ()
   "CLI entry point for one-shot prompt execution.
 This function exits the Lisp image with status 0 on success and 1 on errors."
-  (handler-case
-      (let ((options (parse-clawmacs-prompt-args)))
+  (let ((options nil))
+    (handler-case
+      (progn
+        (setf options (parse-clawmacs-prompt-args))
         (when (prompt-options-help-p options)
           (write-string-with-final-newline (prompt-usage-string) *standard-output*)
           (uiop:quit 0))
         (unless (prompt-options-prompt options)
           (error "No prompt supplied.~%~A" (prompt-usage-string)))
         (maybe-enable-prompt-debug-log options)
-        (let ((*inhibit-user-init* (prompt-options-inhibit-user-init-p options)))
+        (when (prompt-options-isolated-p options)
+          (let ((root (apply-prompt-isolation)))
+            (when (prompt-options-show-metadata-p options)
+              (format *error-output* ";; isolated-root: ~A~%" root))))
+        (let ((*inhibit-user-init* (or (prompt-options-isolated-p options)
+                                       (prompt-options-inhibit-user-init-p
+                                        options))))
           (initialize-clawmacs-runtime)
           (reset-interaction-state)
           (setf *sandbox-root* (truename "."))
@@ -3707,9 +3799,26 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
                    (prompt-options-auto-approve-tools-p options))))
             (write-prompt-run-result result options)))
         (uiop:quit 0))
+      (prompt-run-error (e)
+        (format *error-output* "~&clawmacs prompt error: ~A~%" e)
+        (when options
+          (when (prompt-options-show-metadata-p options)
+            (format *error-output* ";; partial iterations: ~D~%"
+                    (prompt-run-error-iterations e))
+            (format *error-output* ";; partial provider/model: ~(~A~)/~A~%"
+                    (or (prompt-run-error-provider e) :unknown)
+                    (or (prompt-run-error-model e) "unknown"))
+            (format *error-output* ";; partial think: ~A~%"
+                    (or (prompt-run-error-think-level e) "default")))
+          (when (prompt-run-error-tool-events e)
+            (format *error-output* ";; partial tool trace follows~%")
+            (write-prompt-tool-event-list
+             (prompt-run-error-tool-events e)
+             *error-output*)))
+        (uiop:quit 1))
     (error (e)
       (format *error-output* "~&clawmacs prompt error: ~A~%" e)
-      (uiop:quit 1))))
+      (uiop:quit 1)))))
 
 (defun clawmacs-main (&key (session-name "clawmacs:session-01")
                            (agent-name *default-agent-name*))

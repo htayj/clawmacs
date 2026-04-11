@@ -358,6 +358,15 @@ Enforces the invariant that it is not read-only."
         (not (string= text (buffer-original-text buf))))
   text)
 
+(declaim (ftype (function (&optional (or null buffer)) boolean)
+                file-buffer-dirty-p))
+(defun file-buffer-dirty-p (&optional (buf (current-buffer)))
+  "Return true when BUF is a project-backed file buffer with unsaved changes."
+  (when buf
+    (unless (file-buffer-p buf)
+      (error "Not a file buffer: ~A" (buffer-name buf)))
+    (buffer-dirty-p buf)))
+
 (defun mark-buffer-dirty (buf)
   "Mark BUF dirty when it is a project-backed file buffer."
   (when (file-buffer-p buf)

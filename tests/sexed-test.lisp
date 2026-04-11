@@ -23,6 +23,7 @@
   (let ((text (format nil
                       "(list \"(\" #\\) ; ignored )~% #| ignored ) #| nested ( |# |# :ok)")))
     (is-true (sexed-balanced-p text))
+    (is-true (balanced-parentheses-p text))
     (is (null (sexed-diagnostics text)))))
 
 (test sexed-diagnostics-report-unbalanced-source
@@ -30,6 +31,7 @@
   (let ((missing-close (sexed-diagnostics "(foo (bar)"))
         (unexpected-close (sexed-diagnostics "(foo))")))
     (is-false (sexed-balanced-p "(foo (bar)"))
+    (is-false (balanced-parentheses-p "(foo (bar)"))
     (is (eq :missing-close-paren (getf (first missing-close) :kind)))
     (is (eq :unexpected-close-paren (getf (first unexpected-close) :kind)))))
 
@@ -144,6 +146,42 @@
                                   "(vector 1 2"))
     (is (string= "(defun foo () (list 1 2))"
                  (project-read-file "sexed" "source.lisp")))))
+
+(test sexed-staged-project-adapters-compose-before-apply
+  "Staged project adapters update change-set text without touching files."
+  (let* ((dir (sexed-test-directory))
+         (*project-registry* (make-hash-table :test #'equal))
+         (*change-set-registry* (make-hash-table :test #'equal))
+         (*current-change-set* nil)
+         (file (merge-pathnames "source.lisp" dir))
+         (initial "(defun foo () (+ 1 2))"))
+    (write-sexed-test-file file initial)
+    (define-project "staged-sexed" :root dir)
+    (let ((change-set (begin-change-set :name "sexed-stage")))
+      (let ((result (sexed-stage-replace-project-form
+                     "staged-sexed"
+                     "source.lisp"
+                     '(:head "+")
+                     "(list 1 2)"
+                     :change-set change-set)))
+        (is (eq :staged (getf result :status)))
+        (is (string= initial
+                     (project-read-file "staged-sexed" "source.lisp")))
+        (is (string= "(defun foo () (list 1 2))"
+                     (change-set-project-file-text "staged-sexed"
+                                                   "source.lisp"
+                                                   change-set))))
+      (sexed-stage-insert-after-project-form
+       "staged-sexed"
+       "source.lisp"
+       '(:head "defun" :name "foo")
+       "(defun bar () :ok)"
+       :change-set change-set)
+      (is (search "(defun bar () :ok)"
+                  (change-set-diff-to-string change-set)))
+      (apply-change-set change-set)
+      (is (search "(defun bar () :ok)"
+                  (project-read-file "staged-sexed" "source.lisp"))))))
 
 (test sexed-message-adapters-edit-editable-messages
   "Message adapters update editable message text and reject read-only messages."

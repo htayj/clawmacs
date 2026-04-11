@@ -201,12 +201,28 @@
       (is (search "(describe-function-to-string 'SYMBOL)" prompt))
       (is (search "(documentation 'SYMBOL 'function)" prompt))
       (is (search "Use `funcall` or `apply` when the callee or argument list is dynamic." prompt))
+      (is (search "Prefer batching related inspection/edit/check work" prompt))
+      (is (search "each binding must be `(variable value-form)`" prompt))
+      (is (search "(count-occurrences \"needle\" TEXT)" prompt))
+      (is (search "Common Lisp strings do not treat `\\n` as a newline escape" prompt))
+      (is (search "(eval-history-to-string)" prompt))
       (is (search "Use project resource functions for persistent workspace changes" prompt))
       (is (search "(project-list-files \"PROJECT\")" prompt))
       (is (search "(project-save-file \"PROJECT\" \"PATH\" TEXT)" prompt))
+      (is (search "Use `create-project` for temporary roots" prompt))
+      (is (search "does not accept `:persist`" prompt))
+      (is (search "Do not use" prompt))
+      (is (search "`project-list-files` results as buffers" prompt))
+      (is (search "Project file-buffer example" prompt))
+      (is (search "(begin-change-set :name \"short-name\")" prompt))
+      (is (search "(change-set-diff-to-string)" prompt))
+      (is (search "(run-project-checks \"PROJECT\")" prompt))
+      (is (search "(project-find-definitions-to-string \"PROJECT\" :name \"NAME\")" prompt))
       (is (search "Use the `sexed-*` functions for Lisp source edits" prompt))
       (is (search "(sexed-outline-to-string TEXT :max-depth 2)" prompt))
+      (is (search "(balanced-parentheses-p TEXT)" prompt))
       (is (search "(sexed-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
+      (is (search "(sexed-stage-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
       (is (search "(sexed-replace-scratch-form SELECTOR NEW-TEXT)" prompt))
       (is (search "Do not try to set" prompt))
       (is (search "Message adapters such as `sexed-replace-message-form` take a `message` object" prompt))
@@ -292,6 +308,7 @@ PAIR PERSONALITY"
                     "--show-reasoning"
                     "--show-metadata"
                     "--clean-build"
+                    "--isolated"
                     "--json"
                     "--max-tool-iterations" "7"
                     "summarize" "this"))))
@@ -303,6 +320,7 @@ PAIR PERSONALITY"
     (is (clawmacs::prompt-options-show-reasoning-p options))
     (is (clawmacs::prompt-options-show-metadata-p options))
     (is (clawmacs::prompt-options-json-p options))
+    (is (clawmacs::prompt-options-isolated-p options))
     (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
     (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
 
@@ -401,6 +419,84 @@ PAIR PERSONALITY"
               (is (string= "call-1"
                            (cdr (assoc :tool--use--id tool-result))))
               (is (search "5" (cdr (assoc :content tool-result)))))))))))
+
+(test execute-lisp-eval-captures-output-and-history
+  "lisp_eval captures stdout/stderr, results, and bounded eval history."
+  (with-tool-table-restored
+    (let ((clawmacs::*lisp-eval-history* nil)
+          (clawmacs::*last-eval-result* nil)
+          (clawmacs::*last-eval-condition* nil))
+      (clawmacs::init-tools)
+      (let* ((json (clawmacs:execute-tool
+                    "lisp_eval"
+                    '((:code . "(progn (format t \"hello\") (values 4 5))"))))
+             (decoded (clawmacs::api-json-decode json)))
+        (is (search "4" (cdr (assoc :result decoded))))
+        (is (search "5" (cdr (assoc :result decoded))))
+        (is (string= "hello" (cdr (assoc :stdout decoded))))
+        (is (= 2 (cdr (assoc :values decoded))))
+        (is (equal '(4 5) clawmacs:*last-eval-result*))
+        (is (null clawmacs:*last-eval-condition*))
+        (is (search "hello" (clawmacs:eval-history-to-string)))))))
+
+(test execute-lisp-eval-records-errors
+  "Failed lisp_eval executions expose the condition and still record history."
+  (with-tool-table-restored
+    (let ((clawmacs::*lisp-eval-history* nil)
+          (clawmacs::*last-eval-result* nil)
+          (clawmacs::*last-eval-condition* nil))
+      (clawmacs::init-tools)
+      (let* ((json (clawmacs:execute-tool
+                    "lisp_eval"
+                    '((:code . "(error \"boom\")"))))
+             (decoded (clawmacs::api-json-decode json)))
+        (is (search "boom" (cdr (assoc :error decoded))))
+        (is (null clawmacs:*last-eval-result*))
+        (is (not (null clawmacs:*last-eval-condition*)))
+        (is (search "boom" (clawmacs:eval-history-to-string)))))))
+
+(test run-single-prompt-error-carries-partial-tool-events
+  "Prompt loop failures retain tool events for diagnostics."
+  (let ((path (temp-agent-defaults-path)))
+    (with-agent-defaults-path-override (path)
+      (with-tool-table-restored
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore provider messages callback
+                                                  model max-tokens tools
+                                                  reasoning-effort system-prompt))
+                                 (make-completed-stream-state-response
+                                  "tool_use"
+                                  (list
+                                   (clawmacs::canonical-tool-use-block
+                                    "loop-call"
+                                    "lisp_eval"
+                                    '((:code . "(+ 1 1)"))))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (clawmacs::init-tools)
+          (handler-case
+              (progn
+                (clawmacs:run-single-prompt
+                 "loop forever"
+                 :provider :zai
+                 :model "glm-5"
+                 :max-tool-iterations 1)
+                (fail "Expected prompt-run-error"))
+            (clawmacs:prompt-run-error (condition)
+              (let ((events (clawmacs:prompt-run-error-tool-events condition)))
+                (is (search "Exceeded maximum tool iterations"
+                            (clawmacs:prompt-run-error-message condition)))
+                (is (= 1 (clawmacs:prompt-run-error-iterations condition)))
+                (is (= 1 (length events)))
+                (is (string= "lisp_eval"
+                             (clawmacs:prompt-tool-event-name
+                              (first events))))
+                (is (search "2"
+                            (clawmacs:prompt-tool-event-result-text
+                             (first events))))))))))))
 
 (test provider-token-anthropic-is-unsupported
   "Anthropic no longer has a provider-specific token path."
@@ -2078,7 +2174,10 @@ when no cached models are present."
       (is (listp models))
       (is (plusp (length models)))
       ;; First static model is the default
-      (is (string= "openai/gpt-4o-mini" (first models))))))
+      (is (string= "openai/gpt-5.3-codex" (first models)))
+      (is-false (find-if (lambda (model)
+                           (search "anthropic/" model))
+                         models)))))
 
 (test openrouter-provider-known-models-cached
   "provider-known-models returns the cached list when *openrouter-cached-models* is set."

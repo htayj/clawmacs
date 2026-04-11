@@ -9,7 +9,33 @@
   name
   root
   description
-  source)
+  source
+  systems
+  check-functions
+  reload-function)
+
+(defstruct change-set
+  "A staged set of project resource mutations."
+  id
+  name
+  description
+  entries
+  status
+  created-at
+  applied-at)
+
+(defstruct change-set-entry
+  "One staged project resource mutation."
+  kind
+  project-name
+  path
+  new-path
+  new-text
+  old-exists-p
+  old-text
+  target-old-exists-p
+  target-old-text
+  applied-p)
 
 (defvar *project-definitions-directory*
   (merge-pathnames #P".clawmacs.projects.d/" (user-homedir-pathname))
@@ -34,6 +60,15 @@
 (defvar *project-search-result-limit* 100
   "Default maximum number of matches returned by PROJECT-SEARCH.")
 
+(defvar *change-set-registry* (make-hash-table :test #'equal)
+  "Registry of staged project change sets keyed by id.")
+
+(defvar *current-change-set* nil
+  "The current change set used by staging helpers when none is supplied.")
+
+(defvar *change-set-counter* 0
+  "Monotonic counter used to create human-readable change set ids.")
+
 (defun normalize-project-name (name)
   "Normalize NAME to a non-empty registry key."
   (let ((normalized
@@ -52,6 +87,33 @@
                (etypecase name
                  (string name)
                  (symbol (symbol-name name)))))
+
+(defun project-designator-string (designator)
+  "Return DESIGNATOR as a printable comparison string."
+  (typecase designator
+    (string designator)
+    (symbol (symbol-name designator))
+    (pathname (namestring designator))
+    (t (prin1-to-string designator))))
+
+(defun normalize-project-system-list (systems)
+  "Normalize SYSTEMS to a list of ASDF system designators."
+  (cond
+    ((null systems) nil)
+    ((and (listp systems)
+          (not (stringp systems))
+          (not (pathnamep systems)))
+     systems)
+    (t (list systems))))
+
+(defun normalize-project-function-list (functions)
+  "Normalize FUNCTIONS to a list of function designators."
+  (cond
+    ((null functions) nil)
+    ((and (listp functions)
+          (not (functionp functions)))
+     functions)
+    (t (list functions))))
 
 (defun ensure-directory-path-exists (directory)
   "Ensure DIRECTORY exists and return its truename as a directory pathname."
@@ -82,7 +144,8 @@
   "Return PROJECT as an inert manifest property list."
   (list :name (project-name project)
         :root (namestring (project-root project))
-        :description (or (project-description project) "")))
+        :description (or (project-description project) "")
+        :systems (or (project-systems project) '())))
 
 (defun valid-project-manifest-p (manifest)
   "Return true when MANIFEST is a proper project property list."
@@ -134,7 +197,8 @@ When REPLACE is NIL, an existing project with the same name is preserved."
                                      (project-root project)))
        (setf (gethash key *project-registry*) project)))))
 
-(defun define-project (name &key root description (create-if-missing nil)
+(defun define-project (name &key root description systems check-functions
+                              reload-function (create-if-missing nil)
                               (source :programmatic) (replace t))
   "Define a project named NAME rooted at ROOT."
   (unless root
@@ -145,10 +209,15 @@ When REPLACE is NIL, an existing project with the same name is preserved."
                                                :create-if-missing
                                                create-if-missing)
                  :description description
-                 :source source)
+                 :source source
+                 :systems (normalize-project-system-list systems)
+                 :check-functions (normalize-project-function-list
+                                   check-functions)
+                 :reload-function reload-function)
    :replace replace))
 
-(defun create-project (name &key root description (persist t)
+(defun create-project (name &key root description systems check-functions
+                              reload-function (persist t)
                               &allow-other-keys)
   "Create a project and optionally persist its manifest.
 When ROOT is omitted, create a directory under *PROJECT-DEFINITIONS-DIRECTORY*."
@@ -160,6 +229,9 @@ When ROOT is omitted, create a directory under *PROJECT-DEFINITIONS-DIRECTORY*."
          (project (define-project name
                     :root (or root default-root)
                     :description description
+                    :systems systems
+                    :check-functions check-functions
+                    :reload-function reload-function
                     :create-if-missing t
                     :source (if persist :manifest :programmatic)
                     :replace t)))
@@ -194,6 +266,7 @@ When ROOT is omitted, create a directory under *PROJECT-DEFINITIONS-DIRECTORY*."
     (define-project (getf manifest :name)
       :root (getf manifest :root)
       :description (getf manifest :description)
+      :systems (getf manifest :systems)
       :source :manifest
       :replace replace)))
 
@@ -349,19 +422,89 @@ Existing projects, usually from init.lisp, are not overwritten."
   (uiop:read-file-string
    (project-resolve-path project-designator path :require-exists t)))
 
+(defun synchronize-open-project-file-buffer (project-designator path text
+                                             &key (dirty-p nil)
+                                                  (original-text text))
+  "Update an already-open file buffer after a direct project resource write."
+  (let* ((project (ensure-project project-designator))
+         (resource-path (project-resource-name path))
+         (buffer
+           (find-if (lambda (candidate)
+                      (and (file-buffer-p candidate)
+                           (string= (or (buffer-project-name candidate) "")
+                                    (project-name project))
+                           (string= (or (buffer-resource-path candidate) "")
+                                    resource-path)))
+                    *buffer-ring*)))
+    (when buffer
+      (set-message-text (buffer-input-message buffer) text)
+      (setf (buffer-original-text buffer) original-text
+            (buffer-dirty-p buffer) dirty-p)
+      buffer)))
+
+(defun remove-open-project-file-buffer (project-designator path)
+  "Close an open file buffer for PROJECT-DESIGNATOR/PATH, if one exists."
+  (let* ((project (ensure-project project-designator))
+         (resource-path (project-resource-name path))
+         (buffer
+           (find-if (lambda (candidate)
+                      (and (file-buffer-p candidate)
+                           (string= (or (buffer-project-name candidate) "")
+                                    (project-name project))
+                           (string= (or (buffer-resource-path candidate) "")
+                                    resource-path)))
+                    *buffer-ring*)))
+    (when buffer
+      (kill-buffer-from-ring buffer)
+      buffer)))
+
+(defun retarget-open-project-file-buffer (project-designator old-path new-path text)
+  "Retarget an open file buffer from OLD-PATH to NEW-PATH after a rename."
+  (let* ((project (ensure-project project-designator))
+         (old-resource-path (project-resource-name old-path))
+         (new-resource-path (project-resource-name new-path))
+         (buffer
+           (find-if (lambda (candidate)
+                      (and (file-buffer-p candidate)
+                           (string= (or (buffer-project-name candidate) "")
+                                    (project-name project))
+                           (string= (or (buffer-resource-path candidate) "")
+                                    old-resource-path)))
+                    *buffer-ring*)))
+    (when buffer
+      (set-message-text (buffer-input-message buffer) text)
+      (setf (buffer-name buffer) (format nil "~A:~A"
+                                         (project-name project)
+                                         new-resource-path)
+            (buffer-resource-path buffer) new-resource-path
+            (buffer-original-text buffer) text
+            (buffer-dirty-p buffer) nil
+            (buffer-major-mode buffer)
+            (let ((type (pathname-type (pathname new-resource-path))))
+              (cond
+                ((and type (member (string-downcase type) '("lisp" "asd")
+                                   :test #'string=))
+                 "lisp")
+                (type (string-downcase type))
+                (t "text"))))
+      buffer)))
+
 (defun project-write-file (project-designator path text
                             &key (if-exists :supersede))
   "Write TEXT to project resource PATH and return a summary plist."
-  (let ((resolved (project-resolve-path project-designator path)))
+  (let* ((project (ensure-project project-designator))
+         (resource-path (project-resource-name path))
+         (resolved (project-resolve-path project resource-path)))
     (ensure-directories-exist resolved)
     (with-open-file (stream resolved
                             :direction :output
                             :if-exists if-exists
                             :if-does-not-exist :create)
       (write-string text stream))
+    (synchronize-open-project-file-buffer project resource-path text)
     (list :status :ok
-          :project (project-name (ensure-project project-designator))
-          :path (project-resource-name path)
+          :project (project-name project)
+          :path resource-path
           :bytes-written (length text))))
 
 (defun project-save-file (project-designator path text)
@@ -372,6 +515,402 @@ Existing projects, usually from init.lisp, are not overwritten."
                                              (if-exists :error))
   "Create a new project resource PATH containing CONTENT."
   (project-write-file project-designator path content :if-exists if-exists))
+
+;;; --------------------------------------------------------------------------
+;;; Transactional change sets
+;;; --------------------------------------------------------------------------
+
+(defun next-change-set-id ()
+  "Return a fresh human-readable change set id."
+  (format nil "change-~D" (incf *change-set-counter*)))
+
+(defun begin-change-set (&key name description)
+  "Create and select a new staged project change set."
+  (let* ((id (next-change-set-id))
+         (change-set (make-change-set :id id
+                                      :name (or name id)
+                                      :description description
+                                      :entries nil
+                                      :status :open
+                                      :created-at (get-universal-time))))
+    (setf (gethash id *change-set-registry*) change-set
+          *current-change-set* change-set)
+    change-set))
+
+(defun current-change-set ()
+  "Return the current staged project change set, or NIL."
+  *current-change-set*)
+
+(defun find-change-set (designator)
+  "Return the change set named by DESIGNATOR, or NIL."
+  (etypecase designator
+    (change-set designator)
+    (string (gethash designator *change-set-registry*))
+    (symbol (gethash (string-downcase (symbol-name designator))
+                     *change-set-registry*))))
+
+(defun ensure-change-set (&optional change-set-designator)
+  "Return CHANGE-SET-DESIGNATOR, the current change set, or a new change set."
+  (or (and change-set-designator
+           (or (find-change-set change-set-designator)
+               (error "Unknown change set: ~A" change-set-designator)))
+      *current-change-set*
+      (begin-change-set)))
+
+(defun change-set-open-p (change-set)
+  "Return true when CHANGE-SET can still accept staged entries."
+  (eq :open (change-set-status change-set)))
+
+(defun ensure-open-change-set (change-set)
+  "Signal unless CHANGE-SET is open."
+  (unless (change-set-open-p change-set)
+    (error "Change set ~A is not open; status is ~A."
+           (change-set-id change-set)
+           (change-set-status change-set)))
+  change-set)
+
+(defun list-change-sets ()
+  "Return known change sets sorted by creation time."
+  (let (change-sets)
+    (maphash (lambda (key change-set)
+               (declare (ignore key))
+               (push change-set change-sets))
+             *change-set-registry*)
+    (sort change-sets #'< :key (lambda (change-set)
+                                 (or (change-set-created-at change-set) 0)))))
+
+(defun project-file-snapshot (project-designator path)
+  "Return values EXISTS-P and TEXT for PROJECT-DESIGNATOR/PATH."
+  (let* ((project (ensure-project project-designator))
+         (resource-path (project-resource-name path))
+         (resolved (project-resolve-path project resource-path)))
+    (if (probe-file resolved)
+        (values t (uiop:read-file-string (truename resolved)))
+        (values nil nil))))
+
+(defun make-staged-write-entry (project path text)
+  "Return a staged write entry for PROJECT/PATH."
+  (multiple-value-bind (exists-p old-text)
+      (project-file-snapshot project path)
+    (make-change-set-entry :kind :write
+                           :project-name (project-name (ensure-project project))
+                           :path (project-resource-name path)
+                           :new-text text
+                           :old-exists-p exists-p
+                           :old-text old-text)))
+
+(defun append-change-set-entry (change-set entry)
+  "Append ENTRY to CHANGE-SET and return ENTRY."
+  (ensure-open-change-set change-set)
+  (setf (change-set-entries change-set)
+        (append (change-set-entries change-set) (list entry)))
+  entry)
+
+(defun stage-project-file (project-designator path text
+                            &key change-set)
+  "Stage TEXT as the new contents of PROJECT-DESIGNATOR/PATH."
+  (let* ((target-change-set (ensure-change-set change-set))
+         (project (ensure-project project-designator))
+         (entry (make-staged-write-entry project path text)))
+    (append-change-set-entry target-change-set entry)
+    entry))
+
+(defun stage-project-delete (project-designator path &key change-set)
+  "Stage deletion of PROJECT-DESIGNATOR/PATH."
+  (let* ((target-change-set (ensure-change-set change-set))
+         (project (ensure-project project-designator))
+         (resource-path (project-resource-name path)))
+    (multiple-value-bind (exists-p old-text)
+        (project-file-snapshot project resource-path)
+      (unless exists-p
+        (error "Cannot stage delete for missing project file: ~A:~A"
+               (project-name project)
+               resource-path))
+      (append-change-set-entry
+       target-change-set
+       (make-change-set-entry :kind :delete
+                              :project-name (project-name project)
+                              :path resource-path
+                              :old-exists-p exists-p
+                              :old-text old-text)))))
+
+(defun stage-project-rename (project-designator old-path new-path
+                              &key change-set)
+  "Stage a file rename inside PROJECT-DESIGNATOR."
+  (let* ((target-change-set (ensure-change-set change-set))
+         (project (ensure-project project-designator))
+         (old-resource-path (project-resource-name old-path))
+         (new-resource-path (project-resource-name new-path)))
+    (multiple-value-bind (source-exists-p source-text)
+        (project-file-snapshot project old-resource-path)
+      (unless source-exists-p
+        (error "Cannot stage rename for missing project file: ~A:~A"
+               (project-name project)
+               old-resource-path))
+      (multiple-value-bind (target-exists-p target-text)
+          (project-file-snapshot project new-resource-path)
+        (append-change-set-entry
+         target-change-set
+         (make-change-set-entry :kind :rename
+                                :project-name (project-name project)
+                                :path old-resource-path
+                                :new-path new-resource-path
+                                :new-text source-text
+                                :old-exists-p source-exists-p
+                                :old-text source-text
+                                :target-old-exists-p target-exists-p
+                                :target-old-text target-text))))))
+
+(defun latest-staged-file-entry (change-set project-designator path)
+  "Return the latest staged entry affecting PROJECT-DESIGNATOR/PATH."
+  (let* ((project (ensure-project project-designator))
+         (project-key (normalize-project-name (project-name project)))
+         (resource-path (project-resource-name path)))
+    (find-if
+     (lambda (entry)
+       (and (string= project-key
+                     (normalize-project-name
+                      (change-set-entry-project-name entry)))
+            (or (string= resource-path (change-set-entry-path entry))
+                (and (change-set-entry-new-path entry)
+                     (string= resource-path
+                              (change-set-entry-new-path entry))))))
+     (reverse (change-set-entries change-set)))))
+
+(defun change-set-project-file-text (project-designator path
+                                      &optional change-set-designator)
+  "Return PROJECT-DESIGNATOR/PATH text including the latest staged write."
+  (let ((change-set (or (and change-set-designator
+                             (find-change-set change-set-designator))
+                        *current-change-set*)))
+    (when change-set
+      (let ((entry (latest-staged-file-entry change-set project-designator path)))
+        (when entry
+          (case (change-set-entry-kind entry)
+            (:write (return-from change-set-project-file-text
+                      (change-set-entry-new-text entry)))
+            (:rename
+             (if (and (change-set-entry-new-path entry)
+                      (string= (project-resource-name path)
+                               (change-set-entry-new-path entry)))
+                 (return-from change-set-project-file-text
+                   (change-set-entry-new-text entry))
+                 (error "Project file is staged for rename: ~A"
+                        (change-set-entry-path entry))))
+            (:delete
+             (error "Project file is staged for deletion: ~A"
+                    (change-set-entry-path entry)))))))
+    (project-read-file project-designator path)))
+
+(defun diff-line-list (text)
+  "Split TEXT into display lines for change set diffs."
+  (if text
+      (split-text-lines text)
+      nil))
+
+(defun simple-text-diff-to-string (old-text new-text)
+  "Return a compact line-oriented diff from OLD-TEXT to NEW-TEXT."
+  (with-output-to-string (out)
+    (let ((old-lines (diff-line-list old-text))
+          (new-lines (diff-line-list new-text)))
+      (cond
+        ((and (null old-text) new-text)
+         (dolist (line new-lines)
+           (format out "+~A~%" line)))
+        ((and old-text (null new-text))
+         (dolist (line old-lines)
+           (format out "-~A~%" line)))
+        (t
+         (let ((old-set (make-hash-table :test #'equal))
+               (new-set (make-hash-table :test #'equal)))
+           (dolist (line old-lines)
+             (setf (gethash line old-set) t))
+           (dolist (line new-lines)
+             (setf (gethash line new-set) t))
+           (dolist (line old-lines)
+             (unless (gethash line new-set)
+               (format out "-~A~%" line)))
+           (dolist (line new-lines)
+             (unless (gethash line old-set)
+               (format out "+~A~%" line)))))))))
+
+(defun change-set-entry-diff-to-string (entry)
+  "Return a display diff for one staged ENTRY."
+  (with-output-to-string (out)
+    (ecase (change-set-entry-kind entry)
+      (:write
+       (format out "--- ~A:~A~%+++ ~A:~A~%"
+               (change-set-entry-project-name entry)
+               (change-set-entry-path entry)
+               (change-set-entry-project-name entry)
+               (change-set-entry-path entry))
+       (write-string
+        (simple-text-diff-to-string (change-set-entry-old-text entry)
+                                    (change-set-entry-new-text entry))
+        out))
+      (:delete
+       (format out "--- ~A:~A~%+++ /dev/null~%"
+               (change-set-entry-project-name entry)
+               (change-set-entry-path entry))
+       (write-string
+        (simple-text-diff-to-string (change-set-entry-old-text entry) nil)
+        out))
+      (:rename
+       (format out "rename ~A:~A -> ~A:~A~%"
+               (change-set-entry-project-name entry)
+               (change-set-entry-path entry)
+               (change-set-entry-project-name entry)
+               (change-set-entry-new-path entry))))))
+
+(defun change-set-diff-to-string (&optional change-set-designator)
+  "Return an agent-readable diff for CHANGE-SET-DESIGNATOR."
+  (let ((change-set (ensure-change-set change-set-designator)))
+    (with-output-to-string (out)
+      (format out "Change Set: ~A  Status: ~(~A~)~@[  Name: ~A~]~%~%"
+              (change-set-id change-set)
+              (change-set-status change-set)
+              (change-set-name change-set))
+      (if (change-set-entries change-set)
+          (dolist (entry (change-set-entries change-set))
+            (write-string (change-set-entry-diff-to-string entry) out)
+            (terpri out))
+          (format out "No staged changes.~%")))))
+
+(defun restore-project-file-snapshot (project-designator path exists-p text)
+  "Restore PROJECT-DESIGNATOR/PATH to EXISTS-P/TEXT."
+  (if exists-p
+      (project-save-file project-designator path (or text ""))
+      (let ((resolved (project-resolve-path project-designator path)))
+        (when (probe-file resolved)
+          (delete-file (truename resolved)))
+        (remove-open-project-file-buffer project-designator path)))
+  t)
+
+(defun apply-change-set-entry (entry)
+  "Apply one staged change set ENTRY."
+  (ecase (change-set-entry-kind entry)
+    (:write
+     (project-save-file (change-set-entry-project-name entry)
+                        (change-set-entry-path entry)
+                        (change-set-entry-new-text entry)))
+    (:delete
+     (let ((resolved (project-resolve-path (change-set-entry-project-name entry)
+                                           (change-set-entry-path entry)
+                                           :require-exists t)))
+       (delete-file resolved)
+       (remove-open-project-file-buffer (change-set-entry-project-name entry)
+                                        (change-set-entry-path entry))))
+    (:rename
+     (let ((source (project-resolve-path (change-set-entry-project-name entry)
+                                         (change-set-entry-path entry)
+                                         :require-exists t))
+           (target (project-resolve-path (change-set-entry-project-name entry)
+                                         (change-set-entry-new-path entry))))
+       (ensure-directories-exist target)
+       (remove-open-project-file-buffer (change-set-entry-project-name entry)
+                                        (change-set-entry-new-path entry))
+       (rename-file source target)
+       (retarget-open-project-file-buffer (change-set-entry-project-name entry)
+                                          (change-set-entry-path entry)
+                                          (change-set-entry-new-path entry)
+                                          (change-set-entry-new-text entry)))))
+  (setf (change-set-entry-applied-p entry) t)
+  entry)
+
+(defun revert-change-set-entry (entry)
+  "Restore the pre-apply state for one ENTRY."
+  (ecase (change-set-entry-kind entry)
+    (:write
+     (restore-project-file-snapshot (change-set-entry-project-name entry)
+                                    (change-set-entry-path entry)
+                                    (change-set-entry-old-exists-p entry)
+                                    (change-set-entry-old-text entry)))
+    (:delete
+     (restore-project-file-snapshot (change-set-entry-project-name entry)
+                                    (change-set-entry-path entry)
+                                    (change-set-entry-old-exists-p entry)
+                                    (change-set-entry-old-text entry)))
+    (:rename
+     (restore-project-file-snapshot (change-set-entry-project-name entry)
+                                    (change-set-entry-new-path entry)
+                                    (change-set-entry-target-old-exists-p entry)
+                                    (change-set-entry-target-old-text entry))
+     (restore-project-file-snapshot (change-set-entry-project-name entry)
+                                    (change-set-entry-path entry)
+                                    (change-set-entry-old-exists-p entry)
+                                    (change-set-entry-old-text entry))))
+  (setf (change-set-entry-applied-p entry) nil)
+  entry)
+
+(defun apply-change-set (&optional change-set-designator)
+  "Apply CHANGE-SET-DESIGNATOR, rolling back already applied entries on error."
+  (let ((change-set (ensure-change-set change-set-designator))
+        (applied nil))
+    (ensure-open-change-set change-set)
+    (handler-case
+        (progn
+          (dolist (entry (change-set-entries change-set))
+            (apply-change-set-entry entry)
+            (push entry applied))
+          (setf (change-set-status change-set) :applied
+                (change-set-applied-at change-set) (get-universal-time))
+          change-set)
+      (error (condition)
+        (dolist (entry applied)
+          (ignore-errors (revert-change-set-entry entry)))
+        (setf (change-set-status change-set) :failed)
+        (error "Failed applying change set ~A; rolled back applied entries: ~A"
+               (change-set-id change-set)
+               condition)))))
+
+(defun discard-change-set (&optional change-set-designator)
+  "Discard an unapplied staged change set."
+  (let ((change-set (ensure-change-set change-set-designator)))
+    (when (eq :applied (change-set-status change-set))
+      (error "Cannot discard applied change set ~A; use REVERT-CHANGE-SET."
+             (change-set-id change-set)))
+    (setf (change-set-status change-set) :discarded)
+    (when (eq change-set *current-change-set*)
+      (setf *current-change-set* nil))
+    change-set))
+
+(defun revert-change-set (&optional change-set-designator)
+  "Revert an applied CHANGE-SET-DESIGNATOR using stored snapshots."
+  (let ((change-set (ensure-change-set change-set-designator)))
+    (unless (eq :applied (change-set-status change-set))
+      (error "Change set ~A is not applied; status is ~A."
+             (change-set-id change-set)
+             (change-set-status change-set)))
+    (dolist (entry (reverse (change-set-entries change-set)))
+      (revert-change-set-entry entry))
+    (setf (change-set-status change-set) :reverted)
+    (when (eq change-set *current-change-set*)
+      (setf *current-change-set* nil))
+    change-set))
+
+(defun change-set-summary-to-string (&optional change-set-designator)
+  "Return a compact summary of staged entries in CHANGE-SET-DESIGNATOR."
+  (let ((change-set (ensure-change-set change-set-designator)))
+    (with-output-to-string (out)
+      (format out "~A (~(~A~)): ~D entr~:@P~%"
+              (change-set-id change-set)
+              (change-set-status change-set)
+              (length (change-set-entries change-set)))
+      (dolist (entry (change-set-entries change-set))
+        (ecase (change-set-entry-kind entry)
+          (:write
+           (format out "  write ~A:~A~%"
+                   (change-set-entry-project-name entry)
+                   (change-set-entry-path entry)))
+          (:delete
+           (format out "  delete ~A:~A~%"
+                   (change-set-entry-project-name entry)
+                   (change-set-entry-path entry)))
+          (:rename
+           (format out "  rename ~A:~A -> ~A~%"
+                   (change-set-entry-project-name entry)
+                   (change-set-entry-path entry)
+                   (change-set-entry-new-path entry))))))))
 
 (defun split-text-lines (text)
   "Split TEXT into lines without retaining newline characters."
@@ -484,3 +1023,238 @@ Returns plists containing :PATH, :LINE, and :TEXT."
     (setf (buffer-original-text buffer) text
           (buffer-dirty-p buffer) nil)
     summary))
+
+;;; --------------------------------------------------------------------------
+;;; Project checks, reload, and code intelligence
+;;; --------------------------------------------------------------------------
+
+(defun call-project-function (function-designator project)
+  "Call FUNCTION-DESIGNATOR with PROJECT."
+  (funcall (etypecase function-designator
+             (function function-designator)
+             (symbol (symbol-function function-designator)))
+           project))
+
+(defun run-project-checks (project-designator)
+  "Run check callbacks registered on PROJECT-DESIGNATOR.
+Each check function is called with the project object and its result is
+captured in a plist. Conditions are caught so agents can report all failures."
+  (let* ((project (ensure-project project-designator))
+         (checks (project-check-functions project)))
+    (if checks
+        (loop :for check :in checks
+              :collect
+              (handler-case
+                  (list :check check
+                        :status :passed
+                        :result (call-project-function check project))
+                (error (condition)
+                  (list :check check
+                        :status :failed
+                        :condition (format nil "~A" condition)))))
+        (list (list :project (project-name project)
+                    :status :no-checks
+                    :message "No project check functions are registered.")))))
+
+(defun compile-project-file (project-designator path)
+  "Compile PROJECT-DESIGNATOR/PATH with COMPILE-FILE and return a summary plist."
+  (let ((resolved (project-resolve-path project-designator path
+                                        :require-exists t)))
+    (multiple-value-bind (output-path warnings-p failure-p)
+        (compile-file resolved)
+      (list :project (project-name (ensure-project project-designator))
+            :path (project-resource-name path)
+            :output-path output-path
+            :warnings-p warnings-p
+            :failure-p failure-p
+            :status (if failure-p :failed :ok)))))
+
+(defun load-project-file (project-designator path)
+  "Load PROJECT-DESIGNATOR/PATH and return a summary plist."
+  (let ((resolved (project-resolve-path project-designator path
+                                        :require-exists t)))
+    (load resolved :verbose nil :print nil)
+    (list :project (project-name (ensure-project project-designator))
+          :path (project-resource-name path)
+          :status :ok)))
+
+(defun reload-project-system (project-designator &optional system-designator)
+  "Reload PROJECT-DESIGNATOR's registered systems or SYSTEM-DESIGNATOR."
+  (let* ((project (ensure-project project-designator))
+         (reload-function (project-reload-function project))
+         (systems (or (and system-designator (list system-designator))
+                      (project-systems project))))
+    (cond
+      (reload-function
+       (list (list :project (project-name project)
+                   :status :ok
+                   :result (call-project-function reload-function project))))
+      (systems
+       (loop :for system :in systems
+             :collect
+             (handler-case
+                 (progn
+                   (asdf:load-system system)
+                   (list :system system :status :ok))
+               (error (condition)
+                 (list :system system
+                       :status :failed
+                       :condition (format nil "~A" condition))))))
+      (t
+       (list (list :project (project-name project)
+                   :status :no-systems
+                   :message "No project systems or reload function are registered."))))))
+
+(defun project-lisp-source-path-p (path)
+  "Return true when PATH names a Lisp source resource."
+  (let ((type (string-downcase (or (pathname-type (pathname path)) ""))))
+    (member type '("lisp" "lsp" "cl" "asd") :test #'string=)))
+
+(defun keyword-option-list (&rest pairs)
+  "Return PAIRS without keyword/value pairs whose value is NIL."
+  (loop :for (key value) :on pairs :by #'cddr
+        :when value
+          :append (list key value)))
+
+(defun project-sexed-outline (project path options)
+  "Call SEXED-OUTLINE-TO-STRING for PROJECT/PATH with OPTIONS."
+  (apply (symbol-function 'sexed-outline-to-string)
+         (project-read-file project path)
+         options))
+
+(defun project-outline-to-string (project-designator &key path depth max-depth
+                                                     head limit
+                                                     (preview-chars 96))
+  "Return a structural outline for one Lisp project resource or all Lisp files."
+  (let* ((project (ensure-project project-designator))
+         (options (keyword-option-list :depth depth
+                                       :max-depth max-depth
+                                       :head head
+                                       :limit limit
+                                       :preview-chars preview-chars))
+         (paths (if path
+                    (list (project-resource-name path))
+                    (remove-if-not #'project-lisp-source-path-p
+                                   (project-list-files project)))))
+    (with-output-to-string (out)
+      (if paths
+          (dolist (resource-path paths)
+            (format out ";;; ~A~%" resource-path)
+            (handler-case
+                (write-string (project-sexed-outline project resource-path options)
+                              out)
+              (error (condition)
+                (format out "Error: ~A~%" condition)))
+            (terpri out))
+          (format out "No Lisp source files found.~%")))))
+
+(defun definition-head-p (head)
+  "Return true when HEAD names a common Lisp definition form."
+  (and head
+       (member (string-downcase head)
+               '("defun" "defmacro" "defgeneric" "defmethod" "defclass"
+                 "defstruct" "defvar" "defparameter" "defconstant"
+                 "defcommand" "defdoc" "defpackage")
+               :test #'string=)))
+
+(defun project-find-definitions (project-designator &key name head
+                                                    (limit 50))
+  "Return definition plists found in PROJECT-DESIGNATOR."
+  (let ((project (ensure-project project-designator))
+        (results nil))
+    (dolist (path (remove-if-not #'project-lisp-source-path-p
+                                 (project-list-files project :limit nil)))
+      (when (or (null limit) (< (length results) limit))
+        (handler-case
+            (dolist (form (funcall (symbol-function 'sexed-find-forms)
+                                   (project-read-file project path)
+                                   :max-depth 0
+                                   :limit nil))
+              (let ((form-head (getf form :head))
+                    (form-name (getf form :name)))
+                (when (and (definition-head-p form-head)
+                           (or (null head)
+                               (string-equal (project-designator-string head)
+                                             form-head))
+                           (or (null name)
+                               (and form-name
+                                    (string-equal
+                                     (project-designator-string name)
+                                     form-name))))
+                  (push (append (list :path path) form) results)
+                  (when (and limit (>= (length results) limit))
+                    (return)))))
+          (error () nil))))
+    (nreverse results)))
+
+(defun project-find-definitions-to-string (project-designator &rest args
+                                            &key name head limit)
+  "Return PROJECT-FIND-DEFINITIONS results as text."
+  (declare (ignore name head limit))
+  (let ((definitions (apply #'project-find-definitions project-designator args)))
+    (if definitions
+        (with-output-to-string (out)
+          (dolist (definition definitions)
+            (format out "~A:~A ~@[~A~] ~(~A~) [id ~A]~%  ~A~%"
+                    (getf definition :path)
+                    (getf definition :head)
+                    (getf definition :name)
+                    (getf definition :type)
+                    (getf definition :id)
+                    (getf definition :preview))))
+        "No definitions found.")))
+
+(defun project-find-references-to-string (project-designator query
+                                           &key (limit *project-search-result-limit*))
+  "Return text search hits for QUERY in PROJECT-DESIGNATOR."
+  (project-search-to-string project-designator query :limit limit))
+
+(defun project-package-map-to-string (project-designator)
+  "Return package-related forms found in PROJECT-DESIGNATOR."
+  (let ((project (ensure-project project-designator))
+        (hits nil))
+    (dolist (path (remove-if-not #'project-lisp-source-path-p
+                                 (project-list-files project :limit nil)))
+      (handler-case
+          (dolist (form (funcall (symbol-function 'sexed-find-forms)
+                                 (project-read-file project path)
+                                 :max-depth 0
+                                 :limit nil))
+            (when (member (string-downcase (or (getf form :head) ""))
+                          '("defpackage" "in-package")
+                          :test #'string=)
+              (push (append (list :path path) form) hits)))
+        (error () nil)))
+    (if hits
+        (with-output-to-string (out)
+          (dolist (hit (nreverse hits))
+            (format out "~A: ~A ~@[~A~]~%  ~A~%"
+                    (getf hit :path)
+                    (getf hit :head)
+                    (getf hit :name)
+                    (getf hit :preview))))
+        "No package forms found.")))
+
+(defun project-describe-definition-to-string (project-designator name
+                                               &key head)
+  "Return the source text and location for the first matching definition."
+  (let* ((project (ensure-project project-designator))
+         (definition (first (project-find-definitions project
+                                                      :name name
+                                                      :head head
+                                                      :limit 1))))
+    (if definition
+        (let* ((path (getf definition :path))
+               (selector (list :id (getf definition :id)))
+               (text (funcall (symbol-function 'sexed-form-text)
+                              (project-read-file project path)
+                              selector)))
+          (format nil "~A:~A ~A [id ~A]~%~%~A"
+                  path
+                  (getf definition :head)
+                  (getf definition :name)
+                  (getf definition :id)
+                  text))
+        (format nil "No definition found for ~A in project ~A."
+                name
+                (project-name project)))))

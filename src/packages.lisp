@@ -16,6 +16,9 @@
 (defpackage :clawmacs
   (:use :cl)
   (:export
+   ;; General utilities
+   #:count-occurrences
+
    ;; Color specs
    #:color-spec
    #:make-color-spec
@@ -156,6 +159,7 @@
    #:ensure-scratch-buffer
    #:scratch-buffer-text
    #:file-buffer-text
+   #:file-buffer-dirty-p
    #:mark-buffer-dirty
    #:next-buffer-name
    #:buffer-names
@@ -213,12 +217,37 @@
    #:project-root
    #:project-description
    #:project-source
+   #:project-systems
+   #:project-check-functions
+   #:project-reload-function
+   #:change-set
+   #:make-change-set
+   #:change-set-id
+   #:change-set-name
+   #:change-set-description
+   #:change-set-entries
+   #:change-set-status
+   #:change-set-created-at
+   #:change-set-applied-at
+   #:change-set-entry
+   #:change-set-entry-kind
+   #:change-set-entry-project-name
+   #:change-set-entry-path
+   #:change-set-entry-new-path
+   #:change-set-entry-new-text
+   #:change-set-entry-old-exists-p
+   #:change-set-entry-old-text
+   #:change-set-entry-target-old-exists-p
+   #:change-set-entry-target-old-text
+   #:change-set-entry-applied-p
    #:*project-definitions-directory*
    #:*project-registry*
    #:*project-manifest-extension*
    #:*project-ignored-directory-names*
    #:*project-list-file-limit*
    #:*project-search-result-limit*
+   #:*change-set-registry*
+   #:*current-change-set*
    #:define-project
    #:create-project
    #:register-project
@@ -236,6 +265,29 @@
    #:project-open-file
    #:find-project-file-buffer
    #:project-save-buffer
+   #:begin-change-set
+   #:current-change-set
+   #:find-change-set
+   #:list-change-sets
+   #:stage-project-file
+   #:stage-project-delete
+   #:stage-project-rename
+   #:change-set-project-file-text
+   #:change-set-diff-to-string
+   #:change-set-summary-to-string
+   #:apply-change-set
+   #:discard-change-set
+   #:revert-change-set
+   #:run-project-checks
+   #:compile-project-file
+   #:load-project-file
+   #:reload-project-system
+   #:project-outline-to-string
+   #:project-find-definitions
+   #:project-find-definitions-to-string
+   #:project-find-references-to-string
+   #:project-package-map-to-string
+   #:project-describe-definition-to-string
 
     ;; LLM
     #:*zai-env-var*
@@ -322,7 +374,20 @@
    #:*file-read-default-limit*
    #:*shell-exec-default-timeout*
    #:*diff-display-max-lines*
+   #:*last-eval-result*
+   #:*last-eval-condition*
+   #:*lisp-eval-history*
+   #:*lisp-eval-history-limit*
+   #:*lisp-eval-max-output-chars*
    #:*tool-table*
+   #:lisp-eval-record
+   #:lisp-eval-record-code
+   #:lisp-eval-record-package
+   #:lisp-eval-record-result
+   #:lisp-eval-record-stdout
+   #:lisp-eval-record-stderr
+   #:lisp-eval-record-condition
+   #:lisp-eval-record-timestamp
    #:tool-definition
    #:register-tool
    #:execute-tool
@@ -331,6 +396,7 @@
    #:format-tool-call-sexpr
    #:format-tool-call-expanded
    #:tool-approval-extra-display
+   #:eval-history-to-string
    #:init-tools
 
    ;; Standard reference / library discovery
@@ -350,6 +416,7 @@
 
    ;; Sexed structural editing
    #:sexed-balanced-p
+   #:balanced-parentheses-p
    #:sexed-diagnostics
    #:sexed-find-forms
    #:sexed-form-text
@@ -391,6 +458,18 @@
    #:sexed-raise-project-form
    #:sexed-slurp-forward-project-form
    #:sexed-barf-forward-project-form
+   #:sexed-update-staged-project-file
+   #:sexed-stage-replace-project-form
+   #:sexed-stage-delete-project-form
+   #:sexed-stage-insert-before-project-form
+   #:sexed-stage-insert-after-project-form
+   #:sexed-stage-insert-project-form-before
+   #:sexed-stage-insert-project-form-after
+   #:sexed-stage-wrap-project-form
+   #:sexed-stage-splice-project-form
+   #:sexed-stage-raise-project-form
+   #:sexed-stage-slurp-forward-project-form
+   #:sexed-stage-barf-forward-project-form
    #:sexed-replace-message-form
    #:sexed-delete-message-form
    #:sexed-insert-before-message-form
@@ -633,6 +712,13 @@
    #:prompt-run-result-think-level
    #:prompt-run-result-iterations
    #:prompt-run-result-stop-reason
+   #:prompt-run-error
+   #:prompt-run-error-message
+   #:prompt-run-error-tool-events
+   #:prompt-run-error-iterations
+   #:prompt-run-error-provider
+   #:prompt-run-error-model
+   #:prompt-run-error-think-level
    #:prompt-tool-event
    #:prompt-tool-event-id
    #:prompt-tool-event-name

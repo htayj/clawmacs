@@ -140,6 +140,31 @@
       (is-false (buffer-dirty-p buffer))
       (is (string= "(note new)" (project-read-file "edit" "notes.lisp"))))))
 
+(test direct-project-writes-refresh-open-file-buffer
+  "Direct project writes keep already-open file buffers coherent."
+  (with-project-test-state (root definitions)
+    (define-project "sync" :root root)
+    (project-create-file "sync" "notes.lisp" :content "(note old)")
+    (let ((buffer (project-open-file "sync" "notes.lisp")))
+      (setf (file-buffer-text buffer) "(note unsaved)")
+      (is (file-buffer-dirty-p buffer))
+      (project-create-file "sync" "notes.lisp"
+                           :content "(note fresh)"
+                           :if-exists :supersede)
+      (is (eq buffer (project-open-file "sync" "notes.lisp")))
+      (is (string= "(note fresh)" (file-buffer-text buffer)))
+      (is (string= "(note fresh)" (buffer-original-text buffer)))
+      (is-false (file-buffer-dirty-p buffer))
+      (setf (file-buffer-text buffer)
+            (concatenate 'string (file-buffer-text buffer)
+                         (string #\Newline)
+                         ";; one append"))
+      (project-save-buffer buffer)
+      (is-false (file-buffer-dirty-p buffer))
+      (is (string= "(note fresh)
+;; one append"
+                   (project-read-file "sync" "notes.lisp"))))))
+
 (test save-session-command-saves-project-file-buffers
   "C-x C-s behavior saves project file buffers instead of sessions."
   (with-project-test-state (root definitions)
@@ -154,3 +179,108 @@
       (let ((notice (message-prev (buffer-input-message buffer))))
         (is (not (null notice)))
         (is (search "Saved save:draft.txt" (message-text notice)))))))
+
+(test define-project-records-checks-systems-and-reload-function
+  "Project definitions can expose validation and reload metadata."
+  (with-project-test-state (root definitions)
+    (let ((project (define-project "meta"
+                     :root root
+                     :systems '("clawmacs")
+                     :check-functions
+                     (list (lambda (project)
+                             (list :checked (project-name project))))
+                     :reload-function
+                     (lambda (project)
+                       (list :reloaded (project-name project))))))
+      (is (equal '("clawmacs") (project-systems project)))
+      (is (= 1 (length (project-check-functions project))))
+      (is (functionp (project-reload-function project)))
+      (let ((checks (run-project-checks "meta")))
+        (is (eq :passed (getf (first checks) :status)))
+        (is (equal '(:checked "meta") (getf (first checks) :result))))
+      (let ((reloads (reload-project-system "meta")))
+        (is (eq :ok (getf (first reloads) :status)))
+        (is (equal '(:reloaded "meta") (getf (first reloads) :result)))))
+    (is (not (null definitions)))))
+
+(test change-set-stages-applies-and-reverts-project-file
+  "Change sets stage project writes without touching files until apply."
+  (with-project-test-state (root definitions)
+    (define-project "tx" :root root)
+    (project-create-file "tx" "src/sample.lisp"
+                         :content "(defun sample () :old)")
+    (let ((change-set (begin-change-set :name "sample-edit")))
+      (stage-project-file "tx" "src/sample.lisp" "(defun sample () :new)"
+                          :change-set change-set)
+      (is (search "+(defun sample () :new)"
+                  (change-set-diff-to-string change-set)))
+      (is (string= "(defun sample () :old)"
+                   (project-read-file "tx" "src/sample.lisp")))
+      (is (string= "(defun sample () :new)"
+                   (change-set-project-file-text "tx" "src/sample.lisp"
+                                                 change-set)))
+      (apply-change-set change-set)
+      (is (eq :applied (change-set-status change-set)))
+      (is (string= "(defun sample () :new)"
+                   (project-read-file "tx" "src/sample.lisp")))
+      (revert-change-set change-set)
+      (is (eq :reverted (change-set-status change-set)))
+      (is (string= "(defun sample () :old)"
+                   (project-read-file "tx" "src/sample.lisp"))))
+    (is (not (null definitions)))))
+
+(test change-set-delete-and-rename-restore-original-state
+  "Delete and rename entries can be applied and reverted."
+  (with-project-test-state (root definitions)
+    (define-project "moves" :root root)
+    (project-create-file "moves" "old.lisp" :content "(old)")
+    (project-create-file "moves" "delete.lisp" :content "(delete)")
+    (let ((change-set (begin-change-set :name "moves")))
+      (stage-project-rename "moves" "old.lisp" "new.lisp"
+                            :change-set change-set)
+      (stage-project-delete "moves" "delete.lisp"
+                            :change-set change-set)
+      (apply-change-set change-set)
+      (is (string= "(old)" (project-read-file "moves" "new.lisp")))
+      (signals error
+        (project-read-file "moves" "old.lisp"))
+      (signals error
+        (project-read-file "moves" "delete.lisp"))
+      (revert-change-set change-set)
+      (is (string= "(old)" (project-read-file "moves" "old.lisp")))
+      (is (string= "(delete)" (project-read-file "moves" "delete.lisp")))
+      (signals error
+        (project-read-file "moves" "new.lisp")))
+    (is (not (null definitions)))))
+
+(test project-code-intelligence-finds-definitions-and-packages
+  "Project intelligence helpers summarize Lisp files without direct file tools."
+  (with-project-test-state (root definitions)
+    (define-project "intel" :root root)
+    (project-create-file
+     "intel"
+     "src/example.lisp"
+     :content "(defpackage :example
+  (:use :cl))
+
+(in-package :example)
+
+(defun alpha ()
+  :ok)
+
+(defmacro with-alpha (&body body)
+  `(progn ,@body))")
+    (is (search "defun alpha"
+                (project-outline-to-string "intel"
+                                           :path "src/example.lisp"
+                                           :max-depth 0)))
+    (is (search "src/example.lisp:defun alpha"
+                (project-find-definitions-to-string "intel"
+                                                    :name "alpha")))
+    (is (search "defpackage"
+                (project-package-map-to-string "intel")))
+    (is (search "(defun alpha ()"
+                (project-describe-definition-to-string "intel" "alpha")))
+    (is (search "with-alpha"
+                (project-find-references-to-string "intel" "with-alpha")))
+    (is (not (null definitions)))))

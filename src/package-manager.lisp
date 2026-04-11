@@ -47,6 +47,23 @@
                   :start2 (- string-length suffix-length)
                   :end2 string-length))))
 
+(defun count-occurrences (needle haystack &key (start 0) end (test #'char=))
+  "Count non-overlapping occurrences of NEEDLE in HAYSTACK."
+  (let* ((needle (string needle))
+         (haystack (string haystack))
+         (needle-length (length needle))
+         (limit (or end (length haystack))))
+    (unless (plusp needle-length)
+      (error "NEEDLE must not be empty."))
+    (loop :with position := start
+          :for match := (search needle haystack
+                                :start2 position
+                                :end2 limit
+                                :test test)
+          :while match
+          :count t
+          :do (setf position (+ match needle-length)))))
+
 (defun repo-display-name (repo)
   "Return a human-readable package name derived from REPO."
   (let* ((trimmed (string-right-trim "/" repo))

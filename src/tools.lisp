@@ -407,26 +407,153 @@ The file must exist. old_text must be found exactly once."
 ;;; Lisp Eval Tool
 ;;; --------------------------------------------------------------------------
 
+(defstruct lisp-eval-record
+  "One captured lisp_eval execution record."
+  code
+  package
+  result
+  stdout
+  stderr
+  condition
+  timestamp)
+
+(defvar *last-eval-result* nil
+  "Multiple-value list from the last successful lisp_eval execution.")
+
+(defvar *last-eval-condition* nil
+  "Condition object from the last failed lisp_eval execution, or NIL.")
+
+(defvar *lisp-eval-history* nil
+  "Newest-first list of captured lisp_eval execution records.")
+
+(defvar *lisp-eval-history-limit* 50
+  "Maximum number of lisp_eval records retained in memory.")
+
+(defvar *lisp-eval-max-output-chars* 20000
+  "Maximum characters retained per lisp_eval result/stdout/stderr field.")
+
+(defun truncate-lisp-eval-text (text)
+  "Return values TRUNCATED-TEXT and TRUNCATED-P for TEXT."
+  (let ((string (or text "")))
+    (if (> (length string) *lisp-eval-max-output-chars*)
+        (values (concatenate 'string
+                             (subseq string 0 *lisp-eval-max-output-chars*)
+                             (format nil "~%[truncated at ~D characters]"
+                                     *lisp-eval-max-output-chars*))
+                t)
+        (values string nil))))
+
+(defun push-lisp-eval-record (record)
+  "Push RECORD into *LISP-EVAL-HISTORY* and enforce the retention limit."
+  (push record *lisp-eval-history*)
+  (when (> (length *lisp-eval-history*) *lisp-eval-history-limit*)
+    (setf *lisp-eval-history*
+          (subseq *lisp-eval-history* 0 *lisp-eval-history-limit*)))
+  record)
+
+(defun lisp-eval-preview (value &optional (max-length 160))
+  "Return a compact printed preview for VALUE."
+  (let ((text (handler-case
+                  (let ((*print-length* 20)
+                        (*print-level* 4)
+                        (*print-circle* t)
+                        (*print-pretty* nil))
+                    (prin1-to-string value))
+                (error (condition)
+                  (format nil "#<error printing value: ~A>" condition)))))
+    (if (> (length text) max-length)
+        (concatenate 'string (subseq text 0 max-length) "...")
+        text)))
+
+(defun eval-history-to-string (&key (limit 10))
+  "Return a compact newest-first summary of lisp_eval history."
+  (with-output-to-string (out)
+    (if *lisp-eval-history*
+        (loop :for record :in *lisp-eval-history*
+              :for index :from 1
+              :while (<= index limit)
+              :do (format out "~D. package=~A time=~A~%   code: ~A~%"
+                          index
+                          (lisp-eval-record-package record)
+                          (lisp-eval-record-timestamp record)
+                          (lisp-eval-preview
+                           (lisp-eval-record-code record)))
+                  (if (lisp-eval-record-condition record)
+                      (format out "   error: ~A~%"
+                              (lisp-eval-record-condition record))
+                      (format out "   result: ~A~%"
+                              (lisp-eval-preview
+                               (lisp-eval-record-result record))))
+                  (when (plusp (length (or (lisp-eval-record-stdout record)
+                                           "")))
+                    (format out "   stdout: ~A~%"
+                            (lisp-eval-preview
+                             (lisp-eval-record-stdout record))))
+                  (when (plusp (length (or (lisp-eval-record-stderr record)
+                                           "")))
+                    (format out "   stderr: ~A~%"
+                            (lisp-eval-preview
+                             (lisp-eval-record-stderr record)))))
+        (format out "No lisp_eval history captured.~%"))))
+
 (defun execute-lisp-eval (args)
   "Evaluate arbitrary Common Lisp code. Returns the result as a string."
   (let* ((code (cdr (assoc :code args)))
          (package-name (or (cdr (assoc :package args)) "CLAWMACS")))
     (unless code
       (error "code parameter is required"))
-    (let ((*package* (or (find-package (string-upcase package-name))
-                         (find-package :cl-user))))
+    (let ((package (or (find-package (string-upcase package-name))
+                       (find-package :cl-user)))
+          (stdout-stream (make-string-output-stream))
+          (stderr-stream (make-string-output-stream))
+          (results nil)
+          (result-output "")
+          (condition-text nil)
+          (truncated-fields nil))
       (handler-case
-          (let* ((form (read-from-string code))
-                 (results (multiple-value-list (eval form)))
-                 (output (format nil "~{~S~^~%~}" results)))
-            (cl-json:encode-json-to-string
-             `((:code . ,code)
-               (:result . ,output)
-               (:values . ,(length results)))))
-        (error (e)
-          (cl-json:encode-json-to-string
-           `((:code . ,code)
-             (:error . ,(format nil "~A" e)))))))))
+          (let ((*package* package)
+                (*standard-output* stdout-stream)
+                (*trace-output* stderr-stream)
+                (*error-output* stderr-stream))
+            (let ((form (read-from-string code)))
+              (setf results (multiple-value-list (eval form))
+                    *last-eval-result* results
+                    *last-eval-condition* nil
+                    result-output (format nil "~{~S~^~%~}" results))))
+        (error (condition)
+          (setf *last-eval-result* nil
+                *last-eval-condition* condition
+                condition-text (format nil "~A" condition))))
+      (let ((stdout (get-output-stream-string stdout-stream))
+            (stderr (get-output-stream-string stderr-stream)))
+        (multiple-value-bind (result-text result-truncated-p)
+            (truncate-lisp-eval-text result-output)
+          (multiple-value-bind (stdout-text stdout-truncated-p)
+              (truncate-lisp-eval-text stdout)
+            (multiple-value-bind (stderr-text stderr-truncated-p)
+                (truncate-lisp-eval-text stderr)
+              (setf truncated-fields
+                    (remove nil
+                            (list (when result-truncated-p "result")
+                                  (when stdout-truncated-p "stdout")
+                                  (when stderr-truncated-p "stderr"))))
+              (push-lisp-eval-record
+               (make-lisp-eval-record :code code
+                                      :package (package-name package)
+                                      :result results
+                                      :stdout stdout-text
+                                      :stderr stderr-text
+                                      :condition condition-text
+                                      :timestamp (get-universal-time)))
+              (cl-json:encode-json-to-string
+               `((:code . ,code)
+                 (:result . ,result-text)
+                 (:values . ,(length results))
+                 (:stdout . ,stdout-text)
+                 (:stderr . ,stderr-text)
+                 (:truncated . ,(coerce truncated-fields 'vector))
+                 ,@(when condition-text
+                     `((:error . ,condition-text))))))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Tool Registration

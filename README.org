@@ -47,6 +47,11 @@ By default, agents are expected to search for symbols, inspect documentation, ca
 
 The =lisp_eval= tool is particularly powerful: the agent can introspect clawmacs itself, query buffer state, evaluate expressions, and modify the running system. Standard Common Lisp reference lookup is available through a vendored offline snapshot of =cl-community-spec=, and imported library discovery is handled locally through ASDF metadata, package exports, docstrings, and source/doc search helpers.
 
+=lisp_eval= captures printed stdout/stderr as well as multiple return values.
+Recent calls are available with =(eval-history-to-string)=, and the latest
+success/error are exposed through =*last-eval-result*= and
+=*last-eval-condition*=.
+
 ** Project Resources
 
 Persistent edits are exposed through a Lisp project/resource layer rather than
@@ -69,7 +74,37 @@ as the =config= project unless init defines =config= first.
 
 Open project resources become editable file buffers. =C-x C-f= opens a project
 file, =C-x p= selects the current buffer's project, and =C-x C-s= saves a file
-buffer back to its project resource.
+buffer back to its project resource. Programmatic project writes synchronize any
+already-open file buffer for the same resource; agents can inspect unsaved
+buffer state with =(file-buffer-dirty-p BUFFER)=.
+
+For durable coding work, agents should prefer transactional change sets. A
+change set stages project edits, exposes a Lisp-readable diff, and can be
+applied, discarded, or reverted:
+
+#+begin_src lisp
+(let ((cs (begin-change-set :name "demo-edit")))
+  (stage-project-file "clawmacs" "notes/demo.lisp" "(defun demo () :ok)"
+                      :change-set cs)
+  (change-set-diff-to-string cs)
+  (apply-change-set cs))
+#+end_src
+
+Projects can also expose validation and reload hooks through =define-project=:
+
+#+begin_src lisp
+(define-project "clawmacs"
+  :root #P"/home/tay/projects/clawmacs/"
+  :systems '("clawmacs" "clawmacs/tests")
+  :check-functions
+  (list (lambda (project)
+          (declare (ignore project))
+          ;; Project-specific checks can call FiveAM, ASDF, or other Lisp APIs.
+          :ok)))
+
+(run-project-checks "clawmacs")
+(reload-project-system "clawmacs")
+#+end_src
 
 ** Agent Structural Editing
 
@@ -87,6 +122,14 @@ would leave unbalanced text.
  "src/foo.lisp"
  '(:head "defun" :name "foo")
  "(defun foo () :ok)")
+
+(sexed-stage-replace-project-form
+ "clawmacs"
+ "src/foo.lisp"
+ '(:head "defun" :name "foo")
+ "(defun foo () :better)")
+(change-set-diff-to-string)
+(apply-change-set)
 
 (ensure-scratch-buffer)
 (setf (scratch-buffer-text) "(workspace (todo alpha) (todo beta))")
@@ -238,12 +281,26 @@ by default:
 ./prompt.sh --show-tools --show-metadata "List the exported clawmacs functions."
 ./prompt.sh --json --provider openai-codex --model gpt-5.3-codex "Summarize this repo."
 ./prompt.sh --clean-build "Run this prompt after clearing cached Lisp build artifacts."
+./prompt.sh --isolated --show-tools "Exercise project APIs without user config state."
 #+end_src
 
 By default, =prompt.sh= reuses cached ASDF/FASL build artifacts for fast
 iterations. Pass =--clean-build=, or its alias =--force-clean-build=, to clear
 the local Common Lisp output cache before loading clawmacs. If no prompt
 argument is supplied, =prompt.sh= reads non-interactive stdin.
+
+Live harness regression probes are available through:
+
+#+begin_src sh
+scripts/prompt-probes.sh
+scripts/prompt-probes.sh --only transaction --keep-logs
+#+end_src
+
+The probes run through =prompt.sh --isolated=, write logs under =/tmp=, and
+check real agent behavior for docs discovery, transactional project edits, and
+scratch/file-buffer workflows. By default they use
+=openai-codex/gpt-5.3-codex= first, then retry with
+=openrouter/openai/gpt-5.3-codex= if the primary provider fails.
 
 ** Provider Credentials
 

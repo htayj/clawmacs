@@ -419,6 +419,10 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   "Return T when TEXT has balanced s-expression structure."
   (null (sexed-diagnostics text)))
 
+(defun balanced-parentheses-p (text)
+  "Alias for SEXED-BALANCED-P with a name agents often infer."
+  (sexed-balanced-p text))
+
 (defun sexed-diagnostics (text)
   "Return parser diagnostics for TEXT."
   (nth-value 1 (sexed-parse-text text)))
@@ -1005,6 +1009,114 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
                              (lambda (text)
                                (sexed-barf-forward text selector
                                                    :count count))))
+
+(defun sexed-update-staged-project-file (project path edit-fn
+                                          &key change-set)
+  "Apply EDIT-FN to PROJECT/PATH text and stage the result in CHANGE-SET."
+  (let* ((old-text (change-set-project-file-text project path change-set))
+         (new-text (funcall edit-fn old-text)))
+    (sexed-ensure-balanced new-text "Staged project edit result")
+    (let ((entry (stage-project-file project path new-text
+                                     :change-set change-set)))
+      (list :status :staged
+            :change-set (change-set-id (ensure-change-set change-set))
+            :project (change-set-entry-project-name entry)
+            :path (change-set-entry-path entry)
+            :bytes-staged (length new-text)
+            :balanced t))))
+
+(defun sexed-stage-replace-project-form (project path selector new-text
+                                          &key change-set)
+  "Stage replacement of SELECTOR in PROJECT/PATH with NEW-TEXT."
+  (sexed-update-staged-project-file
+   project path
+   (lambda (text)
+     (sexed-replace-form text selector new-text))
+   :change-set change-set))
+
+(defun sexed-stage-delete-project-form (project path selector
+                                         &key change-set)
+  "Stage deletion of SELECTOR in PROJECT/PATH."
+  (sexed-update-staged-project-file
+   project path
+   (lambda (text)
+     (sexed-delete-form text selector))
+   :change-set change-set))
+
+(defun sexed-stage-insert-before-project-form (project path selector new-text
+                                                &key change-set)
+  "Stage insertion of NEW-TEXT before SELECTOR in PROJECT/PATH."
+  (sexed-update-staged-project-file
+   project path
+   (lambda (text)
+     (sexed-insert-before-form text selector new-text))
+   :change-set change-set))
+
+(defun sexed-stage-insert-after-project-form (project path selector new-text
+                                               &key change-set)
+  "Stage insertion of NEW-TEXT after SELECTOR in PROJECT/PATH."
+  (sexed-update-staged-project-file
+   project path
+   (lambda (text)
+     (sexed-insert-after-form text selector new-text))
+   :change-set change-set))
+
+(defun sexed-stage-insert-project-form-before (project path selector new-text
+                                                &key change-set)
+  "Stage insertion of NEW-TEXT before SELECTOR in PROJECT/PATH."
+  (sexed-stage-insert-before-project-form project path selector new-text
+                                          :change-set change-set))
+
+(defun sexed-stage-insert-project-form-after (project path selector new-text
+                                               &key change-set)
+  "Stage insertion of NEW-TEXT after SELECTOR in PROJECT/PATH."
+  (sexed-stage-insert-after-project-form project path selector new-text
+                                         :change-set change-set))
+
+(defun sexed-stage-wrap-project-form (project path selector prefix suffix
+                                       &key change-set)
+  "Stage wrapping SELECTOR in PROJECT/PATH with PREFIX and SUFFIX."
+  (sexed-update-staged-project-file
+   project path
+   (lambda (text)
+     (sexed-wrap-form text selector prefix suffix))
+   :change-set change-set))
+
+(defun sexed-stage-splice-project-form (project path selector
+                                         &key change-set)
+  "Stage splicing SELECTOR out of PROJECT/PATH."
+  (sexed-update-staged-project-file
+   project path
+   (lambda (text)
+     (sexed-splice-form text selector))
+   :change-set change-set))
+
+(defun sexed-stage-raise-project-form (project path selector child-selector
+                                        &key change-set)
+  "Stage raising CHILD-SELECTOR out of SELECTOR in PROJECT/PATH."
+  (sexed-update-staged-project-file
+   project path
+   (lambda (text)
+     (sexed-raise-form text selector child-selector))
+   :change-set change-set))
+
+(defun sexed-stage-slurp-forward-project-form (project path selector
+                                                &key (count 1) change-set)
+  "Stage slurping COUNT following siblings into SELECTOR in PROJECT/PATH."
+  (sexed-update-staged-project-file
+   project path
+   (lambda (text)
+     (sexed-slurp-forward text selector :count count))
+   :change-set change-set))
+
+(defun sexed-stage-barf-forward-project-form (project path selector
+                                               &key (count 1) change-set)
+  "Stage barfing COUNT trailing children out of SELECTOR in PROJECT/PATH."
+  (sexed-update-staged-project-file
+   project path
+   (lambda (text)
+     (sexed-barf-forward text selector :count count))
+   :change-set change-set))
 
 (defun sexed-update-message (message edit-fn)
   "Apply EDIT-FN to editable MESSAGE text and return a summary plist."

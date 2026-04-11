@@ -38,10 +38,10 @@ GLM-5 is the flagship model with 200K context window.")
 Uses the coding-specific endpoint for subscription-based access.")
 
 ;;; OpenRouter Configuration
-(defvar *openrouter-model* "openai/gpt-4o-mini"
+(defvar *openrouter-model* "openai/gpt-5.3-codex"
   "The default OpenRouter model to use for chat completions.
-Model names follow the 'provider/model-name' format (e.g. 'openai/gpt-4o-mini',
-'anthropic/claude-3-5-haiku', 'google/gemini-2.5-pro'). These are OpenRouter
+Model names follow the 'provider/model-name' format (e.g. 'openai/gpt-5.3-codex',
+'google/gemini-2.5-pro', 'z-ai/glm-4.6'). These are OpenRouter
 model identifiers and do not imply direct Anthropic provider support.")
 
 (defvar *openrouter-api-url* "https://openrouter.ai/api/v1/chat/completions"
@@ -136,8 +136,21 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
   function calls, data transformation, and runtime changes.
 - `lisp_eval` evaluates one form per call. When a task needs multiple steps, wrap them
   in a single form such as `progn`, `let`, or `let*`.
+- Prefer batching related inspection/edit/check work into one well-structured Lisp form
+  when the steps are already clear. This keeps prompt-mode reliable and avoids wasting
+  tool iterations on tiny calls.
+- In `let`/`let*`, each binding must be `(variable value-form)`. Put side-effect calls
+  such as `(project-save-file ...)` in the body, or wrap them in `progn`; do not place
+  raw call forms in the binding list.
+- `(count-occurrences \"needle\" TEXT)` is available for simple non-overlapping substring
+  counts; prefer it over inventing ad hoc counting helpers.
+- Common Lisp strings do not treat `\\n` as a newline escape. Use `(string #\\Newline)`,
+  `(format nil \"~%\")`, or a literal line break when constructing multi-line text.
 - The tool's `:package` argument defaults to `CLAWMACS`. Set it explicitly when you need
   another package instead of relying on `in-package`.
+- `lisp_eval` captures printed stdout/stderr. Use `(eval-history-to-string)` to inspect
+  recent evals, `*last-eval-result*` for the last successful multiple-value list, and
+  `*last-eval-condition*` for the last failed condition.
 
 ## Searching the image
 
@@ -193,6 +206,8 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 - `(define-project \"NAME\" :root #P\"/path/to/root/\")` registers a project for this process.
 - `(create-project \"NAME\" :root #P\"/path/to/root/\")` creates a project and writes an inert
   manifest into `*project-definitions-directory*`; use `:persist nil` for temporary projects.
+- Use `create-project` for temporary roots that may not exist. `define-project` registers an
+  existing root and does not accept `:persist`.
 - Project manifests are data files under `*project-definitions-directory*`, which defaults to
   `~/.clawmacs.projects.d/` and may be customized in init.lisp.
 - The user's Clawmacs configuration directory is always available as the `config` project unless
@@ -206,8 +221,36 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 - `(project-save-file \"PROJECT\" \"PATH\" TEXT)` saves text to a project resource.
 - `(project-open-file \"PROJECT\" \"PATH\")` opens a project resource as an editable file buffer.
 - For open file buffers, use `(file-buffer-text BUFFER)` and `(setf (file-buffer-text BUFFER) ...)`,
-  then `(project-save-buffer BUFFER)`.
+  then `(project-save-buffer BUFFER)`. Use `(file-buffer-dirty-p BUFFER)` to check whether
+  there are unsaved file-buffer edits.
+- `project-open-file` returns the buffer object to edit; capture that return value. Do not use
+  `project-list-files` results as buffers.
+- Direct project writes such as `project-save-file`, `project-create-file`, and applied change
+  sets synchronize any already-open buffer for the same resource so retries do not edit stale text.
 - Project resource paths are relative to their project and cannot use absolute paths or `..`.
+- For durable coding work, prefer transactional change sets over immediate writes:
+  `(begin-change-set :name \"short-name\")`,
+  `(stage-project-file \"PROJECT\" \"PATH\" TEXT)`,
+  `(change-set-diff-to-string)`,
+  `(apply-change-set)`,
+  `(discard-change-set)`, and `(revert-change-set)`.
+- `(change-set-project-file-text \"PROJECT\" \"PATH\")` reads staged text when present, so
+  multiple staged edits can compose before applying.
+- Projects may expose validation and reload hooks. Use `(run-project-checks \"PROJECT\")`,
+  `(compile-project-file \"PROJECT\" \"PATH\")`, `(load-project-file \"PROJECT\" \"PATH\")`,
+  and `(reload-project-system \"PROJECT\")` when available.
+- Project code-intelligence helpers include `(project-outline-to-string \"PROJECT\")`,
+  `(project-find-definitions-to-string \"PROJECT\" :name \"NAME\")`,
+  `(project-find-references-to-string \"PROJECT\" \"QUERY\")`,
+  `(project-package-map-to-string \"PROJECT\")`, and
+  `(project-describe-definition-to-string \"PROJECT\" \"NAME\")`.
+- Project file-buffer example:
+  `(progn
+     (create-project \"tmp\" :root #P\"/tmp/work/\" :persist nil)
+     (project-save-file \"tmp\" \"notes.lisp\" \"(note old)\")
+     (let ((buf (project-open-file \"tmp\" \"notes.lisp\")))
+       (setf (file-buffer-text buf) \"(note new)\")
+       (project-save-buffer buf)))`
 
 ## Structural editing with sexed
 
@@ -218,10 +261,14 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 - `(sexed-form-text TEXT '(:head \"defun\" :name \"NAME\"))` returns one selected form.
 - `(sexed-replace-form TEXT SELECTOR NEW-TEXT)` and related pure edit functions return updated
   text only after validating that the full result remains balanced.
+- Use `(sexed-balanced-p TEXT)` or `(balanced-parentheses-p TEXT)` for explicit balance checks.
 - Prefer project-aware adapters for persistent source edits:
   `(sexed-project-outline-to-string \"PROJECT\" \"PATH\" :head \"defun\")`,
   `(sexed-project-form-text \"PROJECT\" \"PATH\" SELECTOR)`, and
   `(sexed-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)`.
+- For durable project edits, prefer staged adapters:
+  `(sexed-stage-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)`,
+  then inspect `(change-set-diff-to-string)` and apply with `(apply-change-set)`.
 - Direct file adapters such as `(sexed-file-outline-to-string \"PATH\")` remain available for
   sandbox-local compatibility, but project adapters are the default for agent work.
 - For scratch buffer edits, prefer scratch adapters:
@@ -242,6 +289,14 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
      (sexed-replace-scratch-form '(:head \"todo\" :nth 1) \"(done beta)\")
      (sexed-insert-after-scratch-form '(:head \"done\") \"(note \\\"checked\\\")\")
      (scratch-buffer-text))`
+- Transactional project edit example:
+  `(let* ((cs (begin-change-set :name \"rename-helper\")))
+     (sexed-stage-replace-project-form
+      \"PROJECT\" \"src/file.lisp\" '(:head \"defun\" :name \"old\")
+      \"(defun old () :new)\")
+     (values (change-set-diff-to-string cs)
+             (apply-change-set cs)
+             (run-project-checks \"PROJECT\")))`
 
 ## Updating runtime state
 
@@ -1587,14 +1642,16 @@ respected."
      "glm-4.5"
      "glm-4.5-air")
     (:openrouter
-     "openai/gpt-4o-mini"
+     "openai/gpt-5.3-codex"
+     "openai/gpt-5.2"
+     "openai/gpt-5.1"
+     "openai/gpt-4.1"
      "openai/gpt-4o"
-     "anthropic/claude-3-5-haiku"
-     "anthropic/claude-3-5-sonnet"
      "google/gemini-2.5-pro"
-     "google/gemini-2.0-flash-001"
-     "meta-llama/llama-4-maverick"
-     "deepseek/deepseek-r1"))
+     "google/gemini-2.5-flash"
+     "z-ai/glm-4.6"
+     "deepseek/deepseek-r1"
+     "meta-llama/llama-4-maverick"))
   "Known model identifiers grouped by provider.
 The first model in each list is the provider's default.
 For :OPENROUTER, models are dynamically fetched by fetch-openrouter-models when

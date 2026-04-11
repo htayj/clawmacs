@@ -777,6 +777,12 @@ documentation in *extended-docs*."
   :side-effects "SETF replaces text and updates buffer-dirty-p."
   :see-also (project-open-file project-save-buffer buffer-dirty-p))
 
+(defdoc file-buffer-dirty-p
+  :category "buffer"
+  :usage "(file-buffer-dirty-p &optional BUF)"
+  :returns "boolean — T when a project-backed file buffer has unsaved edits."
+  :see-also (buffer-dirty-p file-buffer-text project-save-buffer))
+
 (defdoc mark-buffer-dirty
   :category "buffer"
   :usage "(mark-buffer-dirty BUF)"
@@ -1189,14 +1195,14 @@ documentation in *extended-docs*."
   :category "project"
   :usage "(project-create-file \"project\" \"path\" :content \"...\" :if-exists :supersede)"
   :returns "plist — Save summary."
-  :side-effects "Creates a project resource; by default errors if it exists."
+  :side-effects "Creates a project resource; by default errors if it exists. Updates any open buffer for the same resource."
   :see-also (project-save-file project-open-file))
 
 (defdoc project-save-file
   :category "project"
   :usage "(project-save-file \"project\" \"path\" TEXT)"
   :returns "plist — Save summary."
-  :side-effects "Writes TEXT to a project resource."
+  :side-effects "Writes TEXT to a project resource and synchronizes any open buffer for it."
   :see-also (project-read-file project-save-buffer))
 
 (defdoc project-search
@@ -1229,7 +1235,124 @@ documentation in *extended-docs*."
   :usage "(project-save-buffer &optional BUFFER)"
   :returns "plist — Save summary."
   :side-effects "Writes a project-backed file buffer and clears its dirty flag."
-  :see-also (project-open-file file-buffer-text buffer-dirty-p))
+  :see-also (project-open-file file-buffer-text file-buffer-dirty-p))
+
+(defdoc begin-change-set
+  :category "project"
+  :usage "(begin-change-set :name \"short-name\" :description \"...\")"
+  :returns "change-set — Newly opened and current staged mutation set."
+  :side-effects "Registers a change set and stores it in *current-change-set*."
+  :see-also (stage-project-file change-set-diff-to-string apply-change-set))
+
+(defdoc current-change-set
+  :category "project"
+  :usage "(current-change-set)"
+  :returns "change-set or nil — The active staged mutation set."
+  :see-also (begin-change-set list-change-sets))
+
+(defdoc stage-project-file
+  :category "project"
+  :usage "(stage-project-file \"project\" \"path\" TEXT :change-set CHANGE-SET)"
+  :returns "change-set-entry — Staged write entry."
+  :side-effects "Adds a write entry to a change set without changing the project file."
+  :see-also (change-set-project-file-text change-set-diff-to-string apply-change-set))
+
+(defdoc stage-project-delete
+  :category "project"
+  :usage "(stage-project-delete \"project\" \"path\" :change-set CHANGE-SET)"
+  :returns "change-set-entry — Staged delete entry."
+  :side-effects "Adds a delete entry without changing the project file."
+  :see-also (stage-project-file apply-change-set revert-change-set))
+
+(defdoc stage-project-rename
+  :category "project"
+  :usage "(stage-project-rename \"project\" \"old.lisp\" \"new.lisp\" :change-set CHANGE-SET)"
+  :returns "change-set-entry — Staged rename entry."
+  :side-effects "Adds a rename entry without changing project files."
+  :see-also (stage-project-delete apply-change-set revert-change-set))
+
+(defdoc change-set-project-file-text
+  :category "project"
+  :usage "(change-set-project-file-text \"project\" \"path\" &optional CHANGE-SET)"
+  :returns "string — Latest staged text when present, otherwise current project file text."
+  :see-also (stage-project-file sexed-stage-replace-project-form))
+
+(defdoc change-set-diff-to-string
+  :category "project"
+  :usage "(change-set-diff-to-string &optional CHANGE-SET)"
+  :returns "string — Agent-readable diff of staged entries."
+  :see-also (begin-change-set apply-change-set discard-change-set))
+
+(defdoc apply-change-set
+  :category "project"
+  :usage "(apply-change-set &optional CHANGE-SET)"
+  :returns "change-set — Applied change set."
+  :side-effects "Writes staged entries to project resources; rolls back entries already applied if an error occurs."
+  :see-also (change-set-diff-to-string revert-change-set))
+
+(defdoc discard-change-set
+  :category "project"
+  :usage "(discard-change-set &optional CHANGE-SET)"
+  :returns "change-set — Discarded change set."
+  :side-effects "Marks an unapplied change set discarded."
+  :see-also (begin-change-set apply-change-set))
+
+(defdoc revert-change-set
+  :category "project"
+  :usage "(revert-change-set &optional CHANGE-SET)"
+  :returns "change-set — Reverted change set."
+  :side-effects "Restores project files from snapshots captured during staging."
+  :see-also (apply-change-set change-set-diff-to-string))
+
+(defdoc run-project-checks
+  :category "project"
+  :usage "(run-project-checks \"project\")"
+  :returns "list of plists — One status record per registered check."
+  :side-effects "Calls project check functions."
+  :see-also (define-project reload-project-system))
+
+(defdoc reload-project-system
+  :category "project"
+  :usage "(reload-project-system \"project\" &optional SYSTEM)"
+  :returns "list of plists — Reload results."
+  :side-effects "Calls a project reload function or ASDF:LOAD-SYSTEM for registered systems."
+  :see-also (define-project run-project-checks))
+
+(defdoc project-outline-to-string
+  :category "project"
+  :usage "(project-outline-to-string \"project\" :path \"src/file.lisp\" :max-depth 1)"
+  :returns "string — sexed outline for one file or all Lisp files."
+  :see-also (project-find-definitions-to-string sexed-project-outline-to-string))
+
+(defdoc project-find-definitions
+  :category "project"
+  :usage "(project-find-definitions \"project\" :name \"foo\" :head \"defun\")"
+  :returns "list of plists — Definition forms with :PATH and sexed metadata."
+  :see-also (project-find-definitions-to-string project-describe-definition-to-string))
+
+(defdoc project-find-definitions-to-string
+  :category "project"
+  :usage "(project-find-definitions-to-string \"project\" :name \"foo\")"
+  :returns "string — Agent-readable definition list."
+  :see-also (project-find-definitions project-outline-to-string))
+
+(defdoc project-find-references-to-string
+  :category "project"
+  :usage "(project-find-references-to-string \"project\" \"symbol-name\")"
+  :returns "string — Agent-readable text references."
+  :see-also (project-search-to-string project-find-definitions-to-string))
+
+(defdoc project-package-map-to-string
+  :category "project"
+  :usage "(project-package-map-to-string \"project\")"
+  :returns "string — defpackage and in-package forms found in Lisp resources."
+  :see-also (project-outline-to-string))
+
+(defdoc project-describe-definition-to-string
+  :category "project"
+  :usage "(project-describe-definition-to-string \"project\" \"foo\" :head \"defun\")"
+  :returns "string — Location and source for the first matching definition."
+  :see-also (project-find-definitions-to-string sexed-project-form-text))
 
 ;;; ==========================================================================
 ;;; Category: llm — LLM configuration, authentication, and API
@@ -1578,6 +1701,27 @@ documentation in *extended-docs*."
   :category "tool"
   :returns "integer - Maximum diff lines shown when approval UIs render non-default tool edits."
   :see-also (*tool-table* tool-approval-extra-display))
+
+(defdoc *last-eval-result*
+  :category "tool"
+  :returns "list or nil — Multiple-value list from the last successful lisp_eval."
+  :see-also (*last-eval-condition* eval-history-to-string))
+
+(defdoc *last-eval-condition*
+  :category "tool"
+  :returns "condition or nil — Last condition captured by lisp_eval."
+  :see-also (*last-eval-result* eval-history-to-string))
+
+(defdoc *lisp-eval-history*
+  :category "tool"
+  :returns "list — Newest-first lisp_eval execution records."
+  :see-also (lisp-eval-record eval-history-to-string))
+
+(defdoc eval-history-to-string
+  :category "tool"
+  :usage "(eval-history-to-string :limit 10)"
+  :returns "string — Agent-readable recent lisp_eval history."
+  :see-also (*lisp-eval-history* *last-eval-result* *last-eval-condition*))
 
 (defdoc *tool-table*
   :category "tool"
@@ -2252,6 +2396,12 @@ documentation in *extended-docs*."
   :category "sexed"
   :usage "(sexed-balanced-p TEXT) — (sexed-balanced-p \"(foo)\")"
   :returns "boolean — T when TEXT has balanced s-expression structure."
+  :see-also (balanced-parentheses-p sexed-diagnostics sexed-outline-to-string))
+
+(defdoc balanced-parentheses-p
+  :category "sexed"
+  :usage "(balanced-parentheses-p TEXT)"
+  :returns "boolean — Alias for sexed-balanced-p."
   :see-also (sexed-diagnostics sexed-outline-to-string))
 
 (defdoc sexed-diagnostics
@@ -2530,6 +2680,48 @@ documentation in *extended-docs*."
   :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
   :side-effects "Rewrites the project resource after validating the edited source."
   :see-also (sexed-barf-forward sexed-slurp-forward-project-form))
+
+(defdoc sexed-stage-replace-project-form
+  :category "sexed"
+  :usage "(sexed-stage-replace-project-form PROJECT PATH SELECTOR NEW-TEXT &key CHANGE-SET)"
+  :returns "plist — :status :staged, :change-set, :project, :path, :bytes-staged, and :balanced."
+  :side-effects "Stages a balanced replacement in a project change set without writing the project file."
+  :see-also (sexed-replace-project-form change-set-diff-to-string apply-change-set))
+
+(defdoc sexed-stage-delete-project-form
+  :category "sexed"
+  :usage "(sexed-stage-delete-project-form PROJECT PATH SELECTOR &key CHANGE-SET)"
+  :returns "plist — Staged edit summary."
+  :side-effects "Stages a balanced deletion in a project change set."
+  :see-also (sexed-delete-project-form sexed-stage-replace-project-form))
+
+(defdoc sexed-stage-insert-before-project-form
+  :category "sexed"
+  :usage "(sexed-stage-insert-before-project-form PROJECT PATH SELECTOR NEW-TEXT &key CHANGE-SET)"
+  :returns "plist — Staged edit summary."
+  :side-effects "Stages a balanced insertion in a project change set."
+  :see-also (sexed-stage-insert-after-project-form change-set-project-file-text))
+
+(defdoc sexed-stage-insert-after-project-form
+  :category "sexed"
+  :usage "(sexed-stage-insert-after-project-form PROJECT PATH SELECTOR NEW-TEXT &key CHANGE-SET)"
+  :returns "plist — Staged edit summary."
+  :side-effects "Stages a balanced insertion in a project change set."
+  :see-also (sexed-stage-insert-before-project-form change-set-project-file-text))
+
+(defdoc sexed-stage-wrap-project-form
+  :category "sexed"
+  :usage "(sexed-stage-wrap-project-form PROJECT PATH SELECTOR PREFIX SUFFIX &key CHANGE-SET)"
+  :returns "plist — Staged edit summary."
+  :side-effects "Stages a balanced wrap edit in a project change set."
+  :see-also (sexed-wrap-project-form sexed-stage-splice-project-form))
+
+(defdoc sexed-stage-splice-project-form
+  :category "sexed"
+  :usage "(sexed-stage-splice-project-form PROJECT PATH SELECTOR &key CHANGE-SET)"
+  :returns "plist — Staged edit summary."
+  :side-effects "Stages a balanced splice edit in a project change set."
+  :see-also (sexed-splice-project-form sexed-stage-wrap-project-form))
 
 (defdoc sexed-replace-message-form
   :category "sexed"
@@ -3057,6 +3249,16 @@ documentation in *extended-docs*."
   :returns "Boolean — non-nil on successful install/load, NIL on warning or failure."
   :side-effects "Creates the package install directory when needed, runs git clone for missing packages, reads manifest.lisp from the package root, and loads the manifest entrypoint."
   :see-also (*packages-directory* *user-init-file* load-user-init-file))
+
+;;; ==========================================================================
+;;; Category: utilities — Small helpers useful from lisp_eval
+;;; ==========================================================================
+
+(defdoc count-occurrences
+  :category "utilities"
+  :usage "(count-occurrences \"needle\" \"haystack needle\")"
+  :returns "integer — Non-overlapping substring occurrence count."
+  :see-also (search count))
 
 ;;; ==========================================================================
 ;;; Category: init — User init file
