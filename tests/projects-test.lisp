@@ -155,6 +155,48 @@
       (is (not (search "2: two" slice)))
       (is (not (search "6: six" slice))))))
 
+(test project-replace-text-replaces-exact-text
+  "PROJECT-REPLACE-TEXT gives agents a small exact text edit primitive."
+  (with-project-test-state (root definitions)
+    (define-project "replace" :root root)
+    (project-save-file "replace" "notes.txt" "alpha beta beta")
+    (let ((summary (project-replace-text "replace" "notes.txt"
+                                         "beta"
+                                         "gamma")))
+      (is (eq :ok (getf summary :status)))
+      (is (= 1 (getf summary :replacements)))
+      (is (string= "alpha gamma beta"
+                   (project-read-file "replace" "notes.txt"))))
+    (let ((summary (project-replace-text "replace" "notes.txt"
+                                         "beta"
+                                         "delta"
+                                         :count nil)))
+      (is (= 1 (getf summary :replacements)))
+      (is (string= "alpha gamma delta"
+                   (project-read-file "replace" "notes.txt"))))
+    (signals error
+      (project-replace-text "replace" "notes.txt" "missing" "value"))))
+
+(test stage-project-replace-text-composes-with-change-sets
+  "STAGE-PROJECT-REPLACE-TEXT edits staged text without touching the file."
+  (with-project-test-state (root definitions)
+    (define-project "stage-replace" :root root)
+    (project-save-file "stage-replace" "notes.txt" "alpha beta")
+    (let ((change-set (begin-change-set :name "replace-text")))
+      (let ((summary (stage-project-replace-text "stage-replace"
+                                                 "notes.txt"
+                                                 "beta"
+                                                 "gamma"
+                                                 :change-set change-set)))
+        (is (eq :staged (getf summary :status)))
+        (is (= 1 (getf summary :replacements))))
+      (is (string= "alpha beta"
+                   (project-read-file "stage-replace" "notes.txt")))
+      (is (string= "alpha gamma"
+                   (change-set-project-file-text "stage-replace"
+                                                 "notes.txt"
+                                                 change-set))))))
+
 (test project-open-file-creates-editable-buffer-and-save-buffer-persists
   "PROJECT-OPEN-FILE creates a file buffer whose text can be saved back."
   (with-project-test-state (root definitions)

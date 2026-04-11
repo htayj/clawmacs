@@ -551,6 +551,72 @@ Existing projects, usually from init.lisp, are not overwritten."
   "Save TEXT to project resource PATH, replacing any existing contents."
   (project-write-file project-designator path text :if-exists :supersede))
 
+(defun replace-text-occurrences (text old new &key count)
+  "Return TEXT with OLD replaced by NEW up to COUNT times and the replacement count."
+  (when (zerop (length old))
+    (error "Replacement text OLD cannot be empty."))
+  (let ((start 0)
+        (replacements 0))
+    (values
+     (with-output-to-string (out)
+       (loop :for position := (and (or (null count)
+                                       (< replacements count))
+                                   (search old text
+                                           :start2 start
+                                           :test #'char=))
+             :while position
+             :do (write-string text out :start start :end position)
+                 (write-string new out)
+                 (incf replacements)
+                 (setf start (+ position (length old)))
+             :finally
+                (write-string text out :start start)))
+     replacements)))
+
+(defun project-replace-text (project-designator path old new
+                             &key (count 1))
+  "Replace exact OLD text with NEW in PROJECT-DESIGNATOR/PATH."
+  (let ((resource-path (project-resource-name path)))
+    (multiple-value-bind (new-text replacements)
+        (replace-text-occurrences
+         (project-read-file project-designator resource-path)
+         old
+         new
+         :count count)
+      (unless (plusp replacements)
+        (error "Text not found in project file: ~A:~A"
+               project-designator
+               resource-path))
+      (let ((summary (project-save-file project-designator resource-path new-text)))
+        (setf (getf summary :replacements) replacements)
+        summary))))
+
+(defun stage-project-replace-text (project-designator path old new
+                                   &key (count 1) change-set)
+  "Stage exact OLD-to-NEW text replacement in PROJECT-DESIGNATOR/PATH."
+  (let* ((resource-path (project-resource-name path))
+         (target-change-set (ensure-change-set change-set)))
+    (multiple-value-bind (new-text replacements)
+        (replace-text-occurrences
+         (change-set-project-file-text project-designator
+                                       resource-path
+                                       target-change-set)
+         old
+         new
+         :count count)
+      (unless (plusp replacements)
+        (error "Text not found in project file: ~A:~A"
+               project-designator
+               resource-path))
+      (let ((entry (stage-project-file project-designator resource-path new-text
+                                       :change-set target-change-set)))
+        (list :status :staged
+              :change-set (change-set-id target-change-set)
+              :project (change-set-entry-project-name entry)
+              :path (change-set-entry-path entry)
+              :replacements replacements
+              :bytes-staged (length new-text))))))
+
 (defun project-create-file (project-designator path &key (content "")
                                              (if-exists :error))
   "Create a new project resource PATH containing CONTENT."

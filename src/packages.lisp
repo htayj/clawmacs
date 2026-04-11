@@ -245,6 +245,8 @@
    #:*project-registry*
    #:*project-manifest-extension*
    #:*project-ignored-directory-names*
+   #:*project-ignored-file-names*
+   #:*project-ignored-file-types*
    #:*project-list-file-limit*
    #:*project-search-result-limit*
    #:*change-set-registry*
@@ -260,8 +262,10 @@
    #:project-list-files
    #:project-read-file
    #:project-read-file-lines
+   #:project-replace-text
    #:project-create-file
    #:project-save-file
+   #:stage-project-replace-text
    #:project-search
    #:project-search-to-string
    #:project-open-file
@@ -548,7 +552,9 @@
    #:sexed-replace-project-form-with-form
    #:sexed-delete-project-form
    #:sexed-insert-before-project-form
+   #:sexed-insert-before-project-form-with-form
    #:sexed-insert-after-project-form
+   #:sexed-insert-after-project-form-with-form
    #:sexed-insert-project-form-before
    #:sexed-insert-project-form-after
    #:sexed-wrap-project-form
@@ -567,7 +573,9 @@
    #:sexed-stage-replace-project-form-with-form
    #:sexed-stage-delete-project-form
    #:sexed-stage-insert-before-project-form
+   #:sexed-stage-insert-before-project-form-with-form
    #:sexed-stage-insert-after-project-form
+   #:sexed-stage-insert-after-project-form-with-form
    #:sexed-stage-insert-project-form-before
    #:sexed-stage-insert-project-form-after
    #:sexed-stage-wrap-project-form

@@ -985,11 +985,25 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
                              (lambda (text)
                                (sexed-insert-before-form text selector new-text))))
 
+(defun sexed-insert-before-project-form-with-form (project path selector form)
+  "Insert FORM rendered as Lisp source before SELECTOR in PROJECT/PATH."
+  (sexed-insert-before-project-form project
+                                    path
+                                    selector
+                                    (sexed-source-form-to-string form)))
+
 (defun sexed-insert-after-project-form (project path selector new-text)
   "Insert NEW-TEXT after SELECTOR in PROJECT/PATH and return a summary plist."
   (sexed-update-project-file project path
                              (lambda (text)
                                (sexed-insert-after-form text selector new-text))))
+
+(defun sexed-insert-after-project-form-with-form (project path selector form)
+  "Insert FORM rendered as Lisp source after SELECTOR in PROJECT/PATH."
+  (sexed-insert-after-project-form project
+                                   path
+                                   selector
+                                   (sexed-source-form-to-string form)))
 
 (defun sexed-insert-project-form-before (project path selector new-text)
   "Alias for SEXED-INSERT-BEFORE-PROJECT-FORM with natural command ordering."
@@ -1140,6 +1154,15 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
      (sexed-insert-before-form text selector new-text))
    :change-set change-set))
 
+(defun sexed-stage-insert-before-project-form-with-form (project path selector form
+                                                         &key change-set)
+  "Stage insertion of FORM rendered as Lisp source before SELECTOR."
+  (sexed-stage-insert-before-project-form project
+                                          path
+                                          selector
+                                          (sexed-source-form-to-string form)
+                                          :change-set change-set))
+
 (defun sexed-stage-insert-after-project-form (project path selector new-text
                                                &key change-set)
   "Stage insertion of NEW-TEXT after SELECTOR in PROJECT/PATH."
@@ -1148,6 +1171,15 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
    (lambda (text)
      (sexed-insert-after-form text selector new-text))
    :change-set change-set))
+
+(defun sexed-stage-insert-after-project-form-with-form (project path selector form
+                                                        &key change-set)
+  "Stage insertion of FORM rendered as Lisp source after SELECTOR."
+  (sexed-stage-insert-after-project-form project
+                                         path
+                                         selector
+                                         (sexed-source-form-to-string form)
+                                         :change-set change-set))
 
 (defun sexed-stage-insert-project-form-before (project path selector new-text
                                                 &key change-set)

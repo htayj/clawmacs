@@ -1288,7 +1288,14 @@ documentation in *extended-docs*."
   :usage "(project-save-file \"project\" \"path\" TEXT)"
   :returns "plist — Save summary."
   :side-effects "Writes TEXT to a project resource and synchronizes any open buffer for it."
-  :see-also (project-read-file project-save-buffer))
+  :see-also (project-read-file project-replace-text project-save-buffer))
+
+(defdoc project-replace-text
+  :category "project"
+  :usage "(project-replace-text \"project\" \"path\" OLD NEW :count 1)"
+  :returns "plist — Save summary plus :REPLACEMENTS."
+  :side-effects "Replaces exact text in a project resource and saves it."
+  :see-also (stage-project-replace-text project-save-file project-read-file-lines))
 
 (defdoc project-search
   :category "project"
@@ -1340,7 +1347,14 @@ documentation in *extended-docs*."
   :usage "(stage-project-file \"project\" \"path\" TEXT :change-set CHANGE-SET)"
   :returns "change-set-entry — Staged write entry."
   :side-effects "Adds a write entry to a change set without changing the project file."
-  :see-also (change-set-project-file-text change-set-diff-to-string apply-change-set))
+  :see-also (stage-project-replace-text change-set-project-file-text change-set-diff-to-string apply-change-set))
+
+(defdoc stage-project-replace-text
+  :category "project"
+  :usage "(stage-project-replace-text \"project\" \"path\" OLD NEW :count 1 :change-set CHANGE-SET)"
+  :returns "plist — Staged replacement summary."
+  :side-effects "Stages an exact text replacement without changing the project file."
+  :see-also (project-replace-text stage-project-file change-set-diff-to-string apply-change-set))
 
 (defdoc stage-project-delete
   :category "project"
@@ -2795,6 +2809,20 @@ documentation in *extended-docs*."
   :side-effects "Rewrites the project resource after validating the edited source."
   :see-also (sexed-insert-before-project-form sexed-insert-project-form-after))
 
+(defdoc sexed-insert-before-project-form-with-form
+  :category "sexed"
+  :usage "(sexed-insert-before-project-form-with-form PROJECT PATH SELECTOR '(defun example () :ok))"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Renders FORM as source, then inserts it before SELECTOR in a project resource."
+  :see-also (sexed-source-form-to-string sexed-insert-before-project-form sexed-stage-insert-before-project-form-with-form))
+
+(defdoc sexed-insert-after-project-form-with-form
+  :category "sexed"
+  :usage "(sexed-insert-after-project-form-with-form PROJECT PATH SELECTOR '(defun example () :ok))"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Renders FORM as source, then inserts it after SELECTOR in a project resource."
+  :see-also (sexed-source-form-to-string sexed-insert-after-project-form sexed-stage-insert-after-project-form-with-form))
+
 (defdoc sexed-insert-project-form-before
   :category "sexed"
   :usage "(sexed-insert-project-form-before PROJECT PATH SELECTOR NEW-TEXT)"
@@ -2918,6 +2946,20 @@ documentation in *extended-docs*."
   :returns "plist — Staged edit summary."
   :side-effects "Stages a balanced insertion in a project change set."
   :see-also (sexed-stage-insert-before-project-form change-set-project-file-text))
+
+(defdoc sexed-stage-insert-before-project-form-with-form
+  :category "sexed"
+  :usage "(sexed-stage-insert-before-project-form-with-form PROJECT PATH SELECTOR '(defun example () :ok) &key CHANGE-SET)"
+  :returns "plist — Staged edit summary."
+  :side-effects "Renders FORM as source, then stages a balanced insertion before SELECTOR."
+  :see-also (sexed-insert-before-project-form-with-form sexed-stage-insert-before-project-form apply-change-set))
+
+(defdoc sexed-stage-insert-after-project-form-with-form
+  :category "sexed"
+  :usage "(sexed-stage-insert-after-project-form-with-form PROJECT PATH SELECTOR '(defun example () :ok) &key CHANGE-SET)"
+  :returns "plist — Staged edit summary."
+  :side-effects "Renders FORM as source, then stages a balanced insertion after SELECTOR."
+  :see-also (sexed-insert-after-project-form-with-form sexed-stage-insert-after-project-form apply-change-set))
 
 (defdoc sexed-stage-wrap-project-form
   :category "sexed"

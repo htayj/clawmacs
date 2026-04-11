@@ -170,6 +170,14 @@
       (is (search "\"quoted doc\"" text))
       (is (search "\"value\"" text))
       (is (sexed-balanced-p text)))
+    (sexed-insert-after-project-form-with-form
+     "sexed"
+     "source.lisp"
+     '(:head "defun" :name "foo")
+     '(defun inserted-direct () :ok))
+    (let ((text (project-read-file "sexed" "source.lisp")))
+      (is (search "inserted-direct" text))
+      (is (sexed-balanced-p text)))
     (let ((change-set (begin-change-set :name "form-stage")))
       (sexed-stage-replace-project-form-with-form
        "sexed"
@@ -177,7 +185,15 @@
        '(:head "defun" :name "foo")
        '(defun foo () :staged)
        :change-set change-set)
+      (sexed-stage-insert-after-project-form-with-form
+       "sexed"
+       "source.lisp"
+       '(:head "defun" :name "inserted-direct")
+       '(defun inserted-staged () :ok)
+       :change-set change-set)
       (is (search ":staged"
+                  (change-set-project-file-text "sexed" "source.lisp" change-set)))
+      (is (search "inserted-staged"
                   (change-set-project-file-text "sexed" "source.lisp" change-set)))
       (is-false (search ":staged"
                         (project-read-file "sexed" "source.lisp"))))))
