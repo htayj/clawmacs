@@ -30,6 +30,10 @@
   :description "Project resource abstraction tests"
   :in clawmacs-suite)
 
+(def-suite skills-suite
+  :description "Skill discovery and prompt injection tests"
+  :in clawmacs-suite)
+
 (def-suite sexed-suite
   :description "Agent-oriented s-expression editing tests"
   :in clawmacs-suite)

@@ -289,6 +289,70 @@
    #:project-package-map-to-string
    #:project-describe-definition-to-string
 
+   ;; Skills
+   #:skill
+   #:make-skill
+   #:skill-name
+   #:skill-description
+   #:skill-short-description
+   #:skill-display-name
+   #:skill-interface-short-description
+   #:skill-default-prompt
+   #:skill-icon-small
+   #:skill-icon-large
+   #:skill-brand-color
+   #:skill-allow-implicit-invocation-p
+   #:skill-path
+   #:skill-root
+   #:skill-scope
+   #:skill-source
+   #:skill-contents
+   #:skill-root-definition
+   #:make-skill-root
+   #:skill-root-path
+   #:skill-root-scope
+   #:skill-root-source
+   #:skill-error
+   #:make-skill-error
+   #:skill-error-path
+   #:skill-error-message
+   #:skill-load-outcome
+   #:skill-load-outcome-skills
+   #:skill-load-outcome-errors
+   #:skill-load-outcome-disabled-paths
+   #:*skill-user-directory*
+   #:*skill-agents-directory*
+   #:*skill-system-directory*
+   #:*skill-configuration-path*
+   #:*skill-roots*
+   #:*programmatic-skills*
+   #:*skill-scan-max-depth*
+   #:*skill-scan-max-directories-per-root*
+   #:*skill-list-file-limit*
+   #:*skill-search-result-limit*
+   #:register-skill-root
+   #:register-skill-definition
+   #:reload-skills
+   #:clear-skills-cache
+   #:ensure-skills-loaded
+   #:list-skills
+   #:list-skill-errors
+   #:list-skills-to-string
+   #:find-skill
+   #:skill-enabled-p
+   #:set-skill-enabled
+   #:enable-skill
+   #:disable-skill
+   #:save-skill-configuration
+   #:read-skill-instructions
+   #:skill-list-files
+   #:skill-read-file
+   #:skill-search-to-string
+   #:describe-skill-to-string
+   #:collect-skill-mentions
+   #:skill-injection-messages
+   #:render-skills-section
+
     ;; LLM
     #:*zai-env-var*
     #:read-env-token
@@ -517,6 +581,9 @@
    #:open-project-file-command
    #:create-project-file-command
    #:search-project-command
+   #:minibuffer-insert-skill-command
+   #:minibuffer-toggle-skill-command
+   #:list-skills-command
    #:render-buffer-selector
 
    ;; Model selector (overlay)

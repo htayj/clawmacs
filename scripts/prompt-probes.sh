@@ -11,6 +11,7 @@ openrouter/openai/gpt-5.3-codex if the primary provider fails.
 
 Probes:
   docs          Local CL spec and imported-library discovery.
+  skills        Skill discovery, $skill mention injection, and resource reads.
   transaction   Project change set plus staged sexed edit.
   scratch       Scratch, project resource, file buffer, and save flow.
 EOF
@@ -121,6 +122,7 @@ run_prompt() {
   provider=$4
   model=$5
   prompt=$6
+  extra_args=${7:-}
   prompt_args=""
 
   [ -z "$provider" ] || prompt_args="$prompt_args --provider $provider"
@@ -135,13 +137,15 @@ run_prompt() {
     --show-metadata \
     --debug-log "$debug_log" \
     --max-tool-iterations 14 \
+    $extra_args \
     "$prompt" >"$output" 2>"$error"
 }
 
-run_probe() {
+run_probe_with_args() {
   name=$1
   prompt=$2
-  shift 2
+  extra_args=$3
+  shift 3
 
   if [ -n "$ONLY" ] && [ "$ONLY" != "$name" ]; then
     return 0
@@ -152,7 +156,7 @@ run_probe() {
   debug="$ROOT/$name.debug.log"
 
   echo "==> $name" >&2
-  if ! run_prompt "$stdout" "$stderr" "$debug" "$PROVIDER" "$MODEL" "$prompt"; then
+  if ! run_prompt "$stdout" "$stderr" "$debug" "$PROVIDER" "$MODEL" "$prompt" "$extra_args"; then
     if [ "$EXPLICIT_PROVIDER" -eq 0 ] && [ -n "$FALLBACK_PROVIDER" ]; then
       primary_stdout="$ROOT/$name.primary.out"
       primary_stderr="$ROOT/$name.primary.err"
@@ -161,7 +165,7 @@ run_probe() {
       mv "$stderr" "$primary_stderr"
       mv "$debug" "$primary_debug" 2>/dev/null || true
       echo "primary prompt probe failed: $name; retrying with --provider $FALLBACK_PROVIDER --model $FALLBACK_MODEL" >&2
-      if ! run_prompt "$stdout" "$stderr" "$debug" "$FALLBACK_PROVIDER" "$FALLBACK_MODEL" "$prompt"; then
+      if ! run_prompt "$stdout" "$stderr" "$debug" "$FALLBACK_PROVIDER" "$FALLBACK_MODEL" "$prompt" "$extra_args"; then
         echo "prompt probe failed: $name" >&2
         echo "primary stderr:" >&2
         sed -n '1,160p' "$primary_stderr" >&2
@@ -188,10 +192,36 @@ run_probe() {
   done
 }
 
+run_probe() {
+  name=$1
+  prompt=$2
+  shift 2
+  run_probe_with_args "$name" "$prompt" "" "$@"
+}
+
 run_probe "docs" \
   "Use lisp_eval only. Do not modify files. In as few tool calls as practical, verify local documentation discovery by checking common-lisp-spec availability, describing HANDLER-CASE, listing imported systems, and describing one Alexandria symbol. Return a concise report including the APIs used, CL Community Spec available?, and Alexandria discovered?" \
   "CL Community Spec" \
   "Alexandria" \
+  "lisp_eval"
+
+skills_root="$ROOT/skills-root"
+mkdir -p "$skills_root/demo/references"
+cat >"$skills_root/demo/SKILL.md" <<'EOF'
+---
+name: demo-skill
+description: Demo probe skill for Clawmacs.
+---
+When this skill is used, inspect references/guide.md and report the phrase skill-probe-marker.
+EOF
+cat >"$skills_root/demo/references/guide.md" <<'EOF'
+The required phrase is skill-probe-marker.
+EOF
+run_probe_with_args "skills" \
+  "Use lisp_eval only. Use \$demo-skill. Verify that the skill is listed, read its SKILL.md instructions, read references/guide.md, and return a concise report with the skill name and exact phrase skill-probe-marker." \
+  "--skill-root $skills_root" \
+  "demo-skill" \
+  "skill-probe-marker" \
   "lisp_eval"
 
 transaction_root="$ROOT/transaction-project/"

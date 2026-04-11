@@ -52,6 +52,40 @@ Recent calls are available with =(eval-history-to-string)=, and the latest
 success/error are exposed through =*last-eval-result*= and
 =*last-eval-condition*=.
 
+** Skills
+
+Clawmacs supports Codex-style local skills: a skill is a directory containing a
+=SKILL.md= file with YAML frontmatter and task-specific instructions. Enabled
+skills are listed in the agent system prompt, can be selected from the UI, and
+can be invoked in chat with =$skill-name=. When a user message mentions a skill,
+Clawmacs injects a Codex-compatible contextual block for that turn:
+
+#+begin_example
+<skill>
+<name>demo</name>
+<path>/path/to/demo/SKILL.md</path>
+...
+</skill>
+#+end_example
+
+Skill discovery scans repo-local =.agents/skills/= directories, then
+=~/.clawmacs.d/skills/=, =~/.agents/skills/=, =~/.clawmacs.d/skills/.system/=,
+and roots registered from Lisp. Use =C-c s= to insert an exact linked skill
+mention and =C-c S= to toggle skills.
+
+#+begin_src lisp
+(list-skills)
+(describe-skill-to-string "common-lisp")
+(read-skill-instructions "common-lisp")
+(skill-list-files "common-lisp")
+(skill-read-file "common-lisp" "references/notes.md")
+(skill-search-to-string "common-lisp" "hash table")
+#+end_src
+
+Skills do not add new agent tools or widen permissions. Agents inspect skill
+instructions and resources through =lisp_eval=, and scripts/assets are local
+resources unless other Clawmacs APIs explicitly execute or use them.
+
 ** Project Resources
 
 Persistent edits are exposed through a Lisp project/resource layer rather than
@@ -282,6 +316,7 @@ by default:
 ./prompt.sh --json --provider openai-codex --model gpt-5.3-codex "Summarize this repo."
 ./prompt.sh --clean-build "Run this prompt after clearing cached Lisp build artifacts."
 ./prompt.sh --isolated --show-tools "Exercise project APIs without user config state."
+./prompt.sh --isolated --skill-root /tmp/my-skills 'Use $demo to answer.'
 #+end_src
 
 By default, =prompt.sh= reuses cached ASDF/FASL build artifacts for fast
@@ -297,8 +332,8 @@ scripts/prompt-probes.sh --only transaction --keep-logs
 #+end_src
 
 The probes run through =prompt.sh --isolated=, write logs under =/tmp=, and
-check real agent behavior for docs discovery, transactional project edits, and
-scratch/file-buffer workflows. By default they use
+check real agent behavior for docs discovery, skill loading, transactional
+project edits, and scratch/file-buffer workflows. By default they use
 =openai-codex/gpt-5.3-codex= first, then retry with
 =openrouter/openai/gpt-5.3-codex= if the primary provider fails.
 
@@ -338,6 +373,14 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
  :think-level "high"
  :core-prompt "Use lisp_eval for concrete work. Inspect first, then modify."
  :personality-prompt "You are a concise writing partner focused on structure and tone.")
+
+;; Register additional skill roots or programmatic skills
+(clawmacs:register-skill-root #P"/home/tay/.local/share/clawmacs/skills/")
+(clawmacs:register-skill-definition
+ "repo-review"
+ :description "Review Common Lisp changes in this repository."
+ :contents
+ (format nil "---~%name: repo-review~%description: Review Common Lisp changes.~%---~%Use project APIs, run tests, and report risks first."))
 
 ;; Customize seeded defaults after startup initialization
 (clawmacs:add-hook
@@ -389,6 +432,7 @@ src/
   commands.lisp        defcommand macro, permission levels
   keymap.lisp          Keymap data structure, default bindings
   projects.lisp        Project/resource registry, manifests, file buffers
+  skills.lisp          Codex-style local skill discovery and resource access
   matching-core.lisp   Coalton fuzzy matching implementation
   matching.lisp        Common Lisp wrappers for minibuffer matching
   llm.lisp             Multi-provider LLM integration, streaming, OAuth

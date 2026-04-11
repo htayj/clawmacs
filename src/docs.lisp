@@ -3566,3 +3566,71 @@ documentation in *extended-docs*."
   :returns "nil"
   :side-effects "Activates minibuffer with face candidates. On selection, creates customize buffer."
   :see-also (collect-all-faces make-customize-face-buffer handle-customize-key))
+
+;;; ==========================================================================
+;;; Category: skills — Codex-style local skill bundles
+;;; ==========================================================================
+
+(defdoc register-skill-root
+  :category "skills"
+  :usage "(register-skill-root #P\"/path/to/skills/\" :scope :user)"
+  :returns "skill-root-definition — The registered skill root."
+  :side-effects "Adds a root to *skill-roots* and clears the skill cache."
+  :see-also (list-skills reload-skills *skill-roots*))
+
+(defdoc register-skill-definition
+  :category "skills"
+  :usage "(register-skill-definition \"reviewer\" :description \"Review code\" :contents \"---\\nname: reviewer\\n---\\n...\")"
+  :returns "skill — The programmatic skill."
+  :side-effects "Adds a programmatic skill and clears the skill cache."
+  :see-also (list-skills read-skill-instructions))
+
+(defdoc list-skills
+  :category "skills"
+  :usage "(list-skills) or (list-skills :include-disabled t)"
+  :returns "list — Loaded skill structures."
+  :see-also (find-skill describe-skill-to-string list-skills-to-string))
+
+(defdoc find-skill
+  :category "skills"
+  :usage "(find-skill \"common-lisp\") or (find-skill #P\"/path/to/SKILL.md\")"
+  :returns "skill or nil — The matching loaded skill."
+  :see-also (list-skills read-skill-instructions))
+
+(defdoc set-skill-enabled
+  :category "skills"
+  :usage "(set-skill-enabled \"common-lisp\" nil)"
+  :returns "boolean — The requested enabled state."
+  :side-effects "Updates *skill-configuration-path*, clears the skill cache."
+  :see-also (enable-skill disable-skill skill-enabled-p))
+
+(defdoc read-skill-instructions
+  :category "skills"
+  :usage "(read-skill-instructions \"common-lisp\")"
+  :returns "string — Full SKILL.md contents."
+  :see-also (skill-list-files skill-read-file skill-search-to-string))
+
+(defdoc skill-list-files
+  :category "skills"
+  :usage "(skill-list-files \"common-lisp\")"
+  :returns "list — Skill-local relative file paths."
+  :see-also (skill-read-file read-skill-instructions))
+
+(defdoc skill-read-file
+  :category "skills"
+  :usage "(skill-read-file \"common-lisp\" \"references/notes.md\")"
+  :returns "string — File contents."
+  :side-effects "Reads a file under the selected skill directory."
+  :see-also (skill-list-files skill-search-to-string))
+
+(defdoc skill-search-to-string
+  :category "skills"
+  :usage "(skill-search-to-string \"common-lisp\" \"hash table\")"
+  :returns "string — path:line matches or a no-match message."
+  :see-also (skill-read-file describe-skill-to-string))
+
+(defdoc render-skills-section
+  :category "skills"
+  :usage "(render-skills-section)"
+  :returns "string or nil — System-prompt skill discovery section."
+  :see-also (build-agent-system-prompt list-skills))

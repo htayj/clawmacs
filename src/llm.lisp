@@ -189,6 +189,22 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 - Use `describe-common-lisp-symbol-to-string` for standard `COMMON-LISP` symbols, and use the
   system/package helpers for imported libraries or SBCL-specific APIs.
 
+## Skills
+
+- Skills are local instruction bundles stored in `SKILL.md` files and listed in the system prompt
+  when available.
+- Use `(list-skills)` to inspect enabled skill structures and
+  `(mapcar #'skill-name (list-skills))` when you need just skill names.
+- Use `(list-skills :include-disabled t)` to include disabled skills.
+- `(describe-skill-to-string \"SKILL\")` summarizes a skill, its path, and its files.
+- `(read-skill-instructions \"SKILL\")` returns the full `SKILL.md` instructions.
+- `(skill-list-files \"SKILL\")`, `(skill-read-file \"SKILL\" \"references/file.md\")`, and
+  `(skill-search-to-string \"SKILL\" \"QUERY\")` let you inspect referenced skill resources.
+- If the user mentions `$skill-name`, use the skill for that turn. Do not carry skills across turns
+  unless the user mentions them again.
+- Skill scripts and assets are resources to inspect through `lisp_eval`; they do not grant new
+  tools or permissions.
+
 ## Calling and inspecting
 
 - Call known functions directly once you identify the right entry point.
@@ -392,10 +408,11 @@ Project-local files take precedence over global ones."
 
 (defun build-agent-system-prompt (agent-name)
   "Build the full system prompt for AGENT-NAME.
-Composition order: boot-file prefix, core system prompt, then personality prompt."
+Composition order: boot-file prefix, core system prompt, skills section, then personality prompt."
   (let ((parts (remove-if #'null
                           (list (load-boot-files)
                                 (agent-definition-core-prompt-or-default agent-name)
+                                (render-skills-section)
                                 (agent-definition-personality-prompt-or-default agent-name)))))
     (format nil "~{~A~^~%~%---~%~%~}" parts)))
 
@@ -1970,6 +1987,17 @@ and should not be sent to the API."
                                    role
                                    (or (message-raw-content msg)
                                        (message-text msg)))))
+                    (when (and (eq sender :user)
+                               (null (message-raw-content msg)))
+                      (dolist (skill-text
+                                (handler-case
+                                    (skill-injection-messages (message-text msg))
+                                  (error () nil)))
+                        (let ((skill-content
+                                (canonicalize-message-content "user" skill-text)))
+                          (push `((:role . "user")
+                                  (:content . ,(coerce skill-content 'vector)))
+                                messages))))
                     (push `((:role . ,role)
                             (:content . ,(coerce content 'vector)))
                           messages)))))

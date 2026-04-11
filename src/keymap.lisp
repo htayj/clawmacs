@@ -127,6 +127,9 @@
     (keymap-bind km '(:ctrl-c #\t) 'toggle-tool-results-command) ; C-c t = toggle tool results
     ;; C-c A = minibuffer agent selector
     (keymap-bind km '(:ctrl-c #\A) 'minibuffer-select-agent-command)
+    ;; C-c s = insert skill mention, C-c S = toggle skills.
+    (keymap-bind km '(:ctrl-c #\s) 'minibuffer-insert-skill-command)
+    (keymap-bind km '(:ctrl-c #\S) 'minibuffer-toggle-skill-command)
     ;; C-c C-m = minibuffer model selector (helm/ivy/vertico style).
     ;; C-m = ASCII 13 = #\Return.
     ;; Some terminals send #\Newline (LF, ASCII 10) for Enter, so bind both.

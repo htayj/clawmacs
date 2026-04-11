@@ -114,6 +114,14 @@ and C-x b to the old overlay buffer selector."
   (is (eq 'clawmacs::minibuffer-select-agent-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\A)))))
 
+(test default-keymap-skill-bindings
+  "Default keymap binds skill insertion and toggling under C-c."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::minibuffer-insert-skill-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\s))))
+  (is (eq 'clawmacs::minibuffer-toggle-skill-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\S)))))
+
 (test default-keymap-model-selector-binding
   "Default keymap binds C-c C-m (C-c Return) to the minibuffer model selector,
 and C-c M (capital M) to the old overlay model selector."

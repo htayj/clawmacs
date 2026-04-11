@@ -49,6 +49,7 @@
   (json-p nil :type boolean)
   (auto-approve-tools-p nil :type boolean)
   (max-tool-iterations *prompt-max-tool-iterations* :type integer)
+  (skill-roots nil :type list)
   debug-log-path
   (isolated-p nil :type boolean)
   (inhibit-user-init-p nil :type boolean)
@@ -1094,6 +1095,101 @@ If so, call the handler and return T. Otherwise return NIL."
             (buffer-insert-system-message
              buffer
              (format nil "[Search project failed: ~A]" e)))))))))
+
+;;; --------------------------------------------------------------------------
+;;; Skill Commands
+;;; --------------------------------------------------------------------------
+
+(defun skill-mention-text (skill)
+  "Return the text inserted for selecting SKILL."
+  (if (skill-path skill)
+      (format nil "[$~A](skill://~A)"
+              (skill-name skill)
+              (namestring (skill-path skill)))
+      (format nil "$~A" (skill-name skill))))
+
+(defun make-skill-selector-item (skill &key include-enabled-marker)
+  "Build one minibuffer item for SKILL."
+  (let* ((enabled-p (skill-enabled-p skill))
+         (marker (cond
+                   ((not include-enabled-marker) "")
+                   (enabled-p "[x] ")
+                   (t "[ ] ")))
+         (path (and (skill-path skill)
+                    (namestring (skill-path skill))))
+         (description (skill-display-description skill)))
+    (list :skill skill
+          :display (format nil "~A~A  [~(~A~)]~@[ ~A~]"
+                           marker
+                           (skill-name skill)
+                           (or (skill-scope skill) :unknown)
+                           description)
+          :match-text (format nil "~A ~A ~A"
+                              (skill-name skill)
+                              description
+                              (or path "")))))
+
+(defun skill-selector-items (&key include-disabled include-enabled-marker)
+  "Return minibuffer skill selector items."
+  (mapcar (lambda (skill)
+            (make-skill-selector-item
+             skill
+             :include-enabled-marker include-enabled-marker))
+          (list-skills :include-disabled include-disabled)))
+
+(defcommand minibuffer-insert-skill-command (:permission :user-only)
+  "Select a skill and insert an exact $skill mention into the input."
+  (buffer)
+  (let ((items (skill-selector-items)))
+    (if items
+        (minibuffer-activate
+         "Insert Skill" items
+         (lambda (item)
+           (message-insert-string
+            (buffer-input-message buffer)
+            (skill-mention-text (getf item :skill)))
+           (mark-buffer-dirty buffer)))
+        (buffer-insert-system-message buffer "[No enabled skills available.]"))))
+
+(defcommand minibuffer-toggle-skill-command (:permission :user-only)
+  "Select a skill and toggle whether it is enabled."
+  (buffer)
+  (let ((items (skill-selector-items :include-disabled t
+                                     :include-enabled-marker t)))
+    (if items
+        (minibuffer-activate
+         "Toggle Skill" items
+         (lambda (item)
+           (let* ((skill (getf item :skill))
+                  (enabled-p (not (skill-enabled-p skill))))
+             (handler-case
+                 (progn
+                   (set-skill-enabled skill enabled-p)
+                   (buffer-insert-system-message
+                    buffer
+                    (format nil "[Skill ~A ~A]"
+                            (skill-name skill)
+                            (if enabled-p "enabled" "disabled"))))
+               (error (e)
+                 (buffer-insert-system-message
+                  buffer
+                  (format nil "[Skill toggle failed: ~A]" e)))))))
+        (buffer-insert-system-message buffer "[No skills available.]"))))
+
+(defcommand list-skills-command (:permission :user-only)
+  "Open a help buffer listing loaded skills and skill load errors."
+  (buffer)
+  (declare (ignore buffer))
+  (reload-skills)
+  (let* ((buf-name "*help:skills*")
+         (existing (find-buffer-by-name buf-name))
+         (content (list-skills-to-string :include-disabled t)))
+    (if existing
+        (progn
+          (set-message-text (message-prev (buffer-input-message existing))
+                            content)
+          (switch-to-buffer existing))
+        (switch-to-buffer (make-help-buffer buf-name content)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Model Selection Commands
@@ -3502,6 +3598,7 @@ Options:
   --json                    Emit a JSON result object to stdout.
   --auto-approve-tools      Allow permission-gated tools without an interactive prompt.
   --max-tool-iterations N   Stop after N tool-call turns (default: 20).
+  --skill-root PATH         Add a skill root for this prompt run. May repeat.
   --debug-log PATH          Write low-level debug logs to PATH.
   --isolated                Use temporary prompt config/project/session dirs.
   --clean-build             Clear cached Lisp build artifacts before loading.
@@ -3602,6 +3699,13 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
                    (setf (prompt-options-max-tool-iterations options)
                          (parse-positive-integer-option arg value)
                          remaining rest)))
+                ((string= arg "--skill-root")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-skill-roots options)
+                         (append (prompt-options-skill-roots options)
+                                 (list value))
+                         remaining rest)))
                 ((string= arg "--debug-log")
                  (multiple-value-bind (value rest)
                      (require-option-value arg remaining)
@@ -3664,6 +3768,14 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
           (merge-pathnames #P"agent-defaults.json" root)
           *packages-directory*
           (merge-pathnames #P"packages/" root)
+          *skill-user-directory*
+          (merge-pathnames #P"skills/" config-dir)
+          *skill-agents-directory*
+          (merge-pathnames #P"agents-skills/" root)
+          *skill-system-directory*
+          (merge-pathnames #P"system-skills/" root)
+          *skill-configuration-path*
+          (merge-pathnames #P"skills.json" config-dir)
           *personality-prompt-path*
           (merge-pathnames #P"personality-prompt.txt" root))
     (ensure-directories-exist
@@ -3672,6 +3784,12 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
      (merge-pathnames #P".keep" *sessions-dir*))
     (ensure-directories-exist
      (merge-pathnames #P".keep" *packages-directory*))
+    (ensure-directories-exist
+     (merge-pathnames #P".keep" *skill-user-directory*))
+    (ensure-directories-exist
+     (merge-pathnames #P".keep" *skill-agents-directory*))
+    (ensure-directories-exist
+     (merge-pathnames #P".keep" *skill-system-directory*))
     root))
 
 (defun prompt-tool-event-json (event)
@@ -3780,6 +3898,8 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
           (let ((root (apply-prompt-isolation)))
             (when (prompt-options-show-metadata-p options)
               (format *error-output* ";; isolated-root: ~A~%" root))))
+        (dolist (skill-root (prompt-options-skill-roots options))
+          (register-skill-root skill-root :scope :user :source :cli))
         (let ((*inhibit-user-init* (or (prompt-options-isolated-p options)
                                        (prompt-options-inhibit-user-init-p
                                         options))))
