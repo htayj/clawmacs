@@ -863,6 +863,7 @@
    #:run-subagent-async
    #:*prompt-max-tool-iterations*
    #:*prompt-required-write-retry-limit*
+   #:*prompt-required-write-read-only-tool-limit*
    #:*prompt-provider-retry-limit*
    #:*prompt-live-tool-event-stream*
    #:*prompt-live-tool-event-count*

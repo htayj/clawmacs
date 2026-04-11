@@ -3743,6 +3743,12 @@ documentation in *extended-docs*."
   :returns "integer — Maximum corrective retries after no-write prompt completions."
   :see-also (clawmacs-prompt-main run-single-prompt))
 
+(defdoc *prompt-required-write-read-only-tool-limit*
+  :category "main"
+  :usage "Tool-call threshold used by prompt.sh --require-project-write."
+  :returns "integer — Number of tool calls without writes before a corrective turn is appended."
+  :see-also (*prompt-required-write-retry-limit* clawmacs-prompt-main))
+
 (defdoc *prompt-provider-retry-limit*
   :category "main"
   :usage "Integer retry limit used by prompt-mode provider requests."

@@ -17,6 +17,9 @@
 (defvar *prompt-required-write-retry-limit* 2
   "Maximum corrective retries when prompt mode requires project writes.")
 
+(defvar *prompt-required-write-read-only-tool-limit* 25
+  "Tool-call threshold before required-write prompt mode adds a corrective turn.")
+
 (defvar *prompt-provider-retry-limit* 2
   "Maximum provider request retries for transient prompt-mode request failures.")
 
@@ -700,6 +703,12 @@ Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
                 model
                 think-level)))))
 
+(defun prompt-required-write-read-only-tool-text (tool-count)
+  "Return corrective text after TOOL-COUNT tool calls without project writes."
+  (format nil
+          "You have used ~D tool calls without any recorded project write, but this prompt run requires durable project changes. Stop broad exploration and make the smallest correct project edit now using project/sexed helpers, then run targeted checks. Do not give a final answer until at least one project write has been recorded."
+          tool-count))
+
 (defun denied-tool-result-json (reason)
   "Return a canonical JSON denial payload for a non-interactive tool denial."
   (api-json-encode `((:denied . t)
@@ -760,7 +769,8 @@ PROMPT-TOOL-EVENT for terminal/debug output."
                             (max-tool-iterations *prompt-max-tool-iterations*)
                             auto-approve-tools-p
                             (tool-names nil tool-names-supplied-p)
-                            custom-tools)
+                            custom-tools
+                            require-project-write-p)
   "Run prompt-mode provider loop against prepared BUF.
 PROMPT is the user turn text used for the returned PROMPT-RUN-RESULT."
   (let* ((custom-tool-definitions (normalize-run-custom-tools custom-tools))
@@ -775,7 +785,8 @@ PROMPT is the user turn text used for the returned PROMPT-RUN-RESULT."
          (final-provider nil)
          (final-model nil)
          (final-think-level nil)
-         (iterations 0))
+         (iterations 0)
+         (last-required-write-nudge-tool-count 0))
     (maybe-apply-prompt-routing-overrides buf provider model think-level)
     (let ((*active-tool-names* effective-tool-names)
           (*project-write-events* nil)
@@ -825,14 +836,26 @@ PROMPT is the user turn text used for the returned PROMPT-RUN-RESULT."
                                      :keyword)))
               (insert-agent-message-from-content buf canonical-content agent-kw)
               (if tool-uses
-                  (setf tool-events
-                        (append tool-events
-                                (handler-case
-                                    (execute-prompt-tool-calls
-                                     buf tool-uses auto-approve-tools-p)
-                                  (error (condition)
-                                    (fail "Prompt tool loop failed: ~A"
-                                          condition)))))
+                  (let ((new-events
+                          (handler-case
+                              (execute-prompt-tool-calls
+                               buf tool-uses auto-approve-tools-p)
+                            (error (condition)
+                              (fail "Prompt tool loop failed: ~A"
+                                    condition)))))
+                    (setf tool-events (append tool-events new-events))
+                    (when (and require-project-write-p
+                               (null *project-write-events*)
+                               (plusp *prompt-required-write-read-only-tool-limit*)
+                               (>= (- (length tool-events)
+                                      last-required-write-nudge-tool-count)
+                                   *prompt-required-write-read-only-tool-limit*))
+                      (setf last-required-write-nudge-tool-count
+                            (length tool-events))
+                      (prepare-prompt-buffer
+                       buf
+                       (prompt-required-write-read-only-tool-text
+                        (length tool-events)))))
                   (return
                     (make-prompt-run-result
                      :prompt prompt
@@ -880,7 +903,8 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
    :model (prompt-options-model options)
    :think-level (prompt-options-think-level options)
    :max-tool-iterations (prompt-options-max-tool-iterations options)
-   :auto-approve-tools-p (prompt-options-auto-approve-tools-p options)))
+   :auto-approve-tools-p (prompt-options-auto-approve-tools-p options)
+   :require-project-write-p (prompt-options-require-project-write-p options)))
 
 (defun prompt-required-write-retry-text (attempt)
   "Return the corrective prompt for required-write retry ATTEMPT."
