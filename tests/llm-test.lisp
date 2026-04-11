@@ -366,6 +366,7 @@ PAIR PERSONALITY"
                     "--json"
                     "--max-tool-iterations" "7"
                     "--session" "autoimprove"
+                    "--require-project-write"
                     "summarize" "this"))))
     (is (string= "writer" (clawmacs::prompt-options-agent-name options)))
     (is (string= "openai-codex" (clawmacs::prompt-options-provider options)))
@@ -378,6 +379,7 @@ PAIR PERSONALITY"
     (is (clawmacs::prompt-options-isolated-p options))
     (is (string= "autoimprove"
                  (clawmacs::prompt-options-session-name options)))
+    (is (clawmacs::prompt-options-require-project-write-p options))
     (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
     (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
 
@@ -625,6 +627,59 @@ PAIR PERSONALITY"
                    (mapcar (lambda (message)
                              (cdr (assoc :role message)))
                            second-turn-messages)))))))
+
+(test run-single-prompt-records-project-write-events
+  "Prompt-mode records project writes performed through lisp_eval."
+  (let* ((path (temp-agent-defaults-path))
+         (root (make-pathname :directory
+                              (list :absolute "tmp"
+                                    (format nil "clawmacs-prompt-write-~A"
+                                            (list (get-universal-time)
+                                                  (get-internal-real-time)
+                                                  (gensym))))))
+         (request-count 0)
+         (tool-code (format nil
+                            "(progn (define-project \"prompt-writes\" :root #P~S) (project-save-file \"prompt-writes\" \"result.txt\" \"ok\"))"
+                            (namestring root))))
+    (ensure-directories-exist (merge-pathnames #P".keep" root))
+    (with-agent-defaults-path-override (path)
+      (with-tool-table-restored
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                             reasoning-effort system-prompt)
+                                 (declare (ignore provider messages callback
+                                                  model max-tokens tools
+                                                  reasoning-effort system-prompt))
+                                 (incf request-count)
+                                 (if (= request-count 1)
+                                     (make-completed-stream-state-response
+                                      "tool_use"
+                                      (list
+                                       (clawmacs::canonical-tool-use-block
+                                        "write-1"
+                                        "lisp_eval"
+                                        `((:code . ,tool-code)))))
+                                     (make-completed-stream-state-response
+                                      "end_turn"
+                                      (list (clawmacs::canonical-text-block
+                                             "done")))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (clawmacs::init-tools)
+          (let* ((result (clawmacs:run-single-prompt
+                          "write a project file"
+                          :provider :zai
+                          :model "glm-5"))
+                 (events (clawmacs:prompt-run-result-project-write-events result))
+                 (event (first events)))
+            (is (= 1 (length events)))
+            (is (eq :write (getf event :kind)))
+            (is (string= "prompt-writes" (getf event :project)))
+            (is (string= "result.txt" (getf event :path)))
+            (is (string= "ok"
+                         (uiop:read-file-string
+                          (merge-pathnames #P"result.txt" root))))))))))
 
 (test run-single-prompt-executes-lisp-eval-tool-loop
   "Prompt mode executes lisp_eval tool calls and continues with tool results."

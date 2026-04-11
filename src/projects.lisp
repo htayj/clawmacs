@@ -60,6 +60,9 @@
 (defvar *project-search-result-limit* 100
   "Default maximum number of matches returned by PROJECT-SEARCH.")
 
+(defvar *project-write-events* nil
+  "Dynamic list of project write events captured during prompt-mode runs.")
+
 (defvar *change-set-registry* (make-hash-table :test #'equal)
   "Registry of staged project change sets keyed by id.")
 
@@ -68,6 +71,18 @@
 
 (defvar *change-set-counter* 0
   "Monotonic counter used to create human-readable change set ids.")
+
+(defun record-project-write-event (kind project path &key new-path bytes)
+  "Record a project write event in *PROJECT-WRITE-EVENTS* and return it."
+  (let ((event (list :kind kind
+                     :project (project-name (ensure-project project))
+                     :path (project-resource-name path))))
+    (when new-path
+      (setf (getf event :new-path) (project-resource-name new-path)))
+    (when bytes
+      (setf (getf event :bytes) bytes))
+    (push event *project-write-events*)
+    event))
 
 (defun normalize-project-name (name)
   "Normalize NAME to a non-empty registry key."
@@ -502,6 +517,8 @@ Existing projects, usually from init.lisp, are not overwritten."
                             :if-does-not-exist :create)
       (write-string text stream))
     (synchronize-open-project-file-buffer project resource-path text)
+    (record-project-write-event :write project resource-path
+                                :bytes (length text))
     (list :status :ok
           :project (project-name project)
           :path resource-path
@@ -799,7 +816,10 @@ Existing projects, usually from init.lisp, are not overwritten."
                                            :require-exists t)))
        (delete-file resolved)
        (remove-open-project-file-buffer (change-set-entry-project-name entry)
-                                        (change-set-entry-path entry))))
+                                        (change-set-entry-path entry))
+       (record-project-write-event :delete
+                                   (change-set-entry-project-name entry)
+                                   (change-set-entry-path entry))))
     (:rename
      (let ((source (project-resolve-path (change-set-entry-project-name entry)
                                          (change-set-entry-path entry)
@@ -813,7 +833,12 @@ Existing projects, usually from init.lisp, are not overwritten."
        (retarget-open-project-file-buffer (change-set-entry-project-name entry)
                                           (change-set-entry-path entry)
                                           (change-set-entry-new-path entry)
-                                          (change-set-entry-new-text entry)))))
+                                          (change-set-entry-new-text entry))
+       (record-project-write-event :rename
+                                   (change-set-entry-project-name entry)
+                                   (change-set-entry-path entry)
+                                   :new-path
+                                   (change-set-entry-new-path entry)))))
   (setf (change-set-entry-applied-p entry) t)
   entry)
 

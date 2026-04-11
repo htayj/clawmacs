@@ -878,6 +878,7 @@
    #:prompt-run-result-final-text
    #:prompt-run-result-tool-events
    #:prompt-run-result-reasoning-blocks
+   #:prompt-run-result-project-write-events
    #:prompt-run-result-agent-name
    #:prompt-run-result-provider
    #:prompt-run-result-model

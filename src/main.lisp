@@ -41,6 +41,7 @@
   final-text
   tool-events
   reasoning-blocks
+  project-write-events
   agent-name
   provider
   model
@@ -63,6 +64,7 @@
   (max-tool-iterations *prompt-max-tool-iterations* :type integer)
   (skill-roots nil :type list)
   session-name
+  (require-project-write-p nil :type boolean)
   debug-log-path
   (isolated-p nil :type boolean)
   (inhibit-user-init-p nil :type boolean)
@@ -760,6 +762,7 @@ PROMPT is the user turn text used for the returned PROMPT-RUN-RESULT."
          (iterations 0))
     (maybe-apply-prompt-routing-overrides buf provider model think-level)
     (let ((*active-tool-names* effective-tool-names)
+          (*project-write-events* nil)
           (*temporary-tool-table* (or temporary-tool-table
                                       *temporary-tool-table*)))
       (labels ((fail (format-string &rest format-args)
@@ -807,6 +810,7 @@ PROMPT is the user turn text used for the returned PROMPT-RUN-RESULT."
                      :final-text (content-text-blocks canonical-content)
                      :tool-events tool-events
                      :reasoning-blocks (content-reasoning-blocks canonical-content)
+                     :project-write-events (nreverse *project-write-events*)
                      :agent-name (buffer-agent-name buf)
                      :provider final-provider
                      :model final-model
@@ -4230,6 +4234,7 @@ Options:
   --max-tool-iterations N   Stop after N tool-call turns (default: 20).
   --skill-root PATH         Add a skill root for this prompt run. May repeat.
   --session NAME            Continue and save a named prompt-mode session.
+  --require-project-write   Fail if the prompt completes without project writes.
   --debug-log PATH          Write low-level debug logs to PATH.
   --isolated                Use temporary prompt config/project/session dirs.
   --clean-build             Clear cached Lisp build artifacts before loading.
@@ -4342,6 +4347,8 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
                      (require-option-value arg remaining)
                    (setf (prompt-options-session-name options) value
                          remaining rest)))
+                ((string= arg "--require-project-write")
+                 (setf (prompt-options-require-project-write-p options) t))
                 ((string= arg "--debug-log")
                  (multiple-value-bind (value rest)
                      (require-option-value arg remaining)
@@ -4452,6 +4459,9 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
     (:tool--events . ,(coerce (mapcar #'prompt-tool-event-json
                                        (prompt-run-result-tool-events result))
                               'vector))
+    (:project--write--events . ,(coerce (prompt-run-result-project-write-events
+                                         result)
+                                        'vector))
     (:reasoning . ,(coerce (prompt-run-result-reasoning-blocks result) 'vector))))
 
 (defun write-string-with-final-newline (text stream)
@@ -4473,7 +4483,9 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
   (format stream ";; iterations: ~D~%"
           (prompt-run-result-iterations result))
   (format stream ";; stop-reason: ~A~%"
-          (or (prompt-run-result-stop-reason result) "nil")))
+          (or (prompt-run-result-stop-reason result) "nil"))
+  (format stream ";; project-writes: ~D~%"
+          (length (prompt-run-result-project-write-events result))))
 
 (defun write-prompt-tool-events (result stream)
   "Write prompt tool events to STREAM in Lisp-oriented display form."
@@ -4558,6 +4570,15 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
                     (prompt-options-max-tool-iterations options)
                     :auto-approve-tools-p
                     (prompt-options-auto-approve-tools-p options))))
+            (when (and (prompt-options-require-project-write-p options)
+                       (null (prompt-run-result-project-write-events result)))
+              (error 'prompt-run-error
+                     :message "Prompt completed without project writes"
+                     :tool-events (prompt-run-result-tool-events result)
+                     :iterations (prompt-run-result-iterations result)
+                     :provider (prompt-run-result-provider result)
+                     :model (prompt-run-result-model result)
+                     :think-level (prompt-run-result-think-level result)))
             (when session-name
               (save-session buf))
             (write-prompt-run-result result options)))
