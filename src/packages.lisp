@@ -120,6 +120,10 @@
    #:buffer-agent-name
    #:buffer-kind
    #:buffer-working-directory
+   #:buffer-project-name
+   #:buffer-resource-path
+   #:buffer-original-text
+   #:buffer-dirty-p
     #:buffer-token-count
     #:buffer-context-limit
     #:buffer-status
@@ -146,9 +150,13 @@
    #:kill-buffer-from-ring
    #:find-buffer-by-name
    #:scratch-buffer-p
+   #:file-buffer-p
+   #:document-buffer-p
    #:scratch-buffer
    #:ensure-scratch-buffer
    #:scratch-buffer-text
+   #:file-buffer-text
+   #:mark-buffer-dirty
    #:next-buffer-name
    #:buffer-names
    #:buffer-finalize-input
@@ -197,6 +205,37 @@
    #:keymap-bind
    #:keymap-lookup
    #:*default-keymap*
+
+   ;; Projects
+   #:project
+   #:make-project
+   #:project-name
+   #:project-root
+   #:project-description
+   #:project-source
+   #:*project-definitions-directory*
+   #:*project-registry*
+   #:*project-manifest-extension*
+   #:*project-ignored-directory-names*
+   #:*project-list-file-limit*
+   #:*project-search-result-limit*
+   #:define-project
+   #:create-project
+   #:register-project
+   #:find-project
+   #:list-projects
+   #:load-project-definitions
+   #:reload-projects
+   #:project-resolve-path
+   #:project-list-files
+   #:project-read-file
+   #:project-create-file
+   #:project-save-file
+   #:project-search
+   #:project-search-to-string
+   #:project-open-file
+   #:find-project-file-buffer
+   #:project-save-buffer
 
     ;; LLM
     #:*zai-env-var*
@@ -339,6 +378,19 @@
    #:sexed-raise-file-form
    #:sexed-slurp-forward-file-form
    #:sexed-barf-forward-file-form
+   #:sexed-project-outline-to-string
+   #:sexed-project-form-text
+   #:sexed-replace-project-form
+   #:sexed-delete-project-form
+   #:sexed-insert-before-project-form
+   #:sexed-insert-after-project-form
+   #:sexed-insert-project-form-before
+   #:sexed-insert-project-form-after
+   #:sexed-wrap-project-form
+   #:sexed-splice-project-form
+   #:sexed-raise-project-form
+   #:sexed-slurp-forward-project-form
+   #:sexed-barf-forward-project-form
    #:sexed-replace-message-form
    #:sexed-delete-message-form
    #:sexed-insert-before-message-form
@@ -382,6 +434,10 @@
    #:*buffer-selector-active*
    #:*buffer-selector-index*
    #:list-buffers-command
+   #:minibuffer-select-project-command
+   #:open-project-file-command
+   #:create-project-file-command
+   #:search-project-command
    #:render-buffer-selector
 
    ;; Model selector (overlay)

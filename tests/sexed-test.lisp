@@ -117,6 +117,34 @@
     (is (string= "(defun foo () (list 1 2))"
                  (uiop:read-file-string file)))))
 
+(test sexed-project-adapters-edit-project-resources
+  "Project-aware adapters edit persistent Lisp resources through the project layer."
+  (let* ((dir (sexed-test-directory))
+         (*project-registry* (make-hash-table :test #'equal))
+         (file (merge-pathnames "source.lisp" dir))
+         (initial "(defun foo () (+ 1 2))"))
+    (write-sexed-test-file file initial)
+    (define-project "sexed" :root dir)
+    (is (search "defun foo"
+                (sexed-project-outline-to-string "sexed"
+                                                "source.lisp"
+                                                :head "defun")))
+    (let ((result (sexed-replace-project-form "sexed"
+                                              "source.lisp"
+                                              '(:head "+")
+                                              "(list 1 2)")))
+      (is (eq :ok (getf result :status)))
+      (is-true (getf result :balanced)))
+    (is (string= "(defun foo () (list 1 2))"
+                 (project-read-file "sexed" "source.lisp")))
+    (signals error
+      (sexed-replace-project-form "sexed"
+                                  "source.lisp"
+                                  '(:head "list")
+                                  "(vector 1 2"))
+    (is (string= "(defun foo () (list 1 2))"
+                 (project-read-file "sexed" "source.lisp")))))
+
 (test sexed-message-adapters-edit-editable-messages
   "Message adapters update editable message text and reject read-only messages."
   (let ((message (make-message :user))

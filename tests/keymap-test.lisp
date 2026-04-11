@@ -91,6 +91,14 @@ and C-x b to the old overlay buffer selector."
   (is (eq 'clawmacs::list-buffers-command
           (keymap-lookup *default-keymap* '(:ctrl-x #\b)))))
 
+(test default-keymap-project-bindings
+  "Default keymap binds project selection and project file opening."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::open-project-file-command
+          (keymap-lookup *default-keymap* (list :ctrl-x (code-char 6)))))
+  (is (eq 'clawmacs::minibuffer-select-project-command
+          (keymap-lookup *default-keymap* '(:ctrl-x #\p)))))
+
 (test default-keymap-toggle-tool-results-uses-c-c-prefix
   "Toggle tool results is bound under C-c (mode-specific), not C-x (global)."
   (clawmacs::init-default-keymap)

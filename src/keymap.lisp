@@ -160,6 +160,8 @@
     ;; ----- C-x prefix: global / cross-buffer commands -----
     ;; C-x is reserved for global commands that operate across buffers
     ;; or affect the application as a whole (buffer management, I/O, etc.).
+    (keymap-bind km (list :ctrl-x (code-char 6)) 'open-project-file-command) ; C-x C-f
+    (keymap-bind km '(:ctrl-x #\p) 'minibuffer-select-project-command) ; C-x p
     (keymap-bind km '(:ctrl-x #\n) 'new-buffer-command)       ; C-x n = new buffer
     (keymap-bind km '(:ctrl-x #\k) 'kill-buffer-command)      ; C-x k = kill buffer
     (keymap-bind km (list :ctrl-x (code-char 19)) 'save-session-command) ; C-x C-s

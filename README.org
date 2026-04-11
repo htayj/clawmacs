@@ -47,6 +47,30 @@ By default, agents are expected to search for symbols, inspect documentation, ca
 
 The =lisp_eval= tool is particularly powerful: the agent can introspect clawmacs itself, query buffer state, evaluate expressions, and modify the running system. Standard Common Lisp reference lookup is available through a vendored offline snapshot of =cl-community-spec=, and imported library discovery is handled locally through ASDF metadata, package exports, docstrings, and source/doc search helpers.
 
+** Project Resources
+
+Persistent edits are exposed through a Lisp project/resource layer rather than
+through direct agent file tools. Project definitions can be registered from
+=~/.clawmacs.d/init.lisp= with =define-project=, and inert manifest files are
+autoloaded from =*project-definitions-directory*=, which defaults to
+=~/.clawmacs.projects.d/=. The user configuration directory is always available
+as the =config= project unless init defines =config= first.
+
+#+begin_src lisp
+(define-project "clawmacs" :root #P"/home/tay/projects/clawmacs/")
+(create-project "scratch-work" :root #P"/tmp/scratch-work/" :persist nil)
+(list-projects)
+(project-list-files "clawmacs")
+(project-search-to-string "clawmacs" "send-message")
+(project-read-file "clawmacs" "src/main.lisp")
+(project-save-file "clawmacs" "notes.org" "* Notes\n")
+(project-open-file "clawmacs" "src/main.lisp")
+#+end_src
+
+Open project resources become editable file buffers. =C-x C-f= opens a project
+file, =C-x p= selects the current buffer's project, and =C-x C-s= saves a file
+buffer back to its project resource.
+
 ** Agent Structural Editing
 
 Clawmacs includes =sexed=, an agent-oriented s-expression editor inspired by
@@ -55,9 +79,11 @@ inspect, select, and edit Lisp forms by structure while rejecting edits that
 would leave unbalanced text.
 
 #+begin_src lisp
-(sexed-file-outline-to-string "src/main.lisp" :head "defun" :limit 20)
-(sexed-file-form-text "src/main.lisp" '(:head "defun" :name "ensure-scratch-buffer"))
-(sexed-replace-file-form
+(sexed-project-outline-to-string "clawmacs" "src/main.lisp" :head "defun" :limit 20)
+(sexed-project-form-text "clawmacs" "src/main.lisp"
+                         '(:head "defun" :name "ensure-scratch-buffer"))
+(sexed-replace-project-form
+ "clawmacs"
  "src/foo.lisp"
  '(:head "defun" :name "foo")
  "(defun foo () :ok)")
@@ -71,8 +97,9 @@ would leave unbalanced text.
 
 Selectors are plists such as =(:head "defun" :name "foo")=, =(:head "let*" :nth 0)=,
 or =(:id 7)=. The =:nth= selector is zero-based. Pure functions such as
-=sexed-replace-form= return edited strings; file, message, and scratch adapters
-validate the full result before mutating files or editable clawmacs messages.
+=sexed-replace-form= return edited strings; project, file, message, and scratch
+adapters validate the full result before mutating resources or editable
+clawmacs messages.
 Insert helpers add separator whitespace when adjacent forms would otherwise
 touch.
 
@@ -304,6 +331,7 @@ src/
   buffer.lisp          Buffer ring, conversation management, sessions
   commands.lisp        defcommand macro, permission levels
   keymap.lisp          Keymap data structure, default bindings
+  projects.lisp        Project/resource registry, manifests, file buffers
   matching-core.lisp   Coalton fuzzy matching implementation
   matching.lisp        Common Lisp wrappers for minibuffer matching
   llm.lisp             Multi-provider LLM integration, streaming, OAuth

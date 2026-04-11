@@ -544,6 +544,30 @@ documentation in *extended-docs*."
   :returns "pathname — The working directory for shell commands."
   :see-also (buffer make-buffer shell-prefix-handler))
 
+(defdoc buffer-project-name
+  :category "buffer"
+  :usage "(buffer-project-name BUF:buffer)"
+  :returns "string or nil — The selected project or backing project for this buffer."
+  :see-also (project buffer-resource-path project-open-file))
+
+(defdoc buffer-resource-path
+  :category "buffer"
+  :usage "(buffer-resource-path BUF:buffer)"
+  :returns "string or nil — Project-relative resource path for file buffers."
+  :see-also (buffer-project-name file-buffer-p project-open-file))
+
+(defdoc buffer-original-text
+  :category "buffer"
+  :usage "(buffer-original-text BUF:buffer)"
+  :returns "string — Last saved text snapshot for project file buffers."
+  :see-also (buffer-dirty-p file-buffer-text project-save-buffer))
+
+(defdoc buffer-dirty-p
+  :category "buffer"
+  :usage "(buffer-dirty-p BUF:buffer)"
+  :returns "boolean — True when a file buffer has unsaved changes."
+  :see-also (mark-buffer-dirty project-save-buffer file-buffer-text))
+
 (defdoc buffer-token-count
   :category "buffer"
   :usage "(buffer-token-count BUF:buffer) — (buffer-token-count (current-buffer))"
@@ -714,6 +738,18 @@ documentation in *extended-docs*."
   :returns "boolean — T when BUF is the process-local scratch buffer."
   :see-also (scratch-buffer ensure-scratch-buffer buffer-kind))
 
+(defdoc file-buffer-p
+  :category "buffer"
+  :usage "(file-buffer-p BUF:buffer)"
+  :returns "boolean — T when BUF edits a project resource."
+  :see-also (project-open-file file-buffer-text document-buffer-p))
+
+(defdoc document-buffer-p
+  :category "buffer"
+  :usage "(document-buffer-p BUF:buffer)"
+  :returns "boolean — T for scratch and project-backed file buffers."
+  :see-also (scratch-buffer-p file-buffer-p send-message))
+
 (defdoc scratch-buffer
   :category "buffer"
   :usage "(scratch-buffer) — (scratch-buffer)"
@@ -733,6 +769,20 @@ documentation in *extended-docs*."
   :returns "string or nil — The editable scratch document text."
   :side-effects "SETF replaces the scratch buffer's editable text."
   :see-also (scratch-buffer ensure-scratch-buffer buffer-input-message))
+
+(defdoc file-buffer-text
+  :category "buffer"
+  :usage "(file-buffer-text &optional BUF) — (setf (file-buffer-text buf) \"...\")"
+  :returns "string — The editable text for a project-backed file buffer."
+  :side-effects "SETF replaces text and updates buffer-dirty-p."
+  :see-also (project-open-file project-save-buffer buffer-dirty-p))
+
+(defdoc mark-buffer-dirty
+  :category "buffer"
+  :usage "(mark-buffer-dirty BUF)"
+  :returns "buffer — The same buffer."
+  :side-effects "Marks project-backed file buffers as modified."
+  :see-also (buffer-dirty-p file-buffer-p project-save-buffer))
 
 (defdoc next-buffer-name
   :category "buffer"
@@ -999,6 +1049,187 @@ documentation in *extended-docs*."
 (defdoc *default-keymap*
   :category "keymap"
   :see-also (keymap make-keymap keymap-bind keymap-lookup))
+
+;;; ==========================================================================
+;;; Category: project — Persistent project resources
+;;; ==========================================================================
+
+(defdoc project
+  :category "project"
+  :usage "(make-project :name \"config\" :root #P\"~/.clawmacs.d/\")"
+  :returns "Structure — A named project resource root."
+  :see-also (define-project list-projects project-read-file))
+
+(defdoc make-project
+  :category "project"
+  :usage "(make-project :name NAME :root ROOT :description TEXT :source SOURCE)"
+  :returns "project — A project structure."
+  :see-also (project register-project define-project))
+
+(defdoc project-name
+  :category "project"
+  :usage "(project-name PROJECT)"
+  :returns "string — Project display name."
+  :see-also (find-project list-projects))
+
+(defdoc project-root
+  :category "project"
+  :usage "(project-root PROJECT)"
+  :returns "pathname — Root directory for project resources."
+  :see-also (project-resolve-path define-project))
+
+(defdoc project-description
+  :category "project"
+  :usage "(project-description PROJECT)"
+  :returns "string or nil — Human description for selectors and docs."
+  :see-also (define-project create-project))
+
+(defdoc project-source
+  :category "project"
+  :usage "(project-source PROJECT)"
+  :returns "keyword — :PROGRAMMATIC, :MANIFEST, or :BUILTIN."
+  :see-also (load-project-definitions reload-projects))
+
+(defdoc *project-definitions-directory*
+  :category "project"
+  :usage "Pathname — defaults to ~/.clawmacs.projects.d/."
+  :see-also (load-project-definitions create-project))
+
+(defdoc *project-registry*
+  :category "project"
+  :usage "Hash table keyed by normalized project name."
+  :see-also (register-project find-project list-projects))
+
+(defdoc *project-manifest-extension*
+  :category "project"
+  :usage "String — extension for inert project manifests."
+  :see-also (create-project load-project-definitions))
+
+(defdoc *project-ignored-directory-names*
+  :category "project"
+  :usage "List of directory names skipped by project traversal."
+  :see-also (project-list-files project-search))
+
+(defdoc *project-list-file-limit*
+  :category "project"
+  :usage "Integer or nil — default PROJECT-LIST-FILES result limit."
+  :see-also (project-list-files))
+
+(defdoc *project-search-result-limit*
+  :category "project"
+  :usage "Integer or nil — default PROJECT-SEARCH match limit."
+  :see-also (project-search))
+
+(defdoc define-project
+  :category "project"
+  :usage "(define-project \"name\" :root #P\"/path/\" :description \"...\")"
+  :returns "project — The registered project."
+  :side-effects "Registers a project for the current process."
+  :see-also (create-project register-project find-project))
+
+(defdoc create-project
+  :category "project"
+  :usage "(create-project \"name\" :root #P\"/path/\" :description \"...\" :persist nil)"
+  :returns "project — The created project."
+  :side-effects "Creates the root directory when needed and persists an inert manifest by default."
+  :see-also (define-project load-project-definitions *project-definitions-directory*))
+
+(defdoc register-project
+  :category "project"
+  :usage "(register-project PROJECT &key REPLACE)"
+  :returns "project — The registered or preserved project."
+  :side-effects "Mutates *project-registry*."
+  :see-also (project define-project list-projects))
+
+(defdoc find-project
+  :category "project"
+  :usage "(find-project \"config\")"
+  :returns "project or nil — The matching project."
+  :see-also (list-projects define-project))
+
+(defdoc list-projects
+  :category "project"
+  :usage "(list-projects)"
+  :returns "list of projects — Registered projects sorted by name."
+  :see-also (find-project load-project-definitions))
+
+(defdoc load-project-definitions
+  :category "project"
+  :usage "(load-project-definitions)"
+  :returns "list of projects — Loaded project registry."
+  :side-effects "Loads inert manifests and ensures the config project."
+  :see-also (reload-projects *project-definitions-directory*))
+
+(defdoc reload-projects
+  :category "project"
+  :usage "(reload-projects)"
+  :returns "list of projects — Reloaded project registry."
+  :side-effects "Reloads manifest and builtin projects while preserving programmatic projects."
+  :see-also (load-project-definitions define-project))
+
+(defdoc project-resolve-path
+  :category "project"
+  :usage "(project-resolve-path \"project\" \"relative/path\")"
+  :returns "pathname — Resolved path inside the project root."
+  :see-also (project-read-file project-save-file))
+
+(defdoc project-list-files
+  :category "project"
+  :usage "(project-list-files \"project\" :limit 100)"
+  :returns "list of strings — Project-relative file paths."
+  :see-also (project-read-file project-search))
+
+(defdoc project-read-file
+  :category "project"
+  :usage "(project-read-file \"project\" \"path\")"
+  :returns "string — Resource contents."
+  :see-also (project-list-files project-save-file))
+
+(defdoc project-create-file
+  :category "project"
+  :usage "(project-create-file \"project\" \"path\" :content \"...\" :if-exists :supersede)"
+  :returns "plist — Save summary."
+  :side-effects "Creates a project resource; by default errors if it exists."
+  :see-also (project-save-file project-open-file))
+
+(defdoc project-save-file
+  :category "project"
+  :usage "(project-save-file \"project\" \"path\" TEXT)"
+  :returns "plist — Save summary."
+  :side-effects "Writes TEXT to a project resource."
+  :see-also (project-read-file project-save-buffer))
+
+(defdoc project-search
+  :category "project"
+  :usage "(project-search \"project\" \"query\" :limit 20)"
+  :returns "list of plists — Each result has :PATH, :LINE, and :TEXT."
+  :see-also (project-search-to-string project-list-files))
+
+(defdoc project-search-to-string
+  :category "project"
+  :usage "(project-search-to-string \"project\" \"query\")"
+  :returns "string — Agent-readable search results."
+  :see-also (project-search))
+
+(defdoc project-open-file
+  :category "project"
+  :usage "(project-open-file \"project\" \"path\")"
+  :returns "buffer — Editable file buffer for the resource."
+  :side-effects "Creates or switches to a project-backed file buffer."
+  :see-also (file-buffer-text project-save-buffer))
+
+(defdoc find-project-file-buffer
+  :category "project"
+  :usage "(find-project-file-buffer \"project\" \"path\")"
+  :returns "buffer or nil — Existing open file buffer."
+  :see-also (project-open-file file-buffer-p))
+
+(defdoc project-save-buffer
+  :category "project"
+  :usage "(project-save-buffer &optional BUFFER)"
+  :returns "plist — Save summary."
+  :side-effects "Writes a project-backed file buffer and clears its dirty flag."
+  :see-also (project-open-file file-buffer-text buffer-dirty-p))
 
 ;;; ==========================================================================
 ;;; Category: llm — LLM configuration, authentication, and API
@@ -2211,6 +2442,95 @@ documentation in *extended-docs*."
   :side-effects "Rewrites PATH after validating the edited source."
   :see-also (sexed-barf-forward sexed-barf-forward-message-form))
 
+(defdoc sexed-project-outline-to-string
+  :category "sexed"
+  :usage "(sexed-project-outline-to-string PROJECT PATH &rest OPTIONS)"
+  :returns "string — sexed outline for a project resource."
+  :side-effects "Reads the resource through the project abstraction."
+  :see-also (project-read-file sexed-outline-to-string sexed-project-form-text))
+
+(defdoc sexed-project-form-text
+  :category "sexed"
+  :usage "(sexed-project-form-text PROJECT PATH SELECTOR)"
+  :returns "string — Exact source text for SELECTOR in a project resource."
+  :side-effects "Reads the resource through the project abstraction."
+  :see-also (sexed-form-text sexed-project-outline-to-string))
+
+(defdoc sexed-replace-project-form
+  :category "sexed"
+  :usage "(sexed-replace-project-form PROJECT PATH SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites the project resource after validating the edited source."
+  :see-also (sexed-replace-form project-save-file))
+
+(defdoc sexed-delete-project-form
+  :category "sexed"
+  :usage "(sexed-delete-project-form PROJECT PATH SELECTOR)"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites the project resource after validating the edited source."
+  :see-also (sexed-delete-form sexed-replace-project-form))
+
+(defdoc sexed-insert-before-project-form
+  :category "sexed"
+  :usage "(sexed-insert-before-project-form PROJECT PATH SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites the project resource after validating the edited source."
+  :see-also (sexed-insert-after-project-form sexed-insert-project-form-before))
+
+(defdoc sexed-insert-after-project-form
+  :category "sexed"
+  :usage "(sexed-insert-after-project-form PROJECT PATH SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites the project resource after validating the edited source."
+  :see-also (sexed-insert-before-project-form sexed-insert-project-form-after))
+
+(defdoc sexed-insert-project-form-before
+  :category "sexed"
+  :usage "(sexed-insert-project-form-before PROJECT PATH SELECTOR NEW-TEXT)"
+  :returns "plist — Alias for sexed-insert-before-project-form."
+  :see-also (sexed-insert-before-project-form))
+
+(defdoc sexed-insert-project-form-after
+  :category "sexed"
+  :usage "(sexed-insert-project-form-after PROJECT PATH SELECTOR NEW-TEXT)"
+  :returns "plist — Alias for sexed-insert-after-project-form."
+  :see-also (sexed-insert-after-project-form))
+
+(defdoc sexed-wrap-project-form
+  :category "sexed"
+  :usage "(sexed-wrap-project-form PROJECT PATH SELECTOR PREFIX SUFFIX)"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites the project resource after validating the edited source."
+  :see-also (sexed-wrap-form sexed-splice-project-form))
+
+(defdoc sexed-splice-project-form
+  :category "sexed"
+  :usage "(sexed-splice-project-form PROJECT PATH SELECTOR)"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites the project resource after validating the edited source."
+  :see-also (sexed-splice-form sexed-wrap-project-form))
+
+(defdoc sexed-raise-project-form
+  :category "sexed"
+  :usage "(sexed-raise-project-form PROJECT PATH SELECTOR CHILD-SELECTOR)"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites the project resource after validating the edited source."
+  :see-also (sexed-raise-form))
+
+(defdoc sexed-slurp-forward-project-form
+  :category "sexed"
+  :usage "(sexed-slurp-forward-project-form PROJECT PATH SELECTOR &key COUNT)"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites the project resource after validating the edited source."
+  :see-also (sexed-slurp-forward sexed-barf-forward-project-form))
+
+(defdoc sexed-barf-forward-project-form
+  :category "sexed"
+  :usage "(sexed-barf-forward-project-form PROJECT PATH SELECTOR &key COUNT)"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites the project resource after validating the edited source."
+  :see-also (sexed-barf-forward sexed-slurp-forward-project-form))
+
 (defdoc sexed-replace-message-form
   :category "sexed"
   :usage "(sexed-replace-message-form MESSAGE SELECTOR NEW-TEXT)"
@@ -2668,10 +2988,38 @@ documentation in *extended-docs*."
 
 (defdoc save-session-command
   :category "buffer-command"
-  :usage "Bound to C-x C-s. Saves the current buffer's conversation."
+  :usage "Bound to C-x C-s. Saves the current file buffer or chat session."
   :returns "nil"
-  :side-effects "Writes conversation to JSON file. Inserts confirmation system message."
-  :see-also (save-session load-session *sessions-dir*))
+  :side-effects "Writes project file text or conversation JSON. Inserts confirmation system message."
+  :see-also (project-save-buffer save-session load-session *sessions-dir*))
+
+(defdoc minibuffer-select-project-command
+  :category "buffer-command"
+  :usage "Bound to C-x p. Selects the active project for the current chat buffer."
+  :returns "nil"
+  :side-effects "Updates buffer-project-name and buffer-working-directory."
+  :see-also (list-projects buffer-project-name open-project-file-command))
+
+(defdoc open-project-file-command
+  :category "buffer-command"
+  :usage "Bound to C-x C-f. Opens a project file via minibuffer completion."
+  :returns "nil"
+  :side-effects "Creates or switches to a project-backed file buffer."
+  :see-also (project-open-file minibuffer-select-project-command))
+
+(defdoc create-project-file-command
+  :category "buffer-command"
+  :usage "M-x create-project-file-command prompts for project and path."
+  :returns "nil"
+  :side-effects "Creates a project resource and opens it as a file buffer."
+  :see-also (project-create-file project-open-file))
+
+(defdoc search-project-command
+  :category "buffer-command"
+  :usage "M-x search-project-command prompts for project and query."
+  :returns "nil"
+  :side-effects "Inserts search results as a system message."
+  :see-also (project-search-to-string project-search))
 
 (defdoc toggle-tool-results-command
   :category "buffer-command"

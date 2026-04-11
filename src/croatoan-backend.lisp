@@ -257,8 +257,8 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
 ;;; Buffer Rendering
 ;;; --------------------------------------------------------------------------
 
-(defun render-scratch-buffer (buf main-window modeline-window)
-  "Render scratch BUF as a full-window editable text buffer."
+(defun render-document-buffer (buf main-window modeline-window)
+  "Render BUF as a full-window editable document buffer."
   (let* ((height (croatoan:height main-window))
          (width (croatoan:width main-window))
          (row 0))
@@ -282,9 +282,9 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
 (defun render-buffer (buf main-window modeline-window)
   "Render the entire buffer: history + input into MAIN-WINDOW, modeline.
 Respects buffer-scroll-offset for history scrolling."
-  (when (scratch-buffer-p buf)
+  (when (document-buffer-p buf)
     (return-from render-buffer
-      (render-scratch-buffer buf main-window modeline-window)))
+      (render-document-buffer buf main-window modeline-window)))
   (let* ((total-height (croatoan:height main-window))
          (width (croatoan:width main-window))
          (input-height (calculate-input-height buf total-height width))

@@ -461,9 +461,9 @@ When the minibuffer is active, draws a centered popup overlay on top."
 
 (defun mcclim-render-buffer (pane buf rows cols char-w char-h)
   "Render the full buffer: title bar at row 0, then history + input below."
-  (when (scratch-buffer-p buf)
+  (when (document-buffer-p buf)
     (return-from mcclim-render-buffer
-      (mcclim-render-scratch-buffer pane buf rows cols char-w char-h)))
+      (mcclim-render-document-buffer pane buf rows cols char-w char-h)))
   (let* ((total-height (1- rows))
          (width cols)
          (input-height (calculate-input-height buf total-height width))
@@ -524,8 +524,8 @@ When the minibuffer is active, draws a centered popup overlay on top."
                                      input-start-row cols char-w char-h
                                      :show-cursor t :max-rows rows))))
 
-(defun mcclim-render-scratch-buffer (pane buf rows cols char-w char-h)
-  "Render scratch BUF as a full-pane editable text buffer."
+(defun mcclim-render-document-buffer (pane buf rows cols char-w char-h)
+  "Render BUF as a full-pane editable document buffer."
   (clear-pane-with-ink pane *mcclim-bg-ink*)
   (let ((row 0))
     (loop :for msg := (buffer-first-message buf) :then (message-next msg)

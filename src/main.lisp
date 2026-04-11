@@ -730,7 +730,7 @@ If so, call the handler and return T. Otherwise return NIL."
 (defcommand send-message (:permission :user-only :keys (#\Return))
   "Send the current input message to the agent."
   (buffer)
-  (if (scratch-buffer-p buffer)
+  (if (document-buffer-p buffer)
       (insert-newline-command buffer)
       (let ((input-text (message-text (buffer-input-message buffer))))
         (when (plusp (length (string-trim '(#\Space #\Tab #\Newline) input-text)))
@@ -744,7 +744,8 @@ If so, call the handler and return T. Otherwise return NIL."
 (defcommand insert-newline-command (:permission :user-only :keys (#\Linefeed))
   "Insert a newline in the input message."
   (buffer)
-  (message-insert-newline (buffer-input-message buffer)))
+  (message-insert-newline (buffer-input-message buffer))
+  (mark-buffer-dirty buffer))
 
 (defcommand beginning-of-line-command (:permission :user-only)
   "Move point to the beginning of the current line."
@@ -759,22 +760,26 @@ If so, call the handler and return T. Otherwise return NIL."
 (defcommand kill-line-command (:permission :user-only)
   "Kill from point to the end of the line."
   (buffer)
-  (message-kill-line (buffer-input-message buffer)))
+  (message-kill-line (buffer-input-message buffer))
+  (mark-buffer-dirty buffer))
 
 (defcommand yank-command (:permission :user-only)
   "Yank the top of the kill ring at point."
   (buffer)
-  (message-yank (buffer-input-message buffer)))
+  (message-yank (buffer-input-message buffer))
+  (mark-buffer-dirty buffer))
 
 (defcommand delete-char-backward-command (:permission :user-only)
   "Delete the character before point."
   (buffer)
-  (message-delete-char-backward (buffer-input-message buffer)))
+  (message-delete-char-backward (buffer-input-message buffer))
+  (mark-buffer-dirty buffer))
 
 (defcommand delete-char-forward-command (:permission :user-only)
   "Delete the character after point."
   (buffer)
-  (message-delete-char-forward (buffer-input-message buffer)))
+  (message-delete-char-forward (buffer-input-message buffer))
+  (mark-buffer-dirty buffer))
 
 (defcommand forward-char-command (:permission :user-only)
   "Move point one character forward."
@@ -799,22 +804,26 @@ If so, call the handler and return T. Otherwise return NIL."
 (defcommand kill-backward-line-command (:permission :user-only)
   "Kill from start of line to point."
   (buffer)
-  (message-kill-backward-line (buffer-input-message buffer)))
+  (message-kill-backward-line (buffer-input-message buffer))
+  (mark-buffer-dirty buffer))
 
 (defcommand kill-word-command (:permission :user-only)
   "Kill from point to end of current word."
   (buffer)
-  (message-kill-word (buffer-input-message buffer)))
+  (message-kill-word (buffer-input-message buffer))
+  (mark-buffer-dirty buffer))
 
 (defcommand backward-kill-word-command (:permission :user-only)
   "Kill from beginning of current word to point."
   (buffer)
-  (message-backward-kill-word (buffer-input-message buffer)))
+  (message-backward-kill-word (buffer-input-message buffer))
+  (mark-buffer-dirty buffer))
 
 (defcommand yank-pop-command (:permission :user-only)
   "Replace just-yanked text with next kill ring entry."
   (buffer)
-  (message-yank-pop (buffer-input-message buffer)))
+  (message-yank-pop (buffer-input-message buffer))
+  (mark-buffer-dirty buffer))
 
 (defun message-insert-string (msg text)
   "Insert TEXT at point in MSG."
@@ -829,20 +838,23 @@ If so, call the handler and return T. Otherwise return NIL."
   (buffer)
   (let ((arg (buffer-previous-command-first-argument buffer)))
     (when arg
-      (message-insert-string (buffer-input-message buffer) arg))))
+      (message-insert-string (buffer-input-message buffer) arg)
+      (mark-buffer-dirty buffer))))
 
 (defcommand yank-previous-command-last-arg-command (:permission :user-only)
   "Insert the last argument of the previous user command."
   (buffer)
   (let ((arg (buffer-previous-command-last-argument buffer)))
     (when arg
-      (message-insert-string (buffer-input-message buffer) arg))))
+      (message-insert-string (buffer-input-message buffer) arg)
+      (mark-buffer-dirty buffer))))
 
 (defcommand self-insert-command (:permission :user-only :interactive nil)
   "Insert a character at point. The character is passed via *self-insert-char*."
   (buffer)
   (when *self-insert-char*
-    (message-insert-char (buffer-input-message buffer) *self-insert-char*)))
+    (message-insert-char (buffer-input-message buffer) *self-insert-char*)
+    (mark-buffer-dirty buffer)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Scroll Commands
@@ -904,6 +916,147 @@ If so, call the handler and return T. Otherwise return NIL."
   (setf *buffer-selector-active* t
         *buffer-selector-index* 0
         *buffer-selector-scroll* 0))
+
+;;; --------------------------------------------------------------------------
+;;; Project Commands
+;;; --------------------------------------------------------------------------
+
+(defun ensure-projects-for-ui ()
+  "Ensure project definitions are loaded before project UI commands run."
+  (unless *project-definitions-loaded-p*
+    (load-project-definitions))
+  (list-projects))
+
+(defun project-selector-items (&optional active-project-name)
+  "Return minibuffer project selector items."
+  (mapcar (lambda (project)
+            (let* ((name (project-name project))
+                   (active-p (and active-project-name
+                                  (string= name active-project-name)))
+                   (display (format nil "~A ~A  [~(~A~)] ~A"
+                                    (if active-p "*" " ")
+                                    name
+                                    (or (project-source project) :unknown)
+                                    (namestring (project-root project)))))
+              (list :project project
+                    :project-name name
+                    :active-p active-p
+                    :display display
+                    :match-text (format nil "~A ~A ~A"
+                                        name
+                                        (or (project-description project) "")
+                                        (namestring (project-root project))))))
+          (ensure-projects-for-ui)))
+
+(defun minibuffer-choose-project (buffer prompt callback)
+  "Prompt for a project, then call CALLBACK with the selected project."
+  (let ((items (project-selector-items (buffer-project-name buffer))))
+    (if items
+        (progn
+          (minibuffer-activate prompt items
+                               (lambda (item)
+                                 (funcall callback (getf item :project))))
+          (preselect-minibuffer-active-item items))
+        (buffer-insert-system-message buffer "[No projects available.]"))))
+
+(defun project-file-selector-items (project)
+  "Return minibuffer file selector items for PROJECT."
+  (mapcar (lambda (path)
+            (list :project project
+                  :path path
+                  :display path
+                  :match-text path))
+          (project-list-files project)))
+
+(defun minibuffer-open-project-file (buffer project)
+  "Prompt for a file in PROJECT and open it."
+  (let ((items (project-file-selector-items project)))
+    (if items
+        (minibuffer-activate
+         (format nil "Open ~A" (project-name project))
+         items
+         (lambda (item)
+           (handler-case
+               (project-open-file (getf item :project) (getf item :path))
+             (error (e)
+               (buffer-insert-system-message
+                buffer
+                (format nil "[Open project file failed: ~A]" e))))))
+        (buffer-insert-system-message
+         buffer
+         (format nil "[Project ~A has no files.]" (project-name project))))))
+
+(defun current-buffer-project (buffer)
+  "Return BUFFER's selected project, or NIL."
+  (and (buffer-project-name buffer)
+       (find-project (buffer-project-name buffer))))
+
+(defcommand minibuffer-select-project-command (:permission :user-only)
+  "Select the active project for the current buffer."
+  (buffer)
+  (if (file-buffer-p buffer)
+      (buffer-insert-system-message
+       buffer
+       "[File buffers keep the project of their backing resource.]")
+      (minibuffer-choose-project
+       buffer
+       "Select Project"
+       (lambda (project)
+         (setf (buffer-project-name buffer) (project-name project)
+               (buffer-working-directory buffer) (project-root project))
+         (buffer-insert-system-message
+          buffer
+          (format nil "[Project changed to ~A]" (project-name project)))))))
+
+(defcommand open-project-file-command (:permission :user-only)
+  "Open a file from the current or selected project."
+  (buffer)
+  (let ((project (current-buffer-project buffer)))
+    (if project
+        (minibuffer-open-project-file buffer project)
+        (minibuffer-choose-project buffer
+                                   "Select Project"
+                                   (lambda (selected-project)
+                                     (minibuffer-open-project-file
+                                      buffer selected-project))))))
+
+(defcommand create-project-file-command (:permission :user-only)
+  "Create and open a new file in a selected project."
+  (buffer)
+  (minibuffer-choose-project
+   buffer
+   "Select Project"
+   (lambda (project)
+     (minibuffer-prompt
+      (format nil "Create in ~A" (project-name project))
+      (lambda (path)
+        (handler-case
+            (progn
+              (project-create-file project path)
+              (project-open-file project path))
+          (error (e)
+            (buffer-insert-system-message
+             buffer
+             (format nil "[Create project file failed: ~A]" e)))))))))
+
+(defcommand search-project-command (:permission :user-only)
+  "Search a selected project and insert the result list."
+  (buffer)
+  (minibuffer-choose-project
+   buffer
+   "Select Project"
+   (lambda (project)
+     (minibuffer-prompt
+      (format nil "Search ~A" (project-name project))
+      (lambda (query)
+        (handler-case
+            (buffer-insert-system-message
+             buffer
+             (project-search-to-string project query))
+          (error (e)
+            (buffer-insert-system-message
+             buffer
+             (format nil "[Search project failed: ~A]" e)))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Model Selection Commands
@@ -1267,17 +1420,26 @@ to navigate. Shows buffer name, agent, status, and message count."
 ;;; --------------------------------------------------------------------------
 
 (defcommand save-session-command (:permission :user-only)
-  "Save the current buffer's conversation to a session file."
+  "Save the current buffer's persistent state."
   (buffer)
-  (if (scratch-buffer-p buffer)
-      (buffer-insert-system-message
-       buffer
-       "[Scratch buffer is not saved; it lasts only until Clawmacs exits.]")
-      (let ((path (save-session buffer)))
-        ;; Insert a system message confirming the save
-        (let ((sys-msg (buffer-insert-agent-message
-                        buffer (format nil "[Session saved to ~A]" path))))
-          (setf (message-sender sys-msg) :system)))))
+  (cond
+    ((file-buffer-p buffer)
+     (let ((summary (project-save-buffer buffer)))
+       (buffer-insert-system-message
+        buffer
+        (format nil "[Saved ~A:~A]"
+                (getf summary :project)
+                (getf summary :path)))))
+    ((scratch-buffer-p buffer)
+     (buffer-insert-system-message
+      buffer
+      "[Scratch buffer is not saved; it lasts only until Clawmacs exits.]"))
+    (t
+     (let ((path (save-session buffer)))
+       ;; Insert a system message confirming the save
+       (let ((sys-msg (buffer-insert-agent-message
+                       buffer (format nil "[Session saved to ~A]" path))))
+         (setf (message-sender sys-msg) :system))))))
 
 (defcommand execute-extended-command (:permission :user-only
                                       :keys ((:alt #\x)))
@@ -3223,6 +3385,7 @@ Environment variables:
   ;; may still override it directly or reload after changing the path.
   (load-personality-prompt-file)
   (load-user-init-file)
+  (load-project-definitions)
   (run-hook-list '*startup-hook* *startup-hook*))
 
 (defun reset-interaction-state ()

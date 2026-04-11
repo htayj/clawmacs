@@ -326,8 +326,10 @@ MAJOR-MODE is displayed on the far left (e.g. \"chat\", \"buffer-selector\").
 PROVIDER-MODEL is the provider/model string (e.g. \"zai/glm-5\");
 when nil it is resolved from the buffer's agent defaults."
   (let* ((pm (or provider-model (resolve-modeline-provider-model buf)))
-         (left (format nil " [~A] ~A | ~A | ~A | ~A"
+         (dirty-marker (if (and buf (buffer-dirty-p buf)) "*" ""))
+         (left (format nil " [~A~A] ~A | ~A | ~A | ~A"
                        major-mode
+                       dirty-marker
                        (buffer-name buf)
                        (buffer-agent-name buf)
                        pm
@@ -390,6 +392,9 @@ Mode dispatch priority matches handle-key-event in main.lisp."
         ((and buf (scratch-buffer-p buf))
          (setf row1 " Scratch buffer: edit freely  RET: newline"
                row2 " C-x b/C-x C-b: switch  C-l: redraw"))
+        ((and buf (file-buffer-p buf))
+         (setf row1 " File buffer: edit freely  RET: newline  C-x C-s: save"
+               row2 " C-x C-f: open project file  C-x b/C-x C-b: switch"))
         (t
          (setf row1 " RET: send  C-o: newline  C-k: kill  C-y: yank  PgUp/Dn: scroll"
                row2 " C-x C-b: buffers  C-c A: agent  C-c C-m: model  C-c C-r: think  C-l: redraw  C-x C-c: quit")))

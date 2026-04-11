@@ -927,6 +927,85 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
                      (lambda (text)
                        (sexed-barf-forward text selector :count count))))
 
+(defun sexed-update-project-file (project path edit-fn)
+  "Apply EDIT-FN to PROJECT/PATH, save the result, and return a summary."
+  (let* ((old-text (project-read-file project path))
+         (new-text (funcall edit-fn old-text))
+         (summary (project-save-file project path new-text)))
+    (append summary (list :balanced t))))
+
+(defun sexed-project-outline-to-string (project path &rest options)
+  "Return a sexed outline for PROJECT/PATH."
+  (apply #'sexed-outline-to-string (project-read-file project path) options))
+
+(defun sexed-project-form-text (project path selector)
+  "Return source text for SELECTOR in PROJECT/PATH."
+  (sexed-form-text (project-read-file project path) selector))
+
+(defun sexed-replace-project-form (project path selector new-text)
+  "Replace SELECTOR in PROJECT/PATH with NEW-TEXT and return a summary plist."
+  (sexed-update-project-file project path
+                             (lambda (text)
+                               (sexed-replace-form text selector new-text))))
+
+(defun sexed-delete-project-form (project path selector)
+  "Delete SELECTOR in PROJECT/PATH and return a summary plist."
+  (sexed-update-project-file project path
+                             (lambda (text)
+                               (sexed-delete-form text selector))))
+
+(defun sexed-insert-before-project-form (project path selector new-text)
+  "Insert NEW-TEXT before SELECTOR in PROJECT/PATH and return a summary plist."
+  (sexed-update-project-file project path
+                             (lambda (text)
+                               (sexed-insert-before-form text selector new-text))))
+
+(defun sexed-insert-after-project-form (project path selector new-text)
+  "Insert NEW-TEXT after SELECTOR in PROJECT/PATH and return a summary plist."
+  (sexed-update-project-file project path
+                             (lambda (text)
+                               (sexed-insert-after-form text selector new-text))))
+
+(defun sexed-insert-project-form-before (project path selector new-text)
+  "Alias for SEXED-INSERT-BEFORE-PROJECT-FORM with natural command ordering."
+  (sexed-insert-before-project-form project path selector new-text))
+
+(defun sexed-insert-project-form-after (project path selector new-text)
+  "Alias for SEXED-INSERT-AFTER-PROJECT-FORM with natural command ordering."
+  (sexed-insert-after-project-form project path selector new-text))
+
+(defun sexed-wrap-project-form (project path selector prefix suffix)
+  "Wrap SELECTOR in PROJECT/PATH with PREFIX and SUFFIX."
+  (sexed-update-project-file project path
+                             (lambda (text)
+                               (sexed-wrap-form text selector prefix suffix))))
+
+(defun sexed-splice-project-form (project path selector)
+  "Splice SELECTOR in PROJECT/PATH and return a summary plist."
+  (sexed-update-project-file project path
+                             (lambda (text)
+                               (sexed-splice-form text selector))))
+
+(defun sexed-raise-project-form (project path selector child-selector)
+  "Raise CHILD-SELECTOR out of SELECTOR in PROJECT/PATH."
+  (sexed-update-project-file project path
+                             (lambda (text)
+                               (sexed-raise-form text selector child-selector))))
+
+(defun sexed-slurp-forward-project-form (project path selector &key (count 1))
+  "Slurp following forms into SELECTOR in PROJECT/PATH."
+  (sexed-update-project-file project path
+                             (lambda (text)
+                               (sexed-slurp-forward text selector
+                                                     :count count))))
+
+(defun sexed-barf-forward-project-form (project path selector &key (count 1))
+  "Barf trailing child forms out of SELECTOR in PROJECT/PATH."
+  (sexed-update-project-file project path
+                             (lambda (text)
+                               (sexed-barf-forward text selector
+                                                   :count count))))
+
 (defun sexed-update-message (message edit-fn)
   "Apply EDIT-FN to editable MESSAGE text and return a summary plist."
   (when (message-read-only-p message)

@@ -184,6 +184,31 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 - Return a string or data structure from the evaluated form. Prefer `(format nil ...)` over
   `format t`, because printed stdout is not captured by `lisp_eval`.
 
+## Project resources
+
+- Use project resource functions for persistent workspace changes instead of direct filesystem
+  reads or writes.
+- `(list-projects)` returns registered projects. Each project has `project-name`, `project-root`,
+  `project-description`, and `project-source`.
+- `(define-project \"NAME\" :root #P\"/path/to/root/\")` registers a project for this process.
+- `(create-project \"NAME\" :root #P\"/path/to/root/\")` creates a project and writes an inert
+  manifest into `*project-definitions-directory*`; use `:persist nil` for temporary projects.
+- Project manifests are data files under `*project-definitions-directory*`, which defaults to
+  `~/.clawmacs.projects.d/` and may be customized in init.lisp.
+- The user's Clawmacs configuration directory is always available as the `config` project unless
+  init.lisp defines a project named `config` first.
+- `(project-list-files \"PROJECT\")` lists project-relative resource paths.
+- `(project-read-file \"PROJECT\" \"PATH\")` reads a project resource as text.
+- `(project-search-to-string \"PROJECT\" \"QUERY\")` searches project resources and returns
+  `path:line: text` matches.
+- `(project-create-file \"PROJECT\" \"PATH\" :content \"...\" :if-exists :supersede)` creates or
+  replaces a project resource. Omit `:if-exists` when you need an error on existing files.
+- `(project-save-file \"PROJECT\" \"PATH\" TEXT)` saves text to a project resource.
+- `(project-open-file \"PROJECT\" \"PATH\")` opens a project resource as an editable file buffer.
+- For open file buffers, use `(file-buffer-text BUFFER)` and `(setf (file-buffer-text BUFFER) ...)`,
+  then `(project-save-buffer BUFFER)`.
+- Project resource paths are relative to their project and cannot use absolute paths or `..`.
+
 ## Structural editing with sexed
 
 - Use the `sexed-*` functions for Lisp source edits instead of raw string replacement.
@@ -193,8 +218,12 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 - `(sexed-form-text TEXT '(:head \"defun\" :name \"NAME\"))` returns one selected form.
 - `(sexed-replace-form TEXT SELECTOR NEW-TEXT)` and related pure edit functions return updated
   text only after validating that the full result remains balanced.
-- `(sexed-file-outline-to-string \"PATH\" :head \"defun\")` and
-  `(sexed-replace-file-form \"PATH\" SELECTOR NEW-TEXT)` are sandbox-aware file adapters.
+- Prefer project-aware adapters for persistent source edits:
+  `(sexed-project-outline-to-string \"PROJECT\" \"PATH\" :head \"defun\")`,
+  `(sexed-project-form-text \"PROJECT\" \"PATH\" SELECTOR)`, and
+  `(sexed-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)`.
+- Direct file adapters such as `(sexed-file-outline-to-string \"PATH\")` remain available for
+  sandbox-local compatibility, but project adapters are the default for agent work.
 - For scratch buffer edits, prefer scratch adapters:
   `(sexed-replace-scratch-form SELECTOR NEW-TEXT)`,
   `(sexed-insert-after-scratch-form SELECTOR NEW-TEXT)`, and

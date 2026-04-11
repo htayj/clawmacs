@@ -47,6 +47,26 @@
                       :initform (truename ".")
                       :type pathname
                       :documentation "Working directory for shell commands and file operations.")
+   (project-name      :initarg :project-name
+                      :accessor buffer-project-name
+                      :initform nil
+                      :type (or null string)
+                      :documentation "Project name associated with this buffer, when any.")
+   (resource-path     :initarg :resource-path
+                      :accessor buffer-resource-path
+                      :initform nil
+                      :type (or null string)
+                      :documentation "Project-relative resource path associated with this buffer, when any.")
+   (original-text     :initarg :original-text
+                      :accessor buffer-original-text
+                      :initform ""
+                      :type string
+                      :documentation "Last saved text for project-backed editable buffers.")
+   (dirty-p           :initarg :dirty-p
+                      :accessor buffer-dirty-p
+                      :initform nil
+                      :type boolean
+                      :documentation "True when a project-backed editable buffer has unsaved changes.")
    (token-count       :initarg :token-count
                       :accessor buffer-token-count
                       :initform 0
@@ -149,12 +169,20 @@ Enforces the invariant that it is not read-only."
 (declaim (ftype (function (string &key (:agent-name string)
                                        (:kind keyword)
                                        (:working-directory pathname)
+                                       (:project-name (or null string))
+                                       (:resource-path (or null string))
+                                       (:original-text string)
+                                       (:dirty-p boolean)
                                        (:context-limit integer))
                           buffer)
                 make-buffer))
 (defun make-buffer (name &key (agent-name *default-agent-name*)
                               (kind :chat)
                               (working-directory (truename "."))
+                              project-name
+                              resource-path
+                              (original-text "")
+                              (dirty-p nil)
                               (context-limit *default-context-limit*))
   "Create a new buffer with a single empty input message."
   (let* ((input-msg (make-message :user))
@@ -166,6 +194,10 @@ Enforces the invariant that it is not read-only."
                 :agent-name agent-name
                 :kind kind
                 :working-directory working-directory
+                :project-name project-name
+                :resource-path resource-path
+                :original-text original-text
+                :dirty-p dirty-p
                 :context-limit context-limit
                 :face-registry registry)))
     buf))
@@ -174,6 +206,17 @@ Enforces the invariant that it is not read-only."
 (defun scratch-buffer-p (buf)
   "Return true when BUF is the process-local scratch buffer."
   (eq (buffer-kind buf) :scratch))
+
+(declaim (ftype (function (buffer) boolean) file-buffer-p))
+(defun file-buffer-p (buf)
+  "Return true when BUF is a project-backed editable file buffer."
+  (eq (buffer-kind buf) :file))
+
+(declaim (ftype (function (buffer) boolean) document-buffer-p))
+(defun document-buffer-p (buf)
+  "Return true when BUF is an editable document buffer rather than a chat buffer."
+  (or (scratch-buffer-p buf)
+      (file-buffer-p buf)))
 
 (declaim (ftype (function (buffer) fixnum) buffer-message-count))
 (defun buffer-message-count (buf)
@@ -296,6 +339,30 @@ Enforces the invariant that it is not read-only."
   (unless (scratch-buffer-p buf)
     (error "Not a scratch buffer: ~A" (buffer-name buf)))
   (set-message-text (buffer-input-message buf) text))
+
+(defun file-buffer-text (&optional (buf (current-buffer)))
+  "Return BUF's editable file text, or nil when BUF is nil."
+  (when buf
+    (unless (file-buffer-p buf)
+      (error "Not a file buffer: ~A" (buffer-name buf)))
+    (message-text (buffer-input-message buf))))
+
+(defun (setf file-buffer-text) (text &optional (buf (current-buffer)))
+  "Replace BUF's editable file text and update its dirty state."
+  (unless buf
+    (error "No file buffer is current"))
+  (unless (file-buffer-p buf)
+    (error "Not a file buffer: ~A" (buffer-name buf)))
+  (set-message-text (buffer-input-message buf) text)
+  (setf (buffer-dirty-p buf)
+        (not (string= text (buffer-original-text buf))))
+  text)
+
+(defun mark-buffer-dirty (buf)
+  "Mark BUF dirty when it is a project-backed file buffer."
+  (when (file-buffer-p buf)
+    (setf (buffer-dirty-p buf) t))
+  buf)
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Operations
