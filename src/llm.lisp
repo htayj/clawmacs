@@ -295,6 +295,13 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 - Direct project writes such as `project-save-file`, `project-create-file`, and applied change
   sets synchronize any already-open buffer for the same resource so retries do not edit stale text.
 - Project resource paths are relative to their project and cannot use absolute paths or `..`.
+- Do not guess project file paths. Before editing an unfamiliar project area, call
+  `(project-list-files \"PROJECT\")`, `(project-search-to-string \"PROJECT\" \"QUERY\")`, or the
+  project code-intelligence helpers to find the exact resource.
+- After any project edit, immediately read back each edited resource with
+  `(project-read-file \"PROJECT\" \"PATH\")` or a structure-aware read helper and verify the expected
+  text is present. If a TODO was completed, read back `todo.org` and verify that exact item is
+  marked `DONE` before claiming completion.
 - For durable coding work, prefer transactional change sets over immediate writes:
   `(begin-change-set :name \"short-name\")`,
   `(stage-project-file \"PROJECT\" \"PATH\" TEXT)`,
