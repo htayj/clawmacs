@@ -2014,6 +2014,243 @@ documentation in *extended-docs*."
   :see-also (describe-system-to-string describe-library-symbol-to-string list-project-systems))
 
 ;;; ==========================================================================
+;;; Category: sexed — Agent-oriented s-expression editing
+;;; ==========================================================================
+
+(defdoc sexed-balanced-p
+  :category "sexed"
+  :usage "(sexed-balanced-p TEXT) — (sexed-balanced-p \"(foo)\")"
+  :returns "boolean — T when TEXT has balanced s-expression structure."
+  :see-also (sexed-diagnostics sexed-outline-to-string))
+
+(defdoc sexed-diagnostics
+  :category "sexed"
+  :usage "(sexed-diagnostics TEXT) — (sexed-diagnostics \"(foo\")"
+  :returns "list of plists — Each diagnostic includes :kind, :position, and :message."
+  :see-also (sexed-balanced-p sexed-find-forms))
+
+(defdoc sexed-find-forms
+  :category "sexed"
+  :usage "(sexed-find-forms TEXT &key HEAD NAME DEPTH MAX-DEPTH CONTAINING NTH INCLUDE-ATOMS LIMIT)"
+  :returns "list of plists — Matching forms with :id, :type, :depth, :head, :name, source span, and preview."
+  :see-also (sexed-form-text sexed-outline-to-string))
+
+(defdoc sexed-form-text
+  :category "sexed"
+  :usage "(sexed-form-text TEXT SELECTOR) — (sexed-form-text text '(:head \"defun\" :name \"foo\"))"
+  :returns "string — Exact source text for one selected form."
+  :see-also (sexed-find-forms sexed-replace-form))
+
+(defdoc sexed-outline-to-string
+  :category "sexed"
+  :usage "(sexed-outline-to-string TEXT &key DEPTH MAX-DEPTH HEAD LIMIT PREVIEW-CHARS)"
+  :returns "string — Agent-readable outline of form ids, depths, heads, names, spans, and previews."
+  :see-also (sexed-find-forms sexed-file-outline-to-string))
+
+(defdoc sexed-replace-form
+  :category "sexed"
+  :usage "(sexed-replace-form TEXT SELECTOR NEW-TEXT)"
+  :returns "string — Edited TEXT with SELECTOR replaced by NEW-TEXT."
+  :side-effects "None. Signals an error if NEW-TEXT or the result is unbalanced."
+  :see-also (sexed-delete-form sexed-replace-file-form sexed-replace-message-form))
+
+(defdoc sexed-delete-form
+  :category "sexed"
+  :usage "(sexed-delete-form TEXT SELECTOR)"
+  :returns "string — Edited TEXT with SELECTOR removed."
+  :side-effects "None. Signals an error if the result is unbalanced."
+  :see-also (sexed-replace-form sexed-delete-file-form sexed-delete-message-form))
+
+(defdoc sexed-insert-before-form
+  :category "sexed"
+  :usage "(sexed-insert-before-form TEXT SELECTOR NEW-TEXT)"
+  :returns "string — Edited TEXT with NEW-TEXT inserted before SELECTOR."
+  :side-effects "None. Signals an error if NEW-TEXT or the result is unbalanced."
+  :see-also (sexed-insert-after-form sexed-insert-before-file-form sexed-insert-before-message-form))
+
+(defdoc sexed-insert-after-form
+  :category "sexed"
+  :usage "(sexed-insert-after-form TEXT SELECTOR NEW-TEXT)"
+  :returns "string — Edited TEXT with NEW-TEXT inserted after SELECTOR."
+  :side-effects "None. Signals an error if NEW-TEXT or the result is unbalanced."
+  :see-also (sexed-insert-before-form sexed-insert-after-file-form sexed-insert-after-message-form))
+
+(defdoc sexed-wrap-form
+  :category "sexed"
+  :usage "(sexed-wrap-form TEXT SELECTOR PREFIX SUFFIX)"
+  :returns "string — Edited TEXT with SELECTOR wrapped by PREFIX and SUFFIX."
+  :side-effects "None. Signals an error if the result is unbalanced."
+  :see-also (sexed-splice-form sexed-wrap-file-form sexed-wrap-message-form))
+
+(defdoc sexed-splice-form
+  :category "sexed"
+  :usage "(sexed-splice-form TEXT SELECTOR)"
+  :returns "string — Edited TEXT with SELECTOR's outer list delimiters removed."
+  :side-effects "None. Signals an error for non-list selectors or unbalanced results."
+  :see-also (sexed-wrap-form sexed-splice-file-form sexed-splice-message-form))
+
+(defdoc sexed-raise-form
+  :category "sexed"
+  :usage "(sexed-raise-form TEXT SELECTOR CHILD-SELECTOR)"
+  :returns "string — Edited TEXT with SELECTOR replaced by one selected descendant."
+  :side-effects "None. Signals an error if either selector is ambiguous or the result is unbalanced."
+  :see-also (sexed-splice-form sexed-raise-file-form sexed-raise-message-form))
+
+(defdoc sexed-slurp-forward
+  :category "sexed"
+  :usage "(sexed-slurp-forward TEXT SELECTOR &key COUNT)"
+  :returns "string — Edited TEXT with following sibling forms moved inside SELECTOR."
+  :side-effects "None. Signals an error if SELECTOR has too few following siblings."
+  :see-also (sexed-barf-forward sexed-slurp-forward-file-form sexed-slurp-forward-message-form))
+
+(defdoc sexed-barf-forward
+  :category "sexed"
+  :usage "(sexed-barf-forward TEXT SELECTOR &key COUNT)"
+  :returns "string — Edited TEXT with trailing child forms moved out after SELECTOR."
+  :side-effects "None. Signals an error if SELECTOR would become empty or the result is unbalanced."
+  :see-also (sexed-slurp-forward sexed-barf-forward-file-form sexed-barf-forward-message-form))
+
+(defdoc sexed-file-outline-to-string
+  :category "sexed"
+  :usage "(sexed-file-outline-to-string PATH &rest OPTIONS)"
+  :returns "string — sexed outline for PATH."
+  :side-effects "Reads PATH after sandbox validation."
+  :see-also (sexed-outline-to-string sexed-file-form-text))
+
+(defdoc sexed-file-form-text
+  :category "sexed"
+  :usage "(sexed-file-form-text PATH SELECTOR)"
+  :returns "string — Exact source text for SELECTOR in PATH."
+  :side-effects "Reads PATH after sandbox validation."
+  :see-also (sexed-form-text sexed-file-outline-to-string))
+
+(defdoc sexed-replace-file-form
+  :category "sexed"
+  :usage "(sexed-replace-file-form PATH SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites PATH after validating the edited source."
+  :see-also (sexed-replace-form sexed-replace-message-form))
+
+(defdoc sexed-delete-file-form
+  :category "sexed"
+  :usage "(sexed-delete-file-form PATH SELECTOR)"
+  :returns "plist — :status, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites PATH after validating the edited source."
+  :see-also (sexed-delete-form sexed-delete-message-form))
+
+(defdoc sexed-insert-before-file-form
+  :category "sexed"
+  :usage "(sexed-insert-before-file-form PATH SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites PATH after validating the edited source."
+  :see-also (sexed-insert-before-form sexed-insert-before-message-form))
+
+(defdoc sexed-insert-after-file-form
+  :category "sexed"
+  :usage "(sexed-insert-after-file-form PATH SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites PATH after validating the edited source."
+  :see-also (sexed-insert-after-form sexed-insert-after-message-form))
+
+(defdoc sexed-wrap-file-form
+  :category "sexed"
+  :usage "(sexed-wrap-file-form PATH SELECTOR PREFIX SUFFIX)"
+  :returns "plist — :status, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites PATH after validating the edited source."
+  :see-also (sexed-wrap-form sexed-wrap-message-form))
+
+(defdoc sexed-splice-file-form
+  :category "sexed"
+  :usage "(sexed-splice-file-form PATH SELECTOR)"
+  :returns "plist — :status, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites PATH after validating the edited source."
+  :see-also (sexed-splice-form sexed-splice-message-form))
+
+(defdoc sexed-raise-file-form
+  :category "sexed"
+  :usage "(sexed-raise-file-form PATH SELECTOR CHILD-SELECTOR)"
+  :returns "plist — :status, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites PATH after validating the edited source."
+  :see-also (sexed-raise-form sexed-raise-message-form))
+
+(defdoc sexed-slurp-forward-file-form
+  :category "sexed"
+  :usage "(sexed-slurp-forward-file-form PATH SELECTOR &key COUNT)"
+  :returns "plist — :status, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites PATH after validating the edited source."
+  :see-also (sexed-slurp-forward sexed-slurp-forward-message-form))
+
+(defdoc sexed-barf-forward-file-form
+  :category "sexed"
+  :usage "(sexed-barf-forward-file-form PATH SELECTOR &key COUNT)"
+  :returns "plist — :status, :path, :bytes-written, and :balanced."
+  :side-effects "Rewrites PATH after validating the edited source."
+  :see-also (sexed-barf-forward sexed-barf-forward-message-form))
+
+(defdoc sexed-replace-message-form
+  :category "sexed"
+  :usage "(sexed-replace-message-form MESSAGE SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :bytes-written, and :balanced."
+  :side-effects "Replaces MESSAGE text after validation. Signals an error for read-only messages."
+  :see-also (sexed-replace-form sexed-replace-file-form scratch-buffer-text))
+
+(defdoc sexed-delete-message-form
+  :category "sexed"
+  :usage "(sexed-delete-message-form MESSAGE SELECTOR)"
+  :returns "plist — :status, :bytes-written, and :balanced."
+  :side-effects "Replaces MESSAGE text after validation. Signals an error for read-only messages."
+  :see-also (sexed-delete-form sexed-delete-file-form))
+
+(defdoc sexed-insert-before-message-form
+  :category "sexed"
+  :usage "(sexed-insert-before-message-form MESSAGE SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :bytes-written, and :balanced."
+  :side-effects "Replaces MESSAGE text after validation. Signals an error for read-only messages."
+  :see-also (sexed-insert-before-form sexed-insert-before-file-form))
+
+(defdoc sexed-insert-after-message-form
+  :category "sexed"
+  :usage "(sexed-insert-after-message-form MESSAGE SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :bytes-written, and :balanced."
+  :side-effects "Replaces MESSAGE text after validation. Signals an error for read-only messages."
+  :see-also (sexed-insert-after-form sexed-insert-after-file-form))
+
+(defdoc sexed-wrap-message-form
+  :category "sexed"
+  :usage "(sexed-wrap-message-form MESSAGE SELECTOR PREFIX SUFFIX)"
+  :returns "plist — :status, :bytes-written, and :balanced."
+  :side-effects "Replaces MESSAGE text after validation. Signals an error for read-only messages."
+  :see-also (sexed-wrap-form sexed-wrap-file-form))
+
+(defdoc sexed-splice-message-form
+  :category "sexed"
+  :usage "(sexed-splice-message-form MESSAGE SELECTOR)"
+  :returns "plist — :status, :bytes-written, and :balanced."
+  :side-effects "Replaces MESSAGE text after validation. Signals an error for read-only messages."
+  :see-also (sexed-splice-form sexed-splice-file-form))
+
+(defdoc sexed-raise-message-form
+  :category "sexed"
+  :usage "(sexed-raise-message-form MESSAGE SELECTOR CHILD-SELECTOR)"
+  :returns "plist — :status, :bytes-written, and :balanced."
+  :side-effects "Replaces MESSAGE text after validation. Signals an error for read-only messages."
+  :see-also (sexed-raise-form sexed-raise-file-form))
+
+(defdoc sexed-slurp-forward-message-form
+  :category "sexed"
+  :usage "(sexed-slurp-forward-message-form MESSAGE SELECTOR &key COUNT)"
+  :returns "plist — :status, :bytes-written, and :balanced."
+  :side-effects "Replaces MESSAGE text after validation. Signals an error for read-only messages."
+  :see-also (sexed-slurp-forward sexed-slurp-forward-file-form))
+
+(defdoc sexed-barf-forward-message-form
+  :category "sexed"
+  :usage "(sexed-barf-forward-message-form MESSAGE SELECTOR &key COUNT)"
+  :returns "plist — :status, :bytes-written, and :balanced."
+  :side-effects "Replaces MESSAGE text after validation. Signals an error for read-only messages."
+  :see-also (sexed-barf-forward sexed-barf-forward-file-form))
+
+;;; ==========================================================================
 ;;; Category: type — Type definitions (classes, structures, conditions)
 ;;; ==========================================================================
 

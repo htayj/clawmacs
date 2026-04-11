@@ -26,6 +26,10 @@
   :description "Coalton-backed minibuffer matching tests"
   :in clawmacs-suite)
 
+(def-suite sexed-suite
+  :description "Agent-oriented s-expression editing tests"
+  :in clawmacs-suite)
+
 (def-suite package-manager-suite
   :description "Package loader tests"
   :in clawmacs-suite)

@@ -47,6 +47,27 @@ By default, agents are expected to search for symbols, inspect documentation, ca
 
 The =lisp_eval= tool is particularly powerful: the agent can introspect clawmacs itself, query buffer state, evaluate expressions, and modify the running system. Standard Common Lisp reference lookup is available through a vendored offline snapshot of =cl-community-spec=, and imported library discovery is handled locally through ASDF metadata, package exports, docstrings, and source/doc search helpers.
 
+** Agent Structural Editing
+
+Clawmacs includes =sexed=, an agent-oriented s-expression editor inspired by
+Paredit but exposed as Lisp functions instead of cursor commands. It lets agents
+inspect, select, and edit Lisp forms by structure while rejecting edits that
+would leave unbalanced text.
+
+#+begin_src lisp
+(sexed-file-outline-to-string "src/main.lisp" :head "defun" :limit 20)
+(sexed-file-form-text "src/main.lisp" '(:head "defun" :name "ensure-scratch-buffer"))
+(sexed-replace-file-form
+ "src/foo.lisp"
+ '(:head "defun" :name "foo")
+ "(defun foo () :ok)")
+#+end_src
+
+Selectors are plists such as =(:head "defun" :name "foo")=, =(:head "let*" :nth 0)=,
+or =(:id 7)=. The =:nth= selector is zero-based. Pure functions such as
+=sexed-replace-form= return edited strings; file and message adapters validate
+the full result before mutating files or editable clawmacs messages.
+
 ** Emacs-Style Interface
 
 Three-pane layout: main (chat history + input), modeline (status), minibuffer (prompts and completion).
@@ -279,6 +300,7 @@ src/
   matching.lisp        Common Lisp wrappers for minibuffer matching
   llm.lisp             Multi-provider LLM integration, streaming, OAuth
   tools.lisp           Agent tool definitions and execution
+  sexed.lisp           Agent-oriented structural s-expression editing
   ui-protocol.lisp     Abstract UI backend protocol
   render-core.lisp     Pure rendering geometry and formatting functions
   croatoan-backend.lisp  Terminal backend (ncurses via croatoan)

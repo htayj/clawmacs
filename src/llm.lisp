@@ -184,6 +184,21 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 - Return a string or data structure from the evaluated form. Prefer `(format nil ...)` over
   `format t`, because printed stdout is not captured by `lisp_eval`.
 
+## Structural editing with sexed
+
+- Use the `sexed-*` functions for Lisp source edits instead of raw string replacement.
+- `(sexed-outline-to-string TEXT :max-depth 2)` shows stable form ids, depths, heads, names,
+  spans, and previews.
+- `(sexed-find-forms TEXT :head \"defun\" :name \"NAME\")` finds forms by structure.
+- `(sexed-form-text TEXT '(:head \"defun\" :name \"NAME\"))` returns one selected form.
+- `(sexed-replace-form TEXT SELECTOR NEW-TEXT)` and related pure edit functions return updated
+  text only after validating that the full result remains balanced.
+- `(sexed-file-outline-to-string \"PATH\" :head \"defun\")` and
+  `(sexed-replace-file-form \"PATH\" SELECTOR NEW-TEXT)` are sandbox-aware file adapters.
+- For scratch or message text, use `(sexed-replace-message-form (buffer-input-message (scratch-buffer)) SELECTOR NEW-TEXT)`.
+- Selectors are plists such as `(:head \"defun\" :name \"foo\")`, `(:head \"let\" :nth 0)`,
+  or `(:id 7)`. `:nth` is zero-based.
+
 ## Updating runtime state
 
 - Use `(setf ...)` to change variables and slots when the task requires it.

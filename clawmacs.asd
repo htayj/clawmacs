@@ -23,6 +23,7 @@
                              (:file "croatoan-backend")
                              (:file "main")
                              (:file "reference")
+                             (:file "sexed")
                              (:file "docs")))))
 
 (defsystem "clawmacs/mcclim"
@@ -47,6 +48,7 @@
                               (:file "buffer-test")
                               (:file "commands-test")
                               (:file "matching-test")
+                              (:file "sexed-test")
                               (:file "llm-test")
                               (:file "keymap-test")
                               (:file "render-test")))))

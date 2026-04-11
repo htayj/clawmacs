@@ -309,6 +309,42 @@
    #:describe-library-symbol-to-string
    #:search-system-docs
 
+   ;; Sexed structural editing
+   #:sexed-balanced-p
+   #:sexed-diagnostics
+   #:sexed-find-forms
+   #:sexed-form-text
+   #:sexed-outline-to-string
+   #:sexed-replace-form
+   #:sexed-delete-form
+   #:sexed-insert-before-form
+   #:sexed-insert-after-form
+   #:sexed-wrap-form
+   #:sexed-splice-form
+   #:sexed-raise-form
+   #:sexed-slurp-forward
+   #:sexed-barf-forward
+   #:sexed-file-outline-to-string
+   #:sexed-file-form-text
+   #:sexed-replace-file-form
+   #:sexed-delete-file-form
+   #:sexed-insert-before-file-form
+   #:sexed-insert-after-file-form
+   #:sexed-wrap-file-form
+   #:sexed-splice-file-form
+   #:sexed-raise-file-form
+   #:sexed-slurp-forward-file-form
+   #:sexed-barf-forward-file-form
+   #:sexed-replace-message-form
+   #:sexed-delete-message-form
+   #:sexed-insert-before-message-form
+   #:sexed-insert-after-message-form
+   #:sexed-wrap-message-form
+   #:sexed-splice-message-form
+   #:sexed-raise-message-form
+   #:sexed-slurp-forward-message-form
+   #:sexed-barf-forward-message-form
+
    ;; Approval
    #:buffer-approval-pending
    #:buffer-approval-result
