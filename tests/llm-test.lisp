@@ -262,14 +262,16 @@
 
 (test build-agent-system-prompt-composes-boot-core-and-personality
   "Agent prompts are composed in boot -> core -> personality order."
-  (with-agent-definition-registry-override ()
-    (clawmacs:register-agent-definition
-     "pair"
-     :core-prompt "PAIR CORE"
-     :personality-prompt "PAIR PERSONALITY")
-    (with-function-override (clawmacs::load-boot-files ()
-                              "BOOT PREFIX")
-      (is (string= "BOOT PREFIX
+  (with-isolated-skills (root)
+    root
+    (with-agent-definition-registry-override ()
+      (clawmacs:register-agent-definition
+       "pair"
+       :core-prompt "PAIR CORE"
+       :personality-prompt "PAIR PERSONALITY")
+      (with-function-override (clawmacs::load-boot-files ()
+                                "BOOT PREFIX")
+        (is (string= "BOOT PREFIX
 
 ---
 
@@ -278,7 +280,7 @@ PAIR CORE
 ---
 
 PAIR PERSONALITY"
-                   (clawmacs:build-agent-system-prompt "pair"))))))
+                     (clawmacs:build-agent-system-prompt "pair")))))))
 
 (test build-agent-system-prompt-falls-back-to-default-components
   "Missing agent prompt slots fall back to the default core and personality prompts."

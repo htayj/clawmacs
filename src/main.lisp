@@ -1137,6 +1137,294 @@ If so, call the handler and return T. Otherwise return NIL."
              :include-enabled-marker include-enabled-marker))
           (list-skills :include-disabled include-disabled)))
 
+;;; --------------------------------------------------------------------------
+;;; Automatic Skill Completion
+;;; --------------------------------------------------------------------------
+
+(defvar *automatic-skill-completion-enabled* t
+  "When non-nil, typing $NAME in supported buffers opens skill completion.")
+
+(defvar *skill-completion-enabled-buffer-kinds* '(:chat)
+  "Buffer kinds where automatic skill completion is enabled.
+Set this to T to enable automatic completion in every buffer kind, or NIL
+to disable it without changing *AUTOMATIC-SKILL-COMPLETION-ENABLED*.")
+
+(defvar *skill-completion-max-height* 12
+  "Maximum rows used by automatic skill completion, including the prompt row.")
+
+(defvar *skill-completion-active* nil
+  "When non-nil, automatic skill completion candidates are visible.")
+
+(defvar *skill-completion-buffer* nil
+  "Buffer whose input currently owns automatic skill completion state.")
+
+(defvar *skill-completion-query* ""
+  "Current query text after the $ prefix.")
+
+(defvar *skill-completion-token-start* 0
+  "Start offset of the active $skill token on the current input line.")
+
+(defvar *skill-completion-token-end* 0
+  "End offset of the active $skill token on the current input line.")
+
+(defvar *skill-completion-token-text* nil
+  "Exact active $skill token text, including the leading $.")
+
+(defvar *skill-completion-dismissed-token* nil
+  "Exact token text dismissed by the user. Reopens after the token changes.")
+
+(defvar *skill-completion-items* nil
+  "All automatic skill completion candidate items.")
+
+(defvar *skill-completion-filtered-items* nil
+  "Automatic skill completion candidates matching *SKILL-COMPLETION-QUERY*.")
+
+(defvar *skill-completion-match-positions* nil
+  "Fuzzy match positions parallel to *SKILL-COMPLETION-FILTERED-ITEMS*.")
+
+(defvar *skill-completion-selected-index* 0
+  "Index of the selected automatic skill completion candidate.")
+
+(defvar *skill-completion-scroll-offset* 0
+  "First visible automatic skill completion candidate index.")
+
+(defun skill-completion-buffer-kind-enabled-p (kind)
+  "Return true when KIND is configured for automatic skill completion."
+  (or (eq *skill-completion-enabled-buffer-kinds* t)
+      (member kind *skill-completion-enabled-buffer-kinds* :test #'eq)))
+
+(defun skill-completion-enabled-for-buffer-p (buffer)
+  "Return true when automatic skill completion should scan BUFFER."
+  (and *automatic-skill-completion-enabled*
+       buffer
+       (skill-completion-buffer-kind-enabled-p (buffer-kind buffer))
+       (not *minibuffer-active*)
+       (not *buffer-selector-active*)
+       (not *model-selector-active*)
+       (not *think-selector-active*)
+       (not *customize-face-state*)
+       (not *openai-oauth-pending*)
+       (not *deny-message-mode*)
+       (not (buffer-approval-pending buffer))))
+
+(defun skill-completion-whitespace-char-p (char)
+  "Return true when CHAR separates input tokens for automatic completion."
+  (member char '(#\Space #\Tab #\Newline #\Return) :test #'char=))
+
+(defun skill-completion-token-char-p (char)
+  "Return true when CHAR can occur after $ in an automatic skill token."
+  (mention-name-char-p char))
+
+(defun current-skill-mention-token (message)
+  "Return values QUERY START END TOKEN for the $token at MESSAGE point.
+Returns NIL values when point is not inside a whitespace-delimited token that
+starts with $ and contains only skill mention characters after it."
+  (let* ((line (message-point-line message))
+         (content (and line (line-content line)))
+         (point (and content
+                     (max 0 (min (message-point-offset message)
+                                 (length content))))))
+    (when content
+      (let ((start point)
+            (end point))
+        (loop :while (and (plusp start)
+                          (not (skill-completion-whitespace-char-p
+                                (char content (1- start)))))
+              :do (decf start))
+        (loop :while (and (< end (length content))
+                          (not (skill-completion-whitespace-char-p
+                                (char content end))))
+              :do (incf end))
+        (when (and (< start end)
+                   (char= (char content start) #\$)
+                   (loop :for idx :from (1+ start) :below end
+                         :always (skill-completion-token-char-p
+                                  (char content idx))))
+          (let ((token (subseq content start end)))
+            (values (subseq token 1) start end token)))))))
+
+(defun skill-completion-update-filter ()
+  "Recompute automatic skill completion candidates for the active query."
+  (let ((query *skill-completion-query*))
+    (cond
+      ((zerop (length query))
+       (setf *skill-completion-filtered-items*
+             (copy-list *skill-completion-items*)
+             *skill-completion-match-positions*
+             (make-list (length *skill-completion-items*)
+                        :initial-element nil)))
+      (t
+       (let* ((matched (remove-if-not
+                        (lambda (item)
+                          (fuzzy-match-p query
+                                         (minibuffer-item-match-text item)))
+                        *skill-completion-items*))
+              (scored (mapcar (lambda (item)
+                                (cons (or (fuzzy-score
+                                           query
+                                           (minibuffer-item-match-text item))
+                                          0)
+                                      item))
+                              matched))
+              (sorted (stable-sort scored #'> :key #'car))
+              (sorted-items (mapcar #'cdr sorted)))
+         (setf *skill-completion-filtered-items* sorted-items
+               *skill-completion-match-positions*
+               (mapcar (lambda (item)
+                         (fuzzy-match-positions
+                          query
+                          (minibuffer-item-match-text item)))
+                       sorted-items))))))
+  (setf *skill-completion-selected-index*
+        (max 0 (min *skill-completion-selected-index*
+                    (1- (max 1 (length *skill-completion-filtered-items*))))))
+  (setf *skill-completion-scroll-offset* 0)
+  (skill-completion-ensure-visible))
+
+(defun skill-completion-visible-item-count ()
+  "Return candidate rows visible in the automatic skill completion popup."
+  (max 0
+       (1- (min *skill-completion-max-height*
+                (1+ (max 1 (length *skill-completion-filtered-items*)))))))
+
+(defun skill-completion-ensure-visible ()
+  "Adjust automatic skill completion scroll so the selection is visible."
+  (let ((visible (skill-completion-visible-item-count)))
+    (when (plusp visible)
+      (when (< *skill-completion-selected-index*
+               *skill-completion-scroll-offset*)
+        (setf *skill-completion-scroll-offset*
+              *skill-completion-selected-index*))
+      (when (>= *skill-completion-selected-index*
+                (+ *skill-completion-scroll-offset* visible))
+        (setf *skill-completion-scroll-offset*
+              (1+ (- *skill-completion-selected-index* visible)))))))
+
+(defun skill-completion-next-item ()
+  "Move automatic skill completion selection down one candidate."
+  (when (< *skill-completion-selected-index*
+           (1- (length *skill-completion-filtered-items*)))
+    (incf *skill-completion-selected-index*)
+    (skill-completion-ensure-visible)))
+
+(defun skill-completion-prev-item ()
+  "Move automatic skill completion selection up one candidate."
+  (when (plusp *skill-completion-selected-index*)
+    (decf *skill-completion-selected-index*)
+    (skill-completion-ensure-visible)))
+
+(defun deactivate-skill-completion (&key dismissed-token)
+  "Hide automatic skill completion and optionally remember DISMISSED-TOKEN."
+  (setf *skill-completion-active* nil
+        *skill-completion-buffer* nil
+        *skill-completion-query* ""
+        *skill-completion-token-start* 0
+        *skill-completion-token-end* 0
+        *skill-completion-token-text* nil
+        *skill-completion-items* nil
+        *skill-completion-filtered-items* nil
+        *skill-completion-match-positions* nil
+        *skill-completion-selected-index* 0
+        *skill-completion-scroll-offset* 0
+        *skill-completion-dismissed-token* dismissed-token))
+
+(defun sync-skill-completion (buffer)
+  "Synchronize automatic skill completion state with BUFFER's current input."
+  (unless (skill-completion-enabled-for-buffer-p buffer)
+    (deactivate-skill-completion)
+    (return-from sync-skill-completion nil))
+  (multiple-value-bind (query start end token)
+      (current-skill-mention-token (buffer-input-message buffer))
+    (cond
+      ((null token)
+       (deactivate-skill-completion))
+      ((and *skill-completion-dismissed-token*
+            (string= token *skill-completion-dismissed-token*))
+       (deactivate-skill-completion :dismissed-token token))
+      (t
+       (setf *skill-completion-dismissed-token* nil)
+       (let ((items (skill-selector-items)))
+         (if items
+             (progn
+               (setf *skill-completion-active* t
+                     *skill-completion-buffer* buffer
+                     *skill-completion-query* query
+                     *skill-completion-token-start* start
+                     *skill-completion-token-end* end
+                     *skill-completion-token-text* token
+                     *skill-completion-items* items)
+               (skill-completion-update-filter))
+             (deactivate-skill-completion)))))))
+
+(defun insert-selected-skill-completion (buffer)
+  "Replace the active $token in BUFFER with the selected skill mention."
+  (let ((item (when (plusp (length *skill-completion-filtered-items*))
+                (nth *skill-completion-selected-index*
+                     *skill-completion-filtered-items*))))
+    (unless item
+      (deactivate-skill-completion)
+      (return-from insert-selected-skill-completion nil))
+    (multiple-value-bind (query start end token)
+        (current-skill-mention-token (buffer-input-message buffer))
+      (declare (ignore query token))
+      (if (null start)
+          (deactivate-skill-completion)
+          (let* ((message (buffer-input-message buffer))
+                 (line (message-point-line message))
+                 (content (line-content line))
+                 (mention (skill-mention-text (getf item :skill)))
+                 (inserted (concatenate 'string mention " "))
+                 (replacement (concatenate 'string
+                                           (subseq content 0 start)
+                                           inserted
+                                           (subseq content end))))
+            (setf (line-content line) replacement
+                  (message-point-offset message) (+ start (length inserted)))
+            (mark-buffer-dirty buffer)
+            (deactivate-skill-completion)
+            t)))))
+
+(defun skill-completion-base-key (key)
+  "Return KEY without simple prefix wrappers used by completion handlers."
+  (if (and (listp key) (= (length key) 2)
+           (member (first key) '(:alt :ctrl-x :ctrl-c)))
+      (second key)
+      key))
+
+(defun handle-skill-completion-key (buffer key)
+  "Handle KEY for the automatic skill completion popup.
+Returns true when KEY was consumed by completion."
+  (unless (eq buffer *skill-completion-buffer*)
+    (deactivate-skill-completion)
+    (return-from handle-skill-completion-key nil))
+  (let ((base-key (skill-completion-base-key key)))
+    (cond
+      ((or (eq base-key :escape)
+           (and (characterp base-key)
+                (or (char= base-key #\Esc)
+                    (char= base-key (code-char 7)))))
+       (deactivate-skill-completion
+        :dismissed-token *skill-completion-token-text*)
+       t)
+      ((and (characterp base-key)
+            (or (char= base-key #\Return)
+                (char= base-key #\Newline)
+                (char= base-key #\Tab)))
+       (insert-selected-skill-completion buffer)
+       t)
+      ((eq base-key :tab)
+       (insert-selected-skill-completion buffer)
+       t)
+      ((or (eq base-key :down)
+           (and (characterp base-key) (char= base-key (code-char 14))))
+       (skill-completion-next-item)
+       t)
+      ((or (eq base-key :up)
+           (and (characterp base-key) (char= base-key (code-char 16))))
+       (skill-completion-prev-item)
+       t)
+      (t nil))))
+
 (defcommand minibuffer-insert-skill-command (:permission :user-only)
   "Select a skill and insert an exact $skill mention into the input."
   (buffer)
@@ -2898,6 +3186,7 @@ If ITEM is a string, returns it directly. Otherwise returns the :display plist v
                             &key (mode :completion) (initial-input ""))
   "Activate the minibuffer with PROMPT text, a list of candidate ITEMS,
 and a CALLBACK function to call on confirmation."
+  (deactivate-skill-completion)
   (setf *minibuffer-active* t
         *minibuffer-mode* mode
         *minibuffer-prompt* prompt
@@ -3284,7 +3573,12 @@ KEY is already normalized by the backend before calling this."
            (or (and (characterp candidate)
                     (char= candidate (code-char 12)))
                (equal candidate '(:ctrl #\l))
-               (equal candidate '(:ctrl #\L)))))
+               (equal candidate '(:ctrl #\L))))
+         (sync-current-skill-completion ()
+           (let ((current (current-buffer)))
+             (if (and current (not (eq current buf)))
+                 (deactivate-skill-completion)
+                 (sync-skill-completion buf)))))
   (let ((*current-caller* :user))
     (when (null key)
       (return-from handle-key-event nil))
@@ -3381,6 +3675,13 @@ KEY is already normalized by the backend before calling this."
             (setf *deny-message-mode* t))))
        nil)
 
+      ;; === AUTOMATIC SKILL COMPLETION ===
+      ;; Completion is non-modal for normal typing, but selected navigation and
+      ;; confirmation keys are consumed before the chat keymap can send input.
+      ((and *skill-completion-active*
+            (handle-skill-completion-key buf key))
+       nil)
+
       ;; === NORMAL MODE ===
       ;; Keymap lookup
       ((let ((command (keymap-lookup (buffer-keymap buf) key)))
@@ -3391,12 +3692,14 @@ KEY is already normalized by the backend before calling this."
            (when (and (characterp key)
                       (not (member command '(scroll-up-command scroll-down-command))))
              (setf (buffer-scroll-offset buf) 0))
+           (sync-current-skill-completion)
            t)))
       ;; Self-insert
       ((and (characterp key) (graphic-char-p key))
        (let ((*self-insert-char* key))
        (self-insert-command buf))
        (setf (buffer-scroll-offset buf) 0)
+       (sync-current-skill-completion)
        nil)
       (t nil)))))
 
@@ -3546,6 +3849,7 @@ Environment variables:
         *minibuffer-selected-index* 0
         *minibuffer-scroll-offset* 0
         *minibuffer-callback* nil)
+  (deactivate-skill-completion)
   (setf *openai-oauth-pending* nil)
   (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil *ch-pending* nil))
 

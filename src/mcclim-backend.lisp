@@ -436,8 +436,8 @@ When the minibuffer is active, draws a centered popup overlay on top."
           (t
            (mcclim-render-buffer pane (current-buffer) rows cols
                                  char-w char-h)))
-        ;; Popup overlay for minibuffer completion
-        (when *minibuffer-active*
+        ;; Popup overlay for minibuffer and automatic skill completion.
+        (when (or *minibuffer-active* *skill-completion-active*)
           (mcclim-render-completion-popup pane cols rows char-w char-h))))))
 
 ;;; --------------------------------------------------------------------------
@@ -1040,18 +1040,32 @@ into spans and draws each span as a single draw-text-at call."
       (flush-span len))))
 
 (defun mcclim-render-completion-popup (pane cols rows char-w char-h)
-  "Render a centered popup overlay for minibuffer completion on the main pane.
-Drawn on top of existing buffer content when *minibuffer-active* is true.
+  "Render a centered popup overlay for completion on the main pane.
+Drawn on top of existing buffer content when minibuffer or skill completion is
+active.
 Uses span-batched drawing for fuzzy-match highlighting instead of per-character."
-  (let* ((items *minibuffer-filtered-items*)
-         (positions *minibuffer-match-positions*)
-         (selected *minibuffer-selected-index*)
-         (scroll *minibuffer-scroll-offset*)
+  (let* ((skill-popup-p (and (not *minibuffer-active*) *skill-completion-active*))
+         (items (if skill-popup-p
+                    *skill-completion-filtered-items*
+                    *minibuffer-filtered-items*))
+         (positions (if skill-popup-p
+                        *skill-completion-match-positions*
+                        *minibuffer-match-positions*))
+         (selected (if skill-popup-p
+                       *skill-completion-selected-index*
+                       *minibuffer-selected-index*))
+         (scroll (if skill-popup-p
+                     *skill-completion-scroll-offset*
+                     *minibuffer-scroll-offset*))
          (total (length items))
          ;; Popup dimensions
          (popup-w (min (- cols 4) (max 40 (floor (* cols 3) 5))))
-         (max-item-rows (min (or *minibuffer-max-height* 12) (- rows 4)))
-         (item-rows (min total max-item-rows))
+         (max-height (if skill-popup-p
+                         *skill-completion-max-height*
+                         *minibuffer-max-height*))
+         (max-item-rows (max 0 (min (or max-height 12) (- rows 4))))
+         (display-total (if skill-popup-p (max 1 total) total))
+         (item-rows (min display-total max-item-rows))
          (popup-h (+ 1 item-rows))  ; 1 prompt row + items
          ;; Center position
          (popup-left (floor (- cols popup-w) 2))
@@ -1074,8 +1088,13 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
     (clim:draw-rectangle* pane px-left px-top px-right px-bottom
                           :ink border-ink :filled nil)
     ;; Prompt row: "prompt: input" with block cursor
-    (let* ((prompt-str (format nil "~A: " *minibuffer-prompt*))
-           (input *minibuffer-input*)
+    (let* ((prompt-str (if skill-popup-p "Skill: " (format nil "~A: " *minibuffer-prompt*)))
+           (input (if skill-popup-p
+                      (format nil "$~A" *skill-completion-query*)
+                      *minibuffer-input*))
+           (point (if skill-popup-p
+                      (length input)
+                      *minibuffer-point*))
            (prompt-line (concatenate 'string prompt-str input))
            (display-width (- popup-w 2))
            (visible (subseq prompt-line 0 (min (length prompt-line) display-width)))
@@ -1090,49 +1109,59 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
                               :ink popup-bg)
         (draw-text-at pane row col visible fg popup-bg ts char-w char-h))
       ;; Block cursor
-      (let ((cursor-col (+ col (length prompt-str) *minibuffer-point*)))
+      (let ((cursor-col (+ col (length prompt-str) point)))
         (when (< cursor-col (+ popup-left popup-w -1))
-          (let ((char-at-cursor (if (< *minibuffer-point* (length input))
-                                    (char input *minibuffer-point*)
+          (let ((char-at-cursor (if (< point (length input))
+                                    (char input point)
                                     #\Space)))
             (multiple-value-bind (fg bg ts) (resolve-global-face-inks :minibuffer-cursor)
               (draw-text-at pane row cursor-col (string char-at-cursor)
                             fg bg ts char-w char-h))))))
     ;; Candidate rows — batched span drawing instead of per-character
-    (loop :for row-idx :from 0 :below item-rows
-          :for item-idx := (+ scroll row-idx)
-          :while (< item-idx total)
-          :for item := (nth item-idx items)
-          :for row := (+ popup-top 1 row-idx)
-          :for display := (minibuffer-item-display item)
-          :for display-trimmed := (subseq display 0 (min (length display) (- popup-w 4)))
-          :for match-pos := (nth item-idx positions)
-          :for selected-p := (= item-idx selected)
-          :do
-             (let* ((base-face-name (if selected-p :minibuffer-selected :minibuffer-candidate))
-                    (match-face-name (if selected-p :minibuffer-selected-match :minibuffer-match))
-                    (match-set (when match-pos
-                                 (let ((ht (make-hash-table :test #'eql)))
-                                   (dolist (p match-pos ht)
-                                     (setf (gethash p ht) t))))))
-               (multiple-value-bind (base-fg base-bg base-ts)
-                   (resolve-global-face-inks base-face-name)
-                 ;; Fill row within popup
-                 (clim:draw-rectangle* pane
-                                       (+ px-left char-w) (* row char-h)
-                                       (- px-right char-w) (* (1+ row) char-h)
-                                       :ink base-bg)
-                 ;; Indent
-                 (draw-text-at pane row (+ popup-left 1) "  "
-                               base-fg base-bg base-ts char-w char-h)
-                 ;; Draw text with span-batched fuzzy match highlighting
-                 (multiple-value-bind (match-fg match-bg match-ts)
-                     (resolve-global-face-inks match-face-name)
-                   (draw-fuzzy-match-spans pane row (+ popup-left 3)
-                                           display-trimmed match-set
-                                           base-fg base-bg base-ts
-                                           match-fg match-bg match-ts
-                                           char-w char-h)))))))
+    (if (and skill-popup-p (zerop total) (plusp item-rows))
+        (multiple-value-bind (base-fg base-bg base-ts)
+            (resolve-global-face-inks :minibuffer-candidate)
+          (let ((row (+ popup-top 1)))
+            (clim:draw-rectangle* pane
+                                  (+ px-left char-w) (* row char-h)
+                                  (- px-right char-w) (* (1+ row) char-h)
+                                  :ink base-bg)
+            (draw-text-at pane row (+ popup-left 3) "No matching skills"
+                          base-fg base-bg base-ts char-w char-h)))
+        (loop :for row-idx :from 0 :below item-rows
+              :for item-idx := (+ scroll row-idx)
+              :while (< item-idx total)
+              :for item := (nth item-idx items)
+              :for row := (+ popup-top 1 row-idx)
+              :for display := (minibuffer-item-display item)
+              :for display-trimmed := (subseq display 0 (min (length display) (- popup-w 4)))
+              :for match-pos := (nth item-idx positions)
+              :for selected-p := (= item-idx selected)
+              :do
+                 (let* ((base-face-name (if selected-p :minibuffer-selected :minibuffer-candidate))
+                        (match-face-name (if selected-p :minibuffer-selected-match :minibuffer-match))
+                        (match-set (when match-pos
+                                     (let ((ht (make-hash-table :test #'eql)))
+                                       (dolist (p match-pos ht)
+                                         (setf (gethash p ht) t))))))
+                   (multiple-value-bind (base-fg base-bg base-ts)
+                       (resolve-global-face-inks base-face-name)
+                     ;; Fill row within popup
+                     (clim:draw-rectangle* pane
+                                           (+ px-left char-w) (* row char-h)
+                                           (- px-right char-w) (* (1+ row) char-h)
+                                           :ink base-bg)
+                     ;; Indent
+                     (draw-text-at pane row (+ popup-left 1) "  "
+                                   base-fg base-bg base-ts char-w char-h)
+                     ;; Draw text with span-batched fuzzy match highlighting
+                     (multiple-value-bind (match-fg match-bg match-ts)
+                         (resolve-global-face-inks match-face-name)
+                       (draw-fuzzy-match-spans pane row (+ popup-left 3)
+                                               display-trimmed match-set
+                                               base-fg base-bg base-ts
+                                               match-fg match-bg match-ts
+                                               char-w char-h))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Key Normalization (McCLIM-specific)

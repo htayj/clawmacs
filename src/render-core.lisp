@@ -656,9 +656,15 @@ LABEL is typically \"default\", \"low\", or another reasoning-effort value."
 (defun minibuffer-current-height ()
   "Return the current height of the minibuffer in rows.
 When inactive: 1 row. When active: prompt line + number of filtered items,
-capped at *minibuffer-max-height*."
-  (if *minibuffer-active*
-      (let ((item-count (length *minibuffer-filtered-items*)))
-        (min *minibuffer-max-height*
-             (1+ item-count)))
-      1))
+capped at *MINIBUFFER-MAX-HEIGHT*. Automatic skill completion uses the same
+bottom pane area, capped by *SKILL-COMPLETION-MAX-HEIGHT*."
+  (cond
+    (*minibuffer-active*
+     (let ((item-count (length *minibuffer-filtered-items*)))
+       (min *minibuffer-max-height*
+            (1+ item-count))))
+    (*skill-completion-active*
+     (let ((item-count (length *skill-completion-filtered-items*)))
+       (min *skill-completion-max-height*
+            (1+ (max 1 item-count)))))
+    (t 1)))

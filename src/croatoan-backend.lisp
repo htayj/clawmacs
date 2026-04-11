@@ -753,9 +753,13 @@ When active, shows the prompt with input and filtered completion candidates."
   (let ((width (croatoan:width minibuffer-window))
         (height (croatoan:height minibuffer-window)))
     (croatoan:clear minibuffer-window)
-    (if *minibuffer-active*
-        (render-minibuffer-active minibuffer-window width height)
-        (render-minibuffer-inactive minibuffer-window width))
+    (cond
+      (*minibuffer-active*
+       (render-minibuffer-active minibuffer-window width height))
+      (*skill-completion-active*
+       (render-skill-completion minibuffer-window width height))
+      (t
+       (render-minibuffer-inactive minibuffer-window width)))
     (croatoan:refresh minibuffer-window)))
 
 (defun render-minibuffer-inactive (window width)
@@ -851,6 +855,39 @@ Uses global faces: :minibuffer-prompt, :minibuffer-cursor,
             :do (render-minibuffer-candidate-row
                  window row display match-pos selected-p width)))))
 
+(defun render-skill-completion (window width height)
+  "Render automatic $skill completion in the minibuffer area."
+  (let* ((prompt-line (format nil "Skill: $~A  [RET/TAB insert  C-g/ESC close]"
+                              *skill-completion-query*))
+         (prompt-display (subseq prompt-line
+                                 0
+                                 (min (length prompt-line) width))))
+    (apply-global-face window :minibuffer-prompt)
+    (croatoan:move window 0 0)
+    (croatoan:add-string window (make-string width :initial-element #\Space))
+    (croatoan:move window 0 0)
+    (croatoan:add-string window prompt-display))
+  (when (> height 1)
+    (let* ((items *skill-completion-filtered-items*)
+           (positions *skill-completion-match-positions*)
+           (selected *skill-completion-selected-index*)
+           (scroll *skill-completion-scroll-offset*)
+           (visible-rows (1- height))
+           (total (length items)))
+      (if (zerop total)
+          (render-minibuffer-candidate-row
+           window 1 "No matching skills" nil nil width)
+          (loop :for row-idx :from 0 :below visible-rows
+                :for item-idx := (+ scroll row-idx)
+                :while (< item-idx total)
+                :for item := (nth item-idx items)
+                :for row := (1+ row-idx)
+                :for display := (minibuffer-item-display item)
+                :for match-pos := (nth item-idx positions)
+                :for selected-p := (= item-idx selected)
+                :do (render-minibuffer-candidate-row
+                     window row display match-pos selected-p width))))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Key Normalization (croatoan-specific)
 ;;; --------------------------------------------------------------------------
@@ -904,8 +941,11 @@ commands), or a list (:ctrl-c <key>) for C-c prefix (mode-specific commands)."
       ;; -- Raw prefix detection (first key of a chord) --
       ;; ESC received: set meta-pending, return nil (consume the ESC)
       ((and (characterp key) (char= key #\Esc))
-       (setf *meta-pending* t)
-       nil)
+       (if *skill-completion-active*
+           key
+           (progn
+             (setf *meta-pending* t)
+             nil)))
       ;; C-x received (ASCII 24): set cx-pending, return nil
       ((and (characterp key) (char= key (code-char 24)))
        (setf *cx-pending* t)

@@ -613,6 +613,9 @@
    #:*minibuffer-match-positions*
    #:*minibuffer-callback*
    #:*minibuffer-max-height*
+   #:*automatic-skill-completion-enabled*
+   #:*skill-completion-enabled-buffer-kinds*
+   #:*skill-completion-max-height*
    #:*model-selection-history*
    #:matching-core-available-p
    #:split-query-tokens

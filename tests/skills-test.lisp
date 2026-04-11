@@ -35,11 +35,27 @@
           (clawmacs::*programmatic-skills* nil)
           (clawmacs::*skill-registry* nil)
           (clawmacs::*skill-disabled-paths* nil)
+          (clawmacs::*buffer-ring* nil)
           (clawmacs::*minibuffer-active* nil)
           (clawmacs::*minibuffer-items* nil)
           (clawmacs::*minibuffer-filtered-items* nil)
           (clawmacs::*minibuffer-selected-index* 0)
-          (clawmacs::*minibuffer-callback* nil))
+          (clawmacs::*minibuffer-callback* nil)
+          (clawmacs::*automatic-skill-completion-enabled* t)
+          (clawmacs::*skill-completion-enabled-buffer-kinds* '(:chat))
+          (clawmacs::*skill-completion-max-height* 12)
+          (clawmacs::*skill-completion-active* nil)
+          (clawmacs::*skill-completion-buffer* nil)
+          (clawmacs::*skill-completion-query* "")
+          (clawmacs::*skill-completion-token-start* 0)
+          (clawmacs::*skill-completion-token-end* 0)
+          (clawmacs::*skill-completion-token-text* nil)
+          (clawmacs::*skill-completion-dismissed-token* nil)
+          (clawmacs::*skill-completion-items* nil)
+          (clawmacs::*skill-completion-filtered-items* nil)
+          (clawmacs::*skill-completion-match-positions* nil)
+          (clawmacs::*skill-completion-selected-index* 0)
+          (clawmacs::*skill-completion-scroll-offset* 0))
      (ensure-directories-exist
       (merge-pathnames #P".keep" clawmacs::*skill-user-directory*))
      (ensure-directories-exist
@@ -69,6 +85,21 @@ policy:
 ")
     (write-skill-test-file reference-path "A referenced guide with needle inside.")
     skill-path))
+
+(defun make-skill-completion-test-buffer (&key (kind :chat))
+  (clawmacs::init-default-keymap)
+  (let ((buf (make-buffer "skill-completion" :kind kind)))
+    (setf (buffer-keymap buf)
+          (if (eq kind :scratch)
+              clawmacs::*scratch-keymap*
+              clawmacs::*default-keymap*))
+    (clawmacs::add-buffer-to-ring buf)
+    buf))
+
+(defun type-skill-completion-text (buffer text)
+  (loop :for char :across text
+        :do (clawmacs::handle-key-event buffer char))
+  buffer)
 
 (test skill-root-discovery-loads-frontmatter-metadata-and-resources
   "Skills load from SKILL.md roots and expose local resource helpers."
@@ -215,3 +246,97 @@ policy:
       (clawmacs::minibuffer-confirm)
       (is (= 0 (length (list-skills))))
       (is (search "disabled" (message-text (message-prev (buffer-input-message buf))))))))
+
+(test automatic-skill-completion-opens-on-dollar
+  "Typing $ in chat input opens automatic skill completion."
+  (with-isolated-skills (root)
+    (write-demo-skill root)
+    (register-skill-root root)
+    (let ((buf (make-skill-completion-test-buffer)))
+      (clawmacs::handle-key-event buf #\$)
+      (is (eq t clawmacs::*skill-completion-active*))
+      (is (eq buf clawmacs::*skill-completion-buffer*))
+      (is (string= "" clawmacs::*skill-completion-query*))
+      (is (= 1 (length clawmacs::*skill-completion-filtered-items*))))))
+
+(test automatic-skill-completion-filters-while-typing-in-input
+  "Automatic skill completion filters without stealing typed input."
+  (with-isolated-skills (root)
+    (write-demo-skill root :name "needle")
+    (write-demo-skill root :name "other" :description "Other skill")
+    (register-skill-root root)
+    (let ((buf (make-skill-completion-test-buffer)))
+      (type-skill-completion-text buf "$nee")
+      (is (string= "$nee" (message-text (buffer-input-message buf))))
+      (is (eq t clawmacs::*skill-completion-active*))
+      (is (string= "nee" clawmacs::*skill-completion-query*))
+      (is (plusp (length clawmacs::*skill-completion-filtered-items*)))
+      (is (string= "needle"
+                   (skill-name
+                    (getf (first clawmacs::*skill-completion-filtered-items*)
+                          :skill)))))))
+
+(test automatic-skill-completion-confirms-linked-mention-with-return
+  "Return replaces the active token with a precise file-backed skill mention."
+  (with-isolated-skills (root)
+    (write-demo-skill root :name "demo")
+    (register-skill-root root)
+    (let ((buf (make-skill-completion-test-buffer)))
+      (type-skill-completion-text buf "please use $dem")
+      (clawmacs::handle-key-event buf #\Return)
+      (is-false clawmacs::*skill-completion-active*)
+      (is (search "please use [$demo](skill://"
+                  (message-text (buffer-input-message buf))))
+      (is (char= #\Space
+                 (char (message-text (buffer-input-message buf))
+                       (1- (length (message-text
+                                    (buffer-input-message buf))))))))))
+
+(test automatic-skill-completion-confirms-plain-programmatic-mention-with-tab
+  "Tab inserts the plain $skill form for programmatic skills."
+  (with-isolated-skills (root)
+    root
+    (register-skill-definition
+     "inline"
+     :description "Inline skill"
+     :contents "---\nname: inline\ndescription: Inline skill\n---\nUse inline.")
+    (let ((buf (make-skill-completion-test-buffer)))
+      (type-skill-completion-text buf "$in")
+      (clawmacs::handle-key-event buf #\Tab)
+      (is-false clawmacs::*skill-completion-active*)
+      (is (string= "$inline " (message-text (buffer-input-message buf)))))))
+
+(test automatic-skill-completion-dismisses-and-reopens-after-token-change
+  "C-g dismisses the current token without editing; typing more reopens it."
+  (with-isolated-skills (root)
+    (write-demo-skill root :name "demo")
+    (register-skill-root root)
+    (let ((buf (make-skill-completion-test-buffer)))
+      (type-skill-completion-text buf "$dem")
+      (clawmacs::handle-key-event buf (code-char 7))
+      (is-false clawmacs::*skill-completion-active*)
+      (is (string= "$dem" (message-text (buffer-input-message buf))))
+      (clawmacs::handle-key-event buf #\o)
+      (is (eq t clawmacs::*skill-completion-active*))
+      (is (string= "$demo" (message-text (buffer-input-message buf)))))))
+
+(test automatic-skill-completion-excludes-disabled-skills
+  "Disabled skills do not appear in automatic completion."
+  (with-isolated-skills (root)
+    (write-demo-skill root :name "demo")
+    (register-skill-root root)
+    (disable-skill "demo")
+    (let ((buf (make-skill-completion-test-buffer)))
+      (type-skill-completion-text buf "$")
+      (is-false clawmacs::*skill-completion-active*)
+      (is (string= "$" (message-text (buffer-input-message buf)))))))
+
+(test automatic-skill-completion-defaults-to-chat-buffers
+  "The default automatic completion buffer-kind list leaves scratch buffers alone."
+  (with-isolated-skills (root)
+    (write-demo-skill root :name "demo")
+    (register-skill-root root)
+    (let ((buf (make-skill-completion-test-buffer :kind :scratch)))
+      (type-skill-completion-text buf "$dem")
+      (is-false clawmacs::*skill-completion-active*)
+      (is (string= "$dem" (message-text (buffer-input-message buf)))))))

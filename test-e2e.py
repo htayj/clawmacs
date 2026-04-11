@@ -17,6 +17,9 @@ import os
 import select
 import traceback
 import argparse
+import shlex
+import shutil
+import tempfile
 
 MCP_BIN = os.environ.get(
     "CLAWMACS_MCP_BIN", os.path.expanduser("~/.cargo/bin/mcp-tui-driver")
@@ -166,20 +169,25 @@ class MCPClient:
 class ClawmacsSession:
     """Manages a clawmacs session via mcp-tui-driver."""
 
-    def __init__(self, client, cols=120, rows=35):
+    def __init__(self, client, cols=120, rows=35, extra_evals=None):
         self.client = client
         self.cols = cols
         self.rows = rows
+        self.extra_evals = extra_evals or []
         self.session_id = None
 
     def launch(self):
         ql_setup = os.path.expanduser("~/quicklisp/setup.lisp")
+        extra_eval_args = " ".join(
+            f"--eval {shlex.quote(form)}" for form in self.extra_evals
+        )
         cmd = (
             f"LD_LIBRARY_PATH={SSL_LIB}:${{LD_LIBRARY_PATH:-}} "
             f"sbcl --noinform "
             f"--load {ql_setup} "
             f"--eval '(push (truename \"{CLAWMACS_DIR}/\") asdf:*central-registry*)' "
             f"--eval '(ql:quickload :clawmacs :silent t)' "
+            f"{extra_eval_args} "
             f"--eval '(clawmacs:clawmacs-main)'"
         )
         r = self.client.call_tool("tui_launch", {
@@ -990,6 +998,29 @@ def switch_to_buffer(s, query, expected_name=None):
     time.sleep(0.5)
 
 
+def lisp_string(value):
+    """Return VALUE escaped for a Common Lisp string literal."""
+    return value.replace("\\", "\\\\").replace("\"", "\\\"")
+
+
+def create_e2e_skill_root():
+    """Create a temporary skill root used by offline skill-completion tests."""
+    root = tempfile.mkdtemp(prefix="clawmacs-e2e-skills-")
+    skill_dir = os.path.join(root, "demo-skill")
+    os.makedirs(skill_dir, exist_ok=True)
+    with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
+        f.write(
+            "---\n"
+            "name: demo-skill\n"
+            "description: \"E2E demo skill\"\n"
+            "metadata:\n"
+            "  short-description: \"E2E skill completion fixture\"\n"
+            "---\n"
+            "Use this skill for e2e completion tests.\n"
+        )
+    return root
+
+
 # ==========================================================================
 # New Tests — Tier 1: Offline (No LLM Required)
 # ==========================================================================
@@ -1174,6 +1205,24 @@ def test_47_customize_face(s):
     assert_not_contains(screen, "Customize Face", "minibuffer closed")
 
 
+def test_52_skill_completion(s):
+    """Test: Typing $ opens automatic skill completion and inserts a mention."""
+    clear_input(s)
+    s.type_text("$dem")
+    screen = wait_for_text(s, "demo-skill", timeout=5)
+    assert_contains(screen, "Skill: $dem", "skill completion prompt")
+    assert_contains(screen, "demo-skill", "skill candidate visible")
+    s.screenshot("52-skill-completion-popup")
+
+    s.press("Enter")
+    time.sleep(0.5)
+    screen = s.text()
+    assert_contains(screen, "[$demo-skill]", "linked skill mention inserted")
+    assert_contains(screen, "skill://", "skill mention has exact link")
+    s.screenshot("52-skill-completion-inserted")
+    clear_input(s)
+
+
 # ==========================================================================
 # New Tests — Tier 2: LLM Required
 # ==========================================================================
@@ -1266,117 +1315,126 @@ def main():
     client = MCPClient()
     client.initialize()
 
-    session = ClawmacsSession(client)
-    print("Launching clawmacs...")
-    sid = session.launch()
-    if not sid:
-        print("FATAL: Failed to launch clawmacs session")
-        client.close()
-        sys.exit(1)
-    print(f"Session: {sid}")
+    skill_root = create_e2e_skill_root()
+    skill_root_path = skill_root if skill_root.endswith(os.sep) else skill_root + os.sep
+    session = ClawmacsSession(
+        client,
+        extra_evals=[
+            f'(clawmacs:register-skill-root #P"{lisp_string(skill_root_path)}")'
+        ],
+    )
+    try:
+        print("Launching clawmacs...")
+        sid = session.launch()
+        if not sid:
+            print("FATAL: Failed to launch clawmacs session")
+            client.close()
+            sys.exit(1)
+        print(f"Session: {sid}")
 
-    if not session.wait_ready():
-        print("FATAL: clawmacs did not start (no 'user>' found)")
-        screen = session.text()
-        if screen:
-            print("Initial screen:")
-            print(screen[:1000])
+        if not session.wait_ready():
+            print("FATAL: clawmacs did not start (no 'user>' found)")
+            screen = session.text()
+            if screen:
+                print("Initial screen:")
+                print(screen[:1000])
+            session.close()
+            client.close()
+            sys.exit(1)
+        print("clawmacs ready.\n")
+
+        # Offline tests (no LLM required)
+        offline_tests = [
+            ("38-shell-prefix", test_38_shell_prefix),
+            ("39-debug-mode", test_39_debug_mode_toggle),
+            ("40-save-session", test_40_save_session),
+            ("41-buffer-persistence", test_41_buffer_state_persistence),
+            ("42-minibuffer-selector", test_42_minibuffer_buffer_selector),
+            ("43-describe-bindings", test_43_describe_bindings),
+            ("44-describe-function", test_44_describe_function),
+            ("45-describe-variable", test_45_describe_variable),
+            ("46-describe-type", test_46_describe_type),
+            ("47-customize-face", test_47_customize_face),
+            ("52-skill-completion", test_52_skill_completion),
+        ]
+
+        # LLM-required new tests
+        llm_new_tests = [
+            ("48-tool-lisp-eval", test_48_tool_lisp_eval),
+            ("49-tool-spec-lookup", test_49_tool_spec_lookup),
+            ("50-multi-turn", test_50_multi_turn),
+            ("51-toggle-tool-results", test_51_toggle_tool_results),
+        ]
+
+        # Readline tests
+        readline_tests = [
+            ("22-ctrl-b", test_22_ctrl_b),
+            ("23-ctrl-f", test_23_ctrl_f),
+            ("24-alt-b", test_24_alt_b),
+            ("25-alt-f", test_25_alt_f),
+            ("26-ctrl-a", test_26_ctrl_a),
+            ("27-ctrl-e", test_27_ctrl_e),
+            ("28-ctrl-u", test_28_ctrl_u),
+            ("29-ctrl-k", test_29_ctrl_k),
+            ("30-alt-d", test_30_alt_d),
+            ("31-ctrl-w", test_31_ctrl_w),
+            ("32-ctrl-y", test_32_ctrl_y),
+            ("33-alt-y", test_33_alt_y),
+            ("34-alt-ctrl-y", test_34_alt_ctrl_y),
+            ("35-alt-dot", test_35_alt_dot),
+            ("36-alt-underscore", test_36_alt_underscore),
+            ("37-ctrl-d", test_37_ctrl_d),
+        ]
+
+        # Run tests sequentially (they build on each other's state)
+        if args.only == "offline":
+            tests = offline_tests + readline_tests
+        elif args.only == "readline":
+            tests = readline_tests
+        else:
+            # --only all (default): full suite
+            tests = [
+                ("01-initial-render", test_01_initial_render),
+                ("02-text-input", test_02_text_input),
+                ("03-line-editing", test_03_line_editing_c_a_c_e),
+                ("04-kill-yank", test_04_kill_yank),
+                ("05-multiline-input", test_05_multiline_input),
+                ("06-send-message", test_06_send_message),
+                ("07-line-wrapping", test_07_line_wrapping),
+                ("08-scroll", test_08_scroll),
+                ("09-meta-scroll", test_09_meta_scroll),
+                ("10-new-buffer", test_10_new_buffer),
+                ("11-switch-buffer", test_11_switch_buffer),
+                ("12-kill-buffer", test_12_kill_buffer),
+                ("13-backspace", test_13_backspace),
+                ("14-point-face", test_14_point_face),
+                ("15-permission-approve", test_15_permission_approve),
+                ("16-permission-deny", test_16_permission_deny),
+                ("17-permission-deny-message", test_17_permission_deny_with_message),
+                ("18-file-write-diff", test_18_file_write_diff),
+                ("19-file-write-append", test_19_file_write_append),
+                ("20-file-edit", test_20_file_edit_search_replace),
+                ("21-modeline", test_21_modeline_content),
+            ] + offline_tests + llm_new_tests + readline_tests
+
+        for name, fn in tests:
+            run_test(name, fn, session)
+
+        # Summary
+        print(f"\n=== Results: {len(PASSED)} passed, {len(FAILED)} failed ===")
+        if FAILED:
+            print("\nFailed tests:")
+            for name, err in FAILED:
+                print(f"  {name}: {err}")
+            sys.exit(1)
+        else:
+            print("All tests passed!")
+            print(f"Screenshots saved to {SCREENSHOT_DIR}/")
+    finally:
+        print()
         session.close()
         client.close()
-        sys.exit(1)
-    print("clawmacs ready.\n")
-
-    # Offline tests (no LLM required)
-    offline_tests = [
-        ("38-shell-prefix", test_38_shell_prefix),
-        ("39-debug-mode", test_39_debug_mode_toggle),
-        ("40-save-session", test_40_save_session),
-        ("41-buffer-persistence", test_41_buffer_state_persistence),
-        ("42-minibuffer-selector", test_42_minibuffer_buffer_selector),
-        ("43-describe-bindings", test_43_describe_bindings),
-        ("44-describe-function", test_44_describe_function),
-        ("45-describe-variable", test_45_describe_variable),
-        ("46-describe-type", test_46_describe_type),
-        ("47-customize-face", test_47_customize_face),
-    ]
-
-    # LLM-required new tests
-    llm_new_tests = [
-        ("48-tool-lisp-eval", test_48_tool_lisp_eval),
-        ("49-tool-spec-lookup", test_49_tool_spec_lookup),
-        ("50-multi-turn", test_50_multi_turn),
-        ("51-toggle-tool-results", test_51_toggle_tool_results),
-    ]
-
-    # Readline tests
-    readline_tests = [
-        ("22-ctrl-b", test_22_ctrl_b),
-        ("23-ctrl-f", test_23_ctrl_f),
-        ("24-alt-b", test_24_alt_b),
-        ("25-alt-f", test_25_alt_f),
-        ("26-ctrl-a", test_26_ctrl_a),
-        ("27-ctrl-e", test_27_ctrl_e),
-        ("28-ctrl-u", test_28_ctrl_u),
-        ("29-ctrl-k", test_29_ctrl_k),
-        ("30-alt-d", test_30_alt_d),
-        ("31-ctrl-w", test_31_ctrl_w),
-        ("32-ctrl-y", test_32_ctrl_y),
-        ("33-alt-y", test_33_alt_y),
-        ("34-alt-ctrl-y", test_34_alt_ctrl_y),
-        ("35-alt-dot", test_35_alt_dot),
-        ("36-alt-underscore", test_36_alt_underscore),
-        ("37-ctrl-d", test_37_ctrl_d),
-    ]
-
-    # Run tests sequentially (they build on each other's state)
-    if args.only == "offline":
-        tests = offline_tests + readline_tests
-    elif args.only == "readline":
-        tests = readline_tests
-    else:
-        # --only all (default): full suite
-        tests = [
-            ("01-initial-render", test_01_initial_render),
-            ("02-text-input", test_02_text_input),
-            ("03-line-editing", test_03_line_editing_c_a_c_e),
-            ("04-kill-yank", test_04_kill_yank),
-            ("05-multiline-input", test_05_multiline_input),
-            ("06-send-message", test_06_send_message),
-            ("07-line-wrapping", test_07_line_wrapping),
-            ("08-scroll", test_08_scroll),
-            ("09-meta-scroll", test_09_meta_scroll),
-            ("10-new-buffer", test_10_new_buffer),
-            ("11-switch-buffer", test_11_switch_buffer),
-            ("12-kill-buffer", test_12_kill_buffer),
-            ("13-backspace", test_13_backspace),
-            ("14-point-face", test_14_point_face),
-            ("15-permission-approve", test_15_permission_approve),
-            ("16-permission-deny", test_16_permission_deny),
-            ("17-permission-deny-message", test_17_permission_deny_with_message),
-            ("18-file-write-diff", test_18_file_write_diff),
-            ("19-file-write-append", test_19_file_write_append),
-            ("20-file-edit", test_20_file_edit_search_replace),
-            ("21-modeline", test_21_modeline_content),
-        ] + offline_tests + llm_new_tests + readline_tests
-
-    for name, fn in tests:
-        run_test(name, fn, session)
-
-    # Cleanup
-    print()
-    session.close()
-    client.close()
-
-    # Summary
-    print(f"\n=== Results: {len(PASSED)} passed, {len(FAILED)} failed ===")
-    if FAILED:
-        print("\nFailed tests:")
-        for name, err in FAILED:
-            print(f"  {name}: {err}")
-        sys.exit(1)
-    else:
-        print("All tests passed!")
-        print(f"Screenshots saved to {SCREENSHOT_DIR}/")
+        shutil.rmtree(skill_root, ignore_errors=True)
 
 
 if __name__ == "__main__":
