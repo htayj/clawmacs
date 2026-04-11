@@ -499,6 +499,27 @@
 
    ;; Main
    #:clawmacs-main
+   #:clawmacs-prompt-main
+   #:run-single-prompt
+   #:*prompt-max-tool-iterations*
+   #:prompt-run-result
+   #:prompt-run-result-prompt
+   #:prompt-run-result-final-text
+   #:prompt-run-result-tool-events
+   #:prompt-run-result-reasoning-blocks
+   #:prompt-run-result-agent-name
+   #:prompt-run-result-provider
+   #:prompt-run-result-model
+   #:prompt-run-result-think-level
+   #:prompt-run-result-iterations
+   #:prompt-run-result-stop-reason
+   #:prompt-tool-event
+   #:prompt-tool-event-id
+   #:prompt-tool-event-name
+   #:prompt-tool-event-input
+   #:prompt-tool-event-result-text
+   #:prompt-tool-event-display
+   #:prompt-tool-event-denied-p
    #:send-to-agent-with-context
    #:switch-buffer-to-agent
     #:scroll-up-command

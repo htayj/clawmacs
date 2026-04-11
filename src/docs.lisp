@@ -2390,11 +2390,31 @@ documentation in *extended-docs*."
   :side-effects "Sets buffer status to :thinking. Starts a non-blocking streaming API call."
   :see-also (send-message build-conversation-messages provider-request-streaming))
 
+(defdoc *prompt-max-tool-iterations*
+  :category "main"
+  :usage "Integer default used by run-single-prompt."
+  :returns "integer — Default maximum non-interactive tool-call turns."
+  :see-also (run-single-prompt clawmacs-prompt-main))
+
+(defdoc run-single-prompt
+  :category "main"
+  :usage "(run-single-prompt PROMPT &key :agent-name :provider :model :think-level :max-tool-iterations :auto-approve-tools-p)"
+  :returns "prompt-run-result — Final text, routing metadata, iteration count, and captured tool events."
+  :side-effects "Creates an in-memory prompt buffer, sends non-streaming provider requests, executes agent-allowed tools, inserts tool_result messages into the prompt buffer, and loops until a final assistant response is returned."
+  :see-also (clawmacs-prompt-main provider-request execute-tool build-conversation-messages))
+
+(defdoc clawmacs-prompt-main
+  :category "main"
+  :usage "(clawmacs-prompt-main) — CLI entry point used by prompt.sh."
+  :returns "does not return — Exits the Lisp image with status 0 or 1."
+  :side-effects "Parses command-line options, initializes the clawmacs runtime without a UI backend, runs one prompt through run-single-prompt, and writes the final response or JSON result to stdout."
+  :see-also (run-single-prompt *prompt-max-tool-iterations* clawmacs-main))
+
 (defdoc clawmacs-main
   :category "main"
   :usage "(clawmacs-main) — Called once to start the application."
   :returns "nil — Returns when the user quits (C-x C-c)."
-  :side-effects "Initializes state, loads the configured system prompt file, loads user init, runs *startup-hook*, creates the initial buffer, runs *initial-buffer-hook*, then delegates to the UI backend via backend-run."
+  :side-effects "Initializes state, loads the configured personality prompt file, loads user init, runs *startup-hook*, creates the initial buffer, runs *initial-buffer-hook*, then delegates to the UI backend via backend-run."
   :see-also (current-buffer *default-keymap* init-tools *ui-backend* *startup-hook* *initial-buffer-hook* backend-run))
 
 ;;; ==========================================================================

@@ -11,6 +11,48 @@
 ;;; Agent
 ;;; --------------------------------------------------------------------------
 
+(defvar *prompt-max-tool-iterations* 20
+  "Default maximum tool-call turns allowed during one non-interactive prompt run.")
+
+(defstruct prompt-tool-event
+  "A tool call/result pair captured during non-interactive prompt execution."
+  id
+  name
+  input
+  result-text
+  display
+  denied-p)
+
+(defstruct prompt-run-result
+  "Result returned by RUN-SINGLE-PROMPT."
+  prompt
+  final-text
+  tool-events
+  reasoning-blocks
+  agent-name
+  provider
+  model
+  think-level
+  iterations
+  stop-reason)
+
+(defstruct prompt-options
+  "Command-line options for CLAWMACS-PROMPT-MAIN."
+  prompt
+  (agent-name *default-agent-name*)
+  provider
+  model
+  think-level
+  (show-tools-p nil :type boolean)
+  (show-reasoning-p nil :type boolean)
+  (show-metadata-p nil :type boolean)
+  (json-p nil :type boolean)
+  (auto-approve-tools-p nil :type boolean)
+  (max-tool-iterations *prompt-max-tool-iterations* :type integer)
+  debug-log-path
+  (inhibit-user-init-p nil :type boolean)
+  (help-p nil :type boolean))
+
 (defun insert-agent-message-from-content (buf content-blocks agent-kw)
   "Insert an agent message from API content blocks.
 Shows text parts and tool call summaries. Stores raw-content for round-trip."
@@ -134,26 +176,26 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
     ;; Continue with remaining tools
     (advance-tool-approval buf)))
 
-(defun finalize-tool-results (buf)
-  "Insert the accumulated tool results as a message and continue the conversation."
+(defun insert-tool-results-message (buf results)
+  "Insert RESULTS as a tool-result message before BUF's input message.
+RESULTS is a chronological list of alists containing :RESULT, :DISPLAY,
+and :TOOL-ID entries. Returns the inserted message."
   (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
-         (results (nreverse (buffer-tool-call-results buf)))
          (display-parts (mapcar (lambda (r) (cdr (assoc :display r))) results))
-          (result-blocks (mapcar (lambda (r)
-                                   `((:type . "tool_result")
-                                     (:tool--use--id . ,(cdr (assoc :tool-id r)))
-                                     (:content . ,(cdr (assoc :result r)))))
-                                 results))
-          (canonical-result-blocks (canonicalize-message-content "user" result-blocks))
-          (display-text (format nil "~{~A~^~%~}" display-parts))
-          (tr-msg (make-message :tool-result :read-only-p t))
-          (input (buffer-input-message buf)))
+         (result-blocks (mapcar (lambda (r)
+                                  `((:type . "tool_result")
+                                    (:tool--use--id . ,(cdr (assoc :tool-id r)))
+                                    (:content . ,(cdr (assoc :result r)))))
+                                results))
+         (canonical-result-blocks (canonicalize-message-content "user" result-blocks))
+         (display-text (format nil "~{~A~^~%~}" display-parts))
+         (tr-msg (make-message :tool-result :read-only-p t))
+         (input (buffer-input-message buf)))
     (set-message-text tr-msg display-text)
     (setf (message-raw-content tr-msg) canonical-result-blocks)
     (setf (message-timestamp tr-msg) (get-universal-time))
     (setf (message-face-set tr-msg)
           (gethash agent-kw (buffer-face-registry buf)))
-    ;; Link into buffer before input
     (let ((before-input (message-prev input)))
       (setf (message-prev tr-msg) before-input
             (message-next tr-msg) input
@@ -161,6 +203,12 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
       (if before-input
           (setf (message-next before-input) tr-msg)
           (setf (buffer-first-message buf) tr-msg)))
+    tr-msg))
+
+(defun finalize-tool-results (buf)
+  "Insert the accumulated tool results as a message and continue the conversation."
+  (let ((results (nreverse (buffer-tool-call-results buf))))
+    (insert-tool-results-message buf results)
     ;; Clear tool call state
     (setf (buffer-tool-call-results buf) nil
           (buffer-pending-tool-calls buf) nil)
@@ -357,6 +405,181 @@ the event loop polls for updates via update-streaming-response."
   (setf (buffer-status buf) :thinking)
   (start-streaming-response buf)
   buf)
+
+;;; --------------------------------------------------------------------------
+;;; Non-interactive Prompt Mode
+;;; --------------------------------------------------------------------------
+
+(defun make-prompt-buffer (prompt agent-name)
+  "Create a buffer seeded with PROMPT as the only finalized user message."
+  (let ((buf (make-buffer "clawmacs:prompt"
+                          :agent-name agent-name
+                          :working-directory (truename "."))))
+    (init-face-registry buf)
+    (setf (buffer-keymap buf) *default-keymap*)
+    (set-message-text (buffer-input-message buf) prompt)
+    (buffer-finalize-input buf)
+    buf))
+
+(defun maybe-apply-prompt-routing-overrides (buf provider model think-level)
+  "Apply optional provider, model, and think-level overrides to BUF."
+  (when provider
+    (set-buffer-provider-override buf (normalize-provider provider)))
+  (when model
+    (set-buffer-model-override buf model))
+  (when think-level
+    (set-buffer-think-level-override buf think-level))
+  buf)
+
+(defun prompt-stream-state-response (state)
+  "Convert a completed streaming STATE into a canonical response."
+  (bt:with-lock-held ((stream-state-lock state))
+    (when (stream-state-error-p state)
+      (error "Streaming error: ~A" (stream-state-error-p state)))
+    (canonical-response
+     (or (stream-state-stop-reason state) "end_turn")
+     (nreverse (copy-list (stream-state-content-blocks state))))))
+
+(defun wait-for-prompt-stream-state (state)
+  "Block until streaming STATE completes, then return its canonical response."
+  (loop
+    (when (bt:with-lock-held ((stream-state-lock state))
+            (stream-state-done-p state))
+      (return (prompt-stream-state-response state)))
+    (sleep 0.02)))
+
+(defun prompt-request-once (buf)
+  "Send BUF's current conversation once via the streaming provider path.
+Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
+  (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
+         (tools (let ((*current-caller* agent-kw))
+                  (tool-definitions-for-api)))
+         (messages (build-conversation-messages buf))
+         (system-prompt (build-agent-system-prompt (buffer-agent-name buf))))
+    (multiple-value-bind (provider model think-level)
+        (resolve-buffer-provider-and-model buf)
+      (file-debug-log "prompt-request"
+                      "provider=~(~A~) model=~A think=~A msgs=~D tools=~D"
+                      provider model (or think-level "default")
+                      (length messages)
+                      (if tools (length tools) 0))
+      (let ((state (provider-request-streaming
+                    provider messages
+                    (lambda (state) (declare (ignore state)))
+                    :model model
+                    :tools tools
+                    :system-prompt system-prompt
+                    :reasoning-effort think-level)))
+        (values (wait-for-prompt-stream-state state)
+                provider
+                model
+                think-level)))))
+
+(defun denied-tool-result-json (reason)
+  "Return a canonical JSON denial payload for a non-interactive tool denial."
+  (api-json-encode `((:denied . t)
+                     (:reason . ,reason))))
+
+(defun execute-prompt-tool-call (tool-use-block agent-kw auto-approve-tools-p)
+  "Execute TOOL-USE-BLOCK for prompt mode and return values RESULT and EVENT.
+RESULT is the alist consumed by INSERT-TOOL-RESULTS-MESSAGE. EVENT is a
+PROMPT-TOOL-EVENT for terminal/debug output."
+  (let* ((tool-name (cdr (assoc :name tool-use-block)))
+         (tool-input (cdr (assoc :input tool-use-block)))
+         (tool-id (cdr (assoc :id tool-use-block)))
+         (requires-approval-p (tool-requires-permission-p tool-name))
+         (denied-p (and requires-approval-p
+                        (not auto-approve-tools-p)))
+         (result-text
+           (if denied-p
+               (denied-tool-result-json
+                "Tool requires interactive approval; prompt mode denied it.")
+               (let ((*current-caller* agent-kw))
+                 (handler-case
+                     (execute-tool tool-name tool-input)
+                   (error (e)
+                     (api-json-encode
+                      `((:error . ,(format nil "~A" e)))))))))
+         (display (if denied-p
+                      (format nil "[~A DENIED: non-interactive prompt mode]"
+                              tool-name)
+                      (format-tool-result-display tool-name result-text)))
+         (result `((:result . ,result-text)
+                   (:display . ,display)
+                   (:tool-id . ,tool-id)))
+         (event (make-prompt-tool-event
+                 :id tool-id
+                 :name tool-name
+                 :input tool-input
+                 :result-text result-text
+                 :display display
+                 :denied-p denied-p)))
+    (values result event)))
+
+(defun execute-prompt-tool-calls (buf tool-uses auto-approve-tools-p)
+  "Execute TOOL-USES, insert their tool-result message into BUF, and return events."
+  (let ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
+        (results nil)
+        (events nil))
+    (dolist (tool-use tool-uses)
+      (multiple-value-bind (result event)
+          (execute-prompt-tool-call tool-use agent-kw auto-approve-tools-p)
+        (push result results)
+        (push event events)))
+    (insert-tool-results-message buf (nreverse results))
+    (nreverse events)))
+
+(defun run-single-prompt (prompt &key (agent-name *default-agent-name*)
+                                 provider model think-level
+                                 (max-tool-iterations *prompt-max-tool-iterations*)
+                                 auto-approve-tools-p)
+  "Run PROMPT once without a UI and return a PROMPT-RUN-RESULT.
+The request loops through tool_use responses until the provider returns a final
+assistant response or MAX-TOOL-ITERATIONS is exceeded."
+  (when (blank-string-p prompt)
+    (error "Prompt must be non-empty"))
+  (let* ((buf (make-prompt-buffer prompt agent-name))
+         (tool-events nil)
+         (final-provider nil)
+         (final-model nil)
+         (final-think-level nil)
+         (iterations 0))
+    (maybe-apply-prompt-routing-overrides buf provider model think-level)
+    (loop
+      (when (>= iterations max-tool-iterations)
+        (error "Exceeded maximum tool iterations (~D)" max-tool-iterations))
+      (incf iterations)
+      (multiple-value-bind (response provider* model* think-level*)
+          (prompt-request-once buf)
+        (setf final-provider provider*
+              final-model model*
+              final-think-level think-level*)
+        (let* ((content-blocks (response-content response))
+               (canonical-content (canonicalize-message-content
+                                   "assistant"
+                                   content-blocks))
+               (tool-uses (content-tool-use-blocks canonical-content))
+               (stop-reason (response-stop-reason response))
+               (agent-kw (intern (string-upcase (buffer-agent-name buf))
+                                 :keyword)))
+          (insert-agent-message-from-content buf canonical-content agent-kw)
+          (if tool-uses
+              (setf tool-events
+                    (append tool-events
+                            (execute-prompt-tool-calls
+                             buf tool-uses auto-approve-tools-p)))
+              (return
+                (make-prompt-run-result
+                 :prompt prompt
+                 :final-text (content-text-blocks canonical-content)
+                 :tool-events tool-events
+                 :reasoning-blocks (content-reasoning-blocks canonical-content)
+                 :agent-name (buffer-agent-name buf)
+                 :provider final-provider
+                 :model final-model
+                 :think-level final-think-level
+                 :iterations iterations
+                 :stop-reason stop-reason))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Prefix Processing
@@ -2958,6 +3181,7 @@ Returns FUNCTION."
   "Parse command-line arguments and environment variables.
 Recognized flags:
   --debug-log <path>   Enable file-based debug logging to <path>.
+  --clean-build        Clear cached Lisp build artifacts before loading.
   --no-init            Skip loading the user init file.
 Environment variables:
   CLAWMACS_DEBUG_LOG   Same as --debug-log (CLI flag takes precedence)."
@@ -2970,6 +3194,9 @@ Environment variables:
                  (let ((path (pop args)))
                    (when path
                      (setf *debug-log-file* (pathname path)))))
+                ((or (string= arg "--clean-build")
+                     (string= arg "--force-clean-build"))
+                 nil)
                 ((string= arg "--no-init")
                  (setf *inhibit-user-init* t)))))
   ;; Environment variable fallback
@@ -2981,58 +3208,328 @@ Environment variables:
   (when *debug-log-file*
     (file-debug-log "startup" "debug log enabled, writing to ~A" *debug-log-file*)))
 
-(defun clawmacs-main (&key (session-name "clawmacs:session-01")
-                           (agent-name *default-agent-name*))
-  "Entry point for clawmacs. Initializes state and delegates to the UI backend."
-  (parse-clawmacs-args)
+(defun initialize-clawmacs-runtime ()
+  "Initialize shared runtime state before either UI or prompt execution."
   (init-default-keymap)
   (init-tools)
   (init-global-faces)
   ;; Load the configured personality prompt file before init.lisp so user init
   ;; may still override it directly or reload after changing the path.
   (load-personality-prompt-file)
-  ;; User init runs BEFORE backend — so (setf *ui-backend* ...) works
   (load-user-init-file)
-  (run-hook-list '*startup-hook* *startup-hook*)
-  ;; Default to croatoan terminal backend
-  (unless *ui-backend*
-    (setf *ui-backend* (make-instance 'croatoan-backend)))
-  ;; Create initial buffer and initialize global state
+  (run-hook-list '*startup-hook* *startup-hook*))
+
+(defun reset-interaction-state ()
+  "Reset buffer selectors, minibuffer state, OAuth state, and key prefixes."
+  (setf *buffer-ring* nil *buffer-counter* 0)
+  (setf *buffer-selector-active* nil
+        *buffer-selector-index* 0
+        *buffer-selector-scroll* 0)
+  (setf *model-selector-active* nil
+        *model-selector-index* 0
+        *model-selector-scroll* 0
+        *model-selector-entries* nil)
+  (setf *think-selector-active* nil
+        *think-selector-index* 0
+        *think-selector-scroll* 0
+        *think-selector-entries* nil)
+  (setf *minibuffer-active* nil
+        *minibuffer-mode* :completion
+        *minibuffer-prompt* ""
+        *minibuffer-input* ""
+        *minibuffer-point* 0
+        *minibuffer-items* nil
+        *minibuffer-filtered-items* nil
+        *minibuffer-match-positions* nil
+        *minibuffer-selected-index* 0
+        *minibuffer-scroll-offset* 0
+        *minibuffer-callback* nil)
+  (setf *openai-oauth-pending* nil)
+  (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil *ch-pending* nil))
+
+(defun make-initial-chat-buffer (session-name agent-name)
+  "Create and register the initial interactive chat buffer."
   (let ((buf (make-buffer session-name
                           :agent-name agent-name
                           :working-directory (truename "."))))
     (init-face-registry buf)
     (setf (buffer-keymap buf) *default-keymap*)
-    ;; Initialize buffer ring, selector state, and OAuth state
-    (setf *buffer-ring* nil *buffer-counter* 0)
-    (setf *buffer-selector-active* nil
-          *buffer-selector-index* 0
-          *buffer-selector-scroll* 0)
-    (setf *model-selector-active* nil
-          *model-selector-index* 0
-          *model-selector-scroll* 0
-          *model-selector-entries* nil)
-    (setf *think-selector-active* nil
-          *think-selector-index* 0
-          *think-selector-scroll* 0
-          *think-selector-entries* nil)
-    ;; Initialize minibuffer state
-    (setf *minibuffer-active* nil
-          *minibuffer-mode* :completion
-          *minibuffer-prompt* ""
-          *minibuffer-input* ""
-          *minibuffer-point* 0
-          *minibuffer-items* nil
-          *minibuffer-filtered-items* nil
-          *minibuffer-match-positions* nil
-          *minibuffer-selected-index* 0
-          *minibuffer-scroll-offset* 0
-          *minibuffer-callback* nil)
-    (setf *openai-oauth-pending* nil)
-    (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil *ch-pending* nil)
     (add-buffer-to-ring buf)
-    ;; Set sandbox root to the working directory
     (setf *sandbox-root* (truename "."))
     (run-hook-list '*initial-buffer-hook* *initial-buffer-hook* buf)
+    buf))
+
+(defun prompt-usage-string ()
+  "Return command-line help for non-interactive prompt mode."
+  "Usage: prompt.sh [options] PROMPT...
+
+Options:
+  --agent NAME              Use the named clawmacs agent.
+  --provider PROVIDER       Override provider: openai-codex, zai, openrouter.
+  --model MODEL             Override the model name.
+  --think LEVEL             Override reasoning effort when supported.
+  --show-tools              Print tool calls/results to stderr.
+  --show-reasoning          Print provider-supplied reasoning blocks when present.
+  --show-metadata           Print provider/model/iteration metadata to stderr.
+  --json                    Emit a JSON result object to stdout.
+  --auto-approve-tools      Allow permission-gated tools without an interactive prompt.
+  --max-tool-iterations N   Stop after N tool-call turns (default: 20).
+  --debug-log PATH          Write low-level debug logs to PATH.
+  --clean-build             Clear cached Lisp build artifacts before loading.
+  --force-clean-build       Alias for --clean-build.
+  --no-init                 Skip ~/.clawmacs.d/init.lisp.
+  --help                    Show this help.
+
+If PROMPT is omitted, non-interactive stdin is read as the prompt.")
+
+(defun require-option-value (option args)
+  "Pop and return OPTION's value from ARGS, or signal a clear error."
+  (let ((value (pop args)))
+    (unless value
+      (error "~A requires a value" option))
+    (values value args)))
+
+(defun parse-positive-integer-option (option value)
+  "Parse VALUE as a positive integer for OPTION."
+  (let ((parsed (parse-integer value :junk-allowed nil)))
+    (unless (plusp parsed)
+      (error "~A must be a positive integer, got ~A" option value))
+    parsed))
+
+(defun read-stdin-to-string ()
+  "Read all available standard input into a string."
+  (let ((out (make-string-output-stream)))
+    (loop :for char := (read-char *standard-input* nil nil)
+          :while char
+          :do (write-char char out))
+    (get-output-stream-string out)))
+
+(defun finalize-prompt-option-text (prompt-parts)
+  "Return prompt text from PROMPT-PARTS or non-interactive stdin."
+  (let ((from-args (and prompt-parts
+                        (format nil "~{~A~^ ~}" prompt-parts))))
+    (cond
+      ((and from-args (not (blank-string-p from-args)))
+       from-args)
+      ((not (interactive-stream-p *standard-input*))
+       (string-trim '(#\Space #\Tab #\Newline #\Return)
+                    (read-stdin-to-string)))
+      (t
+       nil))))
+
+(defun parse-clawmacs-prompt-args (&optional (args (uiop:command-line-arguments)))
+  "Parse ARGS for non-interactive prompt mode and return PROMPT-OPTIONS."
+  (let ((options (make-prompt-options))
+        (prompt-parts nil)
+        (remaining (copy-list args)))
+    (loop :while remaining
+          :for arg := (pop remaining)
+          :do (cond
+                ((string= arg "--")
+                 (setf prompt-parts (append prompt-parts remaining)
+                       remaining nil))
+                ((or (string= arg "--help") (string= arg "-h"))
+                 (setf (prompt-options-help-p options) t))
+                ((string= arg "--agent")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-agent-name options) value
+                         remaining rest)))
+                ((string= arg "--provider")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-provider options) value
+                         remaining rest)))
+                ((string= arg "--model")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-model options) value
+                         remaining rest)))
+                ((or (string= arg "--think")
+                     (string= arg "--reasoning-effort"))
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-think-level options) value
+                         remaining rest)))
+                ((or (string= arg "--prompt") (string= arg "-p"))
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf prompt-parts (append prompt-parts (list value))
+                         remaining rest)))
+                ((or (string= arg "--show-tools")
+                     (string= arg "--show-tool-calls"))
+                 (setf (prompt-options-show-tools-p options) t))
+                ((string= arg "--show-reasoning")
+                 (setf (prompt-options-show-reasoning-p options) t))
+                ((string= arg "--show-metadata")
+                 (setf (prompt-options-show-metadata-p options) t))
+                ((string= arg "--json")
+                 (setf (prompt-options-json-p options) t))
+                ((string= arg "--auto-approve-tools")
+                 (setf (prompt-options-auto-approve-tools-p options) t))
+                ((string= arg "--max-tool-iterations")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-max-tool-iterations options)
+                         (parse-positive-integer-option arg value)
+                         remaining rest)))
+                ((string= arg "--debug-log")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-debug-log-path options) value
+                         remaining rest)))
+                ((or (string= arg "--clean-build")
+                     (string= arg "--force-clean-build"))
+                 nil)
+                ((string= arg "--no-init")
+                 (setf (prompt-options-inhibit-user-init-p options) t))
+                ((and (plusp (length arg))
+                      (char= #\- (char arg 0)))
+                 (error "Unknown prompt option: ~A" arg))
+                (t
+                 (setf prompt-parts (append prompt-parts (cons arg remaining))
+                       remaining nil))))
+    (unless (prompt-options-help-p options)
+      (setf (prompt-options-prompt options)
+            (finalize-prompt-option-text prompt-parts)))
+    options))
+
+(defun maybe-enable-prompt-debug-log (options)
+  "Apply prompt-mode debug-log options and environment fallback."
+  (let ((path (prompt-options-debug-log-path options)))
+    (when path
+      (setf *debug-log-file* (pathname path))))
+  (unless *debug-log-file*
+    (let ((env (uiop:getenv "CLAWMACS_DEBUG_LOG")))
+      (when (and env (plusp (length env)))
+        (setf *debug-log-file* (pathname env)))))
+  (when *debug-log-file*
+    (file-debug-log "startup" "prompt debug log enabled, writing to ~A"
+                    *debug-log-file*)))
+
+(defun prompt-tool-event-json (event)
+  "Return EVENT as a JSON-ready alist."
+  `((:id . ,(prompt-tool-event-id event))
+    (:name . ,(prompt-tool-event-name event))
+    (:input . ,(prompt-tool-event-input event))
+    (:result . ,(prompt-tool-event-result-text event))
+    (:display . ,(prompt-tool-event-display event))
+    (:denied . ,(prompt-tool-event-denied-p event))))
+
+(defun prompt-run-result-json (result)
+  "Return RESULT as a JSON-ready alist."
+  `((:prompt . ,(prompt-run-result-prompt result))
+    (:final--text . ,(prompt-run-result-final-text result))
+    (:agent . ,(prompt-run-result-agent-name result))
+    (:provider . ,(and (prompt-run-result-provider result)
+                       (string-downcase
+                        (symbol-name (prompt-run-result-provider result)))))
+    (:model . ,(prompt-run-result-model result))
+    (:reasoning--effort . ,(prompt-run-result-think-level result))
+    (:iterations . ,(prompt-run-result-iterations result))
+    (:stop--reason . ,(prompt-run-result-stop-reason result))
+    (:tool--events . ,(coerce (mapcar #'prompt-tool-event-json
+                                       (prompt-run-result-tool-events result))
+                              'vector))
+    (:reasoning . ,(coerce (prompt-run-result-reasoning-blocks result) 'vector))))
+
+(defun write-string-with-final-newline (text stream)
+  "Write TEXT to STREAM and ensure it is newline-terminated."
+  (write-string (or text "") stream)
+  (unless (and text
+               (plusp (length text))
+               (char= #\Newline (char text (1- (length text)))))
+    (terpri stream)))
+
+(defun write-prompt-metadata (result stream)
+  "Write prompt metadata comments to STREAM."
+  (format stream ";; agent: ~A~%" (prompt-run-result-agent-name result))
+  (format stream ";; provider/model: ~(~A~)/~A~%"
+          (prompt-run-result-provider result)
+          (prompt-run-result-model result))
+  (format stream ";; think: ~A~%"
+          (or (prompt-run-result-think-level result) "default"))
+  (format stream ";; iterations: ~D~%"
+          (prompt-run-result-iterations result))
+  (format stream ";; stop-reason: ~A~%"
+          (or (prompt-run-result-stop-reason result) "nil")))
+
+(defun write-prompt-tool-events (result stream)
+  "Write prompt tool events to STREAM in Lisp-oriented display form."
+  (loop :for event :in (prompt-run-result-tool-events result)
+        :for index :from 1
+        :do (format stream ";; tool ~D: ~A~%" index
+                    (prompt-tool-event-name event))
+            (format stream "~A~%~%" (prompt-tool-event-display event))))
+
+(defun write-prompt-reasoning (result stream)
+  "Write provider-supplied reasoning blocks to STREAM when present."
+  (let ((blocks (prompt-run-result-reasoning-blocks result)))
+    (if blocks
+        (dolist (block blocks)
+          (write-string-with-final-newline block stream))
+        (format stream ";; no provider-supplied reasoning blocks captured~%"))))
+
+(defun write-prompt-run-result (result options)
+  "Write RESULT according to OPTIONS."
+  (cond
+    ((prompt-options-json-p options)
+     (write-string-with-final-newline
+      (api-json-encode (prompt-run-result-json result))
+      *standard-output*))
+    (t
+     (when (prompt-options-show-metadata-p options)
+       (write-prompt-metadata result *error-output*))
+     (when (prompt-options-show-tools-p options)
+       (write-prompt-tool-events result *error-output*))
+     (when (prompt-options-show-reasoning-p options)
+       (write-prompt-reasoning result *error-output*))
+     (write-string-with-final-newline
+      (prompt-run-result-final-text result)
+      *standard-output*))))
+
+(defun clawmacs-prompt-main ()
+  "CLI entry point for one-shot prompt execution.
+This function exits the Lisp image with status 0 on success and 1 on errors."
+  (handler-case
+      (let ((options (parse-clawmacs-prompt-args)))
+        (when (prompt-options-help-p options)
+          (write-string-with-final-newline (prompt-usage-string) *standard-output*)
+          (uiop:quit 0))
+        (unless (prompt-options-prompt options)
+          (error "No prompt supplied.~%~A" (prompt-usage-string)))
+        (maybe-enable-prompt-debug-log options)
+        (let ((*inhibit-user-init* (prompt-options-inhibit-user-init-p options)))
+          (initialize-clawmacs-runtime)
+          (reset-interaction-state)
+          (setf *sandbox-root* (truename "."))
+          (let ((result
+                  (run-single-prompt
+                   (prompt-options-prompt options)
+                   :agent-name (prompt-options-agent-name options)
+                   :provider (prompt-options-provider options)
+                   :model (prompt-options-model options)
+                   :think-level (prompt-options-think-level options)
+                   :max-tool-iterations
+                   (prompt-options-max-tool-iterations options)
+                   :auto-approve-tools-p
+                   (prompt-options-auto-approve-tools-p options))))
+            (write-prompt-run-result result options)))
+        (uiop:quit 0))
+    (error (e)
+      (format *error-output* "~&clawmacs prompt error: ~A~%" e)
+      (uiop:quit 1))))
+
+(defun clawmacs-main (&key (session-name "clawmacs:session-01")
+                           (agent-name *default-agent-name*))
+  "Entry point for clawmacs. Initializes state and delegates to the UI backend."
+  (parse-clawmacs-args)
+  (initialize-clawmacs-runtime)
+  ;; Default to croatoan terminal backend
+  (unless *ui-backend*
+    (setf *ui-backend* (make-instance 'croatoan-backend)))
+  ;; Create initial buffer and initialize global state
+  (reset-interaction-state)
+  (let ((buf (make-initial-chat-buffer session-name agent-name)))
     ;; Delegate to the backend
     (backend-run *ui-backend* buf)))

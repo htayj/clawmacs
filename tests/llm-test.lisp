@@ -94,6 +94,14 @@
                   (setf (gethash key clawmacs::*tool-table*) value))
                 snapshot))))
 
+(defun make-completed-stream-state-response (stop-reason content-blocks)
+  (let ((state (clawmacs::make-stream-state)))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (setf (clawmacs::stream-state-stop-reason state) stop-reason
+            (clawmacs::stream-state-content-blocks state) (reverse content-blocks)
+            (clawmacs::stream-state-done-p state) t))
+    state))
+
 (defun write-codex-auth-json (path payload)
   (ensure-directories-exist path)
   (with-open-file (stream path
@@ -263,6 +271,127 @@ PAIR PERSONALITY"
         (let ((prompt (clawmacs:build-agent-system-prompt "missing")))
           (is (search "only built-in tool available by default is `lisp_eval`" prompt))
           (is (search "DEFAULT PERSONALITY" prompt)))))))
+
+(test parse-clawmacs-prompt-args-supports-routing-and-output-options
+  "The one-shot prompt parser accepts routing, visibility, and prompt text."
+  (let ((options (clawmacs::parse-clawmacs-prompt-args
+                  '("--agent" "writer"
+                    "--provider" "openai-codex"
+                    "--model" "gpt-5.4"
+                    "--think" "high"
+                    "--show-tools"
+                    "--show-reasoning"
+                    "--show-metadata"
+                    "--clean-build"
+                    "--json"
+                    "--max-tool-iterations" "7"
+                    "summarize" "this"))))
+    (is (string= "writer" (clawmacs::prompt-options-agent-name options)))
+    (is (string= "openai-codex" (clawmacs::prompt-options-provider options)))
+    (is (string= "gpt-5.4" (clawmacs::prompt-options-model options)))
+    (is (string= "high" (clawmacs::prompt-options-think-level options)))
+    (is (clawmacs::prompt-options-show-tools-p options))
+    (is (clawmacs::prompt-options-show-reasoning-p options))
+    (is (clawmacs::prompt-options-show-metadata-p options))
+    (is (clawmacs::prompt-options-json-p options))
+    (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
+    (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
+
+(test run-single-prompt-returns-final-response
+  "Non-interactive prompt mode returns a final assistant response without a UI."
+  (let ((path (temp-agent-defaults-path))
+        (seen-provider nil)
+        (seen-model nil)
+        (seen-messages nil))
+    (with-agent-defaults-path-override (path)
+      (with-function-override (clawmacs::provider-request-streaming
+                               (provider messages callback
+                                         &key model max-tokens tools
+                                         reasoning-effort system-prompt)
+                               (declare (ignore callback))
+                               (declare (ignore max-tokens tools reasoning-effort
+                                                system-prompt))
+                               (setf seen-provider provider
+                                     seen-model model
+                                     seen-messages messages)
+                               (make-completed-stream-state-response
+                                "end_turn"
+                                (list (clawmacs::canonical-text-block "final answer")
+                                      (clawmacs::canonical-reasoning-block
+                                       "provider reasoning summary"))))
+        (clawmacs::init-default-keymap)
+        (clawmacs::init-global-faces)
+        (clawmacs::init-tools)
+        (let ((result (clawmacs:run-single-prompt
+                       "Say hello"
+                       :provider :zai
+                       :model "glm-5")))
+          (is (eq :zai seen-provider))
+          (is (string= "glm-5" seen-model))
+          (is (= 1 (length seen-messages)))
+          (is (string= "final answer"
+                       (clawmacs:prompt-run-result-final-text result)))
+          (is (equal '("provider reasoning summary")
+                     (clawmacs:prompt-run-result-reasoning-blocks result)))
+          (is (= 1 (clawmacs:prompt-run-result-iterations result)))
+          (is (null (clawmacs:prompt-run-result-tool-events result))))))))
+
+(test run-single-prompt-executes-lisp-eval-tool-loop
+  "Prompt mode executes lisp_eval tool calls and continues with tool results."
+  (let ((path (temp-agent-defaults-path))
+        (request-count 0)
+        (second-request-messages nil))
+    (with-agent-defaults-path-override (path)
+      (with-tool-table-restored
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore callback))
+                                 (declare (ignore provider model max-tokens tools
+                                                  reasoning-effort system-prompt))
+                                 (incf request-count)
+                                 (if (= request-count 1)
+                                     (make-completed-stream-state-response
+                                      "tool_use"
+                                      (list
+                                       (clawmacs::canonical-tool-use-block
+                                        "call-1"
+                                        "lisp_eval"
+                                        '((:code . "(+ 2 3)")))))
+                                     (progn
+                                       (setf second-request-messages messages)
+                                       (make-completed-stream-state-response
+                                        "end_turn"
+                                        (list (clawmacs::canonical-text-block
+                                               "the result is 5"))))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (clawmacs::init-tools)
+          (let* ((result (clawmacs:run-single-prompt
+                          "Compute two plus three"
+                          :provider :zai
+                          :model "glm-5"))
+                 (events (clawmacs:prompt-run-result-tool-events result))
+                 (event (first events)))
+            (is (= 2 request-count))
+            (is (= 3 (length second-request-messages)))
+            (is (string= "the result is 5"
+                         (clawmacs:prompt-run-result-final-text result)))
+            (is (= 2 (clawmacs:prompt-run-result-iterations result)))
+            (is (= 1 (length events)))
+            (is (string= "lisp_eval" (clawmacs:prompt-tool-event-name event)))
+            (is (search "(+ 2 3)" (clawmacs:prompt-tool-event-display event)))
+            (is (search "5" (clawmacs:prompt-tool-event-result-text event)))
+            (let* ((tool-result-message (third second-request-messages))
+                   (content (coerce (cdr (assoc :content tool-result-message))
+                                    'list))
+                   (tool-result (first content)))
+              (is (string= "user" (cdr (assoc :role tool-result-message))))
+              (is (string= "tool_result" (cdr (assoc :type tool-result))))
+              (is (string= "call-1"
+                           (cdr (assoc :tool--use--id tool-result))))
+              (is (search "5" (cdr (assoc :content tool-result)))))))))))
 
 (test provider-token-anthropic-is-unsupported
   "Anthropic no longer has a provider-specific token path."
@@ -1676,9 +1805,12 @@ PAIR PERSONALITY"
     (with-function-override (clawmacs::read-provider-token (provider)
                               (declare (ignore provider))
                               "zai-key")
-      (let ((response (clawmacs::zai-request '() :model "glm-5")))
+      (let* ((response (clawmacs::zai-request '() :model "glm-5"))
+             (content (clawmacs::response-content response)))
         (is (string= "Hello"
-                     (cdr (assoc :text (first (clawmacs::response-content response))))))))))
+                     (cdr (assoc :text (first content)))))
+        (is (equal '("The user wants a greeting...")
+                   (clawmacs::content-reasoning-blocks content)))))))
 
 (test reasoning-content-non-streaming-fallback
   "Non-streaming: when content is blank but reasoning_content is present, use reasoning."

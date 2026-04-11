@@ -158,9 +158,30 @@ Checked in the working directory first, then =~/.config/clawmacs/=. Compatible w
 
 #+begin_src sh
 ./run.sh
+./run.sh --clean-build
 #+end_src
 
 This launches clawmacs in a Guix container with all dependencies (SBCL, ncurses, OpenSSL, fonts) automatically provisioned. Quicklisp is bootstrapped on first run.
+
+By default, =run.sh= reuses cached ASDF/FASL build artifacts for fast startup.
+Pass =--clean-build=, or its alias =--force-clean-build=, to clear the local
+Common Lisp output cache before loading clawmacs.
+
+For one-shot, non-interactive harness checks, use =prompt.sh=. It runs inside
+the same Guix container and prints only the final assistant response to stdout
+by default:
+
+#+begin_src sh
+./prompt.sh "Use lisp_eval to inspect the current default provider."
+./prompt.sh --show-tools --show-metadata "List the exported clawmacs functions."
+./prompt.sh --json --provider openai-codex --model gpt-5.3-codex "Summarize this repo."
+./prompt.sh --clean-build "Run this prompt after clearing cached Lisp build artifacts."
+#+end_src
+
+By default, =prompt.sh= reuses cached ASDF/FASL build artifacts for fast
+iterations. Pass =--clean-build=, or its alias =--force-clean-build=, to clear
+the local Common Lisp output cache before loading clawmacs. If no prompt
+argument is supplied, =prompt.sh= reads non-interactive stdin.
 
 ** Provider Credentials
 

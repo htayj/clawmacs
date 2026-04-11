@@ -8,6 +8,7 @@ e2e-*.txt
 .cache/
 .direnv/
 debug.log
+debug-prompt.log
 
 # Editor backup / autosave files
 *~

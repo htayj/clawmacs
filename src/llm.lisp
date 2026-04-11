@@ -334,6 +334,11 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
   `((:type . "text")
     (:text . ,(or text ""))))
 
+(defun canonical-reasoning-block (text)
+  "Return TEXT as a canonical provider-supplied reasoning block."
+  `((:type . "reasoning")
+    (:text . ,(or text ""))))
+
 (defun canonicalize-content-block (role block)
   "Normalize BLOCK for ROLE and enforce valid role/block pairings."
   (let ((block-type (cdr (assoc :type block))))
@@ -342,6 +347,10 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
        (unless (member role '("user" "assistant") :test #'string=)
          (error "text blocks are only allowed on user or assistant messages"))
        (canonical-text-block (cdr (assoc :text block))))
+      ((string= "reasoning" (or block-type ""))
+       (unless (string= role "assistant")
+         (error "reasoning blocks are only allowed on assistant messages"))
+       (canonical-reasoning-block (cdr (assoc :text block))))
       ((string= "tool_use" (or block-type ""))
        (unless (string= role "assistant")
          (error "tool_use blocks are only allowed on assistant messages"))
@@ -385,6 +394,9 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
             (cond
               ((string= "text" (or block-type ""))
                `((:type . "text")
+                 (:text . ,(cdr (assoc :text block)))))
+              ((string= "reasoning" (or block-type ""))
+               `((:type . "reasoning")
                  (:text . ,(cdr (assoc :text block)))))
               ((string= "tool_use" (or block-type ""))
                `((:type . "tool_use")
@@ -1921,6 +1933,8 @@ reasoning_content is present, falls back to reasoning_content."
                            (t nil))))
     (when effective-text
       (push (canonical-text-block effective-text) content-blocks))
+    (when reasoning
+      (push (canonical-reasoning-block reasoning) content-blocks))
     (dolist (tool-call (coerce (or tool-calls #()) 'list))
       (push (openai-tool-call->canonical-block tool-call) content-blocks))
     (canonical-response
@@ -2764,6 +2778,12 @@ Uses the same OpenAI-compatible streaming protocol."
           (unless first (write-char #\Newline s))
           (write-string (cdr (assoc :text block)) s)
           (setf first nil))))))
+
+(defun content-reasoning-blocks (content-blocks)
+  "Extract provider-supplied reasoning text blocks."
+  (loop :for block :in content-blocks
+        :when (string= "reasoning" (content-block-type block))
+          :collect (or (cdr (assoc :text block)) "")))
 
 (defun content-tool-use-blocks (content-blocks)
   "Extract tool_use blocks from content."
