@@ -1300,6 +1300,26 @@ PAIR PERSONALITY"
              (setf (uiop:getenv ,gvar) ,gold)
              (setf (uiop:getenv ,gvar) ""))))))
 
+(test ensure-prompt-workspace-projects-registers-env-project-and-workspace
+  "Prompt mode exposes the invocation directory as named project resources."
+  (let* ((root (make-pathname :directory
+                              (list :absolute "tmp"
+                                    (format nil "clawmacs-prompt-workspace-~A"
+                                            (list (get-universal-time)
+                                                  (get-internal-real-time)
+                                                  (gensym))))))
+         (*project-registry* (make-hash-table :test #'equal)))
+    (ensure-directories-exist (merge-pathnames #P".keep" root))
+    (with-env-var ("CLAWMACS_PROMPT_PROJECT_ROOT" (namestring root))
+      (with-env-var ("CLAWMACS_PROMPT_PROJECT_NAME" "clawmacs")
+        (clawmacs::ensure-prompt-workspace-projects)
+        (dolist (name '("clawmacs" "workspace"))
+          (let ((project (find-project name)))
+            (is (not (null project)))
+            (is (eq :builtin (project-source project)))
+            (is (string= (namestring (truename root))
+                         (namestring (project-root project))))))))))
+
 (test read-env-token-returns-value-when-set
   "read-env-token returns the token from a set environment variable."
   (with-env-var ("CLAWMACS_TEST_TOKEN" "test-env-token-123")

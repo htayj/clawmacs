@@ -4435,6 +4435,35 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
      (merge-pathnames #P".keep" *skill-system-directory*))
     root))
 
+(defun prompt-workspace-project-root ()
+  "Return the prompt-mode workspace project root."
+  (let ((env (uiop:getenv "CLAWMACS_PROMPT_PROJECT_ROOT")))
+    (if (and env (not (blank-string-p env)))
+        (pathname env)
+        (truename "."))))
+
+(defun prompt-workspace-project-names ()
+  "Return project names that should point at the prompt working directory."
+  (let ((names nil))
+    (dolist (name (list (uiop:getenv "CLAWMACS_PROMPT_PROJECT_NAME")
+                        "workspace")
+             (nreverse names))
+      (when (and name
+                 (not (blank-string-p name))
+                 (not (member name names :test #'string=)))
+        (push name names)))))
+
+(defun ensure-prompt-workspace-projects ()
+  "Expose the prompt invocation directory through project APIs."
+  (let ((root (prompt-workspace-project-root)))
+    (dolist (name (prompt-workspace-project-names))
+      (define-project name
+        :root root
+        :description "Prompt-mode working directory"
+        :source :builtin
+        :replace nil))
+    (list-projects)))
+
 (defun prompt-tool-event-json (event)
   "Return EVENT as a JSON-ready alist."
   `((:id . ,(prompt-tool-event-id event))
@@ -4554,6 +4583,7 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
           (initialize-clawmacs-runtime)
           (reset-interaction-state)
           (setf *sandbox-root* (truename "."))
+          (ensure-prompt-workspace-projects)
           (let* ((session-name (prompt-options-session-name options))
                  (buf (load-or-make-prompt-session-buffer
                        (prompt-options-prompt options)

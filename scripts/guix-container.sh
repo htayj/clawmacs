@@ -681,7 +681,7 @@ launch_payload() {
   fi
 
   # shellcheck disable=SC2086
-  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_MCP_BIN|CLAWMACS_DEBUG_LOG|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}"; exec "$@"' bash "$@"
+  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_MCP_BIN|CLAWMACS_DEBUG_LOG|CLAWMACS_PROMPT_PROJECT_NAME|CLAWMACS_PROMPT_PROJECT_ROOT|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}"; exec "$@"' bash "$@"
 }
 
 main() {
