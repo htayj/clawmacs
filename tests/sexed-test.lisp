@@ -175,6 +175,12 @@
      "source.lisp"
      '(:head "defun" :name "foo")
      '(defun inserted-direct () :ok))
+    (signals error
+      (sexed-insert-after-project-form-with-form
+       "sexed"
+       "source.lisp"
+       '(:head "defun" :name "foo")
+       "(defun bad () :string-literal)"))
     (let ((text (project-read-file "sexed" "source.lisp")))
       (is (search "inserted-direct" text))
       (is (sexed-balanced-p text)))

@@ -952,6 +952,13 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
                      :case :downcase
                      :circle t)))
 
+(defun sexed-source-list-form-to-string (form)
+  "Render FORM as source, requiring a list form suitable for insertion."
+  (unless (consp form)
+    (error "A quoted Lisp list form is expected, got ~S. Use the non-WITH-FORM helper for raw source text."
+           form))
+  (sexed-source-form-to-string form))
+
 (defun sexed-project-outline-to-string (project path &rest options)
   "Return a sexed outline for PROJECT/PATH."
   (apply #'sexed-outline-to-string (project-read-file project path) options))
@@ -990,7 +997,7 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   (sexed-insert-before-project-form project
                                     path
                                     selector
-                                    (sexed-source-form-to-string form)))
+                                    (sexed-source-list-form-to-string form)))
 
 (defun sexed-insert-after-project-form (project path selector new-text)
   "Insert NEW-TEXT after SELECTOR in PROJECT/PATH and return a summary plist."
@@ -1003,7 +1010,7 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   (sexed-insert-after-project-form project
                                    path
                                    selector
-                                   (sexed-source-form-to-string form)))
+                                   (sexed-source-list-form-to-string form)))
 
 (defun sexed-insert-project-form-before (project path selector new-text)
   "Alias for SEXED-INSERT-BEFORE-PROJECT-FORM with natural command ordering."
@@ -1160,7 +1167,7 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   (sexed-stage-insert-before-project-form project
                                           path
                                           selector
-                                          (sexed-source-form-to-string form)
+                                          (sexed-source-list-form-to-string form)
                                           :change-set change-set))
 
 (defun sexed-stage-insert-after-project-form (project path selector new-text
@@ -1178,7 +1185,7 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   (sexed-stage-insert-after-project-form project
                                          path
                                          selector
-                                         (sexed-source-form-to-string form)
+                                         (sexed-source-list-form-to-string form)
                                          :change-set change-set))
 
 (defun sexed-stage-insert-project-form-before (project path selector new-text
