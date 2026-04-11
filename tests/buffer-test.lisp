@@ -472,6 +472,16 @@
       ;; Current buffer unchanged (buf1 is still first)
       (is (eq buf1 (current-buffer))))))
 
+(test buffer-selector-buries-current-buffer
+ (let ((*buffer-selection-history* nil))
+   (let* ((item-z (list :display "zeta" :current-p nil))
+          (item-current (list :display "current" :current-p t))
+          (item-a (list :display "alpha" :current-p nil))
+          (sorted (sort-buffers-by-recency (list item-z item-current item-a))))
+     (is
+      (equal (mapcar (lambda (entry) (getf entry :display)) sorted)
+             '("alpha" "zeta" "current"))))))
+
 (test buffer-selector-new-buffer
   "Pressing n creates a new buffer and closes the selector."
   (let ((*buffer-ring* nil)

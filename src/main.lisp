@@ -3696,7 +3696,7 @@ are sorted with the currently active model first, then alphabetically."
 (defun sort-buffers-by-recency (items)
   "Sort buffer ITEMS by recency (from *buffer-selection-history*) then alphabetically.
 Items that were selected more recently appear first. Items not in the history
-are sorted with the current buffer first, then alphabetically."
+are sorted alphabetically with the current buffer last."
   (stable-sort (copy-list items)
                (lambda (a b)
                  (let* ((a-disp (getf a :display))
@@ -3711,9 +3711,9 @@ are sorted with the current buffer first, then alphabetically."
                      (a-pos t)
                      ;; Only b in history: b first
                      (b-pos nil)
-                     ;; Neither: current buffer first, then alphabetical
-                     ((and (getf a :current-p) (not (getf b :current-p))) t)
-                     ((and (getf b :current-p) (not (getf a :current-p))) nil)
+                     ;; Neither: bury current buffer at end, then alphabetical
+                     ((and (getf a :current-p) (not (getf b :current-p))) nil)
+                     ((and (getf b :current-p) (not (getf a :current-p))) t)
                      (t (string< a-disp b-disp)))))))
 
 (defun handle-minibuffer-key (key)
