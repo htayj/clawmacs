@@ -1,3 +1,18 @@
+(defpackage #:clawmacs/matching-core
+  (:use #:coalton
+        #:coalton-prelude)
+  (:local-nicknames
+   (#:list #:coalton-library/list)
+   (#:str #:coalton-library/string))
+  (:export
+   #:split-query-tokens
+   #:fuzzy-token-match-p
+   #:fuzzy-match-p
+   #:fuzzy-token-positions
+   #:fuzzy-match-positions
+   #:fuzzy-token-score-or-negative-one
+   #:fuzzy-score-or-negative-one))
+
 (defpackage :clawmacs
   (:use :cl)
   (:export
@@ -114,6 +129,7 @@
     #:clear-buffer-provider-override
     #:clear-buffer-model-override
     #:clear-buffer-think-level-override
+    #:clear-buffer-routing-overrides
     #:clear-buffer-provider/model-overrides
      #:buffer-face-registry
    #:buffer-keymap
@@ -188,6 +204,8 @@
      #:agent-definition-provider
      #:agent-definition-model
      #:agent-definition-think-level
+     #:agent-definition-core-prompt
+     #:agent-definition-personality-prompt
      #:agent-definition-tools-prompt
      #:agent-definition-soul-prompt
      #:register-agent-definition
@@ -200,6 +218,10 @@
      #:ensure-agent-defaults-loaded
      #:resolve-buffer-provider-and-model
      #:build-agent-system-prompt
+     #:*default-core-system-prompt*
+     #:*default-personality-prompt*
+     #:*personality-prompt-path*
+     #:load-personality-prompt-file
      #:provider-model-supported-think-levels
      #:reconcile-buffer-think-level-override
      #:*system-prompt*
@@ -334,6 +356,7 @@
    #:*minibuffer-callback*
    #:*minibuffer-max-height*
    #:*model-selection-history*
+   #:matching-core-available-p
    #:split-query-tokens
    #:fuzzy-token-match-p
    #:fuzzy-token-positions

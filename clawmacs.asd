@@ -2,7 +2,8 @@
   :description "A Lisp-native Emacs-inspired LLM chat interface"
   :version "0.1.0"
   :licence "AGPL-3.0-only"
-  :depends-on ("croatoan" "alexandria" "drakma" "cl-json" "bordeaux-threads")
+  :depends-on ("croatoan" "alexandria" "drakma" "cl-json" "bordeaux-threads"
+               "coalton" "named-readtables")
   :serial t
   :components ((:module "src"
                 :serial t
@@ -13,6 +14,8 @@
                              (:file "buffer")
                              (:file "commands")
                              (:file "keymap")
+                             (:file "matching-core")
+                             (:file "matching")
                              (:file "llm")
                              (:file "tools")
                              (:file "ui-protocol")
@@ -43,6 +46,7 @@
                               (:file "message-test")
                               (:file "buffer-test")
                               (:file "commands-test")
+                              (:file "matching-test")
                               (:file "llm-test")
                               (:file "keymap-test")
                               (:file "render-test")))))

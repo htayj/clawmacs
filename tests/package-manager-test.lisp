@@ -216,8 +216,8 @@
    :provider :openai-codex
    :model \"gpt-5.4\"
    :think-level \"high\"
-   :tools-prompt \"writer tools\"
-   :soul-prompt \"writer soul\")")
+   :core-prompt \"writer core\"
+   :personality-prompt \"writer personality\")")
     (let ((clawmacs::*user-init-file* init-path)
           (clawmacs::*inhibit-user-init* nil)
           (clawmacs::*agent-definition-registry* (make-hash-table :test #'equal)))
@@ -227,11 +227,11 @@
         (is (eq :openai-codex (clawmacs:agent-definition-provider definition)))
         (is (string= "gpt-5.4" (clawmacs:agent-definition-model definition)))
         (is (string= "high" (clawmacs:agent-definition-think-level definition)))
-        (is (string= "writer tools" (clawmacs:agent-definition-tools-prompt definition)))
-        (is (string= "writer soul" (clawmacs:agent-definition-soul-prompt definition)))))))
+        (is (string= "writer core" (clawmacs:agent-definition-core-prompt definition)))
+        (is (string= "writer personality" (clawmacs:agent-definition-personality-prompt definition)))))))
 
 (test clawmacs-main-allows-init-based-prompt-and-hook-customization
-  "init.lisp can reload the soul prompt, mutate seeded defaults, and hook the initial buffer."
+  "init.lisp can reload the personality prompt, mutate seeded defaults, and hook the initial buffer."
   (let* ((init-root (uiop:ensure-directory-pathname
                      (temp-package-test-directory "main-init")))
          (init-path (merge-pathnames "init.lisp" init-root))
@@ -239,12 +239,12 @@
          (missing-path (merge-pathnames "missing-system-prompt.txt" init-root)))
     (ensure-directories-exist (merge-pathnames #P".keep" init-root))
     (write-test-file prompt-path
-                     (format nil "  Custom soul prompt from init file.~%"))
+                     (format nil "  Custom personality prompt from init file.~%"))
     (write-test-file
      init-path
      (format nil
-             "(setf *system-prompt-path* #P~S)~%
-(load-system-prompt-file)~%
+             "(setf *personality-prompt-path* #P~S)~%
+(load-personality-prompt-file)~%
 (keymap-bind *default-keymap* '(:ctrl-c #\\z) 'toggle-debug-mode-command)~%
 (add-hook '*startup-hook*
           (lambda ()
@@ -260,8 +260,9 @@
              (namestring prompt-path)))
     (let ((clawmacs::*user-init-file* init-path)
           (clawmacs::*inhibit-user-init* nil)
-          (clawmacs::*system-prompt-path* missing-path)
-          (clawmacs::*system-prompt* "Default soul prompt")
+          (clawmacs::*personality-prompt-path* missing-path)
+          (clawmacs::*default-personality-prompt* "Default personality prompt")
+          (clawmacs::*system-prompt* clawmacs::+default-personality-prompt+)
           (clawmacs::*startup-hook* nil)
           (clawmacs::*initial-buffer-hook* nil)
           (clawmacs::*ui-backend* (make-instance 'test-ui-backend))
@@ -271,7 +272,10 @@
           (*initial-buffer-hook-ran* nil)
           (*initial-buffer-hook-binding* nil))
       (let ((buf (clawmacs:clawmacs-main :session-name "init-customization")))
-        (is (string= "Custom soul prompt from init file." clawmacs:*system-prompt*))
+        (is (string= "Custom personality prompt from init file."
+                     clawmacs:*default-personality-prompt*))
+        (is (string= clawmacs:*default-personality-prompt*
+                     clawmacs:*system-prompt*))
         (is (not (null *startup-hook-ran*)))
         (is (not (null *initial-buffer-hook-ran*)))
         (is (eq 'toggle-debug-mode-command *initial-buffer-hook-binding*))

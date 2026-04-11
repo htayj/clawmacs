@@ -818,7 +818,7 @@ If so, call the handler and return T. Otherwise return NIL."
                             (agent-definition-name definition)
                             (string-trim '(#\Space #\Tab #\Newline #\Return) agent-name))))
     (setf (buffer-agent-name buffer) resolved-name)
-    (clear-buffer-provider/model-overrides buffer)
+    (clear-buffer-routing-overrides buffer)
     (ensure-buffer-agent-face-set buffer resolved-name)
     (buffer-insert-system-message buffer (format-agent-selection-message resolved-name))
     buffer))
@@ -2356,123 +2356,6 @@ Used for recency sorting in the minibuffer buffer selector.")
 ;;; Minibuffer Functions
 ;;; --------------------------------------------------------------------------
 
-(defun split-query-tokens (query)
-  "Split QUERY by spaces and return a list of non-empty token strings.
-Used for orderless-style matching where each space-separated word must
-independently match the candidate via subsequence search."
-  (let ((result nil) (start nil))
-    (dotimes (i (1+ (length query)))
-      (let ((ch (when (< i (length query)) (char query i))))
-        (if (or (null ch) (char= ch #\Space))
-            (when start
-              (push (subseq query start i) result)
-              (setf start nil))
-            (unless start
-              (setf start i)))))
-    (nreverse result)))
-
-(defun fuzzy-token-match-p (token candidate)
-  "Return T if all characters in TOKEN appear in CANDIDATE in order (case-insensitive).
-Both TOKEN and CANDIDATE should already be downcased."
-  (loop :with ci := 0
-        :for qchar :across token
-        :do (let ((pos (position qchar candidate :start ci)))
-              (if pos
-                  (setf ci (1+ pos))
-                  (return nil)))
-        :finally (return t)))
-
-(defun fuzzy-match-p (query candidate)
-  "Return T if QUERY matches CANDIDATE (case-insensitive).
-Supports space-separated tokens (orderless-style): the query is split on
-spaces and every token must independently match CANDIDATE via subsequence
-search.  An empty query (or all-spaces query) matches everything."
-  (let ((tokens (split-query-tokens (string-downcase query)))
-        (c (string-downcase candidate)))
-    (every (lambda (tok) (fuzzy-token-match-p tok c)) tokens)))
-
-(defun fuzzy-token-positions (token candidate)
-  "Return a list of character positions in CANDIDATE matched by TOKEN using
-greedy left-to-right subsequence matching.  TOKEN and CANDIDATE must already
-be downcased.  Returns NIL if TOKEN does not match CANDIDATE."
-  (let ((positions nil))
-    (loop :with ci := 0
-          :for qchar :across token
-          :do (let ((pos (position qchar candidate :start ci)))
-                (if pos
-                    (progn (push pos positions) (setf ci (1+ pos)))
-                    (return-from fuzzy-token-positions nil))))
-    (nreverse positions)))
-
-(defun fuzzy-match-positions (query candidate)
-  "Return a sorted list of character positions in CANDIDATE matched by QUERY.
-Handles space-separated tokens (orderless-style): combines matched positions
-from every token.  Returns NIL if any token fails to match or query is empty."
-  (when (zerop (length (string-trim '(#\Space) query)))
-    (return-from fuzzy-match-positions nil))
-  (let ((tokens (split-query-tokens (string-downcase query)))
-        (c (string-downcase candidate))
-        (all-positions nil))
-    (dolist (tok tokens)
-      (let ((positions (fuzzy-token-positions tok c)))
-        (unless positions
-          (return-from fuzzy-match-positions nil))
-        (setf all-positions (append all-positions positions))))
-    (sort (remove-duplicates all-positions) #'<)))
-
-(defun fuzzy-token-score (token candidate)
-  "Return a relevance score for TOKEN matching CANDIDATE (both already downcased).
-Returns NIL when TOKEN does not match.  Higher scores mean better matches.
-Scoring bonuses:
-  +100 exact match of the full token
-  +50  candidate starts with token (prefix)
-  +30  token appears as a contiguous substring
-  +20  match starts at position 0 (decays by 1 per position)
-  +5   each consecutive matched-character pair
-  +8   each match that starts at a word boundary (after - _ / . or start)"
-  (let ((positions (fuzzy-token-positions token candidate)))
-    (unless positions (return-from fuzzy-token-score nil))
-    (let ((score 1)
-          (tlen (length token))
-          (clen (length candidate)))
-      ;; Exact match
-      (when (string= token candidate) (incf score 100))
-      ;; Prefix match (candidate starts with token)
-      (when (and (<= tlen clen) (string= token (subseq candidate 0 tlen)))
-        (incf score 50))
-      ;; Contiguous substring present
-      (when (search token candidate) (incf score 30))
-      ;; Position bonus: earlier first-match = better (max +20 at position 0)
-      (incf score (max 0 (- 20 (first positions))))
-      ;; Consecutive character run bonus
-      (loop :for i :from 1 :below (length positions)
-            :when (= (nth i positions) (1+ (nth (1- i) positions)))
-            :do (incf score 5))
-      ;; Word-boundary start bonus (each matched char that starts at a boundary)
-      (dolist (pos positions)
-        (when (or (zerop pos)
-                  (and (plusp pos)
-                       (member (char candidate (1- pos))
-                               '(#\- #\_ #\/ #\. #\Space))))
-          (incf score 8)))
-      score)))
-
-(defun fuzzy-score (query candidate)
-  "Return a relevance score for QUERY matching CANDIDATE (case-insensitive).
-Handles space-separated tokens (orderless-style): scores each token
-independently and sums them.  Returns 0 for an empty/blank query, or NIL
-if any token fails to match."
-  (when (zerop (length (string-trim '(#\Space) query)))
-    (return-from fuzzy-score 0))
-  (let ((tokens (split-query-tokens (string-downcase query)))
-        (c (string-downcase candidate)))
-    (unless tokens (return-from fuzzy-score 0))
-    (let ((total 0))
-      (dolist (tok tokens total)
-        (let ((s (fuzzy-token-score tok c)))
-          (unless s (return-from fuzzy-score nil))
-          (incf total s))))))
-
 (defun minibuffer-item-display (item)
   "Get the display string for a minibuffer candidate item.
 If ITEM is a string, returns it directly. Otherwise returns the :display plist value."
@@ -3105,10 +2988,9 @@ Environment variables:
   (init-default-keymap)
   (init-tools)
   (init-global-faces)
-  ;; Load the configured soul prompt file before init.lisp so user init may
-  ;; still override *system-prompt* directly or call LOAD-SYSTEM-PROMPT-FILE
-  ;; again after changing *system-prompt-path*.
-  (load-system-prompt-file)
+  ;; Load the configured personality prompt file before init.lisp so user init
+  ;; may still override it directly or reload after changing the path.
+  (load-personality-prompt-file)
   ;; User init runs BEFORE backend — so (setf *ui-backend* ...) works
   (load-user-init-file)
   (run-hook-list '*startup-hook* *startup-hook*)

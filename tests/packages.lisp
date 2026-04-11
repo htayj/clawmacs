@@ -22,6 +22,10 @@
   :description "Command system tests"
   :in clawmacs-suite)
 
+(def-suite matching-suite
+  :description "Coalton-backed minibuffer matching tests"
+  :in clawmacs-suite)
+
 (def-suite package-manager-suite
   :description "Package loader tests"
   :in clawmacs-suite)

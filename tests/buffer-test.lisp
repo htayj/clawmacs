@@ -198,6 +198,17 @@
     (set-buffer-provider-override buf :openai-codex)
     (set-buffer-model-override buf "gpt-5.4")
     (set-buffer-think-level-override buf "high")
+    (clear-buffer-routing-overrides buf)
+    (is (null (buffer-provider-override buf)))
+    (is (null (buffer-model-override buf)))
+    (is (null (buffer-think-level-override buf)))))
+
+(test deprecated-clear-buffer-provider/model-overrides-clears-routing-state
+  "The old provider/model clearing API remains a compatibility wrapper."
+  (let ((buf (make-buffer "test")))
+    (set-buffer-provider-override buf :openai-codex)
+    (set-buffer-model-override buf "gpt-5.4")
+    (set-buffer-think-level-override buf "high")
     (clear-buffer-provider/model-overrides buf)
     (is (null (buffer-provider-override buf)))
     (is (null (buffer-model-override buf)))

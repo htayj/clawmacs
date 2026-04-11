@@ -185,10 +185,10 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
 (setf clawmacs:*default-provider* :zai)
 (setf clawmacs:*default-model* "glm-5")
 
-;; Override the default soul prompt or point to a different prompt file
-(setf clawmacs:*system-prompt* "You are a pragmatic pair programmer.")
-(setf clawmacs:*system-prompt-path* #P"/home/tay/.config/clawmacs/pair-system-prompt.txt")
-(clawmacs:load-system-prompt-file)
+;; Override the default personality prompt or point to a different prompt file
+(setf clawmacs:*default-personality-prompt* "You are a pragmatic pair programmer.")
+(setf clawmacs:*personality-prompt-path* #P"/home/tay/.config/clawmacs/pair-system-prompt.txt")
+(clawmacs:load-personality-prompt-file)
 
 ;; Register custom agents for the C-c A selector
 (clawmacs:register-agent-definition
@@ -196,8 +196,8 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
  :provider :openai-codex
  :model "gpt-5.4"
  :think-level "high"
- :tools-prompt "Use lisp_eval for concrete work. Inspect first, then modify."
- :soul-prompt "You are a concise writing partner focused on structure and tone.")
+ :core-prompt "Use lisp_eval for concrete work. Inspect first, then modify."
+ :personality-prompt "You are a concise writing partner focused on structure and tone.")
 
 ;; Customize seeded defaults after startup initialization
 (clawmacs:add-hook
@@ -248,6 +248,8 @@ src/
   buffer.lisp          Buffer ring, conversation management, sessions
   commands.lisp        defcommand macro, permission levels
   keymap.lisp          Keymap data structure, default bindings
+  matching-core.lisp   Coalton fuzzy matching implementation
+  matching.lisp        Common Lisp wrappers for minibuffer matching
   llm.lisp             Multi-provider LLM integration, streaming, OAuth
   tools.lisp           Agent tool definitions and execution
   ui-protocol.lisp     Abstract UI backend protocol

@@ -208,13 +208,18 @@ Enforces the invariant that it is not read-only."
   (setf (buffer-think-level-override buf) nil)
   buf)
 
-(declaim (ftype (function (buffer) buffer) clear-buffer-provider/model-overrides))
-(defun clear-buffer-provider/model-overrides (buf)
+(declaim (ftype (function (buffer) buffer) clear-buffer-routing-overrides))
+(defun clear-buffer-routing-overrides (buf)
   "Clear BUF's provider, model, and think-level overrides and return BUF."
   (clear-buffer-provider-override buf)
   (clear-buffer-model-override buf)
   (clear-buffer-think-level-override buf)
   buf)
+
+(declaim (ftype (function (buffer) buffer) clear-buffer-provider/model-overrides))
+(defun clear-buffer-provider/model-overrides (buf)
+  "Deprecated compatibility wrapper for CLEAR-BUFFER-ROUTING-OVERRIDES."
+  (clear-buffer-routing-overrides buf))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Ring

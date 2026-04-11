@@ -592,28 +592,35 @@ documentation in *extended-docs*."
   :usage "(clear-buffer-provider-override BUF:buffer) — (clear-buffer-provider-override buf)"
   :returns "buffer — The modified buffer."
   :side-effects "Clears the buffer's provider override to nil."
-  :see-also (set-buffer-provider-override buffer-provider-override clear-buffer-provider/model-overrides))
+  :see-also (set-buffer-provider-override buffer-provider-override clear-buffer-routing-overrides))
 
 (defdoc clear-buffer-model-override
   :category "buffer"
   :usage "(clear-buffer-model-override BUF:buffer) — (clear-buffer-model-override buf)"
   :returns "buffer — The modified buffer."
   :side-effects "Clears the buffer's model override to nil."
-  :see-also (set-buffer-model-override buffer-model-override clear-buffer-provider/model-overrides))
+  :see-also (set-buffer-model-override buffer-model-override clear-buffer-routing-overrides))
 
 (defdoc clear-buffer-think-level-override
   :category "buffer"
   :usage "(clear-buffer-think-level-override BUF:buffer) — (clear-buffer-think-level-override buf)"
   :returns "buffer — The modified buffer."
   :side-effects "Clears the buffer's think-level override to nil."
-  :see-also (set-buffer-think-level-override buffer-think-level-override clear-buffer-provider/model-overrides))
+  :see-also (set-buffer-think-level-override buffer-think-level-override clear-buffer-routing-overrides))
 
-(defdoc clear-buffer-provider/model-overrides
+(defdoc clear-buffer-routing-overrides
   :category "buffer"
-  :usage "(clear-buffer-provider/model-overrides BUF:buffer) — (clear-buffer-provider/model-overrides buf)"
+  :usage "(clear-buffer-routing-overrides BUF:buffer) — (clear-buffer-routing-overrides buf)"
   :returns "buffer — The modified buffer."
   :side-effects "Clears provider, model, and think-level overrides."
   :see-also (clear-buffer-provider-override clear-buffer-model-override clear-buffer-think-level-override))
+
+(defdoc clear-buffer-provider/model-overrides
+  :category "buffer"
+  :usage "Deprecated alias for clear-buffer-routing-overrides."
+  :returns "buffer — The modified buffer."
+  :side-effects "Kept for existing init.lisp files; prefer clear-buffer-routing-overrides."
+  :see-also (clear-buffer-routing-overrides clear-buffer-provider-override clear-buffer-model-override clear-buffer-think-level-override))
 
 (defdoc buffer-face-registry
   :category "buffer"
@@ -978,34 +985,59 @@ documentation in *extended-docs*."
   :see-also (*default-provider* *provider-fallback-models* resolve-buffer-provider-and-model)
   :side-effects "Changing this affects all new buffers that lack both an agent-specific and provider-fallback model.")
 
+(defdoc *default-core-system-prompt*
+  :category "llm"
+  :usage "String — default clawmacs operating prompt inserted before the personality prompt."
+  :see-also (*default-personality-prompt* build-agent-system-prompt)
+  :side-effects "Changing this affects future requests for agents that do not provide their own core prompt.")
+
+(defdoc *default-personality-prompt*
+  :category "llm"
+  :usage "String — default personality prompt inserted after the core system prompt."
+  :see-also (*default-core-system-prompt* *personality-prompt-path* load-personality-prompt-file build-agent-system-prompt)
+  :side-effects "Changing this affects future requests for agents that do not provide their own personality prompt.")
+
+(defdoc *personality-prompt-path*
+  :category "llm"
+  :usage "Pathname — defaults to ~/.config/clawmacs/system-prompt.txt"
+  :see-also (*default-personality-prompt* load-personality-prompt-file)
+  :side-effects "clawmacs-main loads this file once during startup before init.lisp; init.lisp may then change the path and call load-personality-prompt-file again.")
+
+(defdoc load-personality-prompt-file
+  :category "llm"
+  :usage "(load-personality-prompt-file &optional PATH) — (load-personality-prompt-file #P\"~/my-prompt.txt\")"
+  :returns "string or nil — The trimmed prompt text, or NIL when PATH is missing."
+  :side-effects "Reads PATH and stores its contents into *default-personality-prompt*."
+  :see-also (*default-personality-prompt* *personality-prompt-path* build-agent-system-prompt))
+
 (defdoc *default-tools-prompt*
   :category "llm"
-  :usage "String — default clawmacs operating prompt inserted before the soul prompt."
-  :see-also (*system-prompt* build-agent-system-prompt)
-  :side-effects "Changing this affects future requests for agents that do not provide their own tools prompt.")
+  :usage "Deprecated alias for *default-core-system-prompt*."
+  :see-also (*default-core-system-prompt* build-agent-system-prompt)
+  :side-effects "Kept for existing init.lisp files; prefer *default-core-system-prompt*.")
 
 (defdoc *system-prompt*
   :category "llm"
-  :usage "String — default soul prompt inserted after the tools prompt."
-  :see-also (*default-tools-prompt* *system-prompt-path* load-system-prompt-file build-agent-system-prompt)
-  :side-effects "Changing this affects future requests for agents that do not provide their own soul prompt.")
+  :usage "Deprecated alias for *default-personality-prompt*."
+  :see-also (*default-personality-prompt* *personality-prompt-path* load-personality-prompt-file build-agent-system-prompt)
+  :side-effects "Kept for existing init.lisp files; prefer *default-personality-prompt*.")
 
 (defdoc *system-prompt-path*
   :category "llm"
-  :usage "Pathname — defaults to ~/.config/clawmacs/system-prompt.txt"
-  :see-also (*system-prompt* load-system-prompt-file)
-  :side-effects "clawmacs-main loads this file once during startup before init.lisp; init.lisp may then change the path and call load-system-prompt-file again.")
+  :usage "Deprecated alias for *personality-prompt-path*."
+  :see-also (*personality-prompt-path* load-personality-prompt-file)
+  :side-effects "Kept for existing init.lisp files; prefer *personality-prompt-path*.")
 
 (defdoc load-system-prompt-file
   :category "llm"
   :usage "(load-system-prompt-file &optional PATH) — (load-system-prompt-file #P\"~/my-prompt.txt\")"
   :returns "string or nil — The trimmed prompt text, or NIL when PATH is missing."
-  :side-effects "Reads PATH and stores its contents into *system-prompt*."
-  :see-also (*system-prompt* *system-prompt-path* build-agent-system-prompt))
+  :side-effects "Deprecated wrapper for load-personality-prompt-file."
+  :see-also (load-personality-prompt-file *default-personality-prompt* *personality-prompt-path* build-agent-system-prompt))
 
 (defdoc *boot-file-names*
   :category "llm"
-  :usage "List of strings — boot markdown files loaded ahead of the tools and soul prompts."
+  :usage "List of strings — boot markdown files loaded ahead of the core and personality prompts."
   :see-also (load-boot-files build-agent-system-prompt)
   :side-effects "Changing this affects which AGENTS.md/SOUL.md-style files are consulted for future prompt builds.")
 

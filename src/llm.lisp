@@ -101,9 +101,19 @@ Populated on first call to fetch-openrouter-models.  Set to nil to force refresh
   "Deprecated compatibility path variable for OpenAI Codex auth storage.
 When left at its default value, clawmacs uses *CODEX-AUTH-PATH*.")
 
-(defvar *system-prompt-path*
+(defparameter +default-personality-prompt-path+
   (merge-pathnames #P".config/clawmacs/system-prompt.txt" (user-homedir-pathname))
-  "Path to an optional system prompt file.")
+  "Default path for the optional personality prompt file.")
+
+(defvar *personality-prompt-path*
+  +default-personality-prompt-path+
+  "Path to an optional personality prompt file.")
+
+(defvar *system-prompt-path*
+  +default-personality-prompt-path+
+  "Deprecated compatibility alias for *PERSONALITY-PROMPT-PATH*.
+When this path differs from the default and *PERSONALITY-PROMPT-PATH* does not,
+LOAD-PERSONALITY-PROMPT-FILE honors this value.")
 
 (defvar *agent-defaults-path*
   (merge-pathnames #P".config/clawmacs/agent-defaults.json" (user-homedir-pathname))
@@ -121,10 +131,10 @@ When left at its default value, clawmacs uses *CODEX-AUTH-PATH*.")
   provider
   model
   think-level
-  tools-prompt
-  soul-prompt)
+  core-prompt
+  personality-prompt)
 
-(defvar *default-tools-prompt*
+(defparameter +default-core-system-prompt+
   "You are running inside clawmacs, a Lisp-native terminal chat interface.
 The only built-in tool available by default is `lisp_eval`, which evaluates one Common Lisp
 form inside the running clawmacs image. Use `lisp_eval` for concrete work.
@@ -210,29 +220,98 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 
 - `*default-model*` - the fallback model name.
 - `*default-provider*` - the fallback provider keyword.
-- `*system-prompt*` - the default soul prompt.
-- `*default-tools-prompt*` - the default clawmacs operating prompt."
-  "Default clawmacs operating instructions inserted ahead of the soul prompt.")
+- `*default-personality-prompt*` - the default personality prompt.
+- `*default-core-system-prompt*` - the default clawmacs operating prompt."
+  "Built-in clawmacs operating instructions inserted ahead of the personality prompt.")
 
-(defvar *system-prompt*
+(defvar *default-core-system-prompt*
+  +default-core-system-prompt+
+  "Default clawmacs operating instructions inserted ahead of the personality prompt.")
+
+(defvar *default-tools-prompt*
+  +default-core-system-prompt+
+  "Deprecated compatibility alias for *DEFAULT-CORE-SYSTEM-PROMPT*.
+When this value differs from the built-in default and *DEFAULT-CORE-SYSTEM-PROMPT*
+does not, prompt composition honors this value.")
+
+(defparameter +default-personality-prompt+
   "You are a helpful assistant. Keep private reasoning private. Use normal assistant text only
 for direct user-facing replies and concise explanations after you have done the work."
-  "Default soul prompt inserted after the clawmacs tools prompt.
-Users may override this via *system-prompt-path* or init.lisp.")
+  "Built-in default personality prompt inserted after the clawmacs core system prompt.")
+
+(defvar *default-personality-prompt*
+  +default-personality-prompt+
+  "Default personality prompt inserted after the clawmacs core system prompt.
+Users may override this via *personality-prompt-path* or init.lisp.")
+
+(defvar *system-prompt*
+  +default-personality-prompt+
+  "Deprecated compatibility alias for *DEFAULT-PERSONALITY-PROMPT*.
+When this value differs from the built-in default and *DEFAULT-PERSONALITY-PROMPT*
+does not, prompt composition honors this value.")
 
 (defvar *boot-file-names*
   '("AGENTS.md" "SOUL.md" "USER.md" "IDENTITY.md" "TOOLS.md")
   "Boot markdown files to load, in order. Checked in the working directory
 and ~/.config/clawmacs/. Compatible with OpenClaw workspace conventions.")
 
-(defun load-system-prompt-file (&optional (path *system-prompt-path*))
-  "Load PATH into *SYSTEM-PROMPT* when the file exists.
+(defun agent-definition-tools-prompt (definition)
+  "Deprecated accessor alias for AGENT-DEFINITION-CORE-PROMPT."
+  (agent-definition-core-prompt definition))
+
+(defun (setf agent-definition-tools-prompt) (value definition)
+  "Deprecated setf alias for AGENT-DEFINITION-CORE-PROMPT."
+  (setf (agent-definition-core-prompt definition) value))
+
+(defun agent-definition-soul-prompt (definition)
+  "Deprecated accessor alias for AGENT-DEFINITION-PERSONALITY-PROMPT."
+  (agent-definition-personality-prompt definition))
+
+(defun (setf agent-definition-soul-prompt) (value definition)
+  "Deprecated setf alias for AGENT-DEFINITION-PERSONALITY-PROMPT."
+  (setf (agent-definition-personality-prompt definition) value))
+
+(defun effective-default-core-system-prompt ()
+  "Return the active default core system prompt, honoring deprecated overrides."
+  (cond
+    ((not (equal *default-core-system-prompt* +default-core-system-prompt+))
+     *default-core-system-prompt*)
+    ((not (equal *default-tools-prompt* +default-core-system-prompt+))
+     *default-tools-prompt*)
+    (t *default-core-system-prompt*)))
+
+(defun effective-default-personality-prompt ()
+  "Return the active default personality prompt, honoring deprecated overrides."
+  (cond
+    ((not (equal *default-personality-prompt* +default-personality-prompt+))
+     *default-personality-prompt*)
+    ((not (equal *system-prompt* +default-personality-prompt+))
+     *system-prompt*)
+    (t *default-personality-prompt*)))
+
+(defun effective-personality-prompt-path ()
+  "Return the active personality prompt path, honoring deprecated overrides."
+  (cond
+    ((not (equal *personality-prompt-path* +default-personality-prompt-path+))
+     *personality-prompt-path*)
+    ((not (equal *system-prompt-path* +default-personality-prompt-path+))
+     *system-prompt-path*)
+    (t *personality-prompt-path*)))
+
+(defun load-personality-prompt-file (&optional (path (effective-personality-prompt-path)))
+  "Load PATH into the default personality prompt when the file exists.
 Returns the trimmed prompt text on success, or NIL when PATH is NIL or missing."
   (let ((prompt-path (and path (probe-file path))))
     (when prompt-path
-      (setf *system-prompt*
-            (string-trim '(#\Space #\Tab #\Newline #\Return)
-                         (uiop:read-file-string prompt-path))))))
+      (let ((prompt (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                 (uiop:read-file-string prompt-path))))
+        (setf *default-personality-prompt* prompt
+              *system-prompt* prompt)
+        prompt))))
+
+(defun load-system-prompt-file (&optional (path (effective-personality-prompt-path)))
+  "Deprecated compatibility wrapper for LOAD-PERSONALITY-PROMPT-FILE."
+  (load-personality-prompt-file path))
 
 (defun load-boot-files ()
   "Load boot MD files from the working directory and ~/.config/clawmacs/.
@@ -254,27 +333,35 @@ Project-local files take precedence over global ones."
     (when parts
       (format nil "~{~A~^~%~%---~%~%~}" (nreverse parts)))))
 
-(defun agent-definition-tools-prompt-or-default (agent-name)
-  "Return AGENT-NAME's tools prompt, falling back to *DEFAULT-TOOLS-PROMPT*."
+(defun agent-definition-core-prompt-or-default (agent-name)
+  "Return AGENT-NAME's core prompt, falling back to the default core system prompt."
   (let ((definition (find-agent-definition agent-name)))
     (or (and definition
-             (agent-definition-tools-prompt definition))
-        *default-tools-prompt*)))
+             (agent-definition-core-prompt definition))
+        (effective-default-core-system-prompt))))
+
+(defun agent-definition-tools-prompt-or-default (agent-name)
+  "Deprecated compatibility wrapper for AGENT-DEFINITION-CORE-PROMPT-OR-DEFAULT."
+  (agent-definition-core-prompt-or-default agent-name))
+
+(defun agent-definition-personality-prompt-or-default (agent-name)
+  "Return AGENT-NAME's personality prompt, falling back to the default personality prompt."
+  (let ((definition (find-agent-definition agent-name)))
+    (or (and definition
+             (agent-definition-personality-prompt definition))
+        (effective-default-personality-prompt))))
 
 (defun agent-definition-soul-prompt-or-default (agent-name)
-  "Return AGENT-NAME's soul prompt, falling back to *SYSTEM-PROMPT*."
-  (let ((definition (find-agent-definition agent-name)))
-    (or (and definition
-             (agent-definition-soul-prompt definition))
-        *system-prompt*)))
+  "Deprecated compatibility wrapper for AGENT-DEFINITION-PERSONALITY-PROMPT-OR-DEFAULT."
+  (agent-definition-personality-prompt-or-default agent-name))
 
 (defun build-agent-system-prompt (agent-name)
   "Build the full system prompt for AGENT-NAME.
-Composition order: boot-file prefix, tools prompt, then soul prompt."
+Composition order: boot-file prefix, core system prompt, then personality prompt."
   (let ((parts (remove-if #'null
                           (list (load-boot-files)
-                                (agent-definition-tools-prompt-or-default agent-name)
-                                (agent-definition-soul-prompt-or-default agent-name)))))
+                                (agent-definition-core-prompt-or-default agent-name)
+                                (agent-definition-personality-prompt-or-default agent-name)))))
     (format nil "~{~A~^~%~%---~%~%~}" parts)))
 
 (defun build-system-prompt ()
@@ -1428,19 +1515,23 @@ dereferences it at call time so that user customizations take effect.")
       (error "Agent name must be a non-empty string"))
     (string-downcase trimmed)))
 
-(defun register-agent-definition (name &key provider model think-level tools-prompt soul-prompt)
+(defun register-agent-definition (name &key provider model think-level
+                                       core-prompt personality-prompt
+                                       tools-prompt soul-prompt)
   "Register or update an agent definition for NAME.
 NAME is stored as given for display, while lookups are keyed case-insensitively."
   (let* ((trimmed-name (string-trim '(#\Space #\Tab #\Newline #\Return) name))
          (registry-key (normalize-agent-name-key trimmed-name))
          (normalized-provider (normalize-provider provider))
          (normalized-think-level (normalize-think-level-override think-level))
+         (effective-core-prompt (or core-prompt tools-prompt))
+         (effective-personality-prompt (or personality-prompt soul-prompt))
          (definition (make-agent-definition :name trimmed-name
                                             :provider normalized-provider
                                             :model model
                                             :think-level normalized-think-level
-                                            :tools-prompt tools-prompt
-                                            :soul-prompt soul-prompt)))
+                                            :core-prompt effective-core-prompt
+                                            :personality-prompt effective-personality-prompt)))
     (when (and model (blank-string-p model))
       (error "Agent model must be a non-empty string"))
     (setf (gethash registry-key *agent-definition-registry*) definition)

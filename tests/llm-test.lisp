@@ -208,12 +208,18 @@
                   :provider :openai-codex
                   :model "gpt-5.4"
                   :think-level "high"
-                  :tools-prompt "pair tools"
-                  :soul-prompt "pair soul")))
+                  :core-prompt "pair core"
+                  :personality-prompt "pair personality")))
       (is (string= "Pair" (clawmacs:agent-definition-name first)))
       (is (eq :openai-codex (clawmacs:agent-definition-provider first)))
       (is (string= "high" (clawmacs:agent-definition-think-level first))))
-    (clawmacs:register-agent-definition "Writer" :soul-prompt "writer soul")
+    (is (string= "pair core"
+                 (clawmacs:agent-definition-core-prompt
+                  (clawmacs:find-agent-definition "pair"))))
+    (is (string= "pair personality"
+                 (clawmacs:agent-definition-personality-prompt
+                  (clawmacs:find-agent-definition "pair"))))
+    (clawmacs:register-agent-definition "Writer" :personality-prompt "writer personality")
     (clawmacs:register-agent-definition "pair" :provider :zai :model "glm-5")
     (let* ((found (clawmacs:find-agent-definition "PAIR"))
            (listed (clawmacs:list-agent-definitions)))
@@ -222,42 +228,60 @@
       (is (equal '("pair" "Writer")
                  (mapcar #'clawmacs:agent-definition-name listed))))))
 
-(test build-agent-system-prompt-composes-boot-tools-and-soul
-  "Agent prompts are composed in boot -> tools -> soul order."
+(test build-agent-system-prompt-composes-boot-core-and-personality
+  "Agent prompts are composed in boot -> core -> personality order."
   (with-agent-definition-registry-override ()
     (clawmacs:register-agent-definition
      "pair"
-     :tools-prompt "PAIR TOOLS"
-     :soul-prompt "PAIR SOUL")
+     :core-prompt "PAIR CORE"
+     :personality-prompt "PAIR PERSONALITY")
     (with-function-override (clawmacs::load-boot-files ()
                               "BOOT PREFIX")
       (is (string= "BOOT PREFIX
 
 ---
 
-PAIR TOOLS
+PAIR CORE
 
 ---
 
-PAIR SOUL"
+PAIR PERSONALITY"
                    (clawmacs:build-agent-system-prompt "pair"))))))
 
 (test build-agent-system-prompt-falls-back-to-default-components
-  "Missing agent prompt slots fall back to the default tools and soul prompts."
+  "Missing agent prompt slots fall back to the default core and personality prompts."
   (with-agent-definition-registry-override ()
-    (let ((clawmacs::*system-prompt* "DEFAULT SOUL"))
-      (clawmacs:register-agent-definition "writer" :soul-prompt "WRITER SOUL")
+    (let ((clawmacs::*default-personality-prompt* "DEFAULT PERSONALITY")
+          (clawmacs::*system-prompt* clawmacs::+default-personality-prompt+))
+      (clawmacs:register-agent-definition "writer" :personality-prompt "WRITER PERSONALITY")
       (with-function-override (clawmacs::load-boot-files ()
                                 nil)
         (let ((prompt (clawmacs:build-agent-system-prompt "writer")))
           (is (search "only built-in tool available by default is `lisp_eval`" prompt))
-          (is (search "WRITER SOUL" prompt))
-          (is-false (search "DEFAULT SOUL" prompt))))
+          (is (search "WRITER PERSONALITY" prompt))
+          (is-false (search "DEFAULT PERSONALITY" prompt))))
       (with-function-override (clawmacs::load-boot-files ()
                                 nil)
         (let ((prompt (clawmacs:build-agent-system-prompt "missing")))
           (is (search "only built-in tool available by default is `lisp_eval`" prompt))
-          (is (search "DEFAULT SOUL" prompt)))))))
+          (is (search "DEFAULT PERSONALITY" prompt)))))))
+
+(test register-agent-definition-accepts-deprecated-prompt-keywords
+  "Existing init.lisp files using tools/soul prompt keywords still work."
+  (with-agent-definition-registry-override ()
+    (let ((definition
+            (clawmacs:register-agent-definition
+             "legacy"
+             :tools-prompt "legacy core"
+             :soul-prompt "legacy personality")))
+      (is (string= "legacy core"
+                   (clawmacs:agent-definition-core-prompt definition)))
+      (is (string= "legacy core"
+                   (clawmacs:agent-definition-tools-prompt definition)))
+      (is (string= "legacy personality"
+                   (clawmacs:agent-definition-personality-prompt definition)))
+      (is (string= "legacy personality"
+                   (clawmacs:agent-definition-soul-prompt definition))))))
 
 (test provider-token-anthropic-is-unsupported
   "Anthropic no longer has a provider-specific token path."
@@ -552,7 +576,7 @@ PAIR SOUL"
       (set-buffer-provider-override buf :zai)
       (set-buffer-model-override buf "glm-5")
       (set-buffer-think-level-override buf "high")
-      (clear-buffer-provider/model-overrides buf)
+      (clear-buffer-routing-overrides buf)
       (multiple-value-bind (provider model think-level)
           (resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
