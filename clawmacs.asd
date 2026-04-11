@@ -20,6 +20,7 @@
                              (:file "matching")
                              (:file "llm")
                              (:file "tools")
+                             (:file "compaction")
                              (:file "ui-protocol")
                              (:file "render-core")
                              (:file "croatoan-backend")

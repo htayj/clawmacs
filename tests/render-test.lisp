@@ -199,7 +199,8 @@
   (dolist (name '(:tool-call :tool-call-paren :tool-call-keyword
                    :tool-call-string :tool-call-comment :tool-call-number
                    :tool-result :tool-result-paren :tool-result-keyword
-                   :tool-result-string :tool-result-comment :tool-result-number))
+                   :tool-result-string :tool-result-comment :tool-result-number
+                   :compaction-summary))
     (is (typep (clawmacs::global-face name) 'face))))
 
 (test tool-displays-use-lisp-shaped-text

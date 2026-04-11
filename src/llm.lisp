@@ -181,6 +181,9 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 
 ## Searching the image
 
+- Never guess Clawmacs symbol names. Before calling an unfamiliar function, variable, type, or
+  command, use the list/describe helpers in this section to discover the exact symbol and calling
+  convention.
 - `(list-functions)` - returns a sorted list of exported function symbols.
 - `(list-variables)` - returns a sorted list of exported variable symbols.
 - `(list-types)` - returns a sorted list of exported type symbols.
@@ -2060,6 +2063,7 @@ and should not be sent to the API."
                   (let* ((role (cond
                                  ((eq sender :user) "user")
                                  ((eq sender :tool-result) "user")
+                                 ((eq sender :compaction-summary) "user")
                                  (t "assistant")))
                          (content (canonicalize-message-content
                                    role

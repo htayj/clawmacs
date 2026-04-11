@@ -101,6 +101,19 @@
                   (setf (gethash key clawmacs::*tool-table*) value))
                 snapshot))))
 
+(defun append-test-user-message (buf text)
+  (clawmacs::set-message-text (buffer-input-message buf) text)
+  (buffer-finalize-input buf)
+  (message-prev (buffer-input-message buf)))
+
+(defun test-buffer-history-messages (buf)
+  (loop :for msg := (buffer-first-message buf) :then (message-next msg)
+        :while (and msg (not (eq msg (buffer-input-message buf))))
+        :collect msg))
+
+(defun test-buffer-history-senders (buf)
+  (mapcar #'message-sender (test-buffer-history-messages buf)))
+
 (defun make-completed-stream-state-response (stop-reason content-blocks)
   (let ((state (clawmacs::make-stream-state)))
     (bt:with-lock-held ((clawmacs::stream-state-lock state))
@@ -207,6 +220,7 @@
       (is (search ":tool-names '(\"doc_lookup\")" prompt))
       (is (search "(prompt-run-used-tool-p RESULT \"doc_lookup\")" prompt))
       (is (search "Do not merely describe searches, inspections, calls, or updates" prompt))
+      (is (search "Never guess Clawmacs symbol names" prompt))
       (is (search "(apropos-list \"SUBSTRING\" :clawmacs)" prompt))
       (is (search "(multiple-value-list (find-symbol \"NAME\" :clawmacs))" prompt))
       (is (search "cl-community-spec" prompt))
@@ -343,6 +357,165 @@ PAIR PERSONALITY"
     (is (clawmacs::prompt-options-isolated-p options))
     (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
     (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
+
+(test compaction-threshold-policy
+  "Compaction thresholds are configurable as nil, ratios, integers, or functions."
+  (let ((buf (make-buffer "compact" :context-limit 1000)))
+    (let ((clawmacs::*compaction-point* nil))
+      (is (null (clawmacs:compaction-threshold-tokens buf :estimate 42))))
+    (let ((clawmacs::*compaction-point* 9/10))
+      (is (= 900 (clawmacs:compaction-threshold-tokens buf :estimate 42))))
+    (let ((clawmacs::*compaction-point* 1234))
+      (is (= 1234 (clawmacs:compaction-threshold-tokens buf :estimate 42))))
+    (let ((clawmacs::*compaction-point*
+            (lambda (buffer estimate limit)
+              (declare (ignore buffer estimate))
+              (/ limit 4))))
+      (is (= 250 (clawmacs:compaction-threshold-tokens buf :estimate 42))))
+    (let ((clawmacs::*compaction-point*
+            (lambda (buffer estimate limit)
+              (declare (ignore buffer limit))
+              (>= estimate 42))))
+      (is (= 42 (clawmacs:compaction-threshold-tokens buf :estimate 42))))))
+
+(test maybe-compact-buffer-runs-custom-function-only-at-threshold
+  "maybe-compact-buffer calls the configured function only when needed."
+  (let ((buf (make-buffer "compact")))
+    (append-test-user-message buf "hello")
+    (let ((calls 0)
+          (reasons nil))
+      (let ((clawmacs::*compaction-point* 1000000)
+            (clawmacs::*compaction-function*
+              (lambda (buffer &key reason)
+                (declare (ignore buffer))
+                (incf calls)
+                (push reason reasons)
+                t)))
+        (multiple-value-bind (compacted-p estimate threshold)
+            (clawmacs:maybe-compact-buffer buf :reason :too-small)
+          (declare (ignore estimate threshold))
+          (is-false compacted-p)
+          (is (= 0 calls))))
+      (let ((clawmacs::*compaction-point* 1)
+            (clawmacs::*compaction-function*
+              (lambda (buffer &key reason)
+                (declare (ignore buffer))
+                (incf calls)
+                (push reason reasons)
+                t)))
+        (multiple-value-bind (compacted-p estimate threshold)
+            (clawmacs:maybe-compact-buffer buf :reason :large-enough)
+          (declare (ignore estimate threshold))
+          (is-true compacted-p)
+          (is (= 1 calls))
+          (is (equal '(:large-enough) reasons)))))))
+
+(test default-compact-buffer-replaces-history-with-summary-and-recent-users
+  "Default compaction summarizes old history without exposing tools."
+  (let ((buf (make-buffer "compact" :agent-name "agent" :context-limit 100000))
+        (captured-messages nil)
+        (captured-tools nil)
+        (captured-system-prompt nil))
+    (append-test-user-message buf "first user context")
+    (buffer-insert-agent-message buf "assistant work that should be summarized")
+    (append-test-user-message buf "latest user request")
+    (with-function-override (clawmacs::provider-request-streaming
+                             (provider messages callback
+                                       &key model max-tokens tools
+                                       reasoning-effort system-prompt)
+                             (declare (ignore provider callback model
+                                              max-tokens reasoning-effort))
+                             (setf captured-messages messages
+                                   captured-tools tools
+                                   captured-system-prompt system-prompt)
+                             (make-completed-stream-state-response
+                              "end_turn"
+                              (list (clawmacs::canonical-text-block
+                                     "summary body"))))
+      (let ((clawmacs::*compaction-preserved-user-message-token-limit* 1000))
+        (is (eq buf (clawmacs:default-compact-buffer buf :reason :manual)))))
+    (is (equal '(:compaction-summary :user :user :system)
+               (test-buffer-history-senders buf)))
+    (let ((history (test-buffer-history-messages buf)))
+      (is (search clawmacs:*compaction-summary-prefix*
+                  (message-text (first history))))
+      (is (search "summary body" (message-text (first history))))
+      (is (string= "first user context" (message-text (second history))))
+      (is (string= "latest user request" (message-text (third history))))
+      (is (search "Conversation compacted" (message-text (fourth history)))))
+    (is (= 0 (length captured-tools)))
+    (is (stringp captured-system-prompt))
+    (let* ((prompt-message (car (last captured-messages)))
+           (content (cdr (assoc :content prompt-message)))
+           (block (aref content 0)))
+      (is (string= clawmacs:*compaction-prompt*
+                   (cdr (assoc :text block)))))
+    (let ((provider-messages (clawmacs:build-conversation-messages buf)))
+      (is (every (lambda (message)
+                   (string= "user" (cdr (assoc :role message))))
+                 provider-messages))
+      (is (not (search "Conversation compacted"
+                       (clawmacs:api-json-encode provider-messages)))))))
+
+(test send-message-compacts-before-finalizing-current-input
+  "Interactive sending runs pre-send compaction while current input is editable."
+  (let ((buf (make-buffer "compact-send"))
+        (saw-input nil)
+        (saw-read-only nil)
+        (sent-p nil))
+    (clawmacs::init-global-faces)
+    (clawmacs::init-face-registry buf)
+    (clawmacs::set-message-text (buffer-input-message buf)
+                                "current user request")
+    (with-function-override (clawmacs::send-to-agent-with-context (buffer)
+                              (setf sent-p t)
+                              buffer)
+      (let ((clawmacs::*compaction-point* 1)
+            (clawmacs::*compaction-function*
+              (lambda (buffer &key reason)
+                (declare (ignore reason))
+                (setf saw-input (message-text (buffer-input-message buffer))
+                      saw-read-only (message-read-only-p
+                                     (buffer-input-message buffer)))
+                buffer)))
+        (clawmacs::send-message buf)))
+    (is (string= "current user request" saw-input))
+    (is-false saw-read-only)
+    (is-true sent-p)
+    (is (string= "current user request"
+                 (message-text (message-prev (buffer-input-message buf)))))))
+
+(test run-single-prompt-compacts-before-provider-request
+  "Prompt mode applies compaction before sending provider requests."
+  (let ((compacted-p nil)
+        (provider-requested-p nil))
+    (with-function-override (clawmacs::provider-request-streaming
+                             (provider messages callback
+                                       &key model max-tokens tools
+                                       reasoning-effort system-prompt)
+                             (declare (ignore provider messages callback model
+                                              max-tokens tools reasoning-effort
+                                              system-prompt))
+                             (setf provider-requested-p t)
+                             (make-completed-stream-state-response
+                              "end_turn"
+                              (list (clawmacs::canonical-text-block
+                                     "final after compaction"))))
+      (let ((clawmacs::*compaction-point* 1)
+            (clawmacs::*compaction-function*
+              (lambda (buffer &key reason)
+                (declare (ignore buffer))
+                (when (eq reason :prompt-request)
+                  (setf compacted-p t))
+                t)))
+        (let ((result (clawmacs:run-single-prompt
+                       "hello"
+                       :provider :zai
+                       :model "glm-5")))
+          (is-true compacted-p)
+          (is-true provider-requested-p)
+          (is (string= "final after compaction"
+                       (clawmacs:prompt-run-result-final-text result))))))))
 
 (test run-single-prompt-returns-final-response
   "Non-interactive prompt mode returns a final assistant response without a UI."

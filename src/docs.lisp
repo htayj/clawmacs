@@ -580,6 +580,75 @@ documentation in *extended-docs*."
   :returns "integer — Maximum token context window size (default 200000)."
   :see-also (buffer buffer-token-count))
 
+(defdoc *compaction-point*
+  :category "compaction"
+  :usage "(setf *compaction-point* 9/10) — NIL disables automatic compaction."
+  :returns "number, function, or nil — Automatic compaction threshold policy."
+  :see-also (maybe-compact-buffer compaction-threshold-tokens))
+
+(defdoc *compaction-function*
+  :category "compaction"
+  :usage "(setf *compaction-function* #'default-compact-buffer)"
+  :returns "function — Called as (FUNCTION BUFFER :REASON REASON)."
+  :see-also (maybe-compact-buffer default-compact-buffer))
+
+(defdoc *compaction-prompt*
+  :category "compaction"
+  :usage "(setf *compaction-prompt* \"Summarize this conversation...\")"
+  :returns "string — Prompt used to create compaction summaries."
+  :see-also (default-compact-buffer *compaction-summary-prefix*))
+
+(defdoc *compaction-summary-prefix*
+  :category "compaction"
+  :usage "(setf *compaction-summary-prefix* \"Previous context summary:\")"
+  :returns "string — Prefix inserted before generated compaction summaries."
+  :see-also (default-compact-buffer *compaction-prompt*))
+
+(defdoc *compaction-preserved-user-message-token-limit*
+  :category "compaction"
+  :usage "(setf *compaction-preserved-user-message-token-limit* 20000)"
+  :returns "integer — Approximate token budget for exact recent user messages."
+  :see-also (default-compact-buffer))
+
+(defdoc buffer-conversation-token-estimate
+  :category "compaction"
+  :usage "(buffer-conversation-token-estimate BUF :include-current-input-p t)"
+  :returns "integer — Heuristic estimate of model-visible conversation tokens."
+  :see-also (compaction-needed-p buffer-context-limit))
+
+(defdoc compaction-threshold-tokens
+  :category "compaction"
+  :usage "(compaction-threshold-tokens BUF)"
+  :returns "integer or nil — Absolute token estimate where auto-compaction starts."
+  :see-also (*compaction-point* compaction-needed-p))
+
+(defdoc compaction-needed-p
+  :category "compaction"
+  :usage "(compaction-needed-p BUF :include-current-input-p t)"
+  :returns "values — NEEDED-P, ESTIMATE, and THRESHOLD."
+  :see-also (maybe-compact-buffer compaction-threshold-tokens))
+
+(defdoc maybe-compact-buffer
+  :category "compaction"
+  :usage "(maybe-compact-buffer BUF :reason :auto)"
+  :returns "values — COMPACTED-P, ESTIMATE, and THRESHOLD."
+  :side-effects "May replace BUF's chat history with compacted summary context."
+  :see-also (*compaction-function* default-compact-buffer compact-buffer-command))
+
+(defdoc default-compact-buffer
+  :category "compaction"
+  :usage "(default-compact-buffer BUF :reason :manual)"
+  :returns "buffer or nil — BUF when compaction succeeded."
+  :side-effects "Calls the active provider without tools and rewrites BUF history."
+  :see-also (*compaction-prompt* *compaction-summary-prefix*))
+
+(defdoc compact-buffer-command
+  :category "compaction"
+  :usage "M-x compact-buffer-command or C-c c"
+  :returns "nil — Interactive command."
+  :side-effects "Forces compaction of the current chat buffer."
+  :see-also (maybe-compact-buffer))
+
 (defdoc buffer-status
   :category "buffer"
   :usage "(buffer-status BUF:buffer) — (buffer-status (current-buffer))"
@@ -1916,6 +1985,12 @@ documentation in *extended-docs*."
   :usage "(make-default-system-face-set)"
   :returns "face-set — a face set for system messages with cyan-on-black default."
   :see-also (make-default-user-face-set make-default-agent-face-set init-face-registry))
+
+(defdoc make-default-compaction-summary-face-set
+  :category "global-face"
+  :usage "(make-default-compaction-summary-face-set)"
+  :returns "face-set — a face set for compaction summary messages."
+  :see-also (make-default-system-face-set init-face-registry))
 
 (defdoc make-default-text-face
   :category "global-face"

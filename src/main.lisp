@@ -271,6 +271,7 @@ and :TOOL-ID entries. Returns the inserted message."
   "Start a streaming API call. Creates a placeholder agent message and
 stores the stream state on the buffer. Non-blocking -- the event loop
 polls for updates via update-streaming-response."
+  (maybe-compact-buffer buf :reason :pre-request)
   (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
          (tools (let ((*current-caller* agent-kw))
                    (tool-definitions-for-api)))
@@ -640,6 +641,7 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
 (defun prompt-request-once (buf)
   "Send BUF's current conversation once via the streaming provider path.
 Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
+  (maybe-compact-buffer buf :reason :prompt-request)
   (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
          (tools (let ((*current-caller* agent-kw))
                   (tool-definitions-for-api)))
@@ -1051,6 +1053,10 @@ If so, call the handler and return T. Otherwise return NIL."
       (insert-newline-command buffer)
       (let ((input-text (message-text (buffer-input-message buffer))))
         (when (plusp (length (string-trim '(#\Space #\Tab #\Newline) input-text)))
+          (unless (find-prefix-handler input-text)
+            (maybe-compact-buffer buffer
+                                  :reason :pre-user-message
+                                  :include-current-input-p t))
           (buffer-finalize-input buffer)
           (setf (message-face-set (buffer-input-message buffer))
                 (gethash :user (buffer-face-registry buffer)))
@@ -2261,9 +2267,11 @@ Thread-safe: opens, writes, and closes the file on each call."
 Includes user, agent, and system face sets."
   (let* ((registry (buffer-face-registry buf))
          (user-fs (make-default-user-face-set))
-         (system-fs (make-default-system-face-set)))
+         (system-fs (make-default-system-face-set))
+         (summary-fs (make-default-compaction-summary-face-set)))
     (setf (gethash :user registry) user-fs
-          (gethash :system registry) system-fs)
+          (gethash :system registry) system-fs
+          (gethash :compaction-summary registry) summary-fs)
     (ensure-buffer-agent-face-set buf)
     (setf (message-face-set (buffer-input-message buf)) user-fs)
     buf))

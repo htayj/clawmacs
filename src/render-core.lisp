@@ -35,6 +35,12 @@ Call once at startup. These faces are customizable via customize-face."
             :background (make-color-spec :cga 0)
             :foreground (make-color-spec :cga 6)
             :bold-p nil :underline-p nil :reverse-p nil))
+    ;; Compaction summaries are model-visible handoff context.
+    (setf (gethash :compaction-summary r)
+          (make-instance 'face :name :compaction-summary
+            :background (make-color-spec :cga 0)
+            :foreground (make-color-spec :cga 3)
+            :bold-p nil :underline-p nil :reverse-p nil))
     ;; Debug messages — API request/response log when *debug-mode* is t.
     ;; Bright magenta distinguishes debug output from regular system messages.
     (setf (gethash :debug r)
@@ -279,6 +285,21 @@ Uses the global :system face if available, otherwise cyan on black."
      (list (make-instance 'face
              :name :default
              :parent sys-face
+             :background nil :foreground nil
+             :bold-p nil :underline-p nil :reverse-p nil)))))
+
+(defun make-default-compaction-summary-face-set ()
+  "Create the default face set for compaction summary messages."
+  (let ((summary-face (or (global-face :compaction-summary)
+                          (make-instance 'face :name :default
+                            :background (make-color-spec :cga 0)
+                            :foreground (make-color-spec :cga 3)
+                            :bold-p nil :underline-p nil :reverse-p nil))))
+    (make-face-set
+     :compaction-summary
+     (list (make-instance 'face
+             :name :default
+             :parent summary-face
              :background nil :foreground nil
              :bold-p nil :underline-p nil :reverse-p nil)))))
 

@@ -57,6 +57,7 @@
    #:collect-global-faces
    #:apply-global-face
    #:make-default-system-face-set
+   #:make-default-compaction-summary-face-set
    #:make-default-text-face
 
    ;; Lines
@@ -393,6 +394,19 @@
    #:*default-max-tokens*
    #:api-json-encode
    #:api-json-decode
+
+   ;; Compaction
+   #:*compaction-point*
+   #:*compaction-function*
+   #:*compaction-prompt*
+   #:*compaction-summary-prefix*
+   #:*compaction-preserved-user-message-token-limit*
+   #:buffer-conversation-token-estimate
+   #:compaction-threshold-tokens
+   #:compaction-needed-p
+   #:maybe-compact-buffer
+   #:default-compact-buffer
+   #:compact-buffer-command
 
    ;; Z.AI (Zhipu AI)
    #:*zai-model*

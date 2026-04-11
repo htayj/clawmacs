@@ -108,6 +108,12 @@ and C-x b to the old overlay buffer selector."
   ;; C-x t should NOT be bound (it was moved away)
   (is (null (keymap-lookup *default-keymap* '(:ctrl-x #\t)))))
 
+(test default-keymap-compaction-binding
+  "Manual compaction is bound under the chat-mode C-c prefix."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::compact-buffer-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\c)))))
+
 (test default-keymap-agent-selector-binding
   "Default keymap binds C-c A to the minibuffer agent selector."
   (clawmacs::init-default-keymap)
