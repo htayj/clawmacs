@@ -130,7 +130,6 @@
     #:clear-buffer-model-override
     #:clear-buffer-think-level-override
     #:clear-buffer-routing-overrides
-    #:clear-buffer-provider/model-overrides
      #:buffer-face-registry
    #:buffer-keymap
    #:buffer-scroll-offset
@@ -206,8 +205,6 @@
      #:agent-definition-think-level
      #:agent-definition-core-prompt
      #:agent-definition-personality-prompt
-     #:agent-definition-tools-prompt
-     #:agent-definition-soul-prompt
      #:register-agent-definition
      #:find-agent-definition
      #:list-agent-definitions
@@ -224,9 +221,6 @@
      #:load-personality-prompt-file
      #:provider-model-supported-think-levels
      #:reconcile-buffer-think-level-override
-     #:*system-prompt*
-     #:*system-prompt-path*
-     #:load-system-prompt-file
      #:*boot-file-names*
      #:load-boot-files
      #:*agent-defaults-path*
@@ -234,7 +228,6 @@
    #:*default-provider*
    #:*default-model*
    #:*default-max-tokens*
-   #:*default-tools-prompt*
    #:api-json-encode
    #:api-json-decode
 
@@ -261,7 +254,6 @@
    #:*openai-oauth-redirect-uri*
    #:*openai-oauth-scopes*
    #:*codex-auth-path*
-   #:*openai-codex-oauth-path*
    #:generate-code-verifier
    #:compute-code-challenge
    #:generate-oauth-state

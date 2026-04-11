@@ -262,7 +262,6 @@
           (clawmacs::*inhibit-user-init* nil)
           (clawmacs::*personality-prompt-path* missing-path)
           (clawmacs::*default-personality-prompt* "Default personality prompt")
-          (clawmacs::*system-prompt* clawmacs::+default-personality-prompt+)
           (clawmacs::*startup-hook* nil)
           (clawmacs::*initial-buffer-hook* nil)
           (clawmacs::*ui-backend* (make-instance 'test-ui-backend))
@@ -274,8 +273,6 @@
       (let ((buf (clawmacs:clawmacs-main :session-name "init-customization")))
         (is (string= "Custom personality prompt from init file."
                      clawmacs:*default-personality-prompt*))
-        (is (string= clawmacs:*default-personality-prompt*
-                     clawmacs:*system-prompt*))
         (is (not (null *startup-hook-ran*)))
         (is (not (null *initial-buffer-hook-ran*)))
         (is (eq 'toggle-debug-mode-command *initial-buffer-hook-binding*))

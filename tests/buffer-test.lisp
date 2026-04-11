@@ -203,17 +203,6 @@
     (is (null (buffer-model-override buf)))
     (is (null (buffer-think-level-override buf)))))
 
-(test deprecated-clear-buffer-provider/model-overrides-clears-routing-state
-  "The old provider/model clearing API remains a compatibility wrapper."
-  (let ((buf (make-buffer "test")))
-    (set-buffer-provider-override buf :openai-codex)
-    (set-buffer-model-override buf "gpt-5.4")
-    (set-buffer-think-level-override buf "high")
-    (clear-buffer-provider/model-overrides buf)
-    (is (null (buffer-provider-override buf)))
-    (is (null (buffer-model-override buf)))
-    (is (null (buffer-think-level-override buf)))))
-
 (test load-session-normalizes-legacy-raw-content
   "Legacy saved session raw-content is normalized to canonical blocks on load."
   (let* ((session-name "legacy-raw-content")

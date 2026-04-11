@@ -615,13 +615,6 @@ documentation in *extended-docs*."
   :side-effects "Clears provider, model, and think-level overrides."
   :see-also (clear-buffer-provider-override clear-buffer-model-override clear-buffer-think-level-override))
 
-(defdoc clear-buffer-provider/model-overrides
-  :category "buffer"
-  :usage "Deprecated alias for clear-buffer-routing-overrides."
-  :returns "buffer — The modified buffer."
-  :side-effects "Kept for existing init.lisp files; prefer clear-buffer-routing-overrides."
-  :see-also (clear-buffer-routing-overrides clear-buffer-provider-override clear-buffer-model-override clear-buffer-think-level-override))
-
 (defdoc buffer-face-registry
   :category "buffer"
   :usage "(buffer-face-registry BUF:buffer) — (buffer-face-registry (current-buffer))"
@@ -1010,31 +1003,6 @@ documentation in *extended-docs*."
   :side-effects "Reads PATH and stores its contents into *default-personality-prompt*."
   :see-also (*default-personality-prompt* *personality-prompt-path* build-agent-system-prompt))
 
-(defdoc *default-tools-prompt*
-  :category "llm"
-  :usage "Deprecated alias for *default-core-system-prompt*."
-  :see-also (*default-core-system-prompt* build-agent-system-prompt)
-  :side-effects "Kept for existing init.lisp files; prefer *default-core-system-prompt*.")
-
-(defdoc *system-prompt*
-  :category "llm"
-  :usage "Deprecated alias for *default-personality-prompt*."
-  :see-also (*default-personality-prompt* *personality-prompt-path* load-personality-prompt-file build-agent-system-prompt)
-  :side-effects "Kept for existing init.lisp files; prefer *default-personality-prompt*.")
-
-(defdoc *system-prompt-path*
-  :category "llm"
-  :usage "Deprecated alias for *personality-prompt-path*."
-  :see-also (*personality-prompt-path* load-personality-prompt-file)
-  :side-effects "Kept for existing init.lisp files; prefer *personality-prompt-path*.")
-
-(defdoc load-system-prompt-file
-  :category "llm"
-  :usage "(load-system-prompt-file &optional PATH) — (load-system-prompt-file #P\"~/my-prompt.txt\")"
-  :returns "string or nil — The trimmed prompt text, or NIL when PATH is missing."
-  :side-effects "Deprecated wrapper for load-personality-prompt-file."
-  :see-also (load-personality-prompt-file *default-personality-prompt* *personality-prompt-path* build-agent-system-prompt))
-
 (defdoc *boot-file-names*
   :category "llm"
   :usage "List of strings — boot markdown files loaded ahead of the core and personality prompts."
@@ -1091,10 +1059,6 @@ documentation in *extended-docs*."
 (defdoc *codex-auth-path*
   :category "llm"
   :see-also (read-openai-codex-oauth-tokens save-openai-codex-oauth-tokens))
-
-(defdoc *openai-codex-oauth-path*
-  :category "llm"
-  :see-also (*codex-auth-path* save-openai-codex-oauth-tokens read-openai-codex-oauth-tokens))
 
 (defdoc *openai-oauth-pending*
   :category "llm"
@@ -1178,13 +1142,13 @@ documentation in *extended-docs*."
   :usage "(save-openai-codex-oauth-tokens ACCESS-TOKEN REFRESH-TOKEN EXPIRES-IN)"
   :returns "string — The access token."
   :side-effects "Writes shared Codex auth.json credentials to disk with 600 permissions."
-  :see-also (read-openai-codex-oauth-tokens exchange-openai-oauth-code *codex-auth-path* *openai-codex-oauth-path*))
+  :see-also (read-openai-codex-oauth-tokens exchange-openai-oauth-code *codex-auth-path*))
 
 (defdoc read-openai-codex-oauth-tokens
   :category "llm"
   :usage "(read-openai-codex-oauth-tokens) — (read-openai-codex-oauth-tokens)"
   :returns "plist or nil — (:auth-mode ... :openai-api-key ... :id-token ... :access-token ... :refresh-token ... :account-id ... :last-refresh ...)"
-  :see-also (save-openai-codex-oauth-tokens read-openai-codex-oauth-token *codex-auth-path* *openai-codex-oauth-path*))
+  :see-also (save-openai-codex-oauth-tokens read-openai-codex-oauth-token *codex-auth-path*))
 
 (defdoc refresh-openai-codex-oauth-token
   :category "llm"

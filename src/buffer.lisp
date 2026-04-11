@@ -216,11 +216,6 @@ Enforces the invariant that it is not read-only."
   (clear-buffer-think-level-override buf)
   buf)
 
-(declaim (ftype (function (buffer) buffer) clear-buffer-provider/model-overrides))
-(defun clear-buffer-provider/model-overrides (buf)
-  "Deprecated compatibility wrapper for CLEAR-BUFFER-ROUTING-OVERRIDES."
-  (clear-buffer-routing-overrides buf))
-
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Ring
 ;;; --------------------------------------------------------------------------

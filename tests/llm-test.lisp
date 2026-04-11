@@ -60,8 +60,7 @@
     (merge-pathnames "auth.json" base)))
 
 (defmacro with-codex-auth-path-override ((path) &body body)
-  `(let ((clawmacs::*codex-auth-path* ,path)
-         (clawmacs::*openai-codex-oauth-path* ,path))
+  `(let ((clawmacs::*codex-auth-path* ,path))
      ,@body))
 
 (defun write-agent-defaults-file (path json)
@@ -251,8 +250,7 @@ PAIR PERSONALITY"
 (test build-agent-system-prompt-falls-back-to-default-components
   "Missing agent prompt slots fall back to the default core and personality prompts."
   (with-agent-definition-registry-override ()
-    (let ((clawmacs::*default-personality-prompt* "DEFAULT PERSONALITY")
-          (clawmacs::*system-prompt* clawmacs::+default-personality-prompt+))
+    (let ((clawmacs::*default-personality-prompt* "DEFAULT PERSONALITY"))
       (clawmacs:register-agent-definition "writer" :personality-prompt "WRITER PERSONALITY")
       (with-function-override (clawmacs::load-boot-files ()
                                 nil)
@@ -265,23 +263,6 @@ PAIR PERSONALITY"
         (let ((prompt (clawmacs:build-agent-system-prompt "missing")))
           (is (search "only built-in tool available by default is `lisp_eval`" prompt))
           (is (search "DEFAULT PERSONALITY" prompt)))))))
-
-(test register-agent-definition-accepts-deprecated-prompt-keywords
-  "Existing init.lisp files using tools/soul prompt keywords still work."
-  (with-agent-definition-registry-override ()
-    (let ((definition
-            (clawmacs:register-agent-definition
-             "legacy"
-             :tools-prompt "legacy core"
-             :soul-prompt "legacy personality")))
-      (is (string= "legacy core"
-                   (clawmacs:agent-definition-core-prompt definition)))
-      (is (string= "legacy core"
-                   (clawmacs:agent-definition-tools-prompt definition)))
-      (is (string= "legacy personality"
-                   (clawmacs:agent-definition-personality-prompt definition)))
-      (is (string= "legacy personality"
-                   (clawmacs:agent-definition-soul-prompt definition))))))
 
 (test provider-token-anthropic-is-unsupported
   "Anthropic no longer has a provider-specific token path."
