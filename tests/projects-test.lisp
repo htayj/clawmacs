@@ -123,6 +123,38 @@
       (is (eq :ok (getf summary :status)))
       (is (search ":new" (project-read-file "files" "src/sample.lisp"))))))
 
+(test project-traversal-ignores-generated-noise
+  "Project listing and search skip backup, debug, and binary artifacts."
+  (with-project-test-state (root definitions)
+    (define-project "quiet" :root root)
+    (project-save-file "quiet" "src/live.lisp" "(defun target () :ok)")
+    (project-save-file "quiet" "src/live.lisp~" "target backup")
+    (project-save-file "quiet" "debug.log" "target log")
+    (project-save-file "quiet" "debug-prompt.log" "target prompt log")
+    (project-save-file "quiet" "src/cache.fasl" "target binary")
+    (is (equal '("src/live.lisp")
+               (project-list-files "quiet")))
+    (let ((hits (project-search "quiet" "target")))
+      (is (= 1 (length hits)))
+      (is (string= "src/live.lisp" (getf (first hits) :path))))))
+
+(test project-read-file-lines-returns-bounded-numbered-slices
+  "PROJECT-READ-FILE-LINES reads targeted source slices for agents."
+  (with-project-test-state (root definitions)
+    (define-project "lines" :root root)
+    (project-save-file "lines" "notes.txt"
+                       (format nil "one~%two~%three~%four~%five~%six"))
+    (let ((slice (project-read-file-lines "lines" "notes.txt"
+                                          :line 4
+                                          :context 1
+                                          :max-lines 3)))
+      (is (search "notes.txt: lines 3-5 of 6" slice))
+      (is (search "3: three" slice))
+      (is (search "4: four" slice))
+      (is (search "5: five" slice))
+      (is (not (search "2: two" slice)))
+      (is (not (search "6: six" slice))))))
+
 (test project-open-file-creates-editable-buffer-and-save-buffer-persists
   "PROJECT-OPEN-FILE creates a file buffer whose text can be saved back."
   (with-project-test-state (root definitions)

@@ -259,6 +259,7 @@
    #:project-resolve-path
    #:project-list-files
    #:project-read-file
+   #:project-read-file-lines
    #:project-create-file
    #:project-save-file
    #:project-search

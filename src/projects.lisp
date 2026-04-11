@@ -54,6 +54,14 @@
   '(".git" ".hg" ".svn" ".cache" ".direnv" "node_modules" "target")
   "Directory names ignored by project listing and search.")
 
+(defvar *project-ignored-file-names*
+  '("debug.log" "debug-prompt.log" ".DS_Store")
+  "File names ignored by project listing and search.")
+
+(defvar *project-ignored-file-types*
+  '("fasl" "fas" "o" "so" "dylib" "dll")
+  "File extensions ignored by project listing and search.")
+
 (defvar *project-list-file-limit* 5000
   "Default maximum number of files returned by PROJECT-LIST-FILES.")
 
@@ -410,11 +418,26 @@ Existing projects, usually from init.lisp, are not overwritten."
          (name (car (last components))))
     (member name *project-ignored-directory-names* :test #'string=)))
 
+(defun ignored-project-file-p (path)
+  "Return true when PATH should be skipped during project traversal."
+  (let* ((name (file-namestring path))
+         (type (pathname-type path)))
+    (or (member name *project-ignored-file-names* :test #'string=)
+        (and type
+             (member (string-downcase type)
+                     *project-ignored-file-types*
+                     :test #'string=))
+        (alexandria:ends-with-subseq "~" name)
+        (and (alexandria:starts-with-subseq "#" name)
+             (alexandria:ends-with-subseq "#" name))
+        (alexandria:starts-with-subseq ".#" name))))
+
 (defun project-files-recursively (project)
   "Return all non-ignored files under PROJECT."
   (labels ((walk (directory)
              (unless (ignored-project-directory-p directory)
-               (nconc (uiop:directory-files directory)
+               (nconc (remove-if #'ignored-project-file-p
+                                  (uiop:directory-files directory))
                       (loop :for child :in (uiop:subdirectories directory)
                             :unless (ignored-project-directory-p child)
                               :nconc (walk child))))))
@@ -943,6 +966,48 @@ Existing projects, usually from init.lisp, are not overwritten."
         :for pos := (position #\Newline text :start start)
         :collect (subseq text start (or pos (length text)))
         :while pos))
+
+(defun bounded-project-line-range (line-count start end max-lines)
+  "Return a sane 1-based inclusive line range for LINE-COUNT."
+  (let* ((safe-start (max 1 (or start 1)))
+         (safe-end (or end
+                       (if max-lines
+                           (+ safe-start max-lines -1)
+                           line-count)))
+         (bounded-start (min safe-start (max 1 line-count)))
+         (bounded-end (max bounded-start (min safe-end line-count))))
+    (when (and max-lines
+               (> (1+ (- bounded-end bounded-start)) max-lines))
+      (setf bounded-end (+ bounded-start max-lines -1)))
+    (values bounded-start (min bounded-end line-count))))
+
+(defun project-read-file-lines (project-designator path
+                                &key line start end (context 20)
+                                  (max-lines 120))
+  "Read a line-numbered slice of a project resource as text."
+  (let* ((resource-path (project-resource-name path))
+         (lines (split-text-lines
+                 (project-read-file project-designator resource-path)))
+         (line-count (length lines))
+         (range-start (if line
+                          (max 1 (- line context))
+                          start))
+         (range-end (if line
+                        (+ line context)
+                        end)))
+    (multiple-value-bind (bounded-start bounded-end)
+        (bounded-project-line-range line-count range-start range-end max-lines)
+      (with-output-to-string (out)
+        (format out "~A: lines ~D-~D of ~D~%"
+                resource-path
+                bounded-start
+                bounded-end
+                line-count)
+        (loop :for text :in lines
+              :for line-number :from 1
+              :when (and (>= line-number bounded-start)
+                         (<= line-number bounded-end))
+                :do (format out "~D: ~A~%" line-number text))))))
 
 (defun project-search (project-designator query &key
                           (limit *project-search-result-limit*)

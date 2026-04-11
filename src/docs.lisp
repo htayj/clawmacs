@@ -1185,6 +1185,16 @@ documentation in *extended-docs*."
   :usage "List of directory names skipped by project traversal."
   :see-also (project-list-files project-search))
 
+(defdoc *project-ignored-file-names*
+  :category "project"
+  :usage "List of file names skipped by project traversal."
+  :see-also (project-list-files project-search))
+
+(defdoc *project-ignored-file-types*
+  :category "project"
+  :usage "List of file extensions skipped by project traversal."
+  :see-also (project-list-files project-search))
+
 (defdoc *project-list-file-limit*
   :category "project"
   :usage "Integer or nil — default PROJECT-LIST-FILES result limit."
@@ -1258,7 +1268,13 @@ documentation in *extended-docs*."
   :category "project"
   :usage "(project-read-file \"project\" \"path\")"
   :returns "string — Resource contents."
-  :see-also (project-list-files project-save-file))
+  :see-also (project-read-file-lines project-list-files project-save-file))
+
+(defdoc project-read-file-lines
+  :category "project"
+  :usage "(project-read-file-lines \"project\" \"path\" :line 42 :context 10)"
+  :returns "string — Line-numbered resource slice."
+  :see-also (project-read-file project-search-to-string project-outline-to-string))
 
 (defdoc project-create-file
   :category "project"
