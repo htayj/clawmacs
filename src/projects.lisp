@@ -591,6 +591,46 @@ Existing projects, usually from init.lisp, are not overwritten."
         (setf (getf summary :replacements) replacements)
         summary))))
 
+(defun project-replace-text-between (project-designator path start-marker
+                                      end-marker replacement
+                                      &key (include-start-marker t)
+                                        (include-end-marker nil))
+  "Replace text between START-MARKER and END-MARKER in PROJECT-DESIGNATOR/PATH."
+  (when (zerop (length start-marker))
+    (error "START-MARKER cannot be empty."))
+  (when (zerop (length end-marker))
+    (error "END-MARKER cannot be empty."))
+  (let* ((resource-path (project-resource-name path))
+         (text (project-read-file project-designator resource-path))
+         (start (search start-marker text :test #'char=)))
+    (unless start
+      (error "Start marker not found in project file: ~A:~A"
+             project-designator
+             resource-path))
+    (let* ((after-start (+ start (length start-marker)))
+           (end (search end-marker text
+                        :start2 after-start
+                        :test #'char=)))
+      (unless end
+        (error "End marker not found in project file after start marker: ~A:~A"
+               project-designator
+               resource-path))
+      (let* ((replace-start (if include-start-marker start after-start))
+             (replace-end (if include-end-marker
+                              (+ end (length end-marker))
+                              end))
+             (new-text (concatenate 'string
+                                    (subseq text 0 replace-start)
+                                    replacement
+                                    (subseq text replace-end)))
+             (summary (project-save-file project-designator
+                                         resource-path
+                                         new-text)))
+        (setf (getf summary :start-position) replace-start
+              (getf summary :end-position) replace-end
+              (getf summary :bytes-replaced) (- replace-end replace-start))
+        summary))))
+
 (defun stage-project-replace-text (project-designator path old new
                                    &key (count 1) change-set)
   "Stage exact OLD-to-NEW text replacement in PROJECT-DESIGNATOR/PATH."
@@ -1047,33 +1087,47 @@ Existing projects, usually from init.lisp, are not overwritten."
       (setf bounded-end (+ bounded-start max-lines -1)))
     (values bounded-start (min bounded-end line-count))))
 
-(defun project-read-file-lines (project-designator path
-                                &key line start end (context 20)
-                                  (max-lines 120))
+(defun normalize-project-read-file-lines-args (args)
+  "Normalize PROJECT-READ-FILE-LINES ARGS to a keyword plist."
+  (cond
+    ((or (null args)
+         (keywordp (first args)))
+     args)
+    ((numberp (first args))
+     (list* :start (first args)
+            :end (second args)
+            (cddr args)))
+    (t
+     (error "PROJECT-READ-FILE-LINES arguments must be keywords or positional START END, got ~S."
+            args))))
+
+(defun project-read-file-lines (project-designator path &rest args)
   "Read a line-numbered slice of a project resource as text."
-  (let* ((resource-path (project-resource-name path))
-         (lines (split-text-lines
-                 (project-read-file project-designator resource-path)))
-         (line-count (length lines))
-         (range-start (if line
-                          (max 1 (- line context))
-                          start))
-         (range-end (if line
-                        (+ line context)
-                        end)))
-    (multiple-value-bind (bounded-start bounded-end)
-        (bounded-project-line-range line-count range-start range-end max-lines)
-      (with-output-to-string (out)
-        (format out "~A: lines ~D-~D of ~D~%"
-                resource-path
-                bounded-start
-                bounded-end
-                line-count)
-        (loop :for text :in lines
-              :for line-number :from 1
-              :when (and (>= line-number bounded-start)
-                         (<= line-number bounded-end))
-                :do (format out "~D: ~A~%" line-number text))))))
+  (destructuring-bind (&key line start end (context 20) (max-lines 120))
+      (normalize-project-read-file-lines-args args)
+    (let* ((resource-path (project-resource-name path))
+           (lines (split-text-lines
+                   (project-read-file project-designator resource-path)))
+           (line-count (length lines))
+           (range-start (if line
+                            (max 1 (- line context))
+                            start))
+           (range-end (if line
+                          (+ line context)
+                          end)))
+      (multiple-value-bind (bounded-start bounded-end)
+          (bounded-project-line-range line-count range-start range-end max-lines)
+        (with-output-to-string (out)
+          (format out "~A: lines ~D-~D of ~D~%"
+                  resource-path
+                  bounded-start
+                  bounded-end
+                  line-count)
+          (loop :for text :in lines
+                :for line-number :from 1
+                :when (and (>= line-number bounded-start)
+                           (<= line-number bounded-end))
+                  :do (format out "~D: ~A~%" line-number text)))))))
 
 (defun project-search (project-designator query &key
                           (limit *project-search-result-limit*)

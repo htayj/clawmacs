@@ -1272,7 +1272,7 @@ documentation in *extended-docs*."
 
 (defdoc project-read-file-lines
   :category "project"
-  :usage "(project-read-file-lines \"project\" \"path\" :line 42 :context 10)"
+  :usage "(project-read-file-lines \"project\" \"path\" :line 42 :context 10) or (project-read-file-lines \"project\" \"path\" 10 30)"
   :returns "string — Line-numbered resource slice."
   :see-also (project-read-file project-search-to-string project-outline-to-string))
 
@@ -1295,7 +1295,14 @@ documentation in *extended-docs*."
   :usage "(project-replace-text \"project\" \"path\" OLD NEW :count 1)"
   :returns "plist — Save summary plus :REPLACEMENTS."
   :side-effects "Replaces exact text in a project resource and saves it."
-  :see-also (stage-project-replace-text project-save-file project-read-file-lines))
+  :see-also (project-replace-text-between stage-project-replace-text project-save-file project-read-file-lines))
+
+(defdoc project-replace-text-between
+  :category "project"
+  :usage "(project-replace-text-between \"project\" \"path\" START-MARKER END-MARKER REPLACEMENT)"
+  :returns "plist — Save summary plus :START-POSITION, :END-POSITION, and :BYTES-REPLACED."
+  :side-effects "Replaces the span from START-MARKER through just before END-MARKER. Use :INCLUDE-START-MARKER NIL or :INCLUDE-END-MARKER T to adjust the bounds."
+  :see-also (project-replace-text project-save-file project-read-file-lines))
 
 (defdoc project-search
   :category "project"

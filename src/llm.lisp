@@ -281,11 +281,16 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
   edit succeeded.
 - `(project-list-files \"PROJECT\")` lists project-relative resource paths.
 - `(project-read-file \"PROJECT\" \"PATH\")` reads a project resource as text.
+- `(project-read-file-lines \"PROJECT\" \"PATH\" 10 40)` reads a numbered line slice. It also
+  accepts keyword arguments such as `:line 42 :context 8`.
 - `(project-search-to-string \"PROJECT\" \"QUERY\")` searches project resources and returns
   `path:line: text` matches.
 - `(project-create-file \"PROJECT\" \"PATH\" :content \"...\" :if-exists :supersede)` creates or
   replaces a project resource. Omit `:if-exists` when you need an error on existing files.
 - `(project-save-file \"PROJECT\" \"PATH\" TEXT)` saves text to a project resource.
+- `(project-replace-text \"PROJECT\" \"PATH\" OLD NEW)` replaces exact text once.
+- `(project-replace-text-between \"PROJECT\" \"PATH\" START-MARKER END-MARKER REPLACEMENT)`
+  replaces a marker-bounded span; use this instead of custom substring code for cleanup edits.
 - `(project-open-file \"PROJECT\" \"PATH\")` opens a project resource as an editable file buffer.
 - For open file buffers, use `(file-buffer-text BUFFER)` and `(setf (file-buffer-text BUFFER) ...)`,
   then `(project-save-buffer BUFFER)`. Use `(file-buffer-dirty-p BUFFER)` to check whether

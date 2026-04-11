@@ -263,6 +263,7 @@
    #:project-read-file
    #:project-read-file-lines
    #:project-replace-text
+   #:project-replace-text-between
    #:project-create-file
    #:project-save-file
    #:stage-project-replace-text

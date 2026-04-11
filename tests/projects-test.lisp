@@ -153,7 +153,12 @@
       (is (search "4: four" slice))
       (is (search "5: five" slice))
       (is (not (search "2: two" slice)))
-      (is (not (search "6: six" slice))))))
+      (is (not (search "6: six" slice))))
+    (let ((slice (project-read-file-lines "lines" "notes.txt" 2 4)))
+      (is (search "notes.txt: lines 2-4 of 6" slice))
+      (is (search "2: two" slice))
+      (is (search "4: four" slice))
+      (is (not (search "5: five" slice))))))
 
 (test project-replace-text-replaces-exact-text
   "PROJECT-REPLACE-TEXT gives agents a small exact text edit primitive."
@@ -176,6 +181,38 @@
                    (project-read-file "replace" "notes.txt"))))
     (signals error
       (project-replace-text "replace" "notes.txt" "missing" "value"))))
+
+(test project-replace-text-between-replaces-marker-bounded-spans
+  "PROJECT-REPLACE-TEXT-BETWEEN lets agents avoid fragile substring surgery."
+  (with-project-test-state (root definitions)
+    (define-project "replace-between" :root root)
+    (project-save-file "replace-between"
+                       "notes.txt"
+                       (format nil "alpha~%START remove me~%END~%omega"))
+    (let ((summary (project-replace-text-between "replace-between"
+                                                 "notes.txt"
+                                                 "START"
+                                                 "END"
+                                                 "")))
+      (is (eq :ok (getf summary :status)))
+      (is (plusp (getf summary :bytes-replaced)))
+      (is (string= (format nil "alpha~%END~%omega")
+                   (project-read-file "replace-between" "notes.txt"))))
+    (project-replace-text-between "replace-between"
+                                  "notes.txt"
+                                  "alpha"
+                                  "omega"
+                                  "middle"
+                                  :include-start-marker nil
+                                  :include-end-marker nil)
+    (is (string= "alphamiddleomega"
+                 (project-read-file "replace-between" "notes.txt")))
+    (signals error
+      (project-replace-text-between "replace-between"
+                                    "notes.txt"
+                                    "missing"
+                                    "omega"
+                                    ""))))
 
 (test stage-project-replace-text-composes-with-change-sets
   "STAGE-PROJECT-REPLACE-TEXT edits staged text without touching the file."
