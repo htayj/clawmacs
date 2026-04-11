@@ -3737,6 +3737,12 @@ documentation in *extended-docs*."
   :returns "integer — Default maximum non-interactive tool-call turns."
   :see-also (run-single-prompt run-subagent clawmacs-prompt-main))
 
+(defdoc *prompt-required-write-retry-limit*
+  :category "main"
+  :usage "Integer retry limit used by prompt.sh --require-project-write."
+  :returns "integer — Maximum corrective retries after no-write prompt completions."
+  :see-also (clawmacs-prompt-main run-single-prompt))
+
 (defdoc *default-subagent-name*
   :category "main"
   :usage "String default used when run-subagent is called without :agent-name."

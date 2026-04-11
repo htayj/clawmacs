@@ -14,6 +14,9 @@
 (defvar *prompt-max-tool-iterations* 20
   "Default maximum tool-call turns allowed during one non-interactive prompt run.")
 
+(defvar *prompt-required-write-retry-limit* 2
+  "Maximum corrective retries when prompt mode requires project writes.")
+
 (defvar *default-subagent-name* "subagent"
   "Default transient agent name used by RUN-SUBAGENT.")
 
@@ -841,6 +844,45 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
            :custom-tools custom-tools
            (when tool-names-supplied-p
              (list :tool-names tool-names)))))
+
+(defun run-prompt-buffer-from-options (buf options)
+  "Run BUF using prompt-mode OPTIONS and return a PROMPT-RUN-RESULT."
+  (run-prompt-buffer
+   buf
+   (prompt-options-prompt options)
+   :provider (prompt-options-provider options)
+   :model (prompt-options-model options)
+   :think-level (prompt-options-think-level options)
+   :max-tool-iterations (prompt-options-max-tool-iterations options)
+   :auto-approve-tools-p (prompt-options-auto-approve-tools-p options)))
+
+(defun prompt-required-write-retry-text (attempt)
+  "Return the corrective prompt for required-write retry ATTEMPT."
+  (format nil
+          "The previous response completed without any project writes, but this prompt run requires durable project changes. Continue the same task now. Use lisp_eval to inspect, edit through project/sexed helpers, run checks, and only give a final answer after at least one project write has been recorded. This is corrective retry ~D of ~D."
+          attempt
+          *prompt-required-write-retry-limit*))
+
+(defun run-prompt-buffer-with-required-writes (buf options)
+  "Run BUF with OPTIONS, retrying when required project writes are missing."
+  (let ((attempt 0)
+        (last-result nil))
+    (loop
+      (let ((result (run-prompt-buffer-from-options buf options)))
+        (setf last-result result)
+        (when (or (not (prompt-options-require-project-write-p options))
+                  (prompt-run-result-project-write-events result))
+          (return result))
+        (when (>= attempt *prompt-required-write-retry-limit*)
+          (error 'prompt-run-error
+                 :message "Prompt completed without project writes"
+                 :tool-events (prompt-run-result-tool-events last-result)
+                 :iterations (prompt-run-result-iterations last-result)
+                 :provider (prompt-run-result-provider last-result)
+                 :model (prompt-run-result-model last-result)
+                 :think-level (prompt-run-result-think-level last-result)))
+        (incf attempt)
+        (prepare-prompt-buffer buf (prompt-required-write-retry-text attempt))))))
 
 (defun run-subagent (prompt &key (agent-name *default-subagent-name*)
                                   provider model think-level
@@ -4234,7 +4276,7 @@ Options:
   --max-tool-iterations N   Stop after N tool-call turns (default: 20).
   --skill-root PATH         Add a skill root for this prompt run. May repeat.
   --session NAME            Continue and save a named prompt-mode session.
-  --require-project-write   Fail if the prompt completes without project writes.
+  --require-project-write   Retry, then fail, if the prompt completes without project writes.
   --debug-log PATH          Write low-level debug logs to PATH.
   --isolated                Use temporary prompt config/project/session dirs.
   --clean-build             Clear cached Lisp build artifacts before loading.
@@ -4590,25 +4632,7 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
                        (prompt-options-agent-name options)
                        session-name))
                  (result
-                   (run-prompt-buffer
-                    buf
-                    (prompt-options-prompt options)
-                    :provider (prompt-options-provider options)
-                    :model (prompt-options-model options)
-                    :think-level (prompt-options-think-level options)
-                    :max-tool-iterations
-                    (prompt-options-max-tool-iterations options)
-                    :auto-approve-tools-p
-                    (prompt-options-auto-approve-tools-p options))))
-            (when (and (prompt-options-require-project-write-p options)
-                       (null (prompt-run-result-project-write-events result)))
-              (error 'prompt-run-error
-                     :message "Prompt completed without project writes"
-                     :tool-events (prompt-run-result-tool-events result)
-                     :iterations (prompt-run-result-iterations result)
-                     :provider (prompt-run-result-provider result)
-                     :model (prompt-run-result-model result)
-                     :think-level (prompt-run-result-think-level result)))
+                   (run-prompt-buffer-with-required-writes buf options)))
             (when session-name
               (save-session buf))
             (write-prompt-run-result result options)))

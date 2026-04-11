@@ -681,6 +681,80 @@ PAIR PERSONALITY"
                          (uiop:read-file-string
                           (merge-pathnames #P"result.txt" root))))))))))
 
+(test run-prompt-buffer-required-writes-retries-after-no-write-answer
+  "Required-write prompt mode appends a corrective turn when the agent only answers."
+  (let* ((path (temp-agent-defaults-path))
+         (root (make-pathname :directory
+                              (list :absolute "tmp"
+                                    (format nil "clawmacs-required-write-~A"
+                                            (list (get-universal-time)
+                                                  (get-internal-real-time)
+                                                  (gensym))))))
+         (request-count 0)
+         (corrective-message-seen-p nil)
+         (tool-code (format nil
+                            "(progn (define-project \"required-write\" :root #P~S) (project-save-file \"required-write\" \"result.txt\" \"ok\"))"
+                            (namestring root))))
+    (ensure-directories-exist (merge-pathnames #P".keep" root))
+    (with-agent-defaults-path-override (path)
+      (with-tool-table-restored
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                             reasoning-effort system-prompt)
+                                 (declare (ignore provider callback model
+                                                  max-tokens tools
+                                                  reasoning-effort system-prompt))
+                                 (incf request-count)
+                                 (when (some (lambda (message)
+                                               (search "corrective retry"
+                                                       (format nil "~S" message)))
+                                             messages)
+                                   (setf corrective-message-seen-p t))
+                                 (case request-count
+                                   (1
+                                    (make-completed-stream-state-response
+                                     "end_turn"
+                                     (list (clawmacs::canonical-text-block
+                                            "I will do that next."))))
+                                   (2
+                                    (make-completed-stream-state-response
+                                     "tool_use"
+                                     (list
+                                      (clawmacs::canonical-tool-use-block
+                                       "write-1"
+                                       "lisp_eval"
+                                       `((:code . ,tool-code))))))
+                                   (t
+                                    (make-completed-stream-state-response
+                                     "end_turn"
+                                     (list (clawmacs::canonical-text-block
+                                            "done"))))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (clawmacs::init-tools)
+          (let* ((options (clawmacs::make-prompt-options
+                           :prompt "write a project file"
+                           :provider "zai"
+                           :model "glm-5"
+                           :auto-approve-tools-p t
+                           :require-project-write-p t
+                           :max-tool-iterations 5))
+                 (buf (clawmacs::make-prompt-buffer
+                       "write a project file"
+                       "agent"))
+                 (result (clawmacs::run-prompt-buffer-with-required-writes
+                          buf
+                          options))
+                 (events (clawmacs:prompt-run-result-project-write-events
+                          result)))
+            (is (= 3 request-count))
+            (is-true corrective-message-seen-p)
+            (is (= 1 (length events)))
+            (is (string= "ok"
+                         (uiop:read-file-string
+                          (merge-pathnames #P"result.txt" root))))))))))
+
 (test run-single-prompt-executes-lisp-eval-tool-loop
   "Prompt mode executes lisp_eval tool calls and continues with tool results."
   (let ((path (temp-agent-defaults-path))
