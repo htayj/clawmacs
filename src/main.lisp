@@ -20,6 +20,15 @@
 (defvar *prompt-provider-retry-limit* 2
   "Maximum provider request retries for transient prompt-mode request failures.")
 
+(defvar *prompt-live-tool-event-stream* nil
+  "Output stream used for live prompt-mode tool traces, or NIL to buffer traces.")
+
+(defvar *prompt-live-tool-event-count* 0
+  "Number of prompt-mode tool events written through the live trace stream.")
+
+(defvar *prompt-live-tool-event-callback* nil
+  "Optional function called after a prompt-mode tool event is written live.")
+
 (defvar *default-subagent-name* "subagent"
   "Default transient agent name used by RUN-SUBAGENT.")
 
@@ -741,7 +750,8 @@ PROMPT-TOOL-EVENT for terminal/debug output."
       (multiple-value-bind (result event)
           (execute-prompt-tool-call tool-use agent-kw auto-approve-tools-p)
         (push result results)
-        (push event events)))
+        (push event events)
+        (maybe-write-live-prompt-tool-event event)))
     (insert-tool-results-message buf (nreverse results))
     (nreverse events)))
 
@@ -4574,21 +4584,38 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
   (format stream ";; project-writes: ~D~%"
           (length (prompt-run-result-project-write-events result))))
 
+(defun write-prompt-tool-event (event stream index &key (label "tool"))
+  "Write one prompt tool EVENT to STREAM in Lisp-oriented display form."
+  (format stream ";; ~A ~D: ~A~%" label index
+          (prompt-tool-event-name event))
+  (format stream "~A~%~%" (prompt-tool-event-display event)))
+
+(defun maybe-write-live-prompt-tool-event (event)
+  "Write EVENT immediately when prompt-mode live tool tracing is enabled."
+  (when *prompt-live-tool-event-stream*
+    (incf *prompt-live-tool-event-count*)
+    (write-prompt-tool-event event
+                             *prompt-live-tool-event-stream*
+                             *prompt-live-tool-event-count*)
+    (finish-output *prompt-live-tool-event-stream*)
+    (when *prompt-live-tool-event-callback*
+      (funcall *prompt-live-tool-event-callback* event))
+    t))
+
 (defun write-prompt-tool-events (result stream)
   "Write prompt tool events to STREAM in Lisp-oriented display form."
   (loop :for event :in (prompt-run-result-tool-events result)
         :for index :from 1
-        :do (format stream ";; tool ~D: ~A~%" index
-                    (prompt-tool-event-name event))
-            (format stream "~A~%~%" (prompt-tool-event-display event))))
+        :do (write-prompt-tool-event event stream index)))
 
 (defun write-prompt-tool-event-list (events stream)
   "Write prompt tool EVENTS to STREAM."
   (loop :for event :in events
         :for index :from 1
-        :do (format stream ";; partial tool ~D: ~A~%" index
-                    (prompt-tool-event-name event))
-            (format stream "~A~%~%" (prompt-tool-event-display event))))
+        :do (write-prompt-tool-event event
+                                     stream
+                                     index
+                                     :label "partial tool")))
 
 (defun write-prompt-reasoning (result stream)
   "Write provider-supplied reasoning blocks to STREAM when present."
@@ -4608,7 +4635,8 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
     (t
      (when (prompt-options-show-metadata-p options)
        (write-prompt-metadata result *error-output*))
-     (when (prompt-options-show-tools-p options)
+     (when (and (prompt-options-show-tools-p options)
+                (zerop *prompt-live-tool-event-count*))
        (write-prompt-tool-events result *error-output*))
      (when (prompt-options-show-reasoning-p options)
        (write-prompt-reasoning result *error-output*))
@@ -4619,7 +4647,8 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
 (defun clawmacs-prompt-main ()
   "CLI entry point for one-shot prompt execution.
 This function exits the Lisp image with status 0 on success and 1 on errors."
-  (let ((options nil))
+  (let ((options nil)
+        (live-tool-events-emitted-p nil))
     (handler-case
       (progn
         (setf options (parse-clawmacs-prompt-args))
@@ -4646,12 +4675,22 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
                  (buf (load-or-make-prompt-session-buffer
                        (prompt-options-prompt options)
                        (prompt-options-agent-name options)
-                       session-name))
-                 (result
-                   (run-prompt-buffer-with-required-writes buf options)))
-            (when session-name
-              (save-session buf))
-            (write-prompt-run-result result options)))
+                       session-name)))
+            (let ((*prompt-live-tool-event-stream*
+                    (and (prompt-options-show-tools-p options)
+                         (not (prompt-options-json-p options))
+                         *error-output*))
+                  (*prompt-live-tool-event-count* 0)
+                  (*prompt-live-tool-event-callback*
+                    (lambda (event)
+                      (declare (ignore event))
+                      (setf live-tool-events-emitted-p t))))
+              (let ((result (run-prompt-buffer-with-required-writes
+                             buf
+                             options)))
+                (when session-name
+                  (save-session buf))
+                (write-prompt-run-result result options)))))
         (uiop:quit 0))
       (prompt-run-error (e)
         (format *error-output* "~&clawmacs prompt error: ~A~%" e)
@@ -4664,7 +4703,8 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
                     (or (prompt-run-error-model e) "unknown"))
             (format *error-output* ";; partial think: ~A~%"
                     (or (prompt-run-error-think-level e) "default")))
-          (when (prompt-run-error-tool-events e)
+          (when (and (prompt-run-error-tool-events e)
+                     (not live-tool-events-emitted-p))
             (format *error-output* ";; partial tool trace follows~%")
             (write-prompt-tool-event-list
              (prompt-run-error-tool-events e)

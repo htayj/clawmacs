@@ -801,7 +801,9 @@ PAIR PERSONALITY"
   "Prompt mode executes lisp_eval tool calls and continues with tool results."
   (let ((path (temp-agent-defaults-path))
         (request-count 0)
-        (second-request-messages nil))
+        (second-request-messages nil)
+        (live-tool-output (make-string-output-stream))
+        (live-tool-events nil))
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
         (with-function-override (clawmacs::provider-request-streaming
@@ -829,12 +831,19 @@ PAIR PERSONALITY"
           (clawmacs::init-default-keymap)
           (clawmacs::init-global-faces)
           (clawmacs::init-tools)
-          (let* ((result (clawmacs:run-single-prompt
-                          "Compute two plus three"
-                          :provider :zai
-                          :model "glm-5"))
+          (let* ((result (let ((clawmacs:*prompt-live-tool-event-stream*
+                                  live-tool-output)
+                                 (clawmacs:*prompt-live-tool-event-count* 0)
+                                 (clawmacs:*prompt-live-tool-event-callback*
+                                   (lambda (event)
+                                     (push event live-tool-events))))
+                           (clawmacs:run-single-prompt
+                            "Compute two plus three"
+                            :provider :zai
+                            :model "glm-5")))
                  (events (clawmacs:prompt-run-result-tool-events result))
-                 (event (first events)))
+                 (event (first events))
+                 (live-output (get-output-stream-string live-tool-output)))
             (is (= 2 request-count))
             (is (= 3 (length second-request-messages)))
             (is (string= "the result is 5"
@@ -844,6 +853,9 @@ PAIR PERSONALITY"
             (is (string= "lisp_eval" (clawmacs:prompt-tool-event-name event)))
             (is (search "(+ 2 3)" (clawmacs:prompt-tool-event-display event)))
             (is (search "5" (clawmacs:prompt-tool-event-result-text event)))
+            (is (= 1 (length live-tool-events)))
+            (is (search ";; tool 1: lisp_eval" live-output))
+            (is (search "(+ 2 3)" live-output))
             (let* ((tool-result-message (third second-request-messages))
                    (content (coerce (cdr (assoc :content tool-result-message))
                                     'list))

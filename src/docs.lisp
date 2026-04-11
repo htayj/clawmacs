@@ -3749,6 +3749,24 @@ documentation in *extended-docs*."
   :returns "integer — Maximum retries for transient provider request failures."
   :see-also (clawmacs-prompt-main run-single-prompt))
 
+(defdoc *prompt-live-tool-event-stream*
+  :category "main"
+  :usage "Output stream used for live prompt-mode tool traces."
+  :returns "stream or nil — Destination for immediate tool-call/result output."
+  :see-also (clawmacs-prompt-main write-prompt-tool-event))
+
+(defdoc *prompt-live-tool-event-count*
+  :category "main"
+  :usage "Counter for live prompt-mode tool traces."
+  :returns "integer — Number of tool events emitted in the current prompt run."
+  :see-also (*prompt-live-tool-event-stream* clawmacs-prompt-main))
+
+(defdoc *prompt-live-tool-event-callback*
+  :category "main"
+  :usage "Optional hook called after each live prompt-mode tool trace."
+  :returns "function or nil — Receives a PROMPT-TOOL-EVENT."
+  :see-also (*prompt-live-tool-event-stream* prompt-tool-event))
+
 (defdoc *default-subagent-name*
   :category "main"
   :usage "String default used when run-subagent is called without :agent-name."

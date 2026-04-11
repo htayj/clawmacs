@@ -864,6 +864,9 @@
    #:*prompt-max-tool-iterations*
    #:*prompt-required-write-retry-limit*
    #:*prompt-provider-retry-limit*
+   #:*prompt-live-tool-event-stream*
+   #:*prompt-live-tool-event-count*
+   #:*prompt-live-tool-event-callback*
    #:*default-subagent-name*
    #:subagent-handle
    #:subagent-handle-id
