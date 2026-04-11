@@ -226,6 +226,30 @@ polls for updates via update-streaming-response."
           (setf (message-face-set err-msg)
                 (gethash agent-kw (buffer-face-registry buf))))))))
 
+(defun latest-text-block-text (content-blocks)
+  "Return the text of the last text block in CONTENT-BLOCKS, or NIL."
+  (let ((latest nil))
+    (dolist (block content-blocks latest)
+      (when (string= "text" (content-block-type block))
+        (setf latest (or (cdr (assoc :text block)) ""))))))
+
+(defun stream-state-display-text (state)
+  "Return STATE's in-progress text without double-counting accumulators.
+Some providers keep the current partial text only in STREAM-STATE-TEXT, while
+OpenAI-compatible providers also mirror it into CONTENT-BLOCKS on every delta."
+  (bt:with-lock-held ((stream-state-lock state))
+    (let* ((accumulator (stream-state-text state))
+           (content-blocks (reverse (copy-list (stream-state-content-blocks state))))
+           (content-text (content-text-blocks content-blocks))
+           (latest-text (latest-text-block-text content-blocks)))
+      (cond
+        ((zerop (length accumulator))
+         content-text)
+        ((and latest-text (string= latest-text accumulator))
+         content-text)
+        (t
+         (concatenate 'string content-text accumulator))))))
+
 (defun update-streaming-response (buf)
   "Poll the active streaming response and update the display.
 Returns T if still streaming, NIL if done."
@@ -234,9 +258,7 @@ Returns T if still streaming, NIL if done."
     (unless (and state msg)
       (return-from update-streaming-response nil))
     ;; Read state under lock
-    (let ((in-progress-text (bt:with-lock-held ((stream-state-lock state))
-                              (stream-state-text state)))
-          (done (bt:with-lock-held ((stream-state-lock state))
+    (let ((done (bt:with-lock-held ((stream-state-lock state))
                   (stream-state-done-p state)))
           (err (bt:with-lock-held ((stream-state-lock state))
                  (stream-state-error-p state))))
@@ -244,13 +266,7 @@ Returns T if still streaming, NIL if done."
       ;; (stream-state-text accumulates the CURRENT block's text;
       ;; completed blocks have their text finalized in content-blocks)
       (unless done
-        (let ((all-text (bt:with-lock-held ((stream-state-lock state))
-                          ;; Collect text from completed blocks + current accumulator
-                          (let ((completed (content-text-blocks
-                                            (reverse (stream-state-content-blocks state)))))
-                            (if (plusp (length in-progress-text))
-                                (concatenate 'string completed in-progress-text)
-                                completed)))))
+        (let ((all-text (stream-state-display-text state)))
           (when (plusp (length all-text))
             (set-message-text msg (string-trim '(#\Space #\Tab #\Newline #\Return) all-text)))))
       (cond

@@ -846,6 +846,59 @@ PAIR SOUL"
       (is (search "resolver exploded"
                   (message-text (buffer-first-message buf)))))))
 
+(test update-streaming-response-does-not-double-count-mirrored-text-block
+  "OpenAI-compatible streams mirror partial text into content blocks; render it once."
+  (let* ((buf (make-buffer "stream-openai" :agent-name "agent"))
+         (msg (buffer-insert-agent-message buf ""))
+         (state (clawmacs::make-stream-state)))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (setf (clawmacs::stream-state-text state) "hello"
+            (clawmacs::stream-state-content-blocks state)
+            (list (clawmacs::canonical-text-block "hello"))))
+    (setf (buffer-pending-stream buf) state
+          (buffer-streaming-message buf) msg
+          (buffer-status buf) :streaming)
+    (is-true (clawmacs::update-streaming-response buf))
+    (is (string= "hello" (message-text msg)))
+    (is (= 2 (buffer-message-count buf)))))
+
+(test update-streaming-response-appends-accumulator-after-completed-blocks
+  "Anthropic-style streams keep the current block in the accumulator until block_stop."
+  (let* ((buf (make-buffer "stream-anthropic" :agent-name "agent"))
+         (msg (buffer-insert-agent-message buf ""))
+         (state (clawmacs::make-stream-state)))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (setf (clawmacs::stream-state-text state) "world"
+            (clawmacs::stream-state-content-blocks state)
+            (list (clawmacs::canonical-text-block "Hello, "))))
+    (setf (buffer-pending-stream buf) state
+          (buffer-streaming-message buf) msg
+          (buffer-status buf) :streaming)
+    (is-true (clawmacs::update-streaming-response buf))
+    (is (string= "Hello, world" (message-text msg)))
+    (is (= 2 (buffer-message-count buf)))))
+
+(test update-streaming-response-finalizes-single-placeholder-message
+  "Completing a stream updates the existing placeholder instead of inserting another agent message."
+  (let* ((buf (make-buffer "stream-final" :agent-name "agent"))
+         (msg (buffer-insert-agent-message buf "partial"))
+         (state (clawmacs::make-stream-state)))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (setf (clawmacs::stream-state-text state) "final answer"
+            (clawmacs::stream-state-content-blocks state)
+            (list (clawmacs::canonical-text-block "final answer"))
+            (clawmacs::stream-state-stop-reason state) "end_turn"
+            (clawmacs::stream-state-done-p state) t))
+    (setf (buffer-pending-stream buf) state
+          (buffer-streaming-message buf) msg
+          (buffer-status buf) :streaming)
+    (is-false (clawmacs::update-streaming-response buf))
+    (is (string= "final answer" (message-text msg)))
+    (is (= 2 (buffer-message-count buf)))
+    (is (null (buffer-pending-stream buf)))
+    (is (null (buffer-streaming-message buf)))
+    (is (eq :idle (buffer-status buf)))))
+
 (test anthropic-request-normalizes-response-shape
   "Anthropic adapter returns canonical stop reason and content blocks."
   (with-function-override (drakma:http-request (&rest args)
