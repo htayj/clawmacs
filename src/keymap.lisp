@@ -48,6 +48,17 @@
 (defvar *default-keymap* nil
   "The default keymap for chat buffers. Initialized by init-default-keymap.")
 
+(defvar *scratch-keymap* nil
+  "Keymap for scratch buffers. Inherits global bindings from *default-keymap*.")
+
+(defun init-scratch-keymap ()
+  "Build and install the scratch buffer keymap."
+  (let ((km (make-keymap :scratch :parent *default-keymap*)))
+    ;; In scratch, RET edits the buffer instead of sending a chat message.
+    (keymap-bind km #\Return 'insert-newline-command)
+    (keymap-bind km #\Newline 'insert-newline-command)
+    (setf *scratch-keymap* km)))
+
 (defun init-default-keymap ()
   "Build and install the default keymap with standard chat buffer bindings."
   (let ((km (make-keymap :default)))
@@ -156,4 +167,5 @@
     (keymap-bind km '(:ctrl-x #\b) 'list-buffers-command)
     ;; C-x C-b = minibuffer buffer selector (helm/ivy/vertico style)
     (keymap-bind km (list :ctrl-x (code-char 2)) 'minibuffer-select-buffer-command)
-    (setf *default-keymap* km)))
+    (setf *default-keymap* km)
+    (init-scratch-keymap)))

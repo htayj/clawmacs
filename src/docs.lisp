@@ -481,18 +481,26 @@ documentation in *extended-docs*."
   :category "buffer"
   :see-also (buffer-show-tool-results-p))
 
+(defdoc *scratch-buffer-name*
+  :category "buffer"
+  :see-also (ensure-scratch-buffer scratch-buffer))
+
+(defdoc *scratch-buffer-initial-text*
+  :category "buffer"
+  :see-also (ensure-scratch-buffer scratch-buffer-text))
+
 (defdoc buffer
   :category "buffer"
   :usage "(make-buffer \"session-01\" :agent-name \"agent\") to create a buffer."
-  :returns "Class — A chat buffer with a doubly-linked list of messages."
+  :returns "Class — A buffer with a doubly-linked list of messages."
   :see-also (make-buffer buffer-name buffer-input-message *buffer-ring*))
 
 (defdoc make-buffer
   :category "buffer"
-  :usage "(make-buffer NAME:string &key AGENT-NAME:string WORKING-DIRECTORY:pathname CONTEXT-LIMIT:integer) — (make-buffer \"session-01\" :agent-name \"agent\")"
+  :usage "(make-buffer NAME:string &key AGENT-NAME:string KIND:keyword WORKING-DIRECTORY:pathname CONTEXT-LIMIT:integer) — (make-buffer \"session-01\" :agent-name \"agent\")"
   :returns "buffer — A new buffer with a single empty input message."
   :side-effects "Allocates a buffer with an empty face registry."
-  :see-also (buffer buffer-name add-buffer-to-ring current-buffer))
+  :see-also (buffer buffer-name buffer-kind add-buffer-to-ring current-buffer))
 
 (defdoc buffer-name
   :category "buffer"
@@ -523,6 +531,12 @@ documentation in *extended-docs*."
   :usage "(buffer-agent-name BUF:buffer) — (buffer-agent-name (current-buffer))"
   :returns "string — \"agent\", \"help\", etc."
   :see-also (buffer make-buffer buffer-name))
+
+(defdoc buffer-kind
+  :category "buffer"
+  :usage "(buffer-kind BUF:buffer) — (buffer-kind (current-buffer))"
+  :returns "keyword — :CHAT, :SCRATCH, or another custom buffer kind."
+  :see-also (buffer make-buffer scratch-buffer-p))
 
 (defdoc buffer-working-directory
   :category "buffer"
@@ -654,7 +668,7 @@ documentation in *extended-docs*."
 (defdoc buffer-major-mode
   :category "buffer"
   :usage "(buffer-major-mode BUF:buffer) — (buffer-major-mode (current-buffer))"
-  :returns "string — \"chat\" or \"help\"."
+  :returns "string — \"chat\", \"scratch\", \"help\", etc."
   :see-also (buffer make-help-buffer render-modeline))
 
 (defdoc *buffer-ring*
@@ -685,14 +699,40 @@ documentation in *extended-docs*."
   :category "buffer"
   :usage "(kill-buffer-from-ring BUF:buffer) — (kill-buffer-from-ring (current-buffer))"
   :returns "buffer or nil — The new current buffer, or nil if ring is now empty."
-  :side-effects "Removes BUF from *buffer-ring*."
-  :see-also (*buffer-ring* add-buffer-to-ring kill-buffer-command))
+  :side-effects "Removes BUF from *buffer-ring* unless BUF is the scratch buffer."
+  :see-also (*buffer-ring* add-buffer-to-ring kill-buffer-command scratch-buffer-p))
 
 (defdoc find-buffer-by-name
   :category "buffer"
   :usage "(find-buffer-by-name NAME:string) — (find-buffer-by-name \"session-01\")"
   :returns "buffer or nil — The matching buffer, or nil."
   :see-also (buffer-name buffer-names *buffer-ring*))
+
+(defdoc scratch-buffer-p
+  :category "buffer"
+  :usage "(scratch-buffer-p BUF:buffer) — (scratch-buffer-p (current-buffer))"
+  :returns "boolean — T when BUF is the process-local scratch buffer."
+  :see-also (scratch-buffer ensure-scratch-buffer buffer-kind))
+
+(defdoc scratch-buffer
+  :category "buffer"
+  :usage "(scratch-buffer) — (scratch-buffer)"
+  :returns "buffer or nil — The loaded scratch buffer."
+  :see-also (ensure-scratch-buffer scratch-buffer-text *scratch-buffer-name*))
+
+(defdoc ensure-scratch-buffer
+  :category "buffer"
+  :usage "(ensure-scratch-buffer) — (ensure-scratch-buffer)"
+  :returns "buffer — The process-local scratch buffer."
+  :side-effects "Creates and loads the scratch buffer when absent; preserves the current buffer."
+  :see-also (scratch-buffer scratch-buffer-p *scratch-buffer-initial-text*))
+
+(defdoc scratch-buffer-text
+  :category "buffer"
+  :usage "(scratch-buffer-text &optional BUF) — (setf (scratch-buffer-text) \"notes\")"
+  :returns "string or nil — The editable scratch document text."
+  :side-effects "SETF replaces the scratch buffer's editable text."
+  :see-also (scratch-buffer ensure-scratch-buffer buffer-input-message))
 
 (defdoc next-buffer-name
   :category "buffer"

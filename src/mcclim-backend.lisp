@@ -461,6 +461,9 @@ When the minibuffer is active, draws a centered popup overlay on top."
 
 (defun mcclim-render-buffer (pane buf rows cols char-w char-h)
   "Render the full buffer: title bar at row 0, then history + input below."
+  (when (scratch-buffer-p buf)
+    (return-from mcclim-render-buffer
+      (mcclim-render-scratch-buffer pane buf rows cols char-w char-h)))
   (let* ((total-height (1- rows))
          (width cols)
          (input-height (calculate-input-height buf total-height width))
@@ -521,16 +524,40 @@ When the minibuffer is active, draws a centered popup overlay on top."
                                      input-start-row cols char-w char-h
                                      :show-cursor t :max-rows rows))))
 
+(defun mcclim-render-scratch-buffer (pane buf rows cols char-w char-h)
+  "Render scratch BUF as a full-pane editable text buffer."
+  (clear-pane-with-ink pane *mcclim-bg-ink*)
+  (let ((row 0))
+    (loop :for msg := (buffer-first-message buf) :then (message-next msg)
+          :while (and msg (not (eq msg (buffer-input-message buf))) (< row rows))
+          :do (incf row (mcclim-render-message-lines pane msg row cols
+                                                     char-w char-h
+                                                     :max-rows rows)))
+    (let ((text-height (max 1 (- rows row))))
+      (multiple-value-bind (start-row scroll-offset)
+          (scratch-buffer-scroll-geometry buf text-height cols)
+        (unless (frame-always-poll-p (clim:pane-frame pane))
+          (setf (buffer-scroll-offset buf) scroll-offset))
+        (mcclim-render-message-lines pane
+                                     (buffer-input-message buf)
+                                     (+ row start-row)
+                                     cols
+                                     char-w
+                                     char-h
+                                     :show-cursor t
+                                     :max-rows rows
+                                     :prefix "")))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Message Line Rendering
 ;;; --------------------------------------------------------------------------
 
 (defun mcclim-render-message-lines (pane msg start-row width char-w char-h
-                                    &key show-cursor (max-rows 1000))
+                                    &key show-cursor (max-rows 1000)
+                                      (prefix (message-sender-prefix msg)))
   "Render MSG's lines into PANE starting at START-ROW with line wrapping.
 Returns the number of visual rows consumed."
-  (let* ((prefix (message-sender-prefix msg))
-         (prefix-len (length prefix))
+  (let* ((prefix-len (length prefix))
          (display-width (max 1 (- width prefix-len)))
          (face-set (message-face-set msg))
          (face (if face-set
@@ -555,36 +582,39 @@ Returns the number of visual rows consumed."
                                (chunk-end (min (* (1+ wrap-idx) display-width) content-len))
                                (chunk (subseq content chunk-start chunk-end))
                                (first-row-p (and (= line-idx 0) (= wrap-idx 0))))
-                          (if tool-face-name
-                              (multiple-value-bind (_tool-fg tool-bg _tool-ts)
-                                  (resolve-global-face-inks tool-face-name)
-                                (declare (ignore _tool-fg _tool-ts))
-                                (fill-row pane row width tool-bg char-w char-h)
-                                (draw-faced-spans
-                                 pane row (if first-row-p 0 prefix-len)
-                                 (tool-line-display-spans
-                                  content tool-face-name
-                                  :start chunk-start :end chunk-end
-                                  :prefix (and first-row-p prefix))
-                                 char-w char-h))
-                              (progn
-                                (fill-row pane row width bg char-w char-h)
-                                (when first-row-p
-                                  (draw-text-at pane row 0
-                                                (concatenate 'string prefix chunk)
-                                                fg bg ts char-w char-h)
-                                  (when underline-p
-                                    (draw-underline-at pane row 0
-                                                       (+ prefix-len (length chunk))
-                                                       fg char-w char-h))
-                                  (setf chunk nil))
-                                (when chunk
-                                  (draw-text-at pane row prefix-len chunk
-                                                fg bg ts char-w char-h)
-                                  (when underline-p
-                                    (draw-underline-at pane row prefix-len (length chunk)
-                                                       fg char-w char-h)))))
-                          (when (and show-cursor (eq line (message-point-line msg)))
+                          (when (>= row 0)
+                            (if tool-face-name
+                                (multiple-value-bind (_tool-fg tool-bg _tool-ts)
+                                    (resolve-global-face-inks tool-face-name)
+                                  (declare (ignore _tool-fg _tool-ts))
+                                  (fill-row pane row width tool-bg char-w char-h)
+                                  (draw-faced-spans
+                                   pane row (if first-row-p 0 prefix-len)
+                                   (tool-line-display-spans
+                                    content tool-face-name
+                                    :start chunk-start :end chunk-end
+                                    :prefix (and first-row-p prefix))
+                                   char-w char-h))
+                                (progn
+                                  (fill-row pane row width bg char-w char-h)
+                                  (when first-row-p
+                                    (draw-text-at pane row 0
+                                                  (concatenate 'string prefix chunk)
+                                                  fg bg ts char-w char-h)
+                                    (when underline-p
+                                      (draw-underline-at pane row 0
+                                                         (+ prefix-len (length chunk))
+                                                         fg char-w char-h))
+                                    (setf chunk nil))
+                                  (when chunk
+                                    (draw-text-at pane row prefix-len chunk
+                                                  fg bg ts char-w char-h)
+                                    (when underline-p
+                                      (draw-underline-at pane row prefix-len (length chunk)
+                                                         fg char-w char-h))))))
+                          (when (and show-cursor
+                                     (>= row 0)
+                                     (eq line (message-point-line msg)))
                             (let ((point-off (message-point-offset msg)))
                               (when (and (>= point-off chunk-start)
                                          (or (< point-off chunk-end)

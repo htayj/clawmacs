@@ -130,6 +130,12 @@ Clawmacs has a full face (color/attribute) system inspired by Emacs:
 
 Save and restore conversation sessions with =C-x C-s=. Sessions are serialized to JSON.
 
+** Scratch Buffer
+
+Clawmacs keeps a process-local =*scratch*= buffer loaded in the buffer list for
+temporary notes and programmatic coordination. It is editable, never killed by
+normal buffer-kill commands, and lasts only until Clawmacs exits.
+
 ** Pluggable UI Backends
 
 The rendering layer is abstracted behind a backend protocol:

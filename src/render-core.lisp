@@ -352,7 +352,6 @@ when nil it is resolved from the buffer's agent defaults."
   "Return two strings (row1 row2) for the who-line, context-dependent hints.
 BUF is the current buffer. WIDTH is the available character columns.
 Mode dispatch priority matches handle-key-event in main.lisp."
-  (declare (ignore buf))
   (flet ((pad (str)
            (if (>= (length str) width)
                (subseq str 0 width)
@@ -388,6 +387,9 @@ Mode dispatch priority matches handle-key-event in main.lisp."
                 (tool-name (or (cdr (assoc :tool-name approval)) "")))
            (setf row1 " a: approve  d: deny  m: deny with message"
                  row2 (format nil " ~A" tool-name))))
+        ((and buf (scratch-buffer-p buf))
+         (setf row1 " Scratch buffer: edit freely  RET: newline"
+               row2 " C-x b/C-x C-b: switch  C-l: redraw"))
         (t
          (setf row1 " RET: send  C-o: newline  C-k: kill  C-y: yank  PgUp/Dn: scroll"
                row2 " C-x C-b: buffers  C-c A: agent  C-c C-m: model  C-c C-r: think  C-l: redraw  C-x C-c: quit")))
@@ -404,14 +406,29 @@ An empty string takes 1 row. A string exactly DISPLAY-WIDTH chars takes 1 row."
       1
       (ceiling (length content) display-width)))
 
-(defun message-visual-height (msg width)
+(defun message-visual-height (msg width &key (prefix (message-sender-prefix msg)))
   "Return the total visual rows MSG needs at the given terminal WIDTH.
 Accounts for the sender prefix and line wrapping."
-  (let* ((prefix-len (length (message-sender-prefix msg)))
+  (let* ((prefix-len (length prefix))
          (display-width (max 1 (- width prefix-len))))
     (loop :for line := (message-first-line msg) :then (line-next line)
           :while line
           :sum (wrapped-line-count (line-content line) display-width))))
+
+(defun scratch-buffer-scroll-geometry (buf viewport-height width)
+  "Return scratch render geometry as values START-ROW, SCROLL-OFFSET, MAX-SCROLL.
+Scratch buffers use the same scroll offset semantics as chat history: zero
+means the bottom of the document is visible."
+  (let* ((height (max 1 viewport-height))
+         (total-rows (message-visual-height (buffer-input-message buf)
+                                            width
+                                            :prefix ""))
+         (max-scroll (max 0 (- total-rows height)))
+         (scroll-offset (min (max 0 (buffer-scroll-offset buf)) max-scroll))
+         (visible-bottom (- total-rows scroll-offset))
+         (visible-top (max 0 (- visible-bottom height)))
+         (start-row (- visible-top)))
+    (values start-row scroll-offset max-scroll)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Message Formatting (pure string functions)

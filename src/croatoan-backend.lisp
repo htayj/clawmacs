@@ -132,7 +132,7 @@ Resolves the face and sets WINDOW's colors and attributes."
 (defun render-wrapped-row (window row col text width)
   "Write TEXT at (ROW, COL) in WINDOW, not exceeding WIDTH total columns.
 Fills the rest of the row with spaces for background color."
-  (when (< row (croatoan:height window))
+  (when (and (>= row 0) (< row (croatoan:height window)))
     (croatoan:move window row 0)
     (croatoan:add-string window (make-string width :initial-element #\Space))
     (croatoan:move window row col)
@@ -142,7 +142,7 @@ Fills the rest of the row with spaces for background color."
 
 (defun render-faced-row (window row col spans width base-face-name)
   "Write SPANS at (ROW, COL) using global faces derived from BASE-FACE-NAME."
-  (when (< row (croatoan:height window))
+  (when (and (>= row 0) (< row (croatoan:height window)))
     (let* ((base-face (or (global-face base-face-name)
                           (make-default-text-face)))
            (base-resolved (resolve-face base-face))
@@ -165,12 +165,12 @@ Fills the rest of the row with spaces for background color."
                 (incf cursor-col (length visible)))))))
       (apply-face-to-window window base-resolved))))
 
-(defun render-message-lines (window msg start-row width &key show-cursor)
+(defun render-message-lines (window msg start-row width
+                             &key show-cursor (prefix (message-sender-prefix msg)))
   "Render MSG's lines into WINDOW starting at START-ROW with line wrapping.
 Returns the number of visual rows consumed.
 If SHOW-CURSOR is true, positions the cursor at MSG's point."
-  (let* ((prefix (message-sender-prefix msg))
-         (prefix-len (length prefix))
+  (let* ((prefix-len (length prefix))
          (display-width (max 1 (- width prefix-len)))
          (face-set (message-face-set msg))
          (face (if face-set
@@ -217,7 +217,9 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
                                              width tool-face-name)
                            (render-wrapped-row window row col chunk width)))
                      ;; Track cursor position
-                     (when (and show-cursor (eq line (message-point-line msg)))
+                     (when (and show-cursor
+                                (>= row 0)
+                                (eq line (message-point-line msg)))
                        (let ((point-off (message-point-offset msg)))
                          (when (and (>= point-off chunk-start)
                                     (or (< point-off chunk-end)
@@ -255,9 +257,34 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
 ;;; Buffer Rendering
 ;;; --------------------------------------------------------------------------
 
+(defun render-scratch-buffer (buf main-window modeline-window)
+  "Render scratch BUF as a full-window editable text buffer."
+  (let* ((height (croatoan:height main-window))
+         (width (croatoan:width main-window))
+         (row 0))
+    (croatoan:clear main-window)
+    (loop :for msg := (buffer-first-message buf) :then (message-next msg)
+          :while (and msg (not (eq msg (buffer-input-message buf))) (< row height))
+          :do (incf row (render-message-lines main-window msg row width)))
+    (let ((text-height (max 1 (- height row))))
+      (multiple-value-bind (start-row scroll-offset)
+          (scratch-buffer-scroll-geometry buf text-height width)
+        (setf (buffer-scroll-offset buf) scroll-offset)
+        (render-message-lines main-window
+                              (buffer-input-message buf)
+                              (+ row start-row)
+                              width
+                              :show-cursor t
+                              :prefix "")))
+    (croatoan:refresh main-window)
+    (render-modeline buf modeline-window)))
+
 (defun render-buffer (buf main-window modeline-window)
   "Render the entire buffer: history + input into MAIN-WINDOW, modeline.
 Respects buffer-scroll-offset for history scrolling."
+  (when (scratch-buffer-p buf)
+    (return-from render-buffer
+      (render-scratch-buffer buf main-window modeline-window)))
   (let* ((total-height (croatoan:height main-window))
          (width (croatoan:width main-window))
          (input-height (calculate-input-height buf total-height width))

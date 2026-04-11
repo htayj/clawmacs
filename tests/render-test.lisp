@@ -86,6 +86,23 @@
         (declare (ignore row1))
         (is (search "C-l: redraw" row2))))))
 
+(test format-who-line-scratch-describes-editing
+  "Scratch buffers advertise editing rather than chat send semantics."
+  (let ((*minibuffer-active* nil)
+        (*buffer-selector-active* nil)
+        (*model-selector-active* nil)
+        (*think-selector-active* nil)
+        (*customize-face-state* nil)
+        (*openai-oauth-pending* nil)
+        (*deny-message-mode* nil)
+        (clawmacs::*buffer-ring* nil))
+    (let ((buf (make-buffer "*scratch*" :kind :scratch)))
+      (multiple-value-bind (row1 row2)
+          (clawmacs::format-who-line buf 120)
+        (is (search "Scratch buffer" row1))
+        (is (search "RET: newline" row1))
+        (is (search "switch" row2))))))
+
 (test format-modeline-truncates-to-width
   "format-modeline truncates when content exceeds width."
   (let* ((buf (make-buffer "very-long-session-name" :agent-name "long-agent-name"
@@ -109,6 +126,22 @@
       (message-insert-newline (buffer-input-message buf)))
     ;; 21 lines, terminal height 30, max = 10
     (is (= 10 (clawmacs::calculate-input-height buf 30 80)))))
+
+(test scratch-buffer-scroll-geometry-bottom-aligns-long-text
+  "Scratch render geometry uses full-window rows and bottom-aligned scrolling."
+  (let ((buf (make-buffer "*scratch*" :kind :scratch)))
+    (setf (scratch-buffer-text buf) (format nil "1~%2~%3~%4~%5"))
+    (multiple-value-bind (start scroll max-scroll)
+        (clawmacs::scratch-buffer-scroll-geometry buf 3 80)
+      (is (= -2 start))
+      (is (= 0 scroll))
+      (is (= 2 max-scroll)))
+    (setf (buffer-scroll-offset buf) 1)
+    (multiple-value-bind (start scroll max-scroll)
+        (clawmacs::scratch-buffer-scroll-geometry buf 3 80)
+      (is (= -1 start))
+      (is (= 1 scroll))
+      (is (= 2 max-scroll)))))
 
 (test ensure-croatoan-locale-calls-setlocale
   "Croatoan backend initializes libc locale before starting ncurses."

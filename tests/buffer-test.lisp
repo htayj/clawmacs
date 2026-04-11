@@ -71,12 +71,50 @@
                           :working-directory #P"/tmp/")))
     (is (string= "test-session" (buffer-name buf)))
     (is (string= "echo-agent" (buffer-agent-name buf)))
+    (is (eq :chat (buffer-kind buf)))
     (is (not (null (buffer-input-message buf))))
     (is (eq (buffer-first-message buf) (buffer-input-message buf)))
     (is (eq (buffer-last-message buf) (buffer-input-message buf)))
     (is (not (message-read-only-p (buffer-input-message buf))))
     (is (= 1 (buffer-message-count buf)))
     (is (eq :idle (buffer-status buf)))))
+
+(test ensure-scratch-buffer-creates-loaded-scratch-without-stealing-current
+  "The scratch buffer is loaded into the ring but does not become current."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*scratch-buffer-name* "*scratch*")
+        (*scratch-buffer-initial-text* "notes"))
+    (clawmacs::init-default-keymap)
+    (clawmacs::init-global-faces)
+    (let ((chat (make-buffer "chat")))
+      (clawmacs::init-face-registry chat)
+      (setf (buffer-keymap chat) *default-keymap*)
+      (add-buffer-to-ring chat)
+      (let ((scratch (ensure-scratch-buffer)))
+        (is (eq chat (current-buffer)))
+        (is (eq scratch (scratch-buffer)))
+        (is (scratch-buffer-p scratch))
+        (is (eq :scratch (buffer-kind scratch)))
+        (is (string= "*scratch*" (buffer-name scratch)))
+        (is (string= "scratch" (buffer-major-mode scratch)))
+        (is (string= "notes" (scratch-buffer-text scratch)))
+        (is (eq clawmacs::*scratch-keymap* (buffer-keymap scratch)))
+        (is (= 2 (length *buffer-ring*)))
+        (is (eq scratch (ensure-scratch-buffer)))
+        (is (= 2 (length *buffer-ring*)))))))
+
+(test scratch-buffer-text-is-programmatically-editable
+  "The scratch text accessor reads and replaces the editable document."
+  (let ((*buffer-ring* nil)
+        (*scratch-buffer-initial-text* ""))
+    (clawmacs::init-default-keymap)
+    (clawmacs::init-global-faces)
+    (let ((scratch (ensure-scratch-buffer)))
+      (setf (scratch-buffer-text scratch) "alpha")
+      (is (string= "alpha" (scratch-buffer-text scratch)))
+      (setf (scratch-buffer-text) "beta")
+      (is (string= "beta" (scratch-buffer-text scratch))))))
 
 (test buffer-finalize-input
   "Finalizing input makes it read-only and creates a new input message."
@@ -484,6 +522,99 @@
       (clawmacs::handle-buffer-selector-key #\k)
       (is (= 1 (length *buffer-ring*)))
       (is (eq buf1 (current-buffer))))))
+
+(test scratch-buffer-cannot-be-killed
+  "Scratch remains loaded when kill commands target it."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*scratch-buffer-initial-text* ""))
+    (clawmacs::init-default-keymap)
+    (clawmacs::init-global-faces)
+    (let ((chat (make-buffer "chat")))
+      (clawmacs::init-face-registry chat)
+      (setf (buffer-keymap chat) *default-keymap*)
+      (add-buffer-to-ring chat)
+      (let ((scratch (ensure-scratch-buffer)))
+        (is (= 2 (length *buffer-ring*)))
+        (kill-buffer-from-ring scratch)
+        (is (= 2 (length *buffer-ring*)))
+        (is (eq scratch (scratch-buffer)))
+        (switch-to-buffer scratch)
+        (clawmacs::kill-buffer-command scratch)
+        (is (= 2 (length *buffer-ring*)))
+        (is (eq scratch (scratch-buffer)))
+        (kill-buffer-from-ring chat)
+        (is (= 1 (length *buffer-ring*)))
+        (is (eq scratch (current-buffer)))))))
+
+(test buffer-selector-does-not-kill-scratch-buffer
+  "The buffer selector kill key refuses to remove scratch."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*buffer-selector-active* t)
+        (*buffer-selector-index* 1)
+        (clawmacs::*buffer-selector-scroll* 0)
+        (*scratch-buffer-initial-text* ""))
+    (clawmacs::init-default-keymap)
+    (clawmacs::init-global-faces)
+    (let ((chat (make-buffer "chat")))
+      (clawmacs::init-face-registry chat)
+      (setf (buffer-keymap chat) *default-keymap*)
+      (add-buffer-to-ring chat)
+      (let ((scratch (ensure-scratch-buffer)))
+        (is (equal (list chat scratch) *buffer-ring*))
+        (clawmacs::handle-buffer-selector-key #\k)
+        (is (= 2 (length *buffer-ring*)))
+        (is (eq scratch (scratch-buffer)))))))
+
+(test scratch-return-inserts-newline-without-sending
+  "RET edits scratch text instead of finalizing and sending a chat turn."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*buffer-counter* 0)
+        (*minibuffer-active* nil)
+        (*buffer-selector-active* nil)
+        (*model-selector-active* nil)
+        (*think-selector-active* nil)
+        (*customize-face-state* nil)
+        (*openai-oauth-pending* nil)
+        (*deny-message-mode* nil)
+        (*cc-pending* nil)
+        (*cx-pending* nil)
+        (*ch-pending* nil)
+        (*meta-pending* nil)
+        (*scratch-buffer-initial-text* ""))
+    (clawmacs::init-default-keymap)
+    (clawmacs::init-global-faces)
+    (let ((scratch (ensure-scratch-buffer)))
+      (clawmacs::handle-key-event scratch #\a)
+      (clawmacs::handle-key-event scratch #\Return)
+      (clawmacs::handle-key-event scratch #\b)
+      (is (= 1 (buffer-message-count scratch)))
+      (is (string= (format nil "a~%b") (scratch-buffer-text scratch))))))
+
+(test save-session-command-skips-scratch-buffer
+  "Saving scratch does not write a session file."
+  (let* ((*buffer-ring* nil)
+         (clawmacs::*buffer-counter* 0)
+         (*scratch-buffer-name* "scratch-test")
+         (*scratch-buffer-initial-text* "draft")
+         (*sessions-dir*
+           (make-pathname
+            :directory (list :absolute "tmp"
+                             (format nil "clawmacs-scratch-test-~A"
+                                     (string-downcase
+                                      (symbol-name (gensym "DIR")))))))
+         (path (clawmacs::session-path *scratch-buffer-name*)))
+    (clawmacs::init-default-keymap)
+    (clawmacs::init-global-faces)
+    (let ((scratch (ensure-scratch-buffer)))
+      (clawmacs::save-session-command scratch)
+      (is (not (probe-file path)))
+      (is (string= "draft" (scratch-buffer-text scratch)))
+      (let ((notice (message-prev (buffer-input-message scratch))))
+        (is (not (null notice)))
+        (is (eq :system (message-sender notice)))
+        (is (search "not saved" (message-text notice)))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Agent Selector Tests

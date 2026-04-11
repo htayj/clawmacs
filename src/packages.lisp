@@ -109,6 +109,8 @@
    #:*default-context-limit*
    #:*default-agent-name*
    #:*default-show-tool-results*
+   #:*scratch-buffer-name*
+   #:*scratch-buffer-initial-text*
    #:buffer
    #:make-buffer
    #:buffer-name
@@ -116,6 +118,7 @@
    #:buffer-last-message
    #:buffer-input-message
    #:buffer-agent-name
+   #:buffer-kind
    #:buffer-working-directory
     #:buffer-token-count
     #:buffer-context-limit
@@ -142,6 +145,10 @@
    #:switch-to-buffer
    #:kill-buffer-from-ring
    #:find-buffer-by-name
+   #:scratch-buffer-p
+   #:scratch-buffer
+   #:ensure-scratch-buffer
+   #:scratch-buffer-text
    #:next-buffer-name
    #:buffer-names
    #:buffer-finalize-input

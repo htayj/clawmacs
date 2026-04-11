@@ -730,14 +730,16 @@ If so, call the handler and return T. Otherwise return NIL."
 (defcommand send-message (:permission :user-only :keys (#\Return))
   "Send the current input message to the agent."
   (buffer)
-  (let ((input-text (message-text (buffer-input-message buffer))))
-    (when (plusp (length (string-trim '(#\Space #\Tab #\Newline) input-text)))
-      (buffer-finalize-input buffer)
-      (setf (message-face-set (buffer-input-message buffer))
-            (gethash :user (buffer-face-registry buffer)))
-      ;; Check for prefix commands before sending to the LLM
-      (unless (process-prefix-command buffer input-text)
-        (send-to-agent-with-context buffer)))))
+  (if (scratch-buffer-p buffer)
+      (insert-newline-command buffer)
+      (let ((input-text (message-text (buffer-input-message buffer))))
+        (when (plusp (length (string-trim '(#\Space #\Tab #\Newline) input-text)))
+          (buffer-finalize-input buffer)
+          (setf (message-face-set (buffer-input-message buffer))
+                (gethash :user (buffer-face-registry buffer)))
+          ;; Check for prefix commands before sending to the LLM
+          (unless (process-prefix-command buffer input-text)
+            (send-to-agent-with-context buffer))))))
 
 (defcommand insert-newline-command (:permission :user-only :keys (#\Linefeed))
   "Insert a newline in the input message."
@@ -1267,11 +1269,15 @@ to navigate. Shows buffer name, agent, status, and message count."
 (defcommand save-session-command (:permission :user-only)
   "Save the current buffer's conversation to a session file."
   (buffer)
-  (let ((path (save-session buffer)))
-    ;; Insert a system message confirming the save
-    (let ((sys-msg (buffer-insert-agent-message
-                    buffer (format nil "[Session saved to ~A]" path))))
-      (setf (message-sender sys-msg) :system))))
+  (if (scratch-buffer-p buffer)
+      (buffer-insert-system-message
+       buffer
+       "[Scratch buffer is not saved; it lasts only until Clawmacs exits.]")
+      (let ((path (save-session buffer)))
+        ;; Insert a system message confirming the save
+        (let ((sys-msg (buffer-insert-agent-message
+                        buffer (format nil "[Session saved to ~A]" path))))
+          (setf (message-sender sys-msg) :system)))))
 
 (defcommand execute-extended-command (:permission :user-only
                                       :keys ((:alt #\x)))
@@ -3259,6 +3265,28 @@ Environment variables:
     (run-hook-list '*initial-buffer-hook* *initial-buffer-hook* buf)
     buf))
 
+(defun ensure-scratch-buffer ()
+  "Ensure the process-local scratch buffer is loaded in the buffer ring.
+The current buffer remains current when a current buffer already exists."
+  (unless *default-keymap*
+    (init-default-keymap))
+  (unless *scratch-keymap*
+    (init-scratch-keymap))
+  (or (scratch-buffer)
+      (let* ((current (current-buffer))
+             (buf (make-buffer *scratch-buffer-name*
+                               :agent-name "scratch"
+                               :kind :scratch
+                               :working-directory (truename "."))))
+        (init-face-registry buf)
+        (setf (buffer-keymap buf) (or *scratch-keymap* *default-keymap*)
+              (buffer-major-mode buf) "scratch")
+        (setf (scratch-buffer-text buf) *scratch-buffer-initial-text*)
+        (add-buffer-to-ring buf)
+        (when current
+          (switch-to-buffer current))
+        buf)))
+
 (defun prompt-usage-string ()
   "Return command-line help for non-interactive prompt mode."
   "Usage: prompt.sh [options] PROMPT...
@@ -3531,5 +3559,6 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
   ;; Create initial buffer and initialize global state
   (reset-interaction-state)
   (let ((buf (make-initial-chat-buffer session-name agent-name)))
+    (ensure-scratch-buffer)
     ;; Delegate to the backend
     (backend-run *ui-backend* buf)))

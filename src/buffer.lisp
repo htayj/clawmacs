@@ -13,6 +13,12 @@
 (defvar *default-show-tool-results* t
   "When nil, new buffers hide tool-result messages by default.")
 
+(defvar *scratch-buffer-name* "*scratch*"
+  "Name used for the process-local scratch buffer.")
+
+(defvar *scratch-buffer-initial-text* ""
+  "Initial text inserted into the scratch buffer when it is created.")
+
 (defclass buffer ()
   ((name              :initarg :name
                       :accessor buffer-name
@@ -31,6 +37,11 @@
                       :initform "agent"
                       :type string
                       :documentation "Name of the AI agent for this buffer (e.g. \"agent\").")
+   (kind              :initarg :kind
+                      :accessor buffer-kind
+                      :initform :chat
+                      :type keyword
+                      :documentation "Buffer kind. Built-ins include :chat and :scratch.")
    (working-directory :initarg :working-directory
                       :accessor buffer-working-directory
                       :initform (truename ".")
@@ -136,11 +147,13 @@ Enforces the invariant that it is not read-only."
     msg))
 
 (declaim (ftype (function (string &key (:agent-name string)
+                                       (:kind keyword)
                                        (:working-directory pathname)
                                        (:context-limit integer))
                           buffer)
                 make-buffer))
 (defun make-buffer (name &key (agent-name *default-agent-name*)
+                              (kind :chat)
                               (working-directory (truename "."))
                               (context-limit *default-context-limit*))
   "Create a new buffer with a single empty input message."
@@ -151,10 +164,16 @@ Enforces the invariant that it is not read-only."
                 :first-message input-msg
                 :last-message input-msg
                 :agent-name agent-name
+                :kind kind
                 :working-directory working-directory
                 :context-limit context-limit
                 :face-registry registry)))
     buf))
+
+(declaim (ftype (function (buffer) boolean) scratch-buffer-p))
+(defun scratch-buffer-p (buf)
+  "Return true when BUF is the process-local scratch buffer."
+  (eq (buffer-kind buf) :scratch))
 
 (declaim (ftype (function (buffer) fixnum) buffer-message-count))
 (defun buffer-message-count (buf)
@@ -242,12 +261,17 @@ Enforces the invariant that it is not read-only."
 
 (defun kill-buffer-from-ring (buf)
   "Remove BUF from the buffer ring. Returns the new current buffer or nil."
-  (setf *buffer-ring* (remove buf *buffer-ring*))
+  (unless (and buf (scratch-buffer-p buf))
+    (setf *buffer-ring* (remove buf *buffer-ring*)))
   (first *buffer-ring*))
 
 (defun find-buffer-by-name (name)
   "Find a buffer in the ring by name. Returns the buffer or nil."
   (find name *buffer-ring* :key #'buffer-name :test #'string=))
+
+(defun scratch-buffer ()
+  "Return the loaded scratch buffer, or nil when it has not been created yet."
+  (find-if #'scratch-buffer-p *buffer-ring*))
 
 (defun next-buffer-name ()
   "Generate the next unique buffer name."
@@ -257,6 +281,21 @@ Enforces the invariant that it is not read-only."
 (defun buffer-names ()
   "Return a list of all buffer names in the ring."
   (mapcar #'buffer-name *buffer-ring*))
+
+(defun scratch-buffer-text (&optional (buf (scratch-buffer)))
+  "Return BUF's editable scratch text, or nil when no scratch buffer is loaded."
+  (when buf
+    (unless (scratch-buffer-p buf)
+      (error "Not a scratch buffer: ~A" (buffer-name buf)))
+    (message-text (buffer-input-message buf))))
+
+(defun (setf scratch-buffer-text) (text &optional (buf (scratch-buffer)))
+  "Replace BUF's editable scratch text with TEXT."
+  (unless buf
+    (error "No scratch buffer is loaded"))
+  (unless (scratch-buffer-p buf)
+    (error "Not a scratch buffer: ~A" (buffer-name buf)))
+  (set-message-text (buffer-input-message buf) text))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Operations
