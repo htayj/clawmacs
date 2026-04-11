@@ -186,6 +186,11 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
 (setf clawmacs:*default-provider* :anthropic)
 (setf clawmacs:*default-model* "claude-sonnet-4-5-20250514")
 
+;; Override the default soul prompt or point to a different prompt file
+(setf clawmacs:*system-prompt* "You are a pragmatic pair programmer.")
+(setf clawmacs:*system-prompt-path* #P"/home/tay/.config/clawmacs/pair-system-prompt.txt")
+(clawmacs:load-system-prompt-file)
+
 ;; Register custom agents for the C-c A selector
 (clawmacs:register-agent-definition
  "writer"
@@ -194,6 +199,22 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
  :think-level "high"
  :tools-prompt "Use lisp_eval for concrete work. Inspect first, then modify."
  :soul-prompt "You are a concise writing partner focused on structure and tone.")
+
+;; Customize seeded defaults after startup initialization
+(clawmacs:add-hook
+ 'clawmacs:*startup-hook*
+ (lambda ()
+   (clawmacs:keymap-bind clawmacs:*default-keymap*
+                         '(:ctrl-c #\z)
+                         'clawmacs:toggle-debug-mode-command)))
+
+;; Customize the initial buffer before the backend takes over
+(clawmacs:add-hook
+ 'clawmacs:*initial-buffer-hook*
+ (lambda (buffer)
+   (clawmacs:buffer-insert-system-message
+    buffer
+    "init.lisp customized this buffer")))
 
 ;; Use the McCLIM graphical backend
 (asdf:load-system :clawmacs/mcclim)

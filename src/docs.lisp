@@ -978,6 +978,48 @@ documentation in *extended-docs*."
   :see-also (*default-provider* *provider-fallback-models* resolve-buffer-provider-and-model)
   :side-effects "Changing this affects all new buffers that lack both an agent-specific and provider-fallback model.")
 
+(defdoc *default-tools-prompt*
+  :category "llm"
+  :usage "String — default clawmacs operating prompt inserted before the soul prompt."
+  :see-also (*system-prompt* build-agent-system-prompt)
+  :side-effects "Changing this affects future requests for agents that do not provide their own tools prompt.")
+
+(defdoc *system-prompt*
+  :category "llm"
+  :usage "String — default soul prompt inserted after the tools prompt."
+  :see-also (*default-tools-prompt* *system-prompt-path* load-system-prompt-file build-agent-system-prompt)
+  :side-effects "Changing this affects future requests for agents that do not provide their own soul prompt.")
+
+(defdoc *system-prompt-path*
+  :category "llm"
+  :usage "Pathname — defaults to ~/.config/clawmacs/system-prompt.txt"
+  :see-also (*system-prompt* load-system-prompt-file)
+  :side-effects "clawmacs-main loads this file once during startup before init.lisp; init.lisp may then change the path and call load-system-prompt-file again.")
+
+(defdoc load-system-prompt-file
+  :category "llm"
+  :usage "(load-system-prompt-file &optional PATH) — (load-system-prompt-file #P\"~/my-prompt.txt\")"
+  :returns "string or nil — The trimmed prompt text, or NIL when PATH is missing."
+  :side-effects "Reads PATH and stores its contents into *system-prompt*."
+  :see-also (*system-prompt* *system-prompt-path* build-agent-system-prompt))
+
+(defdoc *boot-file-names*
+  :category "llm"
+  :usage "List of strings — boot markdown files loaded ahead of the tools and soul prompts."
+  :see-also (load-boot-files build-agent-system-prompt)
+  :side-effects "Changing this affects which AGENTS.md/SOUL.md-style files are consulted for future prompt builds.")
+
+(defdoc load-boot-files
+  :category "llm"
+  :usage "(load-boot-files)"
+  :returns "string or nil — Concatenated boot-file content, or NIL when none are present."
+  :see-also (*boot-file-names* build-agent-system-prompt))
+
+(defdoc *agent-defaults-path*
+  :category "llm"
+  :usage "Pathname — defaults to ~/.config/clawmacs/agent-defaults.json"
+  :see-also (load-agent-defaults save-agent-defaults))
+
 (defdoc *default-max-tokens*
   :category "llm"
   :see-also (*default-model* *default-provider* anthropic-request))
@@ -2359,12 +2401,36 @@ documentation in *extended-docs*."
   :usage "Boolean — set to T via --no-init flag to skip loading the user init file."
   :see-also (*user-init-file* load-user-init-file))
 
+(defdoc *startup-hook*
+  :category "init"
+  :usage "List of function designators run after init.lisp loads and before backend startup."
+  :see-also (add-hook remove-hook *initial-buffer-hook* clawmacs-main))
+
+(defdoc *initial-buffer-hook*
+  :category "init"
+  :usage "List of function designators run with the initial buffer after it is created."
+  :see-also (add-hook remove-hook *startup-hook* clawmacs-main))
+
+(defdoc add-hook
+  :category "init"
+  :usage "(add-hook '*startup-hook* #'my-fn &key APPEND)"
+  :returns "The function designator that was added."
+  :side-effects "Mutates the hook variable named by HOOK-VAR."
+  :see-also (remove-hook *startup-hook* *initial-buffer-hook*))
+
+(defdoc remove-hook
+  :category "init"
+  :usage "(remove-hook '*startup-hook* #'my-fn)"
+  :returns "The function designator that was removed."
+  :side-effects "Mutates the hook variable named by HOOK-VAR."
+  :see-also (add-hook *startup-hook* *initial-buffer-hook*))
+
 (defdoc load-user-init-file
   :category "init"
   :usage "(load-user-init-file) — Called once during startup."
   :returns "T on success, NIL if skipped, inhibited, or on error."
-  :side-effects "Loads and evaluates *user-init-file* in the :clawmacs package. Errors are caught, printed to stderr, and logged via file-debug-log."
-  :see-also (*user-init-file* *user-init-directory* *inhibit-user-init* clawmacs-main))
+  :side-effects "Loads and evaluates *user-init-file* in the :clawmacs package. Errors are caught, printed to stderr, and logged via file-debug-log. By the time init.lisp runs, the default keymap, tool registry, faces, and configured system prompt file are already loaded; use *startup-hook* or *initial-buffer-hook* for additional startup customization."
+  :see-also (*user-init-file* *user-init-directory* *inhibit-user-init* *startup-hook* *initial-buffer-hook* clawmacs-main))
 
 ;;; ==========================================================================
 ;;; Category: ui-backend — Pluggable UI backend protocol
@@ -2416,8 +2482,8 @@ documentation in *extended-docs*."
   :category "main"
   :usage "(clawmacs-main) — Called once to start the application."
   :returns "nil — Returns when the user quits (C-x C-c)."
-  :side-effects "Initializes state, loads user init, then delegates to the UI backend via backend-run."
-  :see-also (current-buffer *default-keymap* init-tools *ui-backend* backend-run))
+  :side-effects "Initializes state, loads the configured system prompt file, loads user init, runs *startup-hook*, creates the initial buffer, runs *initial-buffer-hook*, then delegates to the UI backend via backend-run."
+  :see-also (current-buffer *default-keymap* init-tools *ui-backend* *startup-hook* *initial-buffer-hook* backend-run))
 
 ;;; ==========================================================================
 ;;; Category: customize — Interactive face customization

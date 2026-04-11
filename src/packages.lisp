@@ -206,6 +206,12 @@
      #:build-agent-system-prompt
      #:provider-model-supported-think-levels
      #:reconcile-buffer-think-level-override
+     #:*system-prompt*
+     #:*system-prompt-path*
+     #:load-system-prompt-file
+     #:*boot-file-names*
+     #:load-boot-files
+     #:*agent-defaults-path*
      #:anthropic-request
      #:build-conversation-messages
    #:*default-provider*
@@ -464,6 +470,10 @@
    #:*user-init-directory*
    #:*user-init-file*
    #:*inhibit-user-init*
+   #:*startup-hook*
+   #:*initial-buffer-hook*
+   #:add-hook
+   #:remove-hook
    #:load-user-init-file
 
    ;; UI Backend Protocol

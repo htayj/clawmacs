@@ -268,6 +268,15 @@ Users may override this via *system-prompt-path* or init.lisp.")
   "Boot markdown files to load, in order. Checked in the working directory
 and ~/.config/clawmacs/. Compatible with OpenClaw workspace conventions.")
 
+(defun load-system-prompt-file (&optional (path *system-prompt-path*))
+  "Load PATH into *SYSTEM-PROMPT* when the file exists.
+Returns the trimmed prompt text on success, or NIL when PATH is NIL or missing."
+  (let ((prompt-path (and path (probe-file path))))
+    (when prompt-path
+      (setf *system-prompt*
+            (string-trim '(#\Space #\Tab #\Newline #\Return)
+                         (uiop:read-file-string prompt-path))))))
+
 (defun load-boot-files ()
   "Load boot MD files from the working directory and ~/.config/clawmacs/.
 Returns a concatenated string, or nil if no files found.

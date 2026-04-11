@@ -2988,6 +2988,57 @@ KEY is already normalized by the backend before calling this."
 (defvar *inhibit-user-init* nil
   "When non-nil, skip loading the user init file at startup.")
 
+(defvar *startup-hook* nil
+  "List of functions run after init.lisp loads and before backend startup.
+Each function is called with no arguments.")
+
+(defvar *initial-buffer-hook* nil
+  "List of functions run with the initial buffer after it is created.
+Each function is called with the initial buffer as its sole argument.")
+
+(defun add-hook (hook-var function &key append)
+  "Add FUNCTION to the hook list stored in HOOK-VAR and return FUNCTION.
+HOOK-VAR should name a special variable containing a list of function
+designators. When APPEND is non-nil, add FUNCTION at the end instead of the
+front."
+  (check-type hook-var symbol)
+  (let ((hooks (symbol-value hook-var)))
+    (unless (member function hooks :test #'eq)
+      (setf (symbol-value hook-var)
+            (if append
+                (append hooks (list function))
+                (cons function hooks)))))
+  function)
+
+(defun remove-hook (hook-var function)
+  "Remove FUNCTION from the hook list stored in HOOK-VAR.
+Returns FUNCTION."
+  (check-type hook-var symbol)
+  (setf (symbol-value hook-var)
+        (remove function (symbol-value hook-var) :test #'eq))
+  function)
+
+(defun call-hook-safely (hook hook-name &rest args)
+  "Invoke HOOK with ARGS, reporting and logging errors without aborting startup."
+  (handler-case
+      (apply (etypecase hook
+               (function hook)
+               (symbol (symbol-function hook)))
+             args)
+    (error (e)
+      (format *error-output*
+              "~&;; Warning: error running hook ~S from ~S:~%;; ~A~%"
+              hook hook-name e)
+      (file-debug-log "init" "error running hook ~S from ~S: ~A"
+                      hook hook-name e)
+      nil)))
+
+(defun run-hook-list (hook-name hooks &rest args)
+  "Run HOOKS with ARGS, catching and reporting individual hook errors."
+  (dolist (hook hooks)
+    (apply #'call-hook-safely hook hook-name args))
+  nil)
+
 (defun load-user-init-file ()
   "Load ~/.clawmacs.d/init.lisp if it exists. Errors are caught and reported."
   (when *inhibit-user-init*
@@ -3038,13 +3089,13 @@ Environment variables:
   (init-default-keymap)
   (init-tools)
   (init-global-faces)
-  ;; Load custom system prompt from file if it exists
-  (when (probe-file *system-prompt-path*)
-    (setf *system-prompt*
-          (string-trim '(#\Space #\Tab #\Newline #\Return)
-                       (uiop:read-file-string *system-prompt-path*))))
+  ;; Load the configured soul prompt file before init.lisp so user init may
+  ;; still override *system-prompt* directly or call LOAD-SYSTEM-PROMPT-FILE
+  ;; again after changing *system-prompt-path*.
+  (load-system-prompt-file)
   ;; User init runs BEFORE backend — so (setf *ui-backend* ...) works
   (load-user-init-file)
+  (run-hook-list '*startup-hook* *startup-hook*)
   ;; Default to croatoan terminal backend
   (unless *ui-backend*
     (setf *ui-backend* (make-instance 'croatoan-backend)))
@@ -3084,5 +3135,6 @@ Environment variables:
     (add-buffer-to-ring buf)
     ;; Set sandbox root to the working directory
     (setf *sandbox-root* (truename "."))
+    (run-hook-list '*initial-buffer-hook* *initial-buffer-hook* buf)
     ;; Delegate to the backend
     (backend-run *ui-backend* buf)))

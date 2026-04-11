@@ -8,10 +8,28 @@
 (defvar *package-init-continued* nil
   "Tracks whether load-user-init-file continued after a package warning.")
 
+(defvar *startup-hook-ran* nil
+  "Tracks whether the startup hook fired during clawmacs-main tests.")
+
+(defvar *initial-buffer-hook-ran* nil
+  "Tracks whether the initial-buffer hook fired during clawmacs-main tests.")
+
+(defvar *initial-buffer-hook-binding* nil
+  "Captures a key binding observed from the initial buffer hook.")
+
+(defclass test-ui-backend (clawmacs:ui-backend)
+  ())
+
+(defmethod clawmacs:backend-run ((backend test-ui-backend) initial-buffer)
+  (declare (ignore backend))
+  initial-buffer)
+
 (defun temp-package-test-directory (label)
   (make-pathname :directory (list :absolute "tmp"
-                                  (format nil "clawmacs-package-tests-~A-~A"
+                                  (format nil "clawmacs-package-tests-~A-~36R-~36R-~A"
                                           label
+                                          (get-universal-time)
+                                          (get-internal-real-time)
                                           (gensym)))))
 
 (defmacro with-packages-directory-override ((path) &body body)
@@ -62,6 +80,16 @@
       (write-test-file (merge-pathnames "test-package.lisp" repo-root) entrypoint-content))
     (commit-test-git-repo repo-root)
     repo-root))
+
+(test add-hook-and-remove-hook-manage-hook-lists
+  "Hook helpers support stable registration and removal from init-facing hook vars."
+  (let ((clawmacs::*startup-hook* nil))
+    (clawmacs:add-hook 'clawmacs::*startup-hook* 'identity)
+    (clawmacs:add-hook 'clawmacs::*startup-hook* 'identity)
+    (clawmacs:add-hook 'clawmacs::*startup-hook* 'car :append t)
+    (is (equal '(identity car) clawmacs::*startup-hook*))
+    (clawmacs:remove-hook 'clawmacs::*startup-hook* 'identity)
+    (is (equal '(car) clawmacs::*startup-hook*))))
 
 (test clawmacs-use-package-clones-and-loads-local-git-repo
   "A local git repo is cloned, read via manifest.lisp, and loaded."
@@ -201,3 +229,53 @@
         (is (string= "high" (clawmacs:agent-definition-think-level definition)))
         (is (string= "writer tools" (clawmacs:agent-definition-tools-prompt definition)))
         (is (string= "writer soul" (clawmacs:agent-definition-soul-prompt definition)))))))
+
+(test clawmacs-main-allows-init-based-prompt-and-hook-customization
+  "init.lisp can reload the soul prompt, mutate seeded defaults, and hook the initial buffer."
+  (let* ((init-root (uiop:ensure-directory-pathname
+                     (temp-package-test-directory "main-init")))
+         (init-path (merge-pathnames "init.lisp" init-root))
+         (prompt-path (merge-pathnames "custom-system-prompt.txt" init-root))
+         (missing-path (merge-pathnames "missing-system-prompt.txt" init-root)))
+    (ensure-directories-exist (merge-pathnames #P".keep" init-root))
+    (write-test-file prompt-path
+                     (format nil "  Custom soul prompt from init file.~%"))
+    (write-test-file
+     init-path
+     (format nil
+             "(setf *system-prompt-path* #P~S)~%
+(load-system-prompt-file)~%
+(keymap-bind *default-keymap* '(:ctrl-c #\\z) 'toggle-debug-mode-command)~%
+(add-hook '*startup-hook*
+          (lambda ()
+            (setf clawmacs/tests::*startup-hook-ran*
+                  (eq (keymap-lookup *default-keymap* '(:ctrl-c #\\z))
+                      'toggle-debug-mode-command))))~%
+(add-hook '*initial-buffer-hook*
+          (lambda (buffer)
+            (setf clawmacs/tests::*initial-buffer-hook-ran* t)
+            (setf clawmacs/tests::*initial-buffer-hook-binding*
+                  (keymap-lookup (buffer-keymap buffer) '(:ctrl-c #\\z)))
+            (buffer-insert-system-message buffer \"init buffer hook ran\")))~%"
+             (namestring prompt-path)))
+    (let ((clawmacs::*user-init-file* init-path)
+          (clawmacs::*inhibit-user-init* nil)
+          (clawmacs::*system-prompt-path* missing-path)
+          (clawmacs::*system-prompt* "Default soul prompt")
+          (clawmacs::*startup-hook* nil)
+          (clawmacs::*initial-buffer-hook* nil)
+          (clawmacs::*ui-backend* (make-instance 'test-ui-backend))
+          (clawmacs::*default-keymap* nil)
+          (clawmacs::*debug-log-file* nil)
+          (*startup-hook-ran* nil)
+          (*initial-buffer-hook-ran* nil)
+          (*initial-buffer-hook-binding* nil))
+      (let ((buf (clawmacs:clawmacs-main :session-name "init-customization")))
+        (is (string= "Custom soul prompt from init file." clawmacs:*system-prompt*))
+        (is (not (null *startup-hook-ran*)))
+        (is (not (null *initial-buffer-hook-ran*)))
+        (is (eq 'toggle-debug-mode-command *initial-buffer-hook-binding*))
+        (is (eq 'toggle-debug-mode-command
+                (clawmacs:keymap-lookup (clawmacs:buffer-keymap buf)
+                                        '(:ctrl-c #\z))))
+        (is (= 2 (clawmacs:buffer-message-count buf)))))))
