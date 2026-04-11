@@ -361,6 +361,7 @@ PAIR PERSONALITY"
                     "--isolated"
                     "--json"
                     "--max-tool-iterations" "7"
+                    "--session" "autoimprove"
                     "summarize" "this"))))
     (is (string= "writer" (clawmacs::prompt-options-agent-name options)))
     (is (string= "openai-codex" (clawmacs::prompt-options-provider options)))
@@ -371,6 +372,8 @@ PAIR PERSONALITY"
     (is (clawmacs::prompt-options-show-metadata-p options))
     (is (clawmacs::prompt-options-json-p options))
     (is (clawmacs::prompt-options-isolated-p options))
+    (is (string= "autoimprove"
+                 (clawmacs::prompt-options-session-name options)))
     (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
     (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
 
@@ -571,6 +574,53 @@ PAIR PERSONALITY"
                      (clawmacs:prompt-run-result-reasoning-blocks result)))
           (is (= 1 (clawmacs:prompt-run-result-iterations result)))
           (is (null (clawmacs:prompt-run-result-tool-events result))))))))
+
+(test run-prompt-buffer-can-continue-saved-session
+  "Prompt-mode sessions can append turns and preserve provider-visible history."
+  (let* ((path (temp-agent-defaults-path))
+         (session-root
+           (make-pathname :directory
+                          (list :absolute "tmp"
+                                (format nil "clawmacs-prompt-session-~A"
+                                        (list (get-universal-time)
+                                              (get-internal-real-time)
+                                              (gensym))))))
+         (clawmacs::*sessions-dir* session-root)
+         (request-count 0)
+         (second-turn-messages nil))
+    (ensure-directories-exist (merge-pathnames #P".keep" session-root))
+    (with-agent-defaults-path-override (path)
+      (with-function-override (clawmacs::provider-request-streaming
+                               (provider messages callback
+                                         &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                               (declare (ignore provider callback model max-tokens
+                                                tools reasoning-effort system-prompt))
+                               (incf request-count)
+                               (when (= request-count 2)
+                                 (setf second-turn-messages messages))
+                               (make-completed-stream-state-response
+                                "end_turn"
+                                (list (clawmacs::canonical-text-block
+                                       (format nil "response-~D"
+                                               request-count)))))
+        (clawmacs::init-default-keymap)
+        (clawmacs::init-global-faces)
+        (clawmacs::init-tools)
+        (let ((buf (clawmacs::load-or-make-prompt-session-buffer
+                    "first turn" "agent" "autoimprove-test")))
+          (clawmacs::run-prompt-buffer buf "first turn")
+          (clawmacs:save-session buf))
+        (let ((buf (clawmacs::load-or-make-prompt-session-buffer
+                    "second turn" "agent" "autoimprove-test")))
+          (clawmacs::run-prompt-buffer buf "second turn")
+          (clawmacs:save-session buf))
+        (is (= 2 request-count))
+        (is (= 3 (length second-turn-messages)))
+        (is (equal '("user" "assistant" "user")
+                   (mapcar (lambda (message)
+                             (cdr (assoc :role message)))
+                           second-turn-messages)))))))
 
 (test run-single-prompt-executes-lisp-eval-tool-loop
   "Prompt mode executes lisp_eval tool calls and continues with tool results."

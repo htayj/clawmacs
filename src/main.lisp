@@ -62,6 +62,7 @@
   (auto-approve-tools-p nil :type boolean)
   (max-tool-iterations *prompt-max-tool-iterations* :type integer)
   (skill-roots nil :type list)
+  session-name
   debug-log-path
   (isolated-p nil :type boolean)
   (inhibit-user-init-p nil :type boolean)
@@ -600,16 +601,32 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
     (t
      (agent-definition-tool-names-for-name agent-name))))
 
-(defun make-prompt-buffer (prompt agent-name)
-  "Create a buffer seeded with PROMPT as the only finalized user message."
-  (let ((buf (make-buffer "clawmacs:prompt"
-                          :agent-name agent-name
-                          :working-directory (truename "."))))
+(defun prepare-prompt-buffer (buf prompt)
+  "Prepare BUF for prompt-mode execution with PROMPT as a new user turn."
     (init-face-registry buf)
-    (setf (buffer-keymap buf) *default-keymap*)
-    (set-message-text (buffer-input-message buf) prompt)
-    (buffer-finalize-input buf)
-    buf))
+  (setf (buffer-keymap buf) *default-keymap*)
+  (set-message-text (buffer-input-message buf) prompt)
+  (buffer-finalize-input buf)
+  buf)
+
+(defun make-prompt-buffer (prompt agent-name &key session-name)
+  "Create a buffer seeded with PROMPT as the only finalized user message."
+  (prepare-prompt-buffer
+   (make-buffer (or session-name "clawmacs:prompt")
+                :agent-name agent-name
+                :working-directory (truename "."))
+   prompt))
+
+(defun load-or-make-prompt-session-buffer (prompt agent-name session-name)
+  "Load SESSION-NAME when supplied, append PROMPT, and return a prompt buffer."
+  (if session-name
+      (prepare-prompt-buffer
+       (or (load-session session-name :agent-name agent-name)
+           (make-buffer session-name
+                        :agent-name agent-name
+                        :working-directory (truename ".")))
+       prompt)
+      (make-prompt-buffer prompt agent-name)))
 
 (defun maybe-apply-prompt-routing-overrides (buf provider model think-level)
   "Apply optional provider, model, and think-level overrides to BUF."
@@ -720,26 +737,22 @@ PROMPT-TOOL-EVENT for terminal/debug output."
     (insert-tool-results-message buf (nreverse results))
     (nreverse events)))
 
-(defun run-single-prompt (prompt &key (agent-name *default-agent-name*)
-                                 provider model think-level
-                                 (max-tool-iterations *prompt-max-tool-iterations*)
-                                 auto-approve-tools-p
-                                 (tool-names nil tool-names-supplied-p)
-                                 custom-tools)
-  "Run PROMPT once without a UI and return a PROMPT-RUN-RESULT.
-The request loops through tool_use responses until the provider returns a final
-assistant response or MAX-TOOL-ITERATIONS is exceeded."
-  (when (blank-string-p prompt)
-    (error "Prompt must be non-empty"))
+(defun run-prompt-buffer (buf prompt
+                          &key provider model think-level
+                            (max-tool-iterations *prompt-max-tool-iterations*)
+                            auto-approve-tools-p
+                            (tool-names nil tool-names-supplied-p)
+                            custom-tools)
+  "Run prompt-mode provider loop against prepared BUF.
+PROMPT is the user turn text used for the returned PROMPT-RUN-RESULT."
   (let* ((custom-tool-definitions (normalize-run-custom-tools custom-tools))
          (temporary-tool-table
            (temporary-tool-table-from-definitions custom-tool-definitions))
          (effective-tool-names
-           (resolve-prompt-tool-names agent-name
+           (resolve-prompt-tool-names (buffer-agent-name buf)
                                       custom-tool-definitions
                                       tool-names
                                       tool-names-supplied-p))
-         (buf (make-prompt-buffer prompt agent-name))
          (tool-events nil)
          (final-provider nil)
          (final-model nil)
@@ -800,6 +813,30 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
                      :think-level final-think-level
                      :iterations iterations
                      :stop-reason stop-reason))))))))))
+
+(defun run-single-prompt (prompt &key (agent-name *default-agent-name*)
+                                 provider model think-level
+                                 (max-tool-iterations *prompt-max-tool-iterations*)
+                                 auto-approve-tools-p
+                                 (tool-names nil tool-names-supplied-p)
+                                 custom-tools)
+  "Run PROMPT once without a UI and return a PROMPT-RUN-RESULT.
+The request loops through tool_use responses until the provider returns a final
+assistant response or MAX-TOOL-ITERATIONS is exceeded."
+  (when (blank-string-p prompt)
+    (error "Prompt must be non-empty"))
+  (let ((buf (make-prompt-buffer prompt agent-name)))
+    (apply #'run-prompt-buffer
+           buf
+           prompt
+           :provider provider
+           :model model
+           :think-level think-level
+           :max-tool-iterations max-tool-iterations
+           :auto-approve-tools-p auto-approve-tools-p
+           :custom-tools custom-tools
+           (when tool-names-supplied-p
+             (list :tool-names tool-names)))))
 
 (defun run-subagent (prompt &key (agent-name *default-subagent-name*)
                                   provider model think-level
@@ -4192,6 +4229,7 @@ Options:
   --auto-approve-tools      Allow permission-gated tools without an interactive prompt.
   --max-tool-iterations N   Stop after N tool-call turns (default: 20).
   --skill-root PATH         Add a skill root for this prompt run. May repeat.
+  --session NAME            Continue and save a named prompt-mode session.
   --debug-log PATH          Write low-level debug logs to PATH.
   --isolated                Use temporary prompt config/project/session dirs.
   --clean-build             Clear cached Lisp build artifacts before loading.
@@ -4298,6 +4336,11 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
                    (setf (prompt-options-skill-roots options)
                          (append (prompt-options-skill-roots options)
                                  (list value))
+                         remaining rest)))
+                ((string= arg "--session")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-session-name options) value
                          remaining rest)))
                 ((string= arg "--debug-log")
                  (multiple-value-bind (value rest)
@@ -4499,17 +4542,24 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
           (initialize-clawmacs-runtime)
           (reset-interaction-state)
           (setf *sandbox-root* (truename "."))
-          (let ((result
-                  (run-single-prompt
-                   (prompt-options-prompt options)
-                   :agent-name (prompt-options-agent-name options)
-                   :provider (prompt-options-provider options)
-                   :model (prompt-options-model options)
-                   :think-level (prompt-options-think-level options)
-                   :max-tool-iterations
-                   (prompt-options-max-tool-iterations options)
-                   :auto-approve-tools-p
-                   (prompt-options-auto-approve-tools-p options))))
+          (let* ((session-name (prompt-options-session-name options))
+                 (buf (load-or-make-prompt-session-buffer
+                       (prompt-options-prompt options)
+                       (prompt-options-agent-name options)
+                       session-name))
+                 (result
+                   (run-prompt-buffer
+                    buf
+                    (prompt-options-prompt options)
+                    :provider (prompt-options-provider options)
+                    :model (prompt-options-model options)
+                    :think-level (prompt-options-think-level options)
+                    :max-tool-iterations
+                    (prompt-options-max-tool-iterations options)
+                    :auto-approve-tools-p
+                    (prompt-options-auto-approve-tools-p options))))
+            (when session-name
+              (save-session buf))
             (write-prompt-run-result result options)))
         (uiop:quit 0))
       (prompt-run-error (e)
