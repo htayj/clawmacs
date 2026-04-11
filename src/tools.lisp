@@ -55,7 +55,7 @@ approval to generate extra display context (e.g., file diffs)."
                               :approval-display-fn approval-display-fn)))
 
 (defun tool-definitions-for-api ()
-  "Return a vector of tool definitions formatted for the Anthropic API.
+  "Return a vector of clawmacs tool definitions for provider adapters.
 Only includes tools visible to the current *current-caller*."
   (let ((tools nil))
     (maphash (lambda (name def)

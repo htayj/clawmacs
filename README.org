@@ -20,7 +20,6 @@ Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in
 
 Clawmacs supports multiple LLM providers, switchable per buffer:
 
-- *Anthropic* --- Claude models (Haiku, Sonnet, Opus) via REST API or Claude CLI subprocess
 - *Z.AI* (Zhipu AI) --- GLM models
 - *OpenAI Codex* --- with shared Codex OAuth/API-key auth and the Responses API
 - *OpenRouter* --- access to hundreds of models with dynamic model discovery
@@ -165,17 +164,17 @@ This launches clawmacs in a Guix container with all dependencies (SBCL, ncurses,
 
 ** Provider Credentials
 
-Set at least one provider credential via environment variable:
+Set provider credentials through the supported provider-specific sources. Z.AI
+and OpenRouter can use environment variables:
 
 #+begin_src sh
-export ANTHROPIC_API_KEY="sk-ant-..."
-# or
-export OPENAI_API_KEY="sk-..."
-# or
-export ZAI_API_KEY="..."
+export ZAI_CODING_MAX_API_KEY="..."
 # or
 export OPENROUTER_API_KEY="..."
 #+end_src
+
+OpenAI Codex uses the shared Codex auth store or a token file as described
+above.
 
 ** User Init File
 
@@ -183,8 +182,8 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
 
 #+begin_src lisp
 ;; Switch default provider and model
-(setf clawmacs:*default-provider* :anthropic)
-(setf clawmacs:*default-model* "claude-sonnet-4-5-20250514")
+(setf clawmacs:*default-provider* :zai)
+(setf clawmacs:*default-model* "glm-5")
 
 ;; Override the default soul prompt or point to a different prompt file
 (setf clawmacs:*system-prompt* "You are a pragmatic pair programmer.")

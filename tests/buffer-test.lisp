@@ -138,12 +138,12 @@
 (test serialize-buffer-includes-overrides
   "Serialized sessions include provider/model/think overrides."
   (let ((buf (make-buffer "test" :agent-name "echo")))
-    (setf (buffer-provider-override buf) :anthropic
-          (buffer-model-override buf) "claude-3.7")
+    (setf (buffer-provider-override buf) :zai
+          (buffer-model-override buf) "glm-5")
     (set-buffer-think-level-override buf "medium")
     (let ((data (clawmacs::serialize-buffer buf)))
-      (is (eq :anthropic (cdr (assoc :provider-override data))))
-      (is (string= "claude-3.7" (cdr (assoc :model-override data))))
+      (is (eq :zai (cdr (assoc :provider-override data))))
+      (is (string= "glm-5" (cdr (assoc :model-override data))))
       (is (string= "medium" (cdr (assoc :think-level-override data)))))))
 
 (test load-session-missing-overrides-default-to-nil
@@ -495,7 +495,7 @@
     (let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal))
           (clawmacs::*agent-defaults-registry* (clawmacs::make-agent-defaults-registry)))
       (setf (buffer-agent-name buf) "writer")
-      (register-agent-definition "writer" :provider :anthropic :model "claude-writer")
+      (register-agent-definition "writer" :provider :zai :model "glm-5")
       (register-agent-definition "pair" :provider :openai-codex :model "gpt-5.4")
       (clawmacs::handle-key-event buf '(:ctrl-c #\A))
       (is (eq t *minibuffer-active*))
@@ -509,7 +509,7 @@
   (with-interactive-command-test-buffer (buf)
     (let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal))
           (clawmacs::*agent-defaults-registry* (clawmacs::make-agent-defaults-registry)))
-      (register-agent-definition "writer" :provider :anthropic :model "claude-writer")
+      (register-agent-definition "writer" :provider :zai :model "glm-5")
       (register-agent-definition "pair"
                                  :provider :openai-codex
                                  :model "gpt-5.4"
@@ -543,7 +543,7 @@
   (with-interactive-command-test-buffer (buf)
     (let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal))
           (clawmacs::*agent-defaults-registry* (clawmacs::make-agent-defaults-registry)))
-      (register-agent-definition "writer" :provider :anthropic :model "claude-writer")
+      (register-agent-definition "writer" :provider :zai :model "glm-5")
       (register-agent-definition "pair" :provider :openai-codex :model "gpt-5.4")
       (setf (buffer-agent-name buf) "writer"
             (buffer-provider-override buf) :zai
@@ -571,13 +571,13 @@
         (*model-selector-index* 0)
         (clawmacs::*model-selector-scroll* 0)
         (*model-selector-entries* nil))
-    (let ((buf (make-buffer "test-session" :agent-name "claude")))
+    (let ((buf (make-buffer "test-session" :agent-name "coder")))
       (add-buffer-to-ring buf)
       ;; Mock: set entries directly (since we can't call read-provider-token in tests)
       (setf *model-selector-entries*
-            (list (list :provider :anthropic :model "claude-haiku-4-5-20251001" :active-p t)
-                  (list :provider :anthropic :model "claude-3-5-haiku-20241022" :active-p nil)
-                  (list :provider :zai :model "glm-5" :active-p nil)))
+            (list (list :provider :zai :model "glm-5" :active-p t)
+                  (list :provider :zai :model "glm-5-turbo" :active-p nil)
+                  (list :provider :openai-codex :model "gpt-5.4" :active-p nil)))
       (setf *model-selector-active* t
             *model-selector-index* 0)
       (is (eq t *model-selector-active*))
@@ -589,9 +589,9 @@
         (*model-selector-index* 0)
         (clawmacs::*model-selector-scroll* 0)
         (*model-selector-entries*
-          (list (list :provider :anthropic :model "model-a" :active-p t)
-                (list :provider :anthropic :model "model-b" :active-p nil)
-                (list :provider :zai :model "model-c" :active-p nil))))
+          (list (list :provider :zai :model "model-a" :active-p t)
+                (list :provider :zai :model "model-b" :active-p nil)
+                (list :provider :openai-codex :model "model-c" :active-p nil))))
     (let ((buf (make-buffer "test")))
       ;; C-n = move down
       (clawmacs::handle-model-selector-key (code-char 14) buf)
@@ -612,7 +612,7 @@
         (*model-selector-index* 1)
         (clawmacs::*model-selector-scroll* 0)
         (*model-selector-entries*
-          (list (list :provider :anthropic :model "model-a" :active-p t)
+          (list (list :provider :openai-codex :model "gpt-5.4" :active-p t)
                 (list :provider :zai :model "glm-5" :active-p nil)))
         (*buffer-ring* nil)
         (clawmacs::*buffer-counter* 0))
@@ -663,7 +663,7 @@
         (*model-selector-index* 1)
         (clawmacs::*model-selector-scroll* 0)
         (*model-selector-entries*
-          (list (list :provider :anthropic :model "model-a" :active-p t)
+          (list (list :provider :openai-codex :model "gpt-5.4" :active-p t)
                 (list :provider :zai :model "glm-5" :active-p nil))))
     (let ((buf (make-buffer "test")))
       ;; C-g = cancel
@@ -676,8 +676,8 @@
 (test model-selector-active-model-pre-selected
   "When opening the model selector, the active model index is pre-selected."
   (let ((*model-selector-entries*
-          (list (list :provider :anthropic :model "model-a" :active-p nil)
-                (list :provider :anthropic :model "model-b" :active-p nil)
+          (list (list :provider :openai-codex :model "gpt-5.4" :active-p nil)
+                (list :provider :openai-codex :model "gpt-5.2" :active-p nil)
                 (list :provider :zai :model "glm-5" :active-p t))))
     ;; Simulate what select-model-command does
     (let ((active-idx (position-if (lambda (e) (getf e :active-p))

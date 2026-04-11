@@ -167,7 +167,7 @@ documentation in *extended-docs*."
 (defdoc face-set-owner
   :category "face"
   :usage "(face-set-owner FS:face-set) — (face-set-owner my-face-set)"
-  :returns "keyword — :USER, :CLAUDE, etc."
+  :returns "keyword — :USER, :AGENT, etc."
   :see-also (face-set make-face-set face-set-faces))
 
 (defdoc face-set-faces
@@ -234,7 +234,7 @@ documentation in *extended-docs*."
 
 (defdoc make-message
   :category "message"
-  :usage "(make-message SENDER:keyword &key FACE-SET READ-ONLY-P) — (make-message :user), (make-message :claude :read-only-p t)"
+  :usage "(make-message SENDER:keyword &key FACE-SET READ-ONLY-P) — (make-message :user), (make-message :agent :read-only-p t)"
   :returns "message — A new message with a single empty line."
   :see-also (message message-text message-sender message-first-line))
 
@@ -277,7 +277,7 @@ documentation in *extended-docs*."
 (defdoc message-sender
   :category "message"
   :usage "(message-sender MSG:message) — (message-sender my-msg)"
-  :returns "keyword — :USER, :CLAUDE, :SYSTEM, :TOOL-RESULT, etc."
+  :returns "keyword — :USER, :AGENT, :SYSTEM, :TOOL-RESULT, etc."
   :see-also (message make-message message-text))
 
 (defdoc message-timestamp
@@ -483,13 +483,13 @@ documentation in *extended-docs*."
 
 (defdoc buffer
   :category "buffer"
-  :usage "(make-buffer \"session-01\" :agent-name \"claude\") to create a buffer."
+  :usage "(make-buffer \"session-01\" :agent-name \"agent\") to create a buffer."
   :returns "Class — A chat buffer with a doubly-linked list of messages."
   :see-also (make-buffer buffer-name buffer-input-message *buffer-ring*))
 
 (defdoc make-buffer
   :category "buffer"
-  :usage "(make-buffer NAME:string &key AGENT-NAME:string WORKING-DIRECTORY:pathname CONTEXT-LIMIT:integer) — (make-buffer \"session-01\" :agent-name \"claude\")"
+  :usage "(make-buffer NAME:string &key AGENT-NAME:string WORKING-DIRECTORY:pathname CONTEXT-LIMIT:integer) — (make-buffer \"session-01\" :agent-name \"agent\")"
   :returns "buffer — A new buffer with a single empty input message."
   :side-effects "Allocates a buffer with an empty face registry."
   :see-also (buffer buffer-name add-buffer-to-ring current-buffer))
@@ -521,7 +521,7 @@ documentation in *extended-docs*."
 (defdoc buffer-agent-name
   :category "buffer"
   :usage "(buffer-agent-name BUF:buffer) — (buffer-agent-name (current-buffer))"
-  :returns "string — \"claude\", \"help\", etc."
+  :returns "string — \"agent\", \"help\", etc."
   :see-also (buffer make-buffer buffer-name))
 
 (defdoc buffer-working-directory
@@ -551,13 +551,13 @@ documentation in *extended-docs*."
 (defdoc buffer-provider-override
   :category "buffer"
   :usage "(buffer-provider-override BUF:buffer) — (buffer-provider-override (current-buffer))"
-  :returns "keyword or nil — :ANTHROPIC, :OPENAI-CODEX, :ZAI, or nil."
+  :returns "keyword or nil — :OPENAI-CODEX, :ZAI, :OPENROUTER, or nil."
   :see-also (set-buffer-provider-override clear-buffer-provider-override buffer-model-override))
 
 (defdoc buffer-model-override
   :category "buffer"
   :usage "(buffer-model-override BUF:buffer) — (buffer-model-override (current-buffer))"
-  :returns "string or nil — \"claude-opus-4-6\" or nil to use default."
+  :returns "string or nil — \"glm-5\" or nil to use default."
   :see-also (set-buffer-model-override clear-buffer-model-override buffer-provider-override))
 
 (defdoc buffer-think-level-override
@@ -568,14 +568,14 @@ documentation in *extended-docs*."
 
 (defdoc set-buffer-provider-override
   :category "buffer"
-  :usage "(set-buffer-provider-override BUF:buffer PROVIDER:keyword) — (set-buffer-provider-override buf :anthropic)"
+  :usage "(set-buffer-provider-override BUF:buffer PROVIDER:keyword) — (set-buffer-provider-override buf :zai)"
   :returns "buffer — The modified buffer."
   :side-effects "Sets the buffer's provider override."
   :see-also (buffer-provider-override clear-buffer-provider-override set-buffer-model-override))
 
 (defdoc set-buffer-model-override
   :category "buffer"
-  :usage "(set-buffer-model-override BUF:buffer MODEL:string) — (set-buffer-model-override buf \"claude-opus-4-6\")"
+  :usage "(set-buffer-model-override BUF:buffer MODEL:string) — (set-buffer-model-override buf \"glm-5\")"
   :returns "buffer — The modified buffer."
   :side-effects "Sets the buffer's model override."
   :see-also (buffer-model-override clear-buffer-model-override set-buffer-provider-override))
@@ -1022,19 +1022,7 @@ documentation in *extended-docs*."
 
 (defdoc *default-max-tokens*
   :category "llm"
-  :see-also (*default-model* *default-provider* anthropic-request))
-
-(defdoc *anthropic-model*
-  :category "llm"
-  :see-also (*default-model* *claude-cli-models* resolve-buffer-provider-and-model))
-
-(defdoc *claude-code-credentials-path*
-  :category "llm"
-  :see-also (read-claude-code-oauth-token read-provider-token))
-
-(defdoc *anthropic-env-var*
-  :category "llm"
-  :see-also (read-env-token read-provider-token))
+  :see-also (*default-model* *default-provider* provider-request))
 
 (defdoc *zai-env-var*
   :category "llm"
@@ -1076,14 +1064,6 @@ documentation in *extended-docs*."
   :category "llm"
   :see-also (*codex-auth-path* save-openai-codex-oauth-tokens read-openai-codex-oauth-tokens))
 
-(defdoc *claude-cli-path*
-  :category "llm"
-  :see-also (*claude-cli-models* claude-cli-model-p claude-cli-request))
-
-(defdoc *claude-cli-models*
-  :category "llm"
-  :see-also (*claude-cli-path* claude-cli-model-p claude-cli-request))
-
 (defdoc *openai-oauth-pending*
   :category "llm"
   :see-also (openai-codex-oauth-command openai-codex-oauth-start openai-codex-oauth-finish))
@@ -1094,40 +1074,28 @@ documentation in *extended-docs*."
 
 (defdoc read-env-token
   :category "llm"
-  :usage "(read-env-token ENV-VAR:string) — (read-env-token \"CLAUDE_CODE_OAUTH_TOKEN\")"
+  :usage "(read-env-token ENV-VAR:string) — (read-env-token \"ZAI_CODING_MAX_API_KEY\")"
   :returns "string or nil — Trimmed token value, or nil if unset/empty."
-  :see-also (read-provider-token *anthropic-env-var* *zai-env-var*))
-
-(defdoc read-claude-code-oauth-token
-  :category "llm"
-  :usage "(read-claude-code-oauth-token) — (read-claude-code-oauth-token)"
-  :returns "string or nil — The OAuth access token from Claude Code's credentials file."
-  :see-also (*claude-code-credentials-path* read-provider-token))
+  :see-also (read-provider-token *zai-env-var* *openrouter-env-var*))
 
 (defdoc provider-token-path
   :category "llm"
-  :usage "(provider-token-path PROVIDER:keyword) — (provider-token-path :anthropic)"
-  :returns "pathname — ~/.config/clawmacs/claude-max-token, etc."
+  :usage "(provider-token-path PROVIDER:keyword) — (provider-token-path :zai)"
+  :returns "pathname — Provider-specific token file under ~/.config/clawmacs/."
   :see-also (read-provider-token save-provider-token))
 
 (defdoc read-provider-token
   :category "llm"
-  :usage "(read-provider-token PROVIDER:keyword) — (read-provider-token :anthropic)"
+  :usage "(read-provider-token PROVIDER:keyword) — (read-provider-token :zai)"
   :returns "string or nil — The token with highest priority source, or nil."
-  :see-also (save-provider-token read-env-token read-claude-code-oauth-token provider-token-path))
+  :see-also (save-provider-token read-env-token provider-token-path))
 
 (defdoc save-provider-token
   :category "llm"
-  :usage "(save-provider-token PROVIDER:keyword TOKEN:string) — (save-provider-token :anthropic \"sk-...\")"
+  :usage "(save-provider-token PROVIDER:keyword TOKEN:string) — (save-provider-token :zai \"sk-...\")"
   :returns "string — The saved token."
   :side-effects "Writes TOKEN to the provider's token file. Sets file permissions to 600."
   :see-also (read-provider-token provider-token-path))
-
-(defdoc read-token
-  :category "llm"
-  :usage "(read-token) — (read-token)"
-  :returns "string or nil — The Anthropic OAuth token."
-  :see-also (read-provider-token *anthropic-env-var*))
 
 (defdoc generate-code-verifier
   :category "llm"
@@ -1223,13 +1191,13 @@ documentation in *extended-docs*."
 
 (defdoc agent-default
   :category "llm"
-  :usage "(agent-default AGENT-NAME:string) — (agent-default \"claude\")"
-  :returns "keyword — :ANTHROPIC, :OPENAI-CODEX, or :ZAI."
+  :usage "(agent-default AGENT-NAME:string) — (agent-default \"coder\")"
+  :returns "keyword — :OPENAI-CODEX, :ZAI, or :OPENROUTER."
   :see-also (set-agent-default resolve-buffer-provider-and-model load-agent-defaults))
 
 (defdoc set-agent-default
   :category "llm"
-  :usage "(set-agent-default AGENT-NAME:string PROVIDER:keyword &key MODEL:string) — (set-agent-default \"claude\" :anthropic :model \"claude-opus-4-6\")"
+  :usage "(set-agent-default AGENT-NAME:string PROVIDER:keyword &key MODEL:string) — (set-agent-default \"coder\" :zai :model \"glm-5\")"
   :returns "keyword — The normalized provider."
   :side-effects "Updates the agent defaults registry and persists to disk."
   :see-also (agent-default save-agent-defaults resolve-buffer-provider-and-model))
@@ -1244,7 +1212,7 @@ documentation in *extended-docs*."
 (defdoc resolve-buffer-provider-and-model
   :category "llm"
   :usage "(resolve-buffer-provider-and-model BUF:buffer) — (resolve-buffer-provider-and-model (current-buffer))"
-  :returns "values provider:keyword model:string think-level:(or null string) — e.g. :ANTHROPIC, \"claude-haiku-4-5-20251001\", nil"
+  :returns "values provider:keyword model:string think-level:(or null string) — e.g. :ZAI, \"glm-5\", nil"
   :see-also (buffer-provider-override buffer-model-override buffer-think-level-override agent-default))
 
 (defdoc provider-model-supported-think-levels
@@ -1260,18 +1228,11 @@ documentation in *extended-docs*."
   :side-effects "Clears stale think-level overrides that are unsupported by the active model."
   :see-also (buffer-think-level-override provider-model-supported-think-levels))
 
-(defdoc anthropic-request
-  :category "llm"
-  :usage "(anthropic-request MESSAGES:list CALLBACK:function &key MODEL TOOLS)"
-  :returns "list — The API response as an alist."
-  :side-effects "Makes HTTP POST to the Anthropic Messages API."
-  :see-also (build-conversation-messages send-to-agent-with-context))
-
 (defdoc build-conversation-messages
   :category "llm"
   :usage "(build-conversation-messages BUF:buffer) — (build-conversation-messages (current-buffer))"
   :returns "list — API-format messages array (list of alists with :role and :content)."
-  :see-also (anthropic-request buffer-first-message message-raw-content))
+  :see-also (provider-request buffer-first-message message-raw-content))
 
 (defdoc api-json-encode
   :category "llm"
@@ -1284,51 +1245,6 @@ documentation in *extended-docs*."
   :usage "(api-json-decode STRING:string) — (api-json-decode \"{\\\"key\\\": \\\"value\\\"}\")"
   :returns "alist — Decoded JSON with underscore-preserving key mapping."
   :see-also (api-json-encode))
-
-(defdoc claude-cli-model-p
-  :category "llm"
-  :usage "(claude-cli-model-p MODEL:string) — (claude-cli-model-p \"claude-opus-4-6\")"
-  :returns "list or nil — Non-nil when MODEL must use the Claude CLI subprocess."
-  :see-also (*claude-cli-path* *claude-cli-models* claude-cli-request))
-
-(defdoc claude-cli-build-prompt
-  :category "llm"
-  :usage "(claude-cli-build-prompt MESSAGES:list) — (claude-cli-build-prompt messages)"
-  :returns "string — Formatted prompt string for the Claude CLI."
-  :see-also (claude-cli-request claude-cli-build-ndjson-message build-conversation-messages))
-
-(defdoc claude-cli-build-ndjson-message
-  :category "llm"
-  :usage "(claude-cli-build-ndjson-message SESSION-ID:string USER-TEXT:string)"
-  :returns "string — An NDJSON line: {\"type\":\"user\",\"session_id\":\"...\",\"message\":{...}}"
-  :see-also (claude-cli-request claude-cli-next-session-id))
-
-(defdoc claude-cli-spawn-args
-  :category "llm"
-  :usage "(claude-cli-spawn-args MODEL:string SYSTEM-PROMPT:string)"
-  :returns "list of strings — CLI argument list for uiop:launch-program."
-  :see-also (claude-cli-request *claude-cli-path*))
-
-(defdoc claude-cli-next-session-id
-  :category "llm"
-  :usage "(claude-cli-next-session-id) — (claude-cli-next-session-id)"
-  :returns "string — \"clawmacs-<timestamp>-<counter>\""
-  :side-effects "Increments a global session counter."
-  :see-also (claude-cli-build-ndjson-message claude-cli-request))
-
-(defdoc claude-cli-request
-  :category "llm"
-  :usage "(claude-cli-request MESSAGES:list CALLBACK:function &key MODEL TOOLS)"
-  :returns "list — The parsed response from the Claude CLI."
-  :side-effects "Spawns a Claude CLI subprocess, communicates via stdin/stdout NDJSON."
-  :see-also (claude-cli-request-streaming claude-cli-model-p *claude-cli-path*))
-
-(defdoc claude-cli-request-streaming
-  :category "llm"
-  :usage "(claude-cli-request-streaming MESSAGES:list CALLBACK:function &key MODEL TOOLS)"
-  :returns "stream-state — State object for polling streaming progress."
-  :side-effects "Spawns a background thread running the Claude CLI subprocess."
-  :see-also (claude-cli-request send-to-agent-with-context))
 
 (defdoc zai-request
   :category "llm"
@@ -1346,20 +1262,20 @@ documentation in *extended-docs*."
 
 (defdoc provider-known-models
   :category "llm"
-  :usage "(provider-known-models PROVIDER:keyword) — (provider-known-models :anthropic)"
-  :returns "list of strings — (\"claude-haiku-4-5-20251001\" \"claude-sonnet-4-6\" ...)"
+  :usage "(provider-known-models PROVIDER:keyword) — (provider-known-models :zai)"
+  :returns "list of strings — (\"glm-5\" \"glm-5-turbo\" ...)"
   :see-also (*provider-known-models* provider-has-token-p available-models-for-selector))
 
 (defdoc provider-has-token-p
   :category "llm"
-  :usage "(provider-has-token-p PROVIDER:keyword) — (provider-has-token-p :anthropic)"
+  :usage "(provider-has-token-p PROVIDER:keyword) — (provider-has-token-p :zai)"
   :returns "boolean — T if the provider has a usable API key or OAuth token."
   :see-also (read-provider-token provider-known-models available-models-for-selector))
 
 (defdoc available-models-for-selector
   :category "llm"
   :usage "(available-models-for-selector BUF:buffer) — (available-models-for-selector (current-buffer))"
-  :returns "list of plists — ((:provider :anthropic :model \"name\" :active-p t) ...)"
+  :returns "list of plists — ((:provider :zai :model \"name\" :active-p t) ...)"
   :see-also (provider-known-models provider-has-token-p select-model-command minibuffer-select-model-command))
 
 ;;; ==========================================================================
@@ -1429,8 +1345,8 @@ documentation in *extended-docs*."
 (defdoc tool-definitions-for-api
   :category "tool"
   :usage "(tool-definitions-for-api) — (tool-definitions-for-api)"
-  :returns "list — Tool definitions formatted for the Anthropic API tools parameter."
-  :see-also (*tool-table* register-tool anthropic-request))
+  :returns "list — Tool definitions formatted for provider adapters."
+  :see-also (*tool-table* register-tool provider-request))
 
 (defdoc format-tool-call-sexpr
   :category "tool"
@@ -1548,7 +1464,7 @@ documentation in *extended-docs*."
 (defdoc resolve-modeline-provider-model
   :category "render"
   :usage "(resolve-modeline-provider-model BUF:buffer) — (resolve-modeline-provider-model (current-buffer))"
-  :returns "string — \"anthropic/claude-haiku-4-5-20251001\" or \"openai-codex/gpt-5.4 [think:high]\", or \"??\" on error."
+  :returns "string — \"zai/glm-5\" or \"openai-codex/gpt-5.4 [think:high]\", or \"??\" on error."
   :see-also (render-modeline resolve-buffer-provider-and-model))
 
 (defdoc render-modeline
@@ -1715,7 +1631,7 @@ documentation in *extended-docs*."
 
 (defdoc fuzzy-match-p
   :category "minibuffer"
-  :usage "(fuzzy-match-p QUERY:string CANDIDATE:string) — (fuzzy-match-p \"opus\" \"claude-opus-4-6\")"
+  :usage "(fuzzy-match-p QUERY:string CANDIDATE:string) — (fuzzy-match-p \"glm\" \"glm-5\")"
   :returns "boolean — T if all characters in QUERY appear in CANDIDATE in order."
   :see-also (minibuffer-update-filter *minibuffer-filtered-items*))
 
@@ -2097,7 +2013,7 @@ documentation in *extended-docs*."
 
 (defdoc buffer
   :category "type"
-  :usage "(make-buffer \"session-01\" :agent-name \"claude\")"
+  :usage "(make-buffer \"session-01\" :agent-name \"agent\")"
   :see-also (make-buffer buffer-name buffer-status buffer-first-message buffer-input-message))
 
 (defdoc keymap
@@ -2118,7 +2034,7 @@ documentation in *extended-docs*."
 (defdoc stream-state
   :category "type"
   :usage "(make-stream-state)"
-  :see-also (buffer-pending-stream anthropic-request-streaming zai-request-streaming))
+  :see-also (buffer-pending-stream provider-request-streaming zai-request-streaming))
 
 (defdoc permission-denied
   :category "type"
@@ -2476,7 +2392,7 @@ documentation in *extended-docs*."
   :usage "(send-to-agent-with-context BUF:buffer) — (send-to-agent-with-context (current-buffer))"
   :returns "buffer — The buffer."
   :side-effects "Sets buffer status to :thinking. Starts a non-blocking streaming API call."
-  :see-also (send-message build-conversation-messages anthropic-request))
+  :see-also (send-message build-conversation-messages provider-request-streaming))
 
 (defdoc clawmacs-main
   :category "main"

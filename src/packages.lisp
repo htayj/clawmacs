@@ -177,15 +177,11 @@
    #:*default-keymap*
 
     ;; LLM
-    #:*claude-code-credentials-path*
-    #:*anthropic-env-var*
     #:*zai-env-var*
     #:read-env-token
-    #:read-claude-code-oauth-token
     #:provider-token-path
     #:read-provider-token
     #:save-provider-token
-     #:read-token
      #:agent-definition
      #:make-agent-definition
      #:agent-definition-name
@@ -212,26 +208,13 @@
      #:*boot-file-names*
      #:load-boot-files
      #:*agent-defaults-path*
-     #:anthropic-request
      #:build-conversation-messages
    #:*default-provider*
    #:*default-model*
    #:*default-max-tokens*
    #:*default-tools-prompt*
-    #:*anthropic-model*
    #:api-json-encode
    #:api-json-decode
-
-   ;; Claude CLI Subprocess (stream-json protocol)
-   #:*claude-cli-path*
-   #:*claude-cli-models*
-   #:claude-cli-model-p
-   #:claude-cli-build-prompt
-   #:claude-cli-build-ndjson-message
-   #:claude-cli-spawn-args
-   #:claude-cli-next-session-id
-   #:claude-cli-request
-   #:claude-cli-request-streaming
 
    ;; Z.AI (Zhipu AI)
    #:*zai-model*

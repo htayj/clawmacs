@@ -141,6 +141,7 @@
     (keymap-bind km '(:ctrl-h #\v) 'describe-variable-command)  ; C-h v = describe variable
     (keymap-bind km '(:ctrl-h #\T) 'describe-type-command)      ; C-h T = describe type
     (keymap-bind km '(:ctrl-h #\F) 'customize-face-command)     ; C-h F = customize face
+    (keymap-bind km '(:ctrl-c #\b) 'describe-bindings-command)  ; compatibility alias
     (keymap-bind km '(:ctrl-c #\f) 'describe-function-command)  ; compatibility alias
     (keymap-bind km '(:ctrl-c #\v) 'describe-variable-command)  ; compatibility alias
     (keymap-bind km '(:ctrl-c #\T) 'describe-type-command)      ; compatibility alias

@@ -8,17 +8,17 @@
 
 (test format-modeline-basic
   "format-modeline produces a left/right aligned string with major mode."
-  (let* ((buf (make-buffer "test:session" :agent-name "claude"
+  (let* ((buf (make-buffer "test:session" :agent-name "coder"
                            :working-directory #P"/tmp/")))
     (setf (buffer-token-count buf) 1000
           (buffer-context-limit buf) 200000
           (buffer-status buf) :idle)
-    (let ((ml (clawmacs::format-modeline buf 100 :provider-model "anthropic/test-model")))
+    (let ((ml (clawmacs::format-modeline buf 100 :provider-model "zai/test-model")))
       (is (= 100 (length ml)))
       ;; Major mode defaults to "chat"
       (is (search "[chat]" ml))
       (is (search "test:session" ml))
-      (is (search "anthropic/test-model" ml))
+      (is (search "zai/test-model" ml))
       (is (search "1000/200000" ml))
       (is (search "IDLE" ml)))))
 
@@ -93,7 +93,7 @@
     (setf (buffer-token-count buf) 999999
           (buffer-context-limit buf) 999999
           (buffer-status buf) :thinking)
-    (let ((ml (clawmacs::format-modeline buf 40 :provider-model "anthropic/claude-sonnet-4-6")))
+    (let ((ml (clawmacs::format-modeline buf 40 :provider-model "openai-codex/gpt-5.4")))
       (is (= 40 (length ml))))))
 
 (test calculate-input-height-minimum
@@ -210,16 +210,16 @@
 
 (test format-selector-line-fits-width
   "format-selector-line output is exactly the given width."
-  (let ((line (clawmacs::format-selector-line "▸ " "my-session" "claude" "idle" "5" 80)))
+  (let ((line (clawmacs::format-selector-line "▸ " "my-session" "coder" "idle" "5" 80)))
     (is (= 80 (length line)))
     (is (search "my-session" line))
-    (is (search "claude" line))
+    (is (search "coder" line))
     (is (search "idle" line))
     (is (search "5" line))))
 
 (test format-selector-line-truncates-at-narrow-width
   "format-selector-line truncates to fit narrow terminals."
-  (let ((line (clawmacs::format-selector-line "  " "very-long-session-name" "claude" "thinking" "12" 40)))
+  (let ((line (clawmacs::format-selector-line "  " "very-long-session-name" "coder" "thinking" "12" 40)))
     (is (= 40 (length line)))))
 
 ;;; --------------------------------------------------------------------------
@@ -228,10 +228,10 @@
 
 (test format-model-selector-line-fits-width
   "format-model-selector-line output is exactly the given width."
-  (let ((line (clawmacs::format-model-selector-line "▸ " "anthropic" "claude-haiku-4-5-20251001" 80)))
+  (let ((line (clawmacs::format-model-selector-line "▸ " "zai" "glm-5" 80)))
     (is (= 80 (length line)))
-    (is (search "anthropic" line))
-    (is (search "claude-haiku-4-5-20251001" line))))
+    (is (search "zai" line))
+    (is (search "glm-5" line))))
 
 (test format-model-selector-line-with-active-marker
   "format-model-selector-line shows the active marker."

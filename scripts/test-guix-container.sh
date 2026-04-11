@@ -180,7 +180,7 @@ while [ "$#" -gt 0 ]; do
       share=${1#--share=}
       ;;
     --share=*|--expose=*)
-      # Additional shares/exposes (e.g. ~/.claude, /nix) — skip
+      # Additional shares/exposes (e.g. init files or X11 sockets) — skip
       ;;
   esac
   if [ "$1" = "--" ]; then
@@ -391,6 +391,9 @@ run_env_case() {
   env PATH="$TMP_BIN:$PATH" \
     CLAWMACS_ENABLE_TEST_TOGGLES=1 \
     CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
+    OPENAI_API_KEY= \
+    ZAI_CODING_MAX_API_KEY= \
+    OPENROUTER_API_KEY= \
     "$@" 2>"$stderr_file"
   actual_code=$?
   set -e
@@ -426,7 +429,8 @@ run_env_case preflight-precedence-override-over-bootstrap 117 CLAWMACS_TEST_INVA
 run_env_case preflight-precedence-openssl-over-bootstrap 121 CLAWMACS_TEST_MISSING_OPENSSL_PATH=1 CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
 run_env_case e2e-credential-missing-required 116 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only provider
 run_env_case e2e-credential-openai-present 0 OPENAI_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only provider
-run_env_case e2e-credential-anthropic-present 0 ANTHROPIC_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only provider
+run_env_case e2e-credential-zai-present 0 ZAI_CODING_MAX_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only provider
+run_env_case e2e-credential-openrouter-present 0 OPENROUTER_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only provider
 run_env_case e2e-credential-optional-readline 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only readline
 run_env_case e2e-credential-generic-command-optional 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 -c 'print("ok")'
 run_env_case e2e-credential-default-test-e2e-required 116 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py

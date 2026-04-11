@@ -62,7 +62,7 @@
    (sender        :initarg :sender
                   :accessor message-sender
                   :type keyword
-                  :documentation "Keyword identifying who sent this message (e.g. :user, :claude, :system).")
+                  :documentation "Keyword identifying who sent this message (e.g. :user, :agent, :system).")
    (timestamp     :initarg :timestamp
                   :accessor message-timestamp
                   :initform nil

@@ -119,7 +119,7 @@ nil for boolean slots means 'inherit from parent'."
   ((owner :initarg :owner
           :reader face-set-owner
           :type keyword
-          :documentation "Keyword identifying the owner of this face set (e.g. :user, :claude).")
+          :documentation "Keyword identifying the owner of this face set (e.g. :user, :agent).")
    (faces :initarg :faces
           :reader face-set-faces
           :type hash-table

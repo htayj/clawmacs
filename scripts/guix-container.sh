@@ -41,7 +41,7 @@ is_test_toggle_enabled() {
 is_sensitive_key() {
   key="$1"
   case "$key" in
-    ANTHROPIC_API_KEY|OPENAI_API_KEY|*_KEY|*_TOKEN|*_SECRET)
+    OPENAI_API_KEY|*_KEY|*_TOKEN|*_SECRET)
       return 0
       ;;
     *)
@@ -385,7 +385,7 @@ validate_provider_credential() {
     return 0
   fi
 
-  if [ -n "${ANTHROPIC_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
+  if [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${ZAI_CODING_MAX_API_KEY:-}" ] || [ -n "${OPENROUTER_API_KEY:-}" ]; then
     return 0
   fi
 
@@ -666,17 +666,10 @@ launch_payload() {
 
   ensure_payload_mcp_driver "$@"
 
-  # Claude Code CLI: share credentials and expose Nix store for the binary
   # User init directory: share ~/.clawmacs.d/ so init.lisp is available
   extra_container_args=""
-  if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.claude" ]; then
-    extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.claude=$WORKSPACE_HOME/.claude"
-  fi
   if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.clawmacs.d" ]; then
     extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.clawmacs.d=$WORKSPACE_HOME/.clawmacs.d"
-  fi
-  if [ -d "/nix" ]; then
-    extra_container_args="$extra_container_args --expose=/nix"
   fi
   # X11 forwarding: expose the X socket and Xauthority so McCLIM (and any
   # other graphical toolkit) can connect to the host display server.
@@ -687,27 +680,17 @@ launch_payload() {
     extra_container_args="$extra_container_args --expose=$XAUTHORITY"
   fi
 
-  # Resolve the Claude Code CLI binary path so we can add it to PATH inside
-  # the container.  The Nix wrapper lives in /nix/store/…/bin/claude and its
-  # shebang + dependencies are all inside /nix/store (exposed above).
-  if command -v claude >/dev/null 2>&1; then
-    resolved_claude=$(readlink -f "$(command -v claude)" 2>/dev/null || true)
-    if [ -n "$resolved_claude" ] && [ -x "$resolved_claude" ]; then
-      export CLAWMACS_CLAUDE_CLI_DIR
-      CLAWMACS_CLAUDE_CLI_DIR=$(dirname "$resolved_claude")
-    fi
-  fi
-
   # shellcheck disable=SC2086
-  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|DISPLAY|XAUTHORITY|ANTHROPIC_API_KEY|OPENAI_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_MCP_BIN|CLAWMACS_DEBUG_LOG|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|LD_LIBRARY_PATH|CLAWMACS_CLAUDE_CLI_DIR' --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}"; if [ -n "${CLAWMACS_CLAUDE_CLI_DIR:-}" ]; then export PATH="$CLAWMACS_CLAUDE_CLI_DIR:$PATH"; fi; exec "$@"' bash "$@"
+  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_MCP_BIN|CLAWMACS_DEBUG_LOG|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}"; exec "$@"' bash "$@"
 }
 
 main() {
   run_preflight "$@"
 
   if [ "${CLAWMACS_DEBUG:-0}" = "1" ]; then
-    diagnostic_env ANTHROPIC_API_KEY
     diagnostic_env OPENAI_API_KEY
+    diagnostic_env ZAI_CODING_MAX_API_KEY
+    diagnostic_env OPENROUTER_API_KEY
   fi
 
   if [ "$PREFLIGHT_ONLY" -eq 1 ]; then

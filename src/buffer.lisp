@@ -7,7 +7,7 @@
 (defvar *default-context-limit* 200000
   "Default token context window size for new buffers.")
 
-(defvar *default-agent-name* "claude"
+(defvar *default-agent-name* "agent"
   "Default agent name for new buffers. Affects modeline display and agent-defaults resolution.")
 
 (defvar *default-show-tool-results* t
@@ -30,7 +30,7 @@
                       :accessor buffer-agent-name
                       :initform "agent"
                       :type string
-                      :documentation "Name of the AI agent for this buffer (e.g. \"claude\").")
+                      :documentation "Name of the AI agent for this buffer (e.g. \"agent\").")
    (working-directory :initarg :working-directory
                       :accessor buffer-working-directory
                       :initform (truename ".")
@@ -55,7 +55,7 @@
                       :accessor buffer-provider-override
                       :initform nil
                       :type (or null keyword)
-                      :documentation "When non-nil, overrides the agent's default provider (e.g. :anthropic).")
+                      :documentation "When non-nil, overrides the agent's default provider (e.g. :zai).")
    (model-override    :initarg :model-override
                       :accessor buffer-model-override
                       :initform nil

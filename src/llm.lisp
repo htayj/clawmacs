@@ -10,7 +10,7 @@
 
 (defvar *default-provider* :zai
   "The default LLM provider to use when no agent-specific override is set.
-Must be a keyword matching a known provider (:anthropic, :openai-codex, :zai, :openrouter).")
+Must be a keyword matching a known provider (:openai-codex, :zai, :openrouter).")
 
 (defvar *default-model* "glm-5"
   "The default model to use when no agent-specific or provider-fallback model
@@ -18,18 +18,6 @@ is configured. Should be a valid model name for *default-provider*.")
 
 (defvar *default-max-tokens* 8192
   "Default maximum tokens for LLM responses across all providers.")
-
-(defvar *anthropic-model* "claude-haiku-4-5-20251001"
-  "The Anthropic model to use for chat completions.")
-
-(defvar *anthropic-api-url* "https://api.anthropic.com/v1/messages"
-  "The Anthropic Messages API endpoint.")
-
-(defvar *anthropic-version* "2023-06-01"
-  "The Anthropic API version header value.")
-
-(defvar *anthropic-beta* "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14"
-  "Beta features header for Claude Code OAuth authentication and extended thinking.")
 
 (defvar *openai-codex-model* "gpt-5.3-codex"
   "The OpenAI Codex model to use for chat completions.")
@@ -53,7 +41,8 @@ Uses the coding-specific endpoint for subscription-based access.")
 (defvar *openrouter-model* "openai/gpt-4o-mini"
   "The default OpenRouter model to use for chat completions.
 Model names follow the 'provider/model-name' format (e.g. 'openai/gpt-4o-mini',
-'anthropic/claude-3-5-haiku', 'google/gemini-2.5-pro').")
+'anthropic/claude-3-5-haiku', 'google/gemini-2.5-pro'). These are OpenRouter
+model identifiers and do not imply direct Anthropic provider support.")
 
 (defvar *openrouter-api-url* "https://openrouter.ai/api/v1/chat/completions"
   "The OpenRouter Chat Completions API endpoint.
@@ -111,38 +100,6 @@ Populated on first call to fetch-openrouter-models.  Set to nil to force refresh
   +default-codex-auth-path+
   "Deprecated compatibility path variable for OpenAI Codex auth storage.
 When left at its default value, clawmacs uses *CODEX-AUTH-PATH*.")
-
-;;; Claude Code OAuth Identity
-;;; The Anthropic REST API requires OAuth tokens (sk-ant-oat-*) to identify
-;;; as Claude Code via a specific system prompt prefix sent as the first
-;;; content block in array format.  Without this, Sonnet/Opus return 400.
-(defvar *claude-code-system-prefix*
-  "You are Claude Code, Anthropic's official CLI for Claude."
-  "System prompt prefix required by the Anthropic API for Claude Max OAuth
-tokens to access Sonnet/Opus models.  Must be the first text block in an
-array-format system prompt.")
-
-;;; Claude CLI Subprocess Configuration (for Claude Max subscription models)
-;;; Uses the stream-json subprocess protocol.  With the correct beta headers
-;;; and system prompt prefix, OAuth tokens now work for all models via REST.
-(defvar *claude-cli-path* nil
-  "Path to the Claude Code CLI binary. Set to nil (default) to route all
-Anthropic models through the REST API with OAuth tokens. Set to \"claude\"
-to re-enable CLI subprocess delegation for models in *claude-cli-models*.")
-
-(defvar *claude-cli-models*
-  '("claude-sonnet-4-6" "claude-opus-4-6"
-    "claude-sonnet-4-5" "claude-sonnet-4-5-20250929"
-    "claude-opus-4-5" "claude-opus-4-5-20251101"
-    "claude-sonnet-4-20250514" "claude-opus-4-20250514")
-  "Anthropic models that require the Claude CLI subprocess because the
-REST API rejects OAuth tokens for them (returns 400 invalid_request_error).
-These models are routed through the Claude Code CLI stream-json protocol.")
-
-(defun claude-cli-model-p (model)
-  "Return non-nil when MODEL must use the Claude CLI subprocess."
-  (and *claude-cli-path*
-       (member model *claude-cli-models* :test #'string=)))
 
 (defvar *system-prompt-path*
   (merge-pathnames #P".config/clawmacs/system-prompt.txt" (user-homedir-pathname))
@@ -437,34 +394,17 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
 ;;; Token Management
 ;;; --------------------------------------------------------------------------
 
-(defun read-token ()
-  "Read the Anthropic OAuth token from its provider-specific file."
-  (read-provider-token :anthropic))
-
-(defun save-token (token)
-  "Save TOKEN to the Anthropic provider-specific token file."
-  (save-provider-token :anthropic token))
-
 (defun provider-token-path (provider)
   "Return the provider-specific token file path for PROVIDER."
   (merge-pathnames
    (case provider
-     (:anthropic #P".config/clawmacs/claude-max-token")
      (:openai-codex #P".config/clawmacs/openai-codex-token")
      (:zai #P".config/clawmacs/zai-api-key")
      (:openrouter #P".config/clawmacs/openrouter-api-key")
      (otherwise
-      (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI, :OPENROUTER"
+      (error "Unknown provider ~S. Supported providers: :OPENAI-CODEX, :ZAI, :OPENROUTER"
              provider)))
    (user-homedir-pathname)))
-
-(defvar *claude-code-credentials-path*
-  (merge-pathnames #P".claude/.credentials.json" (user-homedir-pathname))
-  "Path to Claude Code's OAuth credentials file.")
-
-(defvar *anthropic-env-var* "CLAUDE_CODE_OAUTH_TOKEN"
-  "Environment variable name for the Anthropic Claude Max OAuth token.
-When set, this takes highest priority over all other Anthropic token sources.")
 
 (defvar *zai-env-var* "ZAI_CODING_MAX_API_KEY"
   "Environment variable name for the Z.AI Coding Max API key.
@@ -478,20 +418,6 @@ Returns the trimmed token string if the variable is set and non-empty, nil other
       (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) value)))
         (when (plusp (length trimmed))
           trimmed)))))
-
-(defun read-claude-code-oauth-token ()
-  "Read the Anthropic OAuth access token from Claude Code's credentials file.
-Returns the access token string if the file exists and contains a valid
-claudeAiOauth entry, otherwise nil."
-  (when (probe-file *claude-code-credentials-path*)
-    (handler-case
-        (let* ((json-str (uiop:read-file-string *claude-code-credentials-path*))
-               (creds (cl-json:decode-json-from-string json-str))
-               (oauth (cdr (assoc :claude-ai-oauth creds)))
-               (token (cdr (assoc :access-token oauth))))
-          (when (and token (stringp token) (plusp (length token)))
-            token))
-      (error () nil))))
 
 (defun save-provider-token (provider token)
   "Save TOKEN to PROVIDER's provider-specific token file."
@@ -958,10 +884,6 @@ Precedence: clawmacs override token file, then shared ~/.codex/auth.json."
 (defun read-provider-token (provider)
   "Read PROVIDER's token with provider-specific precedence rules.
 
-  :ANTHROPIC     1) CLAUDE_CODE_OAUTH_TOKEN env var
-                 2) Claude Code credentials file (~/.claude/.credentials.json)
-                 3) Static token file (~/.config/clawmacs/claude-max-token)
-
   :OPENAI-CODEX  1) Static token override (~/.config/clawmacs/openai-codex-token)
                  2) Shared Codex auth.json (~/.codex/auth.json)
 
@@ -970,14 +892,10 @@ Precedence: clawmacs override token file, then shared ~/.codex/auth.json."
 
   :OPENROUTER    1) OPENROUTER_API_KEY env var
                  2) Static token file (~/.config/clawmacs/openrouter-api-key)"
-  (or (when (eq provider :anthropic)
-        (read-env-token *anthropic-env-var*))
-      (when (eq provider :zai)
+  (or (when (eq provider :zai)
         (read-env-token *zai-env-var*))
       (when (eq provider :openrouter)
         (read-env-token *openrouter-env-var*))
-      (when (eq provider :anthropic)
-        (read-claude-code-oauth-token))
       (when (eq provider :openai-codex)
         (getf (resolve-openai-codex-auth) :token))
       (read-provider-file-token provider)))
@@ -1455,8 +1373,7 @@ Returns the access token on success."
   flow)
 
 (defparameter *provider-fallback-models*
-  '((:anthropic . *anthropic-model*)
-    (:openai-codex . *openai-codex-model*)
+  '((:openai-codex . *openai-codex-model*)
     (:zai . *zai-model*)
     (:openrouter . *openrouter-model*))
   "Alist mapping provider keywords to the variable holding their default model.
@@ -1465,7 +1382,7 @@ dereferences it at call time so that user customizations take effect.")
 
 (defun known-provider-p (provider)
   "Return non-nil when PROVIDER is supported locally."
-  (member provider '(:anthropic :openai-codex :zai :openrouter) :test #'eq))
+  (member provider '(:openai-codex :zai :openrouter) :test #'eq))
 
 (defun canonicalize-provider-name (provider-name)
   "Return a normalized comparison key for PROVIDER-NAME."
@@ -1480,21 +1397,21 @@ dereferences it at call time so that user customizations take effect.")
     ((keywordp provider)
      (if (known-provider-p provider)
          provider
-         (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI, :OPENROUTER"
+         (error "Unknown provider ~S. Supported providers: :OPENAI-CODEX, :ZAI, :OPENROUTER"
                 provider)))
     ((stringp provider)
      (let ((normalized-name (canonicalize-provider-name provider)))
        (or (find normalized-name
-                 '(:anthropic :openai-codex :zai :openrouter)
+                 '(:openai-codex :zai :openrouter)
                  :key (lambda (candidate)
                         (canonicalize-provider-name (symbol-name candidate)))
                  :test #'string=)
-           (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI, :OPENROUTER"
+           (error "Unknown provider ~S. Supported providers: :OPENAI-CODEX, :ZAI, :OPENROUTER"
                   provider))))
     ((symbolp provider)
      (normalize-provider (symbol-name provider)))
     (t
-     (error "Unknown provider ~S. Supported providers: :ANTHROPIC, :OPENAI-CODEX, :ZAI, :OPENROUTER"
+     (error "Unknown provider ~S. Supported providers: :OPENAI-CODEX, :ZAI, :OPENROUTER"
             provider))))
 
 (defun blank-string-p (value)
@@ -1581,13 +1498,7 @@ respected."
 ;;; --------------------------------------------------------------------------
 
 (defparameter *provider-known-models*
-  '((:anthropic
-     "claude-haiku-4-5-20251001"
-     "claude-sonnet-4-6"
-     "claude-opus-4-6"
-     "claude-3-5-haiku-20241022"
-     "claude-3-haiku-20240307")
-    (:openai-codex
+  '((:openai-codex
      "gpt-5.3-codex"
      "gpt-5.4"
      "gpt-5.2-codex"
@@ -1729,7 +1640,7 @@ Returns two values: status keyword and resulting think level."
 
 (defun available-models-for-selector (buf)
   "Build the model selector entry list for BUF.
-Returns a list of plists: ((:provider :anthropic :model \"name\" :active-p t/nil) ...)
+Returns a list of plists: ((:provider :zai :model \"name\" :active-p t/nil) ...)
 Only includes providers that have a valid API key. The entry matching BUF's
 currently resolved provider/model is marked :active-p t.
 For :OPENROUTER, dynamically-fetched models are used when an API key is present."
@@ -1909,7 +1820,7 @@ checked against the resolved provider/model."
 ;;; --------------------------------------------------------------------------
 
 (defun build-conversation-messages (buf)
-  "Build the Anthropic API messages array from the buffer's chat history.
+  "Build canonical provider messages from the buffer's chat history.
 Uses raw-content when available (for tool_use/tool_result messages),
 falls back to plain text content.
 System messages (sender :system) are excluded — they are display-only
@@ -2030,8 +1941,8 @@ reasoning_content is present, falls back to reasoning_content."
                                                       '())))))))
    'vector))
 
-(defun anthropic-tools->openai-tools (tools)
-  "Translate Anthropic-style TOOLS to OpenAI tool definitions."
+(defun tool-definitions->openai-tools (tools)
+  "Translate clawmacs TOOLS to OpenAI-compatible tool definitions."
   (when (and tools (plusp (length tools)))
     (coerce
      (loop :for tool :across tools
@@ -2133,8 +2044,8 @@ reasoning_content is present, falls back to reasoning_content."
             (message-role-content-blocks message)
           (content-blocks->responses-input-items role content-blocks))))
 
-(defun anthropic-tools->responses-tools (tools)
-  "Translate Anthropic-style TOOLS to OpenAI Responses function tools."
+(defun tool-definitions->responses-tools (tools)
+  "Translate clawmacs TOOLS to OpenAI Responses function tools."
   (when (and tools (plusp (length tools)))
     (coerce
      (loop :for tool :across tools
@@ -2210,7 +2121,7 @@ reasoning_content is present, falls back to reasoning_content."
   "Build the request body for an OpenAI Responses API call."
   (declare (ignore max-tokens))
   (let* ((input-items (conversation-messages->responses-input messages))
-         (response-tools (or (anthropic-tools->responses-tools tools) #()))
+         (response-tools (or (tool-definitions->responses-tools tools) #()))
          (body `((:model . ,model)
                  (:instructions . ,system-prompt)
                  (:input . ,(coerce input-items 'vector))
@@ -2291,22 +2202,8 @@ reasoning_content is present, falls back to reasoning_content."
                               tools
                               reasoning-effort
                               (system-prompt (build-system-prompt)))
-  "Dispatch a non-streaming request by resolved PROVIDER.
-Anthropic models listed in *claude-cli-models* are routed through the
-Claude Code CLI subprocess instead of the REST API."
+  "Dispatch a non-streaming request by resolved PROVIDER."
   (ecase provider
-    (:anthropic
-     (if (claude-cli-model-p model)
-         (claude-cli-request messages
-                             :model model
-                             :max-tokens max-tokens
-                             :tools tools
-                             :system-prompt system-prompt)
-         (anthropic-request messages
-                            :model model
-                            :max-tokens max-tokens
-                            :tools tools
-                            :system-prompt system-prompt)))
     (:openai-codex
      (openai-codex-request messages
                            :model model
@@ -2333,22 +2230,8 @@ Claude Code CLI subprocess instead of the REST API."
                                         tools
                                         reasoning-effort
                                         (system-prompt (build-system-prompt)))
-  "Dispatch a streaming request by resolved PROVIDER.
-Anthropic models listed in *claude-cli-models* are routed through the
-Claude Code CLI subprocess instead of the REST API."
+  "Dispatch a streaming request by resolved PROVIDER."
   (ecase provider
-    (:anthropic
-     (if (claude-cli-model-p model)
-         (claude-cli-request-streaming messages callback
-                                       :model model
-                                       :max-tokens max-tokens
-                                       :tools tools
-                                       :system-prompt system-prompt)
-         (anthropic-request-streaming messages callback
-                                      :model model
-                                      :max-tokens max-tokens
-                                      :tools tools
-                                      :system-prompt system-prompt)))
     (:openai-codex
      (openai-codex-request-streaming messages callback
                                      :model model
@@ -2370,411 +2253,8 @@ Claude Code CLI subprocess instead of the REST API."
                                    :system-prompt system-prompt))))
 
 ;;; --------------------------------------------------------------------------
-;;; Claude CLI Subprocess Provider (stream-json protocol)
-;;; --------------------------------------------------------------------------
-;;; The Claude Max subscription (5x, 20x) restricts Sonnet/Opus models to the
-;;; Claude Code CLI process.  The REST API returns 400 "Error" for these models
-;;; even with valid OAuth tokens.
-;;;
-;;; We use the Claude Code CLI's stream-json subprocess protocol — the same
-;;; protocol used by Goose, OpenClaw, and other agentic editors.  This spawns
-;;; `claude --input-format stream-json --output-format stream-json` and
-;;; communicates via NDJSON on stdin/stdout.
-;;;
-;;; Protocol overview:
-;;;   1. Spawn: claude --input-format stream-json --output-format stream-json
-;;;            --verbose --model <model> --system-prompt "..." --max-turns 1
-;;;   2. Send:  {"type":"user","session_id":"...","message":{"role":"user",
-;;;             "content":[{"type":"text","text":"..."}]}}  (newline-terminated)
-;;;   3. Recv:  NDJSON events on stdout until {"type":"result",...}
-;;;
-;;; Each request spawns a fresh subprocess (auth/config load is fast).
-;;; The --dangerously-skip-permissions flag prevents interactive permission
-;;; prompts.  --max-turns 1 restricts to a single response turn.
-
-(defvar *claude-cli-session-counter* 0
-  "Monotonically increasing counter for generating unique session IDs.")
-
-(defun claude-cli-next-session-id ()
-  "Generate a unique session ID for a Claude CLI request."
-  (format nil "clawmacs-~D-~D"
-          (get-universal-time) (incf *claude-cli-session-counter*)))
-
-(defun claude-cli-build-prompt (messages)
-  "Flatten MESSAGES into a single prompt string for the Claude CLI.
-Older messages are prepended as context so the model sees the full
-conversation history.  System messages are excluded since the system
-prompt is passed via --system-prompt."
-  (with-output-to-string (s)
-    (dolist (msg messages)
-      (let ((role (cdr (assoc :role msg)))
-            (raw  (cdr (assoc :content msg))))
-        (when (and role raw (not (string= role "system")))
-          (let ((text (cond
-                        ;; Plain string content
-                        ((stringp raw) raw)
-                        ;; Vector of content blocks – concatenate text blocks
-                        ((and (vectorp raw) (plusp (length raw)))
-                         (with-output-to-string (ts)
-                           (loop :for blk :across raw
-                                 :when (string= "text"
-                                                 (cdr (assoc :type blk)))
-                                 :do (write-string (cdr (assoc :text blk)) ts))))
-                        (t (format nil "~A" raw)))))
-            (format s "~:[~;~%~%~][~A]: ~A" (plusp (file-position s))
-                    role text)))))))
-
-(defun claude-cli-build-ndjson-message (messages session-id)
-  "Build an NDJSON message line for the Claude CLI stream-json protocol.
-Flattens all conversation MESSAGES into a single user message with full
-context, tagged with SESSION-ID."
-  (let ((prompt-text (claude-cli-build-prompt messages)))
-    (api-json-encode
-     `((:type . "user")
-       (:session--id . ,session-id)
-       (:message . ((:role . "user")
-                    (:content . ,(vector
-                                  `((:type . "text")
-                                    (:text . ,prompt-text))))))))))
-
-(defun claude-cli-spawn-args (model &key (system-prompt (or (build-system-prompt)
-                                                            "You are a helpful assistant.")))
-  "Build the CLI argument list for spawning a Claude subprocess for MODEL.
-Wraps with `env -u LD_LIBRARY_PATH` so the Nix-packaged CLI binary uses its
-own RPATH for library resolution instead of picking up incompatible Guix
-container libraries (e.g. OpenSSL version mismatch)."
-  (list "env" "-u" "LD_LIBRARY_PATH"
-        *claude-cli-path*
-        "--input-format" "stream-json"
-        "--output-format" "stream-json"
-        "--verbose"
-        "--model" model
-        "--system-prompt" system-prompt
-        "--dangerously-skip-permissions"
-        "--max-turns" "1"))
-
-(defun claude-cli-request (messages &key (model "claude-sonnet-4-6")
-                                         (max-tokens *default-max-tokens*)
-                                         tools
-                                         (system-prompt (or (build-system-prompt)
-                                                            "You are a helpful assistant.")))
-  "Send a non-streaming request via the Claude Code CLI subprocess.
-Uses the stream-json protocol: spawns `claude --input-format stream-json`,
-writes an NDJSON message to stdin, and reads NDJSON events from stdout
-until a result event arrives.  Returns a canonical Anthropic-format
-response alist."
-  (declare (ignore max-tokens tools))
-  (let* ((session-id (claude-cli-next-session-id))
-         (ndjson-msg (claude-cli-build-ndjson-message messages session-id))
-         (args (claude-cli-spawn-args model :system-prompt system-prompt))
-         (proc (uiop:launch-program args
-                                     :input :stream
-                                     :output :stream
-                                     :error-output nil))
-         (stdin (uiop:process-info-input proc))
-         (stdout (uiop:process-info-output proc)))
-    ;; Send the NDJSON message and close stdin to signal completion
-    (unwind-protect
-         (progn
-           (write-string ndjson-msg stdin)
-           (write-char #\Newline stdin)
-           (force-output stdin)
-           (close stdin)
-           (setf stdin nil)
-           ;; Read NDJSON events from stdout until result or error
-           (let ((accumulated-text "")
-                 (usage nil))
-             (loop :for line := (read-line stdout nil nil)
-                   :while line
-                   :when (and (plusp (length line))
-                              (char= (char line 0) #\{))
-                   :do (handler-case
-                           (let* ((event (api-json-decode line))
-                                  (event-type (cdr (assoc :type event))))
-                             (cond
-                               ;; Assistant message with content blocks
-                               ;; Content is a list (cl-json decodes JSON
-                               ;; arrays as lists).
-                               ((string= event-type "assistant")
-                                (let* ((message (cdr (assoc :message event)))
-                                       (content (cdr (assoc :content message))))
-                                  (when content
-                                    (dolist (blk (coerce content 'list))
-                                      (when (string= "text"
-                                                      (or (cdr (assoc :type blk)) ""))
-                                        (let ((text (cdr (assoc :text blk))))
-                                          (when text
-                                            (setf accumulated-text
-                                                  (concatenate 'string
-                                                               accumulated-text
-                                                               text)))))))))
-                               ;; Result event — final response
-                               ((string= event-type "result")
-                                (setf accumulated-text
-                                      (or (cdr (assoc :result event))
-                                          accumulated-text)
-                                      usage (cdr (assoc :usage event)))
-                                (return))
-                               ;; Error event
-                               ((string= event-type "error")
-                                (error "Claude CLI error: ~A"
-                                       (or (cdr (assoc :error event))
-                                           "Unknown error")))))
-                         (error (e)
-                           ;; Skip malformed lines but propagate real errors
-                           (when (search "Claude CLI error" (format nil "~A" e))
-                             (error e)))))
-             ;; Build canonical Anthropic response format
-             `((:id . ,session-id)
-               (:type . "message")
-               (:role . "assistant")
-               (:content . ,(vector (canonical-text-block (or accumulated-text ""))))
-               (:model . ,model)
-               (:stop--reason . "end_turn")
-               (:usage . ,(or usage
-                              `((:input--tokens . 0)
-                                (:output--tokens . ,(length (or accumulated-text "")))))))))
-      ;; Cleanup
-      (when stdin (ignore-errors (close stdin)))
-      (ignore-errors (close stdout))
-      (ignore-errors (uiop:wait-process proc)))))
-
-(defun claude-cli-request-streaming (messages callback
-                                      &key (model "claude-sonnet-4-6")
-                                           (max-tokens *default-max-tokens*)
-                                           tools
-                                           (system-prompt (or (build-system-prompt)
-                                                              "You are a helpful assistant.")))
-  "Send a streaming request via the Claude Code CLI subprocess.
-Uses the stream-json protocol: spawns `claude --input-format stream-json`,
-writes an NDJSON message to stdin, and parses NDJSON events from stdout
-in a background thread.  Returns a stream-state that the event loop polls."
-  (declare (ignore callback max-tokens tools))
-  (let* ((session-id (claude-cli-next-session-id))
-         (ndjson-msg (claude-cli-build-ndjson-message messages session-id))
-         (args (claude-cli-spawn-args model :system-prompt system-prompt))
-         (state (make-stream-state)))
-    (file-debug-log "cli-spawn" "session=~A model=~A args=(~{~A~^ ~})"
-                    session-id model args)
-    (file-debug-log "cli-stdin" "~A" ndjson-msg)
-    ;; Spawn background thread to run the CLI and parse NDJSON output
-    (bt:make-thread
-     (lambda ()
-       (handler-case
-           (let* ((proc (uiop:launch-program args
-                                              :input :stream
-                                              :output :stream
-                                              :error-output :stream))
-                  (stdin (uiop:process-info-input proc))
-                  (stdout (uiop:process-info-output proc))
-                  (stderr (uiop:process-info-error-output proc))
-                  (got-result nil))
-             (file-debug-log "cli-spawn" "process launched, pid=~A"
-                             (ignore-errors (uiop:process-info-pid proc)))
-             (unwind-protect
-                  (progn
-                    ;; Send NDJSON message and close stdin
-                    (write-string ndjson-msg stdin)
-                    (write-char #\Newline stdin)
-                    (force-output stdin)
-                    (close stdin)
-                    (setf stdin nil)
-                    (file-debug-log "cli-stdin" "message sent, stdin closed")
-                    ;; Read NDJSON events from stdout
-                    (loop :for line := (read-line stdout nil nil)
-                          :while line
-                          :do (file-debug-log "cli-stdout" "~A" line)
-                          :when (and (plusp (length line))
-                                     (char= (char line 0) #\{))
-                          :do (handler-case
-                                  (let* ((event (api-json-decode line))
-                                         (event-type (cdr (assoc :type event))))
-                                    (file-debug-log "cli-event" "type=~A" event-type)
-                                    (cond
-                                      ;; Streaming events (wrapped in stream_event)
-                                      ;; Delegate to process-stream-event which handles
-                                      ;; all Anthropic event types (block start/delta/stop,
-                                      ;; message_delta for stop_reason, etc.)
-                                      ;; Pass the inner alist directly — no JSON roundtrip
-                                      ;; (api-json-encode/decode mangles underscore keys).
-                                      ;; Suppress message_stop — the CLI result event is
-                                      ;; the authoritative completion signal.
-                                      ((string= event-type "stream_event")
-                                       (let* ((inner (cdr (assoc :event event)))
-                                              (inner-type (when inner
-                                                            (cdr (assoc :type inner)))))
-                                         (file-debug-log "cli-stream" "inner-type=~A"
-                                                         inner-type)
-                                         (when (and inner
-                                                    (not (and inner-type
-                                                              (string= inner-type
-                                                                       "message_stop"))))
-                                           (process-stream-event inner state))))
-                                      ;; Full assistant message (complete, not streaming)
-                                      ;; The CLI sends these for each turn's response.
-                                      ;; Only extract text blocks — tool_use blocks are
-                                      ;; for the CLI's internal tools (Bash, ToolSearch,
-                                      ;; Read, etc.) and must NOT propagate to clawmacs.
-                                      ;; Content is a list (cl-json decodes JSON arrays
-                                      ;; as lists, not vectors).
-                                      ((string= event-type "assistant")
-                                       (let* ((message (cdr (assoc :message event)))
-                                              (content (cdr (assoc :content message)))
-                                              (blocks (coerce content 'list)))
-                                         (file-debug-log "cli-assistant"
-                                                         "blocks=~D types=(~{~A~^ ~})"
-                                                         (length blocks)
-                                                         (mapcar (lambda (b)
-                                                                   (cdr (assoc :type b)))
-                                                                 blocks))
-                                         (when blocks
-                                           (bt:with-lock-held ((stream-state-lock state))
-                                             (dolist (blk blocks)
-                                               (when (string= "text"
-                                                               (or (cdr (assoc :type blk)) ""))
-                                                 (let ((text (cdr (assoc :text blk))))
-                                                   (when text
-                                                     (setf (stream-state-text state)
-                                                           (concatenate 'string
-                                                                        (stream-state-text state)
-                                                                        text))
-                                                     (push (canonical-text-block
-                                                            (stream-state-text state))
-                                                           (stream-state-content-blocks
-                                                            state))))))))))
-                                      ;; Result event — completion
-                                      ;; Only overwrite streamed text when result
-                                      ;; provides non-empty text (non-streaming fallback).
-                                      ;; Always use "end_turn" as stop_reason — the CLI
-                                      ;; handles its own tools internally, so "tool_use"
-                                      ;; from the result refers to CLI-internal tools
-                                      ;; (Bash, ToolSearch, etc.) that must NOT trigger
-                                      ;; clawmacs tool execution.
-                                      ((string= event-type "result")
-                                       (setf got-result t)
-                                       (let ((text (cdr (assoc :result event)))
-                                             (result-stop (cdr (assoc :stop--reason event)))
-                                             (subtype (cdr (assoc :subtype event))))
-                                         (file-debug-log "cli-result"
-                                                         "subtype=~A result-text-length=~A result-stop=~A blocks=~A accumulated-stop=~A"
-                                                         subtype
-                                                         (if text (length text) 0)
-                                                         result-stop
-                                                         (length (stream-state-content-blocks state))
-                                                         (stream-state-stop-reason state))
-                                         (bt:with-lock-held ((stream-state-lock state))
-                                           (when (and text (plusp (length text)))
-                                             (setf (stream-state-text state) text
-                                                   (stream-state-content-blocks state)
-                                                   (list (canonical-text-block text))))
-                                           (when (null (stream-state-content-blocks state))
-                                             (setf (stream-state-content-blocks state)
-                                                   (list (canonical-text-block ""))))
-                                           (setf (stream-state-stop-reason state) "end_turn"
-                                                 (stream-state-done-p state) t)))
-                                       (return))
-                                      ;; Error event
-                                      ((string= event-type "error")
-                                       (setf got-result t)
-                                       (let ((err (or (cdr (assoc :error event))
-                                                      (cdr (assoc :message event))
-                                                      "Unknown CLI error")))
-                                         (file-debug-log "cli-error" "~A" err)
-                                         (bt:with-lock-held ((stream-state-lock state))
-                                           (setf (stream-state-error-p state) err
-                                                 (stream-state-done-p state) t)))
-                                       (return))))
-                                (error (e)
-                                  (file-debug-log "cli-parse-error" "~A on line: ~A"
-                                                  e line)
-                                  nil)))
-                    ;; If CLI exited without result/error event, read stderr
-                    (unless got-result
-                      (let ((err-text
-                              (handler-case
-                                  (with-output-to-string (s)
-                                    (loop :for ch := (read-char-no-hang stderr nil nil)
-                                          :while ch
-                                          :do (write-char ch s)))
-                                (error () nil))))
-                        (file-debug-log "cli-stderr" "~A"
-                                        (or err-text "(empty)"))
-                        (bt:with-lock-held ((stream-state-lock state))
-                          (setf (stream-state-error-p state)
-                                (if (and err-text (plusp (length err-text)))
-                                    (format nil "Claude CLI exited without response: ~A"
-                                            (string-trim '(#\Newline #\Return #\Space)
-                                                         err-text))
-                                    (format nil "Claude CLI exited without response (command: ~{~A~^ ~})"
-                                            args)))))))
-               ;; Cleanup process
-               (when stdin (ignore-errors (close stdin)))
-               (ignore-errors (close stdout))
-               (ignore-errors (close stderr))
-               (ignore-errors (uiop:wait-process proc))))
-         (error (e)
-           (file-debug-log "cli-fatal" "~A" e)
-           (bt:with-lock-held ((stream-state-lock state))
-             (setf (stream-state-error-p state) (format nil "~A" e)
-                   (stream-state-done-p state) t))))
-       ;; Ensure done flag is always set
-       (file-debug-log "cli-done" "thread finishing, done-p=~A error-p=~A blocks=~A stop=~A"
-                       (stream-state-done-p state)
-                       (stream-state-error-p state)
-                       (length (stream-state-content-blocks state))
-                       (stream-state-stop-reason state))
-       (bt:with-lock-held ((stream-state-lock state))
-         (setf (stream-state-done-p state) t)))
-     :name "clawmacs-claude-cli-reader")
-    state))
-
-;;; --------------------------------------------------------------------------
 ;;; API Call
 ;;; --------------------------------------------------------------------------
-
-(defun anthropic-request (messages &key (model *anthropic-model*)
-                                        (max-tokens *default-max-tokens*)
-                                        tools
-                                        (system-prompt (build-system-prompt)))
-  "Call the Anthropic Messages API. Returns the parsed response alist.
-MESSAGES is a list of message alists. TOOLS is a vector of tool definitions
-(or nil for no tools)."
-  (let* ((token (or (read-token)
-                    (error "No API token. Set CLAUDE_CODE_OAUTH_TOKEN env var, ~
-                            run 'claude setup-token', or save to ~
-                            ~~/.config/clawmacs/claude-max-token")))
-         (request-body
-           (let ((body `((:model . ,model)
-                         (:max--tokens . ,max-tokens)
-                         (:messages . ,(coerce messages 'vector)))))
-             (when (and tools (plusp (length tools)))
-               (push `(:tools . ,tools) body))
-             ;; System prompt as array of content blocks — required for
-             ;; Claude Max OAuth tokens (first block must be the CC prefix).
-             (let* ((blocks (list `((:type . "text")
-                                    (:text . ,*claude-code-system-prefix*)))))
-               (when system-prompt
-                 (setf blocks (append blocks
-                                      (list `((:type . "text")
-                                              (:text . ,system-prompt))))))
-               (push `(:system . ,(coerce blocks 'vector)) body))
-              (api-json-encode body))))
-    (multiple-value-bind (body status-code)
-        (drakma:http-request
-         *anthropic-api-url*
-         :method :post
-         :content-type "application/json"
-         :additional-headers
-         `(("Authorization" . ,(format nil "Bearer ~A" token))
-           ("anthropic-version" . ,*anthropic-version*)
-           ("anthropic-beta" . ,*anthropic-beta*))
-         :content request-body
-         :want-stream nil
-         :force-binary nil)
-       (let ((body-string (http-body-string body)))
-         (unless (= status-code 200)
-           (error "API error (~A): ~A" status-code body-string))
-         (api-json-decode body-string)))))
 
 (defun openai-codex-request (messages &key (model *openai-codex-model*)
                                            (max-tokens *default-max-tokens*)
@@ -2824,178 +2304,6 @@ SSE format: 'field: value' or just 'data: {...}'."
                        (string-left-trim " " (subseq line (1+ colon-pos)))
                        "")))
         (values field value)))))
-
-(defun process-stream-event (event state)
-  "Process a decoded SSE event alist and update STATE.
-EVENT is an already-decoded alist (not a JSON string)."
-  (let ((event-type (cdr (assoc :type event))))
-    (cond
-      ;; content_block_start: new content block beginning
-      ((string= "content_block_start" (or event-type ""))
-       (let ((block (cdr (assoc :content--block event))))
-         (when block
-           (bt:with-lock-held ((stream-state-lock state))
-             (push block (stream-state-content-blocks state))
-             ;; Reset accumulators for the new block
-             (setf (stream-state-text state) ""
-                   (stream-state-tool-input-json state) "")))))
-
-      ;; content_block_delta: incremental text or tool input JSON
-      ((string= "content_block_delta" (or event-type ""))
-       (let* ((delta (cdr (assoc :delta event)))
-              (delta-type (cdr (assoc :type delta))))
-         (cond
-           ((string= "text_delta" (or delta-type ""))
-            (let ((text (cdr (assoc :text delta))))
-              (when text
-                (bt:with-lock-held ((stream-state-lock state))
-                  (setf (stream-state-text state)
-                        (concatenate 'string (stream-state-text state) text))))))
-           ((string= "input_json_delta" (or delta-type ""))
-            (let ((partial (cdr (assoc :partial--json delta))))
-              (when partial
-                (bt:with-lock-held ((stream-state-lock state))
-                  (setf (stream-state-tool-input-json state)
-                        (concatenate 'string
-                                     (stream-state-tool-input-json state)
-                                     partial)))))))))
-
-      ;; content_block_stop: block finished
-      ((string= "content_block_stop" (or event-type ""))
-       (bt:with-lock-held ((stream-state-lock state))
-         (let* ((blocks (stream-state-content-blocks state))
-                (block (first blocks))
-                (block-type (when block (cdr (assoc :type block)))))
-           (cond
-             ;; Finalize text block
-             ((and block (string= "text" (or block-type "")))
-               (setf (first blocks)
-                     (canonical-text-block (stream-state-text state))))
-              ;; Finalize tool_use block: parse accumulated JSON into input
-              ((and block (string= "tool_use" (or block-type "")))
-               (let ((json-str (stream-state-tool-input-json state)))
-                 (setf (first blocks)
-                       (canonical-tool-use-block
-                        (cdr (assoc :id block))
-                        (cdr (assoc :name block))
-                        (when (plusp (length json-str))
-                          (handler-case
-                              (api-json-decode json-str)
-                            (error () nil))))))))
-            ;; Reset accumulators for next block
-            (setf (stream-state-text state) ""
-                  (stream-state-tool-input-json state) ""))))
-
-      ;; message_delta: stop reason
-      ((string= "message_delta" (or event-type ""))
-       (let ((delta (cdr (assoc :delta event))))
-         (when delta
-           (let ((stop-reason (cdr (assoc :stop--reason delta))))
-             (when stop-reason
-               (bt:with-lock-held ((stream-state-lock state))
-                 (setf (stream-state-stop-reason state) stop-reason)))))))
-
-      ;; message_stop: streaming complete
-      ((string= "message_stop" (or event-type ""))
-       (bt:with-lock-held ((stream-state-lock state))
-         (setf (stream-state-done-p state) t))))))
-
-(defun process-sse-event (data state)
-  "Process a single SSE data payload (JSON string) and update STATE."
-  (handler-case
-      (process-stream-event (api-json-decode data) state)
-    (error (e)
-      (declare (ignore e))
-      ;; Silently skip malformed SSE events
-      nil)))
-
-(defun read-sse-stream (stream state)
-  "Read SSE events from STREAM and update STATE. Runs in a background thread."
-  (handler-case
-      (loop :with data-buffer := nil
-            :for line := (read-line stream nil nil)
-            :while line
-            :do (let ((trimmed (string-trim '(#\Return) line)))
-                  (cond
-                    ;; Empty line = end of event, process accumulated data
-                    ((zerop (length trimmed))
-                     (when data-buffer
-                       (process-sse-event
-                        (format nil "~{~A~}" (nreverse data-buffer))
-                        state)
-                       (setf data-buffer nil)))
-                    ;; Data line
-                    (t
-                     (multiple-value-bind (field value) (parse-sse-line trimmed)
-                       (when (and field (string= "data" field))
-                         (push value data-buffer)))))))
-    (error (e)
-      (bt:with-lock-held ((stream-state-lock state))
-        (setf (stream-state-error-p state) (format nil "~A" e)
-              (stream-state-done-p state) t))))
-  ;; Ensure done is set
-  (bt:with-lock-held ((stream-state-lock state))
-    (setf (stream-state-done-p state) t)))
-
-(defun anthropic-request-streaming (messages callback
-                                     &key (model *anthropic-model*)
-                                          (max-tokens *default-max-tokens*)
-                                          tools
-                                          (system-prompt (build-system-prompt)))
-  "Call the Anthropic Messages API with streaming enabled.
-CALLBACK is called with (stream-state) on each update from the background thread.
-Returns the final stream-state when complete."
-  (declare (ignore callback))
-  (let* ((token (or (read-token)
-                    (error "No API token. Set CLAUDE_CODE_OAUTH_TOKEN env var, ~
-                            run 'claude setup-token', or save to ~
-                            ~~/.config/clawmacs/claude-max-token")))
-         (request-body
-           (let ((body `((:model . ,model)
-                         (:max--tokens . ,max-tokens)
-                         (:stream . t)
-                         (:messages . ,(coerce messages 'vector)))))
-             (when (and tools (plusp (length tools)))
-               (push `(:tools . ,tools) body))
-              ;; System prompt as array of content blocks — required for
-              ;; Claude Max OAuth tokens (first block must be the CC prefix).
-              (let* ((blocks (list `((:type . "text")
-                                     (:text . ,*claude-code-system-prefix*)))))
-                (when system-prompt
-                  (setf blocks (append blocks
-                                       (list `((:type . "text")
-                                               (:text . ,system-prompt))))))
-                (push `(:system . ,(coerce blocks 'vector)) body))
-              (api-json-encode body)))
-         (state (make-stream-state)))
-    (multiple-value-bind (body-stream status-code headers)
-        (drakma:http-request
-         *anthropic-api-url*
-         :method :post
-         :content-type "application/json"
-         :additional-headers
-         `(("Authorization" . ,(format nil "Bearer ~A" token))
-           ("anthropic-version" . ,*anthropic-version*)
-           ("anthropic-beta" . ,*anthropic-beta*))
-         :content request-body
-         :want-stream t)
-      (declare (ignore headers))
-      (unless (= status-code 200)
-        (let ((err (if (streamp body-stream)
-                       (let ((s (make-string-output-stream)))
-                         (loop :for c := (read-char body-stream nil nil)
-                               :while c :do (write-char c s))
-                         (get-output-stream-string s))
-                       (format nil "~A" body-stream))))
-          (error "API error (~A): ~A" status-code err)))
-      ;; Spawn background thread to read SSE events
-       (bt:make-thread
-        (lambda ()
-          (unwind-protect
-               (read-sse-stream body-stream state)
-            (close body-stream)))
-       :name "clawmacs-sse-reader")
-       state)))
 
 (defun stream-state-first-block (state)
   "Return STATE's current leading content block."
@@ -3260,7 +2568,7 @@ Uses the OpenAI-compatible chat completions protocol."
                                                :system-prompt system-prompt)
                                                'vector)))))
               (when (and tools (plusp (length tools)))
-                (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
+                (push `(:tools . ,(tool-definitions->openai-tools tools)) body))
               (api-json-encode body))))
     (multiple-value-bind (body status-code)
         (drakma:http-request
@@ -3303,7 +2611,7 @@ Uses the same OpenAI-compatible streaming protocol."
                                                :system-prompt system-prompt)
                                                'vector)))))
               (when (and tools (plusp (length tools)))
-                (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
+                (push `(:tools . ,(tool-definitions->openai-tools tools)) body))
               (api-json-encode body)))
          (state (make-stream-state)))
     (multiple-value-bind (body-stream status-code headers)
@@ -3356,7 +2664,7 @@ The API follows the OpenAI Chat Completions format."
                                                :system-prompt system-prompt)
                                                'vector)))))
               (when (and tools (plusp (length tools)))
-                (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
+                (push `(:tools . ,(tool-definitions->openai-tools tools)) body))
               (api-json-encode body))))
     (multiple-value-bind (body status-code)
         (drakma:http-request
@@ -3398,7 +2706,7 @@ Uses the same OpenAI-compatible streaming protocol."
                                                :system-prompt system-prompt)
                                                'vector)))))
               (when (and tools (plusp (length tools)))
-                (push `(:tools . ,(anthropic-tools->openai-tools tools)) body))
+                (push `(:tools . ,(tool-definitions->openai-tools tools)) body))
               (api-json-encode body)))
          (state (make-stream-state)))
     (multiple-value-bind (body-stream status-code headers)

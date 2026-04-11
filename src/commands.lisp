@@ -6,7 +6,7 @@
 
 (defvar *current-caller* :user
   "The current caller context. Bound to :USER for interactive use,
-or an agent keyword (e.g., :CLAUDE-OPUS) during agent command dispatch.")
+or an agent keyword (e.g., :CODER) during agent command dispatch.")
 
 (defvar *sandbox-root* nil
   "When non-nil, restricts file operations to this directory subtree.")

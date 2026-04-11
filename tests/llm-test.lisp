@@ -5,15 +5,18 @@
 (defun temp-test-token-path (provider)
   (let* ((base (make-pathname :directory (list :absolute "tmp"
                                                (format nil "clawmacs-llm-tests-~A"
-                                                       (gensym)))))
+                                                       (list (get-universal-time)
+                                                             (get-internal-real-time)
+                                                             (gensym))))))
          (filename (ecase provider
-                     (:anthropic "claude-max-token")
                      (:openai-codex "openai-codex-token")
-                     (:zai "zai-api-key"))))
+                     (:zai "zai-api-key")
+                     (:openrouter "openrouter-api-key"))))
     (ensure-directories-exist (merge-pathnames #P".keep" base))
     (merge-pathnames filename base)))
 
-(defmacro with-provider-token-path-overrides ((anthropic-path openai-codex-path &optional zai-path) &body body)
+(defmacro with-provider-token-path-overrides ((_removed-provider-path openai-codex-path &optional zai-path) &body body)
+  (declare (ignore _removed-provider-path))
   `(let ((original-provider-token-path
            (symbol-function 'clawmacs::provider-token-path)))
      (unwind-protect
@@ -21,7 +24,6 @@
             (setf (symbol-function 'clawmacs::provider-token-path)
                   (lambda (provider)
                     (case provider
-                      (:anthropic ,anthropic-path)
                       (:openai-codex ,openai-codex-path)
                       (:zai ,(or zai-path '(funcall original-provider-token-path provider)))
                       (otherwise
@@ -33,7 +35,9 @@
 (defun temp-agent-defaults-path ()
   (let ((base (make-pathname :directory (list :absolute "tmp"
                                               (format nil "clawmacs-agent-defaults-~A"
-                                                      (gensym))))))
+                                                      (list (get-universal-time)
+                                                            (get-internal-real-time)
+                                                            (gensym)))))))
     (ensure-directories-exist (merge-pathnames #P".keep" base))
     (merge-pathnames "agent-defaults.json" base)))
 
@@ -49,7 +53,9 @@
 (defun temp-codex-auth-path ()
   (let ((base (make-pathname :directory (list :absolute "tmp"
                                               (format nil "clawmacs-codex-auth-~A"
-                                                      (gensym))))))
+                                                      (list (get-universal-time)
+                                                            (get-internal-real-time)
+                                                            (gensym)))))))
     (ensure-directories-exist (merge-pathnames #P".keep" base))
     (merge-pathnames "auth.json" base)))
 
@@ -121,10 +127,12 @@
 (test provider-token-paths
   "Provider token paths are provider-specific."
   (let ((home (user-homedir-pathname)))
-    (is (equal (merge-pathnames #P".config/clawmacs/claude-max-token" home)
-               (clawmacs::provider-token-path :anthropic)))
     (is (equal (merge-pathnames #P".config/clawmacs/openai-codex-token" home)
-               (clawmacs::provider-token-path :openai-codex)))))
+               (clawmacs::provider-token-path :openai-codex)))
+    (is (equal (merge-pathnames #P".config/clawmacs/zai-api-key" home)
+               (clawmacs::provider-token-path :zai)))
+    (is (equal (merge-pathnames #P".config/clawmacs/openrouter-api-key" home)
+               (clawmacs::provider-token-path :openrouter)))))
 
 (test provider-token-path-unknown-provider
   "Unknown providers signal a clear error."
@@ -206,11 +214,11 @@
       (is (eq :openai-codex (clawmacs:agent-definition-provider first)))
       (is (string= "high" (clawmacs:agent-definition-think-level first))))
     (clawmacs:register-agent-definition "Writer" :soul-prompt "writer soul")
-    (clawmacs:register-agent-definition "pair" :provider :anthropic :model "claude-test")
+    (clawmacs:register-agent-definition "pair" :provider :zai :model "glm-5")
     (let* ((found (clawmacs:find-agent-definition "PAIR"))
            (listed (clawmacs:list-agent-definitions)))
-      (is (eq :anthropic (clawmacs:agent-definition-provider found)))
-      (is (string= "claude-test" (clawmacs:agent-definition-model found)))
+      (is (eq :zai (clawmacs:agent-definition-provider found)))
+      (is (string= "glm-5" (clawmacs:agent-definition-model found)))
       (is (equal '("pair" "Writer")
                  (mapcar #'clawmacs:agent-definition-name listed))))))
 
@@ -251,21 +259,19 @@ PAIR SOUL"
           (is (search "only built-in tool available by default is `lisp_eval`" prompt))
           (is (search "DEFAULT SOUL" prompt)))))))
 
-(test provider-token-round-trip-anthropic
-  "Anthropic tokens round-trip through provider-specific helpers."
-  (let ((anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex)))
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
-      (is (string= "anthropic-token"
-                   (clawmacs::save-provider-token :anthropic "anthropic-token")))
-      (is (string= "anthropic-token"
-                   (clawmacs::read-provider-token :anthropic))))))
+(test provider-token-anthropic-is-unsupported
+  "Anthropic no longer has a provider-specific token path."
+  (signals error
+    (clawmacs::provider-token-path :anthropic))
+  (signals error
+    (clawmacs::read-provider-token :anthropic))
+  (signals error
+    (clawmacs::save-provider-token :anthropic "removed")))
 
 (test provider-token-round-trip-openai-codex
   "OpenAI Codex tokens round-trip through provider-specific helpers."
-  (let ((anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex)))
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+  (let ((openai-codex-path (temp-test-token-path :openai-codex)))
+    (with-provider-token-path-overrides (nil openai-codex-path)
       (is (string= "openai-token"
                    (clawmacs::save-provider-token :openai-codex "openai-token")))
       (is (string= "openai-token"
@@ -273,75 +279,16 @@ PAIR SOUL"
 
 (test read-provider-token-trims-whitespace
   "Provider token reads trim surrounding whitespace."
-  (let ((anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex)))
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
-      (with-open-file (stream anthropic-path
+  (let ((openai-codex-path (temp-test-token-path :openai-codex)))
+    (with-provider-token-path-overrides (nil openai-codex-path)
+      (with-open-file (stream openai-codex-path
                               :direction :output
                               :if-exists :supersede
                               :if-does-not-exist :create)
         (write-string "  trimmed-token  " stream)
         (terpri stream))
       (is (string= "trimmed-token"
-                   (clawmacs::read-provider-token :anthropic))))))
-
-(test read-claude-code-oauth-token-reads-credentials
-  "read-claude-code-oauth-token extracts the access token from Claude Code credentials."
-  (let ((creds-path (merge-pathnames
-                     (format nil "clawmacs-creds-~A/credentials.json" (gensym))
-                     #P"/tmp/")))
-    (ensure-directories-exist creds-path)
-    (with-open-file (s creds-path
-                       :direction :output
-                       :if-exists :supersede
-                       :if-does-not-exist :create)
-      (write-string "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-test-token\",\"refreshToken\":\"sk-ant-ort01-test\"}}" s))
-    (let ((clawmacs::*claude-code-credentials-path* creds-path))
-      (is (string= "sk-ant-oat01-test-token"
-                   (clawmacs::read-claude-code-oauth-token))))))
-
-(test read-claude-code-oauth-token-returns-nil-when-missing
-  "read-claude-code-oauth-token returns nil when credentials file is absent."
-  (let ((clawmacs::*claude-code-credentials-path*
-          #P"/tmp/nonexistent-clawmacs-creds/credentials.json"))
-    (is (null (clawmacs::read-claude-code-oauth-token)))))
-
-(test read-provider-token-prefers-claude-code-for-anthropic
-  "read-provider-token prefers Claude Code credentials for :ANTHROPIC."
-  (let ((anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex))
-        (creds-path (merge-pathnames
-                     (format nil "clawmacs-creds-~A/credentials.json" (gensym))
-                     #P"/tmp/")))
-    (ensure-directories-exist creds-path)
-    ;; Write a token file with one value
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
-      (clawmacs::save-provider-token :anthropic "file-token")
-      ;; Write Claude Code credentials with a different value
-      (with-open-file (s creds-path
-                         :direction :output
-                         :if-exists :supersede
-                         :if-does-not-exist :create)
-        (write-string "{\"claudeAiOauth\":{\"accessToken\":\"claude-code-token\"}}" s))
-      (let ((clawmacs::*claude-code-credentials-path* creds-path))
-        ;; Should prefer Claude Code token
-        (is (string= "claude-code-token"
-                     (clawmacs::read-provider-token :anthropic)))
-        ;; OpenAI Codex should still use its own file
-        (clawmacs::save-provider-token :openai-codex "codex-token")
-        (is (string= "codex-token"
-                     (clawmacs::read-provider-token :openai-codex)))))))
-
-(test read-provider-token-falls-back-to-file-when-no-claude-code
-  "read-provider-token falls back to token file when Claude Code credentials are absent."
-  (let ((anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex))
-        (clawmacs::*claude-code-credentials-path*
-          #P"/tmp/nonexistent-clawmacs-creds/credentials.json"))
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
-      (clawmacs::save-provider-token :anthropic "fallback-token")
-      (is (string= "fallback-token"
-                   (clawmacs::read-provider-token :anthropic))))))
+                   (clawmacs::read-provider-token :openai-codex))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Environment Variable Token Tests
@@ -391,55 +338,11 @@ PAIR SOUL"
   "read-env-token returns nil for an unset environment variable."
   (is (null (clawmacs::read-env-token "CLAWMACS_DEFINITELY_NOT_SET_12345"))))
 
-(test anthropic-env-var-takes-highest-priority
-  "CLAUDE_CODE_OAUTH_TOKEN env var takes priority over Claude Code credentials and file."
-  (let ((anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex))
-        (creds-path (merge-pathnames
-                     (format nil "clawmacs-creds-env-~A/credentials.json" (gensym))
-                     #P"/tmp/")))
-    (ensure-directories-exist creds-path)
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
-      ;; Set up all three sources
-      (clawmacs::save-provider-token :anthropic "file-token")
-      (with-open-file (s creds-path
-                         :direction :output
-                         :if-exists :supersede
-                         :if-does-not-exist :create)
-        (write-string "{\"claudeAiOauth\":{\"accessToken\":\"claude-code-token\"}}" s))
-      (let ((clawmacs::*claude-code-credentials-path* creds-path))
-        ;; Env var should win over both
-        (with-env-var ("CLAUDE_CODE_OAUTH_TOKEN" "env-var-token")
-          (is (string= "env-var-token"
-                       (clawmacs::read-provider-token :anthropic))))))))
-
-(test anthropic-env-var-falls-through-when-unset
-  "When CLAUDE_CODE_OAUTH_TOKEN is unset, falls through to Claude Code credentials."
-  (let ((anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex))
-        (creds-path (merge-pathnames
-                     (format nil "clawmacs-creds-env2-~A/credentials.json" (gensym))
-                     #P"/tmp/")))
-    (ensure-directories-exist creds-path)
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
-      (clawmacs::save-provider-token :anthropic "file-token")
-      (with-open-file (s creds-path
-                         :direction :output
-                         :if-exists :supersede
-                         :if-does-not-exist :create)
-        (write-string "{\"claudeAiOauth\":{\"accessToken\":\"claude-code-token\"}}" s))
-      (let ((clawmacs::*claude-code-credentials-path* creds-path)
-            (clawmacs::*anthropic-env-var* "CLAWMACS_UNSET_ANTHROPIC_ENV_98765"))
-        ;; With env var unset, should use Claude Code credentials
-        (is (string= "claude-code-token"
-                     (clawmacs::read-provider-token :anthropic)))))))
-
 (test zai-env-var-takes-highest-priority
   "ZAI_CODING_MAX_API_KEY env var takes priority over the static token file."
-  (let ((anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex))
+  (let ((openai-codex-path (temp-test-token-path :openai-codex))
         (zai-path (temp-test-token-path :zai)))
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path zai-path)
+    (with-provider-token-path-overrides (nil openai-codex-path zai-path)
       ;; Set up file-based token
       (clawmacs::save-provider-token :zai "file-zai-key")
       ;; Env var should win
@@ -449,10 +352,9 @@ PAIR SOUL"
 
 (test zai-env-var-falls-through-to-file
   "When ZAI_CODING_MAX_API_KEY is unset, falls through to static token file."
-  (let ((anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex))
+  (let ((openai-codex-path (temp-test-token-path :openai-codex))
         (zai-path (temp-test-token-path :zai)))
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path zai-path)
+    (with-provider-token-path-overrides (nil openai-codex-path zai-path)
       (clawmacs::save-provider-token :zai "file-zai-key")
       (let ((clawmacs::*zai-env-var* "CLAWMACS_UNSET_ZAI_ENV_98765"))
         ;; With env var unset, should use file
@@ -460,35 +362,21 @@ PAIR SOUL"
                      (clawmacs::read-provider-token :zai)))))))
 
 (test env-var-does-not-affect-openai-codex
-  "OpenAI Codex provider is not affected by Anthropic/Z.AI env vars."
-  (let ((anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex)))
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+  "OpenAI Codex provider is not affected by Z.AI/OpenRouter env vars."
+  (let ((openai-codex-path (temp-test-token-path :openai-codex)))
+    (with-provider-token-path-overrides (nil openai-codex-path)
       (clawmacs::save-provider-token :openai-codex "codex-file-token")
-      ;; Setting Anthropic env var shouldn't affect OpenAI Codex
-      (with-env-var ("CLAUDE_CODE_OAUTH_TOKEN" "env-anthropic-token")
-        (is (string= "codex-file-token"
-                     (clawmacs::read-provider-token :openai-codex)))))))
+      (with-env-var ("ZAI_CODING_MAX_API_KEY" "env-zai-token")
+        (with-env-var ("OPENROUTER_API_KEY" "env-openrouter-token")
+          (is (string= "codex-file-token"
+                       (clawmacs::read-provider-token :openai-codex))))))))
 
 (test default-env-var-names-are-correct
   "Default environment variable names are as documented."
-  (is (string= "CLAUDE_CODE_OAUTH_TOKEN" clawmacs::*anthropic-env-var*))
-  (is (string= "ZAI_CODING_MAX_API_KEY" clawmacs::*zai-env-var*)))
+  (is (string= "ZAI_CODING_MAX_API_KEY" clawmacs::*zai-env-var*))
+  (is (string= "OPENROUTER_API_KEY" clawmacs::*openrouter-env-var*)))
 
 ;;; --------------------------------------------------------------------------
-
-(test read-token-uses-anthropic-provider-path
-  "read-token delegates to the Anthropic provider-specific file."
-  (let ((anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex)))
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path)
-      (with-open-file (stream anthropic-path
-                              :direction :output
-                              :if-exists :supersede
-                              :if-does-not-exist :create)
-         (write-string "anthropic-delegated-token" stream))
-       (is (string= "anthropic-delegated-token"
-                    (read-token))))))
 
 (test resolve-buffer-provider-and-model-buffer-override-wins
   "Buffer overrides win over agent defaults."
@@ -496,7 +384,7 @@ PAIR SOUL"
         (buf (make-buffer "test" :agent-name "spark")))
     (write-agent-defaults-file
      path
-     "{\"spark\":{\"provider\":\"anthropic\"}}")
+     "{\"spark\":{\"provider\":\"zai\"}}")
     (setf (buffer-provider-override buf) :openai-codex
           (buffer-model-override buf) "gpt-5.3-codex")
     (set-buffer-think-level-override buf "high")
@@ -513,7 +401,7 @@ PAIR SOUL"
         (buf (make-buffer "test" :agent-name "spark")))
     (write-agent-defaults-file
      path
-     "{\"spark\":{\"provider\":\"anthropic\",\"model\":\"claude-persisted\"}}")
+     "{\"spark\":{\"provider\":\"zai\",\"model\":\"glm-5\"}}")
     (with-agent-defaults-path-override (path)
       (with-agent-definition-registry-override ()
         (clawmacs:register-agent-definition
@@ -661,8 +549,8 @@ PAIR SOUL"
         (buf (make-buffer "test" :agent-name "spark")))
     (with-agent-defaults-path-override (path)
       (set-agent-default "spark" :openai-codex :model "gpt-5.3-codex")
-      (set-buffer-provider-override buf :anthropic)
-      (set-buffer-model-override buf "claude-override")
+      (set-buffer-provider-override buf :zai)
+      (set-buffer-model-override buf "glm-5")
       (set-buffer-think-level-override buf "high")
       (clear-buffer-provider/model-overrides buf)
       (multiple-value-bind (provider model think-level)
@@ -735,21 +623,19 @@ PAIR SOUL"
   (signals error
     (clawmacs::canonicalize-message-content "system" "hello")))
 
-(test provider-request-dispatches-anthropic-adapter
-  "Anthropic provider requests use the Anthropic adapter and preserve the model."
-  (let ((captured nil))
-    (with-function-override (clawmacs::anthropic-request (messages &key model max-tokens tools system-prompt)
-                              (declare (ignore messages max-tokens tools system-prompt))
-                              (setf captured model)
-                              '((:stop--reason . "end_turn")
-                                (:content . #())))
-      (is (equal '((:stop--reason . "end_turn")
-                   (:content . #()))
-                 (clawmacs::provider-request
-                  :anthropic
-                  '(((:role . "user") (:content . #())))
-                  :model "claude-test")))
-      (is (string= "claude-test" captured)))))
+(test provider-request-rejects-anthropic-provider
+  "Anthropic is no longer a dispatchable provider."
+  (signals error
+    (clawmacs::provider-request
+     :anthropic
+     '(((:role . "user") (:content . #())))
+     :model "removed"))
+  (signals error
+    (clawmacs::provider-request-streaming
+     :anthropic
+     '(((:role . "user") (:content . #())))
+     (lambda (state) (declare (ignore state)))
+     :model "removed")))
 
 (test provider-request-dispatches-openai-codex-adapter
   "OpenAI Codex requests use the Codex adapter and preserve model + reasoning."
@@ -774,35 +660,23 @@ PAIR SOUL"
 
 (test provider-request-streaming-dispatches-by-provider
   "Streaming adapter dispatch follows the selected provider, model, and reasoning."
-  (let ((anthropic-model nil)
-        (openai-model nil)
+  (let ((openai-model nil)
         (openai-reasoning nil))
-    (with-function-override (clawmacs::anthropic-request-streaming (messages callback &key model max-tokens tools system-prompt)
+    (with-function-override (clawmacs::openai-codex-request-streaming
+                              (messages callback &key model max-tokens tools reasoning-effort system-prompt)
                               (declare (ignore messages callback max-tokens tools system-prompt))
-                              (setf anthropic-model model)
-                              :anthropic-stream)
-      (with-function-override (clawmacs::openai-codex-request-streaming
-                                (messages callback &key model max-tokens tools reasoning-effort system-prompt)
-                                (declare (ignore messages callback max-tokens tools system-prompt))
-                                (setf openai-model model
-                                      openai-reasoning reasoning-effort)
-                                :openai-stream)
-        (is (eq :anthropic-stream
-                (clawmacs::provider-request-streaming
-                 :anthropic
-                 '(((:role . "user") (:content . #())))
-                 (lambda (state) (declare (ignore state)))
-                 :model "claude-stream")))
-        (is (eq :openai-stream
-                (clawmacs::provider-request-streaming
-                 :openai-codex
-                 '(((:role . "user") (:content . #())))
-                 (lambda (state) (declare (ignore state)))
-                 :model "codex-stream"
-                 :reasoning-effort "medium")))
-        (is (string= "claude-stream" anthropic-model))
-        (is (string= "codex-stream" openai-model))
-        (is (string= "medium" openai-reasoning))))))
+                              (setf openai-model model
+                                    openai-reasoning reasoning-effort)
+                              :openai-stream)
+      (is (eq :openai-stream
+              (clawmacs::provider-request-streaming
+               :openai-codex
+               '(((:role . "user") (:content . #())))
+               (lambda (state) (declare (ignore state)))
+               :model "codex-stream"
+               :reasoning-effort "medium")))
+      (is (string= "codex-stream" openai-model))
+      (is (string= "medium" openai-reasoning)))))
 
 (test start-streaming-response-uses-resolved-provider-and-model
   "Live streaming resolves provider/model/think first and passes them to the adapter."
@@ -863,8 +737,8 @@ PAIR SOUL"
     (is (= 2 (buffer-message-count buf)))))
 
 (test update-streaming-response-appends-accumulator-after-completed-blocks
-  "Anthropic-style streams keep the current block in the accumulator until block_stop."
-  (let* ((buf (make-buffer "stream-anthropic" :agent-name "agent"))
+  "Streaming state displays completed blocks plus the current text accumulator."
+  (let* ((buf (make-buffer "stream-accumulator" :agent-name "agent"))
          (msg (buffer-insert-agent-message buf ""))
          (state (clawmacs::make-stream-state)))
     (bt:with-lock-held ((clawmacs::stream-state-lock state))
@@ -898,25 +772,6 @@ PAIR SOUL"
     (is (null (buffer-pending-stream buf)))
     (is (null (buffer-streaming-message buf)))
     (is (eq :idle (buffer-status buf)))))
-
-(test anthropic-request-normalizes-response-shape
-  "Anthropic adapter returns canonical stop reason and content blocks."
-  (with-function-override (drakma:http-request (&rest args)
-                            (declare (ignore args))
-                            (values
-                             "{\"stop_reason\":\"tool_use\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"},{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read_file\",\"input\":{\"path\":\"/tmp/example.txt\"}}]}"
-                             200))
-    (with-function-override (clawmacs::read-token ()
-                              "anthropic-token")
-      (let ((response (clawmacs::anthropic-request '() :model "claude-test")))
-        (is (string= "tool_use" (clawmacs::response-stop-reason response)))
-        (is (equal '(((:type . "text")
-                      (:text . "hi"))
-                     ((:type . "tool_use")
-                      (:id . "toolu_1")
-                      (:name . "read_file")
-                      (:input . ((:path . "/tmp/example.txt")))))
-                   (clawmacs::response-content response)))))))
 
 (test openai-codex-request-normalizes-response-shape
   "OpenAI Codex non-streaming normalizes Responses output items."
@@ -1049,39 +904,6 @@ PAIR SOUL"
             (is (= 2 calls))
             (is (equal '("Bearer expired-token" "Bearer fresh-token")
                        (nreverse captured-authz)))))))))
-
-(test anthropic-streaming-normalizes-response-shape
-  "Anthropic streaming adapter accumulates canonical content blocks."
-  (let ((payloads '("data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\",\"text\":\"\"}}"
-                    ""
-                    "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}"
-                    ""
-                    "data: {\"type\":\"content_block_stop\"}"
-                    ""
-                    "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}"
-                    ""
-                    "data: {\"type\":\"message_stop\"}"
-                    "")))
-    (with-function-override (drakma:http-request (&rest args)
-                              (declare (ignore args))
-                              (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
-                                      200
-                                      nil))
-      (with-function-override (clawmacs::read-token ()
-                                "anthropic-token")
-        (let ((state (clawmacs::anthropic-request-streaming '() (lambda (state) (declare (ignore state)))
-                                                           :model "claude-stream")))
-          (loop repeat 100
-                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                        (clawmacs::stream-state-done-p state))
-                do (sleep 0.01))
-          (is (string= "end_turn"
-                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                         (clawmacs::stream-state-stop-reason state))))
-          (is (equal '(((:type . "text")
-                        (:text . "hi")))
-                     (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                       (reverse (clawmacs::stream-state-content-blocks state))))))))))
 
 (test openai-codex-streaming-normalizes-response-shape
   "OpenAI Codex streaming adapter accumulates Responses output deltas."
@@ -1428,13 +1250,12 @@ PAIR SOUL"
 (test read-provider-token-prefers-static-override-for-openai-codex
   "OpenAI Codex uses the clawmacs token file before shared auth.json."
   (let ((path (temp-codex-auth-path))
-        (anthropic-path (temp-test-token-path :anthropic))
         (openai-codex-path (temp-test-token-path :openai-codex)))
     (with-codex-auth-path-override (path)
       (write-codex-auth-json path
                              (make-codex-chatgpt-auth-payload
                               :access-token "oauth-token"))
-      (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+      (with-provider-token-path-overrides (nil openai-codex-path)
       (clawmacs::save-provider-token :openai-codex "static-token")
         (is (string= "static-token"
                      (clawmacs::read-provider-token :openai-codex)))))))
@@ -1442,14 +1263,13 @@ PAIR SOUL"
 (test read-provider-token-ignores-url-like-openai-codex-override
   "A URL-like OpenAI Codex override token is ignored in favor of shared auth.json."
   (let ((path (temp-codex-auth-path))
-        (anthropic-path (temp-test-token-path :anthropic))
         (openai-codex-path (temp-test-token-path :openai-codex)))
     (with-codex-auth-path-override (path)
       (write-codex-auth-json path
                              (make-codex-chatgpt-auth-payload
                               :access-token "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig"
                               :account-id "acct_456"))
-      (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+      (with-provider-token-path-overrides (nil openai-codex-path)
         (clawmacs::save-provider-token
          :openai-codex
          "http://localhost:1455/auth/callback?code=abc&state=xyz")
@@ -1459,13 +1279,12 @@ PAIR SOUL"
 (test read-provider-token-falls-back-to-codex-auth-json-for-openai-codex
   "OpenAI Codex falls back to shared auth.json when no override token exists."
   (let ((path (temp-codex-auth-path))
-        (anthropic-path (temp-test-token-path :anthropic))
         (openai-codex-path (temp-test-token-path :openai-codex)))
     (with-codex-auth-path-override (path)
       (write-codex-auth-json path
                              (make-codex-chatgpt-auth-payload
                               :access-token "oauth-token"))
-      (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+      (with-provider-token-path-overrides (nil openai-codex-path)
         (is (string= "oauth-token"
                      (clawmacs::read-provider-token :openai-codex)))))))
 
@@ -1515,13 +1334,12 @@ PAIR SOUL"
 (test provider-has-token-p-openai-codex-accepts-codex-auth-json
   "provider-has-token-p treats shared Codex auth.json as valid OpenAI Codex auth."
   (let ((path (temp-codex-auth-path))
-        (anthropic-path (temp-test-token-path :anthropic))
         (openai-codex-path (temp-test-token-path :openai-codex)))
     (with-codex-auth-path-override (path)
       (write-codex-auth-json path
                              (make-codex-api-key-auth-payload
                               :api-key "sk-selector"))
-      (with-provider-token-path-overrides (anthropic-path openai-codex-path)
+      (with-provider-token-path-overrides (nil openai-codex-path)
         (is-true (clawmacs::provider-has-token-p :openai-codex))))))
 
 (test exchange-openai-oauth-code-makes-correct-request
@@ -1614,9 +1432,9 @@ PAIR SOUL"
 (test zai-read-provider-token-from-file
   "read-provider-token reads Z.AI API key from static file."
   (let ((zai-path (temp-test-token-path :zai))
-        (anthropic-path (temp-test-token-path :anthropic))
-        (openai-codex-path (temp-test-token-path :openai-codex)))
-    (with-provider-token-path-overrides (anthropic-path openai-codex-path zai-path)
+        (openai-codex-path (temp-test-token-path :openai-codex))
+        (clawmacs::*zai-env-var* "CLAWMACS_UNSET_ZAI_ENV_98765"))
+    (with-provider-token-path-overrides (nil openai-codex-path zai-path)
       (clawmacs::save-provider-token :zai "zai-test-key-abc123")
       (is (string= "zai-test-key-abc123"
                    (clawmacs::read-provider-token :zai))))))
@@ -1954,14 +1772,6 @@ PAIR SOUL"
 ;;; Known Models Tests
 ;;; --------------------------------------------------------------------------
 
-(test provider-known-models-anthropic
-  "Known Anthropic models list is non-empty and contains the default."
-  (let ((models (clawmacs::provider-known-models :anthropic)))
-    (is (listp models))
-    (is (plusp (length models)))
-    ;; Default fallback model should be in the list
-    (is (member "claude-haiku-4-5-20251001" models :test #'string=))))
-
 (test provider-known-models-openai-codex
   "Known OpenAI Codex models list is non-empty and contains the default."
   (let ((models (clawmacs::provider-known-models :openai-codex)))
@@ -1995,7 +1805,7 @@ PAIR SOUL"
     (is (equal '("low" "medium" "high" "xhigh") gpt-53-codex))
     (is (equal '("none" "low" "medium" "high") gpt-51-max))
     (is (null (clawmacs::provider-model-supported-think-levels
-               :anthropic "claude-haiku-4-5-20251001")))))
+               :zai "glm-5")))))
 
 (test provider-known-models-zai
   "Known Z.AI models list is non-empty and contains the default."
@@ -2016,136 +1826,50 @@ PAIR SOUL"
   (let ((path (temp-agent-defaults-path)))
     (with-agent-defaults-path-override (path)
       ;; Set agent default so resolution works
-      (clawmacs::set-agent-default "claude" :anthropic :model "claude-haiku-4-5-20251001")
-      (let ((buf (make-buffer "test" :agent-name "claude")))
-        ;; Mock provider-has-token-p to only return t for :anthropic
+      (clawmacs::set-agent-default "coder" :zai :model "glm-5")
+      (let ((buf (make-buffer "test" :agent-name "coder")))
+        ;; Mock provider-has-token-p to only return t for :zai
         (with-function-override (clawmacs::provider-has-token-p (provider)
-                                  (eq provider :anthropic))
+                                  (eq provider :zai))
           (let ((entries (clawmacs::available-models-for-selector buf)))
-            ;; Should have entries for anthropic only
+            ;; Should have entries for Z.AI only
             (is (plusp (length entries)))
-            (is (every (lambda (e) (eq :anthropic (getf e :provider))) entries))
+            (is (every (lambda (e) (eq :zai (getf e :provider))) entries))
             ;; Exactly one entry should be active
             (let ((active-count (count-if (lambda (e) (getf e :active-p)) entries)))
               (is (= 1 active-count)))
             ;; The active entry should be the default model
             (let ((active (find-if (lambda (e) (getf e :active-p)) entries)))
-              (is (string= "claude-haiku-4-5-20251001" (getf active :model))))))))))
+              (is (string= "glm-5" (getf active :model))))))))))
 
 (test available-models-for-selector-multi-provider
   "available-models-for-selector includes models from multiple providers."
   (let ((path (temp-agent-defaults-path)))
     (with-agent-defaults-path-override (path)
-      (clawmacs::set-agent-default "claude" :zai :model "glm-5")
-      (let ((buf (make-buffer "test" :agent-name "claude")))
-        ;; Mock: both anthropic and zai have tokens
+      (clawmacs::set-agent-default "coder" :zai :model "glm-5")
+      (let ((buf (make-buffer "test" :agent-name "coder")))
+        ;; Mock: both openai-codex and zai have tokens
         (with-function-override (clawmacs::provider-has-token-p (provider)
-                                  (not (null (member provider '(:anthropic :zai)))))
+                                  (not (null (member provider '(:openai-codex :zai)))))
           (let ((entries (clawmacs::available-models-for-selector buf)))
             ;; Should have entries from both providers
             (is (plusp (length entries)))
             (let ((providers (remove-duplicates
                               (mapcar (lambda (e) (getf e :provider)) entries))))
-              (is (member :anthropic providers))
+              (is (member :openai-codex providers))
               (is (member :zai providers)))))))))
 
 (test available-models-for-selector-no-tokens
   "available-models-for-selector returns nil when no provider has a token."
   (let ((path (temp-agent-defaults-path)))
     (with-agent-defaults-path-override (path)
-      (let ((buf (make-buffer "test" :agent-name "claude")))
+      (let ((buf (make-buffer "test" :agent-name "agent")))
         ;; Mock: no tokens available
         (with-function-override (clawmacs::provider-has-token-p (provider)
                                   (declare (ignore provider))
                                   nil)
           (let ((entries (clawmacs::available-models-for-selector buf)))
             (is (null entries))))))))
-
-;;; --------------------------------------------------------------------------
-;;; Claude CLI Subprocess Tests
-;;; --------------------------------------------------------------------------
-
-(test claude-cli-model-p-recognizes-cli-models
-  "claude-cli-model-p returns non-nil for models in *claude-cli-models*."
-  (let ((clawmacs::*claude-cli-path* "claude"))
-    (is (clawmacs::claude-cli-model-p "claude-sonnet-4-6"))
-    (is (clawmacs::claude-cli-model-p "claude-opus-4-6"))
-    (is (clawmacs::claude-cli-model-p "claude-sonnet-4-5"))
-    (is (clawmacs::claude-cli-model-p "claude-opus-4-5-20251101"))))
-
-(test claude-cli-model-p-rejects-rest-models
-  "claude-cli-model-p returns nil for models NOT in *claude-cli-models*."
-  (is (null (clawmacs::claude-cli-model-p "claude-haiku-4-5-20251001")))
-  (is (null (clawmacs::claude-cli-model-p "claude-3-haiku-20240307")))
-  (is (null (clawmacs::claude-cli-model-p "glm-5")))
-  (is (null (clawmacs::claude-cli-model-p "codex-mini-latest"))))
-
-(test claude-cli-model-p-disabled-when-path-nil
-  "claude-cli-model-p returns nil when *claude-cli-path* is nil."
-  (let ((clawmacs::*claude-cli-path* nil))
-    (is (null (clawmacs::claude-cli-model-p "claude-sonnet-4-6")))))
-
-(test claude-cli-build-prompt-single-message
-  "claude-cli-build-prompt flattens a single user message."
-  (let ((msgs (list `((:role . "user") (:content . "Hello world")))))
-    (is (string= "[user]: Hello world"
-                  (clawmacs::claude-cli-build-prompt msgs)))))
-
-(test claude-cli-build-prompt-multi-turn
-  "claude-cli-build-prompt concatenates multiple messages."
-  (let ((msgs (list `((:role . "user") (:content . "Hi"))
-                    `((:role . "assistant") (:content . "Hello"))
-                    `((:role . "user") (:content . "How are you?")))))
-    (let ((result (clawmacs::claude-cli-build-prompt msgs)))
-      (is (search "[user]: Hi" result))
-      (is (search "[assistant]: Hello" result))
-      (is (search "[user]: How are you?" result)))))
-
-(test claude-cli-build-prompt-vector-content
-  "claude-cli-build-prompt extracts text from vector content blocks."
-  (let ((msgs (list `((:role . "assistant")
-                      (:content . ,(vector `((:type . "text") (:text . "Hi there"))))))))
-    (is (search "Hi there" (clawmacs::claude-cli-build-prompt msgs)))))
-
-(test provider-request-routes-cli-models
-  "provider-request routes CLI models to claude-cli-request."
-  (let ((routed-to nil)
-        (clawmacs::*claude-cli-path* "claude"))
-    (with-function-override (clawmacs::claude-cli-request
-                             (messages &key model max-tokens tools system-prompt)
-                             (declare (ignore messages max-tokens tools system-prompt))
-                             (setf routed-to model)
-                             `((:type . "message")
-                               (:content . ,(vector `((:type . "text")
-                                                      (:text . "ok"))))))
-      (clawmacs::provider-request :anthropic nil :model "claude-sonnet-4-6")
-      (is (string= "claude-sonnet-4-6" routed-to)))))
-
-(test provider-request-routes-rest-models
-  "provider-request routes REST-compatible models to anthropic-request."
-  (let ((routed-to nil))
-    (with-function-override (clawmacs::anthropic-request
-                             (messages &key model max-tokens tools system-prompt)
-                             (declare (ignore messages max-tokens tools system-prompt))
-                             (setf routed-to model)
-                             `((:type . "message")
-                               (:content . ,(vector `((:type . "text")
-                                                      (:text . "ok"))))))
-      (clawmacs::provider-request :anthropic nil :model "claude-haiku-4-5-20251001")
-      (is (string= "claude-haiku-4-5-20251001" routed-to)))))
-
-(test provider-request-streaming-routes-cli-models
-  "provider-request-streaming routes CLI models to claude-cli-request-streaming."
-  (let ((routed-to nil)
-        (clawmacs::*claude-cli-path* "claude"))
-    (with-function-override (clawmacs::claude-cli-request-streaming
-                             (messages callback &key model max-tokens tools system-prompt)
-                             (declare (ignore messages callback max-tokens tools system-prompt))
-                             (setf routed-to model)
-                             (clawmacs::make-stream-state))
-      (clawmacs::provider-request-streaming :anthropic nil nil
-                                            :model "claude-opus-4-6")
-      (is (string= "claude-opus-4-6" routed-to)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; OpenRouter Tests
@@ -2161,7 +1885,8 @@ PAIR SOUL"
   "OpenRouter API keys round-trip through provider-specific helpers."
   (let ((or-path (merge-pathnames
                   (format nil ".config/clawmacs/test-openrouter-~A" (gensym))
-                  (user-homedir-pathname))))
+                  (user-homedir-pathname)))
+        (clawmacs::*openrouter-env-var* "CLAWMACS_UNSET_OPENROUTER_ENV_98765"))
     (unwind-protect
          (let ((original (symbol-function 'clawmacs::provider-token-path)))
            (unwind-protect

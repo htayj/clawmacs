@@ -313,7 +313,7 @@ black background. This must NOT be the modeline face."
 
 (defun resolve-modeline-provider-model (buf)
   "Resolve the provider/model string for the modeline.
-Returns a string like \"anthropic/claude-haiku-4-5-20251001\" or \"??\" on error."
+Returns a string like \"zai/glm-5\" or \"??\" on error."
   (handler-case
       (multiple-value-bind (provider model think-level)
           (resolve-buffer-provider-and-model buf)
@@ -323,7 +323,7 @@ Returns a string like \"anthropic/claude-haiku-4-5-20251001\" or \"??\" on error
 (defun format-modeline (buf width &key (major-mode "chat") provider-model)
   "Format the modeline string for BUF, fitting within WIDTH columns.
 MAJOR-MODE is displayed on the far left (e.g. \"chat\", \"buffer-selector\").
-PROVIDER-MODEL is the provider/model string (e.g. \"anthropic/claude-haiku-4-5\");
+PROVIDER-MODEL is the provider/model string (e.g. \"zai/glm-5\");
 when nil it is resolved from the buffer's agent defaults."
   (let* ((pm (or provider-model (resolve-modeline-provider-model buf)))
          (left (format nil " [~A] ~A | ~A | ~A | ~A"
