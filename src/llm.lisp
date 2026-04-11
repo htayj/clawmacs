@@ -114,6 +114,10 @@ Populated on first call to fetch-openrouter-models.  Set to nil to force refresh
 (defvar *agent-definition-registry* (make-hash-table :test #'equal)
   "Programmatic agent definitions keyed by downcased agent name.")
 
+(defvar *agent-prompt-overrides* nil
+  "Dynamic prompt overrides keyed by normalized agent name.
+Each entry is (NAME-KEY . PLIST) and is intended for transient subagent runs.")
+
 (defstruct agent-definition
   "Programmatic agent definition used for per-buffer routing and prompt composition."
   name
@@ -121,12 +125,28 @@ Populated on first call to fetch-openrouter-models.  Set to nil to force refresh
   model
   think-level
   core-prompt
-  personality-prompt)
+  personality-prompt
+  tool-names)
 
 (defparameter +default-core-system-prompt+
   "You are running inside clawmacs, a Lisp-native terminal chat interface.
 The only built-in tool available by default is `lisp_eval`, which evaluates one Common Lisp
 form inside the running clawmacs image. Use `lisp_eval` for concrete work.
+
+## Subagents
+
+- This system can run multiple agents. You are the most powerful type because you can call
+  Common Lisp directly with `lisp_eval`; that power is flexible but not always efficient.
+- Delegate focused work with `(run-subagent \"PROMPT\" ...)` when a constrained agent can answer
+  faster, inspect a narrower surface, or enforce a tool policy.
+- Use an existing registered agent with `(run-subagent \"PROMPT\" :agent-name \"docs\")`, then add
+  overrides such as `:provider`, `:model`, `:think-level`, `:personality-prompt`, or `:tool-names`.
+- Use a fully custom transient agent with `:core-prompt` and `:personality-prompt`; this does not
+  permanently register a new agent definition.
+- Use `:tool-names '(\"doc_lookup\")` to constrain a subagent to specific registered tools instead
+  of the default tool set. Parent agents can inspect `(prompt-run-result-tool-events RESULT)` or
+  use `(prompt-run-used-tool-p RESULT \"doc_lookup\")`, `(prompt-run-tool-count RESULT)`, and
+  `(prompt-run-tool-names RESULT)` to verify what happened.
 
 ## Default workflow
 
@@ -392,17 +412,31 @@ Project-local files take precedence over global ones."
     (when parts
       (format nil "~{~A~^~%~%---~%~%~}" (nreverse parts)))))
 
+(defun agent-prompt-override (agent-name)
+  "Return the dynamic prompt override plist for AGENT-NAME, or NIL."
+  (let ((name-key (normalize-agent-name-key agent-name)))
+    (cdr (assoc name-key *agent-prompt-overrides* :test #'string=))))
+
+(defun agent-prompt-override-value (agent-name key)
+  "Return dynamic prompt override KEY for AGENT-NAME, or NIL."
+  (let ((override (agent-prompt-override agent-name)))
+    (and override (getf override key))))
+
 (defun agent-definition-core-prompt-or-default (agent-name)
   "Return AGENT-NAME's core prompt, falling back to the default core system prompt."
-  (let ((definition (find-agent-definition agent-name)))
-    (or (and definition
+  (let ((override (agent-prompt-override-value agent-name :core-prompt))
+        (definition (find-agent-definition agent-name)))
+    (or override
+        (and definition
              (agent-definition-core-prompt definition))
         *default-core-system-prompt*)))
 
 (defun agent-definition-personality-prompt-or-default (agent-name)
   "Return AGENT-NAME's personality prompt, falling back to the default personality prompt."
-  (let ((definition (find-agent-definition agent-name)))
-    (or (and definition
+  (let ((override (agent-prompt-override-value agent-name :personality-prompt))
+        (definition (find-agent-definition agent-name)))
+    (or override
+        (and definition
              (agent-definition-personality-prompt definition))
         *default-personality-prompt*)))
 
@@ -1573,20 +1607,51 @@ dereferences it at call time so that user customizations take effect.")
       (error "Agent name must be a non-empty string"))
     (string-downcase trimmed)))
 
+(defun normalize-tool-name (tool-name)
+  "Normalize TOOL-NAME into the API-facing tool name string."
+  (let* ((raw (etypecase tool-name
+                (string tool-name)
+                (symbol (symbol-name tool-name))))
+         (trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) raw)))
+    (when (blank-string-p trimmed)
+      (error "Tool name must be non-empty"))
+    (string-downcase
+     (substitute #\_ #\- trimmed))))
+
+(defun normalize-tool-name-list (tool-names)
+  "Normalize TOOL-NAMES into a duplicate-free list of API-facing strings.
+NIL means no explicit tool allowlist."
+  (when tool-names
+    (let ((names (cond
+                   ((or (stringp tool-names)
+                        (symbolp tool-names))
+                    (list tool-names))
+                   ((vectorp tool-names)
+                    (coerce tool-names 'list))
+                   ((listp tool-names)
+                    tool-names)
+                   (t
+                    (error "Tool names must be a string, symbol, list, vector, or NIL")))))
+      (remove-duplicates
+       (mapcar #'normalize-tool-name names)
+       :test #'string=))))
+
 (defun register-agent-definition (name &key provider model think-level
-                                       core-prompt personality-prompt)
+                                       core-prompt personality-prompt tool-names)
   "Register or update an agent definition for NAME.
 NAME is stored as given for display, while lookups are keyed case-insensitively."
   (let* ((trimmed-name (string-trim '(#\Space #\Tab #\Newline #\Return) name))
          (registry-key (normalize-agent-name-key trimmed-name))
          (normalized-provider (normalize-provider provider))
          (normalized-think-level (normalize-think-level-override think-level))
+         (normalized-tool-names (normalize-tool-name-list tool-names))
          (definition (make-agent-definition :name trimmed-name
                                             :provider normalized-provider
                                             :model model
                                             :think-level normalized-think-level
                                             :core-prompt core-prompt
-                                            :personality-prompt personality-prompt)))
+                                            :personality-prompt personality-prompt
+                                            :tool-names normalized-tool-names)))
     (when (and model (blank-string-p model))
       (error "Agent model must be a non-empty string"))
     (setf (gethash registry-key *agent-definition-registry*) definition)
@@ -1630,6 +1695,12 @@ NAME is stored as given for display, while lookups are keyed case-insensitively.
         (when (and think-level
                    (think-level-supported-p provider model think-level))
           think-level)))))
+
+(defun agent-definition-tool-names-for-name (agent-name)
+  "Return AGENT-NAME's programmatic tool allowlist, or NIL for default tools."
+  (let ((definition (find-agent-definition agent-name)))
+    (when definition
+      (copy-list (agent-definition-tool-names definition)))))
 
 (defun provider-fallback-model (provider)
   "Return the fallback model for PROVIDER.

@@ -367,6 +367,7 @@
      #:agent-definition-think-level
      #:agent-definition-core-prompt
      #:agent-definition-personality-prompt
+     #:agent-definition-tool-names
      #:register-agent-definition
      #:find-agent-definition
      #:list-agent-definitions
@@ -444,6 +445,7 @@
    #:*lisp-eval-history-limit*
    #:*lisp-eval-max-output-chars*
    #:*tool-table*
+   #:*active-tool-names*
    #:lisp-eval-record
    #:lisp-eval-record-code
    #:lisp-eval-record-package
@@ -770,7 +772,9 @@
    #:clawmacs-main
    #:clawmacs-prompt-main
    #:run-single-prompt
+   #:run-subagent
    #:*prompt-max-tool-iterations*
+   #:*default-subagent-name*
    #:prompt-run-result
    #:prompt-run-result-prompt
    #:prompt-run-result-final-text
@@ -796,6 +800,9 @@
    #:prompt-tool-event-result-text
    #:prompt-tool-event-display
    #:prompt-tool-event-denied-p
+   #:prompt-run-tool-names
+   #:prompt-run-tool-count
+   #:prompt-run-used-tool-p
    #:send-to-agent-with-context
    #:switch-buffer-to-agent
     #:scroll-up-command

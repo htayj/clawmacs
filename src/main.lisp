@@ -14,6 +14,9 @@
 (defvar *prompt-max-tool-iterations* 20
   "Default maximum tool-call turns allowed during one non-interactive prompt run.")
 
+(defvar *default-subagent-name* "subagent"
+  "Default transient agent name used by RUN-SUBAGENT.")
+
 (defstruct prompt-tool-event
   "A tool call/result pair captured during non-interactive prompt execution."
   id
@@ -554,70 +557,124 @@ PROMPT-TOOL-EVENT for terminal/debug output."
 (defun run-single-prompt (prompt &key (agent-name *default-agent-name*)
                                  provider model think-level
                                  (max-tool-iterations *prompt-max-tool-iterations*)
-                                 auto-approve-tools-p)
+                                 auto-approve-tools-p
+                                 tool-names)
   "Run PROMPT once without a UI and return a PROMPT-RUN-RESULT.
 The request loops through tool_use responses until the provider returns a final
 assistant response or MAX-TOOL-ITERATIONS is exceeded."
   (when (blank-string-p prompt)
     (error "Prompt must be non-empty"))
-  (let* ((buf (make-prompt-buffer prompt agent-name))
+  (let* ((effective-tool-names (or (normalize-tool-name-list tool-names)
+                                   (agent-definition-tool-names-for-name
+                                    agent-name)))
+         (buf (make-prompt-buffer prompt agent-name))
          (tool-events nil)
          (final-provider nil)
          (final-model nil)
          (final-think-level nil)
          (iterations 0))
     (maybe-apply-prompt-routing-overrides buf provider model think-level)
-    (labels ((fail (format-string &rest format-args)
-               (error 'prompt-run-error
-                      :message (apply #'format nil format-string format-args)
-                      :tool-events tool-events
-                      :iterations iterations
-                      :provider final-provider
-                      :model final-model
-                      :think-level final-think-level)))
-      (loop
-        (when (>= iterations max-tool-iterations)
-          (fail "Exceeded maximum tool iterations (~D)"
-                max-tool-iterations))
-        (incf iterations)
-        (multiple-value-bind (response provider* model* think-level*)
-            (handler-case
-                (prompt-request-once buf)
-              (error (condition)
-                (fail "Prompt provider request failed: ~A" condition)))
-          (setf final-provider provider*
-                final-model model*
-                final-think-level think-level*)
-          (let* ((content-blocks (response-content response))
-                 (canonical-content (canonicalize-message-content
-                                     "assistant"
-                                     content-blocks))
-                 (tool-uses (content-tool-use-blocks canonical-content))
-                 (stop-reason (response-stop-reason response))
-                 (agent-kw (intern (string-upcase (buffer-agent-name buf))
-                                   :keyword)))
-            (insert-agent-message-from-content buf canonical-content agent-kw)
-            (if tool-uses
-                (setf tool-events
-                      (append tool-events
-                              (handler-case
-                                  (execute-prompt-tool-calls
-                                   buf tool-uses auto-approve-tools-p)
-                                (error (condition)
-                                  (fail "Prompt tool loop failed: ~A"
-                                        condition)))))
-                (return
-                  (make-prompt-run-result
-                   :prompt prompt
-                   :final-text (content-text-blocks canonical-content)
-                   :tool-events tool-events
-                   :reasoning-blocks (content-reasoning-blocks canonical-content)
-                   :agent-name (buffer-agent-name buf)
-                   :provider final-provider
-                   :model final-model
-                   :think-level final-think-level
-                   :iterations iterations
-                   :stop-reason stop-reason)))))))))
+    (let ((*active-tool-names* effective-tool-names))
+      (labels ((fail (format-string &rest format-args)
+                 (error 'prompt-run-error
+                        :message (apply #'format nil format-string format-args)
+                        :tool-events tool-events
+                        :iterations iterations
+                        :provider final-provider
+                        :model final-model
+                        :think-level final-think-level)))
+        (loop
+          (when (>= iterations max-tool-iterations)
+            (fail "Exceeded maximum tool iterations (~D)"
+                  max-tool-iterations))
+          (incf iterations)
+          (multiple-value-bind (response provider* model* think-level*)
+              (handler-case
+                  (prompt-request-once buf)
+                (error (condition)
+                  (fail "Prompt provider request failed: ~A" condition)))
+            (setf final-provider provider*
+                  final-model model*
+                  final-think-level think-level*)
+            (let* ((content-blocks (response-content response))
+                   (canonical-content (canonicalize-message-content
+                                       "assistant"
+                                       content-blocks))
+                   (tool-uses (content-tool-use-blocks canonical-content))
+                   (stop-reason (response-stop-reason response))
+                   (agent-kw (intern (string-upcase (buffer-agent-name buf))
+                                     :keyword)))
+              (insert-agent-message-from-content buf canonical-content agent-kw)
+              (if tool-uses
+                  (setf tool-events
+                        (append tool-events
+                                (handler-case
+                                    (execute-prompt-tool-calls
+                                     buf tool-uses auto-approve-tools-p)
+                                  (error (condition)
+                                    (fail "Prompt tool loop failed: ~A"
+                                          condition)))))
+                  (return
+                    (make-prompt-run-result
+                     :prompt prompt
+                     :final-text (content-text-blocks canonical-content)
+                     :tool-events tool-events
+                     :reasoning-blocks (content-reasoning-blocks canonical-content)
+                     :agent-name (buffer-agent-name buf)
+                     :provider final-provider
+                     :model final-model
+                     :think-level final-think-level
+                     :iterations iterations
+                     :stop-reason stop-reason))))))))))
+
+(defun run-subagent (prompt &key (agent-name *default-subagent-name*)
+                                  provider model think-level
+                                  core-prompt personality-prompt tool-names
+                                  (max-tool-iterations *prompt-max-tool-iterations*)
+                                  auto-approve-tools-p)
+  "Run PROMPT through a synchronous subagent and return a PROMPT-RUN-RESULT.
+AGENT-NAME may name a registered agent. Explicit routing, prompt, and tool
+arguments override the registered definition for this run only."
+  (let* ((effective-agent-name (or agent-name *default-subagent-name*))
+         (name-key (normalize-agent-name-key effective-agent-name))
+         (prompt-override nil))
+    (when core-prompt
+      (setf (getf prompt-override :core-prompt) core-prompt))
+    (when personality-prompt
+      (setf (getf prompt-override :personality-prompt) personality-prompt))
+    (let ((*agent-prompt-overrides*
+            (if prompt-override
+                (acons name-key prompt-override *agent-prompt-overrides*)
+                *agent-prompt-overrides*)))
+      (run-single-prompt prompt
+                         :agent-name effective-agent-name
+                         :provider provider
+                         :model model
+                         :think-level think-level
+                         :max-tool-iterations max-tool-iterations
+                         :auto-approve-tools-p auto-approve-tools-p
+                         :tool-names tool-names))))
+
+(defun prompt-run-tool-names (result)
+  "Return tool names used by RESULT in chronological order."
+  (mapcar #'prompt-tool-event-name
+          (prompt-run-result-tool-events result)))
+
+(defun prompt-run-tool-count (result &optional tool-name)
+  "Count tool events in RESULT, optionally restricted to TOOL-NAME."
+  (let ((events (prompt-run-result-tool-events result)))
+    (if tool-name
+        (count (normalize-tool-name tool-name)
+               events
+               :key (lambda (event)
+                      (normalize-tool-name
+                       (prompt-tool-event-name event)))
+               :test #'string=)
+        (length events))))
+
+(defun prompt-run-used-tool-p (result tool-name)
+  "Return true when RESULT includes at least one TOOL-NAME call."
+  (plusp (prompt-run-tool-count result tool-name)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Prefix Processing

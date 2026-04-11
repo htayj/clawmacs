@@ -191,6 +191,10 @@
                             nil)
     (let ((prompt (clawmacs::build-system-prompt)))
       (is (search "only built-in tool available by default is `lisp_eval`" prompt))
+      (is (search "This system can run multiple agents" prompt))
+      (is (search "(run-subagent \"PROMPT\" :agent-name \"docs\")" prompt))
+      (is (search ":tool-names '(\"doc_lookup\")" prompt))
+      (is (search "(prompt-run-used-tool-p RESULT \"doc_lookup\")" prompt))
       (is (search "Do not merely describe searches, inspections, calls, or updates" prompt))
       (is (search "(apropos-list \"SUBSTRING\" :clawmacs)" prompt))
       (is (search "(multiple-value-list (find-symbol \"NAME\" :clawmacs))" prompt))
@@ -241,10 +245,13 @@
                   :model "gpt-5.4"
                   :think-level "high"
                   :core-prompt "pair core"
-                  :personality-prompt "pair personality")))
+                  :personality-prompt "pair personality"
+                  :tool-names '("lisp_eval" doc-lookup))))
       (is (string= "Pair" (clawmacs:agent-definition-name first)))
       (is (eq :openai-codex (clawmacs:agent-definition-provider first)))
-      (is (string= "high" (clawmacs:agent-definition-think-level first))))
+      (is (string= "high" (clawmacs:agent-definition-think-level first)))
+      (is (equal '("lisp_eval" "doc_lookup")
+                 (clawmacs:agent-definition-tool-names first))))
     (is (string= "pair core"
                  (clawmacs:agent-definition-core-prompt
                   (clawmacs:find-agent-definition "pair"))))
@@ -421,6 +428,224 @@ PAIR PERSONALITY"
               (is (string= "call-1"
                            (cdr (assoc :tool--use--id tool-result))))
               (is (search "5" (cdr (assoc :content tool-result)))))))))))
+
+(test run-subagent-uses-registered-agent-and-routing-overrides
+  "run-subagent can delegate to a registered agent with explicit routing overrides."
+  (let ((path (temp-agent-defaults-path))
+        (seen-provider nil)
+        (seen-model nil)
+        (seen-think-level nil))
+    (with-agent-defaults-path-override (path)
+      (with-agent-definition-registry-override ()
+        (clawmacs:register-agent-definition
+         "researcher"
+         :provider :zai
+         :model "glm-5"
+         :personality-prompt "research personality")
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore messages callback max-tokens
+                                                  tools system-prompt))
+                                 (setf seen-provider provider
+                                       seen-model model
+                                       seen-think-level reasoning-effort)
+                                 (make-completed-stream-state-response
+                                  "end_turn"
+                                  (list (clawmacs::canonical-text-block
+                                         "delegated answer"))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (clawmacs::init-tools)
+          (let ((result (clawmacs:run-subagent
+                         "Research this"
+                         :agent-name "researcher"
+                         :provider :openai-codex
+                         :model "gpt-5.3-codex"
+                         :think-level "high")))
+            (is (eq :openai-codex seen-provider))
+            (is (string= "gpt-5.3-codex" seen-model))
+            (is (string= "high" seen-think-level))
+            (is (string= "researcher"
+                         (clawmacs:prompt-run-result-agent-name result)))
+            (is (string= "delegated answer"
+                         (clawmacs:prompt-run-result-final-text result)))))))))
+
+(test run-subagent-uses-transient-prompts-without-registering-agent
+  "Custom subagent prompts are dynamically scoped and do not mutate the registry."
+  (let ((path (temp-agent-defaults-path))
+        (seen-system-prompt nil))
+    (with-agent-defaults-path-override (path)
+      (with-agent-definition-registry-override ()
+        (with-function-override (clawmacs::load-boot-files ()
+                                  nil)
+          (with-function-override (clawmacs::provider-request-streaming
+                                   (provider messages callback
+                                             &key model max-tokens tools
+                                             reasoning-effort system-prompt)
+                                   (declare (ignore provider messages callback model
+                                                    max-tokens tools reasoning-effort))
+                                   (setf seen-system-prompt system-prompt)
+                                   (make-completed-stream-state-response
+                                    "end_turn"
+                                    (list (clawmacs::canonical-text-block
+                                           "custom answer"))))
+            (clawmacs::init-default-keymap)
+            (clawmacs::init-global-faces)
+            (clawmacs::init-tools)
+            (let ((result (clawmacs:run-subagent
+                           "Use a custom prompt"
+                           :agent-name "temporary-doc-agent"
+                           :provider :zai
+                           :model "glm-5"
+                           :core-prompt "TEMP CORE"
+                           :personality-prompt "TEMP PERSONALITY")))
+              (is (search "TEMP CORE" seen-system-prompt))
+              (is (search "TEMP PERSONALITY" seen-system-prompt))
+              (is (null (clawmacs:find-agent-definition
+                         "temporary-doc-agent")))
+              (is (string= "custom answer"
+                           (clawmacs:prompt-run-result-final-text result))))))))))
+
+(test run-subagent-uses-agent-tool-allowlist-and-explicit-overrides
+  "Agent tool defaults constrain request tools; explicit subagent tool names override them."
+  (let ((path (temp-agent-defaults-path))
+        (captured-tool-names nil))
+    (with-agent-defaults-path-override (path)
+      (with-agent-definition-registry-override ()
+        (with-tool-table-restored
+          (clrhash clawmacs::*tool-table*)
+          (clawmacs::init-tools)
+          (clawmacs:register-tool
+           "doc_lookup"
+           "Look up docs."
+           '((:type . "object")
+             (:properties . ((:query . ((:type . "string"))))))
+           :agent-allowed
+           (lambda (args)
+             (declare (ignore args))
+             "{\"doc\":\"ok\"}"))
+          (clawmacs:register-agent-definition
+           "docs"
+           :provider :zai
+           :model "glm-5"
+           :tool-names '("doc_lookup"))
+          (with-function-override (clawmacs::provider-request-streaming
+                                   (provider messages callback
+                                             &key model max-tokens tools
+                                             reasoning-effort system-prompt)
+                                   (declare (ignore provider messages callback model
+                                                    max-tokens reasoning-effort
+                                                    system-prompt))
+                                   (setf captured-tool-names
+                                         (mapcar (lambda (tool)
+                                                   (cdr (assoc :name tool)))
+                                                 (coerce tools 'list)))
+                                   (make-completed-stream-state-response
+                                    "end_turn"
+                                    (list (clawmacs::canonical-text-block
+                                           "done"))))
+            (clawmacs::init-default-keymap)
+            (clawmacs::init-global-faces)
+            (clawmacs:run-subagent "Find docs" :agent-name "docs")
+            (is (equal '("doc_lookup") captured-tool-names))
+            (setf captured-tool-names nil)
+            (clawmacs:run-subagent
+             "Use lisp instead"
+             :agent-name "docs"
+             :tool-names '("lisp_eval"))
+            (is (equal '("lisp_eval") captured-tool-names))))))))
+
+(test run-subagent-records-unallowed-tool-call-as-tool-result-error
+  "A provider cannot execute a tool outside the subagent allowlist."
+  (let ((path (temp-agent-defaults-path))
+        (request-count 0)
+        (second-request-messages nil))
+    (with-agent-defaults-path-override (path)
+      (with-tool-table-restored
+        (clrhash clawmacs::*tool-table*)
+        (clawmacs::init-tools)
+        (clawmacs:register-tool
+         "doc_lookup"
+         "Look up docs."
+         '((:type . "object")
+           (:properties . ((:query . ((:type . "string"))))))
+         :agent-allowed
+         (lambda (args)
+           (declare (ignore args))
+           "{\"doc\":\"ok\"}"))
+        (clawmacs:register-tool
+         "write_probe"
+         "A tool this subagent must not call."
+         '((:type . "object")
+           (:properties . ((:payload . ((:type . "string"))))))
+         :agent-allowed
+         (lambda (args)
+           (declare (ignore args))
+           "{\"wrote\":true}"))
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore provider callback model
+                                                  max-tokens tools
+                                                  reasoning-effort system-prompt))
+                                 (incf request-count)
+                                 (if (= request-count 1)
+                                     (make-completed-stream-state-response
+                                      "tool_use"
+                                      (list
+                                       (clawmacs::canonical-tool-use-block
+                                        "call-write"
+                                        "write_probe"
+                                        '((:payload . "bad")))))
+                                     (progn
+                                       (setf second-request-messages messages)
+                                       (make-completed-stream-state-response
+                                        "end_turn"
+                                        (list (clawmacs::canonical-text-block
+                                               "handled denial"))))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (let* ((result (clawmacs:run-subagent
+                          "Try the wrong tool"
+                          :agent-name "docs"
+                          :provider :zai
+                          :model "glm-5"
+                          :tool-names '("doc_lookup")))
+                 (events (clawmacs:prompt-run-result-tool-events result))
+                 (event (first events))
+                 (tool-result-message (third second-request-messages))
+                 (tool-result (first (coerce
+                                      (cdr (assoc :content
+                                                  tool-result-message))
+                                      'list))))
+            (is (= 2 request-count))
+            (is (= 1 (length events)))
+            (is (string= "write_probe"
+                         (clawmacs:prompt-tool-event-name event)))
+            (is (search "not allowed"
+                        (clawmacs:prompt-tool-event-result-text event)))
+            (is (search "not allowed"
+                        (cdr (assoc :content tool-result))))
+            (is (string= "handled denial"
+                         (clawmacs:prompt-run-result-final-text result)))))))))
+
+(test prompt-run-tool-verification-helpers
+  "Parent agents can check tool usage without parsing raw events."
+  (let* ((result (clawmacs::make-prompt-run-result
+                  :tool-events
+                  (list (clawmacs::make-prompt-tool-event
+                         :name "doc_lookup")
+                        (clawmacs::make-prompt-tool-event
+                         :name "lisp_eval")))))
+    (is (equal '("doc_lookup" "lisp_eval")
+               (clawmacs:prompt-run-tool-names result)))
+    (is (= 2 (clawmacs:prompt-run-tool-count result)))
+    (is (= 1 (clawmacs:prompt-run-tool-count result "doc_lookup")))
+    (is (clawmacs:prompt-run-used-tool-p result 'doc-lookup))
+    (is-false (clawmacs:prompt-run-used-tool-p result "missing_tool"))))
 
 (test execute-lisp-eval-captures-output-and-history
   "lisp_eval captures stdout/stderr, results, and bounded eval history."

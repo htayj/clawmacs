@@ -1414,6 +1414,37 @@ documentation in *extended-docs*."
   :usage "Pathname — defaults to ~/.config/clawmacs/agent-defaults.json"
   :see-also (load-agent-defaults save-agent-defaults))
 
+(defdoc agent-definition
+  :category "llm"
+  :usage "Created by register-agent-definition for reusable agent defaults."
+  :returns "Structure — Name, routing defaults, prompt fragments, and optional tool allowlist."
+  :see-also (register-agent-definition find-agent-definition list-agent-definitions run-subagent))
+
+(defdoc agent-definition-tool-names
+  :category "llm"
+  :usage "(agent-definition-tool-names DEFINITION:agent-definition)"
+  :returns "list of strings or nil — Tool allowlist for this agent; nil means default tool visibility."
+  :see-also (register-agent-definition run-subagent *active-tool-names*))
+
+(defdoc register-agent-definition
+  :category "llm"
+  :usage "(register-agent-definition NAME &key PROVIDER MODEL THINK-LEVEL CORE-PROMPT PERSONALITY-PROMPT TOOL-NAMES)"
+  :returns "agent-definition — The registered definition."
+  :side-effects "Updates the process-local agent definition registry used by buffers and subagents."
+  :see-also (find-agent-definition list-agent-definitions run-subagent))
+
+(defdoc find-agent-definition
+  :category "llm"
+  :usage "(find-agent-definition AGENT-NAME:string)"
+  :returns "agent-definition or nil."
+  :see-also (register-agent-definition list-agent-definitions))
+
+(defdoc list-agent-definitions
+  :category "llm"
+  :usage "(list-agent-definitions)"
+  :returns "list of agent-definition — Sorted by agent name."
+  :see-also (register-agent-definition find-agent-definition))
+
 (defdoc *default-max-tokens*
   :category "llm"
   :see-also (*default-model* *default-provider* provider-request))
@@ -1727,6 +1758,12 @@ documentation in *extended-docs*."
   :category "tool"
   :see-also (register-tool execute-tool tool-definitions-for-api init-tools))
 
+(defdoc *active-tool-names*
+  :category "tool"
+  :returns "list of strings or nil — Dynamic allowlist for the current agent run; nil means default visibility."
+  :side-effects "Binding this constrains tool-definitions-for-api and execute-tool for the dynamic extent."
+  :see-also (run-subagent register-agent-definition tool-definitions-for-api execute-tool))
+
 (defdoc tool-definition
   :category "tool"
   :usage "Created by register-tool."
@@ -1757,7 +1794,7 @@ documentation in *extended-docs*."
   :category "tool"
   :usage "(tool-definitions-for-api) — (tool-definitions-for-api)"
   :returns "list — Tool definitions formatted for provider adapters."
-  :see-also (*tool-table* register-tool provider-request))
+  :see-also (*tool-table* *active-tool-names* register-tool provider-request))
 
 (defdoc format-tool-call-sexpr
   :category "tool"
@@ -3360,14 +3397,45 @@ documentation in *extended-docs*."
   :category "main"
   :usage "Integer default used by run-single-prompt."
   :returns "integer — Default maximum non-interactive tool-call turns."
-  :see-also (run-single-prompt clawmacs-prompt-main))
+  :see-also (run-single-prompt run-subagent clawmacs-prompt-main))
+
+(defdoc *default-subagent-name*
+  :category "main"
+  :usage "String default used when run-subagent is called without :agent-name."
+  :returns "string — Default transient subagent name."
+  :see-also (run-subagent register-agent-definition))
 
 (defdoc run-single-prompt
   :category "main"
-  :usage "(run-single-prompt PROMPT &key :agent-name :provider :model :think-level :max-tool-iterations :auto-approve-tools-p)"
+  :usage "(run-single-prompt PROMPT &key :agent-name :provider :model :think-level :max-tool-iterations :auto-approve-tools-p :tool-names)"
   :returns "prompt-run-result — Final text, routing metadata, iteration count, and captured tool events."
   :side-effects "Creates an in-memory prompt buffer, sends non-streaming provider requests, executes agent-allowed tools, inserts tool_result messages into the prompt buffer, and loops until a final assistant response is returned."
-  :see-also (clawmacs-prompt-main provider-request execute-tool build-conversation-messages))
+  :see-also (clawmacs-prompt-main run-subagent provider-request execute-tool build-conversation-messages))
+
+(defdoc run-subagent
+  :category "main"
+  :usage "(run-subagent PROMPT &key :agent-name :provider :model :think-level :core-prompt :personality-prompt :tool-names :max-tool-iterations :auto-approve-tools-p)"
+  :returns "prompt-run-result — The delegated agent's final response and tool evidence."
+  :side-effects "Runs a synchronous prompt-mode subagent. Transient prompt overrides are dynamically scoped and do not mutate the agent registry."
+  :see-also (register-agent-definition prompt-run-result prompt-run-used-tool-p *active-tool-names*))
+
+(defdoc prompt-run-tool-names
+  :category "main"
+  :usage "(prompt-run-tool-names RESULT:prompt-run-result)"
+  :returns "list of strings — Tool names used by the prompt run."
+  :see-also (prompt-run-tool-count prompt-run-used-tool-p prompt-run-result-tool-events))
+
+(defdoc prompt-run-tool-count
+  :category "main"
+  :usage "(prompt-run-tool-count RESULT &optional TOOL-NAME)"
+  :returns "integer — Count of all tool calls or only TOOL-NAME calls."
+  :see-also (prompt-run-tool-names prompt-run-used-tool-p prompt-run-result-tool-events))
+
+(defdoc prompt-run-used-tool-p
+  :category "main"
+  :usage "(prompt-run-used-tool-p RESULT TOOL-NAME)"
+  :returns "boolean — T if RESULT includes at least one TOOL-NAME call."
+  :see-also (prompt-run-tool-names prompt-run-tool-count prompt-run-result-tool-events))
 
 (defdoc clawmacs-prompt-main
   :category "main"

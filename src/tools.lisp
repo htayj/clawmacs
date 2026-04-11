@@ -17,6 +17,10 @@
 (defvar *tool-table* (make-hash-table :test #'equal)
   "Global table mapping tool name strings to tool-definition structs.")
 
+(defvar *active-tool-names* nil
+  "Dynamic tool allowlist for the current agent run.
+NIL means all tools visible to the caller are available.")
+
 (defvar *http-fetch-max-chars* 50000
   "Default maximum characters returned by http_fetch.")
 
@@ -46,13 +50,26 @@ so user-added tools stored in *tool-table* are left intact.")
   "Register a tool in *tool-table*.
 APPROVAL-DISPLAY-FN, if provided, is called with (args) during permission
 approval to generate extra display context (e.g., file diffs)."
-  (setf (gethash name *tool-table*)
-        (make-tool-definition :name name
-                              :description description
-                              :input-schema schema
-                              :permission permission
-                              :execute-fn execute-fn
-                              :approval-display-fn approval-display-fn)))
+  (let ((normalized-name (normalize-tool-name name)))
+    (setf (gethash normalized-name *tool-table*)
+          (make-tool-definition :name normalized-name
+                                :description description
+                                :input-schema schema
+                                :permission permission
+                                :execute-fn execute-fn
+                                :approval-display-fn approval-display-fn))))
+
+(defun tool-allowed-for-active-run-p (name)
+  "Return true when NAME is allowed by *ACTIVE-TOOL-NAMES*."
+  (or (null *active-tool-names*)
+      (member (normalize-tool-name name) *active-tool-names* :test #'string=)))
+
+(defun tool-visible-to-caller-p (definition)
+  "Return true when DEFINITION is visible to *CURRENT-CALLER*."
+  (let ((perm (tool-definition-permission definition)))
+    (or (eq *current-caller* :user)
+        (eq perm :agent-allowed)
+        (eq perm :agent-with-permission))))
 
 (defun tool-definitions-for-api ()
   "Return a vector of clawmacs tool definitions for provider adapters.
@@ -60,14 +77,13 @@ Only includes tools visible to the current *current-caller*."
   (let ((tools nil))
     (maphash (lambda (name def)
                (declare (ignore name))
-               (let ((perm (tool-definition-permission def)))
-                 (when (or (eq *current-caller* :user)
-                           (eq perm :agent-allowed)
-                           (eq perm :agent-with-permission))
-                   (push `((:name . ,(tool-definition-name def))
-                           (:description . ,(tool-definition-description def))
-                           (:input--schema . ,(tool-definition-input-schema def)))
-                         tools))))
+               (when (and (tool-visible-to-caller-p def)
+                          (tool-allowed-for-active-run-p
+                           (tool-definition-name def)))
+                 (push `((:name . ,(tool-definition-name def))
+                         (:description . ,(tool-definition-description def))
+                         (:input--schema . ,(tool-definition-input-schema def)))
+                       tools)))
              *tool-table*)
     (coerce tools 'vector)))
 
@@ -79,16 +95,19 @@ Only includes tools visible to the current *current-caller*."
 (defun execute-tool (name args)
   "Execute tool NAME with ARGS (an alist of parameter values).
 Returns a string result or signals an error."
-  (let ((def (gethash name *tool-table*)))
+  (unless (tool-allowed-for-active-run-p name)
+    (error "Tool ~A is not allowed for this agent" name))
+  (let* ((normalized-name (normalize-tool-name name))
+         (def (gethash normalized-name *tool-table*)))
     (unless def
-      (error "Unknown tool: ~A" name))
+      (error "Unknown tool: ~A" normalized-name))
     (let ((perm (tool-definition-permission def)))
       (ecase perm
         (:agent-allowed t)
         (:agent-with-permission t)  ; caller is responsible for approval check
         (:user-only
          (unless (eq *current-caller* :user)
-           (error "Tool ~A is user-only" name)))))
+           (error "Tool ~A is user-only" normalized-name)))))
     (funcall (tool-definition-execute-fn def) args)))
 
 (defun format-tool-call-sexpr (name args)
