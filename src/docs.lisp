@@ -2812,6 +2812,48 @@ documentation in *extended-docs*."
   :side-effects "Rewrites the project resource after validating the edited source."
   :see-also (sexed-barf-forward sexed-slurp-forward-project-form))
 
+(defdoc sexed-ensure-init-file
+  :category "sexed"
+  :usage "(sexed-ensure-init-file :content \"...\")"
+  :returns "plist — :status :exists or :ok, :project \"config\", :path \"init.lisp\", and byte counts."
+  :side-effects "Ensures the config project exists and creates config/init.lisp when missing."
+  :see-also (sexed-init-outline-to-string project-create-file))
+
+(defdoc sexed-init-outline-to-string
+  :category "sexed"
+  :usage "(sexed-init-outline-to-string &rest OPTIONS)"
+  :returns "string — sexed outline for config/init.lisp."
+  :side-effects "Ensures config/init.lisp exists, then reads it through the config project."
+  :see-also (sexed-project-outline-to-string sexed-init-form-text))
+
+(defdoc sexed-init-form-text
+  :category "sexed"
+  :usage "(sexed-init-form-text SELECTOR)"
+  :returns "string — Exact source text for SELECTOR in config/init.lisp."
+  :side-effects "Ensures config/init.lisp exists, then reads it through the config project."
+  :see-also (sexed-init-outline-to-string sexed-replace-init-form))
+
+(defdoc sexed-replace-init-form
+  :category "sexed"
+  :usage "(sexed-replace-init-form SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :project \"config\", :path \"init.lisp\", :bytes-written, and :balanced."
+  :side-effects "Rewrites config/init.lisp after validating the edited source."
+  :see-also (sexed-init-outline-to-string sexed-stage-replace-init-form project-read-file))
+
+(defdoc sexed-insert-before-init-form
+  :category "sexed"
+  :usage "(sexed-insert-before-init-form SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :project \"config\", :path \"init.lisp\", :bytes-written, and :balanced."
+  :side-effects "Rewrites config/init.lisp after validating the edited source."
+  :see-also (sexed-insert-before-project-form sexed-insert-after-init-form))
+
+(defdoc sexed-insert-after-init-form
+  :category "sexed"
+  :usage "(sexed-insert-after-init-form SELECTOR NEW-TEXT)"
+  :returns "plist — :status, :project \"config\", :path \"init.lisp\", :bytes-written, and :balanced."
+  :side-effects "Rewrites config/init.lisp after validating the edited source."
+  :see-also (sexed-insert-after-project-form sexed-insert-before-init-form))
+
 (defdoc sexed-stage-replace-project-form
   :category "sexed"
   :usage "(sexed-stage-replace-project-form PROJECT PATH SELECTOR NEW-TEXT &key CHANGE-SET)"
@@ -2853,6 +2895,27 @@ documentation in *extended-docs*."
   :returns "plist — Staged edit summary."
   :side-effects "Stages a balanced splice edit in a project change set."
   :see-also (sexed-splice-project-form sexed-stage-wrap-project-form))
+
+(defdoc sexed-stage-replace-init-form
+  :category "sexed"
+  :usage "(sexed-stage-replace-init-form SELECTOR NEW-TEXT &key CHANGE-SET)"
+  :returns "plist — Staged edit summary for config/init.lisp."
+  :side-effects "Stages a balanced replacement in config/init.lisp without writing until apply-change-set."
+  :see-also (sexed-replace-init-form change-set-diff-to-string apply-change-set))
+
+(defdoc sexed-stage-insert-before-init-form
+  :category "sexed"
+  :usage "(sexed-stage-insert-before-init-form SELECTOR NEW-TEXT &key CHANGE-SET)"
+  :returns "plist — Staged edit summary for config/init.lisp."
+  :side-effects "Stages a balanced insertion in config/init.lisp without writing until apply-change-set."
+  :see-also (sexed-insert-before-init-form sexed-stage-insert-after-init-form))
+
+(defdoc sexed-stage-insert-after-init-form
+  :category "sexed"
+  :usage "(sexed-stage-insert-after-init-form SELECTOR NEW-TEXT &key CHANGE-SET)"
+  :returns "plist — Staged edit summary for config/init.lisp."
+  :side-effects "Stages a balanced insertion in config/init.lisp without writing until apply-change-set."
+  :see-also (sexed-insert-after-init-form sexed-stage-insert-before-init-form))
 
 (defdoc sexed-replace-message-form
   :category "sexed"
@@ -3369,17 +3432,112 @@ documentation in *extended-docs*."
 ;;; Category: packages — User-installed package loading
 ;;; ==========================================================================
 
+(defdoc package-channel
+  :category "packages"
+  :usage "Struct — local package channel with name, root, description, and source."
+  :see-also (register-package-channel list-package-channels package-definition))
+
+(defdoc package-definition
+  :category "packages"
+  :usage "Struct — package metadata discovered from a channel manifest."
+  :see-also (list-available-packages find-available-package load-clawmacs-package package-channel))
+
+(defdoc package-prompt-section
+  :category "packages"
+  :usage "Struct — system-prompt section contributed by a loaded package."
+  :see-also (register-package-prompt-section render-package-prompt-sections))
+
+(defdoc *default-package-channel-directory*
+  :category "packages"
+  :usage "Pathname — defaults to packages/channels/default/ inside the clawmacs repo."
+  :see-also (*package-channels* register-package-channel))
+
+(defdoc *package-channels*
+  :category "packages"
+  :usage "List of package-channel structures scanned by reload-package-channels."
+  :see-also (register-package-channel list-package-channels reload-package-channels))
+
+(defdoc *enabled-builtin-packages*
+  :category "packages"
+  :usage "T, NIL, or a list of builtin package names that may autoload."
+  :see-also (load-autoload-packages *default-package-channel-directory*))
+
 (defdoc *packages-directory*
   :category "packages"
   :usage "Pathname — defaults to ~/.clawmacs.d/packages/"
-  :see-also (clawmacs-use-package *user-init-file*))
+  :see-also (clawmacs-use-package *user-init-file* register-package-channel))
+
+(defdoc register-package-channel
+  :category "packages"
+  :usage "(register-package-channel \"NAME\" #P\"/path/to/channel/\" :description \"...\")"
+  :returns "package-channel — the registered channel definition."
+  :side-effects "Adds or replaces a channel in *package-channels* and clears package discovery cache."
+  :see-also (*package-channels* reload-package-channels list-package-channels))
+
+(defdoc list-package-channels
+  :category "packages"
+  :usage "(list-package-channels)"
+  :returns "list — registered package-channel structures."
+  :see-also (register-package-channel reload-package-channels))
+
+(defdoc reload-package-channels
+  :category "packages"
+  :usage "(reload-package-channels)"
+  :returns "list — package-definition structures discovered from registered channels."
+  :side-effects "Reads local channel manifests and updates the package discovery cache."
+  :see-also (list-available-packages find-available-package))
+
+(defdoc list-available-packages
+  :category "packages"
+  :usage "(list-available-packages)"
+  :returns "list — cached package-definition structures, reloading channels when needed."
+  :see-also (reload-package-channels find-available-package load-clawmacs-package))
+
+(defdoc find-available-package
+  :category "packages"
+  :usage "(find-available-package \"sexed\")"
+  :returns "package-definition or NIL."
+  :see-also (list-available-packages load-clawmacs-package))
+
+(defdoc load-clawmacs-package
+  :category "packages"
+  :usage "(load-clawmacs-package \"sexed\")"
+  :returns "package-definition on success, NIL on warning or failure."
+  :side-effects "Loads package dependencies, then loads the package entrypoint into the clawmacs package."
+  :see-also (list-available-packages load-autoload-packages clawmacs-use-package))
+
+(defdoc load-autoload-packages
+  :category "packages"
+  :usage "(load-autoload-packages)"
+  :returns "list — package definitions loaded by autoload."
+  :side-effects "Loads channel packages whose manifests set :autoload T, honoring *enabled-builtin-packages* for builtin packages."
+  :see-also (*enabled-builtin-packages* load-clawmacs-package))
+
+(defdoc register-package-prompt-section
+  :category "packages"
+  :usage "(register-package-prompt-section \"NAME\" \"## Prompt text\" :package \"pkg\")"
+  :returns "package-prompt-section — the registered prompt contribution."
+  :side-effects "Adds or replaces a package prompt section used by build-agent-system-prompt."
+  :see-also (list-package-prompt-sections render-package-prompt-sections))
+
+(defdoc list-package-prompt-sections
+  :category "packages"
+  :usage "(list-package-prompt-sections)"
+  :returns "list — registered package-prompt-section structures in prompt order."
+  :see-also (register-package-prompt-section render-package-prompt-sections))
+
+(defdoc render-package-prompt-sections
+  :category "packages"
+  :usage "(render-package-prompt-sections)"
+  :returns "string or NIL — package prompt sections rendered for the system prompt."
+  :see-also (register-package-prompt-section build-agent-system-prompt))
 
 (defdoc clawmacs-use-package
   :category "packages"
   :usage "(clawmacs-use-package :src-type :git :repo \"https://example.com/user/repo.git\")"
-  :returns "Boolean — non-nil on successful install/load, NIL on warning or failure."
+  :returns "package-definition — non-nil on successful install/load, NIL on warning or failure."
   :side-effects "Creates the package install directory when needed, runs git clone for missing packages, reads manifest.lisp from the package root, and loads the manifest entrypoint."
-  :see-also (*packages-directory* *user-init-file* load-user-init-file))
+  :see-also (*packages-directory* load-clawmacs-package *user-init-file* load-user-init-file))
 
 ;;; ==========================================================================
 ;;; Category: utilities — Small helpers useful from lisp_eval

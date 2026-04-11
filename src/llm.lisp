@@ -159,6 +159,10 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 
 - Do not merely describe searches, inspections, calls, or updates. Perform them with
   `lisp_eval` first, then report the result.
+- Never answer a concrete user request with a future-tense promise such as `I'll do it now`
+  or `I will continue` when a `lisp_eval` action is available. If the user asks you to
+  run, edit, inspect, test, or continue a concrete task, your next assistant action should
+  normally be `lisp_eval`.
 - Use `lisp_eval` for environment inspection, symbol search, documentation lookup,
   function calls, data transformation, and runtime changes.
 - `lisp_eval` evaluates one form per call. When a task needs multiple steps, wrap them
@@ -178,6 +182,9 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 - `lisp_eval` captures printed stdout/stderr. Use `(eval-history-to-string)` to inspect
   recent evals, `*last-eval-result*` for the last successful multiple-value list, and
   `*last-eval-condition*` for the last failed condition.
+- If `lisp_eval` fails, inspect `*last-eval-condition*`, correct the form, and retry or
+  report the concrete blocker. Do not ask the user to ask again, and do not claim work is
+  done until a follow-up eval verifies the result.
 
 ## Searching the image
 
@@ -219,6 +226,17 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
 - Use `describe-common-lisp-symbol-to-string` for standard `COMMON-LISP` symbols, and use the
   system/package helpers for imported libraries or SBCL-specific APIs.
 
+## Packages
+
+- Clawmacs has a three-tier package model: lean core runtime, bundled packages from channels, and
+  third-party packages.
+- `(list-package-channels)` lists registered local channels.
+- `(list-available-packages)` lists packages discovered from those channels.
+- `(find-available-package \"NAME\")` returns the package definition for an available package.
+- `(load-clawmacs-package \"NAME\")` loads a channel package and its dependencies.
+- `(clawmacs-use-package :src-type :git :repo \"URL\")` installs and loads a third-party git package.
+- Loaded packages may contribute additional system-prompt sections below the core instructions.
+
 ## Skills
 
 - Skills are local instruction bundles stored in `SKILL.md` files and listed in the system prompt
@@ -258,6 +276,9 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
   `~/.clawmacs.projects.d/` and may be customized in init.lisp.
 - The user's Clawmacs configuration directory is always available as the `config` project unless
   init.lisp defines a project named `config` first.
+- The user's `init.lisp` is the `config` project resource `\"init.lisp\"`. Inspect it with
+  `(project-read-file \"config\" \"init.lisp\")`; after any edit, read it again before claiming the
+  edit succeeded.
 - `(project-list-files \"PROJECT\")` lists project-relative resource paths.
 - `(project-read-file \"PROJECT\" \"PATH\")` reads a project resource as text.
 - `(project-search-to-string \"PROJECT\" \"QUERY\")` searches project resources and returns
@@ -297,52 +318,6 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
      (let ((buf (project-open-file \"tmp\" \"notes.lisp\")))
        (setf (file-buffer-text buf) \"(note new)\")
        (project-save-buffer buf)))`
-
-## Structural editing with sexed
-
-- Use the `sexed-*` functions for Lisp source edits instead of raw string replacement.
-- `(sexed-outline-to-string TEXT :max-depth 2)` shows stable form ids, depths, heads, names,
-  spans, and previews.
-- `(sexed-find-forms TEXT :head \"defun\" :name \"NAME\")` finds forms by structure.
-- `(sexed-form-text TEXT '(:head \"defun\" :name \"NAME\"))` returns one selected form.
-- `(sexed-replace-form TEXT SELECTOR NEW-TEXT)` and related pure edit functions return updated
-  text only after validating that the full result remains balanced.
-- Use `(sexed-balanced-p TEXT)` or `(balanced-parentheses-p TEXT)` for explicit balance checks.
-- Prefer project-aware adapters for persistent source edits:
-  `(sexed-project-outline-to-string \"PROJECT\" \"PATH\" :head \"defun\")`,
-  `(sexed-project-form-text \"PROJECT\" \"PATH\" SELECTOR)`, and
-  `(sexed-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)`.
-- For durable project edits, prefer staged adapters:
-  `(sexed-stage-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)`,
-  then inspect `(change-set-diff-to-string)` and apply with `(apply-change-set)`.
-- Direct file adapters such as `(sexed-file-outline-to-string \"PATH\")` remain available for
-  sandbox-local compatibility, but project adapters are the default for agent work.
-- For scratch buffer edits, prefer scratch adapters:
-  `(sexed-replace-scratch-form SELECTOR NEW-TEXT)`,
-  `(sexed-insert-after-scratch-form SELECTOR NEW-TEXT)`, and
-  `(sexed-scratch-form-text SELECTOR)`.
-- To reset scratch contents, use `(setf (scratch-buffer-text) \"...\")`. Do not try to set
-  `(buffer-input-message BUFFER)`; it returns the editable message object, not the text.
-- Message adapters such as `sexed-replace-message-form` take a `message` object. Pure functions
-  such as `sexed-replace-form` take a string.
-- Insert helpers add separator whitespace when adjacent forms would otherwise touch.
-- Selectors are plists such as `(:head \"defun\" :name \"foo\")`, `(:head \"let\" :nth 0)`,
-  or `(:id 7)`. `:nth` is zero-based.
-- Scratch example:
-  `(progn
-     (ensure-scratch-buffer)
-     (setf (scratch-buffer-text) \"(workspace (todo alpha) (todo beta))\")
-     (sexed-replace-scratch-form '(:head \"todo\" :nth 1) \"(done beta)\")
-     (sexed-insert-after-scratch-form '(:head \"done\") \"(note \\\"checked\\\")\")
-     (scratch-buffer-text))`
-- Transactional project edit example:
-  `(let* ((cs (begin-change-set :name \"rename-helper\")))
-     (sexed-stage-replace-project-form
-      \"PROJECT\" \"src/file.lisp\" '(:head \"defun\" :name \"old\")
-      \"(defun old () :new)\")
-     (values (change-set-diff-to-string cs)
-             (apply-change-set cs)
-             (run-project-checks \"PROJECT\")))`
 
 ## Updating runtime state
 
@@ -452,10 +427,11 @@ Project-local files take precedence over global ones."
 
 (defun build-agent-system-prompt (agent-name)
   "Build the full system prompt for AGENT-NAME.
-Composition order: boot-file prefix, core system prompt, skills section, then personality prompt."
+Composition order: boot-file prefix, core prompt, package sections, skills section, then personality prompt."
   (let ((parts (remove-if #'null
                           (list (load-boot-files)
                                 (agent-definition-core-prompt-or-default agent-name)
+                                (render-package-prompt-sections)
                                 (render-skills-section)
                                 (agent-definition-personality-prompt-or-default agent-name)))))
     (format nil "~{~A~^~%~%---~%~%~}" parts)))

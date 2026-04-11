@@ -553,6 +553,12 @@
    #:sexed-raise-project-form
    #:sexed-slurp-forward-project-form
    #:sexed-barf-forward-project-form
+   #:sexed-ensure-init-file
+   #:sexed-init-outline-to-string
+   #:sexed-init-form-text
+   #:sexed-replace-init-form
+   #:sexed-insert-before-init-form
+   #:sexed-insert-after-init-form
    #:sexed-update-staged-project-file
    #:sexed-stage-replace-project-form
    #:sexed-stage-delete-project-form
@@ -565,6 +571,9 @@
    #:sexed-stage-raise-project-form
    #:sexed-stage-slurp-forward-project-form
    #:sexed-stage-barf-forward-project-form
+   #:sexed-stage-replace-init-form
+   #:sexed-stage-insert-before-init-form
+   #:sexed-stage-insert-after-init-form
    #:sexed-replace-message-form
    #:sexed-delete-message-form
    #:sexed-insert-before-message-form
@@ -761,7 +770,43 @@
    #:redraw-screen-command
 
    ;; Package loader
+   #:package-channel
+   #:make-package-channel
+   #:package-channel-name
+   #:package-channel-root
+   #:package-channel-description
+   #:package-channel-source
+   #:package-definition
+   #:make-package-definition
+   #:package-definition-name
+   #:package-definition-description
+   #:package-definition-root
+   #:package-definition-entrypoint
+   #:package-definition-channel
+   #:package-definition-source-tier
+   #:package-definition-autoload
+   #:package-definition-dependencies
+   #:package-definition-system-prompt-section
+   #:package-prompt-section
+   #:make-package-prompt-section
+   #:package-prompt-section-name
+   #:package-prompt-section-title
+   #:package-prompt-section-package
+   #:package-prompt-section-body
+   #:*default-package-channel-directory*
+   #:*package-channels*
+   #:*enabled-builtin-packages*
    #:*packages-directory*
+   #:register-package-channel
+   #:list-package-channels
+   #:reload-package-channels
+   #:list-available-packages
+   #:find-available-package
+   #:load-clawmacs-package
+   #:load-autoload-packages
+   #:register-package-prompt-section
+   #:list-package-prompt-sections
+   #:render-package-prompt-sections
    #:clawmacs-use-package
 
    ;; User init

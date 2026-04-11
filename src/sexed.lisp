@@ -1010,6 +1010,64 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
                                (sexed-barf-forward text selector
                                                    :count count))))
 
+(defun sexed-ensure-config-project ()
+  "Ensure the built-in config project is available and return its name."
+  (unless (find-project "config")
+    (load-project-definitions))
+  "config")
+
+(defun sexed-ensure-init-file (&key (content ""))
+  "Ensure config/init.lisp exists, creating it with CONTENT when missing."
+  (let ((project (sexed-ensure-config-project))
+        (path "init.lisp"))
+    (handler-case
+        (let ((text (project-read-file project path)))
+          (list :status :exists
+                :project project
+                :path path
+                :bytes-read (length text)))
+      (error ()
+        (project-create-file project path :content content)))))
+
+(defun sexed-init-outline-to-string (&rest options)
+  "Return a sexed outline for the user's config init.lisp."
+  (sexed-ensure-init-file)
+  (apply #'sexed-project-outline-to-string
+         (sexed-ensure-config-project)
+         "init.lisp"
+         options))
+
+(defun sexed-init-form-text (selector)
+  "Return source text for SELECTOR in the user's config init.lisp."
+  (sexed-ensure-init-file)
+  (sexed-project-form-text (sexed-ensure-config-project)
+                           "init.lisp"
+                           selector))
+
+(defun sexed-replace-init-form (selector new-text)
+  "Replace SELECTOR in the user's config init.lisp with NEW-TEXT."
+  (sexed-ensure-init-file)
+  (sexed-replace-project-form (sexed-ensure-config-project)
+                              "init.lisp"
+                              selector
+                              new-text))
+
+(defun sexed-insert-before-init-form (selector new-text)
+  "Insert NEW-TEXT before SELECTOR in the user's config init.lisp."
+  (sexed-ensure-init-file)
+  (sexed-insert-before-project-form (sexed-ensure-config-project)
+                                    "init.lisp"
+                                    selector
+                                    new-text))
+
+(defun sexed-insert-after-init-form (selector new-text)
+  "Insert NEW-TEXT after SELECTOR in the user's config init.lisp."
+  (sexed-ensure-init-file)
+  (sexed-insert-after-project-form (sexed-ensure-config-project)
+                                   "init.lisp"
+                                   selector
+                                   new-text))
+
 (defun sexed-update-staged-project-file (project path edit-fn
                                           &key change-set)
   "Apply EDIT-FN to PROJECT/PATH text and stage the result in CHANGE-SET."
@@ -1117,6 +1175,33 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
    (lambda (text)
      (sexed-barf-forward text selector :count count))
    :change-set change-set))
+
+(defun sexed-stage-replace-init-form (selector new-text &key change-set)
+  "Stage replacement of SELECTOR in the user's config init.lisp."
+  (sexed-ensure-init-file)
+  (sexed-stage-replace-project-form (sexed-ensure-config-project)
+                                    "init.lisp"
+                                    selector
+                                    new-text
+                                    :change-set change-set))
+
+(defun sexed-stage-insert-before-init-form (selector new-text &key change-set)
+  "Stage insertion of NEW-TEXT before SELECTOR in the user's config init.lisp."
+  (sexed-ensure-init-file)
+  (sexed-stage-insert-before-project-form (sexed-ensure-config-project)
+                                          "init.lisp"
+                                          selector
+                                          new-text
+                                          :change-set change-set))
+
+(defun sexed-stage-insert-after-init-form (selector new-text &key change-set)
+  "Stage insertion of NEW-TEXT after SELECTOR in the user's config init.lisp."
+  (sexed-ensure-init-file)
+  (sexed-stage-insert-after-project-form (sexed-ensure-config-project)
+                                         "init.lisp"
+                                         selector
+                                         new-text
+                                         :change-set change-set))
 
 (defun sexed-update-message (message edit-fn)
   "Apply EDIT-FN to editable MESSAGE text and return a summary plist."

@@ -4108,6 +4108,8 @@ Environment variables:
   ;; may still override it directly or reload after changing the path.
   (load-personality-prompt-file)
   (load-user-init-file)
+  (reload-package-channels)
+  (load-autoload-packages)
   (load-project-definitions)
   (run-hook-list '*startup-hook* *startup-hook*))
 

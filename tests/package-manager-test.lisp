@@ -34,7 +34,27 @@
 
 (defmacro with-packages-directory-override ((path) &body body)
   `(let ((clawmacs::*packages-directory* (uiop:ensure-directory-pathname ,path))
-         (clawmacs::*loaded-packages* (make-hash-table :test #'equal)))
+         (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
+         (clawmacs::*package-channels* nil)
+         (clawmacs::*available-packages* nil)
+         (clawmacs::*package-registry-loaded-p* nil)
+         (clawmacs::*package-prompt-sections* nil))
+     ,@body))
+
+(defun default-package-test-channels ()
+  (list (clawmacs:make-package-channel
+         :name "default"
+         :root clawmacs:*default-package-channel-directory*
+         :description "Bundled Clawmacs packages"
+         :source :builtin)))
+
+(defmacro with-package-state-override ((channels-form) &body body)
+  `(let ((clawmacs::*package-channels* ,channels-form)
+         (clawmacs::*available-packages* nil)
+         (clawmacs::*package-registry-loaded-p* nil)
+         (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
+         (clawmacs::*package-prompt-sections* nil)
+         (clawmacs::*enabled-builtin-packages* '("sexed")))
      ,@body))
 
 (defun write-test-file (path contents)
@@ -89,6 +109,28 @@
     (commit-test-git-repo repo-root)
     repo-root))
 
+(defun make-package-channel-root (&key label package-name manifest entrypoint-content)
+  (let* ((channel-root (uiop:ensure-directory-pathname
+                        (temp-package-test-directory (or label "channel"))))
+         (package-dir (merge-pathnames
+                       (uiop:ensure-directory-pathname
+                        (or package-name "test-package"))
+                       channel-root)))
+    (ensure-directories-exist (merge-pathnames #P".keep" package-dir))
+    (write-test-file
+     (merge-pathnames "manifest.lisp" channel-root)
+     (format nil "(:name ~S :description ~S :packages (~S))"
+             (or label "test-channel")
+             "Test package channel"
+             (or package-name "test-package")))
+    (write-test-file
+     (merge-pathnames "manifest.lisp" package-dir)
+     manifest)
+    (write-test-file
+     (merge-pathnames "entry.lisp" package-dir)
+     entrypoint-content)
+    channel-root))
+
 (test add-hook-and-remove-hook-manage-hook-lists
   "Hook helpers support stable registration and removal from init-facing hook vars."
   (let ((clawmacs::*startup-hook* nil))
@@ -130,6 +172,53 @@
       (is (clawmacs:clawmacs-use-package :src-type :git
                                          :repo (namestring source-repo)))
       (is (= 1 *package-entrypoint-load-count*)))))
+
+(test default-package-channel-discovers-sexed
+  "The bundled default channel advertises the sexed package."
+  (with-package-state-override ((default-package-test-channels))
+    (let* ((definitions (clawmacs:reload-package-channels))
+           (sexed (find "sexed" definitions
+                        :key #'clawmacs:package-definition-name
+                        :test #'string=)))
+      (is (not (null sexed)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier sexed)))
+      (is (clawmacs:package-definition-autoload sexed))
+      (is (probe-file (clawmacs:package-definition-entrypoint sexed))))))
+
+(test load-autoload-packages-registers-sexed-prompt-section
+  "Autoloading bundled packages registers their prompt contributions."
+  (with-package-state-override ((default-package-test-channels))
+    (let ((loaded (clawmacs:load-autoload-packages)))
+      (is (= 1 (length loaded)))
+      (is (not (null (clawmacs:find-available-package "sexed"))))
+      (let ((prompt-section (clawmacs:render-package-prompt-sections)))
+        (is (search "Structural editing with sexed" prompt-section))
+        (is (search "(sexed-outline-to-string TEXT :max-depth 2)" prompt-section))))))
+
+(test package-channel-loads-package-and-manifest-prompt
+  "A local channel can advertise and load a package with a prompt section."
+  (let* ((*package-entrypoint-load-count* 0)
+         (channel-root
+           (make-package-channel-root
+            :label "custom-channel"
+            :package-name "custom-package"
+            :manifest "(:name \"custom-package\"
+ :description \"Custom package\"
+ :entrypoint \"entry.lisp\"
+ :autoload t
+ :system-prompt-section \"CUSTOM PACKAGE PROMPT\")"
+            :entrypoint-content
+            "(incf clawmacs/tests::*package-entrypoint-load-count*)")))
+    (with-package-state-override (nil)
+      (clawmacs:register-package-channel "custom" channel-root
+                                         :description "Custom channel")
+      (let ((definition (clawmacs:find-available-package "custom-package")))
+        (is (not (null definition)))
+        (is (eq :channel (clawmacs:package-definition-source-tier definition)))
+        (is (clawmacs:load-clawmacs-package "custom-package"))
+        (is (= 1 *package-entrypoint-load-count*))
+        (is (search "CUSTOM PACKAGE PROMPT"
+                    (clawmacs:render-package-prompt-sections)))))))
 
 (test clawmacs-use-package-honors-packages-directory-override
   "The install root follows *packages-directory*."
@@ -212,6 +301,38 @@
       (clawmacs:load-user-init-file)
       (is (not (null *package-init-continued*))))))
 
+(test load-user-init-file-can-register-package-channels
+  "init.lisp can register additional local package channels."
+  (let* ((*package-entrypoint-load-count* 0)
+         (channel-root
+           (make-package-channel-root
+            :label "init-channel"
+            :package-name "init-package"
+            :manifest "(:name \"init-package\"
+ :description \"Init package\"
+ :entrypoint \"entry.lisp\"
+ :autoload t)"
+            :entrypoint-content
+            "(incf clawmacs/tests::*package-entrypoint-load-count*)"))
+         (init-root (uiop:ensure-directory-pathname
+                     (temp-package-test-directory "package-channel-init")))
+         (init-path (merge-pathnames "init.lisp" init-root)))
+    (ensure-directories-exist (merge-pathnames #P".keep" init-root))
+    (write-test-file
+     init-path
+     (format nil "(register-package-channel \"init\" #P~S :description \"Init channel\")"
+             (namestring channel-root)))
+    (let ((clawmacs::*user-init-file* init-path)
+          (clawmacs::*inhibit-user-init* nil))
+      (with-package-state-override (nil)
+        (clawmacs:load-user-init-file)
+        (is (not (null (find "init"
+                             (clawmacs:list-package-channels)
+                             :key #'clawmacs:package-channel-name
+                             :test #'string=))))
+        (is (clawmacs:load-autoload-packages))
+        (is (= 1 *package-entrypoint-load-count*))))))
+
 (test load-user-init-file-can-register-agent-definitions
   "User init forms can register programmatic agent definitions."
   (let* ((init-root (uiop:ensure-directory-pathname
@@ -275,6 +396,12 @@
           (clawmacs::*ui-backend* (make-instance 'test-ui-backend))
           (clawmacs::*default-keymap* nil)
           (clawmacs::*debug-log-file* nil)
+          (clawmacs::*package-channels* (default-package-test-channels))
+          (clawmacs::*available-packages* nil)
+          (clawmacs::*package-registry-loaded-p* nil)
+          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
+          (clawmacs::*package-prompt-sections* nil)
+          (clawmacs::*enabled-builtin-packages* '("sexed"))
           (*startup-hook-ran* nil)
           (*initial-buffer-hook-ran* nil)
           (*initial-buffer-hook-binding* nil))

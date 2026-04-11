@@ -147,6 +147,41 @@
     (is (string= "(defun foo () (list 1 2))"
                  (project-read-file "sexed" "source.lisp")))))
 
+(test sexed-init-adapters-edit-config-init-resource
+  "Init-specific adapters route through the config project and verify cleanly."
+  (let* ((dir (sexed-test-directory))
+         (*project-registry* (make-hash-table :test #'equal))
+         (*change-set-registry* (make-hash-table :test #'equal))
+         (*current-change-set* nil)
+         (*change-set-counter* 0)
+         (clawmacs::*user-init-directory* dir)
+         (file (merge-pathnames "init.lisp" dir))
+         (initial "(defvar *prompt-sexed-probe* :before)"))
+    (write-sexed-test-file file initial)
+    (load-project-definitions)
+    (is (search "prompt-sexed-probe"
+                (sexed-init-outline-to-string :max-depth 2)))
+    (let ((result (sexed-replace-init-form
+                   '(:id 0)
+                   "(defvar *prompt-sexed-probe* :after)")))
+      (is (eq :ok (getf result :status)))
+      (is (string= "config" (getf result :project)))
+      (is (string= "init.lisp" (getf result :path))))
+    (is (string= "(defvar *prompt-sexed-probe* :after)"
+                 (project-read-file "config" "init.lisp")))
+    (let ((change-set (begin-change-set :name "init-stage")))
+      (sexed-stage-insert-after-init-form
+       '(:id 0)
+       "(setf *prompt-sexed-probe-edited* t)"
+       :change-set change-set)
+      (is (search "*prompt-sexed-probe-edited*"
+                  (change-set-project-file-text "config" "init.lisp" change-set)))
+      (is-false (search "*prompt-sexed-probe-edited*"
+                        (project-read-file "config" "init.lisp")))
+      (apply-change-set change-set)
+      (is (search "*prompt-sexed-probe-edited*"
+                  (project-read-file "config" "init.lisp"))))))
+
 (test sexed-staged-project-adapters-compose-before-apply
   "Staged project adapters update change-set text without touching files."
   (let* ((dir (sexed-test-directory))
