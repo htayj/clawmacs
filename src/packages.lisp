@@ -540,9 +540,11 @@
    #:sexed-raise-file-form
    #:sexed-slurp-forward-file-form
    #:sexed-barf-forward-file-form
+   #:sexed-source-form-to-string
    #:sexed-project-outline-to-string
    #:sexed-project-form-text
    #:sexed-replace-project-form
+   #:sexed-replace-project-form-with-form
    #:sexed-delete-project-form
    #:sexed-insert-before-project-form
    #:sexed-insert-after-project-form
@@ -561,6 +563,7 @@
    #:sexed-insert-after-init-form
    #:sexed-update-staged-project-file
    #:sexed-stage-replace-project-form
+   #:sexed-stage-replace-project-form-with-form
    #:sexed-stage-delete-project-form
    #:sexed-stage-insert-before-project-form
    #:sexed-stage-insert-after-project-form

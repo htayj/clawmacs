@@ -2737,12 +2737,26 @@ documentation in *extended-docs*."
   :side-effects "Reads the resource through the project abstraction."
   :see-also (sexed-form-text sexed-project-outline-to-string))
 
+(defdoc sexed-source-form-to-string
+  :category "sexed"
+  :usage "(sexed-source-form-to-string '(defun example () \"doc\" :ok))"
+  :returns "string — Readable lowercase Common Lisp source for FORM."
+  :side-effects "None."
+  :see-also (sexed-replace-project-form-with-form sexed-stage-replace-project-form-with-form))
+
 (defdoc sexed-replace-project-form
   :category "sexed"
   :usage "(sexed-replace-project-form PROJECT PATH SELECTOR NEW-TEXT)"
   :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
   :side-effects "Rewrites the project resource after validating the edited source."
   :see-also (sexed-replace-form project-save-file))
+
+(defdoc sexed-replace-project-form-with-form
+  :category "sexed"
+  :usage "(sexed-replace-project-form-with-form PROJECT PATH SELECTOR '(defun example () \"doc\" :ok))"
+  :returns "plist — :status, :project, :path, :bytes-written, and :balanced."
+  :side-effects "Renders FORM as source, then rewrites the project resource after validation."
+  :see-also (sexed-source-form-to-string sexed-replace-project-form sexed-stage-replace-project-form-with-form))
 
 (defdoc sexed-delete-project-form
   :category "sexed"
@@ -2860,6 +2874,13 @@ documentation in *extended-docs*."
   :returns "plist — :status :staged, :change-set, :project, :path, :bytes-staged, and :balanced."
   :side-effects "Stages a balanced replacement in a project change set without writing the project file."
   :see-also (sexed-replace-project-form change-set-diff-to-string apply-change-set))
+
+(defdoc sexed-stage-replace-project-form-with-form
+  :category "sexed"
+  :usage "(sexed-stage-replace-project-form-with-form PROJECT PATH SELECTOR '(defun example () \"doc\" :ok) &key CHANGE-SET)"
+  :returns "plist — :status :staged, :change-set, :project, :path, :bytes-staged, and :balanced."
+  :side-effects "Renders FORM as source, then stages a balanced replacement in a project change set."
+  :see-also (sexed-replace-project-form-with-form change-set-diff-to-string apply-change-set))
 
 (defdoc sexed-stage-delete-project-form
   :category "sexed"

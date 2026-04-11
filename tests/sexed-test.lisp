@@ -147,6 +147,41 @@
     (is (string= "(defun foo () (list 1 2))"
                  (project-read-file "sexed" "source.lisp")))))
 
+(test sexed-project-form-adapters-accept-lisp-forms
+  "Project form adapters can render quoted Lisp forms instead of fragile strings."
+  (let* ((dir (sexed-test-directory))
+         (*project-registry* (make-hash-table :test #'equal))
+         (*change-set-registry* (make-hash-table :test #'equal))
+         (*current-change-set* nil)
+         (*change-set-counter* 0)
+         (file (merge-pathnames "source.lisp" dir)))
+    (write-sexed-test-file file "(defun foo () :old)")
+    (define-project "sexed" :root dir)
+    (let ((result
+            (sexed-replace-project-form-with-form
+             "sexed"
+             "source.lisp"
+             '(:head "defun" :name "foo")
+             '(defun foo ()
+                "quoted doc"
+                (list "value" :ok)))))
+      (is (eq :ok (getf result :status))))
+    (let ((text (project-read-file "sexed" "source.lisp")))
+      (is (search "\"quoted doc\"" text))
+      (is (search "\"value\"" text))
+      (is (sexed-balanced-p text)))
+    (let ((change-set (begin-change-set :name "form-stage")))
+      (sexed-stage-replace-project-form-with-form
+       "sexed"
+       "source.lisp"
+       '(:head "defun" :name "foo")
+       '(defun foo () :staged)
+       :change-set change-set)
+      (is (search ":staged"
+                  (change-set-project-file-text "sexed" "source.lisp" change-set)))
+      (is-false (search ":staged"
+                        (project-read-file "sexed" "source.lisp"))))))
+
 (test sexed-init-adapters-edit-config-init-resource
   "Init-specific adapters route through the config project and verify cleanly."
   (let* ((dir (sexed-test-directory))

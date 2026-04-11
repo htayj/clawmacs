@@ -938,6 +938,20 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
          (summary (project-save-file project path new-text)))
     (append summary (list :balanced t))))
 
+(defun sexed-source-form-to-string (form)
+  "Render FORM as readable lowercase Common Lisp source."
+  (let ((*package* (find-package :clawmacs))
+        (*print-case* :downcase)
+        (*print-pretty* t)
+        (*print-readably* t)
+        (*print-circle* t))
+    (write-to-string form
+                     :escape t
+                     :pretty t
+                     :readably t
+                     :case :downcase
+                     :circle t)))
+
 (defun sexed-project-outline-to-string (project path &rest options)
   "Return a sexed outline for PROJECT/PATH."
   (apply #'sexed-outline-to-string (project-read-file project path) options))
@@ -951,6 +965,13 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   (sexed-update-project-file project path
                              (lambda (text)
                                (sexed-replace-form text selector new-text))))
+
+(defun sexed-replace-project-form-with-form (project path selector form)
+  "Replace SELECTOR in PROJECT/PATH with FORM rendered as Lisp source."
+  (sexed-replace-project-form project
+                              path
+                              selector
+                              (sexed-source-form-to-string form)))
 
 (defun sexed-delete-project-form (project path selector)
   "Delete SELECTOR in PROJECT/PATH and return a summary plist."
@@ -1091,6 +1112,15 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
    (lambda (text)
      (sexed-replace-form text selector new-text))
    :change-set change-set))
+
+(defun sexed-stage-replace-project-form-with-form (project path selector form
+                                                   &key change-set)
+  "Stage replacement of SELECTOR in PROJECT/PATH with FORM rendered as source."
+  (sexed-stage-replace-project-form project
+                                    path
+                                    selector
+                                    (sexed-source-form-to-string form)
+                                    :change-set change-set))
 
 (defun sexed-stage-delete-project-form (project path selector
                                          &key change-set)
