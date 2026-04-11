@@ -122,6 +122,13 @@
             (clawmacs::stream-state-done-p state) t))
     state))
 
+(defun make-failed-stream-state-response (message)
+  (let ((state (clawmacs::make-stream-state)))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (setf (clawmacs::stream-state-error-p state) message
+            (clawmacs::stream-state-done-p state) t))
+    state))
+
 (defun write-codex-auth-json (path payload)
   (ensure-directories-exist path)
   (with-open-file (stream path
@@ -580,6 +587,41 @@ PAIR PERSONALITY"
                      (clawmacs:prompt-run-result-reasoning-blocks result)))
           (is (= 1 (clawmacs:prompt-run-result-iterations result)))
           (is (null (clawmacs:prompt-run-result-tool-events result))))))))
+
+(test run-single-prompt-retries-transient-provider-errors
+  "Prompt mode retries a failed streaming provider request before failing."
+  (let ((path (temp-agent-defaults-path))
+        (request-count 0)
+        (seen-message-counts nil))
+    (with-agent-defaults-path-override (path)
+      (with-function-override (clawmacs::provider-request-streaming
+                               (provider messages callback
+                                         &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                               (declare (ignore provider callback model
+                                                max-tokens tools reasoning-effort
+                                                system-prompt))
+                               (incf request-count)
+                               (push (length messages) seen-message-counts)
+                               (if (= request-count 1)
+                                   (make-failed-stream-state-response
+                                    "end of file on SSL stream")
+                                   (make-completed-stream-state-response
+                                    "end_turn"
+                                    (list (clawmacs::canonical-text-block
+                                           "recovered")))))
+        (clawmacs::init-default-keymap)
+        (clawmacs::init-global-faces)
+        (clawmacs::init-tools)
+        (let ((result (clawmacs:run-single-prompt
+                       "recover from transient provider error"
+                       :provider :zai
+                       :model "glm-5")))
+          (is (= 2 request-count))
+          (is (equal '(1 1) (nreverse seen-message-counts)))
+          (is (string= "recovered"
+                       (clawmacs:prompt-run-result-final-text result)))
+          (is (= 1 (clawmacs:prompt-run-result-iterations result))))))))
 
 (test run-prompt-buffer-can-continue-saved-session
   "Prompt-mode sessions can append turns and preserve provider-visible history."

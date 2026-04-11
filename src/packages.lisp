@@ -863,6 +863,7 @@
    #:run-subagent-async
    #:*prompt-max-tool-iterations*
    #:*prompt-required-write-retry-limit*
+   #:*prompt-provider-retry-limit*
    #:*default-subagent-name*
    #:subagent-handle
    #:subagent-handle-id

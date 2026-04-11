@@ -17,6 +17,9 @@
 (defvar *prompt-required-write-retry-limit* 2
   "Maximum corrective retries when prompt mode requires project writes.")
 
+(defvar *prompt-provider-retry-limit* 2
+  "Maximum provider request retries for transient prompt-mode request failures.")
+
 (defvar *default-subagent-name* "subagent"
   "Default transient agent name used by RUN-SUBAGENT.")
 
@@ -775,17 +778,30 @@ PROMPT is the user turn text used for the returned PROMPT-RUN-RESULT."
                         :iterations iterations
                         :provider final-provider
                         :model final-model
-                        :think-level final-think-level)))
+                        :think-level final-think-level))
+               (request-with-provider-retries ()
+                 (loop :for attempt :from 0
+                       :do (handler-case
+                               (return
+                                 (multiple-value-list
+                                  (prompt-request-once buf)))
+                             (error (condition)
+                               (when (>= attempt *prompt-provider-retry-limit*)
+                                 (fail "Prompt provider request failed: ~A"
+                                       condition))
+                               (file-debug-log
+                                "prompt-provider-retry"
+                                "attempt=~D limit=~D error=~A"
+                                (1+ attempt)
+                                *prompt-provider-retry-limit*
+                                condition))))))
         (loop
           (when (>= iterations max-tool-iterations)
             (fail "Exceeded maximum tool iterations (~D)"
                   max-tool-iterations))
           (incf iterations)
-          (multiple-value-bind (response provider* model* think-level*)
-              (handler-case
-                  (prompt-request-once buf)
-                (error (condition)
-                  (fail "Prompt provider request failed: ~A" condition)))
+          (destructuring-bind (response provider* model* think-level*)
+              (request-with-provider-retries)
             (setf final-provider provider*
                   final-model model*
                   final-think-level think-level*)

@@ -3743,6 +3743,12 @@ documentation in *extended-docs*."
   :returns "integer — Maximum corrective retries after no-write prompt completions."
   :see-also (clawmacs-prompt-main run-single-prompt))
 
+(defdoc *prompt-provider-retry-limit*
+  :category "main"
+  :usage "Integer retry limit used by prompt-mode provider requests."
+  :returns "integer — Maximum retries for transient provider request failures."
+  :see-also (clawmacs-prompt-main run-single-prompt))
+
 (defdoc *default-subagent-name*
   :category "main"
   :usage "String default used when run-subagent is called without :agent-name."
