@@ -446,6 +446,7 @@
    #:*lisp-eval-max-output-chars*
    #:*tool-table*
    #:*active-tool-names*
+   #:*temporary-tool-table*
    #:lisp-eval-record
    #:lisp-eval-record-code
    #:lisp-eval-record-package
@@ -455,6 +456,20 @@
    #:lisp-eval-record-condition
    #:lisp-eval-record-timestamp
    #:tool-definition
+   #:tool-definition-name
+   #:tool-definition-description
+   #:tool-definition-input-schema
+   #:tool-definition-permission
+   #:tool-definition-execute-fn
+   #:tool-definition-approval-display-fn
+   #:subagent-tool
+   #:subagent-tool-name
+   #:subagent-tool-description
+   #:subagent-tool-input-schema
+   #:subagent-tool-permission
+   #:subagent-tool-execute-fn
+   #:subagent-tool-approval-display-fn
+   #:make-subagent-tool
    #:register-tool
    #:execute-tool
    #:tool-requires-permission-p
@@ -773,8 +788,29 @@
    #:clawmacs-prompt-main
    #:run-single-prompt
    #:run-subagent
+   #:run-subagent-async
    #:*prompt-max-tool-iterations*
    #:*default-subagent-name*
+   #:subagent-handle
+   #:subagent-handle-id
+   #:subagent-handle-prompt
+   #:subagent-handle-agent-name
+   #:subagent-handle-status
+   #:subagent-handle-result
+   #:subagent-handle-error
+   #:subagent-handle-started-at
+   #:subagent-handle-finished-at
+   #:subagent-handle-thread
+   #:subagent-handle-cancel-requested-p
+   #:find-subagent
+   #:list-subagents
+   #:subagent-status
+   #:subagent-done-p
+   #:subagent-result
+   #:subagent-error
+   #:subagent-snapshot
+   #:wait-subagent
+   #:cancel-subagent
    #:prompt-run-result
    #:prompt-run-result-prompt
    #:prompt-run-result-final-text

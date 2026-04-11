@@ -50,6 +50,13 @@
   `(let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal)))
      ,@body))
 
+(defmacro with-subagent-registry-override (() &body body)
+  `(let ((clawmacs::*subagent-handle-counter* 0)
+         (clawmacs::*subagent-handles* (make-hash-table :test #'equal))
+         (clawmacs::*subagent-registry-lock*
+           (bt:make-lock "test-subagent-registry")))
+     ,@body))
+
 (defun temp-codex-auth-path ()
   (let ((base (make-pathname :directory (list :absolute "tmp"
                                               (format nil "clawmacs-codex-auth-~A"
@@ -193,6 +200,10 @@
       (is (search "only built-in tool available by default is `lisp_eval`" prompt))
       (is (search "This system can run multiple agents" prompt))
       (is (search "(run-subagent \"PROMPT\" :agent-name \"docs\")" prompt))
+      (is (search "(run-subagent-async \"PROMPT\"" prompt))
+      (is (search "(wait-subagent HANDLE :timeout 120)" prompt))
+      (is (search "(make-subagent-tool :name \"lookup\"" prompt))
+      (is (search "Temporary tools do not mutate the global tool registry" prompt))
       (is (search ":tool-names '(\"doc_lookup\")" prompt))
       (is (search "(prompt-run-used-tool-p RESULT \"doc_lookup\")" prompt))
       (is (search "Do not merely describe searches, inspections, calls, or updates" prompt))
@@ -557,6 +568,115 @@ PAIR PERSONALITY"
              :tool-names '("lisp_eval"))
             (is (equal '("lisp_eval") captured-tool-names))))))))
 
+(test run-subagent-custom-tools-are-temporary-and-executable
+  "Custom subagent tools are exposed only for the run and record tool evidence."
+  (let ((path (temp-agent-defaults-path))
+        (request-count 0)
+        (captured-tool-names nil))
+    (with-agent-defaults-path-override (path)
+      (with-tool-table-restored
+        (clrhash clawmacs::*tool-table*)
+        (clawmacs::init-tools)
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore provider messages callback model
+                                                  max-tokens reasoning-effort
+                                                  system-prompt))
+                                 (incf request-count)
+                                 (when (= request-count 1)
+                                   (setf captured-tool-names
+                                         (mapcar (lambda (tool)
+                                                   (cdr (assoc :name tool)))
+                                                 (coerce tools 'list))))
+                                 (if (= request-count 1)
+                                     (make-completed-stream-state-response
+                                      "tool_use"
+                                      (list
+                                       (clawmacs::canonical-tool-use-block
+                                        "call-custom"
+                                        "custom_echo"
+                                        '((:payload . "ok")))))
+                                     (make-completed-stream-state-response
+                                      "end_turn"
+                                      (list (clawmacs::canonical-text-block
+                                             "custom done")))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (let* ((tool (clawmacs:make-subagent-tool
+                        :name "custom_echo"
+                        :description "Echo a payload."
+                        :input-schema
+                        '((:type . "object")
+                          (:properties . ((:payload . ((:type . "string")))))
+                          (:required . #("payload")))
+                        :execute-fn
+                        (lambda (args)
+                          (format nil "echo=~A" (cdr (assoc :payload args))))))
+                 (result (clawmacs:run-subagent
+                          "Use the custom tool"
+                          :agent-name "custom-tool-agent"
+                          :provider :zai
+                          :model "glm-5"
+                          :custom-tools (list tool)))
+                 (events (clawmacs:prompt-run-result-tool-events result))
+                 (event (first events)))
+            (is (equal '("custom_echo") captured-tool-names))
+            (is (= 2 request-count))
+            (is (string= "custom done"
+                         (clawmacs:prompt-run-result-final-text result)))
+            (is (= 1 (length events)))
+            (is (string= "custom_echo"
+                         (clawmacs:prompt-tool-event-name event)))
+            (is (search "echo=ok"
+                        (clawmacs:prompt-tool-event-result-text event)))
+            (is (null (gethash "custom_echo" clawmacs::*tool-table*)))))))))
+
+(test run-subagent-custom-tool-plists-and-explicit-tool-names
+  "Custom tool plists normalize correctly and explicit tool names can mix scopes."
+  (let ((path (temp-agent-defaults-path))
+        (captured-tool-names nil))
+    (with-agent-defaults-path-override (path)
+      (with-tool-table-restored
+        (clrhash clawmacs::*tool-table*)
+        (clawmacs::init-tools)
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore provider messages callback model
+                                                  max-tokens reasoning-effort
+                                                  system-prompt))
+                                 (setf captured-tool-names
+                                       (sort
+                                        (mapcar (lambda (tool)
+                                                  (cdr (assoc :name tool)))
+                                                (coerce tools 'list))
+                                        #'string<))
+                                 (make-completed-stream-state-response
+                                  "end_turn"
+                                  (list (clawmacs::canonical-text-block
+                                         "done"))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (clawmacs:run-subagent
+           "Use available tools"
+           :agent-name "custom-tool-agent"
+           :provider :zai
+           :model "glm-5"
+           :custom-tools
+           (list (list :name "custom_plist"
+                       :description "Plist-defined tool."
+                       :schema '((:type . "object"))
+                       :execute-fn (lambda (args)
+                                     (declare (ignore args))
+                                     "plist")))
+           :tool-names '("custom_plist" "lisp_eval"))
+          (is (equal '("custom_plist" "lisp_eval")
+                     captured-tool-names))
+          (is (null (gethash "custom_plist" clawmacs::*tool-table*))))))))
+
 (test run-subagent-records-unallowed-tool-call-as-tool-result-error
   "A provider cannot execute a tool outside the subagent allowlist."
   (let ((path (temp-agent-defaults-path))
@@ -631,6 +751,110 @@ PAIR PERSONALITY"
                         (cdr (assoc :content tool-result))))
             (is (string= "handled denial"
                          (clawmacs:prompt-run-result-final-text result)))))))))
+
+(test run-subagent-async-waits-and-registers-result
+  "Async subagents return a handle, register it, and preserve final results."
+  (let ((path (temp-agent-defaults-path)))
+    (with-agent-defaults-path-override (path)
+      (with-subagent-registry-override ()
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore provider messages callback model
+                                                  max-tokens tools
+                                                  reasoning-effort system-prompt))
+                                 (make-completed-stream-state-response
+                                  "end_turn"
+                                  (list (clawmacs::canonical-text-block
+                                         "async answer"))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (clawmacs::init-tools)
+          (let ((handle (clawmacs:run-subagent-async
+                         "Do async work"
+                         :agent-name "async-agent"
+                         :provider :zai
+                         :model "glm-5")))
+            (is (string= "subagent-1"
+                         (clawmacs:subagent-handle-id handle)))
+            (is (eq handle
+                    (clawmacs:find-subagent
+                     (clawmacs:subagent-handle-id handle))))
+            (is (member handle (clawmacs:list-subagents)))
+            (multiple-value-bind (result status returned-handle)
+                (clawmacs:wait-subagent handle :timeout 2)
+              (is (eq :succeeded status))
+              (is (eq handle returned-handle))
+              (is (clawmacs:subagent-done-p handle))
+              (is (string= "async answer"
+                           (clawmacs:prompt-run-result-final-text result)))
+              (let ((snapshot (clawmacs:subagent-snapshot handle)))
+                (is (string= "subagent-1" (getf snapshot :id)))
+                (is (eq :succeeded (getf snapshot :status)))
+                (is (getf snapshot :done-p))
+                (is (eq result (getf snapshot :result)))))))))))
+
+(test run-subagent-async-records-failures
+  "Async provider failures are captured on the handle instead of escaping."
+  (let ((path (temp-agent-defaults-path)))
+    (with-agent-defaults-path-override (path)
+      (with-subagent-registry-override ()
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore provider messages callback model
+                                                  max-tokens tools
+                                                  reasoning-effort system-prompt))
+                                 (error "provider boom"))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (clawmacs::init-tools)
+          (let ((handle (clawmacs:run-subagent-async
+                         "Fail async work"
+                         :provider :zai
+                         :model "glm-5")))
+            (multiple-value-bind (result status)
+                (clawmacs:wait-subagent handle :timeout 2)
+              (is (null result))
+              (is (eq :failed status))
+              (is (search "provider boom"
+                          (clawmacs:subagent-error handle))))))))))
+
+(test cancel-subagent-is-cooperative-and-stable
+  "Cancelled handles stay cancelled even if the background provider returns."
+  (let ((path (temp-agent-defaults-path)))
+    (with-agent-defaults-path-override (path)
+      (with-subagent-registry-override ()
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore provider messages callback model
+                                                  max-tokens tools
+                                                  reasoning-effort system-prompt))
+                                 (sleep 0.1)
+                                 (make-completed-stream-state-response
+                                  "end_turn"
+                                  (list (clawmacs::canonical-text-block
+                                         "late answer"))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (clawmacs::init-tools)
+          (let ((handle (clawmacs:run-subagent-async
+                         "Cancel async work"
+                         :provider :zai
+                         :model "glm-5")))
+            (is (eq :running (clawmacs:subagent-status handle)))
+            (clawmacs:cancel-subagent handle)
+            (multiple-value-bind (result status)
+                (clawmacs:wait-subagent handle :timeout 1)
+              (is (null result))
+              (is (eq :cancelled status)))
+            (sleep 0.2)
+            (is (eq :cancelled (clawmacs:subagent-status handle)))
+            (is (null (clawmacs:subagent-result handle)))))))))
 
 (test prompt-run-tool-verification-helpers
   "Parent agents can check tool usage without parsing raw events."

@@ -1764,11 +1764,30 @@ documentation in *extended-docs*."
   :side-effects "Binding this constrains tool-definitions-for-api and execute-tool for the dynamic extent."
   :see-also (run-subagent register-agent-definition tool-definitions-for-api execute-tool))
 
+(defdoc *temporary-tool-table*
+  :category "tool"
+  :returns "hash-table or nil — Dynamic table of temporary tool definitions for the current prompt or subagent run."
+  :side-effects "Binding this changes effective tool lookup for tool-definitions-for-api, execute-tool, and tool display helpers."
+  :see-also (make-subagent-tool run-subagent run-subagent-async tool-definitions-for-api))
+
 (defdoc tool-definition
   :category "tool"
   :usage "Created by register-tool."
   :returns "Structure — Holds name, description, schema, permission, and execute-fn."
   :see-also (register-tool *tool-table* execute-tool))
+
+(defdoc subagent-tool
+  :category "tool"
+  :usage "Created by make-subagent-tool for temporary subagent tool exposure."
+  :returns "Structure — Holds name, description, schema, permission, execute-fn, and optional approval-display-fn."
+  :see-also (make-subagent-tool run-subagent run-subagent-async))
+
+(defdoc make-subagent-tool
+  :category "tool"
+  :usage "(make-subagent-tool :name \"lookup\" :description \"Look up a value\" :input-schema '((:type . \"object\")) :execute-fn (lambda (args) ...))"
+  :returns "subagent-tool — A temporary tool definition accepted by :custom-tools."
+  :side-effects "Does not mutate *tool-table*. The tool is only active when passed through :custom-tools or manually bound in *temporary-tool-table*."
+  :see-also (run-subagent run-subagent-async *temporary-tool-table* register-tool))
 
 (defdoc register-tool
   :category "tool"
@@ -3407,17 +3426,85 @@ documentation in *extended-docs*."
 
 (defdoc run-single-prompt
   :category "main"
-  :usage "(run-single-prompt PROMPT &key :agent-name :provider :model :think-level :max-tool-iterations :auto-approve-tools-p :tool-names)"
+  :usage "(run-single-prompt PROMPT &key :agent-name :provider :model :think-level :max-tool-iterations :auto-approve-tools-p :tool-names :custom-tools)"
   :returns "prompt-run-result — Final text, routing metadata, iteration count, and captured tool events."
   :side-effects "Creates an in-memory prompt buffer, sends non-streaming provider requests, executes agent-allowed tools, inserts tool_result messages into the prompt buffer, and loops until a final assistant response is returned."
   :see-also (clawmacs-prompt-main run-subagent provider-request execute-tool build-conversation-messages))
 
 (defdoc run-subagent
   :category "main"
-  :usage "(run-subagent PROMPT &key :agent-name :provider :model :think-level :core-prompt :personality-prompt :tool-names :max-tool-iterations :auto-approve-tools-p)"
+  :usage "(run-subagent PROMPT &key :agent-name :provider :model :think-level :core-prompt :personality-prompt :tool-names :custom-tools :max-tool-iterations :auto-approve-tools-p)"
   :returns "prompt-run-result — The delegated agent's final response and tool evidence."
-  :side-effects "Runs a synchronous prompt-mode subagent. Transient prompt overrides are dynamically scoped and do not mutate the agent registry."
-  :see-also (register-agent-definition prompt-run-result prompt-run-used-tool-p *active-tool-names*))
+  :side-effects "Runs a synchronous prompt-mode subagent. Transient prompt overrides and custom tools are dynamically scoped and do not mutate the agent or tool registries."
+  :see-also (run-subagent-async make-subagent-tool register-agent-definition prompt-run-result prompt-run-used-tool-p *active-tool-names*))
+
+(defdoc run-subagent-async
+  :category "main"
+  :usage "(run-subagent-async PROMPT &key :agent-name :provider :model :think-level :core-prompt :personality-prompt :tool-names :custom-tools :max-tool-iterations :auto-approve-tools-p)"
+  :returns "subagent-handle — A process-local handle for polling, waiting, cancellation, and result inspection."
+  :side-effects "Starts a background thread and stores the returned handle in the process-local subagent registry."
+  :see-also (wait-subagent cancel-subagent subagent-snapshot run-subagent make-subagent-tool))
+
+(defdoc subagent-handle
+  :category "main"
+  :usage "Returned by run-subagent-async."
+  :returns "Structure — Background subagent id, prompt, agent name, status, result, error text, timestamps, thread, and cancellation flag."
+  :see-also (run-subagent-async subagent-status subagent-snapshot wait-subagent))
+
+(defdoc find-subagent
+  :category "main"
+  :usage "(find-subagent HANDLE-OR-ID)"
+  :returns "subagent-handle or nil — Looks up a process-local async subagent handle."
+  :see-also (list-subagents run-subagent-async))
+
+(defdoc list-subagents
+  :category "main"
+  :usage "(list-subagents)"
+  :returns "list of subagent-handle — Process-local async subagents sorted by start time."
+  :see-also (find-subagent run-subagent-async))
+
+(defdoc subagent-status
+  :category "main"
+  :usage "(subagent-status HANDLE)"
+  :returns "keyword — :RUNNING, :SUCCEEDED, :FAILED, or :CANCELLED."
+  :see-also (subagent-done-p subagent-result subagent-error subagent-snapshot))
+
+(defdoc subagent-done-p
+  :category "main"
+  :usage "(subagent-done-p HANDLE)"
+  :returns "boolean — True when the subagent has reached a terminal status."
+  :see-also (subagent-status wait-subagent))
+
+(defdoc subagent-result
+  :category "main"
+  :usage "(subagent-result HANDLE)"
+  :returns "prompt-run-result or nil — Available after :SUCCEEDED."
+  :see-also (wait-subagent prompt-run-result subagent-error))
+
+(defdoc subagent-error
+  :category "main"
+  :usage "(subagent-error HANDLE)"
+  :returns "string or nil — Error text available after :FAILED."
+  :see-also (subagent-status subagent-result))
+
+(defdoc subagent-snapshot
+  :category "main"
+  :usage "(subagent-snapshot HANDLE)"
+  :returns "plist — Immutable snapshot of id, prompt, agent-name, status, done-p, result, error, timestamps, and cancellation flag."
+  :see-also (subagent-status subagent-result subagent-error))
+
+(defdoc wait-subagent
+  :category "main"
+  :usage "(wait-subagent HANDLE :timeout 120)"
+  :returns "values — RESULT, STATUS, HANDLE. On timeout returns NIL, :TIMEOUT, HANDLE."
+  :see-also (run-subagent-async subagent-status cancel-subagent))
+
+(defdoc cancel-subagent
+  :category "main"
+  :usage "(cancel-subagent HANDLE)"
+  :returns "subagent-handle — The cancelled handle."
+  :side-effects "Marks the subagent cancelled cooperatively. The provider call may still finish in the background, but late completion does not overwrite cancelled status."
+  :see-also (run-subagent-async wait-subagent subagent-status))
 
 (defdoc prompt-run-tool-names
   :category "main"

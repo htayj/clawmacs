@@ -14,12 +14,28 @@
   ;; Optional function (args) -> string-or-nil for extra approval context
   (approval-display-fn nil     :type (or null function)))
 
+(defstruct (subagent-tool
+            (:constructor %make-subagent-tool
+                (&key name description input-schema permission execute-fn
+                      approval-display-fn)))
+  "Temporary tool definition passed to a subagent run."
+  (name        ""              :type string   :read-only t)
+  (description ""              :type string   :read-only t)
+  (input-schema nil            :type list     :read-only t)
+  (permission  :agent-allowed  :type keyword  :read-only t)
+  (execute-fn  nil             :type (or null function))
+  (approval-display-fn nil     :type (or null function)))
+
 (defvar *tool-table* (make-hash-table :test #'equal)
   "Global table mapping tool name strings to tool-definition structs.")
 
 (defvar *active-tool-names* nil
   "Dynamic tool allowlist for the current agent run.
 NIL means all tools visible to the caller are available.")
+
+(defvar *temporary-tool-table* nil
+  "Dynamic table mapping tool names to temporary tool definitions.
+Temporary tools override same-named global tools for the dynamic extent.")
 
 (defvar *http-fetch-max-chars* 50000
   "Default maximum characters returned by http_fetch.")
@@ -44,6 +60,108 @@ NIL means all tools visible to the caller are available.")
   "Names reserved for clawmacs built-in tools.
 INIT-TOOLS removes these entries before re-registering the default built-ins,
 so user-added tools stored in *tool-table* are left intact.")
+
+(defun make-subagent-tool (&key name description input-schema
+                             ((:schema schema-arg) nil)
+                             (permission :agent-allowed)
+                             execute-fn
+                             ((:function function-arg) nil)
+                             approval-display-fn)
+  "Build a temporary tool definition suitable for RUN-SUBAGENT.
+SCHEMA is accepted as an alias for INPUT-SCHEMA.  EXECUTE-FN or FUNCTION must
+be a function accepting one argument: the decoded tool input alist."
+  (let ((fn (or execute-fn function-arg))
+        (effective-schema (or input-schema schema-arg)))
+    (unless name
+      (error "Temporary subagent tools require :name"))
+    (unless description
+      (error "Temporary subagent tools require :description"))
+    (unless effective-schema
+      (error "Temporary subagent tools require :input-schema or :schema"))
+    (unless fn
+      (error "Temporary subagent tools require :execute-fn or :function"))
+    (%make-subagent-tool :name (normalize-tool-name name)
+                         :description description
+                         :input-schema effective-schema
+                         :permission permission
+                         :execute-fn fn
+                         :approval-display-fn approval-display-fn)))
+
+(defun subagent-tool->tool-definition (tool)
+  "Convert temporary TOOL into a TOOL-DEFINITION."
+  (make-tool-definition :name (subagent-tool-name tool)
+                        :description (subagent-tool-description tool)
+                        :input-schema (subagent-tool-input-schema tool)
+                        :permission (subagent-tool-permission tool)
+                        :execute-fn (subagent-tool-execute-fn tool)
+                        :approval-display-fn
+                        (subagent-tool-approval-display-fn tool)))
+
+(defun plist-subagent-tool-p (tool)
+  "Return true when TOOL appears to be a plist temporary tool definition."
+  (and (listp tool)
+       (keywordp (first tool))
+       (or (getf tool :name)
+           (getf tool :description)
+           (getf tool :input-schema)
+           (getf tool :schema)
+           (getf tool :execute-fn)
+           (getf tool :function))))
+
+(defun normalize-subagent-tool (tool)
+  "Normalize TOOL into a TOOL-DEFINITION.
+TOOL may be a SUBAGENT-TOOL, a TOOL-DEFINITION, or a plist accepted by
+MAKE-SUBAGENT-TOOL."
+  (cond
+    ((tool-definition-p tool)
+     (make-tool-definition :name (normalize-tool-name
+                                  (tool-definition-name tool))
+                           :description (tool-definition-description tool)
+                           :input-schema (tool-definition-input-schema tool)
+                           :permission (tool-definition-permission tool)
+                           :execute-fn (tool-definition-execute-fn tool)
+                           :approval-display-fn
+                           (tool-definition-approval-display-fn tool)))
+    ((subagent-tool-p tool)
+     (subagent-tool->tool-definition tool))
+    ((plist-subagent-tool-p tool)
+     (subagent-tool->tool-definition
+      (apply #'make-subagent-tool tool)))
+    (t
+     (error "Unsupported temporary subagent tool definition: ~S" tool))))
+
+(defun normalize-subagent-tools (tools)
+  "Return a list of normalized temporary tool definitions."
+  (mapcar #'normalize-subagent-tool tools))
+
+(defun make-temporary-tool-table (tools)
+  "Build a temporary tool table from normalized or plist TOOLS."
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (definition (normalize-subagent-tools tools) table)
+      (setf (gethash (tool-definition-name definition) table)
+            definition))))
+
+(defun effective-tool-definition (name)
+  "Return the effective tool definition for NAME.
+Temporary dynamic tools override process-global registered tools."
+  (let ((normalized-name (normalize-tool-name name)))
+    (or (and *temporary-tool-table*
+             (gethash normalized-name *temporary-tool-table*))
+        (gethash normalized-name *tool-table*))))
+
+(defun map-effective-tool-definitions (function)
+  "Call FUNCTION with every effective tool definition.
+Temporary tools are visited first and same-named global tools are suppressed."
+  (let ((seen (make-hash-table :test #'equal)))
+    (when *temporary-tool-table*
+      (maphash (lambda (name definition)
+                 (setf (gethash name seen) t)
+                 (funcall function name definition))
+               *temporary-tool-table*))
+    (maphash (lambda (name definition)
+               (unless (gethash name seen)
+                 (funcall function name definition)))
+             *tool-table*)))
 
 (defun register-tool (name description schema permission execute-fn
                       &key approval-display-fn)
@@ -75,21 +193,21 @@ approval to generate extra display context (e.g., file diffs)."
   "Return a vector of clawmacs tool definitions for provider adapters.
 Only includes tools visible to the current *current-caller*."
   (let ((tools nil))
-    (maphash (lambda (name def)
-               (declare (ignore name))
-               (when (and (tool-visible-to-caller-p def)
-                          (tool-allowed-for-active-run-p
-                           (tool-definition-name def)))
-                 (push `((:name . ,(tool-definition-name def))
-                         (:description . ,(tool-definition-description def))
-                         (:input--schema . ,(tool-definition-input-schema def)))
-                       tools)))
-             *tool-table*)
+    (map-effective-tool-definitions
+     (lambda (name def)
+       (declare (ignore name))
+       (when (and (tool-visible-to-caller-p def)
+                  (tool-allowed-for-active-run-p
+                   (tool-definition-name def)))
+         (push `((:name . ,(tool-definition-name def))
+                 (:description . ,(tool-definition-description def))
+                 (:input--schema . ,(tool-definition-input-schema def)))
+               tools))))
     (coerce tools 'vector)))
 
 (defun tool-requires-permission-p (name)
   "Return T if tool NAME requires user permission."
-  (let ((def (gethash name *tool-table*)))
+  (let ((def (effective-tool-definition name)))
     (and def (eq :agent-with-permission (tool-definition-permission def)))))
 
 (defun execute-tool (name args)
@@ -98,7 +216,7 @@ Returns a string result or signals an error."
   (unless (tool-allowed-for-active-run-p name)
     (error "Tool ~A is not allowed for this agent" name))
   (let* ((normalized-name (normalize-tool-name name))
-         (def (gethash normalized-name *tool-table*)))
+         (def (effective-tool-definition normalized-name)))
     (unless def
       (error "Unknown tool: ~A" normalized-name))
     (let ((perm (tool-definition-permission def)))
@@ -124,7 +242,7 @@ E.g., (lisp_eval :code \"(list-functions)\")"
   "Format a tool call with expanded parameter descriptions.
 E.g., (lisp_eval
         :code \"(list-functions)\")  ; The Common Lisp code to evaluate"
-  (let ((def (gethash name *tool-table*))
+  (let ((def (effective-tool-definition name))
         (schema-props nil))
     ;; Extract property descriptions from schema
     (when def
@@ -191,7 +309,7 @@ just enough to show what changes."
 (defun tool-approval-extra-display (name args)
   "Get extra display text for a tool's approval prompt.
 Returns a string or nil. Calls the tool's approval-display-fn if set."
-  (let ((def (gethash name *tool-table*)))
+  (let ((def (effective-tool-definition name)))
     (when (and def (tool-definition-approval-display-fn def))
       (handler-case
           (funcall (tool-definition-approval-display-fn def) args)

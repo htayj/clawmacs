@@ -143,10 +143,17 @@ form inside the running clawmacs image. Use `lisp_eval` for concrete work.
   overrides such as `:provider`, `:model`, `:think-level`, `:personality-prompt`, or `:tool-names`.
 - Use a fully custom transient agent with `:core-prompt` and `:personality-prompt`; this does not
   permanently register a new agent definition.
+- Use `(run-subagent-async \"PROMPT\" ...)` for concurrent background delegation. It returns a
+  handle that you can inspect with `(subagent-snapshot HANDLE)`, poll with `(subagent-status HANDLE)`,
+  wait on with `(wait-subagent HANDLE :timeout 120)`, or cancel with `(cancel-subagent HANDLE)`.
 - Use `:tool-names '(\"doc_lookup\")` to constrain a subagent to specific registered tools instead
   of the default tool set. Parent agents can inspect `(prompt-run-result-tool-events RESULT)` or
   use `(prompt-run-used-tool-p RESULT \"doc_lookup\")`, `(prompt-run-tool-count RESULT)`, and
   `(prompt-run-tool-names RESULT)` to verify what happened.
+- Use `(make-subagent-tool :name \"lookup\" :description \"...\" :input-schema '((:type . \"object\") ...)
+  :execute-fn (lambda (args) ...))` with `:custom-tools` to expose temporary Lisp functions to one
+  subagent run. Temporary tools do not mutate the global tool registry. If `:custom-tools` is supplied
+  without `:tool-names`, only those temporary tools are exposed to that subagent.
 
 ## Default workflow
 
