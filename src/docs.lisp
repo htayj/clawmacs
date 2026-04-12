@@ -1945,14 +1945,14 @@ documentation in *extended-docs*."
 
 (defdoc execute-tool
   :category "tool"
-  :usage "(execute-tool NAME:string ARGS:alist) — (execute-tool \"lisp_eval\" '((:code . \"(+ 1 2)\")))"
+  :usage "(execute-tool NAME:string ARGS:alist) — (execute-tool \"eval\" '((:code . \"(+ 1 2)\")))"
   :returns "string — The tool execution result as a JSON string."
   :side-effects "Executes the tool's function. Side effects depend on the registered tool implementation."
   :see-also (register-tool tool-requires-permission-p *tool-table*))
 
 (defdoc tool-requires-permission-p
   :category "tool"
-  :usage "(tool-requires-permission-p NAME:string) — (tool-requires-permission-p \"lisp_eval\")"
+  :usage "(tool-requires-permission-p NAME:string) — (tool-requires-permission-p \"eval\")"
   :returns "boolean — T if the tool requires user approval."
   :see-also (execute-tool register-tool))
 
@@ -1965,7 +1965,7 @@ documentation in *extended-docs*."
 (defdoc format-tool-call-sexpr
   :category "tool"
   :usage "(format-tool-call-sexpr NAME:string ARGS:alist)"
-  :returns "string — S-expression formatted tool call. \"(lisp_eval :code \\\"(+ 1 2)\\\")\""
+  :returns "string — S-expression formatted tool call. \"(eval :code \\\"(+ 1 2)\\\")\""
   :see-also (format-tool-call-expanded tool-approval-extra-display))
 
 (defdoc format-tool-call-expanded
@@ -1984,7 +1984,7 @@ documentation in *extended-docs*."
   :category "tool"
   :usage "(init-tools) — Called once at startup."
   :returns "nil"
-  :side-effects "Removes previously registered built-in tool entries and re-registers lisp_eval, project resource tools, and doc_lookup."
+  :side-effects "Removes previously registered built-in tool entries and re-registers read, write, and eval."
   :see-also (*tool-table* register-tool))
 
 ;;; ==========================================================================
@@ -3274,7 +3274,7 @@ documentation in *extended-docs*."
 
 (defdoc tool-definition
   :category "type"
-  :usage "(make-tool-definition :name \"lisp_eval\" :description \"Evaluate Lisp\" ...)"
+  :usage "(make-tool-definition :name \"eval\" :description \"Evaluate Lisp\" ...)"
   :see-also (register-tool execute-tool tool-definitions-for-api *tool-table*))
 
 (defdoc stream-state

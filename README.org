@@ -9,7 +9,7 @@ Macros for your agent!
 
 Anyone who has used Emacs before knows the benefit of a tight feedback loop. Write lisp code, eval it, instant results. Clawmacs brings that same philosophy to agentic programming: the tighter the feedback loop between you and the agent, and the more the agent can introspect its own environment, the more powerful the collaboration becomes.
 
-Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment with full access to the running Lisp image. By default the agent uses explicit project and documentation tools for routine work, with =lisp_eval= available for structured editing, function calls, and runtime inspection inside the live Common Lisp process.
+Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment with access to project resources and the running Lisp image. By default the agent has only =read=, =write=, and =eval= tools; =eval= is reserved for tests/checks or live Clawmacs state when the narrower tools are insufficient.
 
 #+ATTR_ORG: :width 800
 [[file:docs/img/genera-style.png]]
@@ -19,9 +19,9 @@ Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in
 Clawmacs now has a few stable concepts that describe how the interface and
 agent workflow fit together:
 
-- *Image-native agent loop* --- the agent works inside the live Common Lisp
-  image through project/docs tools plus =lisp_eval=, so inspect/edit/verify
-  happens in one runtime.
+- *Image-native agent loop* --- the agent uses narrow =read= and =write=
+  tools for normal work, with =eval= available only when live Lisp state or
+  checks require it.
 - *Recency-biased fuzzy selectors* --- minibuffer and overlay selection UIs
   share the same paradigm: fuzzy matching plus recency ordering, with the
   current item de-prioritized when reselection is unlikely.
@@ -59,22 +59,19 @@ The default built-in agent tool surface is intentionally narrow:
 
 | Tool         | Permission             | Description                          |
 |--------------+------------------------+--------------------------------------|
-| =lisp_eval=  | agent-allowed          | Evaluate Common Lisp in the running image |
-| =project_list_files= | agent-allowed | List project resource paths |
-| =project_read_file=  | agent-allowed | Read a full project resource |
-| =project_read_lines= | agent-allowed | Read focused project resource lines |
-| =project_search=     | agent-allowed | Search project resources |
-| =project_write_file= | agent-allowed | Save a full project resource |
-| =doc_lookup=         | agent-allowed | Look up Clawmacs, Common Lisp, and system docs |
+| =read=  | agent-allowed | List/read/search project resources and look up local docs |
+| =write= | agent-allowed | Save a full project resource |
+| =eval=  | agent-allowed | Evaluate Common Lisp only for checks or live Clawmacs state |
 
-By default, agents use the project and documentation tools for routine
-read/write/search/docs work, and use =lisp_eval= as the escape hatch for
-structured edits, custom function calls, runtime inspection, and operations not
-covered by narrower tools. Custom tools may still be registered explicitly.
+Agents should use =read= for inspection and documentation, =write= for durable
+project edits, and =eval= only when running tests/checks or interacting with
+live Clawmacs state is necessary. Additional capability should be added as
+dedicated tools only after prompt testing shows a real need.
 
-The =lisp_eval= tool is particularly powerful: the agent can introspect clawmacs itself, query buffer state, evaluate expressions, and modify the running system. Standard Common Lisp reference lookup is available through a vendored offline snapshot of =cl-community-spec=, and imported library discovery is handled locally through ASDF metadata, package exports, docstrings, and source/doc search helpers.
+The =eval= tool is powerful: it can evaluate expressions and modify the running
+system. It should not be used for ordinary file reads/writes/searches.
 
-=lisp_eval= captures printed stdout/stderr as well as multiple return values.
+=eval= captures printed stdout/stderr as well as multiple return values.
 Recent calls are available with =(eval-history-to-string)=, and the latest
 success/error are exposed through =*last-eval-result*= and
 =*last-eval-condition*=.
@@ -109,9 +106,9 @@ mention and =C-c S= to toggle skills.
 (skill-search-to-string "common-lisp" "hash table")
 #+end_src
 
-Skills do not add new agent tools or widen permissions. Agents inspect skill
-instructions and resources through =lisp_eval=, and scripts/assets are local
-resources unless other Clawmacs APIs explicitly execute or use them.
+Skills do not add new agent tools or widen permissions. Skill instructions are
+injected into the conversation when mentioned or selected, and scripts/assets
+are local resources unless other Clawmacs APIs explicitly execute or use them.
 
 ** Project Resources
 
@@ -338,7 +335,7 @@ the same Guix container and prints only the final assistant response to stdout
 by default:
 
 #+begin_src sh
-./prompt.sh "Use lisp_eval to inspect the current default provider."
+./prompt.sh "Use read to summarize README.org."
 ./prompt.sh --show-tools --show-metadata "List the exported clawmacs functions."
 ./prompt.sh --json --provider openai-codex --model gpt-5.3-codex "Summarize this repo."
 ./prompt.sh --clean-build "Run this prompt after clearing cached Lisp build artifacts."
@@ -398,7 +395,7 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
  :provider :openai-codex
  :model "gpt-5.4"
  :think-level "high"
- :core-prompt "Use lisp_eval for concrete work. Inspect first, then modify."
+ :core-prompt "Use read and write for concrete work. Use eval only for checks."
  :personality-prompt "You are a concise writing partner focused on structure and tone.")
 
 ;; Register additional skill roots or programmatic skills

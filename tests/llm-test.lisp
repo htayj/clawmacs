@@ -182,16 +182,16 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("doc_lookup" "lisp_eval" "project_list_files"
-                   "project_read_file" "project_read_lines" "project_search"
-                   "project_write_file")
-                 tool-names))
+      (is (equal '("eval" "read" "write") tool-names))
       (is (null (gethash "http_fetch" clawmacs::*tool-table*)))
       (is (null (gethash "file_read" clawmacs::*tool-table*)))
       (is (null (gethash "file_write" clawmacs::*tool-table*)))
       (is (null (gethash "file_edit" clawmacs::*tool-table*)))
       (is (null (gethash "shell_exec" clawmacs::*tool-table*)))
-      (is-false (clawmacs::tool-requires-permission-p "lisp_eval")))))
+      (is (null (gethash "lisp_eval" clawmacs::*tool-table*)))
+      (is (null (gethash "project_read_file" clawmacs::*tool-table*)))
+      (is (null (gethash "doc_lookup" clawmacs::*tool-table*)))
+      (is-false (clawmacs::tool-requires-permission-p "eval")))))
 
 (test init-tools-preserves-custom-tools
   "init-tools resets built-ins without wiping user-added tools."
@@ -211,16 +211,12 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("custom_probe" "doc_lookup" "lisp_eval"
-                   "project_list_files" "project_read_file"
-                   "project_read_lines" "project_search"
-                   "project_write_file")
-                 tool-names))
+      (is (equal '("custom_probe" "eval" "read" "write") tool-names))
       (is (not (null (gethash "custom_probe" clawmacs::*tool-table*))))
-      (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*)))))))
+      (is (not (null (gethash "eval" clawmacs::*tool-table*)))))))
 
-(test default-project-and-doc-tools-work
-  "Default non-eval tools cover routine project IO and docs lookup."
+(test default-read-write-and-eval-tools-work
+  "Default tools cover routine project IO, docs lookup, and focused eval."
   (let* ((root (make-pathname :directory
                               (list :absolute "tmp"
                                     (format nil "clawmacs-default-tools-~A"
@@ -233,38 +229,39 @@
     (with-tool-table-restored
       (clawmacs::init-tools)
       (clawmacs:execute-tool
-       "project_write_file"
+       "write"
        '((:project . "tool-probe")
          (:path . "notes.lisp")
          (:content . "(defun probe () :ok)")))
       (let* ((read-json (clawmacs:execute-tool
-                         "project_read_file"
-                         '((:project . "tool-probe")
+                         "read"
+                         '((:mode . "file")
+                           (:project . "tool-probe")
                            (:path . "notes.lisp"))))
              (read (clawmacs::api-json-decode read-json))
              (search-json (clawmacs:execute-tool
-                           "project_search"
-                           '((:project . "tool-probe")
+                           "read"
+                           '((:mode . "search")
+                             (:project . "tool-probe")
                              (:query . "probe"))))
              (search (clawmacs::api-json-decode search-json))
              (doc-json (clawmacs:execute-tool
-                        "doc_lookup"
-                        '((:query . "project-read-file")
-                          (:kind . "function"))))
+                        "read"
+                        '((:mode . "doc")
+                          (:query . "project-read-file")
+                          (:doc--kind . "function"))))
              (doc (clawmacs::api-json-decode doc-json))
-             (tool-doc-json (clawmacs:execute-tool
-                             "doc_lookup"
-                             '((:query . "project_write_file")
-                               (:kind . "function"))))
-             (tool-doc (clawmacs::api-json-decode tool-doc-json)))
+             (eval-json (clawmacs:execute-tool
+                         "eval"
+                         '((:code . "(+ 1 2)"))))
+             (eval (clawmacs::api-json-decode eval-json)))
         (is (search "probe" (cdr (assoc :content read))))
         (is (search "notes.lisp" (cdr (assoc :content search))))
         (is (search "project-read-file" (cdr (assoc :content doc))))
-        (is (search "Tool: project_write_file"
-                    (cdr (assoc :content tool-doc))))))))
+        (is (search "3" (cdr (assoc :result eval))))))))
 
-(test build-system-prompt-emphasizes-lisp-eval-workflow
-  "The default system prompt teaches REPL-first search, docs, and calling guidance."
+(test build-system-prompt-emphasizes-simple-tool-workflow
+  "The default system prompt keeps the default tool policy small."
   (with-function-override (clawmacs::load-boot-files ()
                             nil)
     (with-package-state-override ((default-package-test-channels))
@@ -272,71 +269,17 @@
       (is-false (search "## Structural editing with sexed"
                         clawmacs::*default-core-system-prompt*))
       (let ((prompt (clawmacs::build-system-prompt)))
-      (is (search "Default built-in tools are `lisp_eval`" prompt))
-      (is (search "`project_read_lines`" prompt))
-      (is (search "`project_write_file`" prompt))
-      (is (search "`doc_lookup`" prompt))
-      (is (search "This system can run multiple agents" prompt))
-      (is (search "(run-subagent \"PROMPT\" :agent-name \"docs\")" prompt))
-      (is (search "(run-subagent-async \"PROMPT\"" prompt))
-      (is (search "(wait-subagent HANDLE :timeout 120)" prompt))
-      (is (search "(make-subagent-tool :name \"lookup\"" prompt))
-      (is (search "Temporary tools do not mutate the global tool registry" prompt))
-      (is (search ":tool-names '(\"doc_lookup\")" prompt))
-      (is (search "(prompt-run-used-tool-p RESULT \"doc_lookup\")" prompt))
-      (is (search "Do not merely describe searches, inspections, calls, or updates" prompt))
-      (is (search "Never answer a concrete user request with a future-tense promise" prompt))
-      (is (search "your next assistant action should" prompt))
-      (is (search "normally be a tool call" prompt))
-      (is (search "If `lisp_eval` fails, inspect `*last-eval-condition*`" prompt))
-      (is (search "do not claim work is" prompt))
-      (is (search "done until a follow-up eval verifies the result" prompt))
-      (is (search "Never guess Clawmacs symbol names" prompt))
-      (is (search "(apropos-list \"SUBSTRING\" :clawmacs)" prompt))
-      (is (search "(multiple-value-list (find-symbol \"NAME\" :clawmacs))" prompt))
-      (is (search "cl-community-spec" prompt))
-      (is (search "(describe-common-lisp-symbol-to-string 'SYMBOL)" prompt))
-      (is (search "(describe-system-to-string \"SYSTEM\")" prompt))
-      (is (search "(search-system-docs \"SYSTEM\" \"QUERY\")" prompt))
-      (is (search "(describe-function-to-string 'SYMBOL)" prompt))
-      (is (search "(documentation 'SYMBOL 'function)" prompt))
-      (is (search "Use `funcall` or `apply` when the callee or argument list is dynamic." prompt))
-      (is (search "(list-package-channels)" prompt))
-      (is (search "(list-available-packages)" prompt))
-      (is (search "(load-clawmacs-package \"NAME\")" prompt))
-      (is (search "Prefer batching related inspection/edit/check work" prompt))
-      (is (search "each binding must be `(variable value-form)`" prompt))
-      (is (search "(count-occurrences \"needle\" TEXT)" prompt))
-      (is (search "Common Lisp strings do not treat `\\n` as a newline escape" prompt))
-      (is (search "(eval-history-to-string)" prompt))
-      (is (search "Use project resource functions for persistent workspace changes" prompt))
-      (is (search "(project-list-files \"PROJECT\")" prompt))
-      (is (search "(project-save-file \"PROJECT\" \"PATH\" TEXT)" prompt))
-      (is (search "Do not guess project file paths" prompt))
-      (is (search "After any project edit, immediately read back each edited resource" prompt))
-      (is (search "read back `todo.org` and verify that exact item is" prompt))
-      (is (search "marked `DONE` before claiming completion" prompt))
-      (is (search "Use `create-project` for temporary roots" prompt))
-      (is (search "does not accept `:persist`" prompt))
-      (is (search "Do not use" prompt))
-      (is (search "`project-list-files` results as buffers" prompt))
-      (is (search "Project file-buffer example" prompt))
-      (is (search "(begin-change-set :name \"short-name\")" prompt))
-      (is (search "(change-set-diff-to-string)" prompt))
-      (is (search "(run-project-checks \"PROJECT\")" prompt))
-      (is (search "(project-find-definitions-to-string \"PROJECT\" :name \"NAME\")" prompt))
-      (is (search "Use the `sexed-*` functions for Lisp source edits" prompt))
-      (is (search "(sexed-outline-to-string TEXT :max-depth 2)" prompt))
-      (is (search "(balanced-parentheses-p TEXT)" prompt))
-      (is (search "(sexed-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
-      (is (search "(sexed-stage-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
-      (is (search "(sexed-replace-scratch-form SELECTOR NEW-TEXT)" prompt))
-      (is (search "(sexed-init-outline-to-string :max-depth 3)" prompt))
-      (is (search "Do not guess a selector for `init.lisp`" prompt))
-      (is (search "(project-read-file \"config\" \"init.lisp\")" prompt))
-      (is (search "Do not try to set" prompt))
-      (is (search "Message adapters such as `sexed-replace-message-form` take a `message` object" prompt))
-      (is (search "Prefer `(format nil ...)` over" prompt))
+      (is (search "Default tools:" prompt))
+      (is (search "`read`" prompt))
+      (is (search "`write`" prompt))
+      (is (search "`eval`" prompt))
+      (is (search "Use `eval` only when you need to run tests/checks" prompt))
+      (is (search "Do not use `eval` for ordinary file reading" prompt))
+      (is (search "After every write, immediately read the changed file" prompt))
+      (is (search "Do not guess symbol names" prompt))
+      (is-false (search "Default built-in tools are `lisp_eval`" prompt))
+      (is-false (search "project_read_lines" prompt))
+      (is-false (search "doc_lookup" prompt))
       (is-false (search "fetching URLs, reading/writing files, running shell commands" prompt))
       (is-false (search "http_fetch" prompt))
       (is-false (search "shell_exec" prompt))
@@ -352,11 +295,11 @@
                   :think-level "high"
                   :core-prompt "pair core"
                   :personality-prompt "pair personality"
-                  :tool-names '("lisp_eval" doc-lookup))))
+                  :tool-names '("eval" read))))
       (is (string= "Pair" (clawmacs:agent-definition-name first)))
       (is (eq :openai-codex (clawmacs:agent-definition-provider first)))
       (is (string= "high" (clawmacs:agent-definition-think-level first)))
-      (is (equal '("lisp_eval" "doc_lookup")
+      (is (equal '("eval" "read")
                  (clawmacs:agent-definition-tool-names first))))
     (is (string= "pair core"
                  (clawmacs:agent-definition-core-prompt
@@ -403,13 +346,13 @@ PAIR PERSONALITY"
       (with-function-override (clawmacs::load-boot-files ()
                                 nil)
         (let ((prompt (clawmacs:build-agent-system-prompt "writer")))
-          (is (search "Default built-in tools are `lisp_eval`" prompt))
+          (is (search "Default tools:" prompt))
           (is (search "WRITER PERSONALITY" prompt))
           (is-false (search "DEFAULT PERSONALITY" prompt))))
       (with-function-override (clawmacs::load-boot-files ()
                                 nil)
         (let ((prompt (clawmacs:build-agent-system-prompt "missing")))
-          (is (search "Default built-in tools are `lisp_eval`" prompt))
+          (is (search "Default tools:" prompt))
           (is (search "DEFAULT PERSONALITY" prompt)))))))
 
 (test parse-clawmacs-prompt-args-supports-routing-and-output-options
@@ -725,7 +668,7 @@ PAIR PERSONALITY"
                            second-turn-messages)))))))
 
 (test run-single-prompt-records-project-write-events
-  "Prompt-mode records project writes performed through lisp_eval."
+  "Prompt-mode records project writes performed through eval."
   (let* ((path (temp-agent-defaults-path))
          (root (make-pathname :directory
                               (list :absolute "tmp"
@@ -754,7 +697,7 @@ PAIR PERSONALITY"
                                       (list
                                        (clawmacs::canonical-tool-use-block
                                         "write-1"
-                                        "lisp_eval"
+                                        "eval"
                                         `((:code . ,tool-code)))))
                                      (make-completed-stream-state-response
                                       "end_turn"
@@ -819,7 +762,7 @@ PAIR PERSONALITY"
                                      (list
                                       (clawmacs::canonical-tool-use-block
                                        "write-1"
-                                       "lisp_eval"
+                                       "eval"
                                        `((:code . ,tool-code))))))
                                    (t
                                     (make-completed-stream-state-response
@@ -888,7 +831,7 @@ PAIR PERSONALITY"
                                      (list
                                       (clawmacs::canonical-tool-use-block
                                        (format nil "read-~D" request-count)
-                                       "lisp_eval"
+                                       "eval"
                                        '((:code . "(+ 1 1)"))))))
                                    (3
                                     (make-completed-stream-state-response
@@ -896,7 +839,7 @@ PAIR PERSONALITY"
                                      (list
                                       (clawmacs::canonical-tool-use-block
                                        "write-1"
-                                       "lisp_eval"
+                                       "eval"
                                        `((:code . ,write-code))))))
                                    (t
                                     (make-completed-stream-state-response
@@ -930,7 +873,7 @@ PAIR PERSONALITY"
                           (merge-pathnames #P"result.txt" root))))))))))
 
 (test run-single-prompt-executes-lisp-eval-tool-loop
-  "Prompt mode executes lisp_eval tool calls and continues with tool results."
+  "Prompt mode executes eval tool calls and continues with tool results."
   (let ((path (temp-agent-defaults-path))
         (request-count 0)
         (second-request-messages nil)
@@ -952,7 +895,7 @@ PAIR PERSONALITY"
                                       (list
                                        (clawmacs::canonical-tool-use-block
                                         "call-1"
-                                        "lisp_eval"
+                                        "eval"
                                         '((:code . "(+ 2 3)")))))
                                      (progn
                                        (setf second-request-messages messages)
@@ -982,11 +925,11 @@ PAIR PERSONALITY"
                          (clawmacs:prompt-run-result-final-text result)))
             (is (= 2 (clawmacs:prompt-run-result-iterations result)))
             (is (= 1 (length events)))
-            (is (string= "lisp_eval" (clawmacs:prompt-tool-event-name event)))
+            (is (string= "eval" (clawmacs:prompt-tool-event-name event)))
             (is (search "(+ 2 3)" (clawmacs:prompt-tool-event-display event)))
             (is (search "5" (clawmacs:prompt-tool-event-result-text event)))
             (is (= 1 (length live-tool-events)))
-            (is (search ";; tool 1: lisp_eval" live-output))
+            (is (search ";; tool 1: eval" live-output))
             (is (search "(+ 2 3)" live-output))
             (let* ((tool-result-message (third second-request-messages))
                    (content (coerce (cdr (assoc :content tool-result-message))
@@ -1123,8 +1066,8 @@ PAIR PERSONALITY"
             (clawmacs:run-subagent
              "Use lisp instead"
              :agent-name "docs"
-             :tool-names '("lisp_eval"))
-            (is (equal '("lisp_eval") captured-tool-names))))))))
+             :tool-names '("eval"))
+            (is (equal '("eval") captured-tool-names))))))))
 
 (test run-subagent-custom-tools-are-temporary-and-executable
   "Custom subagent tools are exposed only for the run and record tool evidence."
@@ -1230,8 +1173,8 @@ PAIR PERSONALITY"
                        :execute-fn (lambda (args)
                                      (declare (ignore args))
                                      "plist")))
-           :tool-names '("custom_plist" "lisp_eval"))
-          (is (equal '("custom_plist" "lisp_eval")
+           :tool-names '("custom_plist" "eval"))
+          (is (equal '("custom_plist" "eval")
                      captured-tool-names))
           (is (null (gethash "custom_plist" clawmacs::*tool-table*))))))))
 
@@ -1495,8 +1438,8 @@ PAIR PERSONALITY"
                   (list (clawmacs::make-prompt-tool-event
                          :name "doc_lookup")
                         (clawmacs::make-prompt-tool-event
-                         :name "lisp_eval")))))
-    (is (equal '("doc_lookup" "lisp_eval")
+                         :name "eval")))))
+    (is (equal '("doc_lookup" "eval")
                (clawmacs:prompt-run-tool-names result)))
     (is (= 2 (clawmacs:prompt-run-tool-count result)))
     (is (= 1 (clawmacs:prompt-run-tool-count result "doc_lookup")))
@@ -1504,14 +1447,14 @@ PAIR PERSONALITY"
     (is-false (clawmacs:prompt-run-used-tool-p result "missing_tool"))))
 
 (test execute-lisp-eval-captures-output-and-history
-  "lisp_eval captures stdout/stderr, results, and bounded eval history."
+  "eval captures stdout/stderr, results, and bounded eval history."
   (with-tool-table-restored
     (let ((clawmacs::*lisp-eval-history* nil)
           (clawmacs::*last-eval-result* nil)
           (clawmacs::*last-eval-condition* nil))
       (clawmacs::init-tools)
       (let* ((json (clawmacs:execute-tool
-                    "lisp_eval"
+                    "eval"
                     '((:code . "(progn (format t \"hello\") (values 4 5))"))))
              (decoded (clawmacs::api-json-decode json)))
         (is (search "4" (cdr (assoc :result decoded))))
@@ -1523,13 +1466,13 @@ PAIR PERSONALITY"
         (is (search "hello" (clawmacs:eval-history-to-string)))))))
 
 (test execute-lisp-eval-middle-truncates-large-results
-  "Large lisp_eval results are bounded while preserving head and tail context."
+  "Large eval results are bounded while preserving head and tail context."
   (with-tool-table-restored
     (let ((clawmacs::*lisp-eval-history* nil)
           (clawmacs:*lisp-eval-max-output-chars* 220))
       (clawmacs::init-tools)
       (let* ((json (clawmacs:execute-tool
-                    "lisp_eval"
+                    "eval"
                     '((:code . "(concatenate 'string \"HEAD-\" (make-string 500 :initial-element #\\x) \"-TAIL\")"))))
              (decoded (clawmacs::api-json-decode json))
              (result (cdr (assoc :result decoded)))
@@ -1543,11 +1486,11 @@ PAIR PERSONALITY"
         (is (= 220 (cdr (assoc :limit decoded))))))))
 
 (test execute-lisp-eval-includes-recovery-guidance-on-errors
-  "lisp_eval failures include actionable guidance instead of a bare error."
+  "eval failures include actionable guidance instead of a bare error."
   (with-tool-table-restored
     (clawmacs::init-tools)
     (let* ((json (clawmacs:execute-tool
-                  "lisp_eval"
+                  "eval"
                   '((:code . "(sexed-form-text \"(defun foo () :ok)\" '(:head \"defmacro\" :name \"foo\"))"))))
            (decoded (clawmacs::api-json-decode json))
            (error-text (cdr (assoc :error decoded)))
@@ -1557,17 +1500,17 @@ PAIR PERSONALITY"
       (is (search "sexed-project-outline-to-string" guidance)))))
 
 (test execute-lisp-eval-max-chars-only-tightens-limit
-  "The lisp_eval max_chars argument cannot increase the configured output cap."
+  "The eval max_chars argument cannot increase the configured output cap."
   (with-tool-table-restored
     (let ((clawmacs:*lisp-eval-max-output-chars* 180))
       (clawmacs::init-tools)
       (let* ((small-json (clawmacs:execute-tool
-                          "lisp_eval"
+                          "eval"
                           '((:code . "(make-string 500 :initial-element #\\y)")
                             (:max--chars . 90))))
              (small (clawmacs::api-json-decode small-json))
              (large-json (clawmacs:execute-tool
-                          "lisp_eval"
+                          "eval"
                           '((:code . "(make-string 500 :initial-element #\\z)")
                             (:max--chars . 1000))))
              (large (clawmacs::api-json-decode large-json)))
@@ -1577,14 +1520,14 @@ PAIR PERSONALITY"
         (is (<= (length (cdr (assoc :result large))) 180))))))
 
 (test execute-lisp-eval-records-errors
-  "Failed lisp_eval executions expose the condition and still record history."
+  "Failed eval executions expose the condition and still record history."
   (with-tool-table-restored
     (let ((clawmacs::*lisp-eval-history* nil)
           (clawmacs::*last-eval-result* nil)
           (clawmacs::*last-eval-condition* nil))
       (clawmacs::init-tools)
       (let* ((json (clawmacs:execute-tool
-                    "lisp_eval"
+                    "eval"
                     '((:code . "(error \"boom\")"))))
              (decoded (clawmacs::api-json-decode json)))
         (is (search "boom" (cdr (assoc :error decoded))))
@@ -1609,7 +1552,7 @@ PAIR PERSONALITY"
                                   (list
                                    (clawmacs::canonical-tool-use-block
                                     "loop-call"
-                                    "lisp_eval"
+                                    "eval"
                                     '((:code . "(+ 1 1)"))))))
           (clawmacs::init-default-keymap)
           (clawmacs::init-global-faces)
@@ -1628,7 +1571,7 @@ PAIR PERSONALITY"
                             (clawmacs:prompt-run-error-message condition)))
                 (is (= 1 (clawmacs:prompt-run-error-iterations condition)))
                 (is (= 1 (length events)))
-                (is (string= "lisp_eval"
+                (is (string= "eval"
                              (clawmacs:prompt-tool-event-name
                               (first events))))
                 (is (search "2"

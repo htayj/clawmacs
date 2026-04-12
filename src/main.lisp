@@ -939,7 +939,7 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
 (defun prompt-required-write-retry-text (attempt)
   "Return the corrective prompt for required-write retry ATTEMPT."
   (format nil
-          "The previous response completed without any project writes, but this prompt run requires durable project changes. Continue the same task now. Use lisp_eval to inspect, edit through project/sexed helpers, run checks, and only give a final answer after at least one project write has been recorded. This is corrective retry ~D of ~D."
+          "The previous response completed without any project writes, but this prompt run requires durable project changes. Continue the same task now. Use read/write for files and eval only for checks or live clawmacs state. Only give a final answer after at least one project write has been recorded. This is corrective retry ~D of ~D."
           attempt
           *prompt-required-write-retry-limit*))
 

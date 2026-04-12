@@ -59,7 +59,7 @@ Temporary tools override same-named global tools for the dynamic extent.")
   '("http_fetch" "file_read" "file_write" "file_edit" "shell_exec"
     "lisp_eval" "project_list_files" "project_read_file"
     "project_read_lines" "project_search" "project_write_file"
-    "doc_lookup")
+    "doc_lookup" "read" "write" "eval")
   "Names reserved for clawmacs built-in tools.
 INIT-TOOLS removes these entries before re-registering the default built-ins,
 so user-added tools stored in *tool-table* are left intact.")
@@ -942,6 +942,44 @@ Long text is middle-truncated so the model sees both the start and the end."
               (:kind . ,kind)
               (:system . ,system)))))
 
+(defun execute-read-tool (args)
+  "Tool implementation for all default read-only agent operations."
+  (let* ((mode (string-downcase (tool-arg args :mode :required t)))
+         (project (or (tool-arg args :project) "clawmacs")))
+    (cond
+      ((string= mode "list")
+       (execute-project-list-files
+        `((:project . ,project)
+          (:limit . ,(tool-positive-integer-arg args :limit 200)))))
+      ((string= mode "file")
+       (execute-project-read-file
+        `((:project . ,project)
+          (:path . ,(tool-arg args :path :required t)))))
+      ((string= mode "lines")
+       (execute-project-read-lines
+        `((:project . ,project)
+          (:path . ,(tool-arg args :path :required t))
+          (:line . ,(tool-positive-integer-arg args :line 1))
+          (:context . ,(tool-positive-integer-arg args :context 40)))))
+      ((string= mode "search")
+       (execute-project-search
+        `((:project . ,project)
+          (:query . ,(tool-arg args :query :required t))
+          (:limit . ,(tool-positive-integer-arg
+                      args :limit *project-search-result-limit*)))))
+      ((string= mode "doc")
+       (execute-doc-lookup
+        `((:query . ,(tool-arg args :query :required t))
+          (:kind . ,(or (tool-arg args :doc--kind) "auto"))
+          (:system . ,(or (tool-arg args :system) "clawmacs")))))
+      (t
+       (error "Unknown read mode ~S. Use list, file, lines, search, or doc."
+              mode)))))
+
+(defun execute-write-tool (args)
+  "Tool implementation for all default durable project writes."
+  (execute-project-write-file args))
+
 ;;; --------------------------------------------------------------------------
 ;;; Tool Registration
 ;;; --------------------------------------------------------------------------
@@ -955,81 +993,35 @@ the default tool set. User-added tools remain untouched."
     (remhash name *tool-table*))
 
   (register-tool
-   "lisp_eval"
-   "Evaluate arbitrary Common Lisp code in the clawmacs process. Returns the result of evaluation. Use this for computation, data transformation, or interacting with the running system. If a result includes error_guidance or truncation_notice, follow it before retrying."
-   `((:type . "object")
-     (:properties
-      . ((:code . ((:type . "string")
-                   (:description . "The Common Lisp code to evaluate.")))
-         (:package . ((:type . "string")
-                      (:description . "Package to evaluate in. Default: CLAWMACS.")))
-         (:max--chars . ((:type . "integer")
-                         (:description . "Optional per-field output limit. Can only lower the configured lisp_eval maximum.")))))
-     (:required . #("code")))
-   :agent-allowed
-   #'execute-lisp-eval)
-
-  (register-tool
-   "project_list_files"
-   "List files in a named clawmacs project. Use this before guessing project paths."
+   "read"
+   "Read project resources or local documentation. Modes: list, file, lines, search, doc. Use this for inspection before writing."
    '((:type . "object")
      (:properties
-      . ((:project . ((:type . "string")
-                      (:description . "Project name, e.g. clawmacs, workspace, or config.")))
-         (:limit . ((:type . "integer")
-                    (:description . "Maximum number of paths to return. Default: 200.")))))
-     (:required . #("project")))
-   :agent-allowed
-   #'execute-project-list-files)
-
-  (register-tool
-   "project_read_file"
-   "Read a project file by project and path. Prefer project_read_lines for focused context."
-   '((:type . "object")
-     (:properties
-      . ((:project . ((:type . "string")
-                      (:description . "Project name.")))
+      . ((:mode . ((:type . "string")
+                   (:description . "Required mode: list, file, lines, search, or doc.")))
+         (:project . ((:type . "string")
+                      (:description . "Project name. Default: clawmacs.")))
          (:path . ((:type . "string")
-                   (:description . "Project-relative path.")))))
-     (:required . #("project" "path")))
-   :agent-allowed
-   #'execute-project-read-file)
-
-  (register-tool
-   "project_read_lines"
-   "Read focused lines from a project file."
-   '((:type . "object")
-     (:properties
-      . ((:project . ((:type . "string")
-                      (:description . "Project name.")))
-         (:path . ((:type . "string")
-                   (:description . "Project-relative path.")))
+                   (:description . "Project-relative path for file or lines mode.")))
          (:line . ((:type . "integer")
-                   (:description . "1-based anchor line. Default: 1.")))
+                   (:description . "1-based anchor line for lines mode. Default: 1.")))
          (:context . ((:type . "integer")
-                      (:description . "Approximate lines of context. Default: 40.")))))
-     (:required . #("project" "path")))
-   :agent-allowed
-   #'execute-project-read-lines)
-
-  (register-tool
-   "project_search"
-   "Search project resources for a string or regex-like query and return path:line matches."
-   '((:type . "object")
-     (:properties
-      . ((:project . ((:type . "string")
-                      (:description . "Project name.")))
+                      (:description . "Approximate lines of context for lines mode. Default: 40.")))
          (:query . ((:type . "string")
-                    (:description . "Search query.")))
+                    (:description . "Search string for search mode, or symbol/query for doc mode.")))
+         (:doc--kind . ((:type . "string")
+                        (:description . "Doc lookup kind for doc mode: auto, tool, function, variable, type, common-lisp, system, or search. Default: auto.")))
+         (:system . ((:type . "string")
+                     (:description . "ASDF system for doc search. Default: clawmacs.")))
          (:limit . ((:type . "integer")
-                    (:description . "Maximum matches to return.")))))
-     (:required . #("project" "query")))
+                    (:description . "Maximum list/search results.")))))
+     (:required . #("mode")))
    :agent-allowed
-   #'execute-project-search)
+   #'execute-read-tool)
 
   (register-tool
-   "project_write_file"
-   "Write a full project file through the project abstraction. Read back after writing."
+   "write"
+   "Write a full project resource through the project abstraction. Read the file back with read after writing."
    '((:type . "object")
      (:properties
       . ((:project . ((:type . "string")
@@ -1040,19 +1032,19 @@ the default tool set. User-added tools remain untouched."
                       (:description . "Full file content to save.")))))
      (:required . #("project" "path" "content")))
    :agent-allowed
-   #'execute-project-write-file)
+   #'execute-write-tool)
 
   (register-tool
-   "doc_lookup"
-   "Look up clawmacs, Common Lisp, and imported-system documentation without writing Lisp eval forms."
-   '((:type . "object")
+   "eval"
+   "Evaluate one Common Lisp form in the running clawmacs process. Avoid this for normal reading/writing. Use it only to run checks/tests, inspect or change live Clawmacs state, or perform operations the read/write tools cannot express."
+   `((:type . "object")
      (:properties
-      . ((:query . ((:type . "string")
-                    (:description . "Symbol, system, or search query.")))
-         (:kind . ((:type . "string")
-                   (:description . "auto, tool, function, variable, type, common-lisp, system, or search. Default: auto.")))
-         (:system . ((:type . "string")
-                     (:description . "ASDF system for kind=search. Default: clawmacs.")))))
-     (:required . #("query")))
+      . ((:code . ((:type . "string")
+                   (:description . "The Common Lisp code to evaluate.")))
+         (:package . ((:type . "string")
+                      (:description . "Package to evaluate in. Default: CLAWMACS.")))
+         (:max--chars . ((:type . "integer")
+                         (:description . "Optional per-field output limit. Can only lower the configured lisp_eval maximum.")))))
+     (:required . #("code")))
    :agent-allowed
-   #'execute-doc-lookup))
+   #'execute-lisp-eval))

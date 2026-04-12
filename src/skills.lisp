@@ -889,7 +889,7 @@ Each entry is a SKILL-ROOT.")
       (with-output-to-string (s)
         (format s "<skills_instructions>~%")
         (format s "## Skills~%")
-        (format s "A skill is a set of local instructions in a `SKILL.md` file. Available skills are listed by name, description, and path. Use `lisp_eval` to inspect the skill file and any referenced local resources before relying on it.~%")
+        (format s "A skill is a set of local instructions in a `SKILL.md` file. Available skills are listed by name, description, and path. Full skill instructions are injected automatically when a skill is mentioned or selected.~%")
         (format s "### Available skills~%")
         (dolist (skill ordered-skills)
           (format s "- ~A: ~A (file: ~A)~%"

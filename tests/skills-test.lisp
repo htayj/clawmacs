@@ -203,14 +203,14 @@ policy:
         (is (search "please use $demo" second-text))))))
 
 (test render-skills-section-lists-enabled-skills
-  "The system prompt skill section lists enabled skills and lisp_eval usage."
+  "The system prompt skill section lists enabled skills and injection behavior."
   (with-isolated-skills (root)
     (write-demo-skill root)
     (register-skill-root root)
     (let ((section (render-skills-section)))
       (is (search "<skills_instructions>" section))
       (is (search "demo: Demo interface description" section))
-      (is (search "Use `lisp_eval`" section)))))
+      (is (search "injected automatically" section)))))
 
 (test render-skills-section-sorts-by-compare-skills
   "Skill section ordering is deterministic regardless input order."
