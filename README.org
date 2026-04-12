@@ -14,6 +14,23 @@ Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in
 #+ATTR_ORG: :width 800
 [[file:docs/img/genera-style.png]]
 
+* Core Interaction Concepts
+
+Clawmacs now has a few stable concepts that describe how the interface and
+agent workflow fit together:
+
+- *Image-native agent loop* --- the agent works inside the live Common Lisp
+  image via =lisp_eval=, so inspect/edit/verify happens in one runtime.
+- *Recency-biased fuzzy selectors* --- minibuffer and overlay selection UIs
+  share the same paradigm: fuzzy matching plus recency ordering, with the
+  current item de-prioritized when reselection is unlikely.
+- *Project resource workflow* --- durable edits happen through project
+  resources and transactional change sets instead of ad hoc filesystem writes.
+- *Structural editing for Lisp* --- =sexed= edits forms by structure and
+  validates balanced results, giving agent-safe transformations for Lisp code.
+- *Backend-neutral command layer* --- the same command and rendering concepts
+  apply across Croatoan (terminal) and McCLIM (graphical) backends.
+
 * Features
 
 ** Multi-Provider LLM Support
