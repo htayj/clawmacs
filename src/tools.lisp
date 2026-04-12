@@ -572,8 +572,12 @@ This mirrors Codex-style tool truncation: large tool results should stay
 bounded for the model, while agents can request smaller focused outputs.")
 
 (defvar *lisp-eval-truncation-guidance*
-  "use narrower project-read-file-lines/search/outline selectors or pass max_chars for a smaller focused result"
+  "use narrower project-read-file-lines/search/outline selectors or pass max_chars for a smaller focused result; do not repeat broad calls after truncation"
   "Guidance appended to truncated lisp_eval fields.")
+
+(defvar *lisp-eval-error-guidance*
+  "Do not repeat the same failing eval. Inspect the error, discover exact symbols/selectors with help/search functions, and retry with a smaller verified call."
+  "Default guidance included when lisp_eval returns an error.")
 
 (defun requested-lisp-eval-output-limit (args)
   "Return the per-field lisp_eval output limit requested by ARGS.
@@ -638,6 +642,24 @@ Long text is middle-truncated so the model sees both the start and the end."
     (if (> (length text) max-length)
         (concatenate 'string (subseq text 0 max-length) "...")
         text)))
+
+(defun lisp-eval-condition-guidance (condition-text)
+  "Return model-facing recovery guidance for CONDITION-TEXT."
+  (let ((lower (string-downcase (or condition-text ""))))
+    (cond
+      ((search "no sexed form matches selector" lower)
+       "The sexed selector did not match. Do not guess selectors or symbol names. Use sexed-project-outline-to-string/sexed-outline-to-string or sexed-find-forms with :limit, then retry with exact :id or verified :head/:name.")
+      ((search "ambiguous" lower)
+       "The selector matched more than one target. Retry with one returned :id value, or add :name/:depth/:nth after verifying the outline.")
+      ((or (search "undefined function" lower)
+           (search "is undefined" lower))
+       "Do not guess Clawmacs symbol names. Use apropos-list, find-symbol, list-functions, or describe-function-to-string to discover the exact exported function before retrying.")
+      ((or (search "invalid number of arguments" lower)
+           (search "too many arguments" lower)
+           (search "too few arguments" lower))
+       "Check the callee before retrying. Use describe-function-to-string, extended-doc, documentation, or function-lambda-expression to verify the lambda list.")
+      (t
+       *lisp-eval-error-guidance*))))
 
 (defun eval-history-to-string (&key (limit 10))
   "Return a compact newest-first summary of lisp_eval history."
@@ -731,7 +753,9 @@ Long text is middle-truncated so the model sees both the start and the end."
                  ,@(when truncated-fields
                      `((:truncation--notice . ,*lisp-eval-truncation-guidance*)))
                  ,@(when condition-text
-                     `((:error . ,condition-text))))))))))))
+                     `((:error . ,condition-text)
+                       (:error--guidance . ,(lisp-eval-condition-guidance
+                                             condition-text)))))))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Tool Registration
@@ -747,7 +771,7 @@ only lisp_eval. User-added tools remain untouched."
 
   (register-tool
    "lisp_eval"
-   "Evaluate arbitrary Common Lisp code in the clawmacs process. Returns the result of evaluation. Use this for computation, data transformation, or interacting with the running system."
+   "Evaluate arbitrary Common Lisp code in the clawmacs process. Returns the result of evaluation. Use this for computation, data transformation, or interacting with the running system. If a result includes error_guidance or truncation_notice, follow it before retrying."
    `((:type . "object")
      (:properties
       . ((:code . ((:type . "string")

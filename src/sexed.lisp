@@ -506,13 +506,19 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   "Return the node with ID from NODES, or NIL."
   (find id nodes :key #'sexed-node-id :test #'=))
 
+(defun sexed-selector-guidance ()
+  "Return recovery guidance for failed agent-facing selectors."
+  "Tip: Do not guess sexed selectors. Discover form ids with sexed-outline-to-string or sexed-project-outline-to-string, or verify filters with sexed-find-forms :limit, then retry with an exact :id or verified :head/:name selector.")
+
 (defun sexed-resolve-selector (nodes text selector &key scope)
   "Resolve SELECTOR to exactly one node from NODES."
   (let* ((plist (sexed-selector-plist selector))
          (id (sexed-getf plist :id)))
     (if (not (eq id +sexed-missing+))
         (or (find id (or scope nodes) :key #'sexed-node-id :test #'=)
-            (error "No sexed form with id ~A." id))
+            (error "No sexed form with id ~A. ~A"
+                   id
+                   (sexed-selector-guidance)))
         (let* ((nth (sexed-getf plist :nth))
                (matches
                  (sexed-filter-nodes (or scope nodes)
@@ -534,11 +540,14 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
                                      (not (null (sexed-getf plist :include-atoms nil)))
                                      :limit nil)))
           (case (length matches)
-            (0 (error "No sexed form matches selector ~S." selector))
-            (1 (first matches))
-            (t (error "Selector ~S is ambiguous; matched ids ~{~A~^, ~}."
+            (0 (error "No sexed form matches selector ~S. ~A"
                       selector
-                      (mapcar #'sexed-node-id matches))))))))
+                      (sexed-selector-guidance)))
+            (1 (first matches))
+            (t (error "Selector ~S is ambiguous; matched ids ~{~A~^, ~}. Retry with one of those :id values or add :name/:depth/:nth after verifying the outline. ~A"
+                      selector
+                      (mapcar #'sexed-node-id matches)
+                      (sexed-selector-guidance))))))))
 
 (defun sexed-parse-balanced (text)
   "Parse TEXT or signal when diagnostics are present."

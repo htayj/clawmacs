@@ -470,6 +470,7 @@
    #:*lisp-eval-history-limit*
    #:*lisp-eval-max-output-chars*
    #:*lisp-eval-truncation-guidance*
+   #:*lisp-eval-error-guidance*
    #:*tool-table*
    #:*active-tool-names*
    #:*temporary-tool-table*

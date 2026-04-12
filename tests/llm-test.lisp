@@ -1488,6 +1488,20 @@ PAIR PERSONALITY"
         (is (member "result" truncated :test #'string=))
         (is (= 220 (cdr (assoc :limit decoded))))))))
 
+(test execute-lisp-eval-includes-recovery-guidance-on-errors
+  "lisp_eval failures include actionable guidance instead of a bare error."
+  (with-tool-table-restored
+    (clawmacs::init-tools)
+    (let* ((json (clawmacs:execute-tool
+                  "lisp_eval"
+                  '((:code . "(sexed-form-text \"(defun foo () :ok)\" '(:head \"defmacro\" :name \"foo\"))"))))
+           (decoded (clawmacs::api-json-decode json))
+           (error-text (cdr (assoc :error decoded)))
+           (guidance (cdr (assoc :error--guidance decoded))))
+      (is (search "No sexed form matches selector" error-text))
+      (is (search "Do not guess selectors" guidance))
+      (is (search "sexed-project-outline-to-string" guidance)))))
+
 (test execute-lisp-eval-max-chars-only-tightens-limit
   "The lisp_eval max_chars argument cannot increase the configured output cap."
   (with-tool-table-restored

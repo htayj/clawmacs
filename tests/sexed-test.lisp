@@ -56,6 +56,17 @@
     (is (search "[0] d0 list defun foo" outline))
     (is (search "[4] d1 list list" outline))))
 
+(test sexed-selector-errors-guide-agents
+  "Selector failures explain how agents should recover."
+  (handler-case
+      (sexed-form-text "(defun foo () :ok)"
+                       '(:head "defmacro" :name "foo"))
+    (error (condition)
+      (let ((message (format nil "~A" condition)))
+        (is (search "Do not guess sexed selectors" message))
+        (is (search "sexed-outline-to-string" message))
+        (is (search ":id" message))))))
+
 (test sexed-pure-edits-preserve-balance
   "Pure edit functions return modified text and reject unbalanced replacements."
   (let ((text "(defun foo () (+ 1 2))"))

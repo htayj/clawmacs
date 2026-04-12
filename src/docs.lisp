@@ -1890,6 +1890,11 @@ documentation in *extended-docs*."
   :returns "string — Guidance included when lisp_eval output is truncated for model context."
   :see-also (*lisp-eval-max-output-chars* execute-tool))
 
+(defdoc *lisp-eval-error-guidance*
+  :category "tool"
+  :returns "string — Default recovery guidance included when lisp_eval captures an error."
+  :see-also (*last-eval-condition* eval-history-to-string execute-tool))
+
 (defdoc eval-history-to-string
   :category "tool"
   :usage "(eval-history-to-string :limit 10)"
@@ -2624,6 +2629,7 @@ documentation in *extended-docs*."
   :category "sexed"
   :usage "(sexed-form-text TEXT SELECTOR) — (sexed-form-text text '(:head \"defun\" :name \"foo\"))"
   :returns "string — Exact source text for one selected form."
+  :side-effects "None. If SELECTOR misses or is ambiguous, the error explains how to discover exact ids instead of guessing."
   :see-also (sexed-find-forms sexed-replace-form))
 
 (defdoc sexed-outline-to-string
@@ -2807,7 +2813,7 @@ documentation in *extended-docs*."
   :category "sexed"
   :usage "(sexed-project-form-text PROJECT PATH SELECTOR)"
   :returns "string — Exact source text for SELECTOR in a project resource."
-  :side-effects "Reads the resource through the project abstraction."
+  :side-effects "Reads the resource through the project abstraction. If SELECTOR misses or is ambiguous, use sexed-project-outline-to-string or sexed-find-forms to discover exact ids before retrying."
   :see-also (sexed-form-text sexed-project-outline-to-string))
 
 (defdoc sexed-source-form-to-string
