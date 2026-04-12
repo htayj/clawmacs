@@ -936,7 +936,9 @@ Long text is middle-truncated so the model sees both the start and the end."
 
 (defun project-todo-context-to-string (project query &key (limit 80))
   "Return TODO and project hits for QUERY to seed a bounded task investigation."
-  (let* ((hits (project-search project query :limit limit))
+  (let* ((hits (project-search project query
+                               :limit limit
+                               :include-ignored t))
          (todo-hits (remove-if-not
                      (lambda (hit)
                        (string= "todo.org" (getf hit :path)))
@@ -953,6 +955,48 @@ Long text is middle-truncated so the model sees both the start and the end."
       (format out "~%Project hits~%============~%~A"
               (format-project-search-hits hits :limit limit)))))
 
+(defun tool-selector-from-args (args)
+  "Build a sexed selector plist from tool ARGS."
+  (let* ((head (tool-arg args :head))
+         (name (tool-arg args :name))
+         (named-selector-p (or (and (stringp head)
+                                    (plusp (length head)))
+                               (and (stringp name)
+                                    (plusp (length name)))))
+         (selector nil))
+    ;; Models often guess id=0 or confuse line numbers with sexed ids. When a
+    ;; named selector is present, ignore id and let sexed resolve by head/name.
+    (unless named-selector-p
+      (let ((id (tool-arg args :id)))
+        (when id
+          (setf selector (append selector (list :id id))))))
+    (dolist (entry '((:head . :head)
+                     (:name . :name)
+                     (:nth . :nth)
+                     (:depth . :depth)))
+      (let ((value (tool-arg args (car entry))))
+        (when (and value
+                   (not (and (stringp value)
+                             (zerop (length value)))))
+          (setf selector (append selector (list (cdr entry) value))))))
+    (unless selector
+      (error "A structural selector is required. Provide id, or head/name, optionally nth/depth."))
+    selector))
+
+(defun execute-project-read-form (args)
+  "Read one structural Lisp form from a project resource."
+  (let* ((project (tool-arg args :project :required t))
+         (path (tool-arg args :path :required t))
+         (selector (tool-selector-from-args args)))
+    (project-tool-json-content
+     (funcall (symbol-function 'sexed-project-form-text)
+              project
+              path
+              selector)
+     :extra `((:project . ,project)
+              (:path . ,path)
+              (:selector . ,(prin1-to-string selector))))))
+
 (defun execute-project-write-file (args)
   "Tool implementation for writing a project resource."
   (let* ((project (tool-arg args :project :required t))
@@ -964,6 +1008,25 @@ Long text is middle-truncated so the model sees both the start and the end."
                        (:bytes . ,(length content))
                        (:status . "ok")
                        (:guidance . "Read this file back before claiming completion.")))))
+
+(defun execute-project-write-form (args)
+  "Replace one structural Lisp form in a project resource."
+  (let* ((project (tool-arg args :project :required t))
+         (path (tool-arg args :path :required t))
+         (content (tool-arg args :content :required t))
+         (selector (tool-selector-from-args args))
+         (summary (funcall (symbol-function 'sexed-replace-project-form)
+                           project
+                           path
+                           selector
+                           content)))
+    (api-json-encode `((:project . ,project)
+                       (:path . ,path)
+                       (:selector . ,(prin1-to-string selector))
+                       (:bytes . ,(length content))
+                       (:status . "ok")
+                       (:summary . ,(prin1-to-string summary))
+                       (:guidance . "Read this form or file back before claiming completion.")))))
 
 (defun doc-lookup-symbol (query)
   "Resolve QUERY to a likely clawmacs symbol."
@@ -1088,6 +1151,15 @@ Long text is middle-truncated so the model sees both the start and the end."
         `((:query . ,(tool-arg args :query :required t))
           (:kind . ,(or (tool-arg args :doc--kind) "auto"))
           (:system . ,(or (tool-arg args :system) "clawmacs")))))
+      ((string= mode "form")
+       (execute-project-read-form
+        `((:project . ,project)
+          (:path . ,(tool-arg args :path :required t))
+          (:id . ,(tool-arg args :id))
+          (:head . ,(tool-arg args :head))
+          (:name . ,(tool-arg args :name))
+          (:nth . ,(tool-arg args :nth))
+          (:depth . ,(tool-arg args :depth)))))
       ((string= mode "xref")
        (project-tool-json-content
         (project-xref-context-to-string
@@ -1108,12 +1180,19 @@ Long text is middle-truncated so the model sees both the start and the end."
         :extra `((:project . ,project)
                  (:query . ,(tool-arg args :query)))))
       (t
-       (error "Unknown read mode ~S. Use list, file, lines, search, doc, xref, or todo."
+       (error "Unknown read mode ~S. Use list, file, lines, search, doc, form, xref, or todo."
               mode)))))
 
 (defun execute-write-tool (args)
   "Tool implementation for all default durable project writes."
-  (execute-project-write-file args))
+  (let ((mode (string-downcase (or (tool-arg args :mode) "file"))))
+    (cond
+      ((string= mode "file")
+       (execute-project-write-file args))
+      ((string= mode "form")
+       (execute-project-write-form args))
+      (t
+       (error "Unknown write mode ~S. Use file or form." mode)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Tool Registration
@@ -1129,15 +1208,17 @@ the default tool set. User-added tools remain untouched."
 
   (register-tool
    "read"
-   "Read project resources or local documentation. Modes: list, file, lines, search, doc, xref, todo. Use xref for symbol definitions/references/tests and todo for task context before making many separate reads."
+   "Read project resources or local documentation. Modes: list, file, lines, search, doc, form, xref, todo. Use form to read one Lisp form by selector, xref for symbol definitions/references/tests, and todo for task context before making many separate reads."
    '((:type . "object")
      (:properties
       . ((:mode . ((:type . "string")
-                   (:description . "Required mode: list, file, lines, search, doc, xref, or todo.")))
+                   (:description . "Required mode: list, file, lines, search, doc, form, xref, or todo.")))
          (:project . ((:type . "string")
                       (:description . "Project name. Default: clawmacs.")))
          (:path . ((:type . "string")
-                   (:description . "Project-relative path for file or lines mode.")))
+                   (:description . "Project-relative path for file, lines, or form mode.")))
+         (:id . ((:type . "integer")
+                 (:description . "Sexed form id for form mode.")))
          (:line . ((:type . "integer")
                    (:description . "1-based anchor line for lines mode. Default: 1.")))
          (:context . ((:type . "integer")
@@ -1145,7 +1226,13 @@ the default tool set. User-added tools remain untouched."
          (:query . ((:type . "string")
                     (:description . "Search string for search/todo mode, or symbol/query for doc/xref mode.")))
          (:head . ((:type . "string")
-                   (:description . "Optional definition head for xref mode, such as defun or defvar.")))
+                   (:description . "Optional definition/form head for xref or form mode, such as defun, test, or defvar.")))
+         (:name . ((:type . "string")
+                   (:description . "Optional form name for form mode.")))
+         (:nth . ((:type . "integer")
+                  (:description . "Optional zero-based match index for form mode.")))
+         (:depth . ((:type . "integer")
+                    (:description . "Optional form depth for form mode.")))
          (:doc--kind . ((:type . "string")
                         (:description . "Doc lookup kind for doc mode: auto, tool, function, variable, type, common-lisp, system, or search. Default: auto.")))
          (:system . ((:type . "string")
@@ -1162,15 +1249,27 @@ the default tool set. User-added tools remain untouched."
 
   (register-tool
    "write"
-   "Write a full project resource through the project abstraction. Read the file back with read after writing."
+   "Write through the project abstraction. Default mode file writes a full resource. Mode form replaces one Lisp form by selector. Read the file or form back after writing."
    '((:type . "object")
      (:properties
-      . ((:project . ((:type . "string")
+      . ((:mode . ((:type . "string")
+                   (:description . "Optional write mode: file or form. Default: file.")))
+         (:project . ((:type . "string")
                       (:description . "Project name.")))
          (:path . ((:type . "string")
                    (:description . "Project-relative path.")))
          (:content . ((:type . "string")
-                      (:description . "Full file content to save.")))))
+                      (:description . "Full file content for file mode, or replacement Lisp form text for form mode.")))
+         (:id . ((:type . "integer")
+                 (:description . "Sexed form id for form mode.")))
+         (:head . ((:type . "string")
+                   (:description . "Optional form head for form mode, such as defun, test, or defvar.")))
+         (:name . ((:type . "string")
+                   (:description . "Optional form name for form mode.")))
+         (:nth . ((:type . "integer")
+                  (:description . "Optional zero-based match index for form mode.")))
+         (:depth . ((:type . "integer")
+                    (:description . "Optional form depth for form mode.")))))
      (:required . #("project" "path" "content")))
    :agent-allowed
    #'execute-write-tool)

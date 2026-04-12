@@ -261,6 +261,14 @@
                           (:query . "project-read-file")
                           (:doc--kind . "function"))))
              (doc (clawmacs::api-json-decode doc-json))
+             (form-json (clawmacs:execute-tool
+                         "read"
+                         '((:mode . "form")
+                           (:project . "tool-probe")
+                           (:path . "notes.lisp")
+                           (:head . "defun")
+                           (:name . "probe"))))
+             (form (clawmacs::api-json-decode form-json))
              (xref-json (clawmacs:execute-tool
                          "read"
                          '((:mode . "xref")
@@ -273,6 +281,23 @@
                            (:project . "tool-probe")
                            (:query . "authinfo"))))
              (todo (clawmacs::api-json-decode todo-json))
+             (write-form-json (clawmacs:execute-tool
+                               "write"
+                               '((:mode . "form")
+                                 (:project . "tool-probe")
+                                 (:path . "notes.lisp")
+                                 (:head . "defun")
+                                 (:name . "probe")
+                                 (:content . "(defun probe () :better)"))))
+             (write-form (clawmacs::api-json-decode write-form-json))
+             (form-after-json (clawmacs:execute-tool
+                               "read"
+                               '((:mode . "form")
+                                 (:project . "tool-probe")
+                                 (:path . "notes.lisp")
+                                 (:head . "defun")
+                                 (:name . "probe"))))
+             (form-after (clawmacs::api-json-decode form-after-json))
              (eval-json (clawmacs:execute-tool
                          "eval"
                          '((:code . "(+ 1 2)"))))
@@ -280,10 +305,13 @@
         (is (search "probe" (cdr (assoc :content read))))
         (is (search "notes.lisp" (cdr (assoc :content search))))
         (is (search "project-read-file" (cdr (assoc :content doc))))
+        (is (search "(defun probe" (cdr (assoc :content form))))
         (is (search "Definitions" (cdr (assoc :content xref))))
         (is (search "tests/notes-test.lisp" (cdr (assoc :content xref))))
         (is (search "TODO hits" (cdr (assoc :content todo))))
         (is (search "authinfo cleanup" (cdr (assoc :content todo))))
+        (is (string= "ok" (cdr (assoc :status write-form))))
+        (is (search ":better" (cdr (assoc :content form-after))))
         (is (search "3" (cdr (assoc :result eval))))))))
 
 (test build-system-prompt-emphasizes-simple-tool-workflow
