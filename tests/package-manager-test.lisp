@@ -195,6 +195,18 @@
         (is (search "Structural editing with sexed" prompt-section))
         (is (search "(sexed-outline-to-string TEXT :max-depth 2)" prompt-section))))))
 
+(test render-package-prompt-sections-sorts-by-section-name
+  "Prompt section rendering is deterministic regardless registration order."
+  (with-package-state-override (nil)
+    (clawmacs:register-package-prompt-section "zeta" "Z section")
+    (clawmacs:register-package-prompt-section "alpha" "A section")
+    (let* ((rendered (clawmacs:render-package-prompt-sections))
+           (alpha-pos (search "A section" rendered))
+           (zeta-pos (search "Z section" rendered)))
+      (is (not (null alpha-pos)))
+      (is (not (null zeta-pos)))
+      (is (< alpha-pos zeta-pos)))))
+
 (test package-channel-loads-package-and-manifest-prompt
   "A local channel can advertise and load a package with a prompt section."
   (let* ((*package-entrypoint-load-count* 0)

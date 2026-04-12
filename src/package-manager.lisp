@@ -331,13 +331,16 @@ Set to T to autoload every builtin package, or NIL to autoload none.")
     (&optional (sections (list-package-prompt-sections)))
   "Render loaded package prompt sections for the system prompt."
   (when sections
-    (with-output-to-string (stream)
-      (format stream "<package_instructions>~%")
-      (dolist (section sections)
-        (when (package-prompt-section-title section)
-          (format stream "<!-- ~A -->~%" (package-prompt-section-title section)))
-        (format stream "~A~%~%" (package-prompt-section-body section)))
-      (format stream "</package_instructions>"))))
+    (let* ((ordered-sections (stable-sort (copy-list sections)
+                                          #'string<
+                                          :key #'package-prompt-section-name)))
+      (with-output-to-string (stream)
+        (format stream "<package_instructions>~%")
+        (dolist (section ordered-sections)
+          (when (package-prompt-section-title section)
+            (format stream "<!-- ~A -->~%" (package-prompt-section-title section)))
+          (format stream "~A~%~%" (package-prompt-section-body section)))
+        (format stream "</package_instructions>")))))
 
 (defun manifest-entrypoint-pathname (value)
   "Normalize a manifest :ENTRYPOINT value to a relative pathname."

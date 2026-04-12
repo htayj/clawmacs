@@ -212,6 +212,23 @@ policy:
       (is (search "demo: Demo interface description" section))
       (is (search "Use `lisp_eval`" section)))))
 
+(test render-skills-section-sorts-by-compare-skills
+  "Skill section ordering is deterministic regardless input order."
+  (let* ((skill-z (make-skill :name "zeta"
+                              :description "Z"
+                              :scope :user
+                              :path #P"/tmp/zeta/SKILL.md"))
+         (skill-a (make-skill :name "alpha"
+                              :description "A"
+                              :scope :user
+                              :path #P"/tmp/alpha/SKILL.md"))
+         (rendered (render-skills-section (list skill-z skill-a)))
+         (alpha-pos (search "- alpha: A" rendered))
+         (zeta-pos (search "- zeta: Z" rendered)))
+    (is (not (null alpha-pos)))
+    (is (not (null zeta-pos)))
+    (is (< alpha-pos zeta-pos))))
+
 (test prompt-args-accept-repeatable-skill-roots
   "prompt.sh can provide temporary skill roots for a prompt run."
   (let ((options (clawmacs::parse-clawmacs-prompt-args
