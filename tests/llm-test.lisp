@@ -261,6 +261,13 @@
                           (:query . "project-read-file")
                           (:doc--kind . "function"))))
              (doc (clawmacs::api-json-decode doc-json))
+             (outline-json (clawmacs:execute-tool
+                            "read"
+                            '((:mode . "outline")
+                              (:project . "tool-probe")
+                              (:path . "notes.lisp")
+                              (:head . "defun"))))
+             (outline (clawmacs::api-json-decode outline-json))
              (form-json (clawmacs:execute-tool
                          "read"
                          '((:mode . "form")
@@ -305,6 +312,7 @@
         (is (search "probe" (cdr (assoc :content read))))
         (is (search "notes.lisp" (cdr (assoc :content search))))
         (is (search "project-read-file" (cdr (assoc :content doc))))
+        (is (search "defun probe" (cdr (assoc :content outline))))
         (is (search "(defun probe" (cdr (assoc :content form))))
         (is (search "Definitions" (cdr (assoc :content xref))))
         (is (search "tests/notes-test.lisp" (cdr (assoc :content xref))))
@@ -1604,6 +1612,33 @@ PAIR PERSONALITY"
         (is (not (null clawmacs:*last-eval-condition*)))
         (is (search "boom" (clawmacs:eval-history-to-string)))))))
 
+(test execute-lisp-eval-blocks-external-processes-by-default
+  "Prompt eval does not let agents shell out through Common Lisp process APIs."
+  (with-tool-table-restored
+    (clawmacs::init-tools)
+    (let* ((json (clawmacs:execute-tool
+                  "eval"
+                  '((:code . "(uiop:run-program '(\"git\" \"status\") :output :string)"))))
+           (decoded (clawmacs::api-json-decode json)))
+      (is (search "External process execution is disabled"
+                  (cdr (assoc :error decoded))))
+      (is (search "Do not shell out from eval"
+                  (cdr (assoc :error--guidance decoded)))))))
+
+(test execute-lisp-eval-suppresses-nested-prompt-live-tool-events
+  "In-process checks run from eval do not pollute outer prompt tool traces."
+  (with-tool-table-restored
+    (clawmacs::init-tools)
+    (let ((stream (make-string-output-stream))
+          (clawmacs::*prompt-live-tool-event-stream* nil)
+          (clawmacs::*prompt-live-tool-event-count* 0))
+      (setf clawmacs::*prompt-live-tool-event-stream* stream)
+      (clawmacs:execute-tool
+       "eval"
+       '((:code . "(maybe-write-live-prompt-tool-event (make-prompt-tool-event :name \"nested\" :display \"nested\" :result-text \"ok\"))")))
+      (is (string= "" (get-output-stream-string stream)))
+      (is (= 0 clawmacs::*prompt-live-tool-event-count*)))))
+
 (test run-single-prompt-error-carries-partial-tool-events
   "Prompt loop failures retain tool events for diagnostics."
   (let ((path (temp-agent-defaults-path)))
@@ -1646,6 +1681,71 @@ PAIR PERSONALITY"
                 (is (search "2"
                             (clawmacs:prompt-tool-event-result-text
                              (first events))))))))))))
+
+(test run-single-prompt-default-tool-allowlist-survives-eval-registered-tools
+  "Tools registered during eval do not become callable in the same default prompt run."
+  (let ((path (temp-agent-defaults-path))
+        (request-count 0)
+        (captured-tool-names nil))
+    (with-agent-defaults-path-override (path)
+      (with-agent-definition-registry-override ()
+        (with-tool-table-restored
+          (clrhash clawmacs::*tool-table*)
+          (clawmacs::init-tools)
+          (with-function-override (clawmacs::provider-request-streaming
+                                   (provider messages callback
+                                             &key model max-tokens tools
+                                             reasoning-effort system-prompt)
+                                   (declare (ignore provider messages callback
+                                                    model max-tokens
+                                                    reasoning-effort
+                                                    system-prompt))
+                                   (incf request-count)
+                                   (when (= request-count 1)
+                                     (setf captured-tool-names
+                                           (sort
+                                            (mapcar (lambda (tool)
+                                                      (cdr (assoc :name tool)))
+                                                    (coerce tools 'list))
+                                            #'string<)))
+                                   (case request-count
+                                     (1
+                                      (make-completed-stream-state-response
+                                       "tool_use"
+                                       (list
+                                        (clawmacs::canonical-tool-use-block
+                                         "register-custom"
+                                         "eval"
+                                         '((:code . "(progn (register-tool \"custom_echo\" \"Echo.\" '((:type . \"object\")) :agent-allowed (lambda (args) (declare (ignore args)) \"echo\")) :ok)"))))))
+                                     (2
+                                      (make-completed-stream-state-response
+                                       "tool_use"
+                                       (list
+                                        (clawmacs::canonical-tool-use-block
+                                         "call-custom"
+                                         "custom_echo"
+                                         '()))))
+                                     (t
+                                      (make-completed-stream-state-response
+                                       "end_turn"
+                                       (list (clawmacs::canonical-text-block
+                                              "done"))))))
+            (clawmacs::init-default-keymap)
+            (clawmacs::init-global-faces)
+            (let* ((result (clawmacs:run-single-prompt
+                            "try to expose a new tool"
+                            :provider :zai
+                            :model "glm-5"
+                            :max-tool-iterations 5))
+                   (events (clawmacs:prompt-run-result-tool-events result)))
+              (is (equal '("eval" "read" "write") captured-tool-names))
+              (is (= 2 (length events)))
+              (is (search "not allowed"
+                          (clawmacs:prompt-tool-event-result-text
+                           (second events))))
+              (is (string= "done"
+                           (clawmacs:prompt-run-result-final-text
+                            result))))))))))
 
 (test provider-token-anthropic-is-unsupported
   "Anthropic no longer has a provider-specific token path."

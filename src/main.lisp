@@ -646,8 +646,9 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
      (normalize-tool-name-list tool-names))
     (custom-tool-definitions
      (mapcar #'tool-definition-name custom-tool-definitions))
+    ((agent-definition-tool-names-for-name agent-name))
     (t
-     (agent-definition-tool-names-for-name agent-name))))
+     (copy-list *default-agent-tool-names*))))
 
 (defun prepare-prompt-buffer (buf prompt)
   "Prepare BUF for prompt-mode execution with PROMPT as a new user turn."

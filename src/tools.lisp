@@ -588,6 +588,13 @@ bounded for the model, while agents can request smaller focused outputs.")
   "Do not repeat the same failing eval. Inspect the error, discover exact symbols/selectors with help/search functions, and retry with a smaller verified call."
   "Default guidance included when lisp_eval returns an error.")
 
+(defvar *lisp-eval-allow-external-processes* nil
+  "When NIL, lisp_eval rejects forms that directly call external process helpers.")
+
+(defparameter *lisp-eval-external-process-symbol-names*
+  '("RUN-PROGRAM" "LAUNCH-PROGRAM" "RUN-SHELL-COMMAND" "SYSTEM" "MAKE-PROCESS")
+  "Symbol names treated as external process execution from lisp_eval.")
+
 (defun requested-lisp-eval-output-limit (args)
   "Return the per-field lisp_eval output limit requested by ARGS.
 The request may tighten, but not exceed, *LISP-EVAL-MAX-OUTPUT-CHARS*."
@@ -664,6 +671,8 @@ Long text is middle-truncated so the model sees both the start and the end."
   "Return model-facing recovery guidance for CONDITION-TEXT."
   (let ((lower (string-downcase (or condition-text ""))))
     (cond
+      ((search "external process execution is disabled" lower)
+       "Do not shell out from eval. Use read/write modes for project inspection and edits, and run Lisp checks in-process with ASDF/FiveAM forms.")
       ((search "no sexed form matches selector" lower)
        "The sexed selector did not match. Do not guess selectors or symbol names. Use sexed-project-outline-to-string/sexed-outline-to-string or sexed-find-forms with :limit, then retry with exact :id or verified :head/:name.")
       ((search "ambiguous" lower)
@@ -677,6 +686,43 @@ Long text is middle-truncated so the model sees both the start and the end."
        "Check the callee before retrying. Use describe-function-to-string, extended-doc, documentation, or function-lambda-expression to verify the lambda list.")
       (t
        *lisp-eval-error-guidance*))))
+
+(defun lisp-eval-external-process-symbol-p (symbol)
+  "Return true when SYMBOL names an external process helper."
+  (member (symbol-name symbol)
+          *lisp-eval-external-process-symbol-names*
+          :test #'string=))
+
+(defun lisp-eval-form-contains-external-process-p (form)
+  "Return true when FORM contains a direct external process helper symbol."
+  (cond
+    ((symbolp form)
+     (lisp-eval-external-process-symbol-p form))
+    ((consp form)
+     (or (lisp-eval-form-contains-external-process-p (car form))
+         (lisp-eval-form-contains-external-process-p (cdr form))))
+    ((vectorp form)
+     (loop :for item :across form
+           :thereis (lisp-eval-form-contains-external-process-p item)))
+    (t nil)))
+
+(defun validate-lisp-eval-form (form)
+  "Reject FORM when prompt-mode eval should not execute it."
+  (when (and (not *lisp-eval-allow-external-processes*)
+             (lisp-eval-form-contains-external-process-p form))
+    (error "External process execution is disabled in eval. Do not use RUN-PROGRAM, LAUNCH-PROGRAM, RUN-SHELL-COMMAND, SYSTEM, or MAKE-PROCESS from the agent harness."))
+  form)
+
+(defun prompt-live-tool-event-suppression-bindings ()
+  "Return symbols/values that suppress nested prompt live tracing during eval."
+  (loop :for (name value) :in '(("*PROMPT-LIVE-TOOL-EVENT-STREAM*" nil)
+                                ("*PROMPT-LIVE-TOOL-EVENT-CALLBACK*" nil)
+                                ("*PROMPT-LIVE-TOOL-EVENT-COUNT*" 0))
+        :for symbol := (find-symbol name :clawmacs)
+        :when symbol
+          :collect symbol :into symbols
+          :and :collect value :into values
+        :finally (return (values symbols values))))
 
 (defun eval-history-to-string (&key (limit 10))
   "Return a compact newest-first summary of lisp_eval history."
@@ -729,11 +775,15 @@ Long text is middle-truncated so the model sees both the start and the end."
                 (*standard-output* stdout-stream)
                 (*trace-output* stderr-stream)
                 (*error-output* stderr-stream))
-            (let ((form (read-from-string code)))
-              (setf results (multiple-value-list (eval form))
-                    *last-eval-result* results
-                    *last-eval-condition* nil
-                    result-output (lisp-eval-result-output results))))
+            (multiple-value-bind (symbols values)
+                (prompt-live-tool-event-suppression-bindings)
+              (progv symbols values
+                (let ((form (read-from-string code)))
+                  (validate-lisp-eval-form form)
+                  (setf results (multiple-value-list (eval form))
+                        *last-eval-result* results
+                        *last-eval-condition* nil
+                        result-output (lisp-eval-result-output results))))))
         (error (condition)
           (setf *last-eval-result* nil
                 *last-eval-condition* condition
@@ -792,18 +842,26 @@ Long text is middle-truncated so the model sees both the start and the end."
         value
         default)))
 
-(defun project-tool-json-content (content &key extra)
+(defun tool-nonnegative-integer-arg (args key default)
+  "Return non-negative integer KEY from ARGS, or DEFAULT."
+  (let ((value (tool-arg args key)))
+    (if (and (integerp value) (not (minusp value)))
+        value
+        default)))
+
+(defun project-tool-json-content (content &key extra
+                                            (max-chars
+                                             *lisp-eval-max-output-chars*))
   "Encode CONTENT with common truncation metadata and EXTRA fields."
-  (let ((max-chars *lisp-eval-max-output-chars*))
-    (multiple-value-bind (text truncated-p)
-        (truncate-lisp-eval-text content max-chars)
-      (api-json-encode
-       (append extra
-               `((:content . ,text)
-                 (:limit . ,max-chars)
-                 (:truncated . ,truncated-p))
-               (when truncated-p
-                 `((:truncation--notice . ,*lisp-eval-truncation-guidance*))))))))
+  (multiple-value-bind (text truncated-p)
+      (truncate-lisp-eval-text content max-chars)
+    (api-json-encode
+     (append extra
+             `((:content . ,text)
+               (:limit . ,max-chars)
+               (:truncated . ,truncated-p))
+             (when truncated-p
+               `((:truncation--notice . ,*lisp-eval-truncation-guidance*)))))))
 
 (defun execute-project-list-files (args)
   "Tool implementation for listing project resource paths."
@@ -838,6 +896,29 @@ Long text is middle-truncated so the model sees both the start and the end."
               (:path . ,path)
               (:line . ,line)
               (:context . ,context)))))
+
+(defun execute-project-outline (args)
+  "Tool implementation for discovering structural forms in a Lisp resource."
+  (let* ((project (tool-arg args :project :required t))
+         (path (tool-arg args :path :required t))
+         (head (tool-arg args :head))
+         (depth (tool-nonnegative-integer-arg args :depth nil))
+         (max-depth (tool-nonnegative-integer-arg args :max--depth 2))
+         (limit (tool-positive-integer-arg args :limit 80)))
+    (project-tool-json-content
+     (funcall (symbol-function 'sexed-project-outline-to-string)
+              project
+              path
+              :head head
+              :depth depth
+              :max-depth max-depth
+              :limit limit)
+     :extra `((:project . ,project)
+              (:path . ,path)
+              (:head . ,head)
+              (:depth . ,depth)
+              (:max--depth . ,max-depth)
+              (:form--limit . ,limit)))))
 
 (defun execute-project-search (args)
   "Tool implementation for searching project resources."
@@ -1151,6 +1232,14 @@ Long text is middle-truncated so the model sees both the start and the end."
         `((:query . ,(tool-arg args :query :required t))
           (:kind . ,(or (tool-arg args :doc--kind) "auto"))
           (:system . ,(or (tool-arg args :system) "clawmacs")))))
+      ((string= mode "outline")
+       (execute-project-outline
+        `((:project . ,project)
+          (:path . ,(tool-arg args :path :required t))
+          (:head . ,(tool-arg args :head))
+          (:depth . ,(tool-arg args :depth))
+          (:max--depth . ,(tool-arg args :max--depth))
+          (:limit . ,(tool-positive-integer-arg args :limit 80)))))
       ((string= mode "form")
        (execute-project-read-form
         `((:project . ,project)
@@ -1180,7 +1269,7 @@ Long text is middle-truncated so the model sees both the start and the end."
         :extra `((:project . ,project)
                  (:query . ,(tool-arg args :query)))))
       (t
-       (error "Unknown read mode ~S. Use list, file, lines, search, doc, form, xref, or todo."
+       (error "Unknown read mode ~S. Use list, file, lines, search, doc, outline, form, xref, or todo."
               mode)))))
 
 (defun execute-write-tool (args)
@@ -1208,15 +1297,15 @@ the default tool set. User-added tools remain untouched."
 
   (register-tool
    "read"
-   "Read project resources or local documentation. Modes: list, file, lines, search, doc, form, xref, todo. Use form to read one Lisp form by selector, xref for symbol definitions/references/tests, and todo for task context before making many separate reads."
+   "Read project resources or local documentation. Modes: list, file, lines, search, doc, outline, form, xref, todo. Use outline before form to discover valid Lisp form selectors, xref for symbol definitions/references/tests, and todo for task context before making many separate reads."
    '((:type . "object")
      (:properties
       . ((:mode . ((:type . "string")
-                   (:description . "Required mode: list, file, lines, search, doc, form, xref, or todo.")))
+                   (:description . "Required mode: list, file, lines, search, doc, outline, form, xref, or todo.")))
          (:project . ((:type . "string")
                       (:description . "Project name. Default: clawmacs.")))
          (:path . ((:type . "string")
-                   (:description . "Project-relative path for file, lines, or form mode.")))
+                   (:description . "Project-relative path for file, lines, outline, or form mode.")))
          (:id . ((:type . "integer")
                  (:description . "Sexed form id for form mode.")))
          (:line . ((:type . "integer")
@@ -1232,7 +1321,9 @@ the default tool set. User-added tools remain untouched."
          (:nth . ((:type . "integer")
                   (:description . "Optional zero-based match index for form mode.")))
          (:depth . ((:type . "integer")
-                    (:description . "Optional form depth for form mode.")))
+                    (:description . "Optional form depth for outline or form mode.")))
+         (:max--depth . ((:type . "integer")
+                         (:description . "Optional maximum form depth for outline mode. Default: 2.")))
          (:doc--kind . ((:type . "string")
                         (:description . "Doc lookup kind for doc mode: auto, tool, function, variable, type, common-lisp, system, or search. Default: auto.")))
          (:system . ((:type . "string")
@@ -1276,7 +1367,7 @@ the default tool set. User-added tools remain untouched."
 
   (register-tool
    "eval"
-   "Evaluate one Common Lisp form in the running clawmacs process. Avoid this for normal reading/writing. Use it only to run checks/tests, inspect or change live Clawmacs state, or perform operations the read/write tools cannot express."
+   "Evaluate one Common Lisp form in the running clawmacs process. Avoid this for normal reading/writing. Use it only to run checks/tests, inspect or change live Clawmacs state, or perform operations the read/write tools cannot express. External process helpers such as run-program are disabled."
    `((:type . "object")
      (:properties
       . ((:code . ((:type . "string")

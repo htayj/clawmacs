@@ -391,6 +391,7 @@
      #:build-agent-system-prompt
      #:*default-core-system-prompt*
      #:*default-personality-prompt*
+     #:*default-agent-tool-names*
      #:*personality-prompt-path*
      #:load-personality-prompt-file
      #:provider-model-supported-think-levels
@@ -469,6 +470,7 @@
    #:*lisp-eval-history*
    #:*lisp-eval-history-limit*
    #:*lisp-eval-max-output-chars*
+   #:*lisp-eval-allow-external-processes*
    #:*lisp-eval-truncation-guidance*
    #:*lisp-eval-error-guidance*
    #:*tool-table*

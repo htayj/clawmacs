@@ -147,10 +147,12 @@ Normal workflow:
 - If you complete a TODO, mark only that exact item `DONE`, then read back `todo.org`.
 
 Tool details:
-- `read` modes: `list`, `file`, `lines`, `search`, `doc`.
+- `read` modes: `list`, `file`, `lines`, `search`, `doc`, `outline`, `form`, `xref`, `todo`.
 - `read` uses project-relative paths. The main project is `clawmacs`; user config is `config`.
-- `write` takes `project`, `path`, and full `content`.
+- Use `read mode=outline` before structural form edits, `xref` for symbols, and `todo` for TODO context.
+- `write` takes `project`, `path`, and full `content`; `write mode=form` replaces one Lisp form.
 - `eval` takes `code`; one form only. Use `progn` when a check needs multiple Lisp steps.
+- In prompt.sh, run tests in-process with eval, for example `(progn (asdf:load-system :clawmacs/tests) (fiveam:run! 'clawmacs/tests::llm-suite))`; do not shell out to `./scripts/guix-container.sh` from eval.
 
 Do not guess symbol names. Use `read` with `mode: doc` or `mode: search` first. If you must use
 `eval`, discover symbols with Lisp helpers such as `apropos-list`, `fboundp`, and `documentation`
@@ -162,6 +164,11 @@ Keep private reasoning private. Report concise results, changed files, and verif
 (defparameter *default-core-system-prompt*
   +default-core-system-prompt+
   "Default clawmacs operating instructions inserted ahead of the personality prompt.")
+
+(defvar *default-agent-tool-names* '("read" "write" "eval")
+  "Default prompt-mode tool allowlist.
+Users can customize this from init.lisp, and individual agent definitions can
+override it with REGISTER-AGENT-DEFINITION :TOOL-NAMES.")
 
 (defparameter +default-personality-prompt+
   "You are a helpful assistant. Keep private reasoning private. Use normal assistant text only
