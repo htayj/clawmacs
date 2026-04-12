@@ -37,8 +37,8 @@ OpenAI Codex auth follows Codex's own credential layout:
 
 ** Agent Tools
 
-The default built-in agent tool surface is provided by the =lispi= package and
-follows Pi-style coding tools, with =lisp_eval= replacing shell access:
+The default built-in agent tool surface follows Pi-style coding tools, with
+provider tools as the primary action surface:
 
 | Tool         | Permission             | Description                          |
 |--------------+------------------------+--------------------------------------|
@@ -49,15 +49,20 @@ follows Pi-style coding tools, with =lisp_eval= replacing shell access:
 | =edit=       | agent-allowed          | Replace exact text in sandboxed files |
 | =lisp_eval=  | agent-allowed          | Evaluate Common Lisp in the running image |
 
-By default, agents use the file tools for workspace search and text changes and
-=lisp_eval= for Lisp-native inspection, documentation lookup, computation, and
-runtime updates. Tool inputs and tool results are represented as Lisp data, for
-example =(edit :path "src/foo.lisp" :old-text "old" :new-text "new")=.
+By default, agents use exposed provider tools for workspace search and text
+changes. Tool inputs and tool results are represented as Lisp data, for example
+=(edit :path "src/foo.lisp" :old-text "old" :new-text "new")=.
 The =write= and =edit= tools reject content that leaves Lisp parentheses
 unbalanced.
-Custom tools may still be registered explicitly.
+Custom tools may be registered explicitly with =register-tool= or tagged through
+=defdoc :tool= and =defcommand :tool=. Imported packages contribute tools as
+soon as their tagged documentation forms are evaluated.
 
-The =lisp_eval= tool is particularly powerful: the agent can introspect clawmacs itself, query buffer state, evaluate expressions, and modify the running system. Standard Common Lisp reference lookup is available through a vendored offline snapshot of =cl-community-spec=, and imported library discovery is handled locally through ASDF metadata, package exports, docstrings, and source/doc search helpers.
+The =lisp_eval= tool is the fallback for Common Lisp tests, introspection, live
+system updates, and defining helper tools when no exposed tool fits. Standard
+Common Lisp reference lookup is available through a vendored offline snapshot of
+=cl-community-spec=, and imported library discovery is handled locally through
+ASDF metadata, package exports, docstrings, and source/doc search helpers.
 
 =lisp_eval= captures printed output, error output, and multiple return values.
 Its tool result is a printed Lisp plist. Recent calls are available with

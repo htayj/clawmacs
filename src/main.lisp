@@ -169,6 +169,7 @@ When all tools are done, finalizes the results."
                 ;; Tool is auto-approved: execute immediately
                 (t
                  (let* ((*current-caller* agent-kw)
+                        (*current-tool-buffer* buf)
                         (result-text
                           (handler-case
                               (execute-tool tool-name tool-input)
@@ -197,6 +198,7 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
       ;; Approved: execute the tool
       ((eq response :approve)
        (let* ((*current-caller* agent-kw)
+              (*current-tool-buffer* buf)
               (result-text
                 (handler-case
                     (execute-tool tool-name tool-input)
@@ -281,7 +283,8 @@ polls for updates via update-streaming-response."
          (tools (let ((*current-caller* agent-kw))
                    (tool-definitions-for-api)))
          (messages (build-conversation-messages buf))
-         (system-prompt (build-agent-system-prompt (buffer-agent-name buf))))
+         (system-prompt (let ((*current-caller* agent-kw))
+                          (build-agent-system-prompt (buffer-agent-name buf)))))
     (handler-case
         (multiple-value-bind (provider model think-level)
             (resolve-buffer-provider-and-model buf)
@@ -651,7 +654,8 @@ Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
          (tools (let ((*current-caller* agent-kw))
                   (tool-definitions-for-api)))
          (messages (build-conversation-messages buf))
-         (system-prompt (build-agent-system-prompt (buffer-agent-name buf))))
+         (system-prompt (let ((*current-caller* agent-kw))
+                          (build-agent-system-prompt (buffer-agent-name buf)))))
     (multiple-value-bind (provider model think-level)
         (resolve-buffer-provider-and-model buf)
       (file-debug-log "prompt-request"
@@ -675,7 +679,7 @@ Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
   "Return a Lisp data denial payload for a non-interactive tool denial."
   (tool-denied-result-data reason))
 
-(defun execute-prompt-tool-call (tool-use-block agent-kw auto-approve-tools-p)
+(defun execute-prompt-tool-call (buf tool-use-block agent-kw auto-approve-tools-p)
   "Execute TOOL-USE-BLOCK for prompt mode and return values RESULT and EVENT.
 RESULT is the alist consumed by INSERT-TOOL-RESULTS-MESSAGE. EVENT is a
 PROMPT-TOOL-EVENT for terminal/debug output."
@@ -689,7 +693,8 @@ PROMPT-TOOL-EVENT for terminal/debug output."
            (if denied-p
                (denied-tool-result-data
                 "Tool requires interactive approval; prompt mode denied it.")
-               (let ((*current-caller* agent-kw))
+               (let ((*current-caller* agent-kw)
+                     (*current-tool-buffer* buf))
                  (handler-case
                      (execute-tool tool-name tool-input)
                    (error (e)
@@ -717,7 +722,7 @@ PROMPT-TOOL-EVENT for terminal/debug output."
         (events nil))
     (dolist (tool-use tool-uses)
       (multiple-value-bind (result event)
-          (execute-prompt-tool-call tool-use agent-kw auto-approve-tools-p)
+          (execute-prompt-tool-call buf tool-use agent-kw auto-approve-tools-p)
         (push result results)
         (push event events)))
     (insert-tool-results-message buf (nreverse results))

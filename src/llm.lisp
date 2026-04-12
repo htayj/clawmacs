@@ -130,28 +130,19 @@ Each entry is (NAME-KEY . PLIST) and is intended for transient subagent runs.")
 
 (defparameter +default-core-system-prompt+
   "You are an expert coding assistant operating inside clawmacs, a Lisp-native terminal chat interface.
-You help users by reading files, editing code, writing files, and evaluating Common Lisp in the live image.
-
-Available tools:
-- read: Read text file contents from the current sandbox.
-- find: Search for files by filename or wildcard pattern.
-- grep: Search file contents for literal text.
-- write: Create or overwrite text files in the current sandbox.
-- edit: Make surgical text replacements in files.
-- lisp_eval: Evaluate one Common Lisp form in the running clawmacs process. Use this instead of bash for inspection, computation, docs, and runtime changes.
-
-Additional custom tools may be available depending on the agent or project.
+You help users by using provider tools to inspect files, edit code, write files, search projects, and verify changes in the live Lisp image.
 
 Tool calls and tool results use Lisp data mode with keyword arguments such as :path, :content, :old-text, and :new-text.
 
 Guidelines:
+- Prefer provider tools for normal work.
 - Use read to examine files before editing.
 - Use find to locate files by name.
 - Use grep to locate literal text in file contents.
 - Use edit for precise changes when :old-text can match exactly once.
 - Use write for new files or complete rewrites.
 - write and edit reject content that leaves Lisp parentheses unbalanced.
-- Use lisp_eval for Common Lisp introspection, symbol lookup, documentation, runtime calls, and batching related Lisp work.
+- Use lisp_eval for Common Lisp tests, introspection, live system updates, or defining helper tools when no exposed tool fits.
 - Return Lisp values from lisp_eval; prefer (format nil ...) over printing when you need a composed string.
 - Be concise in user-facing replies.
 - Show file paths clearly when working with files."
@@ -251,17 +242,26 @@ Project-local files take precedence over global ones."
           (current-system-prompt-date)
           (current-system-prompt-working-directory)))
 
+(defun render-agent-tools-section-if-loaded ()
+  "Render provider tool instructions when the tool system is loaded."
+  (let ((renderer (and (fboundp 'render-agent-tools-section)
+                       (symbol-function 'render-agent-tools-section))))
+    (and renderer (funcall renderer))))
+
 (defun build-agent-system-prompt (agent-name)
   "Build the full system prompt for AGENT-NAME.
-Composition order: boot-file prefix, core prompt, package sections, skills section,
-personality prompt, then dynamic runtime footer."
-  (let ((parts (remove-if #'null
-                          (list (load-boot-files)
-                                (agent-definition-core-prompt-or-default agent-name)
-                                (render-package-prompt-sections)
-                                (render-skills-section)
-                                (agent-definition-personality-prompt-or-default agent-name)
-                                (system-prompt-runtime-footer)))))
+Composition order: boot-file prefix, core prompt, package sections, active
+tools section, skills section, personality prompt, then dynamic runtime footer."
+  (let* ((agent-keyword (intern (string-upcase agent-name) :keyword))
+         (*current-caller* agent-keyword)
+         (parts (remove-if #'null
+                           (list (load-boot-files)
+                                 (agent-definition-core-prompt-or-default agent-name)
+                                 (render-package-prompt-sections)
+                                 (render-agent-tools-section-if-loaded)
+                                 (render-skills-section)
+                                 (agent-definition-personality-prompt-or-default agent-name)
+                                 (system-prompt-runtime-footer)))))
     (format nil "~{~A~^~%~%---~%~%~}" parts)))
 
 (defun build-system-prompt ()

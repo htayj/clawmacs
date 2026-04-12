@@ -37,6 +37,9 @@ NIL means all tools visible to the caller are available.")
   "Dynamic table mapping tool names to temporary tool definitions.
 Temporary tools override same-named global tools for the dynamic extent.")
 
+(defvar *current-tool-buffer* nil
+  "Dynamic buffer passed to command-style provider tools during execution.")
+
 (defvar *http-fetch-max-chars* 50000
   "Default maximum characters returned by http_fetch.")
 
@@ -172,6 +175,134 @@ approval to generate extra display context (e.g., file diffs)."
                                 :execute-fn execute-fn
                                 :approval-display-fn approval-display-fn))))
 
+(defun tool-argument-value (args name)
+  "Return values VALUE and SUPPLIED-P for NAME in Lisp data ARGS."
+  (loop :for (key . value) :in (tool-args-alist args)
+        :when (tool-key= key name)
+          :return (values value t)
+        :finally (return (values nil nil))))
+
+(defun agent-tool-arg-keyword (name)
+  "Return NAME as a keyword symbol suitable for APPLY keyword calls."
+  (intern (string-upcase name) :keyword))
+
+(defun collect-agent-tool-positional-args (metadata args)
+  "Collect provider ARGS in METADATA argument order for positional calls."
+  (let ((values nil)
+        (omitting-optional-tail-p nil))
+    (dolist (arg (agent-tool-metadata-args metadata) (nreverse values))
+      (let ((name (getf arg :name)))
+        (multiple-value-bind (value supplied-p)
+            (tool-argument-value args name)
+          (cond
+            (supplied-p
+             (when omitting-optional-tail-p
+               (error "Optional tool argument ~A was supplied after an omitted optional argument."
+                      name))
+             (push value values))
+            ((getf arg :required)
+             (error "Tool ~A requires argument ~A."
+                    (agent-tool-metadata-name metadata) name))
+            (t
+             (setf omitting-optional-tail-p t))))))))
+
+(defun collect-agent-tool-keyword-args (metadata args)
+  "Collect provider ARGS as keyword/value pairs for keyword calls."
+  (let ((values nil))
+    (dolist (arg (agent-tool-metadata-args metadata) (nreverse values))
+      (let ((name (getf arg :name)))
+        (multiple-value-bind (value supplied-p)
+            (tool-argument-value args name)
+          (cond
+            (supplied-p
+             (push (agent-tool-arg-keyword name) values)
+             (push value values))
+            ((getf arg :required)
+             (error "Tool ~A requires argument ~A."
+                    (agent-tool-metadata-name metadata) name))))))))
+
+(defun validate-agent-tool-required-args (metadata args)
+  "Signal when any required argument in METADATA is absent from ARGS."
+  (dolist (arg (agent-tool-metadata-args metadata))
+    (when (getf arg :required)
+      (multiple-value-bind (_value supplied-p)
+          (tool-argument-value args (getf arg :name))
+        (declare (ignore _value))
+        (unless supplied-p
+          (error "Tool ~A requires argument ~A."
+                 (agent-tool-metadata-name metadata)
+                 (getf arg :name)))))))
+
+(defun resolve-agent-tool-function (symbol)
+  "Return SYMBOL's function binding or signal a clear tool error."
+  (unless (fboundp symbol)
+    (error "Tool function ~A is not defined." symbol))
+  (fdefinition symbol))
+
+(defun resolve-agent-tool-function-designator (designator)
+  "Resolve a tool function designator."
+  (cond
+    ((null designator) nil)
+    ((functionp designator) designator)
+    ((symbolp designator) (resolve-agent-tool-function designator))
+    ((and (consp designator)
+          (eq (first designator) 'function)
+          (symbolp (second designator)))
+     (resolve-agent-tool-function (second designator)))
+    (t
+     (error "Invalid tool function designator: ~S" designator))))
+
+(defun agent-tool-values-result-string (values)
+  "Convert multiple return VALUES from a tagged tool into a tool result string."
+  (cond
+    ((and (= 1 (length values))
+          (stringp (first values)))
+     (first values))
+    ((= 1 (length values))
+     (lisp-data-string (first values)))
+    (t
+     (lisp-data-string (list :values (length values)
+                             :result values)))))
+
+(defun execute-agent-tool-metadata (metadata args)
+  "Execute a tagged Lisp function tool with provider ARGS."
+  (let ((fn (resolve-agent-tool-function
+             (agent-tool-metadata-symbol metadata))))
+    (agent-tool-values-result-string
+     (multiple-value-list
+      (ecase (agent-tool-metadata-call-style metadata)
+        (:raw-args
+         (validate-agent-tool-required-args metadata args)
+         (funcall fn args))
+        (:positional
+         (apply fn (collect-agent-tool-positional-args metadata args)))
+        (:keyword
+         (apply fn (collect-agent-tool-keyword-args metadata args)))
+        (:command
+         (unless *current-tool-buffer*
+           (error "Command tool ~A requires an active buffer."
+                  (agent-tool-metadata-name metadata)))
+         (apply fn *current-tool-buffer*
+                (collect-agent-tool-positional-args metadata args))))))))
+
+(defun register-agent-tool-provider-definition (metadata)
+  "Register AGENT-TOOL-METADATA in the provider tool table."
+  (register-tool
+   (agent-tool-metadata-name metadata)
+   (agent-tool-metadata-description metadata)
+   (agent-tool-metadata-input-schema metadata)
+   (agent-tool-metadata-permission metadata)
+   (lambda (args)
+     (execute-agent-tool-metadata metadata args))
+   :approval-display-fn
+   (resolve-agent-tool-function-designator
+    (agent-tool-metadata-approval-display-fn metadata))))
+
+(defun register-agent-tool-provider-definitions ()
+  "Register all tagged agent tools in the provider tool table."
+  (dolist (metadata (list-agent-tool-metadata))
+    (register-agent-tool-provider-definition metadata)))
+
 (defun tool-allowed-for-active-run-p (name)
   "Return true when NAME is allowed by *ACTIVE-TOOL-NAMES*."
   (or (null *active-tool-names*)
@@ -199,6 +330,30 @@ Only includes tools visible to the current *current-caller*."
                  (:input--schema . ,(tool-definition-input-schema def)))
                tools))))
     (coerce tools 'vector)))
+
+(defun rendered-tool-description (tool)
+  "Return TOOL's provider name and description values."
+  (values (cdr (assoc :name tool))
+          (cdr (assoc :description tool))))
+
+(defun render-agent-tools-section
+    (&optional (tools (coerce (tool-definitions-for-api) 'list)))
+  "Render the active provider tool discovery section for the system prompt."
+  (when tools
+    (let ((sorted-tools (sort (copy-list tools) #'string<
+                              :key (lambda (tool)
+                                     (cdr (assoc :name tool))))))
+      (with-output-to-string (s)
+        (format s "<tools>~%")
+        (format s "## Tools~%")
+        (format s "Use the provider tools for normal actions. Tool inputs and tool results use Lisp data mode with keyword arguments.~%")
+        (format s "Use `lisp_eval` for testing, live system updates, introspection, or defining helper tools when no exposed tool fits.~%")
+        (format s "### Available tools~%")
+        (dolist (tool sorted-tools)
+          (multiple-value-bind (name description)
+              (rendered-tool-description tool)
+            (format s "- ~A: ~A~%" name description)))
+        (format s "</tools>")))))
 
 (defun tool-requires-permission-p (name)
   "Return T if tool NAME requires user permission."
@@ -338,19 +493,10 @@ Returns a string or nil. Calls the tool's approval-display-fn if set."
 (defun init-tools ()
   "Register the default clawmacs built-in tools.
 This removes any previously registered built-in entries, then re-registers
-read, find, grep, write, edit, and lisp_eval. User-added tools remain untouched."
+tagged agent tools. User-added tools remain untouched."
 
   (dolist (name *built-in-tool-names*)
     (remhash name *tool-table*))
 
   (setf *lisp-eval-default-package* "CLAWMACS")
-  (dolist (spec (lispi:default-tool-specs))
-    (apply #'register-tool
-           (getf spec :name)
-           (getf spec :description)
-           (getf spec :schema)
-           (getf spec :permission)
-           (getf spec :execute-fn)
-           (when (getf spec :approval-display-fn)
-             (list :approval-display-fn
-                   (getf spec :approval-display-fn))))))
+  (register-agent-tool-provider-definitions))

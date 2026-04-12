@@ -19,10 +19,233 @@ or an agent keyword (e.g., :CODER) during agent command dispatch.")
   (docstring   ""                            :type string   :read-only t)
   (keybindings nil                           :type list     :read-only t)
   (lambda-list '(buffer)                     :type list     :read-only t)
-  (interactive-spec t                        :type t        :read-only t))
+  (interactive-spec t                        :type t        :read-only t)
+  (tool-spec nil                             :type t        :read-only t))
 
 (defvar *command-table* (make-hash-table :test #'eq)
   "Global table mapping command symbols to command-metadata.")
+
+(defstruct agent-tool-metadata
+  "Metadata for a Lisp function exposed as a provider-callable agent tool."
+  (symbol      (error "symbol required")     :type symbol   :read-only t)
+  (name        ""                            :type string   :read-only t)
+  (description ""                            :type string   :read-only t)
+  (args        nil                           :type list     :read-only t)
+  (input-schema nil                          :type list     :read-only t)
+  (permission  :agent-allowed                :type keyword  :read-only t)
+  (call-style  :positional                   :type keyword  :read-only t)
+  (approval-display-fn nil                   :type t        :read-only t)
+  (command-p   nil                           :type boolean  :read-only t)
+  (lambda-list nil                           :type list     :read-only t))
+
+(defvar *agent-tool-metadata-table* (make-hash-table :test #'eq)
+  "Global table mapping Lisp symbols to AGENT-TOOL-METADATA.")
+
+(defvar *agent-tool-name-table* (make-hash-table :test #'equal)
+  "Global table mapping provider tool names to owning Lisp symbols.")
+
+(defun agent-tool-blank-string-p (value)
+  "Return true when VALUE is NIL or contains only ASCII whitespace."
+  (or (null value)
+      (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                  value)))))
+
+(defun normalize-agent-tool-name (tool-name)
+  "Normalize TOOL-NAME into the provider-facing tool name string."
+  (let* ((raw (etypecase tool-name
+                (string tool-name)
+                (symbol (symbol-name tool-name))))
+         (trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) raw)))
+    (when (agent-tool-blank-string-p trimmed)
+      (error "Tool name must be non-empty"))
+    (string-downcase
+     (substitute #\_ #\- trimmed))))
+
+(defun normalize-agent-tool-schema-type (value)
+  "Normalize a Lisp type designator into the provider schema type string."
+  (cond
+    ((null value) "string")
+    ((stringp value) value)
+    ((symbolp value) (string-downcase (symbol-name value)))
+    (t (format nil "~(~A~)" value))))
+
+(defun normalize-agent-tool-arg-spec (tool-symbol arg-spec)
+  "Normalize one explicit argument spec for TOOL-SYMBOL."
+  (unless (and (consp arg-spec)
+               (not (keywordp (first arg-spec))))
+    (error "Tool ~A argument spec must start with an argument name, got ~S."
+           tool-symbol arg-spec))
+  (let ((arg-name (first arg-spec))
+        (plist (rest arg-spec)))
+    (unless (evenp (length plist))
+      (error "Tool ~A argument spec for ~A has an odd plist: ~S."
+             tool-symbol arg-name arg-spec))
+    (loop :for tail :on plist :by #'cddr
+          :for key := (first tail)
+          :unless (member key '(:type :description :required) :test #'eq)
+            :do (error "Tool ~A argument spec for ~A has unsupported key ~S."
+                       tool-symbol arg-name key))
+    (list :name (tool-key-name arg-name)
+          :type (normalize-agent-tool-schema-type (getf plist :type))
+          :description (or (getf plist :description) "")
+          :required (if (member :required plist :test #'eq)
+                        (not (null (getf plist :required)))
+                        t))))
+
+(defun agent-tool-arg-schema-property (arg)
+  "Return the provider schema property for normalized ARG metadata."
+  (let ((property `((:type . ,(getf arg :type)))))
+    (if (agent-tool-blank-string-p (getf arg :description))
+        property
+        (append property
+                `((:description . ,(getf arg :description)))))))
+
+(defun agent-tool-input-schema (args)
+  "Return the provider input schema for normalized ARGS metadata."
+  (let ((required (loop :for arg :in args
+                        :when (getf arg :required)
+                          :collect (getf arg :name)))
+        (properties (loop :for arg :in args
+                          :collect (cons (getf arg :name)
+                                         (agent-tool-arg-schema-property arg)))))
+    `((:type . "object")
+      (:properties . ,properties)
+      (:required . ,(coerce required 'vector)))))
+
+(defun normalize-agent-tool-call-style (tool-symbol value command-p)
+  "Normalize the call style for TOOL-SYMBOL."
+  (let ((style (or value (if command-p :command :positional))))
+    (unless (member style '(:raw-args :positional :keyword :command) :test #'eq)
+      (error "Tool ~A has unsupported call style ~S." tool-symbol style))
+    (when (and command-p (not (eq style :command)))
+      (error "Command tool ~A must use :COMMAND call style." tool-symbol))
+    style))
+
+(defun validate-agent-tool-args (tool-symbol tool-spec)
+  "Return the explicit :ARGS value from TOOL-SPEC or signal a clear error."
+  (unless (member :args tool-spec :test #'eq)
+    (error "Tool ~A requires explicit :ARGS metadata." tool-symbol))
+  (let ((args (getf tool-spec :args)))
+    (unless (listp args)
+      (error "Tool ~A :ARGS must be a list, got ~S." tool-symbol args))
+    args))
+
+(defun normalize-agent-tool-spec (symbol tool-spec
+                                  &key command-p lambda-list docstring)
+  "Normalize a DEFDOC/DEFCOMMAND :TOOL plist into AGENT-TOOL-METADATA."
+  (unless (and (listp tool-spec) (or (null tool-spec) (keywordp (first tool-spec))))
+    (error "Tool metadata for ~A must be a keyword plist, got ~S."
+           symbol tool-spec))
+  (unless (evenp (length tool-spec))
+    (error "Tool metadata for ~A has an odd plist: ~S." symbol tool-spec))
+  (loop :for tail :on tool-spec :by #'cddr
+        :for key := (first tail)
+        :unless (member key '(:name :description :permission :args
+                              :call-style :approval-display-fn)
+                        :test #'eq)
+          :do (error "Tool metadata for ~A has unsupported key ~S."
+                     symbol key))
+  (let* ((raw-args (validate-agent-tool-args symbol tool-spec))
+         (args (mapcar (lambda (arg)
+                         (normalize-agent-tool-arg-spec symbol arg))
+                       raw-args))
+         (permission (or (getf tool-spec :permission) :agent-allowed))
+         (description (or (getf tool-spec :description)
+                          docstring
+                          (documentation symbol 'function)
+                          ""))
+         (call-style
+           (normalize-agent-tool-call-style
+            symbol (getf tool-spec :call-style) command-p)))
+    (unless (member permission '(:agent-allowed :agent-with-permission :user-only)
+                    :test #'eq)
+      (error "Tool ~A has unsupported permission ~S." symbol permission))
+    (when (and command-p lambda-list
+               (/= (length args) (length (rest lambda-list))))
+      (error "Command tool ~A argument count ~D does not match command parameters ~D."
+             symbol (length args) (length (rest lambda-list))))
+    (make-agent-tool-metadata
+     :symbol symbol
+     :name (normalize-agent-tool-name (or (getf tool-spec :name) symbol))
+     :description description
+     :args args
+     :input-schema (agent-tool-input-schema args)
+     :permission permission
+     :call-style call-style
+     :approval-display-fn (getf tool-spec :approval-display-fn)
+     :command-p (not (null command-p))
+     :lambda-list lambda-list)))
+
+(defun call-agent-tool-provider-bridge (metadata)
+  "Register METADATA with the provider tool table when that bridge is loaded."
+  (let ((bridge (and (fboundp 'register-agent-tool-provider-definition)
+                     (symbol-function 'register-agent-tool-provider-definition))))
+    (when bridge
+      (funcall bridge metadata))))
+
+(defun remove-agent-tool-provider-entry (name)
+  "Remove NAME from the provider tool table when the table is loaded."
+  (when (and (boundp '*tool-table*)
+             (hash-table-p (symbol-value '*tool-table*)))
+    (remhash name (symbol-value '*tool-table*))))
+
+(defun unregister-agent-tool-metadata (symbol)
+  "Remove SYMBOL's agent tool metadata and provider entry, when present."
+  (let ((metadata (gethash symbol *agent-tool-metadata-table*)))
+    (when metadata
+      (remhash (agent-tool-metadata-name metadata) *agent-tool-name-table*)
+      (remhash symbol *agent-tool-metadata-table*)
+      (remove-agent-tool-provider-entry (agent-tool-metadata-name metadata)))
+    metadata))
+
+(defun register-agent-tool-metadata (symbol tool-spec
+                                     &key command-p lambda-list docstring)
+  "Register SYMBOL as an agent tool from explicit TOOL-SPEC metadata."
+  (if (null tool-spec)
+      (unregister-agent-tool-metadata symbol)
+      (let* ((metadata (normalize-agent-tool-spec
+                        symbol tool-spec
+                        :command-p command-p
+                        :lambda-list lambda-list
+                        :docstring docstring))
+             (name (agent-tool-metadata-name metadata))
+             (owner (gethash name *agent-tool-name-table*)))
+        (when (and owner (not (eq owner symbol)))
+          (error "Tool name ~S is already registered for ~A, cannot reuse it for ~A."
+                 name owner symbol))
+        (let ((previous (gethash symbol *agent-tool-metadata-table*)))
+          (when (and previous
+                     (not (string= name (agent-tool-metadata-name previous))))
+            (remhash (agent-tool-metadata-name previous) *agent-tool-name-table*)
+            (remove-agent-tool-provider-entry
+             (agent-tool-metadata-name previous))))
+        (setf (gethash symbol *agent-tool-metadata-table*) metadata
+              (gethash name *agent-tool-name-table*) symbol)
+        (call-agent-tool-provider-bridge metadata)
+        metadata)))
+
+(defun find-agent-tool-metadata (symbol-or-name)
+  "Return agent tool metadata by Lisp symbol or provider tool name."
+  (cond
+    ((symbolp symbol-or-name)
+     (or (gethash symbol-or-name *agent-tool-metadata-table*)
+         (let ((owner (gethash (normalize-agent-tool-name symbol-or-name)
+                               *agent-tool-name-table*)))
+           (and owner (gethash owner *agent-tool-metadata-table*)))))
+    ((stringp symbol-or-name)
+     (let ((owner (gethash (normalize-agent-tool-name symbol-or-name)
+                           *agent-tool-name-table*)))
+       (and owner (gethash owner *agent-tool-metadata-table*))))
+    (t nil)))
+
+(defun list-agent-tool-metadata ()
+  "Return registered agent tool metadata sorted by provider tool name."
+  (let ((metadata nil))
+    (maphash (lambda (_symbol value)
+               (declare (ignore _symbol))
+               (push value metadata))
+             *agent-tool-metadata-table*)
+    (sort metadata #'string< :key #'agent-tool-metadata-name)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Command Validation Helpers
@@ -209,7 +432,8 @@ Filters out :USER-ONLY commands when caller is not :USER."
 
 (defmacro defcommand (name (&key (permission :user-only)
                                  (keys nil)
-                                 (interactive nil interactive-supplied-p))
+                                 (interactive nil interactive-supplied-p)
+                                 (tool nil tool-supplied-p))
                       docstring lambda-list &body body)
   "Define a command as a generic function with access control.
 
@@ -218,6 +442,7 @@ Expands to:
 2. A generic function definition
 3. An :around method that checks permissions
 4. A primary method with BODY
+5. Optional provider tool metadata when :TOOL is supplied
 
 Example:
   (defcommand send-message (:permission :user-only :keys ((#\\Return)))
@@ -239,7 +464,8 @@ Example:
                          :docstring ,docstring
                          :keybindings ',keys
                          :lambda-list ',lambda-list
-                         :interactive-spec ',interactive-spec)))
+                         :interactive-spec ',interactive-spec
+                         :tool-spec ',tool)))
          (setf (gethash ',name *command-table*) ,meta-var))
 
        ;; Define the generic function (idempotent in CLOS)
@@ -256,6 +482,13 @@ Example:
        (defmethod ,name ((,buffer-var buffer) ,@other-args)
          ,@body)
 
+       ,@(when tool-supplied-p
+           `((register-agent-tool-metadata
+              ',name ',tool
+              :command-p t
+              :lambda-list ',lambda-list
+              :docstring ,docstring)))
+
        ',name)))
 
 ;;; --------------------------------------------------------------------------
@@ -269,9 +502,11 @@ Each entry is a plist with optional keys:
   :returns      — return type and example value
   :see-also     — list of related symbols
   :category     — category string for grouping
-  :side-effects — description of mutations, I/O, or global state changes")
+  :side-effects — description of mutations, I/O, or global state changes
+  :tool         — provider tool metadata for agent-facing functions")
 
-(defmacro defdoc (name &key category usage returns see-also side-effects)
+(defmacro defdoc (name &key category usage returns see-also side-effects
+                            (tool nil tool-supplied-p))
   "Define extended documentation for SYMBOL.
 Stores a plist in *extended-docs* keyed by the symbol.
 
@@ -282,12 +517,17 @@ Example:
     :returns \"buffer — A new buffer object with a single empty input message.\"
     :see-also (buffer buffer-name add-buffer-to-ring)
     :side-effects \"Allocates a new buffer with an empty input message.\")"
-  `(setf (gethash ',name *extended-docs*)
-         (list ,@(when category `(:category ,category))
-               ,@(when usage `(:usage ,usage))
-               ,@(when returns `(:returns ,returns))
-               ,@(when see-also `(:see-also ',see-also))
-               ,@(when side-effects `(:side-effects ,side-effects)))))
+  `(let ((doc (setf (gethash ',name *extended-docs*)
+                    (list ,@(when category `(:category ,category))
+                          ,@(when usage `(:usage ,usage))
+                          ,@(when returns `(:returns ,returns))
+                          ,@(when see-also `(:see-also ',see-also))
+                          ,@(when side-effects `(:side-effects ,side-effects))
+                          ,@(when (and tool-supplied-p tool)
+                              `(:tool ',tool))))))
+     ,@(when tool-supplied-p
+         `((register-agent-tool-metadata ',name ',tool)))
+     doc))
 
 (defun extended-doc (symbol &optional key)
   "Return the extended documentation for SYMBOL.

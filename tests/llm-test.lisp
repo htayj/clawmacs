@@ -422,46 +422,85 @@ same
              :new-text "replacement")))))))
 
 (test build-system-prompt-is-compact-and-pi-style
-  "The default system prompt lists the compact Pi-style tool surface."
-  (with-function-override (clawmacs::load-boot-files ()
-                            nil)
-    (with-package-state-override ((default-package-test-channels))
-      (clawmacs:load-autoload-packages)
-      (is-false (search "## Structural editing with sexed"
-                        clawmacs::*default-core-system-prompt*))
-      (let ((prompt (clawmacs::build-system-prompt)))
-      (is (search "operating inside clawmacs" prompt))
-      (is (search "Available tools:" prompt))
-      (is (search "- read: Read text file contents" prompt))
-      (is (search "- find: Search for files" prompt))
-      (is (search "- grep: Search file contents" prompt))
-      (is (search "- write: Create or overwrite text files" prompt))
-      (is (search "- edit: Make surgical text replacements" prompt))
-      (is (search "- lisp_eval: Evaluate one Common Lisp form" prompt))
-      (is (search "Tool calls and tool results use Lisp data mode" prompt))
-      (is (search ":old-text" prompt))
-      (is (search ":new-text" prompt))
-      (is (search "Use find to locate files by name" prompt))
-      (is (search "Use grep to locate literal text" prompt))
-      (is (search "Use lisp_eval for Common Lisp introspection" prompt))
-      (is (search "Current date:" prompt))
-      (is (search "Current working directory:" prompt))
-      (is (search (clawmacs::current-system-prompt-date) prompt))
-      (is-false (search "only built-in tool available by default" prompt))
-      (is-false (search "## Subagents" prompt))
-      (is-false (search "Project file-buffer example" prompt))
-      (is-false (search "Use the `sexed-*` functions for Lisp source edits" prompt))
-      (is-false (search "(sexed-outline-to-string TEXT :max-depth 2)" prompt))
-      (is-false (search "(sexed-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
-      (is-false (search "(sexed-stage-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
-      (is-false (search "(sexed-replace-scratch-form SELECTOR NEW-TEXT)" prompt))
-      (is-false (search "(sexed-init-outline-to-string :max-depth 3)" prompt))
-      (is-false (search "Do not try to set" prompt))
-      (is-false (search "Message adapters such as `sexed-replace-message-form` take a `message` object" prompt))
-      (is-false (search "fetching URLs, reading/writing files, running shell commands" prompt))
-      (is-false (search "http_fetch" prompt))
-      (is-false (search "shell_exec" prompt))
-      (is-false (search "file_read" prompt))))))
+  "The default system prompt lists the active provider tool surface."
+  (with-tool-table-restored
+    (clawmacs::init-tools)
+    (with-function-override (clawmacs::load-boot-files ()
+                              nil)
+      (with-package-state-override ((default-package-test-channels))
+        (clawmacs:load-autoload-packages)
+        (is-false (search "## Structural editing with sexed"
+                          clawmacs::*default-core-system-prompt*))
+        (let ((prompt (clawmacs::build-system-prompt)))
+          (is (search "operating inside clawmacs" prompt))
+          (is (search "## Tools" prompt))
+          (is (search "- read: Read the contents of a text file" prompt))
+          (is (search "- find: Search for files" prompt))
+          (is (search "- grep: Search file contents" prompt))
+          (is (search "- write: Create or overwrite a text file" prompt))
+          (is (search "- edit: Edit a text file" prompt))
+          (is (search "- lisp_eval: Evaluate one Common Lisp form" prompt))
+          (is (search "Tool calls and tool results use Lisp data mode" prompt))
+          (is (search ":old-text" prompt))
+          (is (search ":new-text" prompt))
+          (is (search "Prefer provider tools for normal work" prompt))
+          (is (search "Use find to locate files by name" prompt))
+          (is (search "Use grep to locate literal text" prompt))
+          (is (search "Use `lisp_eval` for testing" prompt))
+          (is (search "Current date:" prompt))
+          (is (search "Current working directory:" prompt))
+          (is (search (clawmacs::current-system-prompt-date) prompt))
+          (is-false (search "only built-in tool available by default" prompt))
+          (is-false (search "## Subagents" prompt))
+          (is-false (search "Project file-buffer example" prompt))
+          (is-false (search "Use the `sexed-*` functions for Lisp source edits" prompt))
+          (is-false (search "(sexed-outline-to-string TEXT :max-depth 2)" prompt))
+          (is-false (search "(sexed-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
+          (is-false (search "(sexed-stage-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
+          (is-false (search "(sexed-replace-scratch-form SELECTOR NEW-TEXT)" prompt))
+          (is-false (search "(sexed-init-outline-to-string :max-depth 3)" prompt))
+          (is-false (search "Do not try to set" prompt))
+          (is-false (search "Message adapters such as `sexed-replace-message-form` take a `message` object" prompt))
+          (is-false (search "fetching URLs, reading/writing files, running shell commands" prompt))
+          (is-false (search "http_fetch" prompt))
+          (is-false (search "shell_exec" prompt))
+          (is-false (search "file_read" prompt)))))))
+
+(test package-defdoc-tool-appears-in-system-prompt
+  "Package entrypoints can register provider tools by evaluating defdoc :tool."
+  (let* ((channel-root
+           (make-package-channel-root
+            :label "package-tool-channel"
+            :package-name "package-tool"
+            :manifest "(:name \"package-tool\"
+ :description \"Package tool\"
+ :entrypoint \"entry.lisp\"
+ :autoload t)"
+            :entrypoint-content
+            "(defun package-tool-probe (value)
+  (format nil \"package=~A\" value))
+(defdoc package-tool-probe
+  :tool (:name \"package_probe\"
+         :description \"Probe tool from a package.\"
+         :args ((value :type \"string\" :description \"Value to echo.\"))))")))
+    (let ((clawmacs::*agent-tool-metadata-table* (make-hash-table :test #'eq))
+          (clawmacs::*agent-tool-name-table* (make-hash-table :test #'equal)))
+      (with-tool-table-restored
+        (clrhash clawmacs::*tool-table*)
+        (with-package-state-override (nil)
+          (clawmacs:register-package-channel "custom" channel-root
+                                             :description "Custom channel")
+          (clawmacs:load-autoload-packages)
+          (let* ((tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+                 (tool-names (mapcar (lambda (tool)
+                                       (cdr (assoc :name tool)))
+                                     tools))
+                 (prompt (clawmacs::build-system-prompt)))
+            (is (member "package_probe" tool-names :test #'string=))
+            (is (search "- package_probe: Probe tool from a package." prompt))
+            (is (string= "package=ok"
+                         (clawmacs:execute-tool "package_probe"
+                                                '(:value "ok"))))))))))
 
 (test register-agent-definition-round-trips-through-registry
   "Programmatic agent definitions can be registered, replaced, found, and listed."

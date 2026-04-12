@@ -227,6 +227,7 @@
    #:command-metadata-keybindings
    #:command-metadata-lambda-list
    #:command-metadata-interactive-spec
+   #:command-metadata-tool-spec
    #:defcommand
    #:check-permission
    #:permission-denied
@@ -241,6 +242,21 @@
    #:*extended-docs*
    #:defdoc
    #:extended-doc
+   #:agent-tool-metadata
+   #:agent-tool-metadata-symbol
+   #:agent-tool-metadata-name
+   #:agent-tool-metadata-description
+   #:agent-tool-metadata-args
+   #:agent-tool-metadata-input-schema
+   #:agent-tool-metadata-permission
+   #:agent-tool-metadata-call-style
+   #:agent-tool-metadata-approval-display-fn
+   #:agent-tool-metadata-command-p
+   #:agent-tool-metadata-lambda-list
+   #:register-agent-tool-metadata
+   #:unregister-agent-tool-metadata
+   #:find-agent-tool-metadata
+   #:list-agent-tool-metadata
    #:undocumented-functions
    #:undocumented-variables
 
@@ -510,6 +526,7 @@
    #:*tool-table*
    #:*active-tool-names*
    #:*temporary-tool-table*
+   #:*current-tool-buffer*
    #:lisp-eval-record
    #:lisp-eval-record-code
    #:lisp-eval-record-package
@@ -537,6 +554,7 @@
    #:execute-tool
    #:tool-requires-permission-p
    #:tool-definitions-for-api
+   #:render-agent-tools-section
    #:format-tool-call-sexpr
    #:format-tool-call-expanded
    #:tool-approval-extra-display

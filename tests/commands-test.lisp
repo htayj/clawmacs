@@ -1,6 +1,18 @@
 (in-package :clawmacs/tests)
 (in-suite commands-suite)
 
+(defvar *command-tool-test-log* nil
+  "Records command tool invocations during command tests.")
+
+(defmacro with-agent-tool-state (() &body body)
+  `(let ((clawmacs::*agent-tool-metadata-table*
+           (make-hash-table :test #'eq))
+         (clawmacs::*agent-tool-name-table*
+           (make-hash-table :test #'equal))
+         (clawmacs::*tool-table*
+           (make-hash-table :test #'equal)))
+     ,@body))
+
 (test command-metadata-registration
   "defcommand registers metadata in the command table."
   (let ((*command-table* (make-hash-table :test #'eq)))
@@ -31,6 +43,96 @@
       (is (equal '((:name count :prompt "Count" :reader parse-integer)
                    (:name label :prompt "Label" :reader nil))
                  (command-metadata-interactive-spec meta))))))
+
+(test defdoc-tool-metadata-registers-provider-tool
+  "defdoc :tool stores metadata and exposes a provider-callable tool."
+  (with-agent-tool-state ()
+    (eval '(defun metadata-doc-tool (value)
+             (format nil "value=~A" value)))
+    (eval '(clawmacs:defdoc metadata-doc-tool
+             :category "test"
+             :tool (:name "metadata_doc_tool"
+                    :description "Return a tagged value."
+                    :args ((value :type "string"
+                                  :description "Value to echo.")))))
+    (let* ((metadata (find-agent-tool-metadata 'metadata-doc-tool))
+           (definition (gethash "metadata_doc_tool" clawmacs::*tool-table*))
+           (schema (and definition
+                        (tool-definition-input-schema definition)))
+           (properties (cdr (assoc :properties schema))))
+      (is (not (null metadata)))
+      (is (string= "metadata_doc_tool"
+                   (agent-tool-metadata-name metadata)))
+      (is (eq :agent-allowed
+              (agent-tool-metadata-permission metadata)))
+      (is (not (null definition)))
+      (is (not (null (assoc "value" properties :test #'string=))))
+      (is (string= "value=ok"
+                   (execute-tool "metadata_doc_tool" '(:value "ok")))))))
+
+(test defdoc-tool-metadata-replaces-same-symbol
+  "Re-evaluating the same symbol's tool metadata replaces the provider entry."
+  (with-agent-tool-state ()
+    (eval '(defun replace-doc-tool (value)
+             (format nil "replace=~A" value)))
+    (eval '(clawmacs:defdoc replace-doc-tool
+             :tool (:name "replace_old"
+                    :description "Old tool."
+                    :args ((value :type "string")))))
+    (eval '(clawmacs:defdoc replace-doc-tool
+             :tool (:name "replace_new"
+                    :description "New tool."
+                    :args ((value :type "string")))))
+    (is (null (gethash "replace_old" clawmacs::*tool-table*)))
+    (is (not (null (gethash "replace_new" clawmacs::*tool-table*))))
+    (is (string= "replace_new"
+                 (agent-tool-metadata-name
+                  (find-agent-tool-metadata 'replace-doc-tool))))))
+
+(test defdoc-tool-metadata-rejects-duplicate-provider-names
+  "Different symbols cannot register the same provider tool name."
+  (with-agent-tool-state ()
+    (eval '(defun duplicate-doc-tool-a (value) value))
+    (eval '(defun duplicate-doc-tool-b (value) value))
+    (eval '(clawmacs:defdoc duplicate-doc-tool-a
+             :tool (:name "duplicate_doc_tool"
+                    :description "First tool."
+                    :args ((value :type "string")))))
+    (signals error
+      (eval '(clawmacs:defdoc duplicate-doc-tool-b
+               :tool (:name "duplicate_doc_tool"
+                      :description "Second tool."
+                      :args ((value :type "string"))))))))
+
+(test defcommand-tool-uses-current-buffer
+  "defcommand :tool omits BUFFER from the schema and receives the active buffer."
+  (with-agent-tool-state ()
+    (let ((*command-table* (make-hash-table :test #'eq))
+          (*command-tool-test-log* nil))
+      (eval '(clawmacs:defcommand command-tool-test
+                 (:permission :agent-allowed
+                  :interactive nil
+                  :tool (:name "command_tool_test"
+                         :description "Run a command as an agent tool."
+                         :args ((label :type "string"
+                                       :description "Label to record."))))
+               "Run a command as an agent tool."
+               (buffer label)
+               (setf clawmacs/tests::*command-tool-test-log*
+                     (list (buffer-name buffer) label))
+               (format nil "command=~A" label)))
+      (let* ((definition (gethash "command_tool_test" clawmacs::*tool-table*))
+             (schema (tool-definition-input-schema definition))
+             (properties (cdr (assoc :properties schema)))
+             (buf (make-buffer "tool-buffer")))
+        (is (not (null (assoc "label" properties :test #'string=))))
+        (is (null (assoc "buffer" properties :test #'string=)))
+        (let ((*current-caller* :some-agent)
+              (*current-tool-buffer* buf))
+          (is (string= "command=ok"
+                       (execute-tool "command_tool_test" '(:label "ok")))))
+        (is (equal '("tool-buffer" "ok")
+                   *command-tool-test-log*))))))
 
 (test permission-denied-for-agent-on-user-only
   "An agent calling a :user-only command signals permission-denied."
