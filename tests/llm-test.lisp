@@ -1468,6 +1468,46 @@ PAIR PERSONALITY"
         (is (null clawmacs:*last-eval-condition*))
         (is (search "hello" (clawmacs:eval-history-to-string)))))))
 
+(test execute-lisp-eval-middle-truncates-large-results
+  "Large lisp_eval results are bounded while preserving head and tail context."
+  (with-tool-table-restored
+    (let ((clawmacs::*lisp-eval-history* nil)
+          (clawmacs:*lisp-eval-max-output-chars* 220))
+      (clawmacs::init-tools)
+      (let* ((json (clawmacs:execute-tool
+                    "lisp_eval"
+                    '((:code . "(concatenate 'string \"HEAD-\" (make-string 500 :initial-element #\\x) \"-TAIL\")"))))
+             (decoded (clawmacs::api-json-decode json))
+             (result (cdr (assoc :result decoded)))
+             (truncated (coerce (cdr (assoc :truncated decoded)) 'list)))
+        (is (<= (length result) clawmacs:*lisp-eval-max-output-chars*))
+        (is (search "HEAD-" result))
+        (is (search "-TAIL" result))
+        (is (search "truncated" result))
+        (is (search "narrower" result))
+        (is (member "result" truncated :test #'string=))
+        (is (= 220 (cdr (assoc :limit decoded))))))))
+
+(test execute-lisp-eval-max-chars-only-tightens-limit
+  "The lisp_eval max_chars argument cannot increase the configured output cap."
+  (with-tool-table-restored
+    (let ((clawmacs:*lisp-eval-max-output-chars* 180))
+      (clawmacs::init-tools)
+      (let* ((small-json (clawmacs:execute-tool
+                          "lisp_eval"
+                          '((:code . "(make-string 500 :initial-element #\\y)")
+                            (:max--chars . 90))))
+             (small (clawmacs::api-json-decode small-json))
+             (large-json (clawmacs:execute-tool
+                          "lisp_eval"
+                          '((:code . "(make-string 500 :initial-element #\\z)")
+                            (:max--chars . 1000))))
+             (large (clawmacs::api-json-decode large-json)))
+        (is (= 90 (cdr (assoc :limit small))))
+        (is (<= (length (cdr (assoc :result small))) 90))
+        (is (= 180 (cdr (assoc :limit large))))
+        (is (<= (length (cdr (assoc :result large))) 180))))))
+
 (test execute-lisp-eval-records-errors
   "Failed lisp_eval executions expose the condition and still record history."
   (with-tool-table-restored

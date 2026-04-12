@@ -566,18 +566,55 @@ The file must exist. old_text must be found exactly once."
 (defvar *lisp-eval-history-limit* 50
   "Maximum number of lisp_eval records retained in memory.")
 
-(defvar *lisp-eval-max-output-chars* 20000
-  "Maximum characters retained per lisp_eval result/stdout/stderr field.")
+(defvar *lisp-eval-max-output-chars* 10000
+  "Maximum characters retained per lisp_eval result/stdout/stderr field.
+This mirrors Codex-style tool truncation: large tool results should stay
+bounded for the model, while agents can request smaller focused outputs.")
 
-(defun truncate-lisp-eval-text (text)
-  "Return values TRUNCATED-TEXT and TRUNCATED-P for TEXT."
+(defvar *lisp-eval-truncation-guidance*
+  "use narrower project-read-file-lines/search/outline selectors or pass max_chars for a smaller focused result"
+  "Guidance appended to truncated lisp_eval fields.")
+
+(defun requested-lisp-eval-output-limit (args)
+  "Return the per-field lisp_eval output limit requested by ARGS.
+The request may tighten, but not exceed, *LISP-EVAL-MAX-OUTPUT-CHARS*."
+  (let ((requested (cdr (assoc :max--chars args))))
+    (if (and (integerp requested)
+             (plusp requested))
+        (min requested *lisp-eval-max-output-chars*)
+        *lisp-eval-max-output-chars*)))
+
+(defun truncate-lisp-eval-text (text &optional (max-chars *lisp-eval-max-output-chars*))
+  "Return values TRUNCATED-TEXT and TRUNCATED-P for TEXT.
+Long text is middle-truncated so the model sees both the start and the end."
   (let ((string (or text "")))
-    (if (> (length string) *lisp-eval-max-output-chars*)
-        (values (concatenate 'string
-                             (subseq string 0 *lisp-eval-max-output-chars*)
-                             (format nil "~%[truncated at ~D characters]"
-                                     *lisp-eval-max-output-chars*))
-                t)
+    (if (> (length string) max-chars)
+        (let* ((total (length string))
+               (initial-notice
+                 (format nil
+                         "~%[truncated: omitted ~D of ~D characters; ~A]~%"
+                         0
+                         total
+                         *lisp-eval-truncation-guidance*))
+               (initial-available (- max-chars (length initial-notice)))
+               (omitted (- total (max 0 initial-available)))
+               (notice (format nil
+                               "~%[truncated: omitted ~D of ~D characters; ~A]~%"
+                               omitted
+                               total
+                               *lisp-eval-truncation-guidance*))
+               (body-available (- max-chars (length notice))))
+          (if (plusp body-available)
+              (let* ((head-length (floor body-available 2))
+                     (tail-length (- body-available head-length))
+                     (tail-start (- total tail-length)))
+                (values (concatenate 'string
+                                     (subseq string 0 head-length)
+                                     notice
+                                     (subseq string tail-start))
+                        t))
+              (values (subseq notice 0 (min (length notice) max-chars))
+                      t)))
         (values string nil))))
 
 (defun push-lisp-eval-record (record)
@@ -636,7 +673,8 @@ The file must exist. old_text must be found exactly once."
 (defun execute-lisp-eval (args)
   "Evaluate arbitrary Common Lisp code. Returns the result as a string."
   (let* ((code (cdr (assoc :code args)))
-         (package-name (or (cdr (assoc :package args)) "CLAWMACS")))
+         (package-name (or (cdr (assoc :package args)) "CLAWMACS"))
+         (max-chars (requested-lisp-eval-output-limit args)))
     (unless code
       (error "code parameter is required"))
     (let ((package (or (find-package (string-upcase package-name))
@@ -664,11 +702,11 @@ The file must exist. old_text must be found exactly once."
       (let ((stdout (get-output-stream-string stdout-stream))
             (stderr (get-output-stream-string stderr-stream)))
         (multiple-value-bind (result-text result-truncated-p)
-            (truncate-lisp-eval-text result-output)
+            (truncate-lisp-eval-text result-output max-chars)
           (multiple-value-bind (stdout-text stdout-truncated-p)
-              (truncate-lisp-eval-text stdout)
+              (truncate-lisp-eval-text stdout max-chars)
             (multiple-value-bind (stderr-text stderr-truncated-p)
-                (truncate-lisp-eval-text stderr)
+                (truncate-lisp-eval-text stderr max-chars)
               (setf truncated-fields
                     (remove nil
                             (list (when result-truncated-p "result")
@@ -688,7 +726,10 @@ The file must exist. old_text must be found exactly once."
                  (:values . ,(length results))
                  (:stdout . ,stdout-text)
                  (:stderr . ,stderr-text)
+                 (:limit . ,max-chars)
                  (:truncated . ,(coerce truncated-fields 'vector))
+                 ,@(when truncated-fields
+                     `((:truncation--notice . ,*lisp-eval-truncation-guidance*)))
                  ,@(when condition-text
                      `((:error . ,condition-text))))))))))))
 
@@ -712,7 +753,9 @@ only lisp_eval. User-added tools remain untouched."
       . ((:code . ((:type . "string")
                    (:description . "The Common Lisp code to evaluate.")))
          (:package . ((:type . "string")
-                      (:description . "Package to evaluate in. Default: CLAWMACS.")))))
+                      (:description . "Package to evaluate in. Default: CLAWMACS.")))
+         (:max--chars . ((:type . "integer")
+                         (:description . "Optional per-field output limit. Can only lower the configured lisp_eval maximum.")))))
      (:required . #("code")))
    :agent-allowed
    #'execute-lisp-eval))

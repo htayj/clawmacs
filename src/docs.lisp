@@ -1880,6 +1880,16 @@ documentation in *extended-docs*."
   :returns "list — Newest-first lisp_eval execution records."
   :see-also (lisp-eval-record eval-history-to-string))
 
+(defdoc *lisp-eval-max-output-chars*
+  :category "tool"
+  :returns "integer — Maximum characters retained per lisp_eval result/stdout/stderr field."
+  :see-also (eval-history-to-string execute-tool))
+
+(defdoc *lisp-eval-truncation-guidance*
+  :category "tool"
+  :returns "string — Guidance included when lisp_eval output is truncated for model context."
+  :see-also (*lisp-eval-max-output-chars* execute-tool))
+
 (defdoc eval-history-to-string
   :category "tool"
   :usage "(eval-history-to-string :limit 10)"
