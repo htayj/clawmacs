@@ -2040,6 +2040,33 @@ PAIR PERSONALITY"
     (is (string= "Hello, world" (message-text msg)))
     (is (= 2 (buffer-message-count buf)))))
 
+(test streaming-waiting-prefix-collapses-as-text-arrives
+  "Waiting animation starts as NIL lists and collapses as streamed text grows."
+  (is (member (clawmacs::streaming-waiting-prefix "")
+              '("(nil nil nil nil) " "(nil nil nil) " "(nil nil) " "(nil) ")
+              :test #'string=))
+  (is (string= "(nil nil nil) " (clawmacs::streaming-waiting-prefix "h")))
+  (is (string= "(nil nil) " (clawmacs::streaming-waiting-prefix "hello, world!")))
+  (is (string= "(nil) " (clawmacs::streaming-waiting-prefix (make-string 24 :initial-element #\x))))
+  (is (string= "" (clawmacs::streaming-waiting-prefix (make-string 36 :initial-element #\x)))))
+
+(test update-streaming-response-prefixes-thinking-animation
+  "In-progress thinking messages are prefixed with the waiting animation."
+  (let* ((buf (make-buffer "stream-wait" :agent-name "agent"))
+         (msg (buffer-insert-agent-message buf ""))
+         (state (clawmacs::make-stream-state)))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (setf (clawmacs::stream-state-content-blocks state)
+            (list (clawmacs::canonical-text-block "draft"))))
+    (setf (buffer-pending-stream buf) state
+          (buffer-streaming-message buf) msg
+          (buffer-status buf) :thinking)
+    (with-function-override (clawmacs::streaming-waiting-prefix (text)
+                              (declare (ignore text))
+                              "(nil nil) ")
+      (is-true (clawmacs::update-streaming-response buf))
+      (is (string= "(nil nil) draft" (message-text msg))))))
+
 (test update-streaming-response-finalizes-single-placeholder-message
   "Completing a stream updates the existing placeholder instead of inserting another agent message."
   (let* ((buf (make-buffer "stream-final" :agent-name "agent"))

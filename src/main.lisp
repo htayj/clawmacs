@@ -377,6 +377,21 @@ OpenAI-compatible providers also mirror it into CONTENT-BLOCKS on every delta."
          content-text)
         (t
          (concatenate 'string content-text accumulator))))))
+(defun streaming-waiting-prefix (text)
+  "Return a transient NIL-list animation prefix while streaming TEXT arrives."
+  (let ((len (length text)))
+    (cond
+      ((>= len 36) "")
+      ((>= len 24) "(nil) ")
+      ((>= len 12) "(nil nil) ")
+      ((plusp len) "(nil nil nil) ")
+      (t
+       (let* ((phase (mod (get-universal-time) 4))
+              (frames #("(nil nil nil nil)"
+                        "(nil nil nil)"
+                        "(nil nil)"
+                        "(nil)")))
+         (format nil "~A " (aref frames phase)))))))
 
 (defun update-streaming-response (buf)
   "Poll the active streaming response and update the display.
@@ -394,9 +409,12 @@ Returns T if still streaming, NIL if done."
       ;; (stream-state-text accumulates the CURRENT block's text;
       ;; completed blocks have their text finalized in content-blocks)
       (unless done
-        (let ((all-text (stream-state-display-text state)))
-          (when (plusp (length all-text))
-            (set-message-text msg (string-trim '(#\Space #\Tab #\Newline #\Return) all-text)))))
+        (let* ((all-text (stream-state-display-text state))
+               (trimmed-text (string-trim '(#\Space #\Tab #\Newline #\Return) all-text))
+               (prefix (if (eq (buffer-status buf) :thinking)
+                           (streaming-waiting-prefix trimmed-text)
+                           "")))
+          (set-message-text msg (concatenate 'string prefix trimmed-text))))
       (cond
         ;; Error during streaming
         (err
