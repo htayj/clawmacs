@@ -138,6 +138,56 @@
       (is (= 1 (length hits)))
       (is (string= "src/live.lisp" (getf (first hits) :path))))))
 
+(test project-traversal-hides-bulk-trees-unless-requested
+  "Default project traversal keeps bulky reference trees out of agent context."
+  (with-project-test-state (root definitions)
+    (define-project "bulk" :root root)
+    (project-save-file "bulk" "src/live.lisp" "(defun target () :source)")
+    (project-save-file "bulk" "vendor/spec.lisp" "(defun target () :vendor)")
+    (project-save-file "bulk" "reference/example.lisp" "(defun target () :reference)")
+    (project-save-file "bulk" ".cache/generated.lisp" "(defun target () :cache)")
+    (is (equal '("src/live.lisp")
+               (project-list-files "bulk")))
+    (is (equal '("reference/example.lisp"
+                 "src/live.lisp"
+                 "vendor/spec.lisp")
+               (project-list-files "bulk" :include-bulk t)))
+    (is (member ".cache/generated.lisp"
+                (project-list-files "bulk"
+                                    :include-bulk t
+                                    :include-ignored t)
+                :test #'string=))
+    (let ((hits (project-search "bulk" "target")))
+      (is (= 1 (length hits)))
+      (is (string= "src/live.lisp" (getf (first hits) :path))))
+    (let ((hits (project-search "bulk" "target" :include-bulk t)))
+      (is (= 3 (length hits)))
+      (is (member "vendor/spec.lisp" hits
+                  :key (lambda (hit) (getf hit :path))
+                  :test #'string=)))))
+
+(test project-traversal-default-limits-are-customizable
+  "Traversal limits are special variables that init.lisp can override."
+  (with-project-test-state (root definitions)
+    (define-project "limits" :root root)
+    (project-save-file "limits" "a.lisp" "(defun alpha-a () :a)")
+    (project-save-file "limits" "b.lisp" "(defun alpha-b () :b)")
+    (let ((*project-list-file-limit* 1)
+          (*project-search-result-limit* 1)
+          (*project-outline-file-limit* 1))
+      (is (= 1 (length (project-list-files "limits"))))
+      (let ((summary (project-search-to-string "limits" "alpha")))
+        (is (search "limited to 1 matches" summary)))
+      (let ((outline (project-outline-to-string "limits")))
+        (flet ((occurrences (needle haystack)
+                 (loop :with count := 0
+                       :for start := (search needle haystack)
+                         :then (search needle haystack :start2 (1+ start))
+                       :while start
+                       :do (incf count)
+                       :finally (return count))))
+          (is (= 1 (occurrences ";;; " outline))))))))
+
 (test project-read-file-lines-returns-bounded-numbered-slices
   "PROJECT-READ-FILE-LINES reads targeted source slices for agents."
   (with-project-test-state (root definitions)

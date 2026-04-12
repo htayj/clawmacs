@@ -51,8 +51,15 @@
   "Extension used for inert project definition manifests.")
 
 (defvar *project-ignored-directory-names*
-  '(".git" ".hg" ".svn" ".cache" ".direnv" "node_modules" "target")
+  '(".git" ".hg" ".svn" ".cache" ".direnv" ".claude" ".serena"
+    ".worktrees" "__pycache__" "node_modules" "target")
   "Directory names ignored by project listing and search.")
+
+(defvar *project-bulk-directory-names*
+  '("vendor" "reference" "external_src" "external-src" "screenshots")
+  "Bulky reference/artifact directories hidden from default project traversal.
+Agents can pass :INCLUDE-BULK T to PROJECT-LIST-FILES, PROJECT-SEARCH, and
+PROJECT-OUTLINE-TO-STRING when these resources are specifically needed.")
 
 (defvar *project-ignored-file-names*
   '("debug.log" "debug-prompt.log" ".DS_Store")
@@ -62,11 +69,14 @@
   '("fasl" "fas" "o" "so" "dylib" "dll")
   "File extensions ignored by project listing and search.")
 
-(defvar *project-list-file-limit* 5000
+(defvar *project-list-file-limit* 500
   "Default maximum number of files returned by PROJECT-LIST-FILES.")
 
 (defvar *project-search-result-limit* 100
   "Default maximum number of matches returned by PROJECT-SEARCH.")
+
+(defvar *project-outline-file-limit* 80
+  "Default maximum number of Lisp source files outlined by PROJECT-OUTLINE-TO-STRING.")
 
 (defvar *project-write-events* nil
   "Dynamic list of project write events captured during prompt-mode runs.")
@@ -412,44 +422,59 @@ Existing projects, usually from init.lisp, are not overwritten."
         (subseq full (length root))
         full)))
 
-(defun ignored-project-directory-p (directory)
+(defun ignored-project-directory-p (directory &key include-ignored include-bulk)
   "Return true when DIRECTORY should be skipped during project traversal."
   (let* ((components (pathname-directory (uiop:ensure-directory-pathname directory)))
          (name (car (last components))))
-    (member name *project-ignored-directory-names* :test #'string=)))
+    (or (and (not include-ignored)
+             (member name *project-ignored-directory-names* :test #'string=))
+        (and (not include-bulk)
+             (member name *project-bulk-directory-names* :test #'string=)))))
 
-(defun ignored-project-file-p (path)
+(defun ignored-project-file-p (path &key include-ignored)
   "Return true when PATH should be skipped during project traversal."
   (let* ((name (file-namestring path))
          (type (pathname-type path)))
-    (or (member name *project-ignored-file-names* :test #'string=)
-        (and type
-             (member (string-downcase type)
-                     *project-ignored-file-types*
-                     :test #'string=))
-        (alexandria:ends-with-subseq "~" name)
-        (and (alexandria:starts-with-subseq "#" name)
-             (alexandria:ends-with-subseq "#" name))
-        (alexandria:starts-with-subseq ".#" name))))
+    (and (not include-ignored)
+         (or (member name *project-ignored-file-names* :test #'string=)
+             (and type
+                  (member (string-downcase type)
+                          *project-ignored-file-types*
+                          :test #'string=))
+             (alexandria:ends-with-subseq "~" name)
+             (and (alexandria:starts-with-subseq "#" name)
+                  (alexandria:ends-with-subseq "#" name))
+             (alexandria:starts-with-subseq ".#" name)))))
 
-(defun project-files-recursively (project)
+(defun project-files-recursively (project &key include-ignored include-bulk)
   "Return all non-ignored files under PROJECT."
-  (labels ((walk (directory)
-             (unless (ignored-project-directory-p directory)
-               (nconc (remove-if #'ignored-project-file-p
+  (labels ((ignored-directory-p (directory)
+             (ignored-project-directory-p directory
+                                          :include-ignored include-ignored
+                                          :include-bulk include-bulk))
+           (ignored-file-p (path)
+             (ignored-project-file-p path :include-ignored include-ignored))
+           (walk (directory)
+             (unless (ignored-directory-p directory)
+               (nconc (remove-if #'ignored-file-p
                                   (uiop:directory-files directory))
                       (loop :for child :in (uiop:subdirectories directory)
-                            :unless (ignored-project-directory-p child)
+                            :unless (ignored-directory-p child)
                               :nconc (walk child))))))
     (walk (project-root project))))
 
 (defun project-list-files (project-designator &key
-                              (limit *project-list-file-limit*))
+                              (limit *project-list-file-limit*)
+                              include-ignored
+                              include-bulk)
   "Return sorted project-relative file paths for PROJECT-DESIGNATOR."
   (let* ((project (ensure-project project-designator))
          (files (sort (mapcar (lambda (path)
                                 (project-relative-namestring project path))
-                              (project-files-recursively project))
+                              (project-files-recursively
+                               project
+                               :include-ignored include-ignored
+                               :include-bulk include-bulk))
                       #'string<)))
     (if limit
         (subseq files 0 (min limit (length files)))
@@ -1131,13 +1156,18 @@ Existing projects, usually from init.lisp, are not overwritten."
 
 (defun project-search (project-designator query &key
                           (limit *project-search-result-limit*)
-                          (case-sensitive nil))
+                          (case-sensitive nil)
+                          include-ignored
+                          include-bulk)
   "Search PROJECT-DESIGNATOR text files for QUERY.
 Returns plists containing :PATH, :LINE, and :TEXT."
   (let* ((project (ensure-project project-designator))
          (needle (if case-sensitive query (string-downcase query)))
          (results nil))
-    (dolist (path (project-list-files project :limit nil))
+    (dolist (path (project-list-files project
+                                      :limit nil
+                                      :include-ignored include-ignored
+                                      :include-bulk include-bulk))
       (when (or (null limit) (< (length results) limit))
         (handler-case
             (let ((text (project-read-file project path)))
@@ -1157,9 +1187,11 @@ Returns plists containing :PATH, :LINE, and :TEXT."
     (nreverse results)))
 
 (defun project-search-to-string (project-designator query &rest args
-                                  &key limit case-sensitive)
+                                  &key (limit *project-search-result-limit*)
+                                       case-sensitive
+                                       include-ignored include-bulk)
   "Return PROJECT-SEARCH results as an agent-readable string."
-  (declare (ignore limit case-sensitive))
+  (declare (ignore case-sensitive include-ignored include-bulk))
   (let ((results (apply #'project-search project-designator query args)))
     (if results
         (with-output-to-string (out)
@@ -1167,7 +1199,10 @@ Returns plists containing :PATH, :LINE, and :TEXT."
             (format out "~A:~D: ~A~%"
                     (getf result :path)
                     (getf result :line)
-                    (getf result :text))))
+                    (getf result :text)))
+          (when (and limit (= (length results) limit))
+            (format out ";;; limited to ~D matches; pass :LIMIT NIL or a larger value if needed.~%"
+                    limit)))
         "No matches.")))
 
 (defun file-buffer-name (project path)
@@ -1334,7 +1369,10 @@ captured in a plist. Conditions are caught so agents can report all failures."
 
 (defun project-outline-to-string (project-designator &key path depth max-depth
                                                      head limit
-                                                     (preview-chars 96))
+                                                     (preview-chars 96)
+                                                     (file-limit *project-outline-file-limit*)
+                                                     include-ignored
+                                                     include-bulk)
   "Return a structural outline for one Lisp project resource or all Lisp files."
   (let* ((project (ensure-project project-designator))
          (options (keyword-option-list :depth depth
@@ -1344,8 +1382,19 @@ captured in a plist. Conditions are caught so agents can report all failures."
                                        :preview-chars preview-chars))
          (paths (if path
                     (list (project-resource-name path))
-                    (remove-if-not #'project-lisp-source-path-p
-                                   (project-list-files project)))))
+                    (let ((source-paths
+                            (remove-if-not
+                             #'project-lisp-source-path-p
+                             (project-list-files
+                              project
+                              :limit nil
+                              :include-ignored include-ignored
+                              :include-bulk include-bulk))))
+                      (if file-limit
+                          (subseq source-paths
+                                  0
+                                  (min file-limit (length source-paths)))
+                          source-paths)))))
     (with-output-to-string (out)
       (if paths
           (dolist (resource-path paths)

@@ -1185,6 +1185,11 @@ documentation in *extended-docs*."
   :usage "List of directory names skipped by project traversal."
   :see-also (project-list-files project-search))
 
+(defdoc *project-bulk-directory-names*
+  :category "project"
+  :usage "List of bulky directory names hidden unless traversal receives :INCLUDE-BULK T."
+  :see-also (project-list-files project-search project-outline-to-string))
+
 (defdoc *project-ignored-file-names*
   :category "project"
   :usage "List of file names skipped by project traversal."
@@ -1204,6 +1209,11 @@ documentation in *extended-docs*."
   :category "project"
   :usage "Integer or nil — default PROJECT-SEARCH match limit."
   :see-also (project-search))
+
+(defdoc *project-outline-file-limit*
+  :category "project"
+  :usage "Integer or nil — default PROJECT-OUTLINE-TO-STRING source file limit."
+  :see-also (project-outline-to-string))
 
 (defdoc define-project
   :category "project"
@@ -1260,8 +1270,8 @@ documentation in *extended-docs*."
 
 (defdoc project-list-files
   :category "project"
-  :usage "(project-list-files \"project\" :limit 100)"
-  :returns "list of strings — Project-relative file paths."
+  :usage "(project-list-files \"project\" :limit 100 :include-bulk t)"
+  :returns "list of strings — Project-relative file paths. Default traversal skips ignored/generated directories and bulky reference trees; pass :INCLUDE-IGNORED T or :INCLUDE-BULK T when needed."
   :see-also (project-read-file project-search))
 
 (defdoc project-read-file
@@ -1306,13 +1316,13 @@ documentation in *extended-docs*."
 
 (defdoc project-search
   :category "project"
-  :usage "(project-search \"project\" \"query\" :limit 20)"
+  :usage "(project-search \"project\" \"query\" :limit 20 :include-bulk t)"
   :returns "list of plists — Each result has :PATH, :LINE, and :TEXT."
   :see-also (project-search-to-string project-list-files))
 
 (defdoc project-search-to-string
   :category "project"
-  :usage "(project-search-to-string \"project\" \"query\")"
+  :usage "(project-search-to-string \"project\" \"query\" :limit 20 :include-bulk t)"
   :returns "string — Agent-readable search results."
   :see-also (project-search))
 
@@ -1426,8 +1436,8 @@ documentation in *extended-docs*."
 
 (defdoc project-outline-to-string
   :category "project"
-  :usage "(project-outline-to-string \"project\" :path \"src/file.lisp\" :max-depth 1)"
-  :returns "string — sexed outline for one file or all Lisp files."
+  :usage "(project-outline-to-string \"project\" :path \"src/file.lisp\" :max-depth 1 :file-limit 20)"
+  :returns "string — sexed outline for one file or a bounded set of Lisp files."
   :see-also (project-find-definitions-to-string sexed-project-outline-to-string))
 
 (defdoc project-find-definitions

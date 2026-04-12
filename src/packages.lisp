@@ -245,10 +245,12 @@
    #:*project-registry*
    #:*project-manifest-extension*
    #:*project-ignored-directory-names*
+   #:*project-bulk-directory-names*
    #:*project-ignored-file-names*
    #:*project-ignored-file-types*
    #:*project-list-file-limit*
    #:*project-search-result-limit*
+   #:*project-outline-file-limit*
    #:*change-set-registry*
    #:*current-change-set*
    #:define-project
