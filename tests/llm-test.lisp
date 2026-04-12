@@ -233,6 +233,16 @@
        '((:project . "tool-probe")
          (:path . "notes.lisp")
          (:content . "(defun probe () :ok)")))
+      (clawmacs:execute-tool
+       "write"
+       '((:project . "tool-probe")
+         (:path . "tests/notes-test.lisp")
+         (:content . "(test probe-works (is (eq :ok (probe))))")))
+      (clawmacs:execute-tool
+       "write"
+       '((:project . "tool-probe")
+         (:path . "todo.org")
+         (:content . "* TODO probe authinfo cleanup")))
       (let* ((read-json (clawmacs:execute-tool
                          "read"
                          '((:mode . "file")
@@ -251,6 +261,18 @@
                           (:query . "project-read-file")
                           (:doc--kind . "function"))))
              (doc (clawmacs::api-json-decode doc-json))
+             (xref-json (clawmacs:execute-tool
+                         "read"
+                         '((:mode . "xref")
+                           (:project . "tool-probe")
+                           (:query . "probe"))))
+             (xref (clawmacs::api-json-decode xref-json))
+             (todo-json (clawmacs:execute-tool
+                         "read"
+                         '((:mode . "todo")
+                           (:project . "tool-probe")
+                           (:query . "authinfo"))))
+             (todo (clawmacs::api-json-decode todo-json))
              (eval-json (clawmacs:execute-tool
                          "eval"
                          '((:code . "(+ 1 2)"))))
@@ -258,6 +280,10 @@
         (is (search "probe" (cdr (assoc :content read))))
         (is (search "notes.lisp" (cdr (assoc :content search))))
         (is (search "project-read-file" (cdr (assoc :content doc))))
+        (is (search "Definitions" (cdr (assoc :content xref))))
+        (is (search "tests/notes-test.lisp" (cdr (assoc :content xref))))
+        (is (search "TODO hits" (cdr (assoc :content todo))))
+        (is (search "authinfo cleanup" (cdr (assoc :content todo))))
         (is (search "3" (cdr (assoc :result eval))))))))
 
 (test build-system-prompt-emphasizes-simple-tool-workflow
@@ -1484,6 +1510,21 @@ PAIR PERSONALITY"
         (is (search "narrower" result))
         (is (member "result" truncated :test #'string=))
         (is (= 220 (cdr (assoc :limit decoded))))))))
+
+(test execute-lisp-eval-bounds-printed-structures
+  "Large returned structures are printer-bounded before truncation."
+  (with-tool-table-restored
+    (let ((clawmacs:*lisp-eval-max-output-chars* 10000)
+          (clawmacs::*lisp-eval-print-length* 5)
+          (clawmacs::*lisp-eval-print-level* 3))
+      (clawmacs::init-tools)
+      (let* ((json (clawmacs:execute-tool
+                    "eval"
+                    '((:code . "(loop :for i :below 200 :collect (list i (list i i i)))"))))
+             (decoded (clawmacs::api-json-decode json))
+             (result (cdr (assoc :result decoded))))
+        (is (< (length result) 1000))
+        (is (search "..." result))))))
 
 (test execute-lisp-eval-includes-recovery-guidance-on-errors
   "eval failures include actionable guidance instead of a bare error."

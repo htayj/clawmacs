@@ -574,6 +574,12 @@ The file must exist. old_text must be found exactly once."
 This mirrors Codex-style tool truncation: large tool results should stay
 bounded for the model, while agents can request smaller focused outputs.")
 
+(defvar *lisp-eval-print-length* 80
+  "Maximum list elements printed per level for eval tool return values.")
+
+(defvar *lisp-eval-print-level* 6
+  "Maximum nesting level printed for eval tool return values.")
+
 (defvar *lisp-eval-truncation-guidance*
   "use narrower project-read-file-lines/search/outline selectors or pass max_chars for a smaller focused result; do not repeat broad calls after truncation"
   "Guidance appended to truncated lisp_eval fields.")
@@ -645,6 +651,14 @@ Long text is middle-truncated so the model sees both the start and the end."
     (if (> (length text) max-length)
         (concatenate 'string (subseq text 0 max-length) "...")
         text)))
+
+(defun lisp-eval-result-output (results)
+  "Return model-facing printed RESULTS with bounded printer controls."
+  (let ((*print-length* *lisp-eval-print-length*)
+        (*print-level* *lisp-eval-print-level*)
+        (*print-circle* t)
+        (*print-pretty* nil))
+    (format nil "~{~S~^~%~}" results)))
 
 (defun lisp-eval-condition-guidance (condition-text)
   "Return model-facing recovery guidance for CONDITION-TEXT."
@@ -719,7 +733,7 @@ Long text is middle-truncated so the model sees both the start and the end."
               (setf results (multiple-value-list (eval form))
                     *last-eval-result* results
                     *last-eval-condition* nil
-                    result-output (format nil "~{~S~^~%~}" results))))
+                    result-output (lisp-eval-result-output results))))
         (error (condition)
           (setf *last-eval-result* nil
                 *last-eval-condition* condition
@@ -836,6 +850,108 @@ Long text is middle-truncated so the model sees both the start and the end."
      :extra `((:project . ,project)
               (:query . ,query)
               (:match--limit . ,limit)))))
+
+(defun search-hit-test-path-p (hit)
+  "Return true when HIT is in the test tree or a test-like Lisp file."
+  (let ((path (string-downcase (or (getf hit :path) ""))))
+    (or (search "tests/" path)
+        (search "-test.lisp" path))))
+
+(defun format-project-search-hits (hits &key limit)
+  "Return HITS as path:line text, optionally bounded by LIMIT."
+  (let ((visible (if limit
+                     (subseq hits 0 (min limit (length hits)))
+                     hits)))
+    (if visible
+        (with-output-to-string (out)
+          (dolist (hit visible)
+            (format out "~A:~D: ~A~%"
+                    (getf hit :path)
+                    (getf hit :line)
+                    (getf hit :text)))
+          (when (and limit (> (length hits) limit))
+            (format out ";;; limited to ~D of ~D matches.~%"
+                    limit
+                    (length hits))))
+        "No matches.")))
+
+(defun definition-search-hit-p (hit query)
+  "Return true when HIT looks like a Lisp definition for QUERY."
+  (let ((line (string-downcase (or (getf hit :text) "")))
+        (needle (string-downcase query)))
+    (and (search "(def" line)
+         (search needle line))))
+
+(defun project-textual-definition-hits (project query &key (limit 20))
+  "Return text-search definition candidates for QUERY in PROJECT."
+  (let ((candidates (remove-if-not
+                     (lambda (hit)
+                       (definition-search-hit-p hit query))
+                     (project-search project query :limit nil))))
+    (subseq candidates 0 (min limit (length candidates)))))
+
+(defun project-xref-context-to-string (project query &key head
+                                                   (definition-limit 20)
+                                                   (reference-limit 80)
+                                                   (test-limit 30))
+  "Return a compact symbol-oriented context bundle for PROJECT and QUERY."
+  (let* ((definitions (project-find-definitions project
+                                                :name query
+                                                :head head
+                                                :limit definition-limit))
+         (textual-definitions
+           (and (null definitions)
+                (project-textual-definition-hits project query
+                                                :limit definition-limit)))
+         (references (project-search project query :limit reference-limit))
+         (test-hits (remove-if-not #'search-hit-test-path-p references)))
+    (with-output-to-string (out)
+      (format out "Xref context for ~S in project ~A~%~%"
+              query
+              (project-name (ensure-project project)))
+      (format out "Definitions~%===========~%")
+      (if definitions
+          (progn
+            (dolist (definition definitions)
+              (format out "~A:~A ~@[~A~] ~(~A~) [id ~A]~%  ~A~%"
+                      (getf definition :path)
+                      (getf definition :head)
+                      (getf definition :name)
+                      (getf definition :type)
+                      (getf definition :id)
+                      (getf definition :preview)))
+            (when (> (length definitions) 1)
+              (format out "~%Potential source-of-truth ambiguity: multiple definitions matched. Inspect load order or remove stale definitions before assuming which one is active.~%")))
+          (if textual-definitions
+              (progn
+                (format out "No structural definitions found. Textual definition candidates:~%")
+                (write-string (format-project-search-hits textual-definitions
+                                                          :limit definition-limit)
+                              out))
+              (format out "No definitions found.~%")))
+      (format out "~%Related tests~%=============~%~A"
+              (format-project-search-hits test-hits :limit test-limit))
+      (format out "~%References~%==========~%~A"
+              (format-project-search-hits references :limit reference-limit)))))
+
+(defun project-todo-context-to-string (project query &key (limit 80))
+  "Return TODO and project hits for QUERY to seed a bounded task investigation."
+  (let* ((hits (project-search project query :limit limit))
+         (todo-hits (remove-if-not
+                     (lambda (hit)
+                       (string= "todo.org" (getf hit :path)))
+                     hits))
+         (test-hits (remove-if-not #'search-hit-test-path-p hits)))
+    (with-output-to-string (out)
+      (format out "TODO context for ~S in project ~A~%~%"
+              query
+              (project-name (ensure-project project)))
+      (format out "TODO hits~%=========~%~A"
+              (format-project-search-hits todo-hits :limit limit))
+      (format out "~%Related tests~%=============~%~A"
+              (format-project-search-hits test-hits :limit limit))
+      (format out "~%Project hits~%============~%~A"
+              (format-project-search-hits hits :limit limit)))))
 
 (defun execute-project-write-file (args)
   "Tool implementation for writing a project resource."
@@ -972,8 +1088,27 @@ Long text is middle-truncated so the model sees both the start and the end."
         `((:query . ,(tool-arg args :query :required t))
           (:kind . ,(or (tool-arg args :doc--kind) "auto"))
           (:system . ,(or (tool-arg args :system) "clawmacs")))))
+      ((string= mode "xref")
+       (project-tool-json-content
+        (project-xref-context-to-string
+         project
+         (tool-arg args :query :required t)
+         :head (tool-arg args :head)
+         :definition-limit (tool-positive-integer-arg args :limit 20)
+         :reference-limit (tool-positive-integer-arg args :reference--limit 80)
+         :test-limit (tool-positive-integer-arg args :test--limit 30))
+        :extra `((:project . ,project)
+                 (:query . ,(tool-arg args :query)))))
+      ((string= mode "todo")
+       (project-tool-json-content
+        (project-todo-context-to-string
+         project
+         (tool-arg args :query :required t)
+         :limit (tool-positive-integer-arg args :limit 80))
+        :extra `((:project . ,project)
+                 (:query . ,(tool-arg args :query)))))
       (t
-       (error "Unknown read mode ~S. Use list, file, lines, search, or doc."
+       (error "Unknown read mode ~S. Use list, file, lines, search, doc, xref, or todo."
               mode)))))
 
 (defun execute-write-tool (args)
@@ -994,11 +1129,11 @@ the default tool set. User-added tools remain untouched."
 
   (register-tool
    "read"
-   "Read project resources or local documentation. Modes: list, file, lines, search, doc. Use this for inspection before writing."
+   "Read project resources or local documentation. Modes: list, file, lines, search, doc, xref, todo. Use xref for symbol definitions/references/tests and todo for task context before making many separate reads."
    '((:type . "object")
      (:properties
       . ((:mode . ((:type . "string")
-                   (:description . "Required mode: list, file, lines, search, or doc.")))
+                   (:description . "Required mode: list, file, lines, search, doc, xref, or todo.")))
          (:project . ((:type . "string")
                       (:description . "Project name. Default: clawmacs.")))
          (:path . ((:type . "string")
@@ -1008,11 +1143,17 @@ the default tool set. User-added tools remain untouched."
          (:context . ((:type . "integer")
                       (:description . "Approximate lines of context for lines mode. Default: 40.")))
          (:query . ((:type . "string")
-                    (:description . "Search string for search mode, or symbol/query for doc mode.")))
+                    (:description . "Search string for search/todo mode, or symbol/query for doc/xref mode.")))
+         (:head . ((:type . "string")
+                   (:description . "Optional definition head for xref mode, such as defun or defvar.")))
          (:doc--kind . ((:type . "string")
                         (:description . "Doc lookup kind for doc mode: auto, tool, function, variable, type, common-lisp, system, or search. Default: auto.")))
          (:system . ((:type . "string")
                      (:description . "ASDF system for doc search. Default: clawmacs.")))
+         (:reference--limit . ((:type . "integer")
+                               (:description . "Maximum reference hits for xref mode. Default: 80.")))
+         (:test--limit . ((:type . "integer")
+                          (:description . "Maximum test hits for xref mode. Default: 30.")))
          (:limit . ((:type . "integer")
                     (:description . "Maximum list/search results.")))))
      (:required . #("mode")))
