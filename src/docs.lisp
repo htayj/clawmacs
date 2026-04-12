@@ -937,6 +937,7 @@ documentation in *extended-docs*."
 
 (defdoc *sandbox-root*
   :category "command"
+  :returns "pathname or nil - Sandboxed file tools are restricted to this directory subtree when non-nil."
   :see-also (check-permission defcommand))
 
 (defdoc *command-table*
@@ -1789,8 +1790,33 @@ documentation in *extended-docs*."
 
 (defdoc *file-read-default-limit*
   :category "tool"
-  :returns "integer - Default line limit for the dormant file_read helper implementation."
+  :returns "integer - Default line limit for the lispi read tool."
   :see-also (*tool-table* register-tool))
+
+(defdoc *find-default-limit*
+  :category "tool"
+  :returns "integer - Default result limit for the lispi find tool."
+  :see-also (*tool-table* register-tool))
+
+(defdoc *grep-default-limit*
+  :category "tool"
+  :returns "integer - Default line-match limit for the lispi grep tool."
+  :see-also (*tool-table* register-tool))
+
+(defdoc *grep-max-file-bytes*
+  :category "tool"
+  :returns "integer - Maximum file size searched by the lispi grep tool."
+  :see-also (*grep-default-limit*))
+
+(defdoc *grep-max-line-length*
+  :category "tool"
+  :returns "integer - Maximum displayed characters for each lispi grep match line."
+  :see-also (*grep-default-limit*))
+
+(defdoc *search-ignored-directory-names*
+  :category "tool"
+  :returns "list of strings - Directory names skipped by the lispi find and grep tools."
+  :see-also (*find-default-limit* *grep-default-limit*))
 
 (defdoc *shell-exec-default-timeout*
   :category "tool"
@@ -1799,8 +1825,14 @@ documentation in *extended-docs*."
 
 (defdoc *diff-display-max-lines*
   :category "tool"
-  :returns "integer - Maximum diff lines shown when approval UIs render non-default tool edits."
+  :returns "integer - Maximum diff lines shown when lispi file tool approval displays render edits."
   :see-also (*tool-table* tool-approval-extra-display))
+
+(defdoc *lisp-eval-default-package*
+  :category "tool"
+  :returns "string - Default package used by lispi lisp_eval when :package is omitted."
+  :side-effects "init-tools sets this to \"CLAWMACS\" for the clawmacs default tool surface."
+  :see-also (init-tools eval-history-to-string))
 
 (defdoc *last-eval-result*
   :category "tool"
@@ -1867,8 +1899,8 @@ documentation in *extended-docs*."
 
 (defdoc execute-tool
   :category "tool"
-  :usage "(execute-tool NAME:string ARGS:alist) — (execute-tool \"lisp_eval\" '((:code . \"(+ 1 2)\")))"
-  :returns "string — The tool execution result as a JSON string."
+  :usage "(execute-tool NAME:string ARGS:lisp-data) — (execute-tool \"lisp_eval\" '(:code \"(+ 1 2)\"))"
+  :returns "string — The tool execution result. File tools return plain text; lisp_eval returns a printed Lisp plist for structured display and history."
   :side-effects "Executes the tool's function. Side effects depend on the registered tool implementation."
   :see-also (register-tool tool-requires-permission-p *tool-table*))
 
@@ -1886,13 +1918,13 @@ documentation in *extended-docs*."
 
 (defdoc format-tool-call-sexpr
   :category "tool"
-  :usage "(format-tool-call-sexpr NAME:string ARGS:alist)"
+  :usage "(format-tool-call-sexpr NAME:string ARGS:lisp-data)"
   :returns "string — S-expression formatted tool call. \"(lisp_eval :code \\\"(+ 1 2)\\\")\""
   :see-also (format-tool-call-expanded tool-approval-extra-display))
 
 (defdoc format-tool-call-expanded
   :category "tool"
-  :usage "(format-tool-call-expanded NAME:string ARGS:alist)"
+  :usage "(format-tool-call-expanded NAME:string ARGS:lisp-data)"
   :returns "string — Multi-line expanded display of a tool call."
   :see-also (format-tool-call-sexpr tool-approval-extra-display))
 
@@ -1906,7 +1938,7 @@ documentation in *extended-docs*."
   :category "tool"
   :usage "(init-tools) — Called once at startup."
   :returns "nil"
-  :side-effects "Removes previously registered built-in tool entries and re-registers only the default built-in tool, lisp_eval."
+  :side-effects "Removes previously registered built-in tool entries and re-registers the lispi read, find, grep, write, edit, and lisp_eval specs."
   :see-also (*tool-table* register-tool))
 
 ;;; ==========================================================================
@@ -3761,7 +3793,7 @@ documentation in *extended-docs*."
   :category "main"
   :usage "(clawmacs-prompt-main) — CLI entry point used by prompt.sh."
   :returns "does not return — Exits the Lisp image with status 0 or 1."
-  :side-effects "Parses command-line options, initializes the clawmacs runtime without a UI backend, runs one prompt through run-single-prompt, and writes the final response or JSON result to stdout."
+  :side-effects "Parses command-line options, defaults plain prompt.sh runs to openai-codex/gpt-5.3-codex unless --agent, --provider, or --model supplies routing, initializes the clawmacs runtime without a UI backend, runs one prompt through run-single-prompt, and writes the final response or JSON result to stdout."
   :see-also (run-single-prompt *prompt-max-tool-iterations* clawmacs-main))
 
 (defdoc clawmacs-main

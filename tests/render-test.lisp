@@ -213,10 +213,10 @@
          (tool-call (clawmacs::format-tool-call-display tool-use))
          (tool-result (clawmacs::format-tool-result-display
                        "lisp_eval"
-                       (clawmacs::api-json-encode
-                        '((:code . "(+ 1 2)")
-                          (:result . "3")
-                          (:values . 1))))))
+                       (clawmacs::lisp-data-string
+                        (list :code "(+ 1 2)"
+                              :result "3"
+                              :values 1)))))
     (is (string= "(lisp_eval :code \"(+ 1 2)\" :package \"CLAWMACS\")"
                  tool-call))
     (is (search ";; lisp_eval" tool-result))

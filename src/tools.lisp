@@ -46,17 +46,12 @@ Temporary tools override same-named global tools for the dynamic extent.")
 (defvar *http-user-agent* "Clawmacs/0.1"
   "User-Agent header for HTTP requests.")
 
-(defvar *file-read-default-limit* 10000
-  "Default maximum lines returned by file_read.")
-
 (defvar *shell-exec-default-timeout* 30
   "Default timeout in seconds for shell_exec.")
 
-(defvar *diff-display-max-lines* 40
-  "Maximum diff lines shown in the approval UI.")
-
 (defparameter *built-in-tool-names*
-  '("http_fetch" "file_read" "file_write" "file_edit" "shell_exec" "lisp_eval")
+  '("http_fetch" "file_read" "file_write" "file_edit" "shell_exec"
+    "read" "find" "grep" "write" "edit" "lisp_eval")
   "Names reserved for clawmacs built-in tools.
 INIT-TOOLS removes these entries before re-registering the default built-ins,
 so user-added tools stored in *tool-table* are left intact.")
@@ -231,19 +226,26 @@ Returns a string result or signals an error."
 (defun format-tool-call-sexpr (name args)
   "Format a tool call as a raw s-expression string.
 E.g., (lisp_eval :code \"(list-functions)\")"
-  (with-output-to-string (s)
-    (format s "(~A" name)
-    (loop :for (k . v) :in args
-          :do (format s " :~A ~S"
-                      (string-downcase (symbol-name k)) v))
-    (write-char #\) s)))
+  (let ((arg-alist (tool-args-alist args)))
+    (with-output-to-string (s)
+      (format s "(~A" name)
+      (loop :for (k . v) :in arg-alist
+            :do (format s " :~A ~S" (tool-key-name k) v))
+      (write-char #\) s))))
+
+(defun tool-schema-property (key schema-props)
+  "Return KEY's property metadata from SCHEMA-PROPS."
+  (loop :for (schema-key . property) :in schema-props
+        :when (tool-key= key schema-key)
+          :return property))
 
 (defun format-tool-call-expanded (name args)
   "Format a tool call with expanded parameter descriptions.
 E.g., (lisp_eval
         :code \"(list-functions)\")  ; The Common Lisp code to evaluate"
   (let ((def (effective-tool-definition name))
-        (schema-props nil))
+        (schema-props nil)
+        (arg-alist (tool-args-alist args)))
     ;; Extract property descriptions from schema
     (when def
       (let ((schema (tool-definition-input-schema def)))
@@ -253,58 +255,14 @@ E.g., (lisp_eval
               (setf schema-props props))))))
     (with-output-to-string (s)
       (format s "(~A" name)
-      (loop :for (k . v) :in args
-            :for param-name := (string-downcase (symbol-name k))
-            :for desc := (let ((prop (cdr (assoc k schema-props))))
+      (loop :for (k . v) :in arg-alist
+            :for param-name := (tool-key-name k)
+            :for desc := (let ((prop (tool-schema-property k schema-props)))
                            (when prop (cdr (assoc :description prop))))
             :do (format s "~%  :~A ~S" param-name v)
                 (when desc
                   (format s "  ; ~A" desc)))
       (write-char #\) s))))
-
-;;; --------------------------------------------------------------------------
-;;; File Diff for Approval Display
-;;; --------------------------------------------------------------------------
-
-(defun compute-simple-diff (old-text new-text)
-  "Compute a simple line-by-line diff between OLD-TEXT and NEW-TEXT.
-Returns a string with +/- prefixed lines. Not a full unified diff,
-just enough to show what changes."
-  (let ((old-lines (if old-text
-                       (loop :for start := 0 :then (1+ pos)
-                             :for pos := (position #\Newline old-text :start start)
-                             :collect (subseq old-text start (or pos (length old-text)))
-                             :while pos)
-                       nil))
-        (new-lines (loop :for start := 0 :then (1+ pos)
-                         :for pos := (position #\Newline new-text :start start)
-                         :collect (subseq new-text start (or pos (length new-text)))
-                         :while pos)))
-    (with-output-to-string (s)
-      (cond
-        ;; New file
-        ((null old-lines)
-         (format s "--- (new file)~%+++ ~A~%" "new")
-         (dolist (line new-lines)
-           (format s "+~A~%" line)))
-        ;; Show removed and added lines
-        (t
-         (format s "--- old~%+++ new~%")
-         ;; Simple approach: show lines unique to old as -, unique to new as +,
-         ;; common lines as context
-         (let ((max-lines *diff-display-max-lines*)
-               (old-set (make-hash-table :test #'equal))
-               (new-set (make-hash-table :test #'equal)))
-           (dolist (l old-lines) (setf (gethash l old-set) t))
-           (dolist (l new-lines) (setf (gethash l new-set) t))
-           ;; Show old lines not in new
-           (let ((removed (remove-if (lambda (l) (gethash l new-set)) old-lines)))
-             (dolist (line (subseq removed 0 (min (length removed) max-lines)))
-               (format s "-~A~%" line)))
-           ;; Show new lines not in old
-           (let ((added (remove-if (lambda (l) (gethash l old-set)) new-lines)))
-             (dolist (line (subseq added 0 (min (length added) max-lines)))
-               (format s "+~A~%" line)))))))))
 
 (defun tool-approval-extra-display (name args)
   "Get extra display text for a tool's approval prompt.
@@ -314,28 +272,6 @@ Returns a string or nil. Calls the tool's approval-display-fn if set."
       (handler-case
           (funcall (tool-definition-approval-display-fn def) args)
         (error () nil)))))
-
-;;; --------------------------------------------------------------------------
-;;; Sandbox Path Validation
-;;; --------------------------------------------------------------------------
-
-(defun validate-sandbox-path (path)
-  "Validate that PATH is within *sandbox-root*. Returns the resolved pathname.
-Signals an error if the path escapes the sandbox.
-Works for both existing and not-yet-existing files."
-  (let* ((sandbox (or *sandbox-root* (truename ".")))
-         (resolved (merge-pathnames (pathname path) sandbox))
-         ;; For validation, resolve the directory part (which must exist)
-         ;; and check the full path string for sandbox containment.
-         (dir (make-pathname :directory (pathname-directory resolved)
-                             :device (pathname-device resolved)))
-         (dir-str (namestring (if (probe-file dir)
-                                  (truename dir)
-                                  dir)))
-         (sandbox-str (namestring sandbox)))
-    (unless (alexandria:starts-with-subseq sandbox-str dir-str)
-      (error "Path ~A is outside the sandbox (~A)" path sandbox-str))
-    resolved))
 
 ;;; --------------------------------------------------------------------------
 ;;; HTTP Fetch Tool
@@ -372,151 +308,6 @@ Works for both existing and not-yet-existing files."
              (:content . ,truncated))))))))
 
 ;;; --------------------------------------------------------------------------
-;;; File Read Tool
-;;; --------------------------------------------------------------------------
-
-(defun execute-file-read (args)
-  "Read a file within the sandbox. Returns file contents as text."
-  (let* ((path (cdr (assoc :path args)))
-         (offset (or (cdr (assoc :offset args)) 0))
-         (limit (or (cdr (assoc :limit args)) *file-read-default-limit*))
-         (resolved (validate-sandbox-path path)))
-    (unless path
-      (error "path parameter is required"))
-    (unless (probe-file resolved)
-      (error "File not found: ~A" path))
-    (let* ((content (uiop:read-file-string resolved))
-           (lines (loop :for start := 0 :then (1+ pos)
-                        :for pos := (position #\Newline content :start start)
-                        :collect (subseq content start (or pos (length content)))
-                        :while pos))
-           (total-lines (length lines))
-           (selected (subseq lines
-                             (min offset total-lines)
-                             (min (+ offset limit) total-lines)))
-           (result (format nil "~{~A~^~%~}" selected)))
-      (cl-json:encode-json-to-string
-       `((:path . ,path)
-         (:total--lines . ,total-lines)
-         (:offset . ,offset)
-         (:lines--returned . ,(length selected))
-         (:content . ,result))))))
-
-;;; --------------------------------------------------------------------------
-;;; File Write Tool (create new or append, never overwrite)
-;;; --------------------------------------------------------------------------
-
-(defun execute-file-write (args)
-  "Write content to a file within the sandbox.
-If the file does not exist, creates it. If it exists, appends to it.
-Never overwrites existing content."
-  (let* ((path (cdr (assoc :path args)))
-         (content (cdr (assoc :content args)))
-         (resolved (validate-sandbox-path path)))
-    (unless path
-      (error "path parameter is required"))
-    (unless content
-      (error "content parameter is required"))
-    (ensure-directories-exist resolved)
-    (let ((existed (probe-file resolved)))
-      (with-open-file (s resolved
-                         :direction :output
-                         :if-exists :append
-                         :if-does-not-exist :create)
-        (write-string content s))
-      (cl-json:encode-json-to-string
-       `((:path . ,path)
-         (:bytes--written . ,(length content))
-         (:mode . ,(if existed "appended" "created"))
-         (:status . "ok"))))))
-
-(defun file-write-approval-display (args)
-  "Approval display for file_write: shows what will be appended or created."
-  (let* ((path (cdr (assoc :path args)))
-         (new-content (cdr (assoc :content args)))
-         (sandbox (or *sandbox-root* (truename ".")))
-         (resolved (merge-pathnames (pathname path) sandbox)))
-    (handler-case
-        (if (probe-file resolved)
-            (format nil "--- APPENDING to existing file: ~A ---~%~{+~A~^~%~}"
-                    path
-                    (loop :for start := 0 :then (1+ pos)
-                          :for pos := (position #\Newline (or new-content "") :start start)
-                          :collect (subseq (or new-content "") start (or pos (length (or new-content ""))))
-                          :while pos))
-            (format nil "--- CREATING new file: ~A ---~%~{+~A~^~%~}"
-                    path
-                    (loop :for start := 0 :then (1+ pos)
-                          :for pos := (position #\Newline (or new-content "") :start start)
-                          :collect (subseq (or new-content "") start (or pos (length (or new-content ""))))
-                          :while pos)))
-      (error () nil))))
-
-;;; --------------------------------------------------------------------------
-;;; File Edit Tool (search-and-replace)
-;;; --------------------------------------------------------------------------
-
-(defun execute-file-edit (args)
-  "Edit a file by replacing the first occurrence of old_text with new_text.
-The file must exist. old_text must be found exactly once."
-  (let* ((path (cdr (assoc :path args)))
-         (old-text (cdr (assoc :old--text args)))
-         (new-text (cdr (assoc :new--text args)))
-         (resolved (validate-sandbox-path path)))
-    (unless path
-      (error "path parameter is required"))
-    (unless old-text
-      (error "old_text parameter is required"))
-    (unless new-text
-      (error "new_text parameter is required (use empty string to delete)"))
-    (unless (probe-file resolved)
-      (error "File not found: ~A" path))
-    (let* ((content (uiop:read-file-string resolved))
-           (pos (search old-text content))
-           (count (loop :for start := 0 :then (+ p (length old-text))
-                        :for p := (search old-text content :start2 start)
-                        :while p :count t)))
-      (unless pos
-        (error "old_text not found in ~A" path))
-      (when (> count 1)
-        (error "old_text found ~A times in ~A (must be unique). Provide more context."
-               count path))
-      ;; Perform the replacement
-      (let ((new-content (concatenate 'string
-                                      (subseq content 0 pos)
-                                      new-text
-                                      (subseq content (+ pos (length old-text))))))
-        (with-open-file (s resolved
-                           :direction :output
-                           :if-exists :supersede
-                           :if-does-not-exist :create)
-          (write-string new-content s))
-        (cl-json:encode-json-to-string
-         `((:path . ,path)
-           (:old--text--length . ,(length old-text))
-           (:new--text--length . ,(length new-text))
-           (:status . "ok")))))))
-
-(defun file-edit-approval-display (args)
-  "Approval display for file_edit: shows diff of the replacement."
-  (let* ((path (cdr (assoc :path args)))
-         (old-text (cdr (assoc :old--text args)))
-         (new-text (cdr (assoc :new--text args)))
-         (sandbox (or *sandbox-root* (truename ".")))
-         (resolved (merge-pathnames (pathname path) sandbox)))
-    (handler-case
-        (when (probe-file resolved)
-          (let* ((content (uiop:read-file-string resolved))
-                 (pos (search old-text content)))
-            (when pos
-              (let ((new-content (concatenate 'string
-                                              (subseq content 0 pos)
-                                              new-text
-                                              (subseq content (+ pos (length old-text))))))
-                (compute-simple-diff content new-content)))))
-      (error () nil))))
-
-;;; --------------------------------------------------------------------------
 ;;; Shell Exec Tool
 ;;; --------------------------------------------------------------------------
 
@@ -541,178 +332,25 @@ The file must exist. old_text must be found exactly once."
          (:stderr . ,stderr))))))
 
 ;;; --------------------------------------------------------------------------
-;;; Lisp Eval Tool
-;;; --------------------------------------------------------------------------
-
-(defstruct lisp-eval-record
-  "One captured lisp_eval execution record."
-  code
-  package
-  result
-  stdout
-  stderr
-  condition
-  timestamp)
-
-(defvar *last-eval-result* nil
-  "Multiple-value list from the last successful lisp_eval execution.")
-
-(defvar *last-eval-condition* nil
-  "Condition object from the last failed lisp_eval execution, or NIL.")
-
-(defvar *lisp-eval-history* nil
-  "Newest-first list of captured lisp_eval execution records.")
-
-(defvar *lisp-eval-history-limit* 50
-  "Maximum number of lisp_eval records retained in memory.")
-
-(defvar *lisp-eval-max-output-chars* 20000
-  "Maximum characters retained per lisp_eval result/stdout/stderr field.")
-
-(defun truncate-lisp-eval-text (text)
-  "Return values TRUNCATED-TEXT and TRUNCATED-P for TEXT."
-  (let ((string (or text "")))
-    (if (> (length string) *lisp-eval-max-output-chars*)
-        (values (concatenate 'string
-                             (subseq string 0 *lisp-eval-max-output-chars*)
-                             (format nil "~%[truncated at ~D characters]"
-                                     *lisp-eval-max-output-chars*))
-                t)
-        (values string nil))))
-
-(defun push-lisp-eval-record (record)
-  "Push RECORD into *LISP-EVAL-HISTORY* and enforce the retention limit."
-  (push record *lisp-eval-history*)
-  (when (> (length *lisp-eval-history*) *lisp-eval-history-limit*)
-    (setf *lisp-eval-history*
-          (subseq *lisp-eval-history* 0 *lisp-eval-history-limit*)))
-  record)
-
-(defun lisp-eval-preview (value &optional (max-length 160))
-  "Return a compact printed preview for VALUE."
-  (let ((text (handler-case
-                  (let ((*print-length* 20)
-                        (*print-level* 4)
-                        (*print-circle* t)
-                        (*print-pretty* nil))
-                    (prin1-to-string value))
-                (error (condition)
-                  (format nil "#<error printing value: ~A>" condition)))))
-    (if (> (length text) max-length)
-        (concatenate 'string (subseq text 0 max-length) "...")
-        text)))
-
-(defun eval-history-to-string (&key (limit 10))
-  "Return a compact newest-first summary of lisp_eval history."
-  (with-output-to-string (out)
-    (if *lisp-eval-history*
-        (loop :for record :in *lisp-eval-history*
-              :for index :from 1
-              :while (<= index limit)
-              :do (format out "~D. package=~A time=~A~%   code: ~A~%"
-                          index
-                          (lisp-eval-record-package record)
-                          (lisp-eval-record-timestamp record)
-                          (lisp-eval-preview
-                           (lisp-eval-record-code record)))
-                  (if (lisp-eval-record-condition record)
-                      (format out "   error: ~A~%"
-                              (lisp-eval-record-condition record))
-                      (format out "   result: ~A~%"
-                              (lisp-eval-preview
-                               (lisp-eval-record-result record))))
-                  (when (plusp (length (or (lisp-eval-record-stdout record)
-                                           "")))
-                    (format out "   stdout: ~A~%"
-                            (lisp-eval-preview
-                             (lisp-eval-record-stdout record))))
-                  (when (plusp (length (or (lisp-eval-record-stderr record)
-                                           "")))
-                    (format out "   stderr: ~A~%"
-                            (lisp-eval-preview
-                             (lisp-eval-record-stderr record)))))
-        (format out "No lisp_eval history captured.~%"))))
-
-(defun execute-lisp-eval (args)
-  "Evaluate arbitrary Common Lisp code. Returns the result as a string."
-  (let* ((code (cdr (assoc :code args)))
-         (package-name (or (cdr (assoc :package args)) "CLAWMACS")))
-    (unless code
-      (error "code parameter is required"))
-    (let ((package (or (find-package (string-upcase package-name))
-                       (find-package :cl-user)))
-          (stdout-stream (make-string-output-stream))
-          (stderr-stream (make-string-output-stream))
-          (results nil)
-          (result-output "")
-          (condition-text nil)
-          (truncated-fields nil))
-      (handler-case
-          (let ((*package* package)
-                (*standard-output* stdout-stream)
-                (*trace-output* stderr-stream)
-                (*error-output* stderr-stream))
-            (let ((form (read-from-string code)))
-              (setf results (multiple-value-list (eval form))
-                    *last-eval-result* results
-                    *last-eval-condition* nil
-                    result-output (format nil "~{~S~^~%~}" results))))
-        (error (condition)
-          (setf *last-eval-result* nil
-                *last-eval-condition* condition
-                condition-text (format nil "~A" condition))))
-      (let ((stdout (get-output-stream-string stdout-stream))
-            (stderr (get-output-stream-string stderr-stream)))
-        (multiple-value-bind (result-text result-truncated-p)
-            (truncate-lisp-eval-text result-output)
-          (multiple-value-bind (stdout-text stdout-truncated-p)
-              (truncate-lisp-eval-text stdout)
-            (multiple-value-bind (stderr-text stderr-truncated-p)
-                (truncate-lisp-eval-text stderr)
-              (setf truncated-fields
-                    (remove nil
-                            (list (when result-truncated-p "result")
-                                  (when stdout-truncated-p "stdout")
-                                  (when stderr-truncated-p "stderr"))))
-              (push-lisp-eval-record
-               (make-lisp-eval-record :code code
-                                      :package (package-name package)
-                                      :result results
-                                      :stdout stdout-text
-                                      :stderr stderr-text
-                                      :condition condition-text
-                                      :timestamp (get-universal-time)))
-              (cl-json:encode-json-to-string
-               `((:code . ,code)
-                 (:result . ,result-text)
-                 (:values . ,(length results))
-                 (:stdout . ,stdout-text)
-                 (:stderr . ,stderr-text)
-                 (:truncated . ,(coerce truncated-fields 'vector))
-                 ,@(when condition-text
-                     `((:error . ,condition-text))))))))))))
-
-;;; --------------------------------------------------------------------------
 ;;; Tool Registration
 ;;; --------------------------------------------------------------------------
 
 (defun init-tools ()
   "Register the default clawmacs built-in tools.
 This removes any previously registered built-in entries, then re-registers
-only lisp_eval. User-added tools remain untouched."
+read, find, grep, write, edit, and lisp_eval. User-added tools remain untouched."
 
   (dolist (name *built-in-tool-names*)
     (remhash name *tool-table*))
 
-  (register-tool
-   "lisp_eval"
-   "Evaluate arbitrary Common Lisp code in the clawmacs process. Returns the result of evaluation. Use this for computation, data transformation, or interacting with the running system."
-   `((:type . "object")
-     (:properties
-      . ((:code . ((:type . "string")
-                   (:description . "The Common Lisp code to evaluate.")))
-         (:package . ((:type . "string")
-                      (:description . "Package to evaluate in. Default: CLAWMACS.")))))
-     (:required . #("code")))
-   :agent-allowed
-   #'execute-lisp-eval))
+  (setf *lisp-eval-default-package* "CLAWMACS")
+  (dolist (spec (lispi:default-tool-specs))
+    (apply #'register-tool
+           (getf spec :name)
+           (getf spec :description)
+           (getf spec :schema)
+           (getf spec :permission)
+           (getf spec :execute-fn)
+           (when (getf spec :approval-display-fn)
+             (list :approval-display-fn
+                   (getf spec :approval-display-fn))))))

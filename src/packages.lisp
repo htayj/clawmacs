@@ -15,6 +15,49 @@
 
 (defpackage :clawmacs
   (:use :cl)
+  (:shadowing-import-from :lispi
+   #:*sandbox-root*
+   #:*file-read-default-limit*
+   #:*find-default-limit*
+   #:*grep-default-limit*
+   #:*grep-max-file-bytes*
+   #:*grep-max-line-length*
+   #:*search-ignored-directory-names*
+   #:*diff-display-max-lines*
+   #:*lisp-eval-default-package*
+   #:*last-eval-result*
+   #:*last-eval-condition*
+   #:*lisp-eval-history*
+   #:*lisp-eval-history-limit*
+   #:*lisp-eval-max-output-chars*
+   #:lisp-eval-record
+   #:lisp-eval-record-code
+   #:lisp-eval-record-package
+   #:lisp-eval-record-result
+   #:lisp-eval-record-output
+   #:lisp-eval-record-error-output
+   #:lisp-eval-record-condition
+   #:lisp-eval-record-timestamp
+   #:lisp-data-string
+   #:lisp-data-read
+   #:tool-error-result-data
+   #:tool-denied-result-data
+   #:tool-key-name
+   #:tool-key=
+   #:tool-plist-p
+   #:tool-args-alist
+   #:tool-arg
+   #:compute-simple-diff
+   #:validate-sandbox-path
+   #:execute-read
+   #:execute-find
+   #:execute-grep
+   #:execute-write
+   #:execute-edit
+   #:execute-lisp-eval
+   #:file-write-approval-display
+   #:file-edit-approval-display
+   #:eval-history-to-string)
   (:export
    ;; General utilities
    #:count-occurrences
@@ -451,8 +494,14 @@
    #:*http-connection-timeout*
    #:*http-user-agent*
    #:*file-read-default-limit*
+   #:*find-default-limit*
+   #:*grep-default-limit*
+   #:*grep-max-file-bytes*
+   #:*grep-max-line-length*
+   #:*search-ignored-directory-names*
    #:*shell-exec-default-timeout*
    #:*diff-display-max-lines*
+   #:*lisp-eval-default-package*
    #:*last-eval-result*
    #:*last-eval-condition*
    #:*lisp-eval-history*
@@ -465,8 +514,8 @@
    #:lisp-eval-record-code
    #:lisp-eval-record-package
    #:lisp-eval-record-result
-   #:lisp-eval-record-stdout
-   #:lisp-eval-record-stderr
+   #:lisp-eval-record-output
+   #:lisp-eval-record-error-output
    #:lisp-eval-record-condition
    #:lisp-eval-record-timestamp
    #:tool-definition

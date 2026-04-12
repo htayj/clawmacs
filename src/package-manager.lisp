@@ -54,7 +54,7 @@
 (defvar *package-registry-loaded-p* nil
   "Non-nil when *AVAILABLE-PACKAGES* reflects *PACKAGE-CHANNELS*.")
 
-(defvar *enabled-builtin-packages* '("sexed")
+(defvar *enabled-builtin-packages* nil
   "Builtin package names that autoload from the default channel.
 Set to T to autoload every builtin package, or NIL to autoload none.")
 

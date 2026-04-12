@@ -14,6 +14,12 @@
 (defvar *prompt-max-tool-iterations* 20
   "Default maximum tool-call turns allowed during one non-interactive prompt run.")
 
+(defparameter +prompt-default-provider+ "openai-codex"
+  "Default provider used by prompt.sh when no agent or provider is specified.")
+
+(defparameter +prompt-default-model+ "gpt-5.3-codex"
+  "Default model used by prompt.sh when no agent or model is specified.")
+
 (defvar *default-subagent-name* "subagent"
   "Default transient agent name used by RUN-SUBAGENT.")
 
@@ -167,7 +173,7 @@ When all tools are done, finalizes the results."
                           (handler-case
                               (execute-tool tool-name tool-input)
                             (error (e)
-                              (api-json-encode `((:error . ,(format nil "~A" e))))))))
+                              (tool-error-result-data e)))))
                    (push `((:result . ,result-text)
                            (:display . ,(format-tool-result-display tool-name result-text))
                            (:tool-id . ,tool-id))
@@ -195,7 +201,7 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
                 (handler-case
                     (execute-tool tool-name tool-input)
                   (error (e)
-                    (api-json-encode `((:error . ,(format nil "~A" e))))))))
+                    (tool-error-result-data e)))))
          (push `((:result . ,result-text)
                  (:display . ,(format-tool-result-display tool-name result-text))
                  (:tool-id . ,tool-id))
@@ -203,15 +209,14 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
       ;; Denied with message
       ((and (consp response) (eq (car response) :deny-with-message))
        (let ((reason (cdr response)))
-         (push `((:result . ,(api-json-encode
-                              `((:denied . t)
-                                (:reason . ,(or reason "User denied this tool call")))))
+         (push `((:result . ,(tool-denied-result-data
+                              (or reason "User denied this tool call")))
                  (:display . ,(format nil "[~A DENIED: ~A]" tool-name (or reason "denied")))
                  (:tool-id . ,tool-id))
                (buffer-tool-call-results buf))))
       ;; Denied (no message)
       (t
-       (push `((:result . ,(api-json-encode `((:denied . t) (:reason . "User denied"))))
+       (push `((:result . ,(tool-denied-result-data "User denied"))
                (:display . ,(format nil "[~A DENIED]" tool-name))
                (:tool-id . ,tool-id))
              (buffer-tool-call-results buf))))
@@ -666,10 +671,9 @@ Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
                 model
                 think-level)))))
 
-(defun denied-tool-result-json (reason)
-  "Return a canonical JSON denial payload for a non-interactive tool denial."
-  (api-json-encode `((:denied . t)
-                     (:reason . ,reason))))
+(defun denied-tool-result-data (reason)
+  "Return a Lisp data denial payload for a non-interactive tool denial."
+  (tool-denied-result-data reason))
 
 (defun execute-prompt-tool-call (tool-use-block agent-kw auto-approve-tools-p)
   "Execute TOOL-USE-BLOCK for prompt mode and return values RESULT and EVENT.
@@ -683,14 +687,13 @@ PROMPT-TOOL-EVENT for terminal/debug output."
                         (not auto-approve-tools-p)))
          (result-text
            (if denied-p
-               (denied-tool-result-json
+               (denied-tool-result-data
                 "Tool requires interactive approval; prompt mode denied it.")
                (let ((*current-caller* agent-kw))
                  (handler-case
                      (execute-tool tool-name tool-input)
                    (error (e)
-                     (api-json-encode
-                      `((:error . ,(format nil "~A" e)))))))))
+                     (tool-error-result-data e))))))
          (display (if denied-p
                       (format nil "[~A DENIED: non-interactive prompt mode]"
                               tool-name)
@@ -4178,12 +4181,14 @@ The current buffer remains current when a current buffer already exists."
 
 (defun prompt-usage-string ()
   "Return command-line help for non-interactive prompt mode."
-  "Usage: prompt.sh [options] PROMPT...
+  (format nil "Usage: prompt.sh [options] PROMPT...
 
 Options:
   --agent NAME              Use the named clawmacs agent.
   --provider PROVIDER       Override provider: openai-codex, zai, openrouter.
+                            Default without --agent: ~A.
   --model MODEL             Override the model name.
+                            Default without --agent: ~A.
   --think LEVEL             Override reasoning effort when supported.
   --show-tools              Print tool calls/results to stderr.
   --show-reasoning          Print provider-supplied reasoning blocks when present.
@@ -4196,10 +4201,12 @@ Options:
   --isolated                Use temporary prompt config/project/session dirs.
   --clean-build             Clear cached Lisp build artifacts before loading.
   --force-clean-build       Alias for --clean-build.
-  --no-init                 Skip ~/.clawmacs.d/init.lisp.
+  --no-init                 Skip ~~/.clawmacs.d/init.lisp.
   --help                    Show this help.
 
-If PROMPT is omitted, non-interactive stdin is read as the prompt.")
+If PROMPT is omitted, non-interactive stdin is read as the prompt."
+          +prompt-default-provider+
+          +prompt-default-model+))
 
 (defun require-option-value (option args)
   "Pop and return OPTION's value from ARGS, or signal a clear error."
@@ -4240,6 +4247,9 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
   "Parse ARGS for non-interactive prompt mode and return PROMPT-OPTIONS."
   (let ((options (make-prompt-options))
         (prompt-parts nil)
+        (agent-supplied-p nil)
+        (provider-supplied-p nil)
+        (model-supplied-p nil)
         (remaining (copy-list args)))
     (loop :while remaining
           :for arg := (pop remaining)
@@ -4253,16 +4263,19 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
                  (multiple-value-bind (value rest)
                      (require-option-value arg remaining)
                    (setf (prompt-options-agent-name options) value
+                         agent-supplied-p t
                          remaining rest)))
                 ((string= arg "--provider")
                  (multiple-value-bind (value rest)
                      (require-option-value arg remaining)
                    (setf (prompt-options-provider options) value
+                         provider-supplied-p t
                          remaining rest)))
                 ((string= arg "--model")
                  (multiple-value-bind (value rest)
                      (require-option-value arg remaining)
                    (setf (prompt-options-model options) value
+                         model-supplied-p t
                          remaining rest)))
                 ((or (string= arg "--think")
                      (string= arg "--reasoning-effort"))
@@ -4319,6 +4332,10 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt.")
                  (setf prompt-parts (append prompt-parts (cons arg remaining))
                        remaining nil))))
     (unless (prompt-options-help-p options)
+      (unless (or agent-supplied-p provider-supplied-p)
+        (setf (prompt-options-provider options) +prompt-default-provider+))
+      (unless (or agent-supplied-p model-supplied-p provider-supplied-p)
+        (setf (prompt-options-model options) +prompt-default-model+))
       (setf (prompt-options-prompt options)
             (finalize-prompt-option-text prompt-parts)))
     options))

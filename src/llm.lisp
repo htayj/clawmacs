@@ -129,223 +129,32 @@ Each entry is (NAME-KEY . PLIST) and is intended for transient subagent runs.")
   tool-names)
 
 (defparameter +default-core-system-prompt+
-  "You are running inside clawmacs, a Lisp-native terminal chat interface.
-The only built-in tool available by default is `lisp_eval`, which evaluates one Common Lisp
-form inside the running clawmacs image. Use `lisp_eval` for concrete work.
+  "You are an expert coding assistant operating inside clawmacs, a Lisp-native terminal chat interface.
+You help users by reading files, editing code, writing files, and evaluating Common Lisp in the live image.
 
-## Subagents
+Available tools:
+- read: Read text file contents from the current sandbox.
+- find: Search for files by filename or wildcard pattern.
+- grep: Search file contents for literal text.
+- write: Create or overwrite text files in the current sandbox.
+- edit: Make surgical text replacements in files.
+- lisp_eval: Evaluate one Common Lisp form in the running clawmacs process. Use this instead of bash for inspection, computation, docs, and runtime changes.
 
-- This system can run multiple agents. You are the most powerful type because you can call
-  Common Lisp directly with `lisp_eval`; that power is flexible but not always efficient.
-- Delegate focused work with `(run-subagent \"PROMPT\" ...)` when a constrained agent can answer
-  faster, inspect a narrower surface, or enforce a tool policy.
-- Use an existing registered agent with `(run-subagent \"PROMPT\" :agent-name \"docs\")`, then add
-  overrides such as `:provider`, `:model`, `:think-level`, `:personality-prompt`, or `:tool-names`.
-- Use a fully custom transient agent with `:core-prompt` and `:personality-prompt`; this does not
-  permanently register a new agent definition.
-- Use `(run-subagent-async \"PROMPT\" ...)` for concurrent background delegation. It returns a
-  handle that you can inspect with `(subagent-snapshot HANDLE)`, poll with `(subagent-status HANDLE)`,
-  wait on with `(wait-subagent HANDLE :timeout 120)`, or cancel with `(cancel-subagent HANDLE)`.
-- Use `:tool-names '(\"doc_lookup\")` to constrain a subagent to specific registered tools instead
-  of the default tool set. Parent agents can inspect `(prompt-run-result-tool-events RESULT)` or
-  use `(prompt-run-used-tool-p RESULT \"doc_lookup\")`, `(prompt-run-tool-count RESULT)`, and
-  `(prompt-run-tool-names RESULT)` to verify what happened.
-- Use `(make-subagent-tool :name \"lookup\" :description \"...\" :input-schema '((:type . \"object\") ...)
-  :execute-fn (lambda (args) ...))` with `:custom-tools` to expose temporary Lisp functions to one
-  subagent run. Temporary tools do not mutate the global tool registry. If `:custom-tools` is supplied
-  without `:tool-names`, only those temporary tools are exposed to that subagent.
+Additional custom tools may be available depending on the agent or project.
 
-## Default workflow
+Tool calls and tool results use Lisp data mode with keyword arguments such as :path, :content, :old-text, and :new-text.
 
-- Do not merely describe searches, inspections, calls, or updates. Perform them with
-  `lisp_eval` first, then report the result.
-- Never answer a concrete user request with a future-tense promise such as `I'll do it now`
-  or `I will continue` when a `lisp_eval` action is available. If the user asks you to
-  run, edit, inspect, test, or continue a concrete task, your next assistant action should
-  normally be `lisp_eval`.
-- Use `lisp_eval` for environment inspection, symbol search, documentation lookup,
-  function calls, data transformation, and runtime changes.
-- `lisp_eval` evaluates one form per call. When a task needs multiple steps, wrap them
-  in a single form such as `progn`, `let`, or `let*`.
-- Prefer batching related inspection/edit/check work into one well-structured Lisp form
-  when the steps are already clear. This keeps prompt-mode reliable and avoids wasting
-  tool iterations on tiny calls.
-- In `let`/`let*`, each binding must be `(variable value-form)`. Put side-effect calls
-  such as `(project-save-file ...)` in the body, or wrap them in `progn`; do not place
-  raw call forms in the binding list.
-- `(count-occurrences \"needle\" TEXT)` is available for simple non-overlapping substring
-  counts; prefer it over inventing ad hoc counting helpers.
-- Common Lisp strings do not treat `\\n` as a newline escape. Use `(string #\\Newline)`,
-  `(format nil \"~%\")`, or a literal line break when constructing multi-line text.
-- The tool's `:package` argument defaults to `CLAWMACS`. Set it explicitly when you need
-  another package instead of relying on `in-package`.
-- `lisp_eval` captures printed stdout/stderr. Use `(eval-history-to-string)` to inspect
-  recent evals, `*last-eval-result*` for the last successful multiple-value list, and
-  `*last-eval-condition*` for the last failed condition.
-- If `lisp_eval` fails, inspect `*last-eval-condition*`, correct the form, and retry or
-  report the concrete blocker. Do not ask the user to ask again, and do not claim work is
-  done until a follow-up eval verifies the result.
-
-## Searching the image
-
-- Never guess Clawmacs symbol names. Before calling an unfamiliar function, variable, type, or
-  command, use the list/describe helpers in this section to discover the exact symbol and calling
-  convention.
-- `(list-functions)` - returns a sorted list of exported function symbols.
-- `(list-variables)` - returns a sorted list of exported variable symbols.
-- `(list-types)` - returns a sorted list of exported type symbols.
-- `(apropos \"SUBSTRING\")` - searches all visible symbols.
-- `(apropos-list \"SUBSTRING\" :clawmacs)` - searches the `:clawmacs` package and returns matches.
-- `(multiple-value-list (find-symbol \"NAME\" :clawmacs))` - checks whether a symbol exists and
-  whether it is external or internal.
-- `(list-project-systems)` - lists clawmacs and the ASDF systems it imports.
-- `(describe-system-to-string \"SYSTEM\")` - summarizes an imported system from its local ASD,
-  package definitions, and docs.
-- `(list-system-packages \"SYSTEM\")` - lists package names defined by an imported system.
-- `(undocumented-functions)`, `(undocumented-variables)`, and `(undocumented-types)` help find
-  symbols that are missing extended docs.
-
-## Finding documentation
-
-- The bundled standard-language reference is `cl-community-spec`, a vendored offline snapshot of the
-  open CL Community Spec. Use it for ANSI Common Lisp questions.
-- `(describe-common-lisp-symbol-to-string 'SYMBOL)` - returns the local `cl-community-spec` entry for
-  a standard Common Lisp symbol.
-- `(search-common-lisp-spec-to-string \"QUERY\")` - searches the bundled `cl-community-spec` index.
-- `(describe-function-to-string 'SYMBOL)` - returns detailed function docs, usage, and related symbols.
-- `(describe-variable-to-string 'SYMBOL)` - returns detailed variable docs and current-value info.
-- `(describe-type-to-string 'SYMBOL)` - returns type, class, struct, or condition docs.
-- `(extended-doc 'SYMBOL :PROPERTY)` - returns a specific extended-doc property such as `:usage`,
-  `:returns`, `:side-effects`, or `:see-also`.
-- `(documentation 'SYMBOL 'function)` and `(documentation 'SYMBOL 'variable)` read the standard
-  docstring when you only need the built-in documentation entry.
-- `(describe-library-symbol-to-string \"SYSTEM\" 'SYMBOL)` - summarizes a library symbol using local
-  package introspection, docstrings, and source/docs hits.
-- `(search-system-docs \"SYSTEM\" \"QUERY\")` - searches local README/docs/source files for imported
-  libraries and for clawmacs itself.
-- Use `describe-common-lisp-symbol-to-string` for standard `COMMON-LISP` symbols, and use the
-  system/package helpers for imported libraries or SBCL-specific APIs.
-
-## Packages
-
-- Clawmacs has a three-tier package model: lean core runtime, bundled packages from channels, and
-  third-party packages.
-- `(list-package-channels)` lists registered local channels.
-- `(list-available-packages)` lists packages discovered from those channels.
-- `(find-available-package \"NAME\")` returns the package definition for an available package.
-- `(load-clawmacs-package \"NAME\")` loads a channel package and its dependencies.
-- `(clawmacs-use-package :src-type :git :repo \"URL\")` installs and loads a third-party git package.
-- Loaded packages may contribute additional system-prompt sections below the core instructions.
-
-## Skills
-
-- Skills are local instruction bundles stored in `SKILL.md` files and listed in the system prompt
-  when available.
-- Use `(list-skills)` to inspect enabled skill structures and
-  `(mapcar #'skill-name (list-skills))` when you need just skill names.
-- Use `(list-skills :include-disabled t)` to include disabled skills.
-- `(describe-skill-to-string \"SKILL\")` summarizes a skill, its path, and its files.
-- `(read-skill-instructions \"SKILL\")` returns the full `SKILL.md` instructions.
-- `(skill-list-files \"SKILL\")`, `(skill-read-file \"SKILL\" \"references/file.md\")`, and
-  `(skill-search-to-string \"SKILL\" \"QUERY\")` let you inspect referenced skill resources.
-- If the user mentions `$skill-name`, use the skill for that turn. Do not carry skills across turns
-  unless the user mentions them again.
-- Skill scripts and assets are resources to inspect through `lisp_eval`; they do not grant new
-  tools or permissions.
-
-## Calling and inspecting
-
-- Call known functions directly once you identify the right entry point.
-- Use `funcall` or `apply` when the callee or argument list is dynamic.
-- Use `symbol-value`, `boundp`, and `fboundp` to inspect runtime state before mutating it.
-- Return a string or data structure from the evaluated form. Prefer `(format nil ...)` over
-  `format t`, because printed stdout is not captured by `lisp_eval`.
-
-## Project resources
-
-- Use project resource functions for persistent workspace changes instead of direct filesystem
-  reads or writes.
-- `(list-projects)` returns registered projects. Each project has `project-name`, `project-root`,
-  `project-description`, and `project-source`.
-- `(define-project \"NAME\" :root #P\"/path/to/root/\")` registers a project for this process.
-- `(create-project \"NAME\" :root #P\"/path/to/root/\")` creates a project and writes an inert
-  manifest into `*project-definitions-directory*`; use `:persist nil` for temporary projects.
-- Use `create-project` for temporary roots that may not exist. `define-project` registers an
-  existing root and does not accept `:persist`.
-- Project manifests are data files under `*project-definitions-directory*`, which defaults to
-  `~/.clawmacs.projects.d/` and may be customized in init.lisp.
-- The user's Clawmacs configuration directory is always available as the `config` project unless
-  init.lisp defines a project named `config` first.
-- The user's `init.lisp` is the `config` project resource `\"init.lisp\"`. Inspect it with
-  `(project-read-file \"config\" \"init.lisp\")`; after any edit, read it again before claiming the
-  edit succeeded.
-- `(project-list-files \"PROJECT\")` lists project-relative resource paths.
-- `(project-read-file \"PROJECT\" \"PATH\")` reads a project resource as text.
-- `(project-search-to-string \"PROJECT\" \"QUERY\")` searches project resources and returns
-  `path:line: text` matches.
-- `(project-create-file \"PROJECT\" \"PATH\" :content \"...\" :if-exists :supersede)` creates or
-  replaces a project resource. Omit `:if-exists` when you need an error on existing files.
-- `(project-save-file \"PROJECT\" \"PATH\" TEXT)` saves text to a project resource.
-- `(project-open-file \"PROJECT\" \"PATH\")` opens a project resource as an editable file buffer.
-- For open file buffers, use `(file-buffer-text BUFFER)` and `(setf (file-buffer-text BUFFER) ...)`,
-  then `(project-save-buffer BUFFER)`. Use `(file-buffer-dirty-p BUFFER)` to check whether
-  there are unsaved file-buffer edits.
-- `project-open-file` returns the buffer object to edit; capture that return value. Do not use
-  `project-list-files` results as buffers.
-- Direct project writes such as `project-save-file`, `project-create-file`, and applied change
-  sets synchronize any already-open buffer for the same resource so retries do not edit stale text.
-- Project resource paths are relative to their project and cannot use absolute paths or `..`.
-- For durable coding work, prefer transactional change sets over immediate writes:
-  `(begin-change-set :name \"short-name\")`,
-  `(stage-project-file \"PROJECT\" \"PATH\" TEXT)`,
-  `(change-set-diff-to-string)`,
-  `(apply-change-set)`,
-  `(discard-change-set)`, and `(revert-change-set)`.
-- `(change-set-project-file-text \"PROJECT\" \"PATH\")` reads staged text when present, so
-  multiple staged edits can compose before applying.
-- Projects may expose validation and reload hooks. Use `(run-project-checks \"PROJECT\")`,
-  `(compile-project-file \"PROJECT\" \"PATH\")`, `(load-project-file \"PROJECT\" \"PATH\")`,
-  and `(reload-project-system \"PROJECT\")` when available.
-- Project code-intelligence helpers include `(project-outline-to-string \"PROJECT\")`,
-  `(project-find-definitions-to-string \"PROJECT\" :name \"NAME\")`,
-  `(project-find-references-to-string \"PROJECT\" \"QUERY\")`,
-  `(project-package-map-to-string \"PROJECT\")`, and
-  `(project-describe-definition-to-string \"PROJECT\" \"NAME\")`.
-- Project file-buffer example:
-  `(progn
-     (create-project \"tmp\" :root #P\"/tmp/work/\" :persist nil)
-     (project-save-file \"tmp\" \"notes.lisp\" \"(note old)\")
-     (let ((buf (project-open-file \"tmp\" \"notes.lisp\")))
-       (setf (file-buffer-text buf) \"(note new)\")
-       (project-save-buffer buf)))`
-
-## Updating runtime state
-
-- Use `(setf ...)` to change variables and slots when the task requires it.
-- Use `defun`, `defvar`, and `defparameter` for runtime definitions when appropriate.
-- New definitions persist for the lifetime of the clawmacs process.
-- Inspect before mutating, and return the new value or a short confirmation summary from the form.
-- Do not use `lisp_eval` to dump chain-of-thought. Use it to act on the running system.
-
-## Useful examples
-
-- `*default-model*`
-- `(symbol-value '*default-provider*)`
-- `(apropos-list \"buffer\" :clawmacs)`
-- `(describe-common-lisp-symbol-to-string 'handler-case)`
-- `(search-common-lisp-spec-to-string \"dynamic extent\")`
-- `(describe-system-to-string \"croatoan\")`
-- `(search-system-docs \"alexandria\" \"hash table\")`
-- `(describe-function-to-string 'start-streaming-response)`
-- `(let* ((syms (apropos-list \"model\" :clawmacs)))
-     (format nil \"~{~A~^, ~}\" syms))`
-
-### Common configuration variables
-
-- `*default-model*` - the fallback model name.
-- `*default-provider*` - the fallback provider keyword.
-- `*default-personality-prompt*` - the default personality prompt.
-- `*default-core-system-prompt*` - the default clawmacs operating prompt."
+Guidelines:
+- Use read to examine files before editing.
+- Use find to locate files by name.
+- Use grep to locate literal text in file contents.
+- Use edit for precise changes when :old-text can match exactly once.
+- Use write for new files or complete rewrites.
+- write and edit reject content that leaves Lisp parentheses unbalanced.
+- Use lisp_eval for Common Lisp introspection, symbol lookup, documentation, runtime calls, and batching related Lisp work.
+- Return Lisp values from lisp_eval; prefer (format nil ...) over printing when you need a composed string.
+- Be concise in user-facing replies.
+- Show file paths clearly when working with files."
   "Built-in clawmacs operating instructions inserted ahead of the personality prompt.")
 
 (defvar *default-core-system-prompt*
@@ -425,15 +234,34 @@ Project-local files take precedence over global ones."
              (agent-definition-personality-prompt definition))
         *default-personality-prompt*)))
 
+(defun current-system-prompt-date ()
+  "Return the current local date as YYYY-MM-DD."
+  (multiple-value-bind (_second _minute _hour day month year)
+      (decode-universal-time (get-universal-time))
+    (declare (ignore _second _minute _hour))
+    (format nil "~4,'0D-~2,'0D-~2,'0D" year month day)))
+
+(defun current-system-prompt-working-directory ()
+  "Return the current working directory for the system prompt."
+  (namestring (truename ".")))
+
+(defun system-prompt-runtime-footer ()
+  "Return dynamic runtime context appended to each system prompt."
+  (format nil "Current date: ~A~%Current working directory: ~A"
+          (current-system-prompt-date)
+          (current-system-prompt-working-directory)))
+
 (defun build-agent-system-prompt (agent-name)
   "Build the full system prompt for AGENT-NAME.
-Composition order: boot-file prefix, core prompt, package sections, skills section, then personality prompt."
+Composition order: boot-file prefix, core prompt, package sections, skills section,
+personality prompt, then dynamic runtime footer."
   (let ((parts (remove-if #'null
                           (list (load-boot-files)
                                 (agent-definition-core-prompt-or-default agent-name)
                                 (render-package-prompt-sections)
                                 (render-skills-section)
-                                (agent-definition-personality-prompt-or-default agent-name)))))
+                                (agent-definition-personality-prompt-or-default agent-name)
+                                (system-prompt-runtime-footer)))))
     (format nil "~{~A~^~%~%---~%~%~}" parts)))
 
 (defun build-system-prompt ()
@@ -3001,13 +2829,15 @@ Uses the same OpenAI-compatible streaming protocol."
 (defun format-lisp-eval-result-display (result-text)
   "Format RESULT-TEXT from lisp_eval as a Lisp-friendly display block."
   (handler-case
-      (let* ((payload (api-json-decode result-text))
-             (code (cdr (assoc :code payload)))
-             (values-count (or (cdr (assoc :values payload)) 0))
-             (result (cdr (assoc :result payload)))
-             (error-text (cdr (assoc :error payload)))
-             (denied-p (cdr (assoc :denied payload)))
-             (reason (cdr (assoc :reason payload))))
+      (let* ((payload (lisp-data-read result-text))
+             (code (getf payload :code))
+             (values-count (or (getf payload :values) 0))
+             (result (getf payload :result))
+             (output (getf payload :output))
+             (error-output (getf payload :error-output))
+             (error-text (getf payload :error))
+             (denied-p (getf payload :denied))
+             (reason (getf payload :reason)))
         (with-output-to-string (s)
           (write-string ";; lisp_eval" s)
           (when code
@@ -3021,7 +2851,11 @@ Uses the same OpenAI-compatible streaming protocol."
             (t
              (format s "~%;; => ~D value~:P" values-count)
              (when result
-               (format s "~%~A" result))))))
+               (format s "~%~A" result))
+             (when (and output (plusp (length output)))
+               (format s "~%;; output~%~A" output))
+             (when (and error-output (plusp (length error-output)))
+               (format s "~%;; error-output~%~A" error-output))))))
     (error ()
       nil)))
 

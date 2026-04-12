@@ -9,7 +9,7 @@ Macros for your agent!
 
 Anyone who has used Emacs before knows the benefit of a tight feedback loop. Write lisp code, eval it, instant results. Clawmacs brings that same philosophy to agentic programming: the tighter the feedback loop between you and the agent, and the more the agent can introspect its own environment, the more powerful the collaboration becomes.
 
-Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment with full access to the running Lisp image. By default the agent acts through =lisp_eval=: it can inspect the editor, search symbols, read docs, call functions, and update runtime state directly inside the live Common Lisp process.
+Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment with full access to the running Lisp image. The agent can read, write, and edit sandboxed files directly through Lisp data mode, and it can use =lisp_eval= to inspect the editor, search symbols, read docs, call functions, and update runtime state inside the live Common Lisp process.
 
 #+ATTR_ORG: :width 800
 [[file:docs/img/genera-style.png]]
@@ -37,19 +37,32 @@ OpenAI Codex auth follows Codex's own credential layout:
 
 ** Agent Tools
 
-The default built-in agent tool surface is intentionally narrow:
+The default built-in agent tool surface is provided by the =lispi= package and
+follows Pi-style coding tools, with =lisp_eval= replacing shell access:
 
 | Tool         | Permission             | Description                          |
 |--------------+------------------------+--------------------------------------|
+| =read=       | agent-allowed          | Read text files in the sandbox       |
+| =find=       | agent-allowed          | Search files by name or wildcard     |
+| =grep=       | agent-allowed          | Search file contents by literal text |
+| =write=      | agent-allowed          | Create or overwrite sandboxed files  |
+| =edit=       | agent-allowed          | Replace exact text in sandboxed files |
 | =lisp_eval=  | agent-allowed          | Evaluate Common Lisp in the running image |
 
-By default, agents are expected to search for symbols, inspect documentation, call functions, and update runtime state through =lisp_eval=. Custom tools may still be registered explicitly, but they are not part of the default built-in tool set.
+By default, agents use the file tools for workspace search and text changes and
+=lisp_eval= for Lisp-native inspection, documentation lookup, computation, and
+runtime updates. Tool inputs and tool results are represented as Lisp data, for
+example =(edit :path "src/foo.lisp" :old-text "old" :new-text "new")=.
+The =write= and =edit= tools reject content that leaves Lisp parentheses
+unbalanced.
+Custom tools may still be registered explicitly.
 
 The =lisp_eval= tool is particularly powerful: the agent can introspect clawmacs itself, query buffer state, evaluate expressions, and modify the running system. Standard Common Lisp reference lookup is available through a vendored offline snapshot of =cl-community-spec=, and imported library discovery is handled locally through ASDF metadata, package exports, docstrings, and source/doc search helpers.
 
-=lisp_eval= captures printed stdout/stderr as well as multiple return values.
-Recent calls are available with =(eval-history-to-string)=, and the latest
-success/error are exposed through =*last-eval-result*= and
+=lisp_eval= captures printed output, error output, and multiple return values.
+Its tool result is a printed Lisp plist. Recent calls are available with
+=(eval-history-to-string)=, and the latest success/error are exposed through
+=*last-eval-result*= and
 =*last-eval-condition*=.
 
 ** Skills
@@ -318,6 +331,10 @@ by default:
 ./prompt.sh --isolated --show-tools "Exercise project APIs without user config state."
 ./prompt.sh --isolated --skill-root /tmp/my-skills 'Use $demo to answer.'
 #+end_src
+
+Plain =prompt.sh= runs default to =openai-codex/gpt-5.3-codex=. Passing
+=--agent= lets that agent's routing decide unless =--provider= or =--model=
+is also supplied.
 
 By default, =prompt.sh= reuses cached ASDF/FASL build artifacts for fast
 iterations. Pass =--clean-build=, or its alias =--force-clean-build=, to clear

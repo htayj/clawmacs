@@ -166,22 +166,26 @@
   (signals error
     (clawmacs::provider-token-path :unknown-provider)))
 
-(test init-tools-registers-only-lisp-eval-by-default
-  "init-tools removes dormant built-ins and exposes only lisp_eval by default."
+(test init-tools-registers-pi-style-tools-by-default
+  "init-tools removes dormant built-ins and exposes Pi-style tools by default."
   (with-tool-table-restored
     (clrhash clawmacs::*tool-table*)
     (clawmacs::init-tools)
     (let* ((*current-caller* :user)
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
-           (tool-names (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)))
-      (is (equal '("lisp_eval") tool-names))
-      (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*))))
+           (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
+                             #'string<)))
+      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "write")
+                 tool-names))
+      (is (string= "CLAWMACS" clawmacs:*lisp-eval-default-package*))
+      (dolist (name '("read" "find" "grep" "write" "edit" "lisp_eval"))
+        (is (not (null (gethash name clawmacs::*tool-table*))))
+        (is-false (clawmacs::tool-requires-permission-p name)))
       (is (null (gethash "http_fetch" clawmacs::*tool-table*)))
       (is (null (gethash "file_read" clawmacs::*tool-table*)))
       (is (null (gethash "file_write" clawmacs::*tool-table*)))
       (is (null (gethash "file_edit" clawmacs::*tool-table*)))
-      (is (null (gethash "shell_exec" clawmacs::*tool-table*)))
-      (is-false (clawmacs::tool-requires-permission-p "lisp_eval")))))
+      (is (null (gethash "shell_exec" clawmacs::*tool-table*))))))
 
 (test init-tools-preserves-custom-tools
   "init-tools resets built-ins without wiping user-added tools."
@@ -201,12 +205,224 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("custom_probe" "lisp_eval") tool-names))
+      (is (equal '("custom_probe" "edit" "find" "grep" "lisp_eval" "read" "write")
+                 tool-names))
       (is (not (null (gethash "custom_probe" clawmacs::*tool-table*))))
       (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*)))))))
 
-(test build-system-prompt-emphasizes-lisp-eval-workflow
-  "The default system prompt teaches REPL-first search, docs, and calling guidance."
+(test default-file-tools-read-write-edit-plain-text
+  "The default file tools accept Lisp data and mutate sandboxed text files."
+  (with-tool-table-restored
+    (let* ((root (uiop:ensure-directory-pathname
+                  (temp-package-test-directory "file-tools")))
+           (file (merge-pathnames "nested/demo.txt" root)))
+      (ensure-directories-exist (merge-pathnames #P".keep" root))
+      (let ((clawmacs::*sandbox-root* root))
+        (clawmacs::init-tools)
+        (let ((write-result
+                (clawmacs:execute-tool
+                 "write"
+                 '(:path "nested/demo.txt"
+                   :content "alpha
+beta
+gamma"))))
+          (is (search "Successfully wrote" write-result))
+          (is (string= "alpha
+beta
+gamma"
+                       (uiop:read-file-string file))))
+        (let ((read-result
+                (clawmacs:execute-tool
+                 "read"
+                 '(:path "nested/demo.txt"
+                   :limit 2))))
+          (is (search "alpha" read-result))
+          (is (search "beta" read-result))
+          (is (search "Use offset=3 to continue" read-result)))
+        (let ((edit-result
+                (clawmacs:execute-tool
+                 "edit"
+                 '(:path "nested/demo.txt"
+                   :old-text "beta"
+                   :new-text "BETA"))))
+          (is (search "Successfully replaced text" edit-result))
+          (is (search "+BETA" edit-result))
+          (is (string= "alpha
+BETA
+gamma"
+                       (uiop:read-file-string file))))
+        (let ((delete-result
+                (clawmacs:execute-tool
+                 "edit"
+                 '(:path "nested/demo.txt"
+                   :old-text "gamma"
+                   :new-text ""))))
+          (is (search "Successfully replaced text" delete-result))
+          (is (string= "alpha
+BETA
+"
+                       (uiop:read-file-string file))))
+        (clawmacs:execute-tool
+         "write"
+         '(:path "nested/demo.txt"
+           :content "reset"))
+        (is (string= "reset" (uiop:read-file-string file)))))))
+
+(test default-search-tools-find-files-and-grep-contents
+  "find searches filenames and grep searches file contents inside the sandbox."
+  (with-tool-table-restored
+    (let* ((root (uiop:ensure-directory-pathname
+                  (temp-package-test-directory "search-tools")))
+           (source (merge-pathnames "src/alpha.lisp" root))
+           (text (merge-pathnames "src/beta.txt" root))
+           (ignored (merge-pathnames "node_modules/ignored.txt" root)))
+      (ensure-directories-exist source)
+      (ensure-directories-exist ignored)
+      (write-test-file source "(defun alpha () :ok)
+")
+      (write-test-file text "intro
+needle here
+")
+      (write-test-file ignored "needle should not be seen
+")
+      (let ((clawmacs::*sandbox-root* root))
+        (clawmacs::init-tools)
+        (let ((find-result (clawmacs:execute-tool
+                            "find"
+                            '(:pattern "*.lisp"))))
+          (is (search "src/alpha.lisp" find-result))
+          (is-false (search "src/beta.txt" find-result)))
+        (let ((find-result (clawmacs:execute-tool
+                            "find"
+                            '(:pattern "beta"
+                              :ignore-case t))))
+          (is (search "src/beta.txt" find-result)))
+        (let ((grep-result (clawmacs:execute-tool
+                            "grep"
+                            '(:pattern "needle"
+                              :glob "*.txt"))))
+          (is (search "src/beta.txt:2:needle here" grep-result))
+          (is-false (search "node_modules" grep-result)))))))
+
+(test lispi-package-exposes-default-tool-implementations
+  "The default read/write/edit/lisp_eval implementations live in the lispi package."
+  (let* ((specs (lispi:default-tool-specs))
+         (names (sort (mapcar (lambda (spec)
+                                (getf spec :name))
+                              specs)
+                      #'string<)))
+    (is (equal '("edit" "find" "grep" "lisp_eval" "read" "write") names)))
+  (let* ((root (uiop:ensure-directory-pathname
+                (temp-package-test-directory "lispi-tools")))
+         (file (merge-pathnames "demo.txt" root)))
+    (ensure-directories-exist (merge-pathnames #P".keep" root))
+    (let ((lispi:*sandbox-root* root))
+      (is (search "Successfully wrote"
+                  (lispi:execute-write
+                   '(:path "demo.txt"
+                     :content "one
+two"))))
+      (is (search "Use offset=2 to continue"
+                  (lispi:execute-read
+                   '(:path "demo.txt"
+                     :limit 1))))
+      (is (search "demo.txt"
+                  (lispi:execute-find
+                   '(:pattern "demo"))))
+      (is (search "demo.txt:2:two"
+                  (lispi:execute-grep
+                   '(:pattern "two"))))
+      (is (search "Successfully replaced text"
+                  (lispi:execute-edit
+                   '(:path "demo.txt"
+                     :old-text "two"
+                     :new-text "TWO"))))
+      (is (string= "one
+TWO"
+                   (uiop:read-file-string file)))))
+  (let ((lispi:*last-eval-result* nil)
+        (lispi:*last-eval-condition* nil)
+        (lispi:*lisp-eval-history* nil))
+    (let* ((data (lispi:execute-lisp-eval
+                  '(:code "(+ 2 3)"
+                    :package "CL-USER")))
+           (decoded (lispi:lisp-data-read data)))
+      (is (equal '(5) lispi:*last-eval-result*))
+      (is (null lispi:*last-eval-condition*))
+      (is (search "5" (getf decoded :result)))
+      (is (search "(+ 2 3)" (lispi:eval-history-to-string))))))
+
+(test default-write-and-edit-tools-reject-unbalanced-parentheses
+  "write and edit fail before touching disk when content would be unbalanced."
+  (with-tool-table-restored
+    (let* ((root (uiop:ensure-directory-pathname
+                  (temp-package-test-directory "tool-paren-balance")))
+           (file (merge-pathnames "sample.lisp" root))
+           (balanced-with-ignored-parens
+             (format nil
+                     "(list \"(\" #\\) ; ignored )~% #| ignored ) #| nested ( |# |# :ok)")))
+      (ensure-directories-exist (merge-pathnames #P".keep" root))
+      (let ((clawmacs::*sandbox-root* root))
+        (clawmacs::init-tools)
+        (clawmacs:execute-tool
+         "write"
+         `(:path "sample.lisp"
+           :content ,balanced-with-ignored-parens))
+        (is (string= balanced-with-ignored-parens
+                     (uiop:read-file-string file)))
+        (signals error
+          (clawmacs:execute-tool
+           "write"
+           '(:path "sample.lisp"
+             :content "(defun broken ()")))
+        (is (string= balanced-with-ignored-parens
+                     (uiop:read-file-string file)))
+        (clawmacs:execute-tool
+         "write"
+         '(:path "sample.lisp"
+           :content "(defun foo () (+ 1 2))"))
+        (signals error
+          (clawmacs:execute-tool
+           "edit"
+           '(:path "sample.lisp"
+             :old-text "(+ 1 2)"
+             :new-text "(list 1 2")))
+        (is (string= "(defun foo () (+ 1 2))"
+                     (uiop:read-file-string file)))))))
+
+(test default-edit-tool-rejects-missing-and-duplicate-old-text
+  "edit requires :old-text to be present exactly once."
+  (with-tool-table-restored
+    (let* ((root (uiop:ensure-directory-pathname
+                  (temp-package-test-directory "edit-tool-errors")))
+           (file (merge-pathnames "sample.txt" root)))
+      (ensure-directories-exist (merge-pathnames #P".keep" root))
+      (write-test-file file "same
+same
+")
+      (let ((clawmacs::*sandbox-root* root))
+        (clawmacs::init-tools)
+        (signals error
+          (clawmacs:execute-tool
+           "edit"
+           '(:path "sample.txt"
+             :old-text "missing"
+             :new-text "replacement")))
+        (signals error
+          (clawmacs:execute-tool
+           "edit"
+           '(:path "sample.txt"
+             :old-text "same"
+             :new-text "replacement")))
+        (signals error
+          (clawmacs:execute-tool
+           "edit"
+           '(:path "sample.txt"
+             :old-text ""
+             :new-text "replacement")))))))
+
+(test build-system-prompt-is-compact-and-pi-style
+  "The default system prompt lists the compact Pi-style tool surface."
   (with-function-override (clawmacs::load-boot-files ()
                             nil)
     (with-package-state-override ((default-package-test-channels))
@@ -214,64 +430,34 @@
       (is-false (search "## Structural editing with sexed"
                         clawmacs::*default-core-system-prompt*))
       (let ((prompt (clawmacs::build-system-prompt)))
-      (is (search "only built-in tool available by default is `lisp_eval`" prompt))
-      (is (search "This system can run multiple agents" prompt))
-      (is (search "(run-subagent \"PROMPT\" :agent-name \"docs\")" prompt))
-      (is (search "(run-subagent-async \"PROMPT\"" prompt))
-      (is (search "(wait-subagent HANDLE :timeout 120)" prompt))
-      (is (search "(make-subagent-tool :name \"lookup\"" prompt))
-      (is (search "Temporary tools do not mutate the global tool registry" prompt))
-      (is (search ":tool-names '(\"doc_lookup\")" prompt))
-      (is (search "(prompt-run-used-tool-p RESULT \"doc_lookup\")" prompt))
-      (is (search "Do not merely describe searches, inspections, calls, or updates" prompt))
-      (is (search "Never answer a concrete user request with a future-tense promise" prompt))
-      (is (search "your next assistant action should" prompt))
-      (is (search "normally be `lisp_eval`" prompt))
-      (is (search "If `lisp_eval` fails, inspect `*last-eval-condition*`" prompt))
-      (is (search "do not claim work is" prompt))
-      (is (search "done until a follow-up eval verifies the result" prompt))
-      (is (search "Never guess Clawmacs symbol names" prompt))
-      (is (search "(apropos-list \"SUBSTRING\" :clawmacs)" prompt))
-      (is (search "(multiple-value-list (find-symbol \"NAME\" :clawmacs))" prompt))
-      (is (search "cl-community-spec" prompt))
-      (is (search "(describe-common-lisp-symbol-to-string 'SYMBOL)" prompt))
-      (is (search "(describe-system-to-string \"SYSTEM\")" prompt))
-      (is (search "(search-system-docs \"SYSTEM\" \"QUERY\")" prompt))
-      (is (search "(describe-function-to-string 'SYMBOL)" prompt))
-      (is (search "(documentation 'SYMBOL 'function)" prompt))
-      (is (search "Use `funcall` or `apply` when the callee or argument list is dynamic." prompt))
-      (is (search "(list-package-channels)" prompt))
-      (is (search "(list-available-packages)" prompt))
-      (is (search "(load-clawmacs-package \"NAME\")" prompt))
-      (is (search "Prefer batching related inspection/edit/check work" prompt))
-      (is (search "each binding must be `(variable value-form)`" prompt))
-      (is (search "(count-occurrences \"needle\" TEXT)" prompt))
-      (is (search "Common Lisp strings do not treat `\\n` as a newline escape" prompt))
-      (is (search "(eval-history-to-string)" prompt))
-      (is (search "Use project resource functions for persistent workspace changes" prompt))
-      (is (search "(project-list-files \"PROJECT\")" prompt))
-      (is (search "(project-save-file \"PROJECT\" \"PATH\" TEXT)" prompt))
-      (is (search "Use `create-project` for temporary roots" prompt))
-      (is (search "does not accept `:persist`" prompt))
-      (is (search "Do not use" prompt))
-      (is (search "`project-list-files` results as buffers" prompt))
-      (is (search "Project file-buffer example" prompt))
-      (is (search "(begin-change-set :name \"short-name\")" prompt))
-      (is (search "(change-set-diff-to-string)" prompt))
-      (is (search "(run-project-checks \"PROJECT\")" prompt))
-      (is (search "(project-find-definitions-to-string \"PROJECT\" :name \"NAME\")" prompt))
-      (is (search "Use the `sexed-*` functions for Lisp source edits" prompt))
-      (is (search "(sexed-outline-to-string TEXT :max-depth 2)" prompt))
-      (is (search "(balanced-parentheses-p TEXT)" prompt))
-      (is (search "(sexed-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
-      (is (search "(sexed-stage-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
-      (is (search "(sexed-replace-scratch-form SELECTOR NEW-TEXT)" prompt))
-      (is (search "(sexed-init-outline-to-string :max-depth 3)" prompt))
-      (is (search "Do not guess a selector for `init.lisp`" prompt))
-      (is (search "(project-read-file \"config\" \"init.lisp\")" prompt))
-      (is (search "Do not try to set" prompt))
-      (is (search "Message adapters such as `sexed-replace-message-form` take a `message` object" prompt))
-      (is (search "Prefer `(format nil ...)` over" prompt))
+      (is (search "operating inside clawmacs" prompt))
+      (is (search "Available tools:" prompt))
+      (is (search "- read: Read text file contents" prompt))
+      (is (search "- find: Search for files" prompt))
+      (is (search "- grep: Search file contents" prompt))
+      (is (search "- write: Create or overwrite text files" prompt))
+      (is (search "- edit: Make surgical text replacements" prompt))
+      (is (search "- lisp_eval: Evaluate one Common Lisp form" prompt))
+      (is (search "Tool calls and tool results use Lisp data mode" prompt))
+      (is (search ":old-text" prompt))
+      (is (search ":new-text" prompt))
+      (is (search "Use find to locate files by name" prompt))
+      (is (search "Use grep to locate literal text" prompt))
+      (is (search "Use lisp_eval for Common Lisp introspection" prompt))
+      (is (search "Current date:" prompt))
+      (is (search "Current working directory:" prompt))
+      (is (search (clawmacs::current-system-prompt-date) prompt))
+      (is-false (search "only built-in tool available by default" prompt))
+      (is-false (search "## Subagents" prompt))
+      (is-false (search "Project file-buffer example" prompt))
+      (is-false (search "Use the `sexed-*` functions for Lisp source edits" prompt))
+      (is-false (search "(sexed-outline-to-string TEXT :max-depth 2)" prompt))
+      (is-false (search "(sexed-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
+      (is-false (search "(sexed-stage-replace-project-form \"PROJECT\" \"PATH\" SELECTOR NEW-TEXT)" prompt))
+      (is-false (search "(sexed-replace-scratch-form SELECTOR NEW-TEXT)" prompt))
+      (is-false (search "(sexed-init-outline-to-string :max-depth 3)" prompt))
+      (is-false (search "Do not try to set" prompt))
+      (is-false (search "Message adapters such as `sexed-replace-message-form` take a `message` object" prompt))
       (is-false (search "fetching URLs, reading/writing files, running shell commands" prompt))
       (is-false (search "http_fetch" prompt))
       (is-false (search "shell_exec" prompt))
@@ -309,7 +495,7 @@
                  (mapcar #'clawmacs:agent-definition-name listed))))))
 
 (test build-agent-system-prompt-composes-boot-core-and-personality
-  "Agent prompts are composed in boot -> core -> personality order."
+  "Agent prompts are composed in boot -> core -> personality -> runtime order."
   (with-isolated-skills (root)
     root
     (with-agent-definition-registry-override ()
@@ -319,16 +505,16 @@
        :personality-prompt "PAIR PERSONALITY")
       (with-function-override (clawmacs::load-boot-files ()
                                 "BOOT PREFIX")
-        (is (string= "BOOT PREFIX
-
----
-
-PAIR CORE
-
----
-
-PAIR PERSONALITY"
-                     (clawmacs:build-agent-system-prompt "pair")))))))
+        (let* ((prompt (clawmacs:build-agent-system-prompt "pair"))
+               (boot-pos (search "BOOT PREFIX" prompt))
+               (core-pos (search "PAIR CORE" prompt))
+               (personality-pos (search "PAIR PERSONALITY" prompt))
+               (date-pos (search "Current date:" prompt)))
+          (is (not (null boot-pos)))
+          (is (not (null core-pos)))
+          (is (not (null personality-pos)))
+          (is (not (null date-pos)))
+          (is (< boot-pos core-pos personality-pos date-pos)))))))
 
 (test build-agent-system-prompt-falls-back-to-default-components
   "Missing agent prompt slots fall back to the default core and personality prompts."
@@ -338,13 +524,13 @@ PAIR PERSONALITY"
       (with-function-override (clawmacs::load-boot-files ()
                                 nil)
         (let ((prompt (clawmacs:build-agent-system-prompt "writer")))
-          (is (search "only built-in tool available by default is `lisp_eval`" prompt))
+          (is (search "Tool calls and tool results use Lisp data mode" prompt))
           (is (search "WRITER PERSONALITY" prompt))
           (is-false (search "DEFAULT PERSONALITY" prompt))))
       (with-function-override (clawmacs::load-boot-files ()
                                 nil)
         (let ((prompt (clawmacs:build-agent-system-prompt "missing")))
-          (is (search "only built-in tool available by default is `lisp_eval`" prompt))
+          (is (search "Tool calls and tool results use Lisp data mode" prompt))
           (is (search "DEFAULT PERSONALITY" prompt)))))))
 
 (test parse-clawmacs-prompt-args-supports-routing-and-output-options
@@ -373,6 +559,36 @@ PAIR PERSONALITY"
     (is (clawmacs::prompt-options-isolated-p options))
     (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
     (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
+
+(test parse-clawmacs-prompt-args-defaults-to-codex-for-plain-prompt-sh
+  "Plain prompt.sh runs default to Codex 5.3 without overriding explicit routing."
+  (let ((options (clawmacs::parse-clawmacs-prompt-args
+                  '("summarize" "this"))))
+    (is (string= "openai-codex"
+                 (clawmacs::prompt-options-provider options)))
+    (is (string= "gpt-5.3-codex"
+                 (clawmacs::prompt-options-model options))))
+  (let ((options (clawmacs::parse-clawmacs-prompt-args
+                  '("--agent" "writer" "summarize" "this"))))
+    (is (null (clawmacs::prompt-options-provider options)))
+    (is (null (clawmacs::prompt-options-model options))))
+  (let ((options (clawmacs::parse-clawmacs-prompt-args
+                  '("--provider" "zai" "summarize" "this"))))
+    (is (string= "zai" (clawmacs::prompt-options-provider options)))
+    (is (null (clawmacs::prompt-options-model options))))
+  (let ((options (clawmacs::parse-clawmacs-prompt-args
+                  '("--model" "custom-codex" "summarize" "this"))))
+    (is (string= "openai-codex"
+                 (clawmacs::prompt-options-provider options)))
+    (is (string= "custom-codex"
+                 (clawmacs::prompt-options-model options)))))
+
+(test prompt-usage-string-docs-prompt-sh-codex-default
+  "prompt.sh help renders its default provider/model without FORMAT errors."
+  (let ((usage (clawmacs::prompt-usage-string)))
+    (is (search "Default without --agent: openai-codex" usage))
+    (is (search "Default without --agent: gpt-5.3-codex" usage))
+    (is (search "Skip ~/.clawmacs.d/init.lisp" usage))))
 
 (test compaction-threshold-policy
   "Compaction thresholds are configurable as nil, ratios, integers, or functions."
@@ -1061,20 +1277,21 @@ PAIR PERSONALITY"
     (is-false (clawmacs:prompt-run-used-tool-p result "missing_tool"))))
 
 (test execute-lisp-eval-captures-output-and-history
-  "lisp_eval captures stdout/stderr, results, and bounded eval history."
+  "lisp_eval captures printed output, values, and returns Lisp data."
   (with-tool-table-restored
     (let ((clawmacs::*lisp-eval-history* nil)
           (clawmacs::*last-eval-result* nil)
           (clawmacs::*last-eval-condition* nil))
       (clawmacs::init-tools)
-      (let* ((json (clawmacs:execute-tool
+      (let* ((data (clawmacs:execute-tool
                     "lisp_eval"
-                    '((:code . "(progn (format t \"hello\") (values 4 5))"))))
-             (decoded (clawmacs::api-json-decode json)))
-        (is (search "4" (cdr (assoc :result decoded))))
-        (is (search "5" (cdr (assoc :result decoded))))
-        (is (string= "hello" (cdr (assoc :stdout decoded))))
-        (is (= 2 (cdr (assoc :values decoded))))
+                    '(:code "(progn (format t \"hello\") (values 4 5))")))
+             (decoded (clawmacs::lisp-data-read data)))
+        (is (search ":code" data :test #'char-equal))
+        (is (search "4" (getf decoded :result)))
+        (is (search "5" (getf decoded :result)))
+        (is (string= "hello" (getf decoded :output)))
+        (is (= 2 (getf decoded :values)))
         (is (equal '(4 5) clawmacs:*last-eval-result*))
         (is (null clawmacs:*last-eval-condition*))
         (is (search "hello" (clawmacs:eval-history-to-string)))))))
@@ -1086,11 +1303,12 @@ PAIR PERSONALITY"
           (clawmacs::*last-eval-result* nil)
           (clawmacs::*last-eval-condition* nil))
       (clawmacs::init-tools)
-      (let* ((json (clawmacs:execute-tool
+      (let* ((data (clawmacs:execute-tool
                     "lisp_eval"
-                    '((:code . "(error \"boom\")"))))
-             (decoded (clawmacs::api-json-decode json)))
-        (is (search "boom" (cdr (assoc :error decoded))))
+                    '(:code "(error \"boom\")")))
+             (decoded (clawmacs::lisp-data-read data)))
+        (is (search ":error" data :test #'char-equal))
+        (is (search "boom" (getf decoded :error)))
         (is (null clawmacs:*last-eval-result*))
         (is (not (null clawmacs:*last-eval-condition*)))
         (is (search "boom" (clawmacs:eval-history-to-string)))))))

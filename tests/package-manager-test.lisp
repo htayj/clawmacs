@@ -48,13 +48,14 @@
          :description "Bundled Clawmacs packages"
          :source :builtin)))
 
-(defmacro with-package-state-override ((channels-form) &body body)
+(defmacro with-package-state-override ((channels-form &key enabled-builtin-packages)
+                                       &body body)
   `(let ((clawmacs::*package-channels* ,channels-form)
          (clawmacs::*available-packages* nil)
          (clawmacs::*package-registry-loaded-p* nil)
          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
          (clawmacs::*package-prompt-sections* nil)
-         (clawmacs::*enabled-builtin-packages* '("sexed")))
+         (clawmacs::*enabled-builtin-packages* ,enabled-builtin-packages))
      ,@body))
 
 (defun write-test-file (path contents)
@@ -185,12 +186,20 @@
       (is (clawmacs:package-definition-autoload sexed))
       (is (probe-file (clawmacs:package-definition-entrypoint sexed))))))
 
-(test load-autoload-packages-registers-sexed-prompt-section
-  "Autoloading bundled packages registers their prompt contributions."
+(test load-autoload-packages-skips-disabled-builtin-sexed
+  "Bundled sexed stays discoverable but does not autoload by default."
   (with-package-state-override ((default-package-test-channels))
     (let ((loaded (clawmacs:load-autoload-packages)))
-      (is (= 1 (length loaded)))
+      (is (null loaded))
       (is (not (null (clawmacs:find-available-package "sexed"))))
+      (is (null (clawmacs:render-package-prompt-sections))))))
+
+(test load-autoload-packages-registers-enabled-sexed-prompt-section
+  "Explicitly enabled bundled packages still register their prompt contributions."
+  (with-package-state-override ((default-package-test-channels)
+                                :enabled-builtin-packages '("sexed"))
+    (let ((loaded (clawmacs:load-autoload-packages)))
+      (is (= 1 (length loaded)))
       (let ((prompt-section (clawmacs:render-package-prompt-sections)))
         (is (search "Structural editing with sexed" prompt-section))
         (is (search "(sexed-outline-to-string TEXT :max-depth 2)" prompt-section))))))
@@ -401,7 +410,7 @@
           (clawmacs::*package-registry-loaded-p* nil)
           (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
           (clawmacs::*package-prompt-sections* nil)
-          (clawmacs::*enabled-builtin-packages* '("sexed"))
+          (clawmacs::*enabled-builtin-packages* nil)
           (*startup-hook-ran* nil)
           (*initial-buffer-hook-ran* nil)
           (*initial-buffer-hook-binding* nil))
