@@ -891,12 +891,41 @@ Existing projects, usually from init.lisp, are not overwritten."
                            :old-exists-p exists-p
                            :old-text old-text)))
 
+(defun staged-write-entry-same-target-p (left right)
+  "Return true when LEFT and RIGHT write the same project resource."
+  (and (string= (normalize-project-name (change-set-entry-project-name left))
+                (normalize-project-name (change-set-entry-project-name right)))
+       (string= (change-set-entry-path left)
+                (change-set-entry-path right))))
+
+(defun latest-staged-write-entry-for-target (change-set entry)
+  "Return the latest staged write in CHANGE-SET with ENTRY's target."
+  (find-if (lambda (candidate)
+             (and (eq :write (change-set-entry-kind candidate))
+                  (staged-write-entry-same-target-p candidate entry)))
+           (reverse (change-set-entries change-set))))
+
+(defun coalesce-staged-write-entry (change-set entry)
+  "Update an existing staged write for ENTRY's target, if present.
+
+Repeated staged writes to the same project/path are one logical file edit.
+Coalescing keeps diffs and apply/revert behavior aligned with the final staged
+file text that agents inspect through CHANGE-SET-PROJECT-FILE-TEXT."
+  (let ((previous (latest-staged-write-entry-for-target change-set entry)))
+    (when previous
+      (setf (change-set-entry-new-text previous)
+            (change-set-entry-new-text entry))
+      previous)))
+
 (defun append-change-set-entry (change-set entry)
   "Append ENTRY to CHANGE-SET and return ENTRY."
   (ensure-open-change-set change-set)
-  (setf (change-set-entries change-set)
-        (append (change-set-entries change-set) (list entry)))
-  entry)
+  (or (and (eq :write (change-set-entry-kind entry))
+           (coalesce-staged-write-entry change-set entry))
+      (progn
+        (setf (change-set-entries change-set)
+              (append (change-set-entries change-set) (list entry)))
+        entry)))
 
 (defun stage-project-file (project-designator path text
                             &key change-set)

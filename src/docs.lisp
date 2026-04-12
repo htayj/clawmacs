@@ -1379,7 +1379,7 @@ documentation in *extended-docs*."
   :category "project"
   :usage "(stage-project-file \"project\" \"path\" TEXT :change-set CHANGE-SET)"
   :returns "change-set-entry — Staged write entry."
-  :side-effects "Adds a write entry to a change set without changing the project file."
+  :side-effects "Adds or updates a write entry in a change set without changing the project file. Repeated staged writes to the same project/path coalesce into one final diff."
   :see-also (stage-project-replace-text change-set-project-file-text change-set-diff-to-string apply-change-set))
 
 (defdoc stage-project-replace-text

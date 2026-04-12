@@ -412,6 +412,32 @@
                    (project-read-file "tx" "src/sample.lisp"))))
     (is (not (null definitions)))))
 
+(test change-set-coalesces-repeated-staged-writes-to-same-file
+  "Repeated staged writes to one resource produce one final diff entry."
+  (with-project-test-state (root definitions)
+    (define-project "tx" :root root)
+    (project-create-file "tx" "src/sample.lisp"
+                         :content "(defun sample () :old)")
+    (let ((change-set (begin-change-set :name "sample-edit")))
+      (stage-project-file "tx" "src/sample.lisp" "(defun sample () :first)"
+                          :change-set change-set)
+      (stage-project-file "tx" "src/sample.lisp" "(defun sample () :second)"
+                          :change-set change-set)
+      (is (= 1 (length (change-set-entries change-set))))
+      (is (string= "(defun sample () :second)"
+                   (change-set-project-file-text "tx" "src/sample.lisp"
+                                                 change-set)))
+      (let ((diff (change-set-diff-to-string change-set)))
+        (is (search "+(defun sample () :second)" diff))
+        (is-false (search ":first" diff)))
+      (apply-change-set change-set)
+      (is (string= "(defun sample () :second)"
+                   (project-read-file "tx" "src/sample.lisp")))
+      (revert-change-set change-set)
+      (is (string= "(defun sample () :old)"
+                   (project-read-file "tx" "src/sample.lisp"))))
+    (is (not (null definitions)))))
+
 (test change-set-delete-and-rename-restore-original-state
   "Delete and rename entries can be applied and reverted."
   (with-project-test-state (root definitions)
