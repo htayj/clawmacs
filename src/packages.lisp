@@ -248,6 +248,8 @@
    #:*project-bulk-directory-names*
    #:*project-ignored-file-names*
    #:*project-ignored-file-types*
+   #:*project-respect-gitignore-p*
+   #:*project-gitignore-file-name*
    #:*project-list-file-limit*
    #:*project-search-result-limit*
    #:*project-outline-file-limit*

@@ -1200,6 +1200,16 @@ documentation in *extended-docs*."
   :usage "List of file extensions skipped by project traversal."
   :see-also (project-list-files project-search))
 
+(defdoc *project-respect-gitignore-p*
+  :category "project"
+  :usage "Boolean — when true, project traversal honors basic root .gitignore patterns."
+  :see-also (project-list-files project-search))
+
+(defdoc *project-gitignore-file-name*
+  :category "project"
+  :usage "String — root ignore file name consulted by project traversal."
+  :see-also (*project-respect-gitignore-p* project-list-files))
+
 (defdoc *project-list-file-limit*
   :category "project"
   :usage "Integer or nil — default PROJECT-LIST-FILES result limit."
@@ -1271,7 +1281,7 @@ documentation in *extended-docs*."
 (defdoc project-list-files
   :category "project"
   :usage "(project-list-files \"project\" :limit 100 :include-bulk t)"
-  :returns "list of strings — Project-relative file paths. Default traversal skips ignored/generated directories and bulky reference trees; pass :INCLUDE-IGNORED T or :INCLUDE-BULK T when needed."
+  :returns "list of strings — Project-relative file paths. Default traversal skips ignored/generated directories, basic root .gitignore matches, and bulky reference trees; pass :INCLUDE-IGNORED T or :INCLUDE-BULK T when needed."
   :see-also (project-read-file project-search))
 
 (defdoc project-read-file

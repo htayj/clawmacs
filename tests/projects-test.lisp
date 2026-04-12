@@ -166,6 +166,28 @@
                   :key (lambda (hit) (getf hit :path))
                   :test #'string=)))))
 
+(test project-traversal-respects-root-gitignore
+  "Default project traversal skips basic root .gitignore matches."
+  (with-project-test-state (root definitions)
+    (define-project "gitignored" :root root)
+    (project-save-file "gitignored" ".gitignore"
+                       (format nil "draft.md~%session-*.md~%ignored-dir/~%docs/generated.md~%"))
+    (project-save-file "gitignored" "src/live.lisp" "(defun target () :source)")
+    (project-save-file "gitignored" "draft.md" "target draft")
+    (project-save-file "gitignored" "session-one.md" "target session")
+    (project-save-file "gitignored" "ignored-dir/notes.txt" "target ignored")
+    (project-save-file "gitignored" "docs/generated.md" "target generated")
+    (is (equal '(".gitignore" "src/live.lisp")
+               (project-list-files "gitignored")))
+    (let ((hits (project-search "gitignored" "target")))
+      (is (= 1 (length hits)))
+      (is (string= "src/live.lisp" (getf (first hits) :path))))
+    (let ((files (project-list-files "gitignored" :include-ignored t)))
+      (is (member "draft.md" files :test #'string=))
+      (is (member "session-one.md" files :test #'string=))
+      (is (member "ignored-dir/notes.txt" files :test #'string=))
+      (is (member "docs/generated.md" files :test #'string=)))))
+
 (test project-traversal-default-limits-are-customizable
   "Traversal limits are special variables that init.lisp can override."
   (with-project-test-state (root definitions)

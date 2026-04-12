@@ -69,6 +69,12 @@ PROJECT-OUTLINE-TO-STRING when these resources are specifically needed.")
   '("fasl" "fas" "o" "so" "dylib" "dll")
   "File extensions ignored by project listing and search.")
 
+(defvar *project-respect-gitignore-p* t
+  "When true, project listing and search honor basic root .gitignore patterns.")
+
+(defvar *project-gitignore-file-name* ".gitignore"
+  "Project-root ignore file used when *PROJECT-RESPECT-GITIGNORE-P* is true.")
+
 (defvar *project-list-file-limit* 500
   "Default maximum number of files returned by PROJECT-LIST-FILES.")
 
@@ -446,6 +452,110 @@ Existing projects, usually from init.lisp, are not overwritten."
                   (alexandria:ends-with-subseq "#" name))
              (alexandria:starts-with-subseq ".#" name)))))
 
+(defun project-ignore-line-pattern (line)
+  "Return an ignore pattern from LINE, or NIL when LINE is not a pattern."
+  (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) line)))
+    (cond
+      ((zerop (length trimmed)) nil)
+      ((char= #\# (char trimmed 0)) nil)
+      ((char= #\! (char trimmed 0)) nil)
+      ((and (>= (length trimmed) 2)
+            (char= #\\ (char trimmed 0))
+            (member (char trimmed 1) '(#\# #\!) :test #'char=))
+       (subseq trimmed 1))
+      (t trimmed))))
+
+(defun project-gitignore-patterns (project)
+  "Return root .gitignore patterns for PROJECT."
+  (let ((path (merge-pathnames *project-gitignore-file-name*
+                               (project-root project))))
+    (when (probe-file path)
+      (loop :for line :in (split-text-lines (uiop:read-file-string path))
+            :for pattern := (project-ignore-line-pattern line)
+            :when pattern
+              :collect pattern))))
+
+(defun project-wildcard-match-p (pattern string)
+  "Return true when PATTERN matches STRING using simple * and ? wildcards."
+  (labels ((match (pattern-index string-index)
+             (cond
+               ((= pattern-index (length pattern))
+                (= string-index (length string)))
+               ((char= #\* (char pattern pattern-index))
+                (or (match (1+ pattern-index) string-index)
+                    (and (< string-index (length string))
+                         (match pattern-index (1+ string-index)))))
+               ((char= #\? (char pattern pattern-index))
+                (and (< string-index (length string))
+                     (match (1+ pattern-index) (1+ string-index))))
+               ((and (char= #\\ (char pattern pattern-index))
+                     (< (1+ pattern-index) (length pattern)))
+                (and (< string-index (length string))
+                     (char= (char pattern (1+ pattern-index))
+                            (char string string-index))
+                     (match (+ pattern-index 2) (1+ string-index))))
+               (t
+                (and (< string-index (length string))
+                     (char= (char pattern pattern-index)
+                            (char string string-index))
+                     (match (1+ pattern-index) (1+ string-index)))))))
+    (match 0 0)))
+
+(defun project-path-pattern-p (pattern)
+  "Return true when PATTERN is anchored or contains a path separator."
+  (or (alexandria:starts-with-subseq "/" pattern)
+      (find #\/ pattern)))
+
+(defun project-normalize-ignore-pattern (pattern)
+  "Return PATTERN without leading slash and trailing directory slash."
+  (let* ((without-leading
+           (if (alexandria:starts-with-subseq "/" pattern)
+               (subseq pattern 1)
+               pattern))
+         (length (length without-leading)))
+    (if (and (plusp length)
+             (char= #\/ (char without-leading (1- length))))
+        (subseq without-leading 0 (1- length))
+        without-leading)))
+
+(defun project-directory-ignore-pattern-p (pattern)
+  "Return true when PATTERN denotes an ignored directory."
+  (and (plusp (length pattern))
+       (char= #\/ (char pattern (1- (length pattern))))))
+
+(defun project-path-components (relative-path)
+  "Return non-empty slash-separated components of RELATIVE-PATH."
+  (remove-if (lambda (component) (zerop (length component)))
+             (uiop:split-string relative-path :separator '(#\/))))
+
+(defun project-gitignore-pattern-matches-p (relative-path pattern)
+  "Return true when RELATIVE-PATH matches one root .gitignore PATTERN."
+  (let* ((directory-pattern-p (project-directory-ignore-pattern-p pattern))
+         (path-pattern-p (project-path-pattern-p pattern))
+         (normalized (project-normalize-ignore-pattern pattern))
+         (components (project-path-components relative-path)))
+    (cond
+      ((zerop (length normalized)) nil)
+      (directory-pattern-p
+       (if path-pattern-p
+           (or (string= normalized relative-path)
+               (alexandria:starts-with-subseq
+                (concatenate 'string normalized "/")
+                relative-path))
+           (some (lambda (component)
+                   (project-wildcard-match-p normalized component))
+                 components)))
+      (path-pattern-p
+       (project-wildcard-match-p normalized relative-path))
+      (t
+       (project-wildcard-match-p normalized (file-namestring relative-path))))))
+
+(defun project-gitignored-relative-path-p (relative-path patterns)
+  "Return true when RELATIVE-PATH matches any PATTERNS entry."
+  (some (lambda (pattern)
+          (project-gitignore-pattern-matches-p relative-path pattern))
+        patterns))
+
 (defun project-files-recursively (project &key include-ignored include-bulk)
   "Return all non-ignored files under PROJECT."
   (labels ((ignored-directory-p (directory)
@@ -469,13 +579,24 @@ Existing projects, usually from init.lisp, are not overwritten."
                               include-bulk)
   "Return sorted project-relative file paths for PROJECT-DESIGNATOR."
   (let* ((project (ensure-project project-designator))
+         (gitignore-patterns
+           (and *project-respect-gitignore-p*
+                (not include-ignored)
+                (project-gitignore-patterns project)))
          (files (sort (mapcar (lambda (path)
-                                (project-relative-namestring project path))
-                              (project-files-recursively
-                               project
-                               :include-ignored include-ignored
-                               :include-bulk include-bulk))
+                                 (project-relative-namestring project path))
+                               (project-files-recursively
+                                project
+                                :include-ignored include-ignored
+                                :include-bulk include-bulk))
                       #'string<)))
+    (when gitignore-patterns
+      (setf files
+            (remove-if (lambda (path)
+                         (project-gitignored-relative-path-p
+                          path
+                          gitignore-patterns))
+                       files)))
     (if limit
         (subseq files 0 (min limit (length files)))
         files)))
