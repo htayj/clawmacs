@@ -1984,7 +1984,7 @@ documentation in *extended-docs*."
   :category "tool"
   :usage "(init-tools) — Called once at startup."
   :returns "nil"
-  :side-effects "Removes previously registered built-in tool entries and re-registers only the default built-in tool, lisp_eval."
+  :side-effects "Removes previously registered built-in tool entries and re-registers lisp_eval, project resource tools, and doc_lookup."
   :see-also (*tool-table* register-tool))
 
 ;;; ==========================================================================

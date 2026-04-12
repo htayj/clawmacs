@@ -56,7 +56,10 @@ Temporary tools override same-named global tools for the dynamic extent.")
   "Maximum diff lines shown in the approval UI.")
 
 (defparameter *built-in-tool-names*
-  '("http_fetch" "file_read" "file_write" "file_edit" "shell_exec" "lisp_eval")
+  '("http_fetch" "file_read" "file_write" "file_edit" "shell_exec"
+    "lisp_eval" "project_list_files" "project_read_file"
+    "project_read_lines" "project_search" "project_write_file"
+    "doc_lookup")
   "Names reserved for clawmacs built-in tools.
 INIT-TOOLS removes these entries before re-registering the default built-ins,
 so user-added tools stored in *tool-table* are left intact.")
@@ -758,13 +761,195 @@ Long text is middle-truncated so the model sees both the start and the end."
                                              condition-text)))))))))))))
 
 ;;; --------------------------------------------------------------------------
+;;; Project and Documentation Tools
+;;; --------------------------------------------------------------------------
+
+(defun tool-arg (args key &key required)
+  "Return KEY from ARGS, signaling a clear error when REQUIRED and missing."
+  (let ((value (cdr (assoc key args))))
+    (when (and required (null value))
+      (error "~A parameter is required" (string-downcase (symbol-name key))))
+    value))
+
+(defun tool-positive-integer-arg (args key default)
+  "Return positive integer KEY from ARGS, or DEFAULT."
+  (let ((value (tool-arg args key)))
+    (if (and (integerp value) (plusp value))
+        value
+        default)))
+
+(defun project-tool-json-content (content &key extra)
+  "Encode CONTENT with common truncation metadata and EXTRA fields."
+  (let ((max-chars *lisp-eval-max-output-chars*))
+    (multiple-value-bind (text truncated-p)
+        (truncate-lisp-eval-text content max-chars)
+      (api-json-encode
+       (append extra
+               `((:content . ,text)
+                 (:limit . ,max-chars)
+                 (:truncated . ,truncated-p))
+               (when truncated-p
+                 `((:truncation--notice . ,*lisp-eval-truncation-guidance*))))))))
+
+(defun execute-project-list-files (args)
+  "Tool implementation for listing project resource paths."
+  (let* ((project (tool-arg args :project :required t))
+         (limit (tool-positive-integer-arg args :limit 200))
+         (files (project-list-files project))
+         (visible (subseq files 0 (min limit (length files)))))
+    (api-json-encode `((:project . ,project)
+                       (:files . ,(coerce visible 'vector))
+                       (:count . ,(length visible))
+                       (:total . ,(length files))
+                       (:truncated . ,(> (length files) limit))))))
+
+(defun execute-project-read-file (args)
+  "Tool implementation for reading a bounded project resource."
+  (let* ((project (tool-arg args :project :required t))
+         (path (tool-arg args :path :required t)))
+    (project-tool-json-content
+     (project-read-file project path)
+     :extra `((:project . ,project)
+              (:path . ,path)))))
+
+(defun execute-project-read-lines (args)
+  "Tool implementation for reading focused project resource lines."
+  (let* ((project (tool-arg args :project :required t))
+         (path (tool-arg args :path :required t))
+         (line (tool-positive-integer-arg args :line 1))
+         (context (tool-positive-integer-arg args :context 40)))
+    (project-tool-json-content
+     (project-read-file-lines project path :line line :context context)
+     :extra `((:project . ,project)
+              (:path . ,path)
+              (:line . ,line)
+              (:context . ,context)))))
+
+(defun execute-project-search (args)
+  "Tool implementation for searching project resources."
+  (let* ((project (tool-arg args :project :required t))
+         (query (tool-arg args :query :required t))
+         (limit (tool-positive-integer-arg args :limit
+                                           *project-search-result-limit*)))
+    (project-tool-json-content
+     (project-search-to-string project query :limit limit)
+     :extra `((:project . ,project)
+              (:query . ,query)
+              (:match--limit . ,limit)))))
+
+(defun execute-project-write-file (args)
+  "Tool implementation for writing a project resource."
+  (let* ((project (tool-arg args :project :required t))
+         (path (tool-arg args :path :required t))
+         (content (tool-arg args :content :required t)))
+    (project-save-file project path content)
+    (api-json-encode `((:project . ,project)
+                       (:path . ,path)
+                       (:bytes . ,(length content))
+                       (:status . "ok")
+                       (:guidance . "Read this file back before claiming completion.")))))
+
+(defun doc-lookup-symbol (query)
+  "Resolve QUERY to a likely clawmacs symbol."
+  (or (multiple-value-bind (symbol status)
+          (find-symbol (string-upcase query) :clawmacs)
+        (and status symbol))
+      (ignore-errors
+        (let ((*package* (find-package :clawmacs)))
+          (read-from-string query)))))
+
+(defun doc-lookup-tool-definition (query)
+  "Return the effective tool definition named by QUERY, or NIL."
+  (ignore-errors
+    (effective-tool-definition (normalize-tool-name query))))
+
+(defun describe-tool-definition-to-string (definition)
+  "Return an agent-readable description of a tool DEFINITION."
+  (with-output-to-string (out)
+    (format out "Tool: ~A~%Permission: ~A~%~%~A~%~%Input schema:~%~S"
+            (tool-definition-name definition)
+            (tool-definition-permission definition)
+            (tool-definition-description definition)
+            (tool-definition-input-schema definition))))
+
+(defun doc-lookup-auto (query)
+  "Return a compact automatic documentation lookup for QUERY."
+  (let ((tool-definition (doc-lookup-tool-definition query))
+        (symbol (doc-lookup-symbol query)))
+    (cond
+      (tool-definition
+       (describe-tool-definition-to-string tool-definition))
+      ((and symbol (fboundp symbol))
+       (describe-function-to-string symbol))
+      ((and symbol (boundp symbol))
+       (describe-variable-to-string symbol))
+      (symbol
+       (format nil "~A~%~A"
+               (or (documentation symbol 'type)
+                   (documentation symbol 'variable)
+                   (documentation symbol 'function)
+                   "Symbol exists, but no direct documentation was found.")
+               (project-find-definitions-to-string "clawmacs"
+                                                   :name (symbol-name symbol))))
+      (t
+       (format nil "No exact symbol found for ~S.~%~{~A~%~}"
+               query
+               (mapcar #'symbol-name
+                       (subseq (apropos-list query :clawmacs)
+                               0
+                               (min 25 (length (apropos-list query :clawmacs))))))))))
+
+(defun execute-doc-lookup (args)
+  "Tool implementation for clawmacs and Common Lisp documentation lookup."
+  (let* ((query (tool-arg args :query :required t))
+         (kind (string-downcase (or (tool-arg args :kind) "auto")))
+         (system (or (tool-arg args :system) "clawmacs"))
+         (tool-definition (doc-lookup-tool-definition query))
+         (symbol (doc-lookup-symbol query))
+         (content
+           (cond
+             ((string= kind "auto")
+              (doc-lookup-auto query))
+             ((string= kind "tool")
+              (if tool-definition
+                  (describe-tool-definition-to-string tool-definition)
+                  (error "No tool named ~S is registered." query)))
+             ((string= kind "function")
+              (if (and symbol (fboundp symbol))
+                  (describe-function-to-string symbol)
+                  (if tool-definition
+                      (describe-tool-definition-to-string tool-definition)
+                      (describe-function-to-string symbol))))
+             ((string= kind "variable")
+              (describe-variable-to-string symbol))
+             ((string= kind "type")
+              (describe-type-to-string symbol))
+             ((or (string= kind "common-lisp")
+                  (string= kind "common_lisp")
+                  (string= kind "cl"))
+              (describe-common-lisp-symbol-to-string symbol))
+             ((string= kind "system")
+              (describe-system-to-string query))
+             ((or (string= kind "system-search")
+                  (string= kind "search"))
+              (search-system-docs system query))
+             (t
+              (error "Unknown doc_lookup kind ~S. Use auto, tool, function, variable, type, common-lisp, system, or search."
+                     kind)))))
+    (project-tool-json-content
+     content
+     :extra `((:query . ,query)
+              (:kind . ,kind)
+              (:system . ,system)))))
+
+;;; --------------------------------------------------------------------------
 ;;; Tool Registration
 ;;; --------------------------------------------------------------------------
 
 (defun init-tools ()
   "Register the default clawmacs built-in tools.
 This removes any previously registered built-in entries, then re-registers
-only lisp_eval. User-added tools remain untouched."
+the default tool set. User-added tools remain untouched."
 
   (dolist (name *built-in-tool-names*)
     (remhash name *tool-table*))
@@ -782,4 +967,92 @@ only lisp_eval. User-added tools remain untouched."
                          (:description . "Optional per-field output limit. Can only lower the configured lisp_eval maximum.")))))
      (:required . #("code")))
    :agent-allowed
-   #'execute-lisp-eval))
+   #'execute-lisp-eval)
+
+  (register-tool
+   "project_list_files"
+   "List files in a named clawmacs project. Use this before guessing project paths."
+   '((:type . "object")
+     (:properties
+      . ((:project . ((:type . "string")
+                      (:description . "Project name, e.g. clawmacs, workspace, or config.")))
+         (:limit . ((:type . "integer")
+                    (:description . "Maximum number of paths to return. Default: 200.")))))
+     (:required . #("project")))
+   :agent-allowed
+   #'execute-project-list-files)
+
+  (register-tool
+   "project_read_file"
+   "Read a project file by project and path. Prefer project_read_lines for focused context."
+   '((:type . "object")
+     (:properties
+      . ((:project . ((:type . "string")
+                      (:description . "Project name.")))
+         (:path . ((:type . "string")
+                   (:description . "Project-relative path.")))))
+     (:required . #("project" "path")))
+   :agent-allowed
+   #'execute-project-read-file)
+
+  (register-tool
+   "project_read_lines"
+   "Read focused lines from a project file."
+   '((:type . "object")
+     (:properties
+      . ((:project . ((:type . "string")
+                      (:description . "Project name.")))
+         (:path . ((:type . "string")
+                   (:description . "Project-relative path.")))
+         (:line . ((:type . "integer")
+                   (:description . "1-based anchor line. Default: 1.")))
+         (:context . ((:type . "integer")
+                      (:description . "Approximate lines of context. Default: 40.")))))
+     (:required . #("project" "path")))
+   :agent-allowed
+   #'execute-project-read-lines)
+
+  (register-tool
+   "project_search"
+   "Search project resources for a string or regex-like query and return path:line matches."
+   '((:type . "object")
+     (:properties
+      . ((:project . ((:type . "string")
+                      (:description . "Project name.")))
+         (:query . ((:type . "string")
+                    (:description . "Search query.")))
+         (:limit . ((:type . "integer")
+                    (:description . "Maximum matches to return.")))))
+     (:required . #("project" "query")))
+   :agent-allowed
+   #'execute-project-search)
+
+  (register-tool
+   "project_write_file"
+   "Write a full project file through the project abstraction. Read back after writing."
+   '((:type . "object")
+     (:properties
+      . ((:project . ((:type . "string")
+                      (:description . "Project name.")))
+         (:path . ((:type . "string")
+                   (:description . "Project-relative path.")))
+         (:content . ((:type . "string")
+                      (:description . "Full file content to save.")))))
+     (:required . #("project" "path" "content")))
+   :agent-allowed
+   #'execute-project-write-file)
+
+  (register-tool
+   "doc_lookup"
+   "Look up clawmacs, Common Lisp, and imported-system documentation without writing Lisp eval forms."
+   '((:type . "object")
+     (:properties
+      . ((:query . ((:type . "string")
+                    (:description . "Symbol, system, or search query.")))
+         (:kind . ((:type . "string")
+                   (:description . "auto, tool, function, variable, type, common-lisp, system, or search. Default: auto.")))
+         (:system . ((:type . "string")
+                     (:description . "ASDF system for kind=search. Default: clawmacs.")))))
+     (:required . #("query")))
+   :agent-allowed
+   #'execute-doc-lookup))

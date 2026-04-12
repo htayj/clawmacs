@@ -173,16 +173,19 @@
   (signals error
     (clawmacs::provider-token-path :unknown-provider)))
 
-(test init-tools-registers-only-lisp-eval-by-default
-  "init-tools removes dormant built-ins and exposes only lisp_eval by default."
+(test init-tools-registers-default-agent-tools
+  "init-tools removes dormant built-ins and exposes the default agent tool set."
   (with-tool-table-restored
     (clrhash clawmacs::*tool-table*)
     (clawmacs::init-tools)
     (let* ((*current-caller* :user)
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
-           (tool-names (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)))
-      (is (equal '("lisp_eval") tool-names))
-      (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*))))
+           (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
+                             #'string<)))
+      (is (equal '("doc_lookup" "lisp_eval" "project_list_files"
+                   "project_read_file" "project_read_lines" "project_search"
+                   "project_write_file")
+                 tool-names))
       (is (null (gethash "http_fetch" clawmacs::*tool-table*)))
       (is (null (gethash "file_read" clawmacs::*tool-table*)))
       (is (null (gethash "file_write" clawmacs::*tool-table*)))
@@ -208,9 +211,57 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("custom_probe" "lisp_eval") tool-names))
+      (is (equal '("custom_probe" "doc_lookup" "lisp_eval"
+                   "project_list_files" "project_read_file"
+                   "project_read_lines" "project_search"
+                   "project_write_file")
+                 tool-names))
       (is (not (null (gethash "custom_probe" clawmacs::*tool-table*))))
       (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*)))))))
+
+(test default-project-and-doc-tools-work
+  "Default non-eval tools cover routine project IO and docs lookup."
+  (let* ((root (make-pathname :directory
+                              (list :absolute "tmp"
+                                    (format nil "clawmacs-default-tools-~A"
+                                            (list (get-universal-time)
+                                                  (get-internal-real-time)
+                                                  (gensym))))))
+         (*project-registry* (make-hash-table :test #'equal)))
+    (ensure-directories-exist (merge-pathnames #P".keep" root))
+    (define-project "tool-probe" :root root)
+    (with-tool-table-restored
+      (clawmacs::init-tools)
+      (clawmacs:execute-tool
+       "project_write_file"
+       '((:project . "tool-probe")
+         (:path . "notes.lisp")
+         (:content . "(defun probe () :ok)")))
+      (let* ((read-json (clawmacs:execute-tool
+                         "project_read_file"
+                         '((:project . "tool-probe")
+                           (:path . "notes.lisp"))))
+             (read (clawmacs::api-json-decode read-json))
+             (search-json (clawmacs:execute-tool
+                           "project_search"
+                           '((:project . "tool-probe")
+                             (:query . "probe"))))
+             (search (clawmacs::api-json-decode search-json))
+             (doc-json (clawmacs:execute-tool
+                        "doc_lookup"
+                        '((:query . "project-read-file")
+                          (:kind . "function"))))
+             (doc (clawmacs::api-json-decode doc-json))
+             (tool-doc-json (clawmacs:execute-tool
+                             "doc_lookup"
+                             '((:query . "project_write_file")
+                               (:kind . "function"))))
+             (tool-doc (clawmacs::api-json-decode tool-doc-json)))
+        (is (search "probe" (cdr (assoc :content read))))
+        (is (search "notes.lisp" (cdr (assoc :content search))))
+        (is (search "project-read-file" (cdr (assoc :content doc))))
+        (is (search "Tool: project_write_file"
+                    (cdr (assoc :content tool-doc))))))))
 
 (test build-system-prompt-emphasizes-lisp-eval-workflow
   "The default system prompt teaches REPL-first search, docs, and calling guidance."
@@ -221,7 +272,10 @@
       (is-false (search "## Structural editing with sexed"
                         clawmacs::*default-core-system-prompt*))
       (let ((prompt (clawmacs::build-system-prompt)))
-      (is (search "only built-in tool available by default is `lisp_eval`" prompt))
+      (is (search "Default built-in tools are `lisp_eval`" prompt))
+      (is (search "`project_read_lines`" prompt))
+      (is (search "`project_write_file`" prompt))
+      (is (search "`doc_lookup`" prompt))
       (is (search "This system can run multiple agents" prompt))
       (is (search "(run-subagent \"PROMPT\" :agent-name \"docs\")" prompt))
       (is (search "(run-subagent-async \"PROMPT\"" prompt))
@@ -233,7 +287,7 @@
       (is (search "Do not merely describe searches, inspections, calls, or updates" prompt))
       (is (search "Never answer a concrete user request with a future-tense promise" prompt))
       (is (search "your next assistant action should" prompt))
-      (is (search "normally be `lisp_eval`" prompt))
+      (is (search "normally be a tool call" prompt))
       (is (search "If `lisp_eval` fails, inspect `*last-eval-condition*`" prompt))
       (is (search "do not claim work is" prompt))
       (is (search "done until a follow-up eval verifies the result" prompt))
@@ -349,13 +403,13 @@ PAIR PERSONALITY"
       (with-function-override (clawmacs::load-boot-files ()
                                 nil)
         (let ((prompt (clawmacs:build-agent-system-prompt "writer")))
-          (is (search "only built-in tool available by default is `lisp_eval`" prompt))
+          (is (search "Default built-in tools are `lisp_eval`" prompt))
           (is (search "WRITER PERSONALITY" prompt))
           (is-false (search "DEFAULT PERSONALITY" prompt))))
       (with-function-override (clawmacs::load-boot-files ()
                                 nil)
         (let ((prompt (clawmacs:build-agent-system-prompt "missing")))
-          (is (search "only built-in tool available by default is `lisp_eval`" prompt))
+          (is (search "Default built-in tools are `lisp_eval`" prompt))
           (is (search "DEFAULT PERSONALITY" prompt)))))))
 
 (test parse-clawmacs-prompt-args-supports-routing-and-output-options
