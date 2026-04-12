@@ -610,6 +610,12 @@ documentation in *extended-docs*."
   :returns "integer — Approximate token budget for exact recent user messages."
   :see-also (default-compact-buffer))
 
+(defdoc *compaction-stream-poll-interval*
+  :category "compaction"
+  :usage "(setf *compaction-stream-poll-interval* 0.02)"
+  :returns "real — Sleep interval between compaction stream-state polling checks."
+  :see-also (wait-for-compaction-stream-state default-compact-buffer))
+
 (defdoc buffer-conversation-token-estimate
   :category "compaction"
   :usage "(buffer-conversation-token-estimate BUF :include-current-input-p t)"
@@ -3756,6 +3762,24 @@ documentation in *extended-docs*."
   :usage "Integer default used by run-single-prompt."
   :returns "integer — Default maximum non-interactive tool-call turns."
   :see-also (run-single-prompt run-subagent clawmacs-prompt-main))
+
+(defdoc *prompt-default-session-name*
+  :category "main"
+  :usage "(setf *prompt-default-session-name* \"clawmacs:prompt\")"
+  :returns "string — Default prompt buffer name when :SESSION-NAME is omitted."
+  :see-also (make-prompt-buffer run-single-prompt))
+
+(defdoc *prompt-stream-poll-interval*
+  :category "main"
+  :usage "(setf *prompt-stream-poll-interval* 0.02)"
+  :returns "real — Sleep interval between prompt stream-state polling checks."
+  :see-also (wait-for-prompt-stream-state run-single-prompt))
+
+(defdoc *subagent-wait-default-poll-interval*
+  :category "main"
+  :usage "(setf *subagent-wait-default-poll-interval* 0.05)"
+  :returns "real — Default :POLL-INTERVAL used by WAIT-SUBAGENT."
+  :see-also (wait-subagent run-subagent-async))
 
 (defdoc *prompt-required-write-retry-limit*
   :category "main"

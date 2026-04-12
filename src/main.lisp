@@ -14,6 +14,15 @@
 (defvar *prompt-max-tool-iterations* 20
   "Default maximum tool-call turns allowed during one non-interactive prompt run.")
 
+(defvar *prompt-default-session-name* "clawmacs:prompt"
+  "Default prompt buffer name used when prompt mode creates a transient session.")
+
+(defvar *prompt-stream-poll-interval* 0.02
+  "Sleep interval in seconds while waiting for prompt streaming completion.")
+
+(defvar *subagent-wait-default-poll-interval* 0.05
+  "Default poll interval in seconds for WAIT-SUBAGENT when :POLL-INTERVAL is omitted.")
+
 (defvar *prompt-required-write-retry-limit* 2
   "Maximum corrective retries when prompt mode requires project writes.")
 
@@ -579,7 +588,7 @@ not overwrite the public cancelled status or result."
               (subagent-handle-finished-at handle) (get-universal-time))))
     handle))
 
-(defun wait-subagent (handle &key timeout (poll-interval 0.05))
+(defun wait-subagent (handle &key timeout (poll-interval *subagent-wait-default-poll-interval*))
   "Wait for HANDLE to finish.
 Returns values RESULT, STATUS, and HANDLE.  When TIMEOUT seconds elapse before
 completion, returns NIL, :TIMEOUT, and HANDLE."
@@ -633,7 +642,7 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
 (defun make-prompt-buffer (prompt agent-name &key session-name)
   "Create a buffer seeded with PROMPT as the only finalized user message."
   (prepare-prompt-buffer
-   (make-buffer (or session-name "clawmacs:prompt")
+   (make-buffer (or session-name *prompt-default-session-name*)
                 :agent-name agent-name
                 :working-directory (truename "."))
    prompt))
@@ -674,7 +683,7 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
     (when (bt:with-lock-held ((stream-state-lock state))
             (stream-state-done-p state))
       (return (prompt-stream-state-response state)))
-    (sleep 0.02)))
+    (sleep *prompt-stream-poll-interval*)))
 
 (defun prompt-request-once (buf)
   "Send BUF's current conversation once via the streaming provider path.

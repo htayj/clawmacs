@@ -411,6 +411,7 @@
    #:*compaction-prompt*
    #:*compaction-summary-prefix*
    #:*compaction-preserved-user-message-token-limit*
+   #:*compaction-stream-poll-interval*
    #:buffer-conversation-token-estimate
    #:compaction-threshold-tokens
    #:compaction-needed-p
@@ -866,6 +867,9 @@
    #:run-subagent
    #:run-subagent-async
    #:*prompt-max-tool-iterations*
+   #:*prompt-default-session-name*
+   #:*prompt-stream-poll-interval*
+   #:*subagent-wait-default-poll-interval*
    #:*prompt-required-write-retry-limit*
    #:*prompt-required-write-read-only-tool-limit*
    #:*prompt-provider-retry-limit*

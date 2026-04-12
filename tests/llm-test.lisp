@@ -1360,6 +1360,80 @@ PAIR PERSONALITY"
             (is (eq :cancelled (clawmacs:subagent-status handle)))
             (is (null (clawmacs:subagent-result handle)))))))))
 
+(test make-prompt-buffer-default-session-name-is-configurable
+  "Prompt buffers use *PROMPT-DEFAULT-SESSION-NAME* when no explicit session name is supplied."
+  (let ((clawmacs:*prompt-default-session-name* "custom:prompt"))
+    (let ((buf (clawmacs::make-prompt-buffer "hello" "agent")))
+      (is (string= "custom:prompt" (buffer-name buf))))))
+
+(test wait-subagent-default-poll-interval-is-configurable
+  "WAIT-SUBAGENT uses *SUBAGENT-WAIT-DEFAULT-POLL-INTERVAL* when poll interval is omitted."
+  (with-subagent-registry-override ()
+    (let* ((handle (clawmacs::make-subagent-handle
+                    :id "subagent-test"
+                    :prompt "p"
+                    :agent-name "a"
+                    :status :running
+                    :lock (bt:make-lock "subagent-test-lock")))
+           (clawmacs:*subagent-wait-default-poll-interval* 0.001)
+           (start (get-internal-real-time)))
+      (clawmacs::register-subagent-handle handle)
+      (bt:make-thread
+       (lambda ()
+         (sleep 0.005)
+         (bt:with-lock-held ((clawmacs::subagent-handle-lock handle))
+           (setf (clawmacs::subagent-handle-status handle) :succeeded
+                 (clawmacs::subagent-handle-result handle) :ok))))
+      (multiple-value-bind (result status)
+          (clawmacs:wait-subagent handle)
+        (let ((elapsed (/ (- (get-internal-real-time) start)
+                          internal-time-units-per-second)))
+          (is (eq :ok result))
+          (is (eq :succeeded status))
+          (is (< elapsed 0.03)))))))
+
+(test wait-for-prompt-stream-state-poll-interval-is-configurable
+  "Prompt stream waiting uses *PROMPT-STREAM-POLL-INTERVAL*."
+  (let ((state (clawmacs::make-stream-state))
+        (clawmacs:*prompt-stream-poll-interval* 0.001)
+        (start (get-internal-real-time)))
+    (bt:make-thread
+     (lambda ()
+       (sleep 0.005)
+       (bt:with-lock-held ((clawmacs::stream-state-lock state))
+         (setf (clawmacs::stream-state-done-p state) t
+               (clawmacs::stream-state-stop-reason state) "end_turn"
+               (clawmacs::stream-state-content-blocks state)
+               (list (clawmacs::canonical-text-block "done"))))))
+    (let* ((response (clawmacs::wait-for-prompt-stream-state state))
+           (elapsed (/ (- (get-internal-real-time) start)
+                      internal-time-units-per-second)))
+      (is (< elapsed 0.03))
+      (is (string= "done"
+                   (clawmacs::content-text-blocks
+                    (clawmacs::response-content response)))))))
+
+(test wait-for-compaction-stream-state-poll-interval-is-configurable
+  "Compaction stream waiting uses *COMPACTION-STREAM-POLL-INTERVAL*."
+  (let ((state (clawmacs::make-stream-state))
+        (clawmacs:*compaction-stream-poll-interval* 0.001)
+        (start (get-internal-real-time)))
+    (bt:make-thread
+     (lambda ()
+       (sleep 0.005)
+       (bt:with-lock-held ((clawmacs::stream-state-lock state))
+         (setf (clawmacs::stream-state-done-p state) t
+               (clawmacs::stream-state-stop-reason state) "end_turn"
+               (clawmacs::stream-state-content-blocks state)
+               (list (clawmacs::canonical-text-block "compact"))))))
+    (let* ((response (clawmacs::wait-for-compaction-stream-state state))
+           (elapsed (/ (- (get-internal-real-time) start)
+                      internal-time-units-per-second)))
+      (is (< elapsed 0.03))
+      (is (string= "compact"
+                   (clawmacs::content-text-blocks
+                    (clawmacs::response-content response)))))))
+
 (test prompt-run-tool-verification-helpers
   "Parent agents can check tool usage without parsing raw events."
   (let* ((result (clawmacs::make-prompt-run-result

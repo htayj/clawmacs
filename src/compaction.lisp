@@ -35,6 +35,9 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
 (defvar *compaction-preserved-user-message-token-limit* 20000
   "Approximate token budget for exact recent user messages kept after compaction.")
 
+(defvar *compaction-stream-poll-interval* 0.02
+  "Sleep interval in seconds while waiting for compaction streaming completion.")
+
 (defun compaction-token-estimate-for-string (text)
   "Return a deterministic rough token estimate for TEXT."
   (let ((length (length (or text ""))))
@@ -224,7 +227,7 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
     (when (bt:with-lock-held ((stream-state-lock state))
             (stream-state-done-p state))
       (return (compaction-stream-state-response state)))
-    (sleep 0.02)))
+    (sleep *compaction-stream-poll-interval*)))
 
 (defun trim-compaction-request-messages (messages system-prompt limit)
   "Trim oldest MESSAGES until the compaction request fits LIMIT.
