@@ -538,6 +538,13 @@ documentation in *extended-docs*."
   :returns "keyword — :CHAT, :SCRATCH, or another custom buffer kind."
   :see-also (buffer make-buffer scratch-buffer-p))
 
+(defdoc buffer-enabled-packages
+  :category "buffer"
+  :usage "(buffer-enabled-packages BUF:buffer)"
+  :returns "list — package names explicitly enabled for this buffer."
+  :side-effects "Setf updates buffer-local package enablement; saved sessions persist the list."
+  :see-also (active-package-names package-enablement-scope save-session load-session))
+
 (defdoc buffer-working-directory
   :category "buffer"
   :usage "(buffer-working-directory BUF:buffer) — (buffer-working-directory (current-buffer))"
@@ -981,6 +988,12 @@ documentation in *extended-docs*."
   :returns "list — Minibuffer prompt specs for the command's non-buffer arguments."
   :see-also (command-required-arguments defcommand))
 
+(defdoc command-metadata-package
+  :category "command"
+  :usage "(command-metadata-package META:command-metadata)"
+  :returns "string or NIL — Owning Clawmacs package name for package-defined commands."
+  :see-also (command-metadata list-available-commands package-enablement-scope))
+
 (defdoc defcommand
   :category "command"
   :usage "(defun NAME (BUFFER &rest REQUIRED-ARGS) DOCSTRING ...) then (defcommand NAME :keys (...) :prompts (...))"
@@ -990,9 +1003,9 @@ documentation in *extended-docs*."
 
 (defdoc list-available-commands
   :category "command"
-  :usage "(list-available-commands) — (list-available-commands)"
-  :returns "list of symbols — Registered commands."
-  :see-also (*command-table* defcommand))
+  :usage "(list-available-commands :buffer BUF)"
+  :returns "list of symbols — Registered commands visible in the package context."
+  :see-also (*command-table* defcommand command-metadata-package))
 
 (defdoc command-required-arguments
   :category "command"
@@ -1982,6 +1995,12 @@ documentation in *extended-docs*."
   :returns "Structure — Holds provider name, description, explicit args, schema, permission, call style, and owning Lisp symbol."
   :see-also (deftool defcommand register-agent-tool-metadata list-agent-tool-metadata))
 
+(defdoc agent-tool-metadata-package
+  :category "tool"
+  :usage "(agent-tool-metadata-package META:agent-tool-metadata)"
+  :returns "string or NIL — Owning Clawmacs package name for package-defined tools."
+  :see-also (agent-tool-metadata tool-definitions-for-api package-enablement-scope))
+
 (defdoc register-agent-tool-metadata
   :category "tool"
   :usage "(register-agent-tool-metadata SYMBOL TOOL-SPEC &key COMMAND-P LAMBDA-LIST DOCSTRING)"
@@ -2049,8 +2068,8 @@ documentation in *extended-docs*."
 
 (defdoc tool-definitions-for-api
   :category "tool"
-  :usage "(tool-definitions-for-api) — (tool-definitions-for-api)"
-  :returns "list — Tool definitions formatted for provider adapters."
+  :usage "(tool-definitions-for-api :buffer BUF)"
+  :returns "vector — Provider tool definitions visible to the current caller and package context."
   :see-also (*tool-table* *active-tool-names* register-tool provider-request render-agent-tools-section))
 
 (defdoc render-agent-tools-section
@@ -3624,8 +3643,13 @@ documentation in *extended-docs*."
 
 (defdoc *enabled-builtin-packages*
   :category "packages"
-  :usage "T, NIL, or a list of builtin package names that may autoload."
-  :see-also (load-autoload-packages *default-package-channel-directory*))
+  :usage "Legacy compatibility variable for old builtin autoload init files; package enablement now uses packages.json."
+  :see-also (load-autoload-packages *default-package-channel-directory* *package-configuration-path*))
+
+(defdoc *package-configuration-path*
+  :category "packages"
+  :usage "Pathname — defaults to ~/.clawmacs.d/packages.json"
+  :see-also (active-package-names set-package-enablement-scope))
 
 (defdoc *packages-directory*
   :category "packages"
@@ -3655,28 +3679,73 @@ documentation in *extended-docs*."
 (defdoc list-available-packages
   :category "packages"
   :usage "(list-available-packages)"
-  :returns "list — cached package-definition structures, reloading channels when needed."
-  :see-also (reload-package-channels find-available-package load-clawmacs-package))
+  :returns "list — cached package-definition structures advertised by channels."
+  :see-also (reload-package-channels find-available-package list-installed-packages))
 
 (defdoc find-available-package
   :category "packages"
   :usage "(find-available-package \"sexed\")"
   :returns "package-definition or NIL."
-  :see-also (list-available-packages load-clawmacs-package))
+  :see-also (list-available-packages find-installed-package))
+
+(defdoc list-installed-packages
+  :category "packages"
+  :usage "(list-installed-packages)"
+  :returns "list — package definitions present on disk, including channel packages and cloned packages."
+  :see-also (find-installed-package clawmacs-use-package list-available-packages))
+
+(defdoc find-installed-package
+  :category "packages"
+  :usage "(find-installed-package \"sexed\")"
+  :returns "package-definition or NIL."
+  :see-also (list-installed-packages load-clawmacs-package))
+
+(defdoc package-enablement-scope
+  :category "packages"
+  :usage "(package-enablement-scope \"sexed\" :buffer BUF)"
+  :returns "keyword — :BUFFER, :AGENT, :GLOBAL, or :DEFAULT."
+  :see-also (set-package-enablement-scope cycle-package-enablement-scope active-package-names))
+
+(defdoc set-package-enablement-scope
+  :category "packages"
+  :usage "(set-package-enablement-scope \"sexed\" :global) or (set-package-enablement-scope \"sexed\" :buffer :buffer BUF)"
+  :returns "keyword — the selected scope."
+  :side-effects "Persists global/agent package configuration and mutates buffer package state for :BUFFER scope."
+  :see-also (package-enablement-scope cycle-package-enablement-scope *package-configuration-path*))
+
+(defdoc cycle-package-enablement-scope
+  :category "packages"
+  :usage "(cycle-package-enablement-scope \"sexed\" :buffer BUF)"
+  :returns "keyword — the new scope after cycling default → buffer → agent → global → default."
+  :side-effects "Moves the package to the new scope and removes it from other scopes in the same context."
+  :see-also (set-package-enablement-scope minibuffer-toggle-package-command))
+
+(defdoc active-package-names
+  :category "packages"
+  :usage "(active-package-names :buffer BUF)"
+  :returns "list — package names enabled by global, agent, or buffer scope."
+  :see-also (load-active-packages package-enablement-scope))
 
 (defdoc load-clawmacs-package
   :category "packages"
   :usage "(load-clawmacs-package \"sexed\")"
   :returns "package-definition on success, NIL on warning or failure."
   :side-effects "Loads package dependencies, then loads the package entrypoint into the clawmacs package."
-  :see-also (list-available-packages load-autoload-packages clawmacs-use-package))
+  :see-also (list-installed-packages load-active-packages clawmacs-use-package))
+
+(defdoc load-active-packages
+  :category "packages"
+  :usage "(load-active-packages :buffer BUF)"
+  :returns "list — active package definitions loaded for the given context."
+  :side-effects "Loads enabled package entrypoints and their dependencies; inactive package registrations remain hidden."
+  :see-also (active-package-names load-clawmacs-package))
 
 (defdoc load-autoload-packages
   :category "packages"
   :usage "(load-autoload-packages)"
-  :returns "list — package definitions loaded by autoload."
-  :side-effects "Loads channel packages whose manifests set :autoload T, honoring *enabled-builtin-packages* for builtin packages."
-  :see-also (*enabled-builtin-packages* load-clawmacs-package))
+  :returns "list — globally enabled package definitions loaded for compatibility."
+  :side-effects "Compatibility wrapper around load-active-packages with no buffer context."
+  :see-also (load-active-packages active-package-names))
 
 (defdoc register-package-prompt-section
   :category "packages"
@@ -3693,16 +3762,30 @@ documentation in *extended-docs*."
 
 (defdoc render-package-prompt-sections
   :category "packages"
-  :usage "(render-package-prompt-sections)"
-  :returns "string or NIL — package prompt sections rendered for the system prompt."
-  :see-also (register-package-prompt-section build-agent-system-prompt))
+  :usage "(render-package-prompt-sections (list-package-prompt-sections) :buffer BUF)"
+  :returns "string or NIL — active package prompt sections rendered for the system prompt."
+  :see-also (register-package-prompt-section build-agent-system-prompt active-package-names))
 
 (defdoc clawmacs-use-package
   :category "packages"
   :usage "(clawmacs-use-package :src-type :git :repo \"https://example.com/user/repo.git\")"
-  :returns "package-definition — non-nil on successful install/load, NIL on warning or failure."
-  :side-effects "Creates the package install directory when needed, runs git clone for missing packages, reads manifest.lisp from the package root, and loads the manifest entrypoint."
-  :see-also (*packages-directory* load-clawmacs-package *user-init-file* load-user-init-file))
+  :returns "package-definition — non-nil on successful install, NIL on warning or failure."
+  :side-effects "Creates the package install directory when needed, runs git clone for missing packages, and validates manifest.lisp without loading or enabling the entrypoint."
+  :see-also (*packages-directory* list-installed-packages set-package-enablement-scope *user-init-file* load-user-init-file))
+
+(defdoc minibuffer-toggle-package-command
+  :category "packages"
+  :usage "M-x minibuffer-toggle-package-command"
+  :returns "nil"
+  :side-effects "Opens a minibuffer package selector; RET cycles default, buffer, agent, and global enablement."
+  :see-also (cycle-package-enablement-scope describe-installed-package-command))
+
+(defdoc describe-installed-package-command
+  :category "packages"
+  :usage "M-x describe-installed-package-command"
+  :returns "nil"
+  :side-effects "Opens a minibuffer package selector and displays package help derived from registered package commands, tools, docs, and prompt sections."
+  :see-also (list-installed-packages load-clawmacs-package))
 
 ;;; ==========================================================================
 ;;; Category: utilities — Small helpers useful from lisp_eval

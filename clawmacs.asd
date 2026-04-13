@@ -19,10 +19,10 @@
   :components ((:module "src"
                 :serial t
                 :components ((:file "packages")
-                             (:file "package-manager")
                              (:file "faces")
                              (:file "message")
                              (:file "buffer")
+                             (:file "package-manager")
                              (:file "commands")
                              (:file "keymap")
                              (:file "projects")

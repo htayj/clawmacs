@@ -97,6 +97,11 @@
                          :initform nil
                          :type (or null string)
                          :documentation "When non-nil, overrides the model's default reasoning effort.")
+   (enabled-packages :initarg :enabled-packages
+                     :accessor buffer-enabled-packages
+                     :initform nil
+                     :type list
+                     :documentation "Package names explicitly enabled for this buffer.")
     (face-registry     :initarg :face-registry
                        :accessor buffer-face-registry
                        :type hash-table
@@ -173,7 +178,8 @@ Enforces the invariant that it is not read-only."
                                        (:resource-path (or null string))
                                        (:original-text string)
                                        (:dirty-p boolean)
-                                       (:context-limit integer))
+                                       (:context-limit integer)
+                                       (:enabled-packages list))
                           buffer)
                 make-buffer))
 (defun make-buffer (name &key (agent-name *default-agent-name*)
@@ -183,7 +189,8 @@ Enforces the invariant that it is not read-only."
                               resource-path
                               (original-text "")
                               (dirty-p nil)
-                              (context-limit *default-context-limit*))
+                              (context-limit *default-context-limit*)
+                              (enabled-packages nil))
   "Create a new buffer with a single empty input message."
   (let* ((input-msg (make-message :user))
          (registry (make-hash-table :test #'eq))
@@ -199,6 +206,7 @@ Enforces the invariant that it is not read-only."
                 :original-text original-text
                 :dirty-p dirty-p
                 :context-limit context-limit
+                :enabled-packages (copy-list enabled-packages)
                 :face-registry registry)))
     buf))
 
@@ -526,6 +534,8 @@ Assigns the :system face set from the buffer's face registry if available."
       (:provider-override . ,(buffer-provider-override buf))
       (:model-override . ,(buffer-model-override buf))
       (:think-level-override . ,(buffer-think-level-override buf))
+      (:enabled-packages . ,(coerce (copy-list (buffer-enabled-packages buf))
+                                    'vector))
       (:messages . ,(coerce (nreverse messages) 'vector)))))
 
 (defun save-session (buf)
@@ -551,6 +561,7 @@ Assigns the :system face set from the buffer's face registry if available."
              (provider-override (cdr (assoc :provider-override data)))
              (model-override (cdr (assoc :model-override data)))
              (think-level-override (cdr (assoc :think-level-override data)))
+             (enabled-packages (cdr (assoc :enabled-packages data)))
              (messages (cdr (assoc :messages data)))
              (buf (make-buffer name :agent-name agent
                                      :working-directory (truename "."))))
@@ -561,7 +572,11 @@ Assigns the :system face set from the buffer's face registry if available."
               (buffer-model-override buf)
               model-override
               (buffer-think-level-override buf)
-              (normalize-think-level-override think-level-override))
+              (normalize-think-level-override think-level-override)
+              (buffer-enabled-packages buf)
+              (loop :for package :in (coerce (or enabled-packages #()) 'list)
+                    :when (stringp package)
+                      :collect package))
         ;; Replay messages into the buffer
         (loop :for msg-data :across messages
               :for sender-str := (cdr (assoc :sender msg-data))

@@ -80,7 +80,8 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
                                                                 input-text)))))))
     (compaction-provider-messages-token-estimate
      messages
-     :system-prompt (build-agent-system-prompt (buffer-agent-name buf)))))
+     :system-prompt (build-agent-system-prompt (buffer-agent-name buf)
+                                               :buffer buf))))
 
 (defun normalize-compaction-point-value (value limit estimate)
   "Normalize VALUE into an absolute token threshold or NIL."
@@ -243,7 +244,8 @@ TRIMMED-MESSAGES and TRIMMED-COUNT."
 
 (defun compaction-request-messages (buf)
   "Return provider messages and trim count for compacting BUF."
-  (let* ((system-prompt (build-agent-system-prompt (buffer-agent-name buf)))
+  (let* ((system-prompt (build-agent-system-prompt (buffer-agent-name buf)
+                                                   :buffer buf))
          (messages (append (build-conversation-messages buf)
                            (list (compaction-text-provider-message
                                   "user"

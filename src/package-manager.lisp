@@ -30,6 +30,9 @@
   package
   body)
 
+(defvar *current-clawmacs-package* nil
+  "Package name dynamically bound while loading a package entrypoint.")
+
 (defun clawmacs-system-source-directory ()
   "Return the source directory for the clawmacs ASDF system."
   (or (ignore-errors (asdf:system-source-directory :clawmacs))
@@ -55,8 +58,15 @@
   "Non-nil when *AVAILABLE-PACKAGES* reflects *PACKAGE-CHANNELS*.")
 
 (defvar *enabled-builtin-packages* nil
-  "Builtin package names that autoload from the default channel.
-Set to T to autoload every builtin package, or NIL to autoload none.")
+  "Legacy compatibility variable for old builtin package autoload init files.
+Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
+
+(defvar *package-configuration-path*
+  (merge-pathnames #P".clawmacs.d/packages.json" (user-homedir-pathname))
+  "Path to persisted package enablement configuration.")
+
+(defvar *package-configuration* nil
+  "Memoized package enablement configuration.")
 
 (defvar *packages-directory*
   (merge-pathnames #P".clawmacs.d/packages/" (user-homedir-pathname))
@@ -271,6 +281,255 @@ Set to T to autoload every builtin package, or NIL to autoload none.")
                            field-name)
      nil)))
 
+(defun normalize-package-name-list (value)
+  "Normalize VALUE as a list/vector of package names, dropping invalid entries."
+  (loop :for item :in (coerce (or value #()) 'list)
+        :for name := (manifest-package-name item)
+        :when name
+          :collect name))
+
+(defun normalize-package-agent-name (agent-name)
+  "Normalize AGENT-NAME for package configuration keys."
+  (let ((trimmed (manifest-string agent-name)))
+    (and trimmed (string-downcase trimmed))))
+
+(defun make-package-enable-table (&optional names)
+  "Return an equal-test hash table containing normalized package NAMES."
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (name (normalize-package-name-list names))
+      (setf (gethash name table) t))
+    table))
+
+(defun make-package-configuration ()
+  "Create an empty package enablement configuration."
+  (list :global (make-package-enable-table)
+        :agents (make-hash-table :test #'equal)))
+
+(defun package-json-key-string (key)
+  "Return KEY as a lowercase JSON field name string."
+  (cond
+    ((keywordp key) (string-downcase (symbol-name key)))
+    ((symbolp key) (string-downcase (symbol-name key)))
+    ((stringp key) key)
+    (t (string key))))
+
+(defun package-lookup-json-value (alist key)
+  "Look up KEY in decoded JSON ALIST using string-insensitive key matching."
+  (let ((target (string-downcase key)))
+    (cdr (find target alist
+               :key (lambda (entry)
+                      (string-downcase (package-json-key-string (car entry))))
+               :test #'string=))))
+
+(defun package-configuration-global-table (configuration)
+  "Return CONFIGURATION's global package enablement table."
+  (getf configuration :global))
+
+(defun package-configuration-agents-table (configuration)
+  "Return CONFIGURATION's agent package enablement table."
+  (getf configuration :agents))
+
+(defun package-table-names (table)
+  "Return sorted enabled package names from TABLE."
+  (let ((names nil))
+    (when table
+      (maphash (lambda (name enabled-p)
+                 (when enabled-p
+                   (push name names)))
+               table))
+    (sort names #'string<)))
+
+(defun load-package-configuration ()
+  "Load and memoize persisted package enablement configuration."
+  (let ((configuration (make-package-configuration)))
+    (when (probe-file *package-configuration-path*)
+      (handler-case
+          (let* ((json (uiop:read-file-string *package-configuration-path*))
+                 (data (cl-json:decode-json-from-string json))
+                 (global (package-lookup-json-value data "global"))
+                 (agents (package-lookup-json-value data "agents")))
+            (setf (getf configuration :global)
+                  (make-package-enable-table global))
+            (when (listp agents)
+              (dolist (entry agents)
+                (let ((agent-name (normalize-package-agent-name (car entry))))
+                  (when agent-name
+                    (setf (gethash agent-name
+                                   (package-configuration-agents-table
+                                    configuration))
+                          (make-package-enable-table (cdr entry))))))))
+        (error (e)
+          (emit-package-warning "Failed to load package configuration ~A: ~A"
+                                (namestring *package-configuration-path*)
+                                e))))
+    (setf *package-configuration* configuration)))
+
+(defun ensure-package-configuration-loaded ()
+  "Return the package enablement configuration, loading it if needed."
+  (or *package-configuration*
+      (load-package-configuration)))
+
+(defun save-package-configuration ()
+  "Persist package enablement configuration to disk."
+  (let* ((configuration (ensure-package-configuration-loaded))
+         (global (package-table-names
+                  (package-configuration-global-table configuration)))
+         (agents nil))
+    (maphash (lambda (agent-name table)
+               (let ((names (package-table-names table)))
+                 (when names
+                   (push `(,agent-name . ,(coerce names 'vector))
+                         agents))))
+             (package-configuration-agents-table configuration))
+    (ensure-directories-exist *package-configuration-path*)
+    (with-open-file (stream *package-configuration-path*
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string
+       (cl-json:encode-json-to-string
+        `((:global . ,(coerce global 'vector))
+          (:agents . ,(sort agents #'string< :key #'car))))
+       stream))
+    *package-configuration-path*))
+
+(defun package-agent-enable-table (agent-name &key create)
+  "Return AGENT-NAME's package enablement table."
+  (let ((agent-key (normalize-package-agent-name agent-name)))
+    (when agent-key
+      (let* ((configuration (ensure-package-configuration-loaded))
+             (agents (package-configuration-agents-table configuration))
+             (table (gethash agent-key agents)))
+        (or table
+            (when create
+              (setf (gethash agent-key agents)
+                    (make-package-enable-table))))))))
+
+(defun package-name-enabled-in-table-p (name table)
+  "Return true when normalized package NAME is enabled in TABLE."
+  (and table (gethash name table)))
+
+(defun set-package-name-enabled-in-table (name table enabled-p)
+  "Set normalized package NAME enablement in TABLE."
+  (if enabled-p
+      (setf (gethash name table) t)
+      (remhash name table))
+  enabled-p)
+
+(defun buffer-package-name-enabled-p (buffer package-name)
+  "Return true when BUFFER explicitly enables PACKAGE-NAME."
+  (and buffer
+       (member package-name (buffer-enabled-packages buffer) :test #'string=)))
+
+(defun set-buffer-package-name-enabled (buffer package-name enabled-p)
+  "Set BUFFER's explicit PACKAGE-NAME enablement."
+  (unless buffer
+    (error "Buffer package enablement requires a buffer."))
+  (setf (buffer-enabled-packages buffer)
+        (remove package-name (buffer-enabled-packages buffer) :test #'string=))
+  (when enabled-p
+    (push package-name (buffer-enabled-packages buffer)))
+  enabled-p)
+
+(defun package-enabled-globally-p (package-name)
+  "Return true when PACKAGE-NAME is globally enabled."
+  (package-name-enabled-in-table-p
+   package-name
+   (package-configuration-global-table
+    (ensure-package-configuration-loaded))))
+
+(defun package-enabled-for-agent-p (package-name agent-name)
+  "Return true when PACKAGE-NAME is enabled for AGENT-NAME."
+  (package-name-enabled-in-table-p
+   package-name
+   (package-agent-enable-table agent-name)))
+
+(defun package-enablement-scope (package &key buffer agent-name)
+  "Return PACKAGE's effective enablement scope for BUFFER/AGENT-NAME."
+  (let* ((name (manifest-package-name package))
+         (agent (or agent-name
+                    (and buffer (buffer-agent-name buffer)))))
+    (cond
+      ((null name) :default)
+      ((buffer-package-name-enabled-p buffer name) :buffer)
+      ((package-enabled-for-agent-p name agent) :agent)
+      ((package-enabled-globally-p name) :global)
+      (t :default))))
+
+(defun active-package-names (&key buffer agent-name)
+  "Return package names active for BUFFER/AGENT-NAME."
+  (let ((table (make-hash-table :test #'equal))
+        (agent (or agent-name
+                   (and buffer (buffer-agent-name buffer)))))
+    (dolist (name (package-table-names
+                   (package-configuration-global-table
+                    (ensure-package-configuration-loaded))))
+      (setf (gethash name table) t))
+    (when agent
+      (dolist (name (package-table-names
+                     (package-agent-enable-table agent)))
+        (setf (gethash name table) t)))
+    (when buffer
+      (dolist (name (buffer-enabled-packages buffer))
+        (let ((normalized (manifest-package-name name)))
+          (when normalized
+            (setf (gethash normalized table) t)))))
+    (package-table-names table)))
+
+(defun package-active-p (package &key buffer agent-name)
+  "Return true when PACKAGE is active for BUFFER/AGENT-NAME."
+  (let ((name (manifest-package-name package)))
+    (and name
+         (member name (active-package-names :buffer buffer
+                                            :agent-name agent-name)
+                 :test #'string=))))
+
+(defun set-package-enablement-scope (package scope &key buffer agent-name)
+  "Set PACKAGE to SCOPE for BUFFER/AGENT-NAME.
+SCOPE is one of :DEFAULT, :BUFFER, :AGENT, or :GLOBAL. Setting one scope
+removes the package from the other scopes in the same context."
+  (let* ((name (or (manifest-package-name package)
+                   (error "Package name must be a non-empty string or symbol.")))
+         (agent (or agent-name
+                    (and buffer (buffer-agent-name buffer))
+                    *default-agent-name*))
+         (configuration (ensure-package-configuration-loaded)))
+    (unless (member scope '(:default :buffer :agent :global) :test #'eq)
+      (error "Unsupported package enablement scope: ~S" scope))
+    (when buffer
+      (set-buffer-package-name-enabled buffer name nil))
+    (when agent
+      (set-package-name-enabled-in-table
+       name (package-agent-enable-table agent :create t) nil))
+    (set-package-name-enabled-in-table
+     name (package-configuration-global-table configuration) nil)
+    (ecase scope
+      (:default nil)
+      (:buffer
+       (set-buffer-package-name-enabled buffer name t))
+      (:agent
+       (set-package-name-enabled-in-table
+        name (package-agent-enable-table agent :create t) t))
+      (:global
+       (set-package-name-enabled-in-table
+        name (package-configuration-global-table configuration) t)))
+    (save-package-configuration)
+    scope))
+
+(defun cycle-package-enablement-scope (package &key buffer agent-name)
+  "Cycle PACKAGE through default, buffer, agent, global, and back."
+  (let* ((current (package-enablement-scope package
+                                           :buffer buffer
+                                           :agent-name agent-name))
+         (next (ecase current
+                 (:default (if buffer :buffer :agent))
+                 (:buffer :agent)
+                 (:agent :global)
+                 (:global :default))))
+    (set-package-enablement-scope package next
+                                  :buffer buffer
+                                  :agent-name agent-name)))
+
 (defun package-directory-pathname (path)
   "Return PATH as a directory pathname."
   (uiop:ensure-directory-pathname (pathname path)))
@@ -305,7 +564,8 @@ Set to T to autoload every builtin package, or NIL to autoload none.")
 (defun register-package-prompt-section (name body &key title package)
   "Register BODY as a system-prompt section contributed by a package."
   (let ((normalized-name (manifest-package-name name))
-        (normalized-package (and package (manifest-package-name package)))
+        (normalized-package (or (and package (manifest-package-name package))
+                                *current-clawmacs-package*))
         (text (manifest-string body)))
     (unless normalized-name
       (error "Package prompt section name must be a non-empty string or symbol."))
@@ -327,17 +587,31 @@ Set to T to autoload every builtin package, or NIL to autoload none.")
   "Return package prompt sections in registration order."
   (reverse *package-prompt-sections*))
 
+(defun package-prompt-section-active-p (section &key buffer agent-name)
+  "Return true when SECTION should render for BUFFER/AGENT-NAME."
+  (let ((package (package-prompt-section-package section)))
+    (and package
+         (package-active-p package :buffer buffer :agent-name agent-name))))
+
 (defun render-package-prompt-sections
-    (&optional (sections (list-package-prompt-sections)))
-  "Render loaded package prompt sections for the system prompt."
-  (when sections
-    (with-output-to-string (stream)
-      (format stream "<package_instructions>~%")
-      (dolist (section sections)
-        (when (package-prompt-section-title section)
-          (format stream "<!-- ~A -->~%" (package-prompt-section-title section)))
-        (format stream "~A~%~%" (package-prompt-section-body section)))
-      (format stream "</package_instructions>"))))
+    (&optional (sections (list-package-prompt-sections))
+     &key buffer agent-name)
+  "Render active package prompt sections for the system prompt."
+  (let ((active-sections
+          (remove-if-not (lambda (section)
+                           (package-prompt-section-active-p
+                            section
+                            :buffer buffer
+                            :agent-name agent-name))
+                         sections)))
+    (when active-sections
+      (with-output-to-string (stream)
+        (format stream "<package_instructions>~%")
+        (dolist (section active-sections)
+          (when (package-prompt-section-title section)
+            (format stream "<!-- ~A -->~%" (package-prompt-section-title section)))
+          (format stream "~A~%~%" (package-prompt-section-body section)))
+        (format stream "</package_instructions>")))))
 
 (defun manifest-entrypoint-pathname (value)
   "Normalize a manifest :ENTRYPOINT value to a relative pathname."
@@ -466,7 +740,8 @@ Returns a normalized plist or NIL on failure."
       (return-from load-package-definition-entrypoint definition))
     (handler-case
         (let ((*default-pathname-defaults* (package-definition-root definition))
-              (*package* (find-package :clawmacs)))
+              (*package* (find-package :clawmacs))
+              (*current-clawmacs-package* package-name))
           (load entrypoint :verbose nil :print nil)
           (register-package-manifest-prompt-section definition)
           (setf (gethash install-key *loaded-packages*) package-name)
@@ -578,30 +853,54 @@ Returns a normalized plist or NIL on failure."
                :key #'package-definition-name
                :test #'string=))))
 
-(defun builtin-package-autoload-enabled-p (definition)
-  "Return non-nil when builtin DEFINITION may autoload."
-  (let ((enabled *enabled-builtin-packages*))
-    (cond
-      ((eq enabled t) t)
-      ((null enabled) nil)
-      ((listp enabled)
-       (member (package-definition-name definition)
-               enabled
-               :test #'string=))
-      (t nil))))
+(defun installed-package-manifest-roots ()
+  "Return package roots installed under *PACKAGES-DIRECTORY*."
+  (when (probe-file *packages-directory*)
+    (loop :for manifest :in (directory
+                             (merge-pathnames #P"*/manifest.lisp"
+                                              *packages-directory*))
+          :collect (uiop:pathname-directory-pathname manifest))))
 
-(defun package-autoload-enabled-p (definition)
-  "Return non-nil when DEFINITION should autoload."
-  (and (package-definition-autoload definition)
-       (or (not (eq (package-definition-source-tier definition) :builtin))
-           (builtin-package-autoload-enabled-p definition))))
+(defun scan-installed-package-definitions ()
+  "Return package definitions discovered from *PACKAGES-DIRECTORY*."
+  (let ((definitions nil))
+    (dolist (root (installed-package-manifest-roots))
+      (let ((manifest (read-package-manifest root :source-tier :third-party)))
+        (when manifest
+          (push (package-definition-from-manifest manifest) definitions))))
+    (nreverse definitions)))
+
+(defun unique-package-definitions (definitions)
+  "Return DEFINITIONS de-duplicated by package name, keeping first wins."
+  (let ((seen (make-hash-table :test #'equal))
+        (result nil))
+    (dolist (definition definitions)
+      (let ((name (package-definition-name definition)))
+        (unless (gethash name seen)
+          (setf (gethash name seen) t)
+          (push definition result))))
+    (nreverse result)))
+
+(defun list-installed-packages ()
+  "Return package definitions present on disk and available for enablement."
+  (unique-package-definitions
+   (append (scan-installed-package-definitions)
+           (list-available-packages))))
+
+(defun find-installed-package (name)
+  "Find an installed package definition by NAME."
+  (let ((normalized-name (manifest-package-name name)))
+    (and normalized-name
+         (find normalized-name (list-installed-packages)
+               :key #'package-definition-name
+               :test #'string=))))
 
 (defun load-clawmacs-package (package &optional seen)
   "Load PACKAGE by name or definition, including dependencies.
 Returns the loaded package definition on success, or NIL on warning/failure."
   (let* ((definition (typecase package
                        (package-definition package)
-                       (t (find-available-package package))))
+                       (t (find-installed-package package))))
          (name (and definition (package-definition-name definition))))
     (unless definition
       (return-from load-clawmacs-package
@@ -619,19 +918,28 @@ Returns the loaded package definition on success, or NIL on warning/failure."
              dependency))))
       (load-package-definition-entrypoint definition))))
 
-(defun load-autoload-packages ()
-  "Load all autoload-enabled packages from registered channels."
+(defun load-active-packages (&key buffer agent-name)
+  "Load packages active for BUFFER/AGENT-NAME and return loaded definitions."
   (let ((loaded nil))
-    (dolist (definition (ensure-package-registry-loaded))
-      (when (package-autoload-enabled-p definition)
-        (let ((result (load-clawmacs-package definition)))
-          (when result
-            (push result loaded)))))
+    (dolist (name (active-package-names :buffer buffer :agent-name agent-name))
+      (let ((definition (find-installed-package name)))
+        (cond
+          ((null definition)
+           (emit-package-warning "Enabled Clawmacs package ~A is not installed"
+                                 name))
+          (t
+           (let ((result (load-clawmacs-package definition)))
+             (when result
+               (push result loaded)))))))
     (nreverse loaded)))
 
+(defun load-autoload-packages ()
+  "Compatibility wrapper that loads globally enabled packages."
+  (load-active-packages))
+
 (defun clawmacs-use-package (&key (src-type :git) repo &allow-other-keys)
-  "Install and load a Clawmacs package from a git repository.
-Returns the loaded package definition on success, or NIL on warning/failure."
+  "Install a Clawmacs package from a git repository without enabling it.
+Returns the installed package definition on success, or NIL on warning/failure."
   (let ((normalized-source-type (normalize-package-source-type src-type))
         (normalized-repo (normalize-package-repo repo)))
     (cond
@@ -644,12 +952,10 @@ Returns the loaded package definition on success, or NIL on warning/failure."
                              src-type))
       (t
        (let* ((install-dir (package-install-directory normalized-source-type normalized-repo))
-              (package-root (or (probe-file install-dir) install-dir))
-              (install-key (package-install-key install-dir)))
-         (or (gethash install-key *loaded-packages*)
-             (when (ensure-package-installed normalized-repo install-dir)
-               (let ((manifest (read-package-manifest
-                                package-root
-                                :source-tier :third-party)))
-                 (and manifest
-                      (load-package-entrypoint manifest package-root install-dir))))))))))
+              (package-root (or (probe-file install-dir) install-dir)))
+         (when (ensure-package-installed normalized-repo install-dir)
+           (let ((manifest (read-package-manifest
+                            package-root
+                            :source-tier :third-party)))
+             (and manifest
+                  (package-definition-from-manifest manifest)))))))))

@@ -308,6 +308,27 @@ approval to generate extra display context (e.g., file diffs)."
   (or (null *active-tool-names*)
       (member (normalize-tool-name name) *active-tool-names* :test #'string=)))
 
+(defun caller-agent-name ()
+  "Return an agent-name string derived from *CURRENT-CALLER*, or NIL."
+  (unless (eq *current-caller* :user)
+    (string-downcase (symbol-name *current-caller*))))
+
+(defun tool-definition-package (definition)
+  "Return DEFINITION's owning package name, when it came from deftool."
+  (let ((metadata (find-agent-tool-metadata (tool-definition-name definition))))
+    (and metadata (agent-tool-metadata-package metadata))))
+
+(defun tool-visible-in-package-context-p (definition &key buffer agent-name)
+  "Return true when DEFINITION is visible for the active package context."
+  (let ((package (tool-definition-package definition)))
+    (or (null package)
+        (package-active-p package
+                          :buffer buffer
+                          :agent-name (or agent-name
+                                          (and buffer
+                                               (buffer-agent-name buffer))
+                                          (caller-agent-name))))))
+
 (defun tool-visible-to-caller-p (definition)
   "Return true when DEFINITION is visible to *CURRENT-CALLER*."
   (let ((perm (tool-definition-permission definition)))
@@ -315,7 +336,7 @@ approval to generate extra display context (e.g., file diffs)."
         (eq perm :agent-allowed)
         (eq perm :agent-with-permission))))
 
-(defun tool-definitions-for-api ()
+(defun tool-definitions-for-api (&key buffer agent-name)
   "Return a vector of clawmacs tool definitions for provider adapters.
 Only includes tools visible to the current *current-caller*."
   (let ((tools nil))
@@ -323,6 +344,10 @@ Only includes tools visible to the current *current-caller*."
      (lambda (name def)
        (declare (ignore name))
        (when (and (tool-visible-to-caller-p def)
+                  (tool-visible-in-package-context-p
+                   def
+                   :buffer buffer
+                   :agent-name agent-name)
                   (tool-allowed-for-active-run-p
                    (tool-definition-name def)))
          (push `((:name . ,(tool-definition-name def))
@@ -369,6 +394,11 @@ Returns a string result or signals an error."
          (def (effective-tool-definition normalized-name)))
     (unless def
       (error "Unknown tool: ~A" normalized-name))
+    (unless (tool-visible-in-package-context-p
+             def
+             :buffer *current-tool-buffer*
+             :agent-name (caller-agent-name))
+      (error "Tool ~A belongs to an inactive package" normalized-name))
     (let ((perm (tool-definition-permission def)))
       (ecase perm
         (:agent-allowed t)

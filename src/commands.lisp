@@ -18,7 +18,8 @@ or an agent keyword (e.g., :CODER) during agent tool dispatch.")
   (docstring   ""                            :type string   :read-only t)
   (keybindings nil                           :type list     :read-only t)
   (lambda-list '(buffer)                     :type list     :read-only t)
-  (prompts     nil                           :type list     :read-only t))
+  (prompts     nil                           :type list     :read-only t)
+  (package     nil                           :type (or null string) :read-only t))
 
 (defvar *command-table* (make-hash-table :test #'eq)
   "Global table mapping command symbols to command-metadata.")
@@ -34,7 +35,8 @@ or an agent keyword (e.g., :CODER) during agent tool dispatch.")
   (call-style  :positional                   :type keyword  :read-only t)
   (approval-display-fn nil                   :type t        :read-only t)
   (command-p   nil                           :type boolean  :read-only t)
-  (lambda-list nil                           :type list     :read-only t))
+  (lambda-list nil                           :type list     :read-only t)
+  (package     nil                           :type (or null string) :read-only t))
 
 (defvar *agent-tool-metadata-table* (make-hash-table :test #'eq)
   "Global table mapping Lisp symbols to AGENT-TOOL-METADATA.")
@@ -172,7 +174,8 @@ or an agent keyword (e.g., :CODER) during agent tool dispatch.")
      :call-style call-style
      :approval-display-fn (getf tool-spec :approval-display-fn)
      :command-p (not (null command-p))
-     :lambda-list lambda-list)))
+     :lambda-list lambda-list
+     :package *current-clawmacs-package*)))
 
 (defun call-agent-tool-provider-bridge (metadata)
   "Register METADATA with the provider tool table when that bridge is loaded."
@@ -377,13 +380,23 @@ buffer is supplied automatically during execution."
 ;;; Command Listing
 ;;; --------------------------------------------------------------------------
 
-(declaim (ftype (function () list) list-available-commands))
-(defun list-available-commands ()
-  "Return a list of registered command symbols."
+(defun command-metadata-visible-p (metadata &key buffer agent-name include-inactive)
+  "Return true when METADATA should be visible in the current package context."
+  (let ((package (command-metadata-package metadata)))
+    (or include-inactive
+        (null package)
+        (package-active-p package :buffer buffer :agent-name agent-name))))
+
+(defun list-available-commands (&key buffer agent-name include-inactive)
+  "Return registered command symbols visible in the package context."
   (let ((result nil))
     (maphash (lambda (name metadata)
-               (declare (ignore metadata))
-               (push name result))
+               (when (command-metadata-visible-p
+                      metadata
+                      :buffer buffer
+                      :agent-name agent-name
+                      :include-inactive include-inactive)
+                 (push name result)))
              *command-table*)
     result))
 
@@ -429,7 +442,8 @@ buffer is supplied automatically during execution."
                                    "")
                     :keybindings keys
                     :lambda-list lambda-list
-                    :prompts prompts)))
+                    :prompts prompts
+                    :package *current-clawmacs-package*)))
     (setf (gethash name *command-table*) metadata)
     metadata))
 
@@ -480,11 +494,14 @@ Example:
     :see-also (buffer buffer-name add-buffer-to-ring)
     :side-effects \"Allocates a new buffer with an empty input message.\")"
   `(let ((doc (setf (gethash ',name *extended-docs*)
-                    (list ,@(when category `(:category ,category))
-                          ,@(when usage `(:usage ,usage))
-                          ,@(when returns `(:returns ,returns))
-                          ,@(when see-also `(:see-also ',see-also))
-                          ,@(when side-effects `(:side-effects ,side-effects))))))
+                    (append
+                     (list ,@(when category `(:category ,category))
+                           ,@(when usage `(:usage ,usage))
+                           ,@(when returns `(:returns ,returns))
+                           ,@(when see-also `(:see-also ',see-also))
+                           ,@(when side-effects `(:side-effects ,side-effects)))
+                     (when *current-clawmacs-package*
+                       (list :package *current-clawmacs-package*))))))
      doc))
 
 (defun extended-doc (symbol &optional key)

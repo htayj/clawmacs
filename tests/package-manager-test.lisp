@@ -34,6 +34,9 @@
 
 (defmacro with-packages-directory-override ((path) &body body)
   `(let ((clawmacs::*packages-directory* (uiop:ensure-directory-pathname ,path))
+         (clawmacs::*package-configuration-path*
+          (merge-pathnames "packages.json" (uiop:ensure-directory-pathname ,path)))
+         (clawmacs::*package-configuration* nil)
          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
          (clawmacs::*package-channels* nil)
          (clawmacs::*available-packages* nil)
@@ -50,12 +53,18 @@
 
 (defmacro with-package-state-override ((channels-form &key enabled-builtin-packages)
                                        &body body)
-  `(let ((clawmacs::*package-channels* ,channels-form)
-         (clawmacs::*available-packages* nil)
-         (clawmacs::*package-registry-loaded-p* nil)
-         (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
-         (clawmacs::*package-prompt-sections* nil)
-         (clawmacs::*enabled-builtin-packages* ,enabled-builtin-packages))
+  (declare (ignore enabled-builtin-packages))
+  `(let* ((package-test-root (temp-package-test-directory "config"))
+          (clawmacs::*package-configuration-path*
+           (merge-pathnames "packages.json"
+                            (uiop:ensure-directory-pathname package-test-root)))
+          (clawmacs::*package-configuration* nil)
+          (clawmacs::*package-channels* ,channels-form)
+          (clawmacs::*available-packages* nil)
+          (clawmacs::*package-registry-loaded-p* nil)
+          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
+          (clawmacs::*package-prompt-sections* nil)
+          (clawmacs::*enabled-builtin-packages* nil))
      ,@body))
 
 (defun write-test-file (path contents)
@@ -142,8 +151,8 @@
     (clawmacs:remove-hook 'clawmacs::*startup-hook* 'identity)
     (is (equal '(car) clawmacs::*startup-hook*))))
 
-(test clawmacs-use-package-clones-and-loads-local-git-repo
-  "A local git repo is cloned, read via manifest.lisp, and loaded."
+(test clawmacs-use-package-clones-and-installs-local-git-repo
+  "A local git repo is cloned and read via manifest.lisp without loading."
   (let* ((*package-entrypoint-load-count* 0)
          (source-repo
            (make-package-repo
@@ -152,14 +161,19 @@
             :entrypoint-content "(incf clawmacs/tests::*package-entrypoint-load-count*)"))
          (packages-root (temp-package-test-directory "install-root")))
     (with-packages-directory-override (packages-root)
-      (is (clawmacs:clawmacs-use-package :src-type :git
-                                         :repo (namestring source-repo)))
-      (is (= 1 *package-entrypoint-load-count*))
+      (let ((definition (clawmacs:clawmacs-use-package
+                         :src-type :git
+                         :repo (namestring source-repo))))
+        (is (not (null definition)))
+        (is (string= "test-package"
+                     (clawmacs:package-definition-name definition))))
+      (is (= 0 *package-entrypoint-load-count*))
+      (is (not (null (clawmacs:find-installed-package "test-package"))))
       (is (probe-file
            (clawmacs::package-install-directory :git (namestring source-repo)))))))
 
-(test clawmacs-use-package-loads-once-per-session
-  "Repeated calls do not reload an already-loaded package."
+(test clawmacs-use-package-is-install-only-and-idempotent
+  "Repeated install calls do not load the package entrypoint."
   (let* ((*package-entrypoint-load-count* 0)
          (source-repo
            (make-package-repo
@@ -172,6 +186,28 @@
                                          :repo (namestring source-repo)))
       (is (clawmacs:clawmacs-use-package :src-type :git
                                          :repo (namestring source-repo)))
+      (is (= 0 *package-entrypoint-load-count*)))))
+
+(test load-active-packages-loads-enabled-installed-package-once
+  "Installed packages load only after enablement and only once per session."
+  (let* ((*package-entrypoint-load-count* 0)
+         (source-repo
+           (make-package-repo
+            :label "active-load"
+            :manifest "(:name \"active-package\" :entrypoint \"test-package.lisp\")"
+            :entrypoint-content "(incf clawmacs/tests::*package-entrypoint-load-count*)"))
+         (packages-root (temp-package-test-directory "active-install-root")))
+    (with-packages-directory-override (packages-root)
+      (is (clawmacs:clawmacs-use-package :src-type :git
+                                         :repo (namestring source-repo)))
+      (is (null (clawmacs:load-active-packages)))
+      (is (= 0 *package-entrypoint-load-count*))
+      (is (eq :global
+              (clawmacs:set-package-enablement-scope
+               "active-package" :global)))
+      (is (= 1 (length (clawmacs:load-active-packages))))
+      (is (= 1 *package-entrypoint-load-count*))
+      (is (= 1 (length (clawmacs:load-active-packages))))
       (is (= 1 *package-entrypoint-load-count*)))))
 
 (test default-package-channel-discovers-sexed
@@ -196,13 +232,75 @@
 
 (test load-autoload-packages-registers-enabled-sexed-prompt-section
   "Explicitly enabled bundled packages still register their prompt contributions."
-  (with-package-state-override ((default-package-test-channels)
-                                :enabled-builtin-packages '("sexed"))
+  (with-package-state-override ((default-package-test-channels))
+    (clawmacs:set-package-enablement-scope "sexed" :global)
     (let ((loaded (clawmacs:load-autoload-packages)))
       (is (= 1 (length loaded)))
       (let ((prompt-section (clawmacs:render-package-prompt-sections)))
         (is (search "Structural editing with sexed" prompt-section))
         (is (search "(sexed-outline-to-string TEXT :max-depth 2)" prompt-section))))))
+
+(test package-enablement-scope-resolves-buffer-agent-global-default
+  "Package enablement inherits global, agent, and buffer scopes without explicit disables."
+  (with-package-state-override ((default-package-test-channels))
+    (let ((buf (make-buffer "pkg-scope" :agent-name "coder")))
+      (is (eq :default
+              (clawmacs:package-enablement-scope "sexed" :buffer buf)))
+      (is (equal nil (clawmacs:active-package-names :buffer buf)))
+      (clawmacs:set-package-enablement-scope "sexed" :global :buffer buf)
+      (is (eq :global
+              (clawmacs:package-enablement-scope "sexed" :buffer buf)))
+      (is (member "sexed" (clawmacs:active-package-names :buffer buf)
+                  :test #'string=))
+      (clawmacs:set-package-enablement-scope "sexed" :agent :buffer buf)
+      (is (eq :agent
+              (clawmacs:package-enablement-scope "sexed" :buffer buf)))
+      (is (not (clawmacs::package-enabled-globally-p "sexed")))
+      (clawmacs:set-package-enablement-scope "sexed" :buffer :buffer buf)
+      (is (eq :buffer
+              (clawmacs:package-enablement-scope "sexed" :buffer buf)))
+      (is (not (clawmacs::package-enabled-for-agent-p "sexed" "coder")))
+      (clawmacs:set-package-enablement-scope "sexed" :default :buffer buf)
+      (is (eq :default
+              (clawmacs:package-enablement-scope "sexed" :buffer buf)))
+      (is (equal nil (clawmacs:active-package-names :buffer buf))))))
+
+(test package-enablement-configuration-persists-global-and-agent
+  "Global and agent package enablement round-trip through packages.json."
+  (with-package-state-override ((default-package-test-channels))
+    (let ((path clawmacs::*package-configuration-path*))
+      (clawmacs:set-package-enablement-scope "sexed" :global)
+      (clawmacs:set-package-enablement-scope "lispi" :agent
+                                            :agent-name "coder")
+      (setf clawmacs::*package-configuration* nil)
+      (is (probe-file path))
+      (is (eq :global
+              (clawmacs:package-enablement-scope "sexed")))
+      (is (eq :agent
+              (clawmacs:package-enablement-scope "lispi"
+                                                 :agent-name "coder")))
+      (is (equal '("lispi" "sexed")
+                 (sort (copy-list
+                        (clawmacs:active-package-names
+                         :agent-name "coder"))
+                       #'string<))))))
+
+(test cycle-package-enablement-scope-uses-simple-cycle
+  "Package scope cycling avoids explicit disable chains."
+  (with-package-state-override ((default-package-test-channels))
+    (let ((buf (make-buffer "pkg-cycle" :agent-name "coder")))
+      (is (eq :buffer
+              (clawmacs:cycle-package-enablement-scope "sexed"
+                                                       :buffer buf)))
+      (is (eq :agent
+              (clawmacs:cycle-package-enablement-scope "sexed"
+                                                       :buffer buf)))
+      (is (eq :global
+              (clawmacs:cycle-package-enablement-scope "sexed"
+                                                       :buffer buf)))
+      (is (eq :default
+              (clawmacs:cycle-package-enablement-scope "sexed"
+                                                       :buffer buf))))))
 
 (test package-channel-loads-package-and-manifest-prompt
   "A local channel can advertise and load a package with a prompt section."
@@ -226,6 +324,8 @@
         (is (eq :channel (clawmacs:package-definition-source-tier definition)))
         (is (clawmacs:load-clawmacs-package "custom-package"))
         (is (= 1 *package-entrypoint-load-count*))
+        (is (null (clawmacs:render-package-prompt-sections)))
+        (clawmacs:set-package-enablement-scope "custom-package" :global)
         (is (search "CUSTOM PACKAGE PROMPT"
                     (clawmacs:render-package-prompt-sections)))))))
 
@@ -339,6 +439,7 @@
                              (clawmacs:list-package-channels)
                              :key #'clawmacs:package-channel-name
                              :test #'string=))))
+        (clawmacs:set-package-enablement-scope "init-package" :global)
         (is (clawmacs:load-autoload-packages))
         (is (= 1 *package-entrypoint-load-count*))))))
 

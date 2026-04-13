@@ -278,13 +278,15 @@ and :TOOL-ID entries. Returns the inserted message."
   "Start a streaming API call. Creates a placeholder agent message and
 stores the stream state on the buffer. Non-blocking -- the event loop
 polls for updates via update-streaming-response."
+  (load-active-packages :buffer buf)
   (maybe-compact-buffer buf :reason :pre-request)
   (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
          (tools (let ((*current-caller* agent-kw))
-                   (tool-definitions-for-api)))
+                   (tool-definitions-for-api :buffer buf)))
          (messages (build-conversation-messages buf))
          (system-prompt (let ((*current-caller* agent-kw))
-                          (build-agent-system-prompt (buffer-agent-name buf)))))
+                          (build-agent-system-prompt (buffer-agent-name buf)
+                                                     :buffer buf))))
     (handler-case
         (multiple-value-bind (provider model think-level)
             (resolve-buffer-provider-and-model buf)
@@ -649,13 +651,15 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
 (defun prompt-request-once (buf)
   "Send BUF's current conversation once via the streaming provider path.
 Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
+  (load-active-packages :buffer buf)
   (maybe-compact-buffer buf :reason :prompt-request)
   (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
          (tools (let ((*current-caller* agent-kw))
-                  (tool-definitions-for-api)))
+                  (tool-definitions-for-api :buffer buf)))
          (messages (build-conversation-messages buf))
          (system-prompt (let ((*current-caller* agent-kw))
-                          (build-agent-system-prompt (buffer-agent-name buf)))))
+                          (build-agent-system-prompt (buffer-agent-name buf)
+                                                     :buffer buf))))
     (multiple-value-bind (provider model think-level)
         (resolve-buffer-provider-and-model buf)
       (file-debug-log "prompt-request"
@@ -987,7 +991,7 @@ If so, call the handler and return T. Otherwise return NIL."
   (let ((bindings (find-keybindings-for-command command)))
     (sort (mapcar #'format-key-binding bindings) #'string<)))
 
-(defun make-command-selector-items ()
+(defun make-command-selector-items (&key buffer)
   "Build minibuffer items for command selection."
   (mapcar (lambda (command)
             (let* ((name (command-display-name command))
@@ -998,7 +1002,7 @@ If so, call the handler and return T. Otherwise return NIL."
               (list :command command
                     :display display
                     :match-text name)))
-          (sort (copy-list (list-available-commands))
+          (sort (copy-list (list-available-commands :buffer buffer))
                 #'string<
                 :key #'command-display-name)))
 
@@ -1038,6 +1042,8 @@ If so, call the handler and return T. Otherwise return NIL."
     (cond
       ((null metadata)
        (error "Unknown command: ~A" command))
+      ((not (command-metadata-visible-p metadata :buffer buffer))
+       (error "Command ~A belongs to an inactive package." command))
       ((null required-args)
        (funcall command buffer))
       (prompts
@@ -1769,6 +1775,202 @@ Returns true when KEY was consumed by completion."
 (defcommand list-skills-command)
 
 ;;; --------------------------------------------------------------------------
+;;; Package Commands
+;;; --------------------------------------------------------------------------
+
+(defun package-display-description (definition)
+  "Return DEFINITION's single-line selector description."
+  (let ((description (package-definition-description definition)))
+    (if (and description (plusp (length description)))
+        description
+        "No description.")))
+
+(defun package-scope-label (scope)
+  "Return the selector label for package enablement SCOPE."
+  (ecase scope
+    (:default "default")
+    (:buffer "buffer")
+    (:agent "agent")
+    (:global "global")))
+
+(defun package-scope-message (scope)
+  "Return a short user-facing description for package SCOPE."
+  (ecase scope
+    (:default "default")
+    (:buffer "enabled for this buffer")
+    (:agent "enabled for this agent")
+    (:global "enabled globally")))
+
+(defun make-package-selector-item (definition buffer)
+  "Build one minibuffer item for package DEFINITION."
+  (let* ((name (package-definition-name definition))
+         (scope (package-enablement-scope name :buffer buffer))
+         (description (package-display-description definition))
+         (display (format nil "[~A] ~A - ~A"
+                          (package-scope-label scope)
+                          name
+                          description)))
+    (list :package definition
+          :package-name name
+          :scope scope
+          :display display
+          :match-text (format nil "~A ~A ~A"
+                              name
+                              (package-scope-label scope)
+                              description))))
+
+(defun installed-package-selector-items (buffer)
+  "Return installed packages as minibuffer selector items."
+  (mapcar (lambda (definition)
+            (make-package-selector-item definition buffer))
+          (sort (copy-list (list-installed-packages))
+                #'string<
+                :key #'package-definition-name)))
+
+(defun select-package-selector-item (package-name)
+  "Select PACKAGE-NAME in the active minibuffer when present."
+  (let ((index (position package-name *minibuffer-filtered-items*
+                         :key (lambda (item)
+                                (getf item :package-name))
+                         :test #'string=)))
+    (when index
+      (setf *minibuffer-selected-index* index)
+      (minibuffer-ensure-visible))))
+
+(defun activate-package-toggle-minibuffer (buffer &optional selected-package-name)
+  "Open the installed package enablement selector."
+  (let ((items (installed-package-selector-items buffer)))
+    (if items
+        (progn
+          (minibuffer-activate
+           "Enable Package" items
+           (lambda (item)
+             (let* ((name (getf item :package-name))
+                    (scope (cycle-package-enablement-scope name :buffer buffer)))
+               (load-active-packages :buffer buffer)
+               (buffer-insert-system-message
+                buffer
+                (format nil "[Package ~A ~A]"
+                        name
+                        (package-scope-message scope)))
+               (activate-package-toggle-minibuffer buffer name))))
+          (when selected-package-name
+            (select-package-selector-item selected-package-name)))
+        (buffer-insert-system-message buffer "[No installed packages available.]"))))
+
+(defun minibuffer-toggle-package-command (buffer)
+  "Select an installed package and cycle its enablement scope."
+  (reload-package-channels)
+  (activate-package-toggle-minibuffer buffer))
+(defcommand minibuffer-toggle-package-command)
+
+(defun package-owned-command-metadata (package-name)
+  "Return command metadata registered by PACKAGE-NAME."
+  (let ((entries nil))
+    (maphash (lambda (_name metadata)
+               (declare (ignore _name))
+               (when (string= package-name
+                              (or (command-metadata-package metadata) ""))
+                 (push metadata entries)))
+             *command-table*)
+    (sort entries #'string<
+          :key (lambda (metadata)
+                 (symbol-name (command-metadata-name metadata))))))
+
+(defun package-owned-tool-metadata (package-name)
+  "Return tool metadata registered by PACKAGE-NAME."
+  (remove-if-not (lambda (metadata)
+                   (string= package-name
+                            (or (agent-tool-metadata-package metadata) "")))
+                 (list-agent-tool-metadata)))
+
+(defun package-owned-prompt-sections (package-name)
+  "Return prompt sections registered by PACKAGE-NAME."
+  (remove-if-not (lambda (section)
+                   (string= package-name
+                            (or (package-prompt-section-package section) "")))
+                 (list-package-prompt-sections)))
+
+(defun package-owned-extended-docs (package-name)
+  "Return extended documentation entries registered by PACKAGE-NAME."
+  (let ((entries nil))
+    (maphash (lambda (symbol doc)
+               (when (string= package-name (or (getf doc :package) ""))
+                 (push (cons symbol doc) entries)))
+             *extended-docs*)
+    (sort entries #'string< :key (lambda (entry)
+                                   (symbol-name (car entry))))))
+
+(defun describe-installed-package-to-string (definition buffer)
+  "Return the help text for installed package DEFINITION."
+  (load-clawmacs-package definition)
+  (let* ((name (package-definition-name definition))
+         (scope (package-enablement-scope name :buffer buffer)))
+    (with-output-to-string (s)
+      (format s "Package: ~A~%" name)
+      (format s "Enabled: [~A]~%" (package-scope-label scope))
+      (format s "Source: ~(~A~)~%" (package-definition-source-tier definition))
+      (format s "Root: ~A~%~%" (namestring (package-definition-root definition)))
+      (format s "~A~%~%" (package-display-description definition))
+      (let ((sections (package-owned-prompt-sections name)))
+        (when sections
+          (format s "Prompt Sections:~%")
+          (dolist (section sections)
+            (format s "  - ~A~%"
+                    (or (package-prompt-section-title section)
+                        (package-prompt-section-name section))))
+          (format s "~%")))
+      (let ((tools (package-owned-tool-metadata name)))
+        (when tools
+          (format s "Tools:~%")
+          (dolist (tool tools)
+            (format s "  - ~A (~(~A~)): ~A~%"
+                    (agent-tool-metadata-name tool)
+                    (agent-tool-metadata-permission tool)
+                    (agent-tool-metadata-description tool)))
+          (format s "~%")))
+      (let ((commands (package-owned-command-metadata name)))
+        (when commands
+          (format s "Commands:~%")
+          (dolist (command commands)
+            (format s "  - ~(~A~): ~A~%"
+                    (command-metadata-name command)
+                    (command-metadata-docstring command)))
+          (format s "~%")))
+      (let ((docs (package-owned-extended-docs name)))
+        (when docs
+          (format s "Documentation:~%")
+          (dolist (entry docs)
+            (let ((doc (cdr entry)))
+              (format s "  - ~(~A~)~@[: ~A~]~%"
+                      (car entry)
+                      (getf doc :category))))
+          (format s "~%"))))))
+
+(defun describe-installed-package-command (buffer)
+  "Select an installed package and open its help buffer."
+  (reload-package-channels)
+  (let ((items (installed-package-selector-items buffer)))
+    (if items
+        (minibuffer-activate
+         "Describe Package" items
+         (lambda (item)
+           (let* ((definition (getf item :package))
+                  (name (package-definition-name definition))
+                  (content (describe-installed-package-to-string
+                            definition buffer))
+                  (buf-name (format nil "*help:package:~A*" name))
+                  (existing (find-buffer-by-name buf-name)))
+             (if existing
+                 (progn
+                   (set-message-text (message-prev (buffer-input-message existing))
+                                     content)
+                   (switch-to-buffer existing))
+                 (switch-to-buffer (make-help-buffer buf-name content))))))
+        (buffer-insert-system-message buffer "[No installed packages available.]"))))
+(defcommand describe-installed-package-command)
+
+;;; --------------------------------------------------------------------------
 ;;; Model Selection Commands
 ;;; --------------------------------------------------------------------------
 
@@ -2154,7 +2356,7 @@ to navigate. Shows buffer name, agent, status, and message count."
 
 (defun execute-extended-command (buffer)
   "Select and run a command via the minibuffer. Bound to M-x."
-  (let ((items (make-command-selector-items)))
+  (let ((items (make-command-selector-items :buffer buffer)))
     (if (null items)
         (buffer-insert-system-message buffer "[No commands available]")
         (minibuffer-activate
@@ -4373,6 +4575,8 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt."
           (merge-pathnames #P"agent-defaults.json" root)
           *packages-directory*
           (merge-pathnames #P"packages/" root)
+          *package-configuration-path*
+          (merge-pathnames #P"packages.json" config-dir)
           *skill-user-directory*
           (merge-pathnames #P"skills/" config-dir)
           *skill-agents-directory*

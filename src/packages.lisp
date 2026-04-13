@@ -177,6 +177,7 @@
     #:buffer-provider-override
     #:buffer-model-override
     #:buffer-think-level-override
+    #:buffer-enabled-packages
     #:set-buffer-provider-override
     #:set-buffer-model-override
     #:set-buffer-think-level-override
@@ -226,6 +227,7 @@
    #:command-metadata-keybindings
    #:command-metadata-lambda-list
    #:command-metadata-prompts
+   #:command-metadata-package
    #:defcommand
    #:list-available-commands
    #:command-required-arguments
@@ -247,6 +249,7 @@
    #:agent-tool-metadata-approval-display-fn
    #:agent-tool-metadata-command-p
    #:agent-tool-metadata-lambda-list
+   #:agent-tool-metadata-package
    #:register-agent-tool-metadata
    #:unregister-agent-tool-metadata
    #:find-agent-tool-metadata
@@ -685,6 +688,8 @@
    #:minibuffer-insert-skill-command
    #:minibuffer-toggle-skill-command
    #:list-skills-command
+   #:minibuffer-toggle-package-command
+   #:describe-installed-package-command
    #:render-buffer-selector
 
    ;; Model selector (overlay)
@@ -857,13 +862,22 @@
    #:*default-package-channel-directory*
    #:*package-channels*
    #:*enabled-builtin-packages*
+   #:*package-configuration-path*
    #:*packages-directory*
+   #:*current-clawmacs-package*
    #:register-package-channel
    #:list-package-channels
    #:reload-package-channels
    #:list-available-packages
    #:find-available-package
+   #:list-installed-packages
+   #:find-installed-package
+   #:package-enablement-scope
+   #:set-package-enablement-scope
+   #:cycle-package-enablement-scope
+   #:active-package-names
    #:load-clawmacs-package
+   #:load-active-packages
    #:load-autoload-packages
    #:register-package-prompt-section
    #:list-package-prompt-sections

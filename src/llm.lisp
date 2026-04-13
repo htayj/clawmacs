@@ -242,23 +242,36 @@ Project-local files take precedence over global ones."
           (current-system-prompt-date)
           (current-system-prompt-working-directory)))
 
-(defun render-agent-tools-section-if-loaded ()
+(defun render-agent-tools-section-if-loaded (&key buffer agent-name)
   "Render provider tool instructions when the tool system is loaded."
   (let ((renderer (and (fboundp 'render-agent-tools-section)
-                       (symbol-function 'render-agent-tools-section))))
-    (and renderer (funcall renderer))))
+                       (symbol-function 'render-agent-tools-section)))
+        (tool-provider (and (fboundp 'tool-definitions-for-api)
+                            (symbol-function 'tool-definitions-for-api))))
+    (and renderer tool-provider
+         (funcall renderer
+                  (coerce (funcall tool-provider
+                                   :buffer buffer
+                                   :agent-name agent-name)
+                          'list)))))
 
-(defun build-agent-system-prompt (agent-name)
+(defun build-agent-system-prompt (agent-name &key buffer)
   "Build the full system prompt for AGENT-NAME.
 Composition order: boot-file prefix, core prompt, package sections, active
 tools section, skills section, personality prompt, then dynamic runtime footer."
+  (load-active-packages :buffer buffer :agent-name agent-name)
   (let* ((agent-keyword (intern (string-upcase agent-name) :keyword))
          (*current-caller* agent-keyword)
          (parts (remove-if #'null
                            (list (load-boot-files)
                                  (agent-definition-core-prompt-or-default agent-name)
-                                 (render-package-prompt-sections)
-                                 (render-agent-tools-section-if-loaded)
+                                 (render-package-prompt-sections
+                                  (list-package-prompt-sections)
+                                  :buffer buffer
+                                  :agent-name agent-name)
+                                 (render-agent-tools-section-if-loaded
+                                  :buffer buffer
+                                  :agent-name agent-name)
                                  (render-skills-section)
                                  (agent-definition-personality-prompt-or-default agent-name)
                                  (system-prompt-runtime-footer)))))

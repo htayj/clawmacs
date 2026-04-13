@@ -176,12 +176,15 @@
   "Serialized sessions include provider/model/think overrides."
   (let ((buf (make-buffer "test" :agent-name "echo")))
     (setf (buffer-provider-override buf) :zai
-          (buffer-model-override buf) "glm-5")
+          (buffer-model-override buf) "glm-5"
+          (buffer-enabled-packages buf) '("sexed"))
     (set-buffer-think-level-override buf "medium")
     (let ((data (clawmacs::serialize-buffer buf)))
       (is (eq :zai (cdr (assoc :provider-override data))))
       (is (string= "glm-5" (cdr (assoc :model-override data))))
-      (is (string= "medium" (cdr (assoc :think-level-override data)))))))
+      (is (string= "medium" (cdr (assoc :think-level-override data))))
+      (is (equal '("sexed")
+                 (coerce (cdr (assoc :enabled-packages data)) 'list))))))
 
 (test load-session-missing-overrides-default-to-nil
   "Sessions without override fields load nil overrides."
@@ -206,7 +209,8 @@
        (is (not (null buf)))
        (is (null (buffer-provider-override buf)))
         (is (null (buffer-model-override buf)))
-       (is (null (buffer-think-level-override buf)))))))
+       (is (null (buffer-think-level-override buf)))
+       (is (null (buffer-enabled-packages buf)))))))
 
 (test save-and-load-session-round-trips-overrides
   "Saved sessions preserve override values and types when reloaded."
@@ -214,7 +218,8 @@
          (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
          (buf (make-buffer session-name :agent-name "echo")))
     (setf (buffer-provider-override buf) :openai-codex
-          (buffer-model-override buf) "gpt-5.4")
+          (buffer-model-override buf) "gpt-5.4"
+          (buffer-enabled-packages buf) '("sexed" "lispi"))
     (set-buffer-think-level-override buf "high")
     (message-insert-char (buffer-input-message buf) #\h)
     (message-insert-char (buffer-input-message buf) #\i)
@@ -227,7 +232,9 @@
       (is (string= "gpt-5.4" (buffer-model-override loaded)))
       (is (typep (buffer-model-override loaded) 'string))
       (is (string= "high" (buffer-think-level-override loaded)))
-      (is (typep (buffer-think-level-override loaded) 'string)))))
+      (is (typep (buffer-think-level-override loaded) 'string))
+      (is (equal '("sexed" "lispi")
+                 (buffer-enabled-packages loaded))))))
 
 (test clear-buffer-overrides-clears-think-level
   "Clearing buffer overrides also clears think-level state."
@@ -614,6 +621,65 @@
         (is (not (null notice)))
         (is (eq :system (message-sender notice)))
         (is (search "not saved" (message-text notice)))))))
+
+;;; --------------------------------------------------------------------------
+;;; Package Selector Tests
+;;; --------------------------------------------------------------------------
+
+(test minibuffer-package-selector-activates
+  "The package enable command lists installed packages with scope and description."
+  (with-interactive-command-test-buffer (buf)
+    (with-package-state-override ((default-package-test-channels))
+      (clawmacs::minibuffer-toggle-package-command buf)
+      (is (eq t *minibuffer-active*))
+      (is (string= "Enable Package" *minibuffer-prompt*))
+      (let ((item (find "sexed" *minibuffer-filtered-items*
+                        :key (lambda (entry)
+                               (getf entry :package-name))
+                        :test #'string=)))
+        (is (not (null item)))
+        (is (search "[default] sexed - " (getf item :display)))))))
+
+(test minibuffer-package-selector-cycles-and-refreshes
+  "Confirming a package cycles scope and reopens the package selector."
+  (with-interactive-command-test-buffer (buf)
+    (with-package-state-override ((default-package-test-channels))
+      (clawmacs::minibuffer-toggle-package-command buf)
+      (let ((index (position "sexed" *minibuffer-filtered-items*
+                             :key (lambda (entry)
+                                    (getf entry :package-name))
+                             :test #'string=)))
+        (is (not (null index)))
+        (setf *minibuffer-selected-index* index)
+        (minibuffer-confirm))
+      (is (eq t *minibuffer-active*))
+      (is (eq :buffer
+              (clawmacs:package-enablement-scope "sexed" :buffer buf)))
+      (is (equal '("sexed") (buffer-enabled-packages buf)))
+      (let ((item (find "sexed" *minibuffer-filtered-items*
+                        :key (lambda (entry)
+                               (getf entry :package-name))
+                        :test #'string=)))
+        (is (search "[buffer] sexed - " (getf item :display)))))))
+
+(test describe-installed-package-command-opens-help-buffer
+  "The describe package command loads package metadata and opens a help buffer."
+  (with-interactive-command-test-buffer (buf)
+    (with-package-state-override ((default-package-test-channels))
+      (clawmacs::describe-installed-package-command buf)
+      (let ((index (position "sexed" *minibuffer-filtered-items*
+                             :key (lambda (entry)
+                                    (getf entry :package-name))
+                             :test #'string=)))
+        (is (not (null index)))
+        (setf *minibuffer-selected-index* index)
+        (minibuffer-confirm))
+      (let ((help (current-buffer)))
+        (is (string= "*help:package:sexed*" (buffer-name help)))
+        (let ((text (message-text (message-prev (buffer-input-message help)))))
+          (is (search "Package: sexed" text))
+          (is (search "Prompt Sections:" text))
+          (is (search "Structural editing with sexed" text)))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Agent Selector Tests
