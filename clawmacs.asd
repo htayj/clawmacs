@@ -38,6 +38,7 @@
                              (:file "main")
                              (:file "reference")
                              (:file "sexed")
+                             (:file "slop")
                              (:file "docs")))))
 
 (defsystem "clawmacs/mcclim"
@@ -65,6 +66,7 @@
                               (:file "projects-test")
                               (:file "skills-test")
                               (:file "sexed-test")
+                              (:file "slop-test")
                               (:file "llm-test")
                               (:file "keymap-test")
                               (:file "render-test")))))

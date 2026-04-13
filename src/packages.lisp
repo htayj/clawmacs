@@ -622,6 +622,19 @@
    #:sexed-slurp-forward-project-form
    #:sexed-barf-forward-project-form
 
+   ;; Slop symbol intelligence
+   #:*slop-default-result-limit*
+   #:*slop-project-index-cache*
+   #:slop-index-project
+   #:slop-project-symbols
+   #:slop-symbol-at
+   #:slop-find-definitions
+   #:slop-find-references
+   #:slop-find-callers
+   #:slop-find-callees
+   #:slop-find-variable-uses
+   #:slop-rename-variable
+
    ;; Approval
    #:buffer-approval-pending
    #:buffer-approval-result

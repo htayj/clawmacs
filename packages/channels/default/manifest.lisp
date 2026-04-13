@@ -1,3 +1,3 @@
 (:name "default"
  :description "Bundled Clawmacs packages"
- :packages ("lispi" "sexed"))
+ :packages ("lispi" "sexed" "slop"))

@@ -210,7 +210,7 @@
       (is (= 1 (length (clawmacs:load-active-packages))))
       (is (= 1 *package-entrypoint-load-count*)))))
 
-(test default-package-channel-discovers-sexed
+(test default-package-channel-discovers-bundled-packages
   "The bundled default channel advertises the built-in packages."
   (with-package-state-override ((default-package-test-channels))
     (let* ((definitions (clawmacs:reload-package-channels))
@@ -221,15 +221,22 @@
                         :test #'string=))
            (sexed (find "sexed" definitions
                         :key #'clawmacs:package-definition-name
-                        :test #'string=)))
-      (is (equal '("lispi" "sexed") names))
+                        :test #'string=))
+           (slop (find "slop" definitions
+                       :key #'clawmacs:package-definition-name
+                       :test #'string=)))
+      (is (equal '("lispi" "sexed" "slop") names))
       (is (not (null lispi)))
       (is (eq :builtin (clawmacs:package-definition-source-tier lispi)))
       (is (probe-file (clawmacs:package-definition-entrypoint lispi)))
       (is (not (null sexed)))
       (is (eq :builtin (clawmacs:package-definition-source-tier sexed)))
       (is (clawmacs:package-definition-autoload sexed))
-      (is (probe-file (clawmacs:package-definition-entrypoint sexed))))))
+      (is (probe-file (clawmacs:package-definition-entrypoint sexed)))
+      (is (not (null slop)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier slop)))
+      (is (clawmacs:package-definition-autoload slop))
+      (is (probe-file (clawmacs:package-definition-entrypoint slop))))))
 
 (test load-autoload-packages-skips-disabled-builtin-sexed
   "Bundled sexed stays discoverable but does not autoload by default."
@@ -237,6 +244,7 @@
     (let ((loaded (clawmacs:load-autoload-packages)))
       (is (null loaded))
       (is (not (null (clawmacs:find-available-package "sexed"))))
+      (is (not (null (clawmacs:find-available-package "slop"))))
       (is (null (clawmacs:render-package-prompt-sections))))))
 
 (test load-autoload-packages-registers-enabled-sexed-prompt-section
