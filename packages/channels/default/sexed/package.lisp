@@ -10,8 +10,11 @@
   Use `sexed_project_outline`, `sexed_project_form_text`, `sexed_project_edit`,
   `sexed_project_read`, and `sexed_project_write` only when you have an actual
   Clawmacs project name and a project-relative path.
-- Before editing an existing file, call an outline tool with no filters first.
-  Outlines provide stable form ids, depths, heads, names, spans, and previews;
+- `sexed_file_read` and `sexed_project_read` return exact source for ordinary
+  files. For structurally giant files they return a safety page with form ids,
+  levels, heads, names, spans, previews, and continuation guidance. Use `full`
+  only when exact source text is required.
+- Outlines provide stable form ids, depths, heads, names, spans, and previews;
   add filters such as `head` or `max-depth` only after you have seen the broad
   outline.
 - Structural edit and form-text tools require a `selector` input object. Use
@@ -100,11 +103,23 @@
 
 (deftool sexed-tool-file-read
   :name "sexed_file_read"
-  :description "Read a sandbox-local Lisp source file from disk."
+  :description "Read a sandbox-local Lisp source file from disk. Ordinary files return exact source; structurally giant files return a safety page unless full is true."
   :permission :agent-allowed
   :call-style :raw-args
   :args ((path :type "string"
-               :description "Sandbox-local path to read.")))
+               :description "Sandbox-local path to read.")
+         (offset :type "integer" :required nil
+                 :description "1-indexed structural item offset when a safety page is returned.")
+         (limit :type "integer" :required nil
+                :description "Maximum structural items to return in a safety page.")
+         (selector :type "object" :required nil
+                   :description "Optional selector used to page inside a selected form.")
+         (level :type "integer" :required nil
+                :description "Structural level relative to the file or selector for safety pages.")
+         (include-atoms :type "boolean" :required nil
+                        :description "Include atom/string nodes in safety pages.")
+         (full :type "boolean" :required nil
+               :description "Return exact source text even when the file is structurally large. With selector, return exact selected form text.")))
 
 (deftool sexed-tool-file-write
   :name "sexed_file_write"
@@ -178,13 +193,25 @@
 
 (deftool sexed-tool-project-read
   :name "sexed_project_read"
-  :description "Read a project Lisp source file from disk."
+  :description "Read a project Lisp source file from disk. Ordinary files return exact source; structurally giant files return a safety page unless full is true."
   :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string"
                   :description "Project name.")
          (path :type "string"
-               :description "Project-relative path to read.")))
+               :description "Project-relative path to read.")
+         (offset :type "integer" :required nil
+                 :description "1-indexed structural item offset when a safety page is returned.")
+         (limit :type "integer" :required nil
+                :description "Maximum structural items to return in a safety page.")
+         (selector :type "object" :required nil
+                   :description "Optional selector used to page inside a selected form.")
+         (level :type "integer" :required nil
+                :description "Structural level relative to the file or selector for safety pages.")
+         (include-atoms :type "boolean" :required nil
+                        :description "Include atom/string nodes in safety pages.")
+         (full :type "boolean" :required nil
+               :description "Return exact source text even when the file is structurally large. With selector, return exact selected form text.")))
 
 (deftool sexed-tool-project-write
   :name "sexed_project_write"

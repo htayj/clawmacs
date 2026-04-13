@@ -23,6 +23,9 @@
 (defparameter +sexed-missing+ (gensym "SEXED-MISSING-")
   "Internal marker for absent selector keys.")
 
+(defparameter *sexed-read-form-count-limit* 2000
+  "Structural form count above which sexed read tools return a safety page.")
+
 (defun sexed-whitespace-char-p (char)
   "Return T when CHAR is whitespace for source scanning."
   (member char '(#\Space #\Tab #\Newline #\Return #\Page) :test #'char=))
@@ -441,6 +444,11 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
         :child-count (length (sexed-node-children node))
         :preview (sexed-truncate-preview (sexed-node-text node text) preview-chars)))
 
+(defun sexed-structural-form-node-p (node &key include-atoms)
+  "Return T when NODE should count as a structural read item."
+  (or include-atoms
+      (member (sexed-node-type node) '(:list :vector) :test #'eq)))
+
 (defun sexed-filter-nodes (nodes text &key head name depth max-depth containing
                                       (nth +sexed-missing+)
                                       include-atoms limit)
@@ -608,6 +616,156 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
                  (write-nodes fallback))))
             (t
              (format out "No forms matched.~%"))))))))
+
+(defun sexed-structural-form-count (nodes)
+  "Return the count of list/vector forms in NODES."
+  (count-if #'sexed-structural-form-node-p nodes))
+
+(defun sexed-node-within-p (node container)
+  "Return T when NODE's source span is inside CONTAINER."
+  (and (>= (sexed-node-start node) (sexed-node-start container))
+       (<= (sexed-node-end node) (sexed-node-end container))))
+
+(defun sexed-read-scope (nodes text selector)
+  "Return NODES scoped to SELECTOR, plus the selected node when present."
+  (if selector
+      (let ((node (sexed-resolve-selector nodes text selector)))
+        (values (remove-if-not (lambda (candidate)
+                                 (sexed-node-within-p candidate node))
+                               nodes)
+                node))
+      (values nodes nil)))
+
+(defun sexed-read-level-nodes (nodes selected-node level include-atoms)
+  "Return structural read nodes at LEVEL relative to SELECTED-NODE or file."
+  (let ((base-depth (if selected-node
+                        (sexed-node-depth selected-node)
+                        0)))
+    (remove-if-not
+     (lambda (node)
+       (and (sexed-structural-form-node-p node :include-atoms include-atoms)
+            (= (- (sexed-node-depth node) base-depth) level)))
+     nodes)))
+
+(defun sexed-read-page-slice (nodes offset limit)
+  "Return a 1-indexed page slice of NODES."
+  (let* ((start (min (length nodes) (max 0 (1- offset))))
+         (end (min (length nodes) (+ start limit))))
+    (values (subseq nodes start end)
+            (and (< end (length nodes)) (1+ end)))))
+
+(defun sexed-write-read-page-node (stream node text preview-chars)
+  "Write one node line for a sexed structural read page."
+  (format stream "[~D] d~D ~(~A~)~@[ ~A~]~@[ ~A~] ~D..~D  ~A~%"
+          (sexed-node-id node)
+          (sexed-node-depth node)
+          (sexed-node-type node)
+          (sexed-node-head node)
+          (sexed-node-name node)
+          (sexed-node-start node)
+          (sexed-node-end node)
+          (sexed-truncate-preview (sexed-node-text node text) preview-chars)))
+
+(defun sexed-read-page-to-string (text nodes diagnostics
+                                  &key source tool-name selector
+                                    offset limit level include-atoms
+                                    reason total-structural-forms
+                                    (preview-chars 96))
+  "Return a structural safety page for TEXT."
+  (multiple-value-bind (scope selected-node)
+      (sexed-read-scope nodes text selector)
+    (let* ((scope-structural-forms (sexed-structural-form-count scope))
+           (items (sexed-read-level-nodes scope selected-node level
+                                          include-atoms))
+           (item-count (length items)))
+      (multiple-value-bind (page next-offset)
+          (sexed-read-page-slice items offset limit)
+        (with-output-to-string (out)
+          (format out "Sexed structural read page~%")
+          (format out "Source: ~A~%" source)
+          (format out "Mode: ~A~%"
+                  (ecase reason
+                    (:safety "safety fallback for a structurally large file")
+                    (:explicit "explicit structural page request")))
+          (format out "Total structural forms: ~D~%" total-structural-forms)
+          (when selected-node
+            (format out "Scope: selector id ~D (~D structural form~:P)~%"
+                    (sexed-node-id selected-node)
+                    scope-structural-forms))
+          (unless selected-node
+            (format out "Scope: whole file~%"))
+          (format out "Page: offset ~D, limit ~D, level ~D, include-atoms ~A~%"
+                  offset limit level (if include-atoms "true" "false"))
+          (format out "Items at this level: ~D; returned: ~D~%"
+                  item-count (length page))
+          (when diagnostics
+            (format out "Diagnostics:~%")
+            (dolist (diagnostic diagnostics)
+              (format out "  ~A at ~D: ~A~%"
+                      (getf diagnostic :kind)
+                      (getf diagnostic :position)
+                      (getf diagnostic :message))))
+          (when next-offset
+            (format out "Continue: call ~A with offset ~D, limit ~D, level ~D~@[ and the same selector~].~%"
+                    tool-name next-offset limit level selected-node))
+          (format out "Drill down: call ~A with selector {id: <id>} and level 1. Use full=true only when exact source text is required.~%"
+                  tool-name)
+          (terpri out)
+          (cond
+            (page
+             (dolist (node page)
+               (sexed-write-read-page-node out node text preview-chars)))
+            (t
+             (format out "No structural items matched this page. Try offset 1, a different level, or a narrower selector.~%"))))))))
+
+(defun sexed-read-text-with-safety (text &key source tool-name selector
+                                      (offset 1)
+                                      (limit *sexed-read-form-count-limit*)
+                                      (level 0)
+                                      include-atoms
+                                      full
+                                      paginate)
+  "Return TEXT unless structural safety pagination is needed or requested."
+  (cond
+    (full
+     (if selector
+         (sexed-form-text text selector)
+         text))
+    (t
+     (multiple-value-bind (nodes diagnostics)
+         (sexed-parse-text text)
+       (let* ((total-structural-forms (sexed-structural-form-count nodes))
+              (safety-p (> total-structural-forms
+                           *sexed-read-form-count-limit*)))
+         (if (or paginate safety-p)
+             (sexed-read-page-to-string
+              text nodes diagnostics
+              :source source
+              :tool-name tool-name
+              :selector selector
+              :offset offset
+              :limit limit
+              :level level
+              :include-atoms include-atoms
+              :reason (if safety-p :safety :explicit)
+              :total-structural-forms total-structural-forms)
+             text))))))
+
+(defun sexed-read-file-text-with-safety (path &rest options)
+  "Read PATH, returning exact text or a structural safety page."
+  (apply #'sexed-read-text-with-safety
+         (sexed-read-file-text path)
+         :source path
+         :tool-name "sexed_file_read"
+         options))
+
+(defun sexed-read-project-file-text-with-safety (project path &rest options)
+  "Read PROJECT/PATH, returning exact text or a structural safety page."
+  (apply #'sexed-read-text-with-safety
+         (project-read-file project path)
+         :source (format nil "~A/~A" project path)
+         :tool-name "sexed_project_read"
+         options))
 
 (defun sexed-ensure-balanced (text context)
   "Signal an error unless TEXT is structurally balanced."
@@ -1140,10 +1298,34 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   (multiple-value-bind (value present-p)
       (sexed-tool-arg-value args key)
     (cond
-      ((not present-p) default)
-      ((or (null value) (integerp value)) value)
+      ((not present-p) (values default nil))
+      ((or (null value) (integerp value)) (values value t))
       (t
        (error "Sexed tool argument :~A must be an integer, got ~S."
+              (tool-key-name key)
+              value)))))
+
+(defun sexed-tool-optional-boolean (args key default)
+  "Return optional boolean KEY from tool ARGS."
+  (multiple-value-bind (value present-p)
+      (sexed-tool-arg-value args key)
+    (cond
+      ((not present-p) (values default nil))
+      ((or (eq value t) (eq value nil)) (values value t))
+      ((stringp value)
+       (let ((trimmed (string-downcase
+                       (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                    value))))
+         (cond
+           ((string= trimmed "true") (values t t))
+           ((string= trimmed "false") (values nil t))
+           ((blank-string-p trimmed) (values default t))
+           (t
+            (error "Sexed tool argument :~A must be a boolean, got ~S."
+                   (tool-key-name key)
+                   value)))))
+      (t
+       (error "Sexed tool argument :~A must be a boolean, got ~S."
               (tool-key-name key)
               value)))))
 
@@ -1187,6 +1369,14 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
   "Return required :SELECTOR from tool ARGS."
   (sexed-tool-selector (sexed-tool-required-arg args :selector)))
 
+(defun sexed-tool-optional-selector (args)
+  "Return optional :SELECTOR from tool ARGS."
+  (multiple-value-bind (value present-p)
+      (sexed-tool-arg-value args :selector)
+    (if present-p
+        (values (sexed-tool-selector value) t)
+        (values nil nil))))
+
 (defun sexed-tool-options (args)
   "Return outline options from tool ARGS as keyword arguments."
   (let ((options nil))
@@ -1214,6 +1404,51 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
 (defun sexed-tool-count (args)
   "Return edit count from tool ARGS."
   (or (sexed-tool-optional-integer args :count 1) 1))
+
+(defun sexed-tool-positive-integer (value key)
+  "Return VALUE or signal if it is not a positive integer."
+  (unless (and (integerp value) (plusp value))
+    (error "Sexed tool argument :~A must be a positive integer, got ~S."
+           (tool-key-name key)
+           value))
+  value)
+
+(defun sexed-tool-nonnegative-integer (value key)
+  "Return VALUE or signal if it is not a non-negative integer."
+  (unless (and (integerp value) (not (minusp value)))
+    (error "Sexed tool argument :~A must be a non-negative integer, got ~S."
+           (tool-key-name key)
+           value))
+  value)
+
+(defun sexed-tool-read-options (args)
+  "Return keyword options for safety-paginated read tools."
+  (multiple-value-bind (selector selector-present-p)
+      (sexed-tool-optional-selector args)
+    (multiple-value-bind (offset offset-present-p)
+        (sexed-tool-optional-integer args :offset 1)
+      (multiple-value-bind (limit limit-present-p)
+          (sexed-tool-optional-integer args
+                                       :limit
+                                       *sexed-read-form-count-limit*)
+        (multiple-value-bind (level level-present-p)
+            (sexed-tool-optional-integer args :level 0)
+          (multiple-value-bind (include-atoms include-atoms-present-p)
+              (sexed-tool-optional-boolean args :include-atoms nil)
+            (multiple-value-bind (full full-present-p)
+                (sexed-tool-optional-boolean args :full nil)
+              (declare (ignore full-present-p))
+              (list :selector selector
+                    :offset (sexed-tool-positive-integer offset :offset)
+                    :limit (sexed-tool-positive-integer limit :limit)
+                    :level (sexed-tool-nonnegative-integer level :level)
+                    :include-atoms include-atoms
+                    :full full
+                    :paginate (or selector-present-p
+                                  offset-present-p
+                                  limit-present-p
+                                  level-present-p
+                                  include-atoms-present-p)))))))))
 
 (defun sexed-tool-list (value label)
   "Return VALUE as a list, accepting provider vectors."
@@ -1307,7 +1542,9 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
 
 (defun sexed-tool-file-read (args)
   "Read a sandbox-local Lisp source file."
-  (sexed-read-file-text (sexed-tool-required-string args :path)))
+  (apply #'sexed-read-file-text-with-safety
+         (sexed-tool-required-string args :path)
+         (sexed-tool-read-options args)))
 
 (defun sexed-tool-file-write (args)
   "Write a sandbox-local Lisp source file."
@@ -1372,8 +1609,10 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
 
 (defun sexed-tool-project-read (args)
   "Read PROJECT/PATH as Lisp source text."
-  (project-read-file (sexed-tool-required-string args :project)
-                     (sexed-tool-required-string args :path)))
+  (apply #'sexed-read-project-file-text-with-safety
+         (sexed-tool-required-string args :project)
+         (sexed-tool-required-string args :path)
+         (sexed-tool-read-options args)))
 
 (defun sexed-tool-project-write (args)
   "Write PROJECT/PATH as Lisp source text."

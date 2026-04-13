@@ -18,6 +18,20 @@
                           :if-does-not-exist :create)
     (write-string text stream)))
 
+(defun sexed-test-top-level-calls (count)
+  "Return COUNT simple top-level forms."
+  (with-output-to-string (out)
+    (dotimes (index count)
+      (format out "(item-~D)~%" index))))
+
+(defun sexed-test-wide-form (count)
+  "Return one top-level form with COUNT direct structural children."
+  (with-output-to-string (out)
+    (format out "(progn")
+    (dotimes (index count)
+      (format out "~%  (item-~D)" index))
+    (format out ")~%")))
+
 (defmacro with-sexed-tool-registry-restored (&body body)
   "Run BODY with tool registries restored afterwards."
   `(let ((tool-snapshot
@@ -204,6 +218,101 @@
     (is (string= "(defun foo () (list 1 2))"
                  (project-read-file "sexed" "source.lisp")))))
 
+(test sexed-read-tools-return-exact-text-for-ordinary-files
+  "Safety pagination does not change normal small-file reads."
+  (let* ((dir (sexed-test-directory))
+         (file (merge-pathnames "small.lisp" dir))
+         (*sandbox-root* (truename dir))
+         (text "(defun small () :ok)"))
+    (write-sexed-test-file file text)
+    (let ((clawmacs::*sexed-read-form-count-limit* 3))
+      (is (string= text
+                   (clawmacs::sexed-tool-file-read
+                    '(:path "small.lisp")))))))
+
+(test sexed-read-tools-page-structurally-large-files
+  "Large files return structural safety pages with continuation hints."
+  (let* ((dir (sexed-test-directory))
+         (file (merge-pathnames "large.lisp" dir))
+         (*sandbox-root* (truename dir))
+         (text (sexed-test-top-level-calls 5)))
+    (write-sexed-test-file file text)
+    (let ((clawmacs::*sexed-read-form-count-limit* 3))
+      (let ((first-page
+              (clawmacs::sexed-tool-file-read
+               '(:path "large.lisp"))))
+        (is (search "Sexed structural read page" first-page))
+        (is (search "Mode: safety fallback" first-page))
+        (is (search "Total structural forms: 5" first-page))
+        (is (search "Continue: call sexed_file_read with offset 4" first-page))
+        (is (search "item-0" first-page))
+        (is (search "item-2" first-page))
+        (is-false (search "item-4" first-page))
+        (is-false (string= text first-page)))
+      (let ((next-page
+              (clawmacs::sexed-tool-file-read
+               '(:path "large.lisp" :offset 4 :limit 2))))
+        (is (search "Page: offset 4, limit 2" next-page))
+        (is (search "item-3" next-page))
+        (is (search "item-4" next-page))
+        (is-false (search "item-0" next-page)))
+      (is (string= text
+                   (clawmacs::sexed-tool-file-read
+                    '(:path "large.lisp" :full t)))))))
+
+(test sexed-read-tools-page-inside-selected-forms
+  "Selector and level options let agents drill into giant structural forms."
+  (let* ((dir (sexed-test-directory))
+         (file (merge-pathnames "wide.lisp" dir))
+         (*sandbox-root* (truename dir))
+         (text (sexed-test-wide-form 5)))
+    (write-sexed-test-file file text)
+    (let ((clawmacs::*sexed-read-form-count-limit* 3))
+      (let ((top-page
+              (clawmacs::sexed-tool-file-read
+               '(:path "wide.lisp"))))
+        (is (search "Sexed structural read page" top-page))
+        (is (search "progn" top-page))
+        (is (search "Drill down: call sexed_file_read with selector" top-page)))
+      (let ((child-page
+              (clawmacs::sexed-tool-file-read
+               '(:path "wide.lisp"
+                 :selector ((:id . 0))
+                 :level 1
+                 :limit 2))))
+        (is (search "Scope: selector id 0" child-page))
+        (is (search "Page: offset 1, limit 2, level 1" child-page))
+        (is (search "item-0" child-page))
+        (is (search "item-1" child-page))
+        (is-false (search "item-3" child-page))
+        (is (search "and the same selector" child-page)))
+      (is (string= "(progn
+  (item-0)
+  (item-1)
+  (item-2)
+  (item-3)
+  (item-4))"
+                   (clawmacs::sexed-tool-file-read
+                    '(:path "wide.lisp"
+                      :selector ((:id . 0))
+                      :full t)))))))
+
+(test sexed-project-read-tools-share-safety-pagination
+  "Project reads use the same structural safety pagination as file reads."
+  (let* ((dir (sexed-test-directory))
+         (*project-registry* (make-hash-table :test #'equal))
+         (file (merge-pathnames "large.lisp" dir)))
+    (write-sexed-test-file file (sexed-test-top-level-calls 5))
+    (define-project "sexed-page" :root dir)
+    (let ((clawmacs::*sexed-read-form-count-limit* 3))
+      (let ((page
+              (clawmacs::sexed-tool-project-read
+               '(:project "sexed-page"
+                 :path "large.lisp"))))
+        (is (search "Sexed structural read page" page))
+        (is (search "Source: sexed-page/large.lisp" page))
+        (is (search "Continue: call sexed_project_read with offset 4" page))))))
+
 (test sexed-package-prompt-points-to-tools-not-lisp-eval
   "The package prompt advertises provider tools instead of function-call examples."
   (with-sexed-tool-registry-restored
@@ -241,6 +350,19 @@
                (tool-names (mapcar (lambda (tool)
                                      (cdr (assoc :name tool)))
                                    tools)))
+          (labels ((tool-properties (name)
+                     (let* ((tool (find name tools
+                                        :key (lambda (entry)
+                                               (cdr (assoc :name entry)))
+                                        :test #'string=))
+                            (schema (cdr (assoc :input--schema tool))))
+                       (cdr (assoc :properties schema)))))
+            (dolist (arg '("offset" "limit" "selector" "level"
+                           "include-atoms" "full"))
+              (is (assoc arg (tool-properties "sexed_file_read")
+                         :test #'string=))
+              (is (assoc arg (tool-properties "sexed_project_read")
+                         :test #'string=))))
           (is (member "sexed_project_outline" tool-names :test #'string=))
           (is (member "sexed_project_edit" tool-names :test #'string=))
           (is (member "sexed_project_edits" tool-names :test #'string=))
