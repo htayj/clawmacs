@@ -68,6 +68,7 @@
   (auto-approve-tools-p nil :type boolean)
   (max-tool-iterations *prompt-max-tool-iterations* :type integer)
   (skill-roots nil :type list)
+  (packages nil :type list)
   debug-log-path
   (isolated-p nil :type boolean)
   (inhibit-user-init-p nil :type boolean)
@@ -736,6 +737,7 @@ PROMPT-TOOL-EVENT for terminal/debug output."
                                  provider model think-level
                                  (max-tool-iterations *prompt-max-tool-iterations*)
                                  auto-approve-tools-p
+                                 package-names
                                  (tool-names nil tool-names-supplied-p)
                                  custom-tools)
   "Run PROMPT once without a UI and return a PROMPT-RUN-RESULT.
@@ -758,6 +760,9 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
          (final-think-level nil)
          (iterations 0))
     (maybe-apply-prompt-routing-overrides buf provider model think-level)
+    (when package-names
+      (setf (buffer-enabled-packages buf)
+            (normalize-package-name-list package-names)))
     (let ((*active-tool-names* effective-tool-names)
           (*temporary-tool-table* (or temporary-tool-table
                                       *temporary-tool-table*)))
@@ -4459,6 +4464,7 @@ Options:
   --json                    Emit a JSON result object to stdout.
   --auto-approve-tools      Allow permission-gated tools without an interactive prompt.
   --max-tool-iterations N   Stop after N tool-call turns (default: 20).
+  --package NAME            Enable an installed package for this prompt run. May repeat.
   --skill-root PATH         Add a skill root for this prompt run. May repeat.
   --debug-log PATH          Write low-level debug logs to PATH.
   --isolated                Use temporary prompt config/project/session dirs.
@@ -4573,6 +4579,13 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt."
                      (require-option-value arg remaining)
                    (setf (prompt-options-skill-roots options)
                          (append (prompt-options-skill-roots options)
+                                 (list value))
+                         remaining rest)))
+                ((string= arg "--package")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-packages options)
+                         (append (prompt-options-packages options)
                                  (list value))
                          remaining rest)))
                 ((string= arg "--debug-log")
@@ -4720,6 +4733,10 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt."
         :for index :from 1
         :do (format stream ";; tool ~D: ~A~%" index
                     (prompt-tool-event-name event))
+            (format stream "~A~%"
+                    (format-tool-call-sexpr
+                     (prompt-tool-event-name event)
+                     (prompt-tool-event-input event)))
             (format stream "~A~%~%" (prompt-tool-event-display event))))
 
 (defun write-prompt-tool-event-list (events stream)
@@ -4728,6 +4745,10 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt."
         :for index :from 1
         :do (format stream ";; partial tool ~D: ~A~%" index
                     (prompt-tool-event-name event))
+            (format stream "~A~%"
+                    (format-tool-call-sexpr
+                     (prompt-tool-event-name event)
+                     (prompt-tool-event-input event)))
             (format stream "~A~%~%" (prompt-tool-event-display event))))
 
 (defun write-prompt-reasoning (result stream)
@@ -4791,7 +4812,9 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
                    :max-tool-iterations
                    (prompt-options-max-tool-iterations options)
                    :auto-approve-tools-p
-                   (prompt-options-auto-approve-tools-p options))))
+                   (prompt-options-auto-approve-tools-p options)
+                   :package-names
+                   (prompt-options-packages options))))
             (write-prompt-run-result result options)))
         (uiop:quit 0))
       (prompt-run-error (e)

@@ -709,6 +709,8 @@ same
                     "--clean-build"
                     "--isolated"
                     "--json"
+                    "--package" "sexed"
+                    "--package" "lispi"
                     "--max-tool-iterations" "7"
                     "summarize" "this"))))
     (is (string= "writer" (clawmacs::prompt-options-agent-name options)))
@@ -720,6 +722,8 @@ same
     (is (clawmacs::prompt-options-show-metadata-p options))
     (is (clawmacs::prompt-options-json-p options))
     (is (clawmacs::prompt-options-isolated-p options))
+    (is (equal '("sexed" "lispi")
+               (clawmacs::prompt-options-packages options)))
     (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
     (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
 
@@ -751,6 +755,7 @@ same
   (let ((usage (clawmacs::prompt-usage-string)))
     (is (search "Default without --agent: openai-codex" usage))
     (is (search "Default without --agent: gpt-5.3-codex" usage))
+    (is (search "--package NAME" usage))
     (is (search "Skip ~/.clawmacs.d/init.lisp" usage))))
 
 (test compaction-threshold-policy

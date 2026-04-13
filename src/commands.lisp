@@ -82,11 +82,12 @@ or an agent keyword (e.g., :CODER) during agent tool dispatch.")
              tool-symbol arg-name arg-spec))
     (loop :for tail :on plist :by #'cddr
           :for key := (first tail)
-          :unless (member key '(:type :description :required) :test #'eq)
+          :unless (member key '(:type :description :required :items) :test #'eq)
             :do (error "Tool ~A argument spec for ~A has unsupported key ~S."
                        tool-symbol arg-name key))
     (list :name (tool-key-name arg-name)
           :type (normalize-agent-tool-schema-type (getf plist :type))
+          :items (getf plist :items)
           :description (or (getf plist :description) "")
           :required (if (member :required plist :test #'eq)
                         (not (null (getf plist :required)))
@@ -95,6 +96,8 @@ or an agent keyword (e.g., :CODER) during agent tool dispatch.")
 (defun agent-tool-arg-schema-property (arg)
   "Return the provider schema property for normalized ARG metadata."
   (let ((property `((:type . ,(getf arg :type)))))
+    (when (getf arg :items)
+      (setf property (append property `((:items . ,(getf arg :items))))))
     (if (agent-tool-blank-string-p (getf arg :description))
         property
         (append property

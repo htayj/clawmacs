@@ -592,6 +592,8 @@
    #:sexed-raise-form
    #:sexed-slurp-forward
    #:sexed-barf-forward
+   #:sexed-read-file-text
+   #:sexed-write-file-text
    #:sexed-file-outline-to-string
    #:sexed-file-form-text
    #:sexed-replace-file-form
@@ -605,6 +607,7 @@
    #:sexed-raise-file-form
    #:sexed-slurp-forward-file-form
    #:sexed-barf-forward-file-form
+   #:sexed-write-project-file-text
    #:sexed-project-outline-to-string
    #:sexed-project-form-text
    #:sexed-replace-project-form
@@ -618,53 +621,6 @@
    #:sexed-raise-project-form
    #:sexed-slurp-forward-project-form
    #:sexed-barf-forward-project-form
-   #:sexed-ensure-init-file
-   #:sexed-init-outline-to-string
-   #:sexed-init-form-text
-   #:sexed-replace-init-form
-   #:sexed-insert-before-init-form
-   #:sexed-insert-after-init-form
-   #:sexed-update-staged-project-file
-   #:sexed-stage-replace-project-form
-   #:sexed-stage-delete-project-form
-   #:sexed-stage-insert-before-project-form
-   #:sexed-stage-insert-after-project-form
-   #:sexed-stage-insert-project-form-before
-   #:sexed-stage-insert-project-form-after
-   #:sexed-stage-wrap-project-form
-   #:sexed-stage-splice-project-form
-   #:sexed-stage-raise-project-form
-   #:sexed-stage-slurp-forward-project-form
-   #:sexed-stage-barf-forward-project-form
-   #:sexed-stage-replace-init-form
-   #:sexed-stage-insert-before-init-form
-   #:sexed-stage-insert-after-init-form
-   #:sexed-replace-message-form
-   #:sexed-delete-message-form
-   #:sexed-insert-before-message-form
-   #:sexed-insert-after-message-form
-   #:sexed-insert-message-form-before
-   #:sexed-insert-message-form-after
-   #:sexed-wrap-message-form
-   #:sexed-splice-message-form
-   #:sexed-raise-message-form
-   #:sexed-slurp-forward-message-form
-   #:sexed-barf-forward-message-form
-   #:sexed-scratch-message
-   #:sexed-scratch-text
-   #:sexed-scratch-outline-to-string
-   #:sexed-scratch-form-text
-   #:sexed-replace-scratch-form
-   #:sexed-delete-scratch-form
-   #:sexed-insert-before-scratch-form
-   #:sexed-insert-after-scratch-form
-   #:sexed-insert-scratch-form-before
-   #:sexed-insert-scratch-form-after
-   #:sexed-wrap-scratch-form
-   #:sexed-splice-scratch-form
-   #:sexed-raise-scratch-form
-   #:sexed-slurp-forward-scratch-form
-   #:sexed-barf-forward-scratch-form
 
    ;; Approval
    #:buffer-approval-pending

@@ -82,6 +82,10 @@
     (is (string= "(defun bar () nil)"
                  (sexed-form-text text '(:head "defun" :nth 1))))
     (signals error
+      (sexed-form-text text '(:id 1)))
+    (is (string= "defun"
+                 (sexed-form-text text '(:id 1 :include-atoms t))))
+    (signals error
       (sexed-form-text text '(:head "defun")))))
 
 (test sexed-outline-is-agent-readable
@@ -90,6 +94,14 @@
                                           :max-depth 1)))
     (is (search "[0] d0 list defun foo" outline))
     (is (search "[4] d1 list list" outline))))
+
+(test sexed-outline-filter-miss-includes-top-level-fallback
+  "Filtered misses still give agents enough structure to choose a selector."
+  (let ((outline (sexed-outline-to-string "(defun foo () (list 1 2))"
+                                          :head "missing")))
+    (is (search "No forms matched for the supplied filters." outline))
+    (is (search "Unfiltered top-level forms:" outline))
+    (is (search "[0] d0 list defun foo" outline))))
 
 (test sexed-pure-edits-preserve-balance
   "Pure edit functions return modified text and reject unbalanced replacements."
@@ -119,7 +131,17 @@
                (sexed-insert-form-after
                 "(foo (bar) (baz))"
                 '(:head "bar")
-                "(quux)"))))
+                "(quux)")))
+  (is (string= (format nil "(defun a () 1)~%~%(defun b () 2)~%~%(defun c () 3)")
+               (sexed-insert-after-form
+                (format nil "(defun a () 1)~%~%(defun c () 3)")
+                '(:head "defun" :name "a")
+                (format nil "~%(defun b () 2)"))))
+  (is (string= (format nil "(defun a () 1)~%~%(defun b () 2)~%~%(defun c () 3)")
+               (sexed-insert-after-form
+                (format nil "(defun a () 1)~%~%(defun c () 3)")
+                '(:head "defun" :name "a")
+                "(defun b () 2)"))))
 
 (test sexed-structural-list-edits
   "Splice, raise, slurp, and barf operate on selected s-expression spans."
@@ -182,129 +204,6 @@
     (is (string= "(defun foo () (list 1 2))"
                  (project-read-file "sexed" "source.lisp")))))
 
-(test sexed-init-adapters-edit-config-init-resource
-  "Init-specific adapters route through the config project and verify cleanly."
-  (let* ((dir (sexed-test-directory))
-         (*project-registry* (make-hash-table :test #'equal))
-         (*change-set-registry* (make-hash-table :test #'equal))
-         (*current-change-set* nil)
-         (*change-set-counter* 0)
-         (clawmacs::*user-init-directory* dir)
-         (file (merge-pathnames "init.lisp" dir))
-         (initial "(defvar *prompt-sexed-probe* :before)"))
-    (write-sexed-test-file file initial)
-    (load-project-definitions)
-    (is (search "prompt-sexed-probe"
-                (sexed-init-outline-to-string :max-depth 2)))
-    (let ((result (sexed-replace-init-form
-                   '(:id 0)
-                   "(defvar *prompt-sexed-probe* :after)")))
-      (is (eq :ok (getf result :status)))
-      (is (string= "config" (getf result :project)))
-      (is (string= "init.lisp" (getf result :path))))
-    (is (string= "(defvar *prompt-sexed-probe* :after)"
-                 (project-read-file "config" "init.lisp")))
-    (let ((change-set (begin-change-set :name "init-stage")))
-      (sexed-stage-insert-after-init-form
-       '(:id 0)
-       "(setf *prompt-sexed-probe-edited* t)"
-       :change-set change-set)
-      (is (search "*prompt-sexed-probe-edited*"
-                  (change-set-project-file-text "config" "init.lisp" change-set)))
-      (is-false (search "*prompt-sexed-probe-edited*"
-                        (project-read-file "config" "init.lisp")))
-      (apply-change-set change-set)
-      (is (search "*prompt-sexed-probe-edited*"
-                  (project-read-file "config" "init.lisp"))))))
-
-(test sexed-staged-project-adapters-compose-before-apply
-  "Staged project adapters update change-set text without touching files."
-  (let* ((dir (sexed-test-directory))
-         (*project-registry* (make-hash-table :test #'equal))
-         (*change-set-registry* (make-hash-table :test #'equal))
-         (*current-change-set* nil)
-         (file (merge-pathnames "source.lisp" dir))
-         (initial "(defun foo () (+ 1 2))"))
-    (write-sexed-test-file file initial)
-    (define-project "staged-sexed" :root dir)
-    (let ((change-set (begin-change-set :name "sexed-stage")))
-      (let ((result (sexed-stage-replace-project-form
-                     "staged-sexed"
-                     "source.lisp"
-                     '(:head "+")
-                     "(list 1 2)"
-                     :change-set change-set)))
-        (is (eq :staged (getf result :status)))
-        (is (string= initial
-                     (project-read-file "staged-sexed" "source.lisp")))
-        (is (string= "(defun foo () (list 1 2))"
-                     (change-set-project-file-text "staged-sexed"
-                                                   "source.lisp"
-                                                   change-set))))
-      (sexed-stage-insert-after-project-form
-       "staged-sexed"
-       "source.lisp"
-       '(:head "defun" :name "foo")
-       "(defun bar () :ok)"
-       :change-set change-set)
-      (is (search "(defun bar () :ok)"
-                  (change-set-diff-to-string change-set)))
-      (apply-change-set change-set)
-      (is (search "(defun bar () :ok)"
-                  (project-read-file "staged-sexed" "source.lisp"))))))
-
-(test sexed-message-adapters-edit-editable-messages
-  "Message adapters update editable message text and reject read-only messages."
-  (let ((message (make-message :user))
-        (read-only (make-message :agent :read-only-p t)))
-    (clawmacs::set-message-text message "(note (list 1 2))")
-    (sexed-replace-message-form message '(:head "list") "(vector 1 2)")
-    (is (string= "(note (vector 1 2))" (message-text message)))
-    (sexed-insert-message-form-after message
-                                     '(:head "vector")
-                                     "(status ok)")
-    (is (string= "(note (vector 1 2) (status ok))" (message-text message)))
-    (signals error
-      (sexed-replace-message-form read-only '(:id 0) "(ok)"))))
-
-(test sexed-can-edit-scratch-buffer-text
-  "Scratch buffer text can be edited structurally through the message adapter."
-  (let ((*buffer-ring* nil)
-        (*scratch-buffer-initial-text* "(scratch (todo one))"))
-    (clawmacs::init-default-keymap)
-    (clawmacs::init-global-faces)
-    (let ((scratch (ensure-scratch-buffer)))
-      (sexed-replace-message-form (buffer-input-message scratch)
-                                  '(:head "todo")
-                                  "(done one)")
-      (is (string= "(scratch (done one))"
-                   (scratch-buffer-text scratch))))))
-
-(test sexed-scratch-adapters-hide-message-plumbing
-  "Scratch adapters let agents edit scratch text without touching message internals."
-  (let ((*buffer-ring* nil)
-        (*scratch-buffer-initial-text* ""))
-    (clawmacs::init-default-keymap)
-    (clawmacs::init-global-faces)
-    (ensure-scratch-buffer)
-    (setf (scratch-buffer-text)
-          "(workspace (todo alpha) (todo beta) (notes (keep old)))")
-    (is (search "todo beta"
-                (sexed-scratch-outline-to-string :head "todo")))
-    (let ((replace-result
-            (sexed-replace-scratch-form '(:head "todo" :nth 1)
-                                        "(done beta)")))
-      (is (eq :ok (getf replace-result :status)))
-      (is (search "(done beta)" (getf replace-result :final-text))))
-    (let ((insert-result
-            (sexed-insert-after-scratch-form
-             '(:head "done")
-             "(note \"sexed edited scratch\")")))
-      (is (eq :ok (getf insert-result :status)))
-      (is (string= "(workspace (todo alpha) (done beta) (note \"sexed edited scratch\") (notes (keep old)))"
-                   (scratch-buffer-text)))
-      (is-true (getf insert-result :balanced)))))
-
 (test sexed-package-prompt-points-to-tools-not-lisp-eval
   "The package prompt advertises provider tools instead of function-call examples."
   (with-sexed-tool-registry-restored
@@ -319,17 +218,18 @@
         (is-false (search "lisp_eval" prompt :test #'char-equal))
         (is-false (search "raw Lisp" prompt :test #'char-equal))
         (is-false (search "evaluate" prompt :test #'char-equal))
+        (is-false (search "change_set" prompt :test #'char-equal))
+        (is-false (search "init" prompt :test #'char-equal))
+        (is-false (search "scratch" prompt :test #'char-equal))
         (is-false (search "(sexed-" prompt :test #'char=))))))
 
 (test sexed-package-tools-edit-project-files
-  "Enabled sexed package tools expose project and staged edit adapters."
+  "Enabled sexed package tools expose disk-backed structural read and edit adapters."
   (with-sexed-tool-registry-restored
     (with-package-state-override ((default-package-test-channels))
       (let* ((dir (sexed-test-directory))
              (*project-registry* (make-hash-table :test #'equal))
-             (*change-set-registry* (make-hash-table :test #'equal))
-             (*current-change-set* nil)
-             (*change-set-counter* 0)
+             (*sandbox-root* (truename dir))
              (file (merge-pathnames "source.lisp" dir)))
         (write-sexed-test-file file "(defun foo () (+ 1 2))")
         (define-project "sexed-tool" :root dir)
@@ -343,7 +243,19 @@
                                    tools)))
           (is (member "sexed_project_outline" tool-names :test #'string=))
           (is (member "sexed_project_edit" tool-names :test #'string=))
-          (is (member "sexed_stage_project_edit" tool-names :test #'string=))
+          (is (member "sexed_project_edits" tool-names :test #'string=))
+          (is (member "sexed_project_read" tool-names :test #'string=))
+          (is (member "sexed_project_write" tool-names :test #'string=))
+          (is (member "sexed_file_read" tool-names :test #'string=))
+          (is (member "sexed_file_write" tool-names :test #'string=))
+          (is (member "sexed_file_edits" tool-names :test #'string=))
+          (is (member "sexed_text_edits" tool-names :test #'string=))
+          (is-false (member "sexed_stage_project_edit" tool-names
+                            :test #'string=))
+          (is-false (member "sexed_change_set_begin" tool-names
+                            :test #'string=))
+          (is-false (member "sexed_init_edit" tool-names :test #'string=))
+          (is-false (member "sexed_scratch_edit" tool-names :test #'string=))
           (is (member "sexed_text_diagnostics" tool-names :test #'string=))
           (let ((diagnostics
                   (clawmacs::lisp-data-read
@@ -352,12 +264,62 @@
             (is-false (getf diagnostics :balanced))
             (is (eq :missing-close-paren
                     (getf (first (getf diagnostics :diagnostics)) :kind))))
+          (is (string= "(defun foo () (vector 1 2))"
+                       (execute-tool
+                        "sexed_text_edit"
+                        '(:text "(defun foo () (+ 1 2))"
+                          :operation "replace"
+                          :selector (("head" . "+"))
+                          :new_text "(vector 1 2)"))))
+          (is (string= "(defun foo () (list 1 2))"
+                       (execute-tool
+                        "sexed_text_edit"
+                        '(:text "(defun foo () (+ 1 2))"
+                          :operation "replace"
+                          :selector (("head" . "+"))
+                          :new--text "(list 1 2)"))))
+          (is (string= "(defun foo () (array 1 2))"
+                       (execute-tool
+                        "sexed_text_edit"
+                        '(:text "(defun foo () (+ 1 2))"
+                          :operation "replace"
+                          :selector (("head" . "+"))
+                          :replacement "(array 1 2)"))))
+          (is (string= "(defun foo () (quote 1 2))"
+                       (execute-tool
+                        "sexed_text_edit"
+                        '(:text "(defun foo () (+ 1 2))"
+                          :operation "replace"
+                          :selector (("head" . "+"))
+                          :newtext "(quote 1 2)"))))
+          (is (search "defun foo"
+                      (execute-tool
+                       "sexed_text_outline"
+                       '(:text "(defun foo () (+ 1 2))"
+                         :head ""
+                         :max-depth 0))))
+          (let ((batch-result
+                  (clawmacs::lisp-data-read
+                   (execute-tool
+                    "sexed_text_edits"
+                    '(:text "(defun foo () (+ 1 2))"
+                      :edits (((:operation . "replace")
+                               (:selector . ((:head . "+")))
+                               (:newtext . "(list 1 2)"))))))))
+            (is (= 1 (getf batch-result :edits-applied)))
+            (is (string= "(defun foo () (list 1 2))"
+                         (getf batch-result :text))))
           (is (search "defun foo"
                       (execute-tool
                        "sexed_project_outline"
                        '(:project "sexed-tool"
                          :path "source.lisp"
-                         :head "defun"))))
+                        :head "defun"))))
+          (is (string= "(defun foo () (+ 1 2))"
+                       (execute-tool
+                        "sexed_project_read"
+                        '(:project "sexed-tool"
+                          :path "source.lisp"))))
           (let ((result
                   (clawmacs::lisp-data-read
                    (execute-tool
@@ -371,33 +333,52 @@
             (is-true (getf result :balanced)))
           (is (string= "(defun foo () (list 1 2))"
                        (project-read-file "sexed-tool" "source.lisp")))
-          (let* ((change-set
-                   (clawmacs::lisp-data-read
-                    (execute-tool "sexed_change_set_begin"
-                                  '(:name "sexed-stage"))))
-                 (change-set-id (getf change-set :id))
-                 (stage-result
-                   (clawmacs::lisp-data-read
-                    (execute-tool
-                     "sexed_stage_project_edit"
-                     `(:project "sexed-tool"
-                       :path "source.lisp"
-                       :operation "insert-after"
-                       :selector (("head" . "defun") ("name" . "foo"))
-                       :new-text "(defun bar () :ok)"
-                       :change-set ,change-set-id)))))
-            (is (eq :staged (getf stage-result :status)))
-            (is (search "(defun bar () :ok)"
-                        (execute-tool "sexed_change_set_diff"
-                                      `(:change-set ,change-set-id))))
-            (is-false (search "defun bar"
-                              (project-read-file "sexed-tool"
-                                                 "source.lisp")))
-            (let ((apply-result
-                    (clawmacs::lisp-data-read
-                     (execute-tool "sexed_change_set_apply"
-                                   `(:change-set ,change-set-id)))))
-              (is (eq :applied (getf apply-result :status))))
-            (is (search "defun bar"
-                        (project-read-file "sexed-tool"
-                                           "source.lisp")))))))))
+          (let ((write-result
+                  (clawmacs::lisp-data-read
+                   (execute-tool
+                    "sexed_project_write"
+                    '(:project "sexed-tool"
+                      :path "generated.lisp"
+                      :content "(defun generated () :ok)")))))
+            (is (eq :ok (getf write-result :status)))
+            (is-true (getf write-result :balanced)))
+          (is (string= "(defun generated () :ok)"
+                       (project-read-file "sexed-tool" "generated.lisp")))
+          (let ((project-batch-result
+                  (clawmacs::lisp-data-read
+                   (execute-tool
+                    "sexed_project_edits"
+                    '(:project "sexed-tool"
+                      :path "generated.lisp"
+                      :edits (((:operation . "replace")
+                               (:selector . ((:head . "defun")
+                                             (:name . "generated")))
+                               (:newtext . "(defun generated () :batch)"))))))))
+            (is (eq :ok (getf project-batch-result :status)))
+            (is (= 1 (getf project-batch-result :edits-applied)))
+            (is-true (getf project-batch-result :balanced)))
+          (is (string= "(defun generated () :batch)"
+                       (project-read-file "sexed-tool" "generated.lisp")))
+          (let ((file-write-result
+                  (clawmacs::lisp-data-read
+                   (execute-tool
+                    "sexed_file_write"
+                    '(:path "local.lisp"
+                      :content "(defun local () :ok)")))))
+            (is (eq :ok (getf file-write-result :status)))
+            (is-true (getf file-write-result :balanced)))
+          (let ((file-batch-result
+                  (clawmacs::lisp-data-read
+                   (execute-tool
+                    "sexed_file_edits"
+                    '(:path "local.lisp"
+                      :edits (((:operation . "replace")
+                               (:selector . ((:head . "defun")
+                                             (:name . "local")))
+                               (:newtext . "(defun local () :batch)"))))))))
+            (is (eq :ok (getf file-batch-result :status)))
+            (is (= 1 (getf file-batch-result :edits-applied)))
+            (is-true (getf file-batch-result :balanced)))
+          (is (string= "(defun local () :batch)"
+                       (execute-tool "sexed_file_read"
+                                     '(:path "local.lisp")))))))))
