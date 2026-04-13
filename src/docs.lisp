@@ -983,9 +983,9 @@ documentation in *extended-docs*."
 
 (defdoc defcommand
   :category "command"
-  :usage "(defcommand NAME (&key KEYS PROMPTS) DOCSTRING (BUFFER &rest REQUIRED-ARGS) &body BODY)"
-  :returns "symbol — The command name."
-  :side-effects "Registers an M-x command in *command-table*, defines a generic function, and defines the primary method. PROMPTS supplies minibuffer readers for non-buffer arguments."
+  :usage "(defun NAME (BUFFER &rest REQUIRED-ARGS) DOCSTRING ...) then (defcommand NAME :keys (...) :prompts (...))"
+  :returns "command-metadata — Metadata for the registered command."
+  :side-effects "Registers an existing function as an M-x command in *command-table*. PROMPTS supplies minibuffer readers for non-buffer arguments."
   :see-also (*command-table* command-metadata list-available-commands deftool defdoc))
 
 (defdoc list-available-commands
@@ -1025,7 +1025,7 @@ documentation in *extended-docs*."
   :category "tool"
   :usage "(deftool SYMBOL :name \"provider_name\" :description \"...\" :args ((arg :type \"string\")))"
   :returns "agent-tool-metadata — Metadata for the registered provider-callable tool."
-  :side-effects "Registers explicit agent tool metadata, including tool permission, and syncs the provider tool table when available. If SYMBOL is a registered command, command call style is inferred and the current tool buffer is supplied automatically."
+  :side-effects "Registers an existing function as an agent tool, including tool permission, and syncs the provider tool table when available. If SYMBOL is a registered command, command call style is inferred and the current tool buffer is supplied automatically."
   :see-also (register-agent-tool-metadata defcommand execute-tool))
 
 (defdoc extended-doc

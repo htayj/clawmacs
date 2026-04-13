@@ -339,9 +339,8 @@ Returns values COMPACTED-P, ESTIMATE, and THRESHOLD."
             (values nil estimate threshold)))
         (values nil estimate threshold))))
 
-(defcommand compact-buffer-command ()
+(defun compact-buffer-command (buffer)
   "Compact the current chat buffer now."
-  (buffer)
   (cond
     ((document-buffer-p buffer)
      (buffer-insert-system-message
@@ -359,6 +358,7 @@ Returns values COMPACTED-P, ESTIMATE, and THRESHOLD."
                   (if threshold
                       (format nil "/~D threshold" threshold)
                       ""))))))))
+(defcommand compact-buffer-command)
 
 (unless *compaction-function*
   (setf *compaction-function* #'default-compact-buffer))

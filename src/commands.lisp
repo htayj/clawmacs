@@ -245,8 +245,14 @@ or an agent keyword (e.g., :CODER) during agent tool dispatch.")
              *agent-tool-metadata-table*)
     (sort metadata #'string< :key #'agent-tool-metadata-name)))
 
+(defun ensure-agent-tool-function-defined (symbol)
+  "Signal an error unless SYMBOL names a callable tool function."
+  (unless (fboundp symbol)
+    (error "deftool ~A requires a separately defined function." symbol))
+  symbol)
+
 (defmacro deftool (symbol &rest tool-spec)
-  "Register SYMBOL as a provider-callable agent tool.
+  "Register an existing function SYMBOL as a provider-callable agent tool.
 
 When SYMBOL names a registered command, command call style is inferred: provider
 arguments map to the command's non-BUFFER parameters, and the current tool
@@ -259,6 +265,7 @@ buffer is supplied automatically during execution."
     (error "deftool ~A metadata has an odd plist: ~S." symbol tool-spec))
   (let ((metadata-var (gensym "COMMAND-METADATA")))
     `(let ((,metadata-var (gethash ',symbol *command-table*)))
+       (ensure-agent-tool-function-defined ',symbol)
        (register-agent-tool-metadata
         ',symbol ',tool-spec
         :command-p (not (null ,metadata-var))
@@ -278,6 +285,27 @@ buffer is supplied automatically during execution."
     (member symbol '(&optional &rest &body &key &allow-other-keys
                      &aux &whole &environment)
             :test #'eq))
+
+  (defun function-lambda-list (symbol)
+    "Return SYMBOL's runtime function lambda list, or NIL when unavailable."
+    (handler-case
+        (let ((fn (fdefinition symbol)))
+          (cond
+            ((typep fn 'generic-function)
+             #+sbcl (sb-mop:generic-function-lambda-list fn)
+             #-sbcl nil)
+            (t
+             #+sbcl (sb-introspect:function-lambda-list symbol)
+             #-sbcl nil)))
+      (error () nil)))
+
+  (defun command-function-lambda-list (name)
+    "Return NAME's function lambda list or signal a defcommand error."
+    (unless (fboundp name)
+      (error "defcommand ~A requires a separately defined function." name))
+    (or (function-lambda-list name)
+        (error "defcommand ~A could not determine the function lambda list."
+               name)))
 
   (defun validate-command-lambda-list (name lambda-list)
     "Validate that LAMBDA-LIST is a defcommand-compatible required arg list."
@@ -384,47 +412,48 @@ buffer is supplied automatically during execution."
 ;;; defcommand Macro
 ;;; --------------------------------------------------------------------------
 
-(defmacro defcommand (name (&key (keys nil)
-                                 (prompts nil prompts-supplied-p))
-                      docstring lambda-list &body body)
-  "Define an interactive command as a generic function.
-
-Expands to:
-1. Registration of command metadata in *command-table*
-2. A generic function definition
-3. A primary method with BODY
-
-Example:
-  (defcommand send-message (:keys ((#\\Return)))
-    \"Send the current input.\"
-    (buffer)
-    (buffer-finalize-input buffer))"
-  (let* ((lambda-list (validate-command-lambda-list name lambda-list))
+(defun register-command-metadata (name &key keys
+                                            (prompts nil prompts-supplied-p)
+                                            docstring)
+  "Register existing function NAME as a user command."
+  (let* ((lambda-list
+           (validate-command-lambda-list
+            name (command-function-lambda-list name)))
          (prompts
            (normalize-command-prompts name lambda-list
                                       prompts prompts-supplied-p))
-         (buffer-var (first lambda-list))
-         (other-args (rest lambda-list))
-         (meta-var (gensym "META")))
-    `(progn
-       ;; Register metadata
-       (let ((,meta-var (make-command-metadata
-                         :name ',name
-                         :docstring ,docstring
-                         :keybindings ',keys
-                         :lambda-list ',lambda-list
-                         :prompts ',prompts)))
-         (setf (gethash ',name *command-table*) ,meta-var))
+         (metadata (make-command-metadata
+                    :name name
+                    :docstring (or docstring
+                                   (documentation name 'function)
+                                   "")
+                    :keybindings keys
+                    :lambda-list lambda-list
+                    :prompts prompts)))
+    (setf (gethash name *command-table*) metadata)
+    metadata))
 
-       ;; Define the generic function (idempotent in CLOS)
-       (defgeneric ,name ,lambda-list
-         (:documentation ,docstring))
+(defmacro defcommand (name &rest command-spec)
+  "Register existing function NAME as an interactive command.
 
-       ;; Define the primary method
-       (defmethod ,name ((,buffer-var buffer) ,@other-args)
-         ,@body)
-
-       ',name)))
+Example:
+  (defun send-message (buffer)
+    \"Send the current input.\"
+    ...)
+  (defcommand send-message :keys (#\\Return))"
+  (unless (symbolp name)
+    (error "defcommand requires a symbol name, got ~S." name))
+  (unless (evenp (length command-spec))
+    (error "defcommand ~A metadata has an odd plist: ~S."
+           name command-spec))
+  (loop :for tail :on command-spec :by #'cddr
+        :for key := (first tail)
+        :unless (member key '(:keys :prompts :docstring) :test #'eq)
+          :do (error "defcommand ~A has unsupported key ~S." name key))
+  `(register-command-metadata
+    ',name
+    ,@(loop :for (key value) :on command-spec :by #'cddr
+            :append (list key `',value))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Extended Documentation System

@@ -16,11 +16,11 @@
 (test command-metadata-registration
   "defcommand registers metadata in the command table."
   (let ((*command-table* (make-hash-table :test #'eq)))
-    (eval '(clawmacs:defcommand test-cmd ()
+    (eval '(defun test-cmd (buffer)
              "A test command."
-             (buffer)
              (declare (ignore buffer))
              :test-result))
+    (eval '(clawmacs:defcommand test-cmd))
     (let ((meta (gethash 'test-cmd *command-table*)))
       (is (not (null meta)))
       (is (string= "A test command." (command-metadata-docstring meta))))))
@@ -28,13 +28,13 @@
 (test command-metadata-captures-lambda-list-and-prompts
   "defcommand stores the command lambda list and prompt metadata."
   (let ((*command-table* (make-hash-table :test #'eq)))
-    (eval '(clawmacs:defcommand prompted-cmd
-               (:prompts ((count :prompt "Count" :reader parse-integer)
-                          (label :prompt "Label")))
+    (eval '(defun prompted-cmd (buffer count label)
              "Prompted command."
-             (buffer count label)
              (declare (ignore buffer count label))
              :ok))
+    (eval '(clawmacs:defcommand prompted-cmd
+             :prompts ((count :prompt "Count" :reader parse-integer)
+                       (label :prompt "Label"))))
     (let ((meta (gethash 'prompted-cmd *command-table*)))
       (is (equal '(buffer count label)
                  (command-metadata-lambda-list meta)))
@@ -101,18 +101,29 @@
                :description "Second tool."
                :args ((value :type "string")))))))
 
+(test deftool-rejects-undefined-functions
+  "deftool tags a separately defined function."
+  (with-agent-tool-state ()
+    (when (fboundp 'missing-doc-tool)
+      (fmakunbound 'missing-doc-tool))
+    (signals error
+      (eval '(clawmacs:deftool missing-doc-tool
+               :name "missing_doc_tool"
+               :description "Missing function."
+               :args ((value :type "string")))))))
+
 (test deftool-command-uses-current-buffer
   "deftool infers command call style and supplies the active buffer."
   (with-agent-tool-state ()
     (let ((*command-table* (make-hash-table :test #'eq))
           (*command-tool-test-log* nil))
-      (eval '(clawmacs:defcommand command-tool-test
-                 (:prompts ((label :prompt "Label")))
+      (eval '(defun command-tool-test (buffer label)
                "Run a command as an agent tool."
-               (buffer label)
                (setf clawmacs/tests::*command-tool-test-log*
                      (list (buffer-name buffer) label))
                (format nil "command=~A" label)))
+      (eval '(clawmacs:defcommand command-tool-test
+               :prompts ((label :prompt "Label"))))
       (eval '(clawmacs:deftool command-tool-test
                :name "command_tool_test"
                :description "Run a command as an agent tool."
@@ -145,42 +156,39 @@
   (signals error
     (macroexpand-1
      '(clawmacs:defcommand old-command-tool
-          (:tool (:name "old_command_tool"
-                  :args ((label :type "string"))))
-        "Old command tool."
-        (buffer label)
-        (declare (ignore buffer label))
-        nil))))
+        :tool (:name "old_command_tool"
+               :args ((label :type "string")))))))
 
 (test defcommand-rejects-permission-keyword
   "Command permissions belong in deftool metadata, not defcommand."
   (signals error
     (macroexpand-1
      '(clawmacs:defcommand permission-command
-          (:permission :agent-allowed)
-        "Old permission metadata."
-        (buffer)
-        (declare (ignore buffer))
-        nil))))
+        :permission :agent-allowed))))
 
 (test defcommand-rejects-interactive-keyword
   "Prompt metadata belongs under :PROMPTS, not :INTERACTIVE."
   (signals error
     (macroexpand-1
      '(clawmacs:defcommand interactive-command
-          (:interactive nil)
-        "Old interactive metadata."
-        (buffer)
-        (declare (ignore buffer))
-        nil))))
+        :interactive nil))))
+
+(test defcommand-rejects-undefined-functions
+  "defcommand tags a separately defined function."
+  (when (fboundp 'missing-command)
+    (fmakunbound 'missing-command))
+  (signals error
+    (eval '(clawmacs:defcommand missing-command))))
 
 (test list-available-commands-returns-registered-commands
   "list-available-commands returns registered commands for every caller."
   (let ((*command-table* (make-hash-table :test #'eq)))
-    (eval '(clawmacs:defcommand first-cmd ()
-             "First." (buffer) (declare (ignore buffer)) nil))
-    (eval '(clawmacs:defcommand second-cmd ()
-             "Second." (buffer) (declare (ignore buffer)) nil))
+    (eval '(defun first-cmd (buffer)
+             "First." (declare (ignore buffer)) nil))
+    (eval '(defun second-cmd (buffer)
+             "Second." (declare (ignore buffer)) nil))
+    (eval '(clawmacs:defcommand first-cmd))
+    (eval '(clawmacs:defcommand second-cmd))
     (let ((*current-caller* :user))
       (let ((cmds (list-available-commands)))
         (is (member 'first-cmd cmds))
@@ -193,43 +201,41 @@
 (test list-available-commands-includes-prompted-commands
   "All defcommand forms are UI commands."
   (let ((*command-table* (make-hash-table :test #'eq)))
-    (eval '(clawmacs:defcommand zero-arg-cmd ()
-             "Default command." (buffer) (declare (ignore buffer)) :ok))
+    (eval '(defun zero-arg-cmd (buffer)
+             "Default command." (declare (ignore buffer)) :ok))
+    (eval '(defun listed-prompted-cmd (buffer count)
+             "Prompted command." (declare (ignore buffer count)) :ok))
+    (eval '(clawmacs:defcommand zero-arg-cmd))
     (eval '(clawmacs:defcommand listed-prompted-cmd
-               (:prompts ((count :prompt "Count" :reader parse-integer)))
-             "Prompted command." (buffer count)
-             (declare (ignore buffer count)) :ok))
+             :prompts ((count :prompt "Count" :reader parse-integer))))
     (let ((cmds (list-available-commands)))
       (is (member 'zero-arg-cmd cmds))
       (is (member 'listed-prompted-cmd cmds)))))
 
 (test defcommand-rejects-unsupported-lambda-lists
-  "Interactive commands must use required positional arguments only."
+  "Commands must use required positional arguments only."
+  (eval '(defun unsupported-cmd (buffer &optional count)
+           "Bad lambda list."
+           (declare (ignore buffer count))
+           nil))
   (signals error
-    (macroexpand-1
-     '(clawmacs:defcommand unsupported-cmd ()
-       "Bad lambda list."
-       (buffer &optional count)
-       (declare (ignore buffer count))
-       nil))))
+    (eval '(clawmacs:defcommand unsupported-cmd))))
 
 (test defcommand-rejects-missing-prompts-for-arguments
   "Commands with non-buffer arguments must declare minibuffer prompts."
+  (eval '(defun missing-prompts-cmd (buffer count)
+           "Missing prompts."
+           (declare (ignore buffer count))
+           nil))
   (signals error
-    (macroexpand-1
-     '(clawmacs:defcommand missing-prompts-cmd ()
-        "Missing prompts."
-        (buffer count)
-        (declare (ignore buffer count))
-        nil))))
+    (eval '(clawmacs:defcommand missing-prompts-cmd))))
 
 (test defcommand-rejects-prompt-arg-mismatches
   "Prompt specs must line up with the command parameters."
+  (eval '(defun mismatched-cmd (buffer count label)
+           "Mismatched."
+           (declare (ignore buffer count label))
+           nil))
   (signals error
-    (macroexpand-1
-     '(clawmacs:defcommand mismatched-cmd
-          (:prompts ((count :prompt "Count" :reader parse-integer)))
-        "Mismatched."
-        (buffer count label)
-        (declare (ignore buffer count label))
-        nil))))
+    (eval '(clawmacs:defcommand mismatched-cmd
+             :prompts ((count :prompt "Count" :reader parse-integer))))))

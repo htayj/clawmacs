@@ -4,19 +4,19 @@
 (defvar *mx-test-command-log* nil
   "Records command invocations during buffer tests.")
 
-(clawmacs:defcommand mx-test-noarg-command ()
+(defun mx-test-noarg-command (buffer)
   "Test command used to verify M-x invocation without arguments."
-  (buffer)
   (declare (ignore buffer))
   (setf *mx-test-command-log* '(:noarg)))
+(clawmacs:defcommand mx-test-noarg-command)
 
-(clawmacs:defcommand mx-test-arg-command
-    (:prompts ((count :prompt "Count" :reader parse-integer)
-               (label :prompt "Label")))
+(defun mx-test-arg-command (buffer count label)
   "Test command used to verify M-x argument prompting."
-  (buffer count label)
   (declare (ignore buffer))
   (setf *mx-test-command-log* (list :args count label)))
+(clawmacs:defcommand mx-test-arg-command
+  :prompts ((count :prompt "Count" :reader parse-integer)
+            (label :prompt "Label")))
 
 (defmacro with-interactive-command-test-buffer ((buffer-var) &body body)
   `(let ((*buffer-ring* nil)

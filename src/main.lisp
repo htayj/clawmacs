@@ -1051,9 +1051,8 @@ If so, call the handler and return T. Otherwise return NIL."
 ;;; Commands
 ;;; --------------------------------------------------------------------------
 
-(defcommand send-message (:keys (#\Return))
+(defun send-message (buffer)
   "Send the current input message to the agent."
-  (buffer)
   (if (document-buffer-p buffer)
       (insert-newline-command buffer)
       (let ((input-text (message-text (buffer-input-message buffer))))
@@ -1068,90 +1067,91 @@ If so, call the handler and return T. Otherwise return NIL."
           ;; Check for prefix commands before sending to the LLM
           (unless (process-prefix-command buffer input-text)
             (send-to-agent-with-context buffer))))))
+(defcommand send-message :keys (#\Return))
 
-(defcommand insert-newline-command (:keys (#\Linefeed))
+(defun insert-newline-command (buffer)
   "Insert a newline in the input message."
-  (buffer)
   (message-insert-newline (buffer-input-message buffer))
   (mark-buffer-dirty buffer))
+(defcommand insert-newline-command :keys (#\Linefeed))
 
-(defcommand beginning-of-line-command ()
+(defun beginning-of-line-command (buffer)
   "Move point to the beginning of the current line."
-  (buffer)
   (message-move-beginning-of-line (buffer-input-message buffer)))
+(defcommand beginning-of-line-command)
 
-(defcommand end-of-line-command ()
+(defun end-of-line-command (buffer)
   "Move point to the end of the current line."
-  (buffer)
   (message-move-end-of-line (buffer-input-message buffer)))
+(defcommand end-of-line-command)
 
-(defcommand kill-line-command ()
+(defun kill-line-command (buffer)
   "Kill from point to the end of the line."
-  (buffer)
   (message-kill-line (buffer-input-message buffer))
   (mark-buffer-dirty buffer))
+(defcommand kill-line-command)
 
-(defcommand yank-command ()
+(defun yank-command (buffer)
   "Yank the top of the kill ring at point."
-  (buffer)
   (message-yank (buffer-input-message buffer))
   (mark-buffer-dirty buffer))
+(defcommand yank-command)
 
-(defcommand delete-char-backward-command ()
+(defun delete-char-backward-command (buffer)
   "Delete the character before point."
-  (buffer)
   (message-delete-char-backward (buffer-input-message buffer))
   (mark-buffer-dirty buffer))
+(defcommand delete-char-backward-command)
 
-(defcommand delete-char-forward-command ()
+(defun delete-char-forward-command (buffer)
   "Delete the character after point."
-  (buffer)
   (message-delete-char-forward (buffer-input-message buffer))
   (mark-buffer-dirty buffer))
+(defcommand delete-char-forward-command)
 
-(defcommand forward-char-command ()
+(defun forward-char-command (buffer)
   "Move point one character forward."
-  (buffer)
   (message-forward-char (buffer-input-message buffer)))
+(defcommand forward-char-command)
 
-(defcommand backward-char-command ()
+(defun backward-char-command (buffer)
   "Move point one character backward."
-  (buffer)
   (message-backward-char (buffer-input-message buffer)))
+(defcommand backward-char-command)
 
-(defcommand forward-word-command ()
+(defun forward-word-command (buffer)
   "Move point forward to end of next word."
-  (buffer)
   (message-forward-word (buffer-input-message buffer)))
+(defcommand forward-word-command)
 
-(defcommand backward-word-command ()
+(defun backward-word-command (buffer)
   "Move point backward to beginning of previous word."
-  (buffer)
   (message-backward-word (buffer-input-message buffer)))
+(defcommand backward-word-command)
 
-(defcommand kill-backward-line-command ()
+(defun kill-backward-line-command (buffer)
   "Kill from start of line to point."
-  (buffer)
   (message-kill-backward-line (buffer-input-message buffer))
   (mark-buffer-dirty buffer))
+(defcommand kill-backward-line-command)
 
-(defcommand kill-word-command ()
+(defun kill-word-command (buffer)
   "Kill from point to end of current word."
-  (buffer)
   (message-kill-word (buffer-input-message buffer))
   (mark-buffer-dirty buffer))
+(defcommand kill-word-command)
 
-(defcommand backward-kill-word-command ()
+(defun backward-kill-word-command (buffer)
   "Kill from beginning of current word to point."
-  (buffer)
   (message-backward-kill-word (buffer-input-message buffer))
   (mark-buffer-dirty buffer))
+(defcommand backward-kill-word-command)
 
-(defcommand yank-pop-command ()
+(defun yank-pop-command (buffer)
   "Replace just-yanked text with next kill ring entry."
-  (buffer)
   (message-yank-pop (buffer-input-message buffer))
   (mark-buffer-dirty buffer))
+(defcommand yank-pop-command)
 
 (defun message-insert-string (msg text)
   "Insert TEXT at point in MSG."
@@ -1161,21 +1161,21 @@ If so, call the handler and return T. Otherwise return NIL."
                 (message-insert-char msg char)))
   msg)
 
-(defcommand yank-previous-command-first-arg-command ()
+(defun yank-previous-command-first-arg-command (buffer)
   "Insert the first argument of the previous user command."
-  (buffer)
   (let ((arg (buffer-previous-command-first-argument buffer)))
     (when arg
       (message-insert-string (buffer-input-message buffer) arg)
       (mark-buffer-dirty buffer))))
+(defcommand yank-previous-command-first-arg-command)
 
-(defcommand yank-previous-command-last-arg-command ()
+(defun yank-previous-command-last-arg-command (buffer)
   "Insert the last argument of the previous user command."
-  (buffer)
   (let ((arg (buffer-previous-command-last-argument buffer)))
     (when arg
       (message-insert-string (buffer-input-message buffer) arg)
       (mark-buffer-dirty buffer))))
+(defcommand yank-previous-command-last-arg-command)
 
 (defun self-insert-command (buffer)
   "Insert a character at point. The character is passed via *self-insert-char*."
@@ -1190,27 +1190,26 @@ If so, call the handler and return T. Otherwise return NIL."
 (defvar *scroll-page-size* nil
   "Number of rows to scroll per page. Set by the event loop based on window height.")
 
-(defcommand scroll-up-command ()
+(defun scroll-up-command (buffer)
   "Scroll history up (back) by one page."
-  (buffer)
   (when *scroll-page-size*
     (incf (buffer-scroll-offset buffer) *scroll-page-size*)))
+(defcommand scroll-up-command)
 
-(defcommand scroll-down-command ()
+(defun scroll-down-command (buffer)
   "Scroll history down (forward) by one page."
-  (buffer)
   (when *scroll-page-size*
     (decf (buffer-scroll-offset buffer) *scroll-page-size*)
     (when (minusp (buffer-scroll-offset buffer))
       (setf (buffer-scroll-offset buffer) 0))))
+(defcommand scroll-down-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; OpenAI Codex OAuth Command
 ;;; --------------------------------------------------------------------------
 
-(defcommand openai-codex-oauth-command ()
+(defun openai-codex-oauth-command (buffer)
   "Start the OpenAI Codex OAuth login flow using a localhost browser callback."
-  (buffer)
   (handler-case
       (progn
         (when *openai-oauth-pending*
@@ -1231,18 +1230,19 @@ If so, call the handler and return T. Otherwise return NIL."
       (let ((sys-msg (buffer-insert-agent-message
                       buffer (format nil "[OAuth error: ~A]" e))))
         (setf (message-sender sys-msg) :system)))))
+(defcommand openai-codex-oauth-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Management Commands
 ;;; --------------------------------------------------------------------------
 
-(defcommand list-buffers-command ()
+(defun list-buffers-command (buffer)
   "Open the buffer selector to switch between agent sessions."
-  (buffer)
   (declare (ignore buffer))
   (setf *buffer-selector-active* t
         *buffer-selector-index* 0
         *buffer-selector-scroll* 0))
+(defcommand list-buffers-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Project Commands
@@ -1318,9 +1318,8 @@ If so, call the handler and return T. Otherwise return NIL."
   (and (buffer-project-name buffer)
        (find-project (buffer-project-name buffer))))
 
-(defcommand minibuffer-select-project-command ()
+(defun minibuffer-select-project-command (buffer)
   "Select the active project for the current buffer."
-  (buffer)
   (if (file-buffer-p buffer)
       (buffer-insert-system-message
        buffer
@@ -1329,15 +1328,15 @@ If so, call the handler and return T. Otherwise return NIL."
        buffer
        "Select Project"
        (lambda (project)
-         (setf (buffer-project-name buffer) (project-name project)
-               (buffer-working-directory buffer) (project-root project))
-         (buffer-insert-system-message
-          buffer
-          (format nil "[Project changed to ~A]" (project-name project)))))))
+        (setf (buffer-project-name buffer) (project-name project)
+              (buffer-working-directory buffer) (project-root project))
+        (buffer-insert-system-message
+         buffer
+         (format nil "[Project changed to ~A]" (project-name project)))))))
+(defcommand minibuffer-select-project-command)
 
-(defcommand open-project-file-command ()
+(defun open-project-file-command (buffer)
   "Open a file from the current or selected project."
-  (buffer)
   (let ((project (current-buffer-project buffer)))
     (if project
         (minibuffer-open-project-file buffer project)
@@ -1346,10 +1345,10 @@ If so, call the handler and return T. Otherwise return NIL."
                                    (lambda (selected-project)
                                      (minibuffer-open-project-file
                                       buffer selected-project))))))
+(defcommand open-project-file-command)
 
-(defcommand create-project-file-command ()
+(defun create-project-file-command (buffer)
   "Create and open a new file in a selected project."
-  (buffer)
   (minibuffer-choose-project
    buffer
    "Select Project"
@@ -1365,10 +1364,10 @@ If so, call the handler and return T. Otherwise return NIL."
             (buffer-insert-system-message
              buffer
              (format nil "[Create project file failed: ~A]" e)))))))))
+(defcommand create-project-file-command)
 
-(defcommand search-project-command ()
+(defun search-project-command (buffer)
   "Search a selected project and insert the result list."
-  (buffer)
   (minibuffer-choose-project
    buffer
    "Select Project"
@@ -1384,6 +1383,7 @@ If so, call the handler and return T. Otherwise return NIL."
             (buffer-insert-system-message
              buffer
              (format nil "[Search project failed: ~A]" e)))))))))
+(defcommand search-project-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Skill Commands
@@ -1714,9 +1714,8 @@ Returns true when KEY was consumed by completion."
        t)
       (t nil))))
 
-(defcommand minibuffer-insert-skill-command ()
+(defun minibuffer-insert-skill-command (buffer)
   "Select a skill and insert an exact $skill mention into the input."
-  (buffer)
   (let ((items (skill-selector-items)))
     (if items
         (minibuffer-activate
@@ -1727,10 +1726,10 @@ Returns true when KEY was consumed by completion."
             (skill-mention-text (getf item :skill)))
            (mark-buffer-dirty buffer)))
         (buffer-insert-system-message buffer "[No enabled skills available.]"))))
+(defcommand minibuffer-insert-skill-command)
 
-(defcommand minibuffer-toggle-skill-command ()
+(defun minibuffer-toggle-skill-command (buffer)
   "Select a skill and toggle whether it is enabled."
-  (buffer)
   (let ((items (skill-selector-items :include-disabled t
                                      :include-enabled-marker t)))
     (if items
@@ -1748,14 +1747,14 @@ Returns true when KEY was consumed by completion."
                             (skill-name skill)
                             (if enabled-p "enabled" "disabled"))))
                (error (e)
-                 (buffer-insert-system-message
-                  buffer
-                  (format nil "[Skill toggle failed: ~A]" e)))))))
+                  (buffer-insert-system-message
+                   buffer
+                   (format nil "[Skill toggle failed: ~A]" e)))))))
         (buffer-insert-system-message buffer "[No skills available.]"))))
+(defcommand minibuffer-toggle-skill-command)
 
-(defcommand list-skills-command ()
+(defun list-skills-command (buffer)
   "Open a help buffer listing loaded skills and skill load errors."
-  (buffer)
   (declare (ignore buffer))
   (reload-skills)
   (let* ((buf-name "*help:skills*")
@@ -1767,6 +1766,7 @@ Returns true when KEY was consumed by completion."
                             content)
           (switch-to-buffer existing))
         (switch-to-buffer (make-help-buffer buf-name content)))))
+(defcommand list-skills-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Model Selection Commands
@@ -1943,9 +1943,8 @@ Returns true when KEY was consumed by completion."
                    (t (string< (getf a :agent-name)
                                (getf b :agent-name)))))))
 
-(defcommand minibuffer-select-agent-command ()
+(defun minibuffer-select-agent-command (buffer)
   "Open the minibuffer agent selector for the current buffer."
-  (buffer)
   (let* ((active-agent (buffer-agent-name buffer))
          (known-agents (list-known-agent-names))
          (items (sort-agent-selector-items
@@ -1961,11 +1960,11 @@ Returns true when KEY was consumed by completion."
         (lambda (item)
           (switch-buffer-to-agent buffer (getf item :agent-name))))
        (preselect-minibuffer-active-item items)))))
+(defcommand minibuffer-select-agent-command)
 
-(defcommand select-model-command ()
+(defun select-model-command (buffer)
   "Open the model selector to change the LLM model for this session.
 Builds the available model list based on configured API keys."
-  (buffer)
   (let ((entries (available-models-for-selector buffer)))
     (cond
       ((null entries)
@@ -1979,13 +1978,13 @@ Builds the available model list based on configured API keys."
                *model-selector-active* t
                *model-selector-index* (or active-idx 0)
                *model-selector-scroll* 0))))))
+(defcommand select-model-command)
 
-(defcommand minibuffer-select-model-command ()
+(defun minibuffer-select-model-command (buffer)
   "Open the minibuffer model selector with fuzzy search (helm/ivy/vertico style).
 Activates the minibuffer with all available models as candidates, sorted by
 recency then alphabetically. The user can type to fuzzy-filter and use C-n/C-p
 to navigate."
-  (buffer)
   (let ((entries (available-models-for-selector buffer)))
     (cond
       ((null entries)
@@ -2009,10 +2008,10 @@ to navigate."
                                                 model
                                                 think-status
                                                 think-level))))))))))
+(defcommand minibuffer-select-model-command)
 
-(defcommand select-think-level-command ()
+(defun select-think-level-command (buffer)
   "Open the think-level selector for the active model."
-  (buffer)
   (let ((entries (available-think-levels-for-selector buffer)))
     (cond
       ((null entries)
@@ -2032,10 +2031,10 @@ to navigate."
                *think-selector-active* t
                *think-selector-index* (or active-idx 0)
                *think-selector-scroll* 0))))))
+(defcommand select-think-level-command)
 
-(defcommand minibuffer-select-think-level-command ()
+(defun minibuffer-select-think-level-command (buffer)
   "Open the minibuffer think-level selector for the active model."
-  (buffer)
   (let ((entries (available-think-levels-for-selector buffer)))
     (cond
       ((null entries)
@@ -2054,17 +2053,18 @@ to navigate."
         (lambda (item)
           (apply-buffer-think-level-selection buffer item)))
        (preselect-minibuffer-active-item entries)))))
+(defcommand minibuffer-select-think-level-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Management Commands (continued)
 ;;; --------------------------------------------------------------------------
 
-(defcommand minibuffer-select-buffer-command ()
+(defun minibuffer-select-buffer-command (buffer)
   "Open the minibuffer buffer selector with fuzzy search (helm/ivy/vertico style).
 Activates the minibuffer with all open buffers as candidates, sorted by
 recency then alphabetically. The user can type to fuzzy-filter and use C-n/C-p
 to navigate. Shows buffer name, agent, status, and message count."
-  (buffer)
+  (declare (ignore buffer))
   (let* ((current (current-buffer))
          (items (mapcar (lambda (buf)
                           (let* ((name (buffer-name buf))
@@ -2095,10 +2095,10 @@ to navigate. Shows buffer name, agent, status, and message count."
                  (cons name
                        (remove name *buffer-selection-history*
                                :test #'string=)))))))))
+(defcommand minibuffer-select-buffer-command)
 
-(defcommand new-buffer-command ()
+(defun new-buffer-command (buffer)
   "Create a new chat buffer and switch to it."
-  (buffer)
   (declare (ignore buffer))
   (let* ((name (next-buffer-name))
          (new-buf (make-buffer name
@@ -2108,30 +2108,30 @@ to navigate. Shows buffer name, agent, status, and message count."
     (setf (buffer-keymap new-buf) *default-keymap*)
     (add-buffer-to-ring new-buf)
     (switch-to-buffer new-buf)))
+(defcommand new-buffer-command)
 
-(defcommand next-buffer-command ()
+(defun next-buffer-command (buffer)
   "Switch to the next buffer in the ring."
-  (buffer)
   (declare (ignore buffer))
   (when (cdr *buffer-ring*)
     ;; Rotate: move first to end
     (let ((current (pop *buffer-ring*)))
       (setf *buffer-ring* (append *buffer-ring* (list current))))))
+(defcommand next-buffer-command)
 
-(defcommand kill-buffer-command ()
+(defun kill-buffer-command (buffer)
   "Kill the current buffer. Switches to the next buffer in the ring."
-  (buffer)
   (declare (ignore buffer))
   (when (cdr *buffer-ring*)  ; Don't kill the last buffer
     (kill-buffer-from-ring (current-buffer))))
+(defcommand kill-buffer-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Session Commands
 ;;; --------------------------------------------------------------------------
 
-(defcommand save-session-command ()
+(defun save-session-command (buffer)
   "Save the current buffer's persistent state."
-  (buffer)
   (cond
     ((file-buffer-p buffer)
      (let ((summary (project-save-buffer buffer)))
@@ -2150,10 +2150,10 @@ to navigate. Shows buffer name, agent, status, and message count."
        (let ((sys-msg (buffer-insert-agent-message
                        buffer (format nil "[Session saved to ~A]" path))))
          (setf (message-sender sys-msg) :system))))))
+(defcommand save-session-command)
 
-(defcommand execute-extended-command (:keys ((:alt #\x)))
+(defun execute-extended-command (buffer)
   "Select and run a command via the minibuffer. Bound to M-x."
-  (buffer)
   (let ((items (make-command-selector-items)))
     (if (null items)
         (buffer-insert-system-message buffer "[No commands available]")
@@ -2162,45 +2162,45 @@ to navigate. Shows buffer name, agent, status, and message count."
          items
          (lambda (item)
            (invoke-command buffer (getf item :command)))))))
+(defcommand execute-extended-command :keys ((:alt #\x)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Display Toggle Commands
 ;;; --------------------------------------------------------------------------
 
-(defcommand toggle-tool-results-command ()
+(defun toggle-tool-results-command (buffer)
   "Toggle visibility of tool-result messages in the chat."
-  (buffer)
   (setf (buffer-show-tool-results-p buffer)
         (not (buffer-show-tool-results-p buffer))))
+(defcommand toggle-tool-results-command)
 
-(defcommand toggle-debug-mode-command ()
+(defun toggle-debug-mode-command (buffer)
   "Toggle API debug mode on/off. When enabled, every outgoing API request
 (provider, model, full messages/tools JSON) and every completed response
 (stop-reason, content blocks) is echoed into the chat window as a debug
 message, rendered in magenta so it stands out from normal system output.
 Bound to C-c C-d."
-  (buffer)
   (setf *debug-mode* (not *debug-mode*))
   (buffer-insert-system-message
    buffer
    (if *debug-mode*
        "[Debug mode ON — API calls will be shown in chat]"
        "[Debug mode OFF]")))
+(defcommand toggle-debug-mode-command)
 
-(defcommand redraw-screen-command ()
+(defun redraw-screen-command (buffer)
   "Request a full screen redraw. Bound to C-l."
-  (buffer)
   (declare (ignore buffer))
   :redraw)
+(defcommand redraw-screen-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Popup GUI Command
 ;;; --------------------------------------------------------------------------
 
-(defcommand popup-gui-command ()
+(defun popup-gui-command (buffer)
   "Spawn a read-only McCLIM X11 popup window showing the current buffer.
 Requires clawmacs/mcclim to be loaded. Bound to C-c g."
-  (buffer)
   (let ((sym (find-symbol "SPAWN-MCCLIM-POPUP" :clawmacs)))
     (if (and sym (fboundp sym))
         (progn
@@ -2209,6 +2209,7 @@ Requires clawmacs/mcclim to be loaded. Bound to C-c g."
            buffer "[GUI popup spawned — read-only X11 viewer]"))
         (buffer-insert-system-message
          buffer "[McCLIM not loaded. Add (asdf:load-system :clawmacs/mcclim) to init.lisp]"))))
+(defcommand popup-gui-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Debug Logging
@@ -2663,12 +2664,11 @@ through global command bindings like C-x and M-x."
     ;; Everything else: ignore
     (t nil)))
 
-(defcommand customize-face-command ()
+(defun customize-face-command (buffer)
   "Open a face selector in the minibuffer, then customize the selected face.
 Lists all faces from all buffer face registries. When a face is selected,
 opens a customize buffer where face attributes can be edited interactively.
 Bound to C-h F."
-  (buffer)
   (declare (ignore buffer))
   (let ((faces (collect-all-faces)))
     (if (null faces)
@@ -2693,6 +2693,7 @@ Bound to C-h F."
                   (label (getf item :label))
                   (buf (make-customize-face-buffer face label)))
              (switch-to-buffer buf)))))))
+(defcommand customize-face-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Introspection: list-functions & describe-function
@@ -2763,7 +2764,7 @@ Includes: name, type, lambda list, docstring, and keybindings."
            (fn-obj (fdefinition fn-symbol))
            (type-str (cond
                        ((macro-function fn-symbol) "Macro")
-                       ((and cmd-meta (typep fn-obj 'generic-function)) "Command")
+                       (cmd-meta "Command")
                        ((typep fn-obj 'generic-function) "Generic Function")
                        (t "Function"))))
       (format s "Type: ~A~%" type-str)
@@ -2821,11 +2822,10 @@ Returns the new buffer."
     (add-buffer-to-ring buf)
     buf))
 
-(defcommand describe-function-command ()
+(defun describe-function-command (buffer)
   "Open a minibuffer selector listing all functions.
 On selection, displays detailed function description in a help buffer.
 Bound to C-h f."
-  (buffer)
   (declare (ignore buffer))
   (let* ((fn-list (list-functions))
          (items (mapcar (lambda (sym)
@@ -2834,9 +2834,7 @@ Bound to C-h f."
                                  (fn-obj (fdefinition sym))
                                  (type-str (cond
                                              ((macro-function sym) "macro")
-                                             ((and cmd-meta
-                                                   (typep fn-obj 'generic-function))
-                                              "command")
+                                             (cmd-meta "command")
                                              ((typep fn-obj 'generic-function)
                                               "generic")
                                              (t "function")))
@@ -2863,6 +2861,7 @@ Bound to C-h f."
              (switch-to-buffer existing)
              (let ((help-buf (make-help-buffer buf-name desc)))
                (switch-to-buffer help-buf))))))))
+(defcommand describe-function-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Introspection: list-variables & describe-variable
@@ -2950,11 +2949,10 @@ and docstring."
           (when category
             (format s "~%Category: ~A~%" category)))))))
 
-(defcommand describe-variable-command ()
+(defun describe-variable-command (buffer)
   "Open a minibuffer selector listing all exported variables.
 On selection, displays detailed variable description in a help buffer.
 Bound to C-h v."
-  (buffer)
   (declare (ignore buffer))
   (let* ((var-list (list-variables))
          (items (mapcar (lambda (sym)
@@ -2988,6 +2986,7 @@ Bound to C-h v."
              (switch-to-buffer existing)
              (let ((help-buf (make-help-buffer buf-name desc)))
                (switch-to-buffer help-buf))))))))
+(defcommand describe-variable-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Introspection: list-types & describe-type
@@ -3174,11 +3173,10 @@ Useful for finding types that still need extended documentation."
         (push sym missing)))
     (nreverse missing)))
 
-(defcommand describe-type-command ()
+(defun describe-type-command (buffer)
   "Open a minibuffer selector listing all defined types.
 On selection, displays detailed type description in a help buffer.
 Bound to C-h T."
-  (buffer)
   (declare (ignore buffer))
   (let* ((type-list (list-types))
          (items (mapcar (lambda (sym)
@@ -3222,6 +3220,7 @@ Bound to C-h T."
              (switch-to-buffer existing)
              (let ((help-buf (make-help-buffer buf-name desc)))
                (switch-to-buffer help-buf))))))))
+(defcommand describe-type-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Describe Bindings (C-h b)
@@ -3308,10 +3307,9 @@ Each binding shows the key notation and the command name."
                         (format s "  ~20A  ~A~%" keys-str cmd-name)))))
                 (format s "~%")))))))))
 
-(defcommand describe-bindings-command ()
+(defun describe-bindings-command (buffer)
   "Open a help buffer listing all keybindings in the default keymap.
 Bound to C-h b."
-  (buffer)
   (declare (ignore buffer))
   (let* ((buf-name "*help:keybindings*")
          (existing (find-buffer-by-name buf-name)))
@@ -3320,6 +3318,7 @@ Bound to C-h b."
         (let ((help-buf (make-help-buffer buf-name
                                           (describe-bindings-to-string))))
           (switch-to-buffer help-buf)))))
+(defcommand describe-bindings-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Event Loop
