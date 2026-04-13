@@ -998,6 +998,35 @@
         (slop-reference-enclosing-definition-id reference)
         :preview (slop-reference-preview reference)))
 
+(defun slop-line-range-plist (text start end)
+  "Return a plist describing START..END as source lines and columns."
+  (multiple-value-bind (start-line start-column)
+      (slop-node-line-column text start)
+    (multiple-value-bind (end-line end-column)
+        (slop-node-line-column text end)
+      (list :start-line start-line
+            :start-column start-column
+            :end-line end-line
+            :end-column end-column))))
+
+(defun slop-node-source-plist (node text &key role (include-text t))
+  "Return NODE as a compact source-context plist."
+  (multiple-value-bind (line column)
+      (slop-node-line-column text (sexed-node-start node))
+    (append
+     (list :role role
+           :head (sexed-node-head node)
+           :line line
+           :column column
+           :start (sexed-node-start node)
+           :end (sexed-node-end node)
+           :line-range
+           (slop-line-range-plist text
+                                  (sexed-node-start node)
+                                  (sexed-node-end node)))
+     (when include-text
+       (list :text (sexed-node-text node text))))))
+
 (defun slop-kind-match-p (kind wanted)
   "Return true when KIND matches optional WANTED."
   (or (null wanted)
@@ -1123,6 +1152,43 @@
                                             :include-body include-body))
                   (slop-limit-list definitions limit)))))
 
+(defun slop-find-definitions-batch (project symbols
+                                    &key path package namespace kind
+                                         include-body
+                                         (per-symbol-limit
+                                          *slop-default-result-limit*))
+  "Return definitions for multiple SYMBOLS in one indexed PROJECT pass."
+  (unless symbols
+    (error "Provide at least one symbol for batch definition lookup."))
+  (let* ((index (slop-index-project project :path path))
+         (results
+           (mapcar
+            (lambda (symbol)
+              (let ((definitions
+                      (slop-filter-definitions
+                       (slop-index-definitions index)
+                       :symbol symbol
+                       :package package
+                       :namespace namespace
+                       :kind kind)))
+                (list :symbol symbol
+                      :count (length definitions)
+                      :definitions
+                      (mapcar (lambda (definition)
+                                (slop-definition->plist
+                                 definition
+                                 :include-body include-body))
+                              (slop-limit-list definitions
+                                               per-symbol-limit)))))
+            symbols)))
+    (list :project (slop-project-index-project index)
+          :count (length results)
+          :total-definitions
+          (reduce #'+ results :key (lambda (result)
+                                     (getf result :count))
+                  :initial-value 0)
+          :results results)))
+
 (defun slop-find-definition-by-id (index id)
   "Find definition ID in INDEX."
   (find id (slop-index-definitions index)
@@ -1134,6 +1200,36 @@
   (find id (slop-index-bindings index)
         :key #'slop-binding-id
         :test #'string=))
+
+(defun slop-definition-id-path (definition-id)
+  "Return the path component encoded in DEFINITION-ID, when present."
+  (let ((marker (and definition-id
+                     (search "#def-" definition-id :test #'char=))))
+    (and marker (subseq definition-id 0 marker))))
+
+(defun slop-definition-id-hints (index definition-id
+                                 &key symbol package namespace kind
+                                      (limit 10))
+  "Return candidate current definitions related to stale DEFINITION-ID."
+  (let* ((path (slop-definition-id-path definition-id))
+         (definitions
+           (cond
+             (symbol
+              (slop-filter-definitions
+               (slop-index-definitions index)
+               :symbol symbol
+               :package package
+               :namespace namespace
+               :kind kind))
+             (path
+              (remove-if-not
+               (lambda (definition)
+                 (string= path (slop-definition-path definition)))
+               (slop-index-definitions index)))
+             (t
+              (slop-index-definitions index)))))
+    (mapcar #'slop-definition->plist
+            (slop-limit-list definitions limit))))
 
 (defun slop-reference-matches-definition-p (reference definition)
   "Return true when REFERENCE points to DEFINITION's symbol namespace."
@@ -1152,9 +1248,8 @@
   "Return symbol references in PROJECT."
   (let* ((index (slop-index-project project :path path))
          (definition (and definition-id
-                          (or (slop-find-definition-by-id index definition-id)
-                              (error "Unknown SLOP definition id: ~A."
-                                     definition-id))))
+                          (slop-find-definition-by-id index definition-id)))
+         (stale-definition-id-p (and definition-id (null definition)))
          (references
            (cond
              (definition
@@ -1165,8 +1260,10 @@
                       (or (null role)
                           (string= (slop-normalize-name role)
                                    (slop-normalize-name
-                                    (slop-reference-role reference))))))
+                                   (slop-reference-role reference))))))
                (slop-index-references index)))
+             ((and stale-definition-id-p (null symbol))
+              nil)
              (t
               (remove :definition
                       (slop-filter-references
@@ -1175,14 +1272,25 @@
                        :package package
                        :namespace namespace
                        :role role
-                       :substring substring)
+                      :substring substring)
                       :key #'slop-reference-role
                       :test #'eq)))))
-    (list :project (slop-project-index-project index)
-          :count (length references)
-          :references
-          (mapcar #'slop-reference->plist
-                  (slop-limit-list references limit)))))
+    (append
+     (list :project (slop-project-index-project index))
+     (when stale-definition-id-p
+       (list :status :definition-id-not-found
+             :requested-definition-id definition-id
+             :fallback (and symbol :symbol)
+             :matching-definitions
+             (slop-definition-id-hints index definition-id
+                                       :symbol symbol
+                                       :package package
+                                       :namespace namespace
+                                       :limit 10)))
+     (list :count (length references)
+           :references
+           (mapcar #'slop-reference->plist
+                   (slop-limit-list references limit))))))
 
 (defun slop-definition-at-offset (definitions offset)
   "Return a definition whose name or form contains OFFSET."
@@ -1232,18 +1340,31 @@
           :binding (and binding (slop-binding->plist binding))
           :reference (and reference (slop-reference->plist reference)))))
 
-(defun slop-resolve-one-definition (index &key definition-id symbol path)
+(defun slop-resolve-one-definition (index &key definition-id symbol path
+                                         package namespace kind
+                                         (default-namespace :function))
   "Resolve a single definition from INDEX."
   (cond
     (definition-id
      (or (slop-find-definition-by-id index definition-id)
-         (error "Unknown SLOP definition id: ~A." definition-id)))
+         (if symbol
+             (slop-resolve-one-definition
+              index
+              :symbol symbol
+              :path path
+              :package package
+              :namespace namespace
+              :kind kind
+              :default-namespace default-namespace)
+             (error "Unknown SLOP definition id: ~A." definition-id))))
     (symbol
      (let ((matches
              (slop-filter-definitions
               (slop-index-definitions index)
               :symbol symbol
-              :namespace :function)))
+              :package package
+              :namespace (or namespace default-namespace)
+              :kind kind)))
        (setf matches
              (if path
                  (remove-if-not
@@ -1260,6 +1381,102 @@
                    (mapcar #'slop-definition-id matches))))))
     (t
      (error "Provide :definition-id or :symbol."))))
+
+(defun slop-file-index-for-definition (index definition)
+  "Return the indexed file containing DEFINITION."
+  (or (slop-index-file-by-path index (slop-definition-path definition))
+      (error "No indexed file for definition path ~A."
+             (slop-definition-path definition))))
+
+(defun slop-root-containing-span (file-index start end)
+  "Return the top-level root in FILE-INDEX containing START..END."
+  (find-if (lambda (root)
+             (and (<= (sexed-node-start root) start)
+                  (<= end (sexed-node-end root))))
+           (slop-file-index-roots file-index)))
+
+(defun slop-package-root-name (root text)
+  "Return the package named by a DEFPACKAGE or IN-PACKAGE ROOT."
+  (let ((head (string-downcase (or (sexed-node-head root) ""))))
+    (when (member head '("defpackage" "in-package") :test #'string=)
+      (let ((name-node (slop-nth-child root 1)))
+        (and name-node
+             (slop-package-name-from-node name-node text nil))))))
+
+(defun slop-definition-package-forms (roots text definition root-index)
+  "Return package-related top-level forms relevant to DEFINITION."
+  (let ((forms nil)
+        (definition-package (slop-definition-package definition)))
+    (loop :for root :in roots
+          :for index :from 0
+          :for head := (string-downcase (or (sexed-node-head root) ""))
+          :while (< index root-index)
+          :do (cond
+                ((and (string= head "defpackage")
+                      (or (null definition-package)
+                          (string= (or (slop-package-root-name root text) "")
+                                   definition-package)))
+                 (push (slop-node-source-plist root text
+                                               :role :defpackage)
+                       forms))
+                ((and (string= head "in-package")
+                      (or (null definition-package)
+                          (string= (or (slop-package-root-name root text) "")
+                                   definition-package)))
+                 (push (slop-node-source-plist root text
+                                               :role :in-package)
+                       forms))))
+    (nreverse forms)))
+
+(defun slop-definition-context (project &key path symbol definition-id
+                                          package namespace kind
+                                          (before-forms 1)
+                                          (after-forms 1))
+  "Return a definition body with nearby top-level and package context."
+  (unless (and (integerp before-forms) (not (minusp before-forms))
+               (integerp after-forms) (not (minusp after-forms)))
+    (error "before-forms and after-forms must be non-negative integers."))
+  (let* ((index (slop-index-project project :path path))
+         (definition (slop-resolve-one-definition
+                      index
+                      :definition-id definition-id
+                      :symbol symbol
+                      :path path
+                      :package package
+                      :namespace namespace
+                      :kind kind
+                      :default-namespace nil))
+         (file-index (slop-file-index-for-definition index definition))
+         (text (slop-file-index-text file-index))
+         (roots (slop-file-index-roots file-index))
+         (root (or (slop-root-containing-span
+                    file-index
+                    (slop-definition-start definition)
+                    (slop-definition-end definition))
+                   (error "No top-level source form found for definition ~A."
+                          (slop-definition-id definition))))
+         (root-index (position root roots :test #'eq))
+         (start-index (max 0 (- root-index before-forms)))
+         (end-index (min (length roots) (+ root-index after-forms 1)))
+         (nearby-forms
+           (loop :for candidate :in (subseq roots start-index end-index)
+                 :for index :from start-index
+                 :for role := (cond
+                                ((= index root-index) :definition)
+                                ((< index root-index) :before)
+                                (t :after))
+                 :collect (slop-node-source-plist candidate text
+                                                  :role role))))
+    (list :project (slop-project-index-project index)
+          :path (slop-file-index-path file-index)
+          :definition (slop-definition->plist definition :include-body t)
+          :line-range (slop-line-range-plist
+                       text
+                       (slop-definition-start definition)
+                       (slop-definition-end definition))
+          :package-forms
+          (slop-definition-package-forms roots text definition root-index)
+          :nearby-forms nearby-forms)))
 
 (defun slop-find-callers (project &key path symbol definition-id
                                   (limit *slop-default-result-limit*))
@@ -1346,6 +1563,163 @@
                                                  (getf callee
                                                        :qualified-name)))
                                     limit))))
+
+(defun slop-definitions-matching-reference (index reference)
+  "Return definitions that may be the target of function call REFERENCE."
+  (remove-if-not
+   (lambda (definition)
+     (slop-reference-matches-definition-p reference definition))
+   (slop-index-definitions index)))
+
+(defun slop-call-references-from-definition (index definition)
+  "Return call references whose enclosing definition is DEFINITION."
+  (remove-if-not
+   (lambda (reference)
+     (and (eq :call (slop-reference-role reference))
+          (string= (slop-definition-id definition)
+                   (or (slop-reference-enclosing-definition-id reference)
+                       ""))))
+   (slop-index-references index)))
+
+(defun slop-call-references-to-definition (index definition)
+  "Return call references that target DEFINITION."
+  (remove-if-not
+   (lambda (reference)
+     (and (eq :call (slop-reference-role reference))
+          (slop-reference-matches-definition-p reference definition)))
+   (slop-index-references index)))
+
+(defun slop-trace-direction-list (direction)
+  "Normalize DIRECTION into one or more trace directions."
+  (let ((name (slop-normalize-name (or direction "callees"))))
+    (cond
+      ((member name '("callee" "callees" "out" "outbound") :test #'string=)
+       '(:callees))
+      ((member name '("caller" "callers" "in" "inbound") :test #'string=)
+       '(:callers))
+      ((string= name "both")
+       '(:callees :callers))
+      (t
+       (error "Unknown slop trace direction: ~A." direction)))))
+
+(defun slop-trace-edge (direction depth caller callee call)
+  "Return an agent-facing trace edge."
+  (list :direction direction
+        :depth depth
+        :caller-id (and caller (slop-definition-id caller))
+        :caller (and caller
+                     (slop-definition-qualified-name caller))
+        :callee-id (and callee (slop-definition-id callee))
+        :callee (if callee
+                    (slop-definition-qualified-name callee)
+                    (slop-reference-qualified-name call))
+        :resolved (not (null callee))
+        :call (slop-reference->plist call)))
+
+(defun slop-trace-calls (project &key path symbol definition-id
+                                  direction
+                                  (max-depth 2)
+                                  include-body
+                                  (limit *slop-default-result-limit*))
+  "Trace calls outward, inward, or both from a selected definition."
+  (unless (and (integerp max-depth) (not (minusp max-depth)))
+    (error "max-depth must be a non-negative integer."))
+  (let* ((index (slop-index-project project :path path))
+         (root (slop-resolve-one-definition
+                index
+                :definition-id definition-id
+                :symbol symbol
+                :path path))
+         (directions (slop-trace-direction-list direction))
+         (visited (make-hash-table :test #'equal))
+         (nodes (make-hash-table :test #'equal))
+         (queue nil)
+         (edges nil)
+         (truncated nil))
+    (labels ((remember-node (definition depth)
+               (let ((id (slop-definition-id definition)))
+                 (unless (gethash id nodes)
+                   (setf (gethash id nodes)
+                         (list :depth depth
+                               :definition
+                               (slop-definition->plist
+                                definition
+                                :include-body include-body))))))
+             (enqueue (definition depth)
+               (let ((id (slop-definition-id definition)))
+                 (remember-node definition depth)
+                 (unless (gethash id visited)
+                   (setf (gethash id visited) depth)
+                   (setf queue
+                         (nconc queue (list (cons definition depth)))))))
+             (record-edge (edge)
+               (if (or (null limit) (< (length edges) limit))
+                   (push edge edges)
+                   (setf truncated t)))
+             (trace-callees (definition depth)
+               (dolist (call (slop-call-references-from-definition index
+                                                                    definition))
+                 (let ((targets (slop-definitions-matching-reference
+                                 index call)))
+                   (cond
+                     (targets
+                      (dolist (target targets)
+                        (record-edge
+                         (slop-trace-edge :callees
+                                          (1+ depth)
+                                          definition
+                                          target
+                                          call))
+                        (when (< depth max-depth)
+                          (enqueue target (1+ depth)))))
+                     (t
+                      (record-edge
+                       (slop-trace-edge :callees
+                                        (1+ depth)
+                                        definition
+                                        nil
+                                        call)))))))
+             (trace-callers (definition depth)
+               (dolist (call (slop-call-references-to-definition index
+                                                                  definition))
+                 (let* ((caller-id (slop-reference-enclosing-definition-id
+                                    call))
+                        (caller (and caller-id
+                                     (slop-find-definition-by-id
+                                      index caller-id))))
+                   (record-edge
+                    (slop-trace-edge :callers
+                                     (1+ depth)
+                                     caller
+                                     definition
+                                     call))
+                   (when (and caller (< depth max-depth))
+                     (enqueue caller (1+ depth)))))))
+      (enqueue root 0)
+      (loop :while queue
+            :do (let* ((entry (pop queue))
+                       (definition (car entry))
+                       (depth (cdr entry)))
+                  (when (< depth max-depth)
+                    (when (member :callees directions :test #'eq)
+                      (trace-callees definition depth))
+                    (when (member :callers directions :test #'eq)
+                      (trace-callers definition depth)))))
+      (let ((node-list nil))
+        (maphash (lambda (_id node)
+                   (declare (ignore _id))
+                   (push node node-list))
+                 nodes)
+        (list :project (slop-project-index-project index)
+              :root (slop-definition->plist root :include-body include-body)
+              :direction (or direction "callees")
+              :max-depth max-depth
+              :node-count (length node-list)
+              :nodes (sort node-list #'< :key (lambda (node)
+                                                (getf node :depth)))
+              :edge-count (length edges)
+              :truncated truncated
+              :edges (nreverse edges))))))
 
 (defun slop-binding-from-location (index project path offset line column)
   "Resolve a lexical binding from a location."
@@ -1500,6 +1874,115 @@
               :updated-uses (length references)
               :diff (compute-simple-diff old-text new-text))))))
 
+(defparameter *slop-mention-skipped-file-types*
+  '("png" "jpg" "jpeg" "gif" "webp" "ico" "pdf" "zip" "gz" "xz" "bz2"
+    "fasl" "o" "so" "dylib" "a" "class" "jar" "sqlite" "db")
+  "Project file extensions skipped by SLOP mention search.")
+
+(defun slop-mention-readable-path-p (path)
+  "Return true when PATH is likely to be a text file worth mention-searching."
+  (let ((type (string-downcase (or (pathname-type (pathname path)) ""))))
+    (not (member type *slop-mention-skipped-file-types* :test #'string=))))
+
+(defun slop-project-text-paths (project &optional path)
+  "Return project text paths, optionally restricted to PATH."
+  (let ((all (remove-if-not #'slop-mention-readable-path-p
+                            (project-list-files project :limit nil))))
+    (if (null path)
+        all
+        (let* ((resource (project-resource-name path :allow-directory t))
+               (prefix (if (and (plusp (length resource))
+                                (char= #\/ (char resource
+                                                 (1- (length resource)))))
+                           resource
+                           (concatenate 'string resource "/"))))
+          (cond
+            ((member resource all :test #'string=)
+             (list resource))
+            (t
+             (remove-if-not
+              (lambda (candidate)
+                (alexandria:starts-with-subseq prefix candidate))
+              all)))))))
+
+(defun slop-mention-symbol-character-p (char)
+  "Return true when CHAR is a likely Lisp/documentation symbol constituent."
+  (or (alphanumericp char)
+      (find char "!$%&*+-./:<=>?@[]^_{}~#:" :test #'char=)))
+
+(defun slop-mention-whole-symbol-match-p (text start end)
+  "Return true when START..END is not embedded in a larger symbol."
+  (and (or (zerop start)
+           (not (slop-mention-symbol-character-p
+                 (char text (1- start)))))
+       (or (>= end (length text))
+           (not (slop-mention-symbol-character-p
+                 (char text end))))))
+
+(defun slop-find-text-occurrences (text query &key substring case-sensitive)
+  "Return START offsets where QUERY occurs in TEXT."
+  (let ((positions nil)
+        (start 0)
+        (test (if case-sensitive #'char= #'char-equal)))
+    (loop :for position := (search query text
+                                   :start2 start
+                                   :test test)
+          :while position
+          :for end := (+ position (length query))
+          :do (when (or substring
+                        (slop-mention-whole-symbol-match-p text
+                                                           position
+                                                           end))
+                (push position positions))
+              (setf start (1+ position)))
+    (nreverse positions)))
+
+(defun slop-mention-plist (project path text query position)
+  "Return an agent-facing mention plist for QUERY at POSITION."
+  (let ((end (+ position (length query))))
+    (multiple-value-bind (line column)
+        (slop-node-line-column text position)
+      (list :project project
+            :path path
+            :line line
+            :column column
+            :start position
+            :end end
+            :query query
+            :preview (slop-preview-around text position end)))))
+
+(defun slop-find-mentions (project query &key path substring case-sensitive
+                                           (limit *slop-default-result-limit*))
+  "Find text mentions of QUERY across project source, docs, tests, and config."
+  (unless (and (stringp query) (plusp (length query)))
+    (error "Mention query must be a non-empty string."))
+  (let* ((project-object (ensure-project project))
+         (project-name (project-name project-object))
+         (mentions nil)
+         (truncated nil))
+    (dolist (resource-path (slop-project-text-paths project-object path))
+      (when (or (null limit) (< (length mentions) limit))
+        (handler-case
+            (let ((text (project-read-file project-object resource-path)))
+              (dolist (position (slop-find-text-occurrences
+                                 text query
+                                 :substring substring
+                                 :case-sensitive case-sensitive))
+                (if (or (null limit) (< (length mentions) limit))
+                    (push (slop-mention-plist project-name
+                                              resource-path
+                                              text
+                                              query
+                                              position)
+                          mentions)
+                    (setf truncated t))))
+          (error () nil))))
+    (list :project project-name
+          :query query
+          :count (length mentions)
+          :truncated truncated
+          :mentions (nreverse mentions))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Provider tool adapters
 ;;; --------------------------------------------------------------------------
@@ -1544,6 +2027,32 @@
                                   value)))
         (unless (blank-string-p trimmed)
           trimmed)))))
+
+(defun slop-tool-string-list (value key)
+  "Normalize VALUE as a list of non-blank strings for tool argument KEY."
+  (let ((items (cond
+                 ((null value) nil)
+                 ((vectorp value) (coerce value 'list))
+                 ((and (listp value) (not (stringp value))) value)
+                 ((stringp value) (list value))
+                 (t
+                  (error "SLOP argument :~A must be a string array." key)))))
+    (loop :for item :in items
+          :for trimmed := (and (stringp item)
+                               (string-trim '(#\Space #\Tab #\Newline
+                                               #\Return)
+                                            item))
+          :unless (stringp item)
+            :do (error "SLOP argument :~A must contain only strings." key)
+          :unless (blank-string-p trimmed)
+            :collect trimmed)))
+
+(defun slop-tool-required-string-list (args key)
+  "Return required string-list KEY from ARGS."
+  (let ((items (slop-tool-string-list (slop-tool-arg args key) key)))
+    (unless items
+      (error "Missing required slop tool argument :~A." key))
+    items))
 
 (defun slop-tool-optional-integer (args key)
   "Return optional integer KEY from ARGS."
@@ -1593,6 +2102,20 @@
    :limit (or (slop-tool-optional-integer args :limit)
               *slop-default-result-limit*)))
 
+(defun slop-tool-find-definitions-batch (args)
+  "Provider adapter for slop_find_definitions_batch."
+  (slop-find-definitions-batch
+   (slop-tool-required-string args :project)
+   (slop-tool-required-string-list args :symbols)
+   :path (slop-tool-optional-string args :path)
+   :package (slop-tool-optional-string args :package)
+   :namespace (slop-tool-optional-string args :namespace)
+   :kind (slop-tool-optional-string args :kind)
+   :include-body (slop-tool-optional-boolean args :include-body)
+   :per-symbol-limit
+   (or (slop-tool-optional-integer args :per-symbol-limit)
+       *slop-default-result-limit*)))
+
 (defun slop-tool-find-references (args)
   "Provider adapter for slop_find_references."
   (slop-find-references
@@ -1626,6 +2149,43 @@
    :definition-id (slop-tool-optional-string args :definition-id)
    :limit (or (slop-tool-optional-integer args :limit)
               *slop-default-result-limit*)))
+
+(defun slop-tool-trace-calls (args)
+  "Provider adapter for slop_trace_calls."
+  (slop-trace-calls
+   (slop-tool-required-string args :project)
+   :path (slop-tool-optional-string args :path)
+   :symbol (slop-tool-optional-string args :symbol)
+   :definition-id (slop-tool-optional-string args :definition-id)
+   :direction (slop-tool-optional-string args :direction)
+   :max-depth (or (slop-tool-optional-integer args :max-depth) 2)
+   :include-body (slop-tool-optional-boolean args :include-body)
+   :limit (or (slop-tool-optional-integer args :limit)
+              *slop-default-result-limit*)))
+
+(defun slop-tool-find-mentions (args)
+  "Provider adapter for slop_find_mentions."
+  (slop-find-mentions
+   (slop-tool-required-string args :project)
+   (slop-tool-required-string args :query)
+   :path (slop-tool-optional-string args :path)
+   :substring (slop-tool-optional-boolean args :substring)
+   :case-sensitive (slop-tool-optional-boolean args :case-sensitive)
+   :limit (or (slop-tool-optional-integer args :limit)
+              *slop-default-result-limit*)))
+
+(defun slop-tool-definition-context (args)
+  "Provider adapter for slop_definition_context."
+  (slop-definition-context
+   (slop-tool-required-string args :project)
+   :path (slop-tool-optional-string args :path)
+   :symbol (slop-tool-optional-string args :symbol)
+   :definition-id (slop-tool-optional-string args :definition-id)
+   :package (slop-tool-optional-string args :package)
+   :namespace (slop-tool-optional-string args :namespace)
+   :kind (slop-tool-optional-string args :kind)
+   :before-forms (or (slop-tool-optional-integer args :before-forms) 1)
+   :after-forms (or (slop-tool-optional-integer args :after-forms) 1)))
 
 (defun slop-tool-find-variable-uses (args)
   "Provider adapter for slop_find_variable_uses."

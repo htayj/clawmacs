@@ -114,6 +114,117 @@
         (is (member "double" callee-names :test #'string=))
         (is (member "triple" callee-names :test #'string=))))))
 
+(test slop-batches-definition-lookups
+  "Batch lookup resolves multiple symbols from one indexed project pass."
+  (with-slop-project ("slop-batch" root source)
+    (let* ((result (slop-find-definitions-batch
+                    "slop-batch"
+                    '("double" "caller")
+                    :namespace "function"
+                    :per-symbol-limit 1))
+           (results (getf result :results)))
+      (is (= 2 (getf result :count)))
+      (is (= 2 (getf result :total-definitions)))
+      (is (every (lambda (entry)
+                   (= 1 (getf entry :count)))
+                 results))
+      (is (equal '("double" "caller")
+                 (mapcar (lambda (entry)
+                           (getf entry :symbol))
+                         results))))
+    (let ((tool-result
+            (clawmacs::slop-tool-find-definitions-batch
+             '(:project "slop-batch"
+               :symbols #("double" "triple")
+               :namespace "function"
+               :per-symbol-limit 1))))
+      (is (= 2 (getf tool-result :count)))
+      (is (= 2 (getf tool-result :total-definitions))))))
+
+(test slop-traces-call-flow-from-entrypoint
+  "Trace call flow follows callees and returns resolved graph edges."
+  (with-slop-project ("slop-trace" root source)
+    (let* ((trace (slop-trace-calls "slop-trace"
+                                    :symbol "caller"
+                                    :direction "callees"
+                                    :max-depth 2))
+           (edges (getf trace :edges))
+           (callee-names (mapcar (lambda (edge)
+                                   (getf edge :callee))
+                                 edges)))
+      (is (string= "caller" (getf (getf trace :root) :name)))
+      (is (member "slop-demo:double" callee-names :test #'string=))
+      (is (member "slop-demo:triple" callee-names :test #'string=))
+      (is (find-if (lambda (edge)
+                     (and (string= "slop-demo:triple"
+                                   (or (getf edge :caller) ""))
+                          (string= "slop-demo:double"
+                                   (or (getf edge :callee) ""))))
+                   edges))
+      (is (>= (getf trace :node-count) 3)))))
+
+(test slop-stale-definition-ids-return-hints-or-fallback
+  "Reference lookup handles stale ids without forcing a failed tool call."
+  (with-slop-project ("slop-stale" root source)
+    (let ((fallback (slop-find-references
+                     "slop-stale"
+                     :definition-id "src/main.lisp#def-999999"
+                     :symbol "double"
+                     :namespace "function"
+                     :role "call")))
+      (is (eq :definition-id-not-found (getf fallback :status)))
+      (is (eq :symbol (getf fallback :fallback)))
+      (is (= 3 (getf fallback :count)))
+      (is (= 1 (length (getf fallback :matching-definitions)))))
+    (let ((hint (slop-find-references
+                 "slop-stale"
+                 :definition-id "src/main.lisp#def-999999")))
+      (is (eq :definition-id-not-found (getf hint :status)))
+      (is (= 0 (getf hint :count)))
+      (is (null (getf hint :references)))
+      (is (plusp (length (getf hint :matching-definitions)))))))
+
+(test slop-finds-text-mentions-outside-source-references
+  "Mention search includes docs/tests/config style text and quoted data."
+  (with-slop-project ("slop-mentions" root source)
+    (project-create-file "slop-mentions"
+                         "docs/commands.md"
+                         :content "The caller command is documented here. callers-extra is separate.")
+    (let* ((mentions (slop-find-mentions "slop-mentions"
+                                         "caller"
+                                         :path "docs"))
+           (items (getf mentions :mentions)))
+      (is (= 1 (getf mentions :count)))
+      (is (string= "docs/commands.md" (getf (first items) :path)))
+      (is (search "caller command" (getf (first items) :preview))))
+    (let ((quoted (slop-find-mentions "slop-mentions"
+                                      "double"
+                                      :path "src/main.lisp")))
+      (is (plusp (getf quoted :count))))))
+
+(test slop-reads-definition-with-local-context
+  "Definition context returns body, nearby top-level forms, and package forms."
+  (with-slop-project ("slop-context" root source)
+    (let* ((context (slop-definition-context "slop-context"
+                                             :symbol "caller"
+                                             :before-forms 1
+                                             :after-forms 1))
+           (definition (getf context :definition))
+           (forms (getf context :nearby-forms))
+           (roles (mapcar (lambda (form)
+                            (getf form :role))
+                          forms)))
+      (is (string= "caller" (getf definition :name)))
+      (is (search "(defun caller" (getf definition :body)))
+      (is (equal '(:before :definition :after) roles))
+      (is (search "(defun triple" (getf (first forms) :text)))
+      (is (search "(defun quoted" (getf (third forms) :text)))
+      (is (find :in-package
+                (getf context :package-forms)
+                :key (lambda (form)
+                       (getf form :role))))
+      (is (plusp (getf (getf context :line-range) :start-line))))))
+
 (test slop-skips-quoted-data-strings-and-finds-function-references
   "Quoted data and strings are not counted as calls; #' references are."
   (with-slop-project ("slop-quoted" root source)
@@ -214,8 +325,14 @@
                              #'string<))
            (prompt (render-package-prompt-sections)))
       (is (member "slop_project_symbols" tool-names :test #'string=))
+      (is (member "slop_find_definitions_batch" tool-names :test #'string=))
       (is (member "slop_find_references" tool-names :test #'string=))
+      (is (member "slop_trace_calls" tool-names :test #'string=))
+      (is (member "slop_find_mentions" tool-names :test #'string=))
+      (is (member "slop_definition_context" tool-names :test #'string=))
       (is (member "slop_rename_variable" tool-names :test #'string=))
       (is (search "Symbol lookup with slop" prompt))
       (is (search "slop_find_definitions" prompt))
+      (is (search "slop_trace_calls" prompt))
+      (is (search "slop_find_mentions" prompt))
       (is-false (search "lisp_eval" prompt :test #'char=)))))

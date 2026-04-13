@@ -10,9 +10,14 @@
 - `slop` is a static source analyzer for project Lisp files. Its results are
   source spans, ids, roles, namespaces, packages, enclosing definitions, and
   previews that are meant to guide precise follow-up reads or structural edits.
-- Start with `slop_project_symbols` or `slop_find_definitions` when locating
-  definitions. Use `slop_find_references`, `slop_find_callers`, and
-  `slop_find_callees` for relationships between definitions.
+- Start with `slop_project_symbols`, `slop_find_definitions`, or
+  `slop_find_definitions_batch` when locating definitions. Use
+  `slop_find_references`, `slop_find_callers`, `slop_find_callees`, and
+  `slop_trace_calls` for relationships between definitions.
+- Use `slop_definition_context` when you need a definition body plus nearby
+  top-level forms and package context without reading the whole file.
+- Use `slop_find_mentions` for docs, tests, config, quoted strings, and other
+  text mentions that are intentionally outside source-reference indexing.
 - Use `slop_symbol_at` when you know a file location and need the symbol,
   binding, or enclosing definition at that point.
 - Use `slop_find_variable_uses` with a `binding-id` or source location to
@@ -86,9 +91,31 @@
          (limit :type "integer" :required nil
                 :description "Maximum number of definitions to return.")))
 
+(deftool slop-tool-find-definitions-batch
+  :name "slop_find_definitions_batch"
+  :description "Find Common Lisp definitions for multiple symbols in one project index pass."
+  :permission :agent-allowed
+  :call-style :raw-args
+  :args ((project :type "string"
+                  :description "Clawmacs project name.")
+         (symbols :type "array" :items ((:type . "string"))
+                  :description "Symbol names such as foo, pkg:foo, or *option*.")
+         (path :type "string" :required nil
+               :description "Optional project-relative file or directory to restrict indexing.")
+         (package :type "string" :required nil
+                  :description "Optional package name for unqualified symbols.")
+         (namespace :type "string" :required nil
+                    :description "Optional namespace: function, variable, type, package, system, or documentation.")
+         (kind :type "string" :required nil
+               :description "Optional definition kind such as function, macro, method, class, parameter, package, tool, or command.")
+         (include-body :type "boolean" :required nil
+                       :description "Include full source body for matching definitions.")
+         (per-symbol-limit :type "integer" :required nil
+                           :description "Maximum number of definitions to return for each symbol.")))
+
 (deftool slop-tool-find-references
   :name "slop_find_references"
-  :description "Find Common Lisp references for a symbol or slop definition id."
+  :description "Find Common Lisp references for a symbol or slop definition id; stale ids fall back to symbol lookup when supplied."
   :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string"
@@ -141,6 +168,70 @@
                         :description "Slop function definition id.")
          (limit :type "integer" :required nil
                 :description "Maximum number of callees to return.")))
+
+(deftool slop-tool-trace-calls
+  :name "slop_trace_calls"
+  :description "Trace Common Lisp call flow from an entry definition to a bounded depth."
+  :permission :agent-allowed
+  :call-style :raw-args
+  :args ((project :type "string"
+                  :description "Clawmacs project name.")
+         (path :type "string" :required nil
+               :description "Optional project-relative file or directory to restrict indexing.")
+         (symbol :type "string" :required nil
+                 :description "Function symbol when definition-id is not supplied.")
+         (definition-id :type "string" :required nil
+                        :description "Slop function definition id.")
+         (direction :type "string" :required nil
+                    :description "Trace direction: callees, callers, or both. Defaults to callees.")
+         (max-depth :type "integer" :required nil
+                    :description "Maximum call graph depth from the entry definition. Defaults to 2.")
+         (include-body :type "boolean" :required nil
+                       :description "Include full source bodies for traced definitions.")
+         (limit :type "integer" :required nil
+                :description "Maximum number of trace edges to return.")))
+
+(deftool slop-tool-find-mentions
+  :name "slop_find_mentions"
+  :description "Find text mentions of a symbol or phrase across project source, docs, tests, and config."
+  :permission :agent-allowed
+  :call-style :raw-args
+  :args ((project :type "string"
+                  :description "Clawmacs project name.")
+         (query :type "string"
+                :description "Symbol or phrase to find in text.")
+         (path :type "string" :required nil
+               :description "Optional project-relative file or directory to restrict search.")
+         (substring :type "boolean" :required nil
+                    :description "Allow matches embedded inside larger symbols or words.")
+         (case-sensitive :type "boolean" :required nil
+                         :description "Use case-sensitive text matching.")
+         (limit :type "integer" :required nil
+                :description "Maximum number of mentions to return.")))
+
+(deftool slop-tool-definition-context
+  :name "slop_definition_context"
+  :description "Read a Common Lisp definition body with nearby top-level forms and package context."
+  :permission :agent-allowed
+  :call-style :raw-args
+  :args ((project :type "string"
+                  :description "Clawmacs project name.")
+         (path :type "string" :required nil
+               :description "Optional project-relative file or directory to restrict indexing.")
+         (symbol :type "string" :required nil
+                 :description "Symbol name when definition-id is not supplied.")
+         (definition-id :type "string" :required nil
+                        :description "Slop definition id.")
+         (package :type "string" :required nil
+                  :description "Optional package name for unqualified symbols.")
+         (namespace :type "string" :required nil
+                    :description "Optional namespace: function, variable, type, package, system, or documentation.")
+         (kind :type "string" :required nil
+               :description "Optional definition kind such as function, macro, method, class, parameter, package, tool, or command.")
+         (before-forms :type "integer" :required nil
+                       :description "Number of preceding top-level forms to include. Defaults to 1.")
+         (after-forms :type "integer" :required nil
+                      :description "Number of following top-level forms to include. Defaults to 1.")))
 
 (deftool slop-tool-find-variable-uses
   :name "slop_find_variable_uses"

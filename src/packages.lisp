@@ -629,9 +629,13 @@
    #:slop-project-symbols
    #:slop-symbol-at
    #:slop-find-definitions
+   #:slop-find-definitions-batch
    #:slop-find-references
    #:slop-find-callers
    #:slop-find-callees
+   #:slop-trace-calls
+   #:slop-find-mentions
+   #:slop-definition-context
    #:slop-find-variable-uses
    #:slop-rename-variable
 
