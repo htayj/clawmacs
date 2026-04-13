@@ -10,6 +10,8 @@
 - `slop` is a static source analyzer for project Lisp files. Its results are
   source spans, ids, roles, namespaces, packages, enclosing definitions, and
   previews that are meant to guide precise follow-up reads or structural edits.
+- In `prompt.sh`, the mounted clawmacs source tree is available as project
+  `clawmacs`.
 - Start with `slop_project_symbols`, `slop_find_definitions`, or
   `slop_find_definitions_batch` when locating definitions. Use
   `slop_find_references`, `slop_find_callers`, `slop_find_callees`, and

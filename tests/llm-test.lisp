@@ -1577,6 +1577,39 @@ same
              (setf (uiop:getenv ,gvar) ,gold)
              (setf (uiop:getenv ,gvar) ""))))))
 
+(test ensure-prompt-workspace-project-registers-clawmacs-source-root
+  "Prompt mode registers the mounted workspace as the clawmacs project."
+  (let* ((base (project-test-directory))
+         (workspace (merge-pathnames #P"workspace/" base))
+         (custom (merge-pathnames #P"custom/" base))
+         (definitions (merge-pathnames #P"defs/" base))
+         (*project-registry* (make-hash-table :test #'equal))
+         (*project-definitions-directory* definitions)
+         (clawmacs::*project-definitions-loaded-p* nil))
+    (ensure-directories-exist (merge-pathnames #P".keep" workspace))
+    (ensure-directories-exist (merge-pathnames #P".keep" custom))
+    (ensure-directories-exist (merge-pathnames #P".keep" definitions))
+    (with-env-var ("CLAWMACS_PROMPT_PROJECT_ROOT" (namestring workspace))
+      (clawmacs::ensure-prompt-workspace-project)
+      (let ((project (find-project "clawmacs")))
+        (is (not (null project)))
+        (is (eq :builtin (project-source project)))
+        (is (equal '(:clawmacs :clawmacs/tests)
+                   (project-systems project)))
+        (is (string= (namestring (truename workspace))
+                     (namestring (project-root project)))))
+      (define-project "clawmacs"
+        :root custom
+        :description "user-defined clawmacs project"
+        :source :programmatic
+        :replace t)
+      (clawmacs::ensure-prompt-workspace-project)
+      (let ((project (find-project "clawmacs")))
+        (is (string= "user-defined clawmacs project"
+                     (project-description project)))
+        (is (string= (namestring (truename custom))
+                     (namestring (project-root project))))))))
+
 (test read-env-token-returns-value-when-set
   "read-env-token returns the token from a set environment variable."
   (with-env-var ("CLAWMACS_TEST_TOKEN" "test-env-token-123")

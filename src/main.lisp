@@ -4680,6 +4680,25 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt."
      (merge-pathnames #P".keep" *skill-system-directory*))
     root))
 
+(defparameter *prompt-workspace-project-name* "clawmacs"
+  "Project name used for the source tree mounted into prompt.sh runs.")
+
+(defun prompt-workspace-project-root ()
+  "Return the source root that prompt.sh should expose as a Clawmacs project."
+  (let ((root (uiop:getenv "CLAWMACS_PROMPT_PROJECT_ROOT")))
+    (if (and root (plusp (length root)))
+        (truename (uiop:ensure-directory-pathname root))
+        (truename "."))))
+
+(defun ensure-prompt-workspace-project ()
+  "Expose the prompt workspace source tree as project \"clawmacs\"."
+  (define-project *prompt-workspace-project-name*
+    :root (prompt-workspace-project-root)
+    :description "Clawmacs source tree mounted for prompt-mode analysis"
+    :systems '(:clawmacs :clawmacs/tests)
+    :source :builtin
+    :replace nil))
+
 (defun prompt-tool-event-json (event)
   "Return EVENT as a JSON-ready alist."
   `((:id . ,(prompt-tool-event-id event))
@@ -4802,6 +4821,7 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
           (initialize-clawmacs-runtime)
           (reset-interaction-state)
           (setf *sandbox-root* (truename "."))
+          (ensure-prompt-workspace-project)
           (let ((result
                   (run-single-prompt
                    (prompt-options-prompt options)
