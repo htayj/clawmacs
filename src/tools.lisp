@@ -12,7 +12,8 @@
   (permission  :agent-allowed  :type keyword  :read-only t)
   (execute-fn  nil             :type (or null function))
   ;; Optional function (args) -> string-or-nil for extra approval context
-  (approval-display-fn nil     :type (or null function)))
+  (approval-display-fn nil     :type (or null function))
+  (package nil                 :type (or null string) :read-only t))
 
 (defstruct (subagent-tool
             (:constructor %make-subagent-tool
@@ -53,11 +54,10 @@ Temporary tools override same-named global tools for the dynamic extent.")
   "Default timeout in seconds for shell_exec.")
 
 (defparameter *built-in-tool-names*
-  '("http_fetch" "file_read" "file_write" "file_edit" "shell_exec"
-    "read" "find" "grep" "write" "edit" "lisp_eval")
-  "Names reserved for clawmacs built-in tools.
-INIT-TOOLS removes these entries before re-registering the default built-ins,
-so user-added tools stored in *tool-table* are left intact.")
+  '("lisp_eval")
+  "Names reserved for core Clawmacs provider tools.
+INIT-TOOLS removes these entries before re-registering tagged tools, so
+user-added tools stored in *tool-table* are left intact.")
 
 (defun make-subagent-tool (&key name description input-schema
                              ((:schema schema-arg) nil)
@@ -119,7 +119,8 @@ MAKE-SUBAGENT-TOOL."
                            :permission (tool-definition-permission tool)
                            :execute-fn (tool-definition-execute-fn tool)
                            :approval-display-fn
-                           (tool-definition-approval-display-fn tool)))
+                           (tool-definition-approval-display-fn tool)
+                           :package (tool-definition-package tool)))
     ((subagent-tool-p tool)
      (subagent-tool->tool-definition tool))
     ((plist-subagent-tool-p tool)
@@ -162,10 +163,11 @@ Temporary tools are visited first and same-named global tools are suppressed."
              *tool-table*)))
 
 (defun register-tool (name description schema permission execute-fn
-                      &key approval-display-fn)
+                      &key approval-display-fn package)
   "Register a tool in *tool-table*.
 APPROVAL-DISPLAY-FN, if provided, is called with (args) during permission
-approval to generate extra display context (e.g., file diffs)."
+approval to generate extra display context (e.g., file diffs). PACKAGE records
+the owning Clawmacs package for package-scoped tools."
   (let ((normalized-name (normalize-tool-name name)))
     (setf (gethash normalized-name *tool-table*)
           (make-tool-definition :name normalized-name
@@ -173,7 +175,8 @@ approval to generate extra display context (e.g., file diffs)."
                                 :input-schema schema
                                 :permission permission
                                 :execute-fn execute-fn
-                                :approval-display-fn approval-display-fn))))
+                                :approval-display-fn approval-display-fn
+                                :package package))))
 
 (defun tool-argument-value (args name)
   "Return values VALUE and SUPPLIED-P for NAME in Lisp data ARGS."
@@ -296,12 +299,23 @@ approval to generate extra display context (e.g., file diffs)."
      (execute-agent-tool-metadata metadata args))
    :approval-display-fn
    (resolve-agent-tool-function-designator
-    (agent-tool-metadata-approval-display-fn metadata))))
+    (agent-tool-metadata-approval-display-fn metadata))
+   :package (agent-tool-metadata-package metadata)))
 
 (defun register-agent-tool-provider-definitions ()
-  "Register all tagged agent tools in the provider tool table."
+  "Register process-global tagged agent tools in the provider tool table.
+Package-owned tools are registered when their package entrypoint is loaded."
   (dolist (metadata (list-agent-tool-metadata))
-    (register-agent-tool-provider-definition metadata)))
+    (unless (agent-tool-metadata-package metadata)
+      (register-agent-tool-provider-definition metadata))))
+
+(defun register-package-agent-tool-provider-definitions (package-name)
+  "Register provider tools owned by PACKAGE-NAME."
+  (let ((name (manifest-package-name package-name)))
+    (when name
+      (dolist (metadata (list-agent-tool-metadata))
+        (when (string= name (or (agent-tool-metadata-package metadata) ""))
+          (register-agent-tool-provider-definition metadata))))))
 
 (defun tool-allowed-for-active-run-p (name)
   "Return true when NAME is allowed by *ACTIVE-TOOL-NAMES*."
@@ -312,11 +326,6 @@ approval to generate extra display context (e.g., file diffs)."
   "Return an agent-name string derived from *CURRENT-CALLER*, or NIL."
   (unless (eq *current-caller* :user)
     (string-downcase (symbol-name *current-caller*))))
-
-(defun tool-definition-package (definition)
-  "Return DEFINITION's owning package name, when it came from deftool."
-  (let ((metadata (find-agent-tool-metadata (tool-definition-name definition))))
-    (and metadata (agent-tool-metadata-package metadata))))
 
 (defun tool-visible-in-package-context-p (definition &key buffer agent-name)
   "Return true when DEFINITION is visible for the active package context."
@@ -519,6 +528,17 @@ Returns a string or nil. Calls the tool's approval-display-fn if set."
 ;;; --------------------------------------------------------------------------
 ;;; Tool Registration
 ;;; --------------------------------------------------------------------------
+
+(deftool execute-lisp-eval
+  :name "lisp_eval"
+  :description "Evaluate one Common Lisp form in the running clawmacs process for testing, introspection, live system updates, or defining helper tools."
+  :permission :agent-allowed
+  :call-style :raw-args
+  :args ((code :type "string"
+               :description "Lisp data :code, one Common Lisp form to read and evaluate.")
+         (package :type "string"
+                  :required nil
+                  :description "Lisp data :package, the package name used while reading and evaluating :code. Default: CLAWMACS.")))
 
 (defun init-tools ()
   "Register the default clawmacs built-in tools.

@@ -989,19 +989,4 @@ Works for both existing and not-yet-existing files."
       (:required . #("path" "old-text" "new-text")))
     :permission :agent-allowed
     :execute-fn #'execute-edit
-    :approval-display-fn #'file-edit-approval-display)
-   (list
-    :name "lisp_eval"
-    :description
-    "Evaluate arbitrary Common Lisp code in the current process. Returns a printed Lisp data payload. Use this for computation, data transformation, or interacting with the running system."
-    :schema
-    `((:type . "object")
-      (:properties
-       . (("code" . ((:type . "string")
-                     (:description . "Lisp data :code, the Common Lisp form to evaluate.")))
-          ("package" . ((:type . "string")
-                        (:description . ,(format nil "Lisp data :package. Default: ~A."
-                                                 *lisp-eval-default-package*))))))
-      (:required . #("code")))
-    :permission :agent-allowed
-    :execute-fn #'execute-lisp-eval)))
+    :approval-display-fn #'file-edit-approval-display)))

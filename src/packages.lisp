@@ -539,6 +539,7 @@
    #:tool-definition-permission
    #:tool-definition-execute-fn
    #:tool-definition-approval-display-fn
+   #:tool-definition-package
    #:subagent-tool
    #:subagent-tool-name
    #:subagent-tool-description

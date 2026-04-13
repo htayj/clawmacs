@@ -1,7 +1,5 @@
 (in-package :clawmacs)
 
-(setf *lisp-eval-default-package* "CLAWMACS")
-
 (deftool execute-read
   :name "read"
   :description "Read the contents of a text file within the sandbox. Output is truncated to 2000 lines by default; use offset and limit to continue through large files."
@@ -76,14 +74,3 @@
                    :description "Lisp data :old-text, the exact text to find and replace. Must occur exactly once.")
          (new-text :type "string"
                    :description "Lisp data :new-text, the replacement text. Use an empty string to delete :old-text. The resulting file's parentheses must be balanced.")))
-
-(deftool execute-lisp-eval
-  :name "lisp_eval"
-  :description "Evaluate one Common Lisp form in the running clawmacs process for testing, introspection, live system updates, or defining helper tools."
-  :permission :agent-allowed
-  :call-style :raw-args
-  :args ((code :type "string"
-               :description "Lisp data :code, one Common Lisp form to read and evaluate.")
-         (package :type "string"
-                  :required nil
-                  :description "Lisp data :package, the package name used while reading and evaluating :code. Default: CLAWMACS.")))

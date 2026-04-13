@@ -930,6 +930,11 @@ Returns the loaded package definition on success, or NIL on warning/failure."
           (t
            (let ((result (load-clawmacs-package definition)))
              (when result
+               (when (fboundp 'register-package-agent-tool-provider-definitions)
+                 (funcall
+                  (symbol-function
+                   'register-package-agent-tool-provider-definitions)
+                  (package-definition-name result)))
                (push result loaded)))))))
     (nreverse loaded)))
 

@@ -1814,7 +1814,7 @@ documentation in *extended-docs*."
 
 (defdoc *lisp-eval-default-package*
   :category "tool"
-  :returns "string - Default package used by lispi lisp_eval when :package is omitted."
+  :returns "string - Default package used by lisp_eval when :package is omitted."
   :side-effects "init-tools sets this to \"CLAWMACS\" for the clawmacs default tool surface."
   :see-also (init-tools eval-history-to-string))
 
@@ -1944,7 +1944,7 @@ documentation in *extended-docs*."
 (defdoc tool-definition
   :category "tool"
   :usage "Created by register-tool."
-  :returns "Structure — Holds name, description, schema, permission, and execute-fn."
+  :returns "Structure — Holds name, description, schema, permission, execute-fn, optional approval-display-fn, and optional owning package."
   :see-also (register-tool *tool-table* execute-tool))
 
 (defdoc subagent-tool
@@ -2014,7 +2014,7 @@ documentation in *extended-docs*."
   :category "tool"
   :usage "(init-tools) — Called once at startup."
   :returns "nil"
-  :side-effects "Removes previously registered built-in tool entries and re-registers provider tools tagged through deftool."
+  :side-effects "Removes the reserved lisp_eval entry and re-registers process-global provider tools tagged through deftool. Package tools are registered by active package loading."
   :see-also (*tool-table* deftool register-tool))
 
 ;;; ==========================================================================

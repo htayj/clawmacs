@@ -90,6 +90,12 @@
 
 (defmacro with-tool-table-restored (&body body)
   `(let* ((snapshot (make-hash-table :test (hash-table-test clawmacs::*tool-table*)))
+          (agent-tool-snapshot
+            (make-hash-table
+             :test (hash-table-test clawmacs::*agent-tool-metadata-table*)))
+          (agent-tool-name-snapshot
+            (make-hash-table
+             :test (hash-table-test clawmacs::*agent-tool-name-table*)))
           (package-test-root (temp-package-test-directory "llm-package-config"))
           (clawmacs::*package-configuration-path*
            (merge-pathnames "packages.json"
@@ -103,13 +109,28 @@
      (maphash (lambda (key value)
                 (setf (gethash key snapshot) value))
               clawmacs::*tool-table*)
+     (maphash (lambda (key value)
+                (setf (gethash key agent-tool-snapshot) value))
+              clawmacs::*agent-tool-metadata-table*)
+     (maphash (lambda (key value)
+                (setf (gethash key agent-tool-name-snapshot) value))
+              clawmacs::*agent-tool-name-table*)
      (unwind-protect
           (progn
             ,@body)
        (clrhash clawmacs::*tool-table*)
        (maphash (lambda (key value)
                   (setf (gethash key clawmacs::*tool-table*) value))
-                snapshot))))
+                snapshot)
+       (clrhash clawmacs::*agent-tool-metadata-table*)
+       (maphash (lambda (key value)
+                  (setf (gethash key clawmacs::*agent-tool-metadata-table*)
+                        value))
+                agent-tool-snapshot)
+       (clrhash clawmacs::*agent-tool-name-table*)
+       (maphash (lambda (key value)
+                  (setf (gethash key clawmacs::*agent-tool-name-table*) value))
+                agent-tool-name-snapshot))))
 
 (defun initialize-test-tools ()
   "Initialize the tool table with the bundled lispi package enabled."
@@ -183,7 +204,7 @@
     (clawmacs::provider-token-path :unknown-provider)))
 
 (test init-tools-registers-pi-style-tools-by-default
-  "Enabling the bundled lispi package exposes Pi-style tools."
+  "Enabling the bundled lispi package exposes file tools beside lisp_eval."
   (with-tool-table-restored
     (clrhash clawmacs::*tool-table*)
     (initialize-test-tools)
@@ -204,7 +225,7 @@
       (is (null (gethash "shell_exec" clawmacs::*tool-table*))))))
 
 (test init-tools-hides-lispi-tools-until-package-enabled
-  "init-tools alone does not expose lispi package tools."
+  "init-tools exposes built-in lisp_eval without lispi package tools."
   (with-tool-table-restored
     (clrhash clawmacs::*tool-table*)
     (clawmacs::init-tools)
@@ -214,8 +235,82 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is-false (member "read" tool-names :test #'string=))
-      (is-false (member "lisp_eval" tool-names :test #'string=)))))
+      (is (equal '("lisp_eval") tool-names))
+      (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*))))
+      (is-false (member "read" tool-names :test #'string=)))))
+
+(test init-tools-only-reserves-lisp-eval
+  "User tools may use Lispi names when Lispi is not active."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs::register-tool
+     "read"
+     "User read tool."
+     '((:type . "object")
+       (:properties . nil))
+     :agent-allowed
+     (lambda (args)
+       (declare (ignore args))
+       "user-read"))
+    (clawmacs::init-tools)
+    (let* ((*current-caller* :user)
+           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tool-names (sort (mapcar (lambda (tool)
+                                       (cdr (assoc :name tool)))
+                                     tools)
+                             #'string<)))
+      (is (equal '("lisp_eval" "read") tool-names))
+      (is (string= "user-read"
+                   (clawmacs:execute-tool "read" nil))))))
+
+(test direct-tools-with-lispi-names-are-not-package-scoped
+  "A direct user tool named like a Lispi tool remains visible without Lispi."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs::init-tools)
+    (clawmacs:set-package-enablement-scope "lispi" :global)
+    (clawmacs:load-active-packages)
+    (clawmacs:set-package-enablement-scope "lispi" :default)
+    (clawmacs::register-tool
+     "read"
+     "User read tool."
+     '((:type . "object")
+       (:properties . nil))
+     :agent-allowed
+     (lambda (args)
+       (declare (ignore args))
+       "user-read"))
+    (clawmacs::init-tools)
+    (let* ((*current-caller* :user)
+           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tool-names (sort (mapcar (lambda (tool)
+                                       (cdr (assoc :name tool)))
+                                     tools)
+                             #'string<)))
+      (is (equal '("lisp_eval" "read") tool-names))
+      (is (string= "user-read"
+                   (clawmacs:execute-tool "read" nil))))))
+
+(test load-active-packages-reregisters-active-package-tools
+  "Active package loading restores package tools after init-tools resets core."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs::init-tools)
+    (clawmacs:set-package-enablement-scope "lispi" :global)
+    (clawmacs:load-active-packages)
+    (is (not (null (gethash "read" clawmacs::*tool-table*))))
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs::init-tools)
+    (is (null (gethash "read" clawmacs::*tool-table*)))
+    (clawmacs:load-active-packages)
+    (let* ((*current-caller* :user)
+           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tool-names (sort (mapcar (lambda (tool)
+                                       (cdr (assoc :name tool)))
+                                     tools)
+                             #'string<)))
+      (is (member "read" tool-names :test #'string=))
+      (is (member "lisp_eval" tool-names :test #'string=)))))
 
 (test init-tools-preserves-custom-tools
   "init-tools resets built-ins without wiping user-added tools."
@@ -335,13 +430,13 @@ needle here
           (is-false (search "node_modules" grep-result)))))))
 
 (test lispi-package-exposes-default-tool-implementations
-  "The default read/write/edit/lisp_eval implementations live in the lispi package."
+  "The default read/write/edit implementations live in the lispi package."
   (let* ((specs (lispi:default-tool-specs))
          (names (sort (mapcar (lambda (spec)
                                 (getf spec :name))
                               specs)
                       #'string<)))
-    (is (equal '("edit" "find" "grep" "lisp_eval" "read" "write") names)))
+    (is (equal '("edit" "find" "grep" "read" "write") names)))
   (let* ((root (uiop:ensure-directory-pathname
                 (temp-package-test-directory "lispi-tools")))
          (file (merge-pathnames "demo.txt" root)))
@@ -369,18 +464,7 @@ two"))))
                      :new-text "TWO"))))
       (is (string= "one
 TWO"
-                   (uiop:read-file-string file)))))
-  (let ((lispi:*last-eval-result* nil)
-        (lispi:*last-eval-condition* nil)
-        (lispi:*lisp-eval-history* nil))
-    (let* ((data (lispi:execute-lisp-eval
-                  '(:code "(+ 2 3)"
-                    :package "CL-USER")))
-           (decoded (lispi:lisp-data-read data)))
-      (is (equal '(5) lispi:*last-eval-result*))
-      (is (null lispi:*last-eval-condition*))
-      (is (search "5" (getf decoded :result)))
-      (is (search "(+ 2 3)" (lispi:eval-history-to-string))))))
+                   (uiop:read-file-string file))))))
 
 (test default-write-and-edit-tools-reject-unbalanced-parentheses
   "write and edit fail before touching disk when content would be unbalanced."
