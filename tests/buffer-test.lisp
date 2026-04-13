@@ -2,18 +2,17 @@
 (in-suite buffer-suite)
 
 (defvar *mx-test-command-log* nil
-  "Records interactive command invocations during buffer tests.")
+  "Records command invocations during buffer tests.")
 
-(clawmacs:defcommand mx-test-noarg-command (:permission :user-only)
+(clawmacs:defcommand mx-test-noarg-command ()
   "Test command used to verify M-x invocation without arguments."
   (buffer)
   (declare (ignore buffer))
   (setf *mx-test-command-log* '(:noarg)))
 
 (clawmacs:defcommand mx-test-arg-command
-    (:permission :user-only
-     :interactive ((count :prompt "Count" :reader parse-integer)
-                   (label :prompt "Label")))
+    (:prompts ((count :prompt "Count" :reader parse-integer)
+               (label :prompt "Label")))
   "Test command used to verify M-x argument prompting."
   (buffer count label)
   (declare (ignore buffer))
@@ -314,7 +313,7 @@
           (keymap-lookup *default-keymap* '(:alt #\x)))))
 
 (test execute-extended-command-opens-the-command-picker
-  "M-x opens the minibuffer with interactive commands."
+  "M-x opens the minibuffer with commands."
   (with-interactive-command-test-buffer (buf)
     (clawmacs::handle-key-event buf '(:alt #\x))
     (is (eq t *minibuffer-active*))
@@ -336,7 +335,7 @@
     (is (equal '(:noarg) *mx-test-command-log*))))
 
 (test execute-extended-command-prompts-for-each-argument
-  "Selecting a parameterized command prompts for each interactive argument."
+  "Selecting a parameterized command prompts for each command argument."
   (with-interactive-command-test-buffer (buf)
     (clawmacs::handle-key-event buf '(:alt #\x))
     (select-minibuffer-command 'mx-test-arg-command)
@@ -383,7 +382,7 @@
     (is (null *mx-test-command-log*))))
 
 (test key-dispatch-prompts-for-parameterized-commands
-  "Key-dispatched commands use the same interactive prompt path as M-x."
+  "Key-dispatched commands use the same prompt path as M-x."
   (with-interactive-command-test-buffer (buf)
     (let ((km (make-keymap :test :parent *default-keymap*)))
       (keymap-bind km #\? 'mx-test-arg-command)

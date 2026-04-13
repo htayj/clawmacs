@@ -222,20 +222,14 @@
    #:*command-table*
    #:command-metadata
    #:command-metadata-name
-   #:command-metadata-permission
    #:command-metadata-docstring
    #:command-metadata-keybindings
    #:command-metadata-lambda-list
-   #:command-metadata-interactive-spec
+   #:command-metadata-prompts
    #:defcommand
-   #:check-permission
-   #:permission-denied
-   #:permission-required
    #:list-available-commands
    #:command-required-arguments
-   #:command-interactive-p
-   #:list-interactive-commands
-   #:resolve-command-interactive-reader
+   #:resolve-command-prompt-reader
 
    ;; Extended documentation
    #:*extended-docs*

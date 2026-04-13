@@ -16,33 +16,31 @@
 (test command-metadata-registration
   "defcommand registers metadata in the command table."
   (let ((*command-table* (make-hash-table :test #'eq)))
-    (eval '(clawmacs:defcommand test-cmd (:permission :user-only)
+    (eval '(clawmacs:defcommand test-cmd ()
              "A test command."
              (buffer)
              (declare (ignore buffer))
              :test-result))
     (let ((meta (gethash 'test-cmd *command-table*)))
       (is (not (null meta)))
-      (is (eq :user-only (command-metadata-permission meta)))
       (is (string= "A test command." (command-metadata-docstring meta))))))
 
-(test command-metadata-captures-lambda-list-and-interactive-spec
-  "defcommand stores the command lambda list and interactive arg metadata."
+(test command-metadata-captures-lambda-list-and-prompts
+  "defcommand stores the command lambda list and prompt metadata."
   (let ((*command-table* (make-hash-table :test #'eq)))
-    (eval '(clawmacs:defcommand interactive-cmd
-               (:permission :user-only
-                :interactive ((count :prompt "Count" :reader parse-integer)
-                              (label :prompt "Label")))
-             "Interactive command."
+    (eval '(clawmacs:defcommand prompted-cmd
+               (:prompts ((count :prompt "Count" :reader parse-integer)
+                          (label :prompt "Label")))
+             "Prompted command."
              (buffer count label)
              (declare (ignore buffer count label))
              :ok))
-    (let ((meta (gethash 'interactive-cmd *command-table*)))
+    (let ((meta (gethash 'prompted-cmd *command-table*)))
       (is (equal '(buffer count label)
                  (command-metadata-lambda-list meta)))
       (is (equal '((:name count :prompt "Count" :reader parse-integer)
                    (:name label :prompt "Label" :reader nil))
-                 (command-metadata-interactive-spec meta))))))
+                 (command-metadata-prompts meta))))))
 
 (test deftool-metadata-registers-provider-tool
   "deftool stores metadata and exposes a provider-callable tool."
@@ -109,8 +107,7 @@
     (let ((*command-table* (make-hash-table :test #'eq))
           (*command-tool-test-log* nil))
       (eval '(clawmacs:defcommand command-tool-test
-                 (:permission :agent-allowed
-                  :interactive nil)
+                 (:prompts ((label :prompt "Label")))
                "Run a command as an agent tool."
                (buffer label)
                (setf clawmacs/tests::*command-tool-test-log*
@@ -119,6 +116,7 @@
       (eval '(clawmacs:deftool command-tool-test
                :name "command_tool_test"
                :description "Run a command as an agent tool."
+               :permission :agent-allowed
                :args ((label :type "string"
                              :description "Label to record."))))
       (let* ((definition (gethash "command_tool_test" clawmacs::*tool-table*))
@@ -147,99 +145,90 @@
   (signals error
     (macroexpand-1
      '(clawmacs:defcommand old-command-tool
-          (:permission :agent-allowed
-           :tool (:name "old_command_tool"
+          (:tool (:name "old_command_tool"
                   :args ((label :type "string"))))
         "Old command tool."
         (buffer label)
         (declare (ignore buffer label))
         nil))))
 
-(test permission-denied-for-agent-on-user-only
-  "An agent calling a :user-only command signals permission-denied."
-  (let ((*command-table* (make-hash-table :test #'eq))
-        (*current-caller* :some-agent))
-    (eval '(clawmacs:defcommand restricted-cmd (:permission :user-only)
-             "Restricted."
-             (buffer)
-             (declare (ignore buffer))
-             :ok))
-    (signals permission-denied
-      (check-permission 'restricted-cmd))))
+(test defcommand-rejects-permission-keyword
+  "Command permissions belong in deftool metadata, not defcommand."
+  (signals error
+    (macroexpand-1
+     '(clawmacs:defcommand permission-command
+          (:permission :agent-allowed)
+        "Old permission metadata."
+        (buffer)
+        (declare (ignore buffer))
+        nil))))
 
-(test permission-passes-for-user-on-user-only
-  "A user calling a :user-only command succeeds."
-  (let ((*command-table* (make-hash-table :test #'eq))
-        (*current-caller* :user))
-    (eval '(clawmacs:defcommand allowed-cmd (:permission :user-only)
-             "Allowed."
-             (buffer)
-             (declare (ignore buffer))
-             :ok))
-    (finishes (check-permission 'allowed-cmd))))
+(test defcommand-rejects-interactive-keyword
+  "Prompt metadata belongs under :PROMPTS, not :INTERACTIVE."
+  (signals error
+    (macroexpand-1
+     '(clawmacs:defcommand interactive-command
+          (:interactive nil)
+        "Old interactive metadata."
+        (buffer)
+        (declare (ignore buffer))
+        nil))))
 
-(test agent-allowed-passes-for-any-caller
-  "An :agent-allowed command can be called by anyone."
-  (let ((*command-table* (make-hash-table :test #'eq))
-        (*current-caller* :some-agent))
-    (eval '(clawmacs:defcommand open-cmd (:permission :agent-allowed)
-             "Open."
-             (buffer)
-             (declare (ignore buffer))
-             :ok))
-    (finishes (check-permission 'open-cmd))))
-
-(test list-available-commands-filters-by-caller
-  "list-available-commands excludes :user-only commands for agent callers."
+(test list-available-commands-returns-registered-commands
+  "list-available-commands returns registered commands for every caller."
   (let ((*command-table* (make-hash-table :test #'eq)))
-    (eval '(clawmacs:defcommand user-cmd (:permission :user-only)
-             "User only." (buffer) (declare (ignore buffer)) nil))
-    (eval '(clawmacs:defcommand agent-cmd (:permission :agent-allowed)
-             "Agent ok." (buffer) (declare (ignore buffer)) nil))
+    (eval '(clawmacs:defcommand first-cmd ()
+             "First." (buffer) (declare (ignore buffer)) nil))
+    (eval '(clawmacs:defcommand second-cmd ()
+             "Second." (buffer) (declare (ignore buffer)) nil))
     (let ((*current-caller* :user))
       (let ((cmds (list-available-commands)))
-        (is (member 'user-cmd cmds))
-        (is (member 'agent-cmd cmds))))
+        (is (member 'first-cmd cmds))
+        (is (member 'second-cmd cmds))))
     (let ((*current-caller* :some-agent))
       (let ((cmds (list-available-commands)))
-        (is (not (member 'user-cmd cmds)))
-        (is (member 'agent-cmd cmds))))))
+        (is (member 'first-cmd cmds))
+        (is (member 'second-cmd cmds))))))
 
-(test list-interactive-commands-excludes-programmatic-commands
-  "Interactive command listing only returns commands exposed to the UI."
+(test list-available-commands-includes-prompted-commands
+  "All defcommand forms are UI commands."
   (let ((*command-table* (make-hash-table :test #'eq)))
-    (eval '(clawmacs:defcommand zero-arg-cmd (:permission :user-only)
-             "Default interactive." (buffer) (declare (ignore buffer)) :ok))
-    (eval '(clawmacs:defcommand prompted-cmd
-               (:permission :user-only
-                :interactive ((count :prompt "Count" :reader parse-integer)))
-             "Prompted interactive." (buffer count)
+    (eval '(clawmacs:defcommand zero-arg-cmd ()
+             "Default command." (buffer) (declare (ignore buffer)) :ok))
+    (eval '(clawmacs:defcommand listed-prompted-cmd
+               (:prompts ((count :prompt "Count" :reader parse-integer)))
+             "Prompted command." (buffer count)
              (declare (ignore buffer count)) :ok))
-    (eval '(clawmacs:defcommand hidden-cmd
-               (:permission :user-only :interactive nil)
-             "Hidden." (buffer) (declare (ignore buffer)) :ok))
-    (let ((cmds (list-interactive-commands)))
+    (let ((cmds (list-available-commands)))
       (is (member 'zero-arg-cmd cmds))
-      (is (member 'prompted-cmd cmds))
-      (is (not (member 'hidden-cmd cmds))))))
+      (is (member 'listed-prompted-cmd cmds)))))
 
 (test defcommand-rejects-unsupported-lambda-lists
   "Interactive commands must use required positional arguments only."
   (signals error
     (macroexpand-1
-     '(clawmacs:defcommand unsupported-cmd (:permission :user-only)
+     '(clawmacs:defcommand unsupported-cmd ()
        "Bad lambda list."
        (buffer &optional count)
        (declare (ignore buffer count))
        nil))))
 
-(test defcommand-rejects-interactive-arg-mismatches
-  "Interactive arg specs must line up with the command parameters."
+(test defcommand-rejects-missing-prompts-for-arguments
+  "Commands with non-buffer arguments must declare minibuffer prompts."
+  (signals error
+    (macroexpand-1
+     '(clawmacs:defcommand missing-prompts-cmd ()
+        "Missing prompts."
+        (buffer count)
+        (declare (ignore buffer count))
+        nil))))
+
+(test defcommand-rejects-prompt-arg-mismatches
+  "Prompt specs must line up with the command parameters."
   (signals error
     (macroexpand-1
      '(clawmacs:defcommand mismatched-cmd
-          (:permission :user-only
-           :interactive ((count :prompt "Count" :reader parse-integer)))
+          (:prompts ((count :prompt "Count" :reader parse-integer)))
         "Mismatched."
         (buffer count label)
         (declare (ignore buffer count label))

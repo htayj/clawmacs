@@ -928,39 +928,34 @@ documentation in *extended-docs*."
   :see-also (save-session load-session *sessions-dir*))
 
 ;;; ==========================================================================
-;;; Category: command — Command infrastructure and permissions
+;;; Category: command — Command infrastructure
 ;;; ==========================================================================
 
 (defdoc *current-caller*
-  :category "command"
-  :see-also (check-permission defcommand *command-table*))
+  :category "tool"
+  :returns "keyword — :USER for interactive use, or an agent keyword while provider tools run."
+  :see-also (tool-definitions-for-api execute-tool deftool))
 
 (defdoc *sandbox-root*
-  :category "command"
+  :category "tool"
   :returns "pathname or nil - Sandboxed file tools are restricted to this directory subtree when non-nil."
-  :see-also (check-permission defcommand))
+  :see-also (execute-tool validate-sandbox-path))
 
 (defdoc *command-table*
   :category "command"
-  :see-also (defcommand command-metadata list-available-commands check-permission))
+  :see-also (defcommand command-metadata list-available-commands))
 
 (defdoc command-metadata
   :category "command"
   :usage "Created automatically by defcommand."
-  :returns "Structure — Holds name, permission, docstring, keybindings, lambda list, and interactive metadata for a command."
-  :see-also (defcommand *command-table* command-metadata-name command-metadata-permission))
+  :returns "Structure — Holds name, docstring, keybindings, lambda list, and minibuffer prompt metadata for a command."
+  :see-also (defcommand *command-table* command-metadata-name command-metadata-docstring))
 
 (defdoc command-metadata-name
   :category "command"
   :usage "(command-metadata-name META:command-metadata)"
   :returns "symbol — The command's name."
-  :see-also (command-metadata command-metadata-permission))
-
-(defdoc command-metadata-permission
-  :category "command"
-  :usage "(command-metadata-permission META:command-metadata)"
-  :returns "keyword — :USER-ONLY, :AGENT-ALLOWED, or :AGENT-WITH-PERMISSION."
-  :see-also (command-metadata command-metadata-name check-permission))
+  :see-also (command-metadata command-metadata-docstring))
 
 (defdoc command-metadata-docstring
   :category "command"
@@ -980,67 +975,36 @@ documentation in *extended-docs*."
   :returns "list — The command's required positional lambda list."
   :see-also (command-required-arguments defcommand))
 
-(defdoc command-metadata-interactive-spec
+(defdoc command-metadata-prompts
   :category "command"
-  :usage "(command-metadata-interactive-spec META:command-metadata)"
-  :returns "T, NIL, or a list of interactive argument specs."
-  :see-also (command-interactive-p list-interactive-commands defcommand))
+  :usage "(command-metadata-prompts META:command-metadata)"
+  :returns "list — Minibuffer prompt specs for the command's non-buffer arguments."
+  :see-also (command-required-arguments defcommand))
 
 (defdoc defcommand
   :category "command"
-  :usage "(defcommand NAME (&key PERMISSION KEYS INTERACTIVE) DOCSTRING (BUFFER &rest REQUIRED-ARGS) &body BODY)"
+  :usage "(defcommand NAME (&key KEYS PROMPTS) DOCSTRING (BUFFER &rest REQUIRED-ARGS) &body BODY)"
   :returns "symbol — The command name."
-  :side-effects "Registers metadata in *command-table*, defines a generic function, :around method for access control, and primary method. INTERACTIVE controls M-x visibility and minibuffer prompting."
-  :see-also (*command-table* command-metadata check-permission list-available-commands list-interactive-commands deftool defdoc))
-
-(defdoc check-permission
-  :category "command"
-  :usage "(check-permission COMMAND-NAME:symbol) — (check-permission 'send-message)"
-  :returns "values — No meaningful return value."
-  :side-effects "Signals PERMISSION-DENIED or PERMISSION-REQUIRED if access is denied."
-  :see-also (*current-caller* permission-denied permission-required defcommand))
-
-(defdoc permission-denied
-  :category "command"
-  :usage "Signaled automatically by check-permission."
-  :returns "Condition — An error condition for denied access."
-  :see-also (check-permission permission-required *current-caller*))
-
-(defdoc permission-required
-  :category "command"
-  :usage "Signaled automatically by check-permission."
-  :returns "Condition — An error condition requiring user approval."
-  :see-also (check-permission permission-denied *current-caller*))
+  :side-effects "Registers an M-x command in *command-table*, defines a generic function, and defines the primary method. PROMPTS supplies minibuffer readers for non-buffer arguments."
+  :see-also (*command-table* command-metadata list-available-commands deftool defdoc))
 
 (defdoc list-available-commands
   :category "command"
   :usage "(list-available-commands) — (list-available-commands)"
-  :returns "list of symbols — Commands available to *current-caller*."
-  :see-also (*command-table* *current-caller* defcommand))
+  :returns "list of symbols — Registered commands."
+  :see-also (*command-table* defcommand))
 
 (defdoc command-required-arguments
   :category "command"
   :usage "(command-required-arguments COMMAND-NAME:symbol)"
   :returns "list — The non-buffer required argument names for the command."
-  :see-also (command-metadata-lambda-list command-interactive-p))
+  :see-also (command-metadata-lambda-list command-metadata-prompts))
 
-(defdoc command-interactive-p
+(defdoc resolve-command-prompt-reader
   :category "command"
-  :usage "(command-interactive-p COMMAND-NAME:symbol)"
-  :returns "T, NIL, or a list of interactive arg specs."
-  :see-also (list-interactive-commands command-metadata-interactive-spec))
-
-(defdoc list-interactive-commands
-  :category "command"
-  :usage "(list-interactive-commands) — (list-interactive-commands)"
-  :returns "list of symbols — Commands available to the UI via M-x."
-  :see-also (list-available-commands command-interactive-p))
-
-(defdoc resolve-command-interactive-reader
-  :category "command"
-  :usage "(resolve-command-interactive-reader READER)"
+  :usage "(resolve-command-prompt-reader READER)"
   :returns "function — A callable reader for minibuffer text."
-  :see-also (defcommand command-metadata-interactive-spec))
+  :see-also (defcommand command-metadata-prompts))
 
 ;;; ==========================================================================
 ;;; Category: docs — Extended documentation system
@@ -1061,7 +1025,7 @@ documentation in *extended-docs*."
   :category "tool"
   :usage "(deftool SYMBOL :name \"provider_name\" :description \"...\" :args ((arg :type \"string\")))"
   :returns "agent-tool-metadata — Metadata for the registered provider-callable tool."
-  :side-effects "Registers explicit agent tool metadata and syncs the provider tool table when available. If SYMBOL is a registered command, command call style and default permission are inferred and the current tool buffer is supplied automatically."
+  :side-effects "Registers explicit agent tool metadata, including tool permission, and syncs the provider tool table when available. If SYMBOL is a registered command, command call style is inferred and the current tool buffer is supplied automatically."
   :see-also (register-agent-tool-metadata defcommand execute-tool))
 
 (defdoc extended-doc
@@ -2466,15 +2430,15 @@ documentation in *extended-docs*."
   :category "minibuffer"
   :usage "(invoke-command BUFFER COMMAND)"
   :returns "The direct command result, or NIL when invocation switches to minibuffer prompts."
-  :side-effects "Runs an interactive command immediately or prompts for its arguments in the minibuffer."
-  :see-also (execute-extended-command list-interactive-commands))
+  :side-effects "Runs a command immediately or prompts for its arguments in the minibuffer."
+  :see-also (execute-extended-command list-available-commands))
 
 (defdoc execute-extended-command
   :category "minibuffer"
   :usage "(execute-extended-command BUFFER)"
   :returns "nil"
-  :side-effects "Opens the M-x minibuffer, lets the user choose an interactive command, and invokes it."
-  :see-also (invoke-command list-interactive-commands))
+  :side-effects "Opens the M-x minibuffer, lets the user choose a command, and invokes it."
+  :see-also (invoke-command list-available-commands))
 
 (defdoc sort-models-by-recency
   :category "minibuffer"
@@ -3352,8 +3316,8 @@ documentation in *extended-docs*."
 
 (defdoc command-metadata
   :category "type"
-  :usage "(make-command-metadata :name 'send-message :permission :user-only)"
-  :see-also (defcommand command-metadata-name command-metadata-permission *command-table*))
+  :usage "(make-command-metadata :name 'send-message)"
+  :see-also (defcommand command-metadata-name command-metadata-docstring *command-table*))
 
 (defdoc tool-definition
   :category "type"
@@ -3364,16 +3328,6 @@ documentation in *extended-docs*."
   :category "type"
   :usage "(make-stream-state)"
   :see-also (buffer-pending-stream provider-request-streaming zai-request-streaming))
-
-(defdoc permission-denied
-  :category "type"
-  :usage "(error 'permission-denied :command 'some-command)"
-  :see-also (check-permission permission-required *current-caller*))
-
-(defdoc permission-required
-  :category "type"
-  :usage "(error 'permission-required :command 'some-command)"
-  :see-also (check-permission permission-denied *current-caller*))
 
 ;;; ==========================================================================
 ;;; Category: prefix — Prefix command processing
@@ -3535,7 +3489,7 @@ documentation in *extended-docs*."
 
 (defdoc self-insert-command
   :category "editing"
-  :usage "Invoked for printable characters. Inserts *self-insert-char* at point."
+  :usage "Called by the event loop for printable characters. Inserts *self-insert-char* at point."
   :returns "nil"
   :side-effects "Inserts one character at point."
   :see-also (message-insert-char *self-insert-char*))

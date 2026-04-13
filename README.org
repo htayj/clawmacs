@@ -451,7 +451,7 @@ src/
   faces.lisp           Color specs, faces, face sets, global registry
   message.lisp         Line/message data structures, editing operations
   buffer.lisp          Buffer ring, conversation management, sessions
-  commands.lisp        defcommand macro, permission levels
+  commands.lisp        defcommand macro and command metadata
   keymap.lisp          Keymap data structure, default bindings
   projects.lisp        Project/resource registry, manifests, file buffers
   skills.lisp          Codex-style local skill discovery and resource access

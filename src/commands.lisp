@@ -6,7 +6,7 @@
 
 (defvar *current-caller* :user
   "The current caller context. Bound to :USER for interactive use,
-or an agent keyword (e.g., :CODER) during agent command dispatch.")
+or an agent keyword (e.g., :CODER) during agent tool dispatch.")
 
 ;;; --------------------------------------------------------------------------
 ;;; Command Metadata
@@ -15,11 +15,10 @@ or an agent keyword (e.g., :CODER) during agent command dispatch.")
 (defstruct command-metadata
   "Metadata for a registered command."
   (name        (error "name required")       :type symbol   :read-only t)
-  (permission  :user-only                    :type keyword  :read-only t)
   (docstring   ""                            :type string   :read-only t)
   (keybindings nil                           :type list     :read-only t)
   (lambda-list '(buffer)                     :type list     :read-only t)
-  (interactive-spec t                        :type t        :read-only t))
+  (prompts     nil                           :type list     :read-only t))
 
 (defvar *command-table* (make-hash-table :test #'eq)
   "Global table mapping command symbols to command-metadata.")
@@ -249,28 +248,19 @@ or an agent keyword (e.g., :CODER) during agent command dispatch.")
 (defmacro deftool (symbol &rest tool-spec)
   "Register SYMBOL as a provider-callable agent tool.
 
-When SYMBOL names a registered command, command call style and default
-permission are inferred: provider arguments map to the command's non-BUFFER
-parameters, and the current tool buffer is supplied automatically during
-execution."
+When SYMBOL names a registered command, command call style is inferred: provider
+arguments map to the command's non-BUFFER parameters, and the current tool
+buffer is supplied automatically during execution."
   (unless (symbolp symbol)
     (error "deftool requires a symbol name, got ~S." symbol))
   (unless tool-spec
     (error "deftool ~A requires explicit metadata." symbol))
   (unless (evenp (length tool-spec))
     (error "deftool ~A metadata has an odd plist: ~S." symbol tool-spec))
-  (let ((metadata-var (gensym "COMMAND-METADATA"))
-        (tool-spec-var (gensym "TOOL-SPEC")))
-    `(let* ((,metadata-var (gethash ',symbol *command-table*))
-            (,tool-spec-var
-              (if (and ,metadata-var
-                       (not (member :permission ',tool-spec :test #'eq)))
-                  (append ',tool-spec
-                          (list :permission
-                                (command-metadata-permission ,metadata-var)))
-                  ',tool-spec)))
+  (let ((metadata-var (gensym "COMMAND-METADATA")))
+    `(let ((,metadata-var (gethash ',symbol *command-table*)))
        (register-agent-tool-metadata
-        ',symbol ,tool-spec-var
+        ',symbol ',tool-spec
         :command-p (not (null ,metadata-var))
         :lambda-list (and ,metadata-var
                           (command-metadata-lambda-list ,metadata-var))
@@ -308,23 +298,23 @@ execution."
      (substitute #\Space #\-
                  (string-downcase (symbol-name arg-name)))))
 
-  (defun normalize-command-interactive-entry (command-name arg-name entry)
-    "Normalize one interactive ENTRY for ARG-NAME on COMMAND-NAME."
+  (defun normalize-command-prompt-entry (command-name arg-name entry)
+    "Normalize one prompt ENTRY for ARG-NAME on COMMAND-NAME."
     (unless (and (consp entry) (symbolp (first entry)))
-      (error "defcommand ~A interactive entry for ~A must start with the argument name, got ~S."
+      (error "defcommand ~A prompt entry for ~A must start with the argument name, got ~S."
              command-name arg-name entry))
     (let ((entry-name (first entry))
           (plist (rest entry)))
       (unless (eq entry-name arg-name)
-        (error "defcommand ~A interactive entry ~S does not match argument ~S."
+        (error "defcommand ~A prompt entry ~S does not match argument ~S."
                command-name entry-name arg-name))
       (unless (evenp (length plist))
-        (error "defcommand ~A interactive entry for ~A has an odd plist: ~S."
+        (error "defcommand ~A prompt entry for ~A has an odd plist: ~S."
                command-name arg-name entry))
       (loop :for rest :on plist :by #'cddr
             :for key := (first rest)
             :unless (member key '(:prompt :reader) :test #'eq)
-              :do (error "defcommand ~A interactive entry for ~A has unsupported key ~S."
+              :do (error "defcommand ~A prompt entry for ~A has unsupported key ~S."
                          command-name arg-name key))
       (let* ((prompt (if (member :prompt plist :test #'eq)
                          (string (getf plist :prompt))
@@ -335,77 +325,25 @@ execution."
               :prompt prompt
               :reader reader))))
 
-  (defun normalize-command-interactive-spec (name lambda-list interactive supplied-p)
-    "Normalize the interactive metadata for NAME and LAMBDA-LIST."
+  (defun normalize-command-prompts (name lambda-list prompts supplied-p)
+    "Normalize minibuffer prompt metadata for NAME and LAMBDA-LIST."
     (let ((args (rest lambda-list)))
       (cond
         ((not supplied-p)
-         (if args nil t))
-        ((null interactive)
-         nil)
-        ((eq interactive t)
          (when args
-           (error "defcommand ~A requires an interactive arg spec for parameters ~S."
+           (error "defcommand ~A requires :PROMPTS metadata for parameters ~S."
                   name args))
-         t)
-        ((listp interactive)
-         (unless (= (length interactive) (length args))
-           (error "defcommand ~A interactive spec count ~D does not match argument count ~D."
-                  name (length interactive) (length args)))
+         nil)
+        ((listp prompts)
+         (unless (= (length prompts) (length args))
+           (error "defcommand ~A prompt spec count ~D does not match argument count ~D."
+                  name (length prompts) (length args)))
          (mapcar (lambda (arg entry)
-                   (normalize-command-interactive-entry name arg entry))
-                 args interactive))
+                   (normalize-command-prompt-entry name arg entry))
+                 args prompts))
         (t
-         (error "defcommand ~A interactive spec must be T, NIL, or a list, got ~S."
-                name interactive))))))
-
-;;; --------------------------------------------------------------------------
-;;; Conditions
-;;; --------------------------------------------------------------------------
-
-(define-condition permission-denied (error)
-  ((command :initarg :command :reader permission-denied-command
-            :documentation "The command symbol that was denied."))
-  (:documentation "Signaled when a command is invoked by a caller who lacks permission.")
-  (:report (lambda (c stream)
-             (format stream "Permission denied: ~A is not available to ~A"
-                     (permission-denied-command c) *current-caller*))))
-
-(define-condition permission-required (error)
-  ((command :initarg :command :reader permission-required-command
-            :documentation "The command symbol that requires approval."))
-  (:documentation "Signaled when a command requires explicit user approval before execution.")
-  (:report (lambda (c stream)
-             (format stream "Permission required: ~A needs approval for ~A"
-                     *current-caller* (permission-required-command c)))))
-
-;;; --------------------------------------------------------------------------
-;;; Access Control
-;;; --------------------------------------------------------------------------
-
-(declaim (ftype (function (symbol) (values)) check-permission))
-(defun check-permission (command-name)
-  "Check whether *CURRENT-CALLER* has permission to execute COMMAND-NAME.
-Signals PERMISSION-DENIED or PERMISSION-REQUIRED as appropriate."
-  (let* ((metadata (gethash command-name *command-table*))
-         (permission (command-metadata-permission metadata)))
-    (ecase permission
-      (:agent-allowed
-       (values))
-      (:agent-with-permission
-       (unless (eq *current-caller* :user)
-         (restart-case
-             (error 'permission-required :command command-name)
-           (grant-permission ()
-             :report "Grant permission for this command"
-             (values))
-           (deny-permission ()
-             :report "Deny permission for this command"
-             (error 'permission-denied :command command-name)))))
-      (:user-only
-       (unless (eq *current-caller* :user)
-         (error 'permission-denied :command command-name))
-       (values)))))
+         (error "defcommand ~A :PROMPTS must be a list, got ~S."
+                name prompts))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Command Listing
@@ -413,14 +351,11 @@ Signals PERMISSION-DENIED or PERMISSION-REQUIRED as appropriate."
 
 (declaim (ftype (function () list) list-available-commands))
 (defun list-available-commands ()
-  "Return a list of command symbols available to *CURRENT-CALLER*.
-Filters out :USER-ONLY commands when caller is not :USER."
+  "Return a list of registered command symbols."
   (let ((result nil))
     (maphash (lambda (name metadata)
-               (let ((perm (command-metadata-permission metadata)))
-                 (when (or (eq *current-caller* :user)
-                           (not (eq perm :user-only)))
-                   (push name result))))
+               (declare (ignore metadata))
+               (push name result))
              *command-table*)
     result))
 
@@ -431,21 +366,9 @@ Filters out :USER-ONLY commands when caller is not :USER."
     (when metadata
       (rest (command-metadata-lambda-list metadata)))))
 
-(declaim (ftype (function (symbol) t) command-interactive-p))
-(defun command-interactive-p (command-name)
-  "Return the interactive metadata for COMMAND-NAME, or NIL when absent."
-  (let ((metadata (gethash command-name *command-table*)))
-    (when metadata
-      (command-metadata-interactive-spec metadata))))
-
-(declaim (ftype (function () list) list-interactive-commands))
-(defun list-interactive-commands ()
-  "Return interactive commands available to *CURRENT-CALLER*."
-  (remove-if-not #'command-interactive-p (list-available-commands)))
-
-(declaim (ftype (function (t) function) resolve-command-interactive-reader))
-(defun resolve-command-interactive-reader (reader)
-  "Resolve READER into a callable function for interactive prompts."
+(declaim (ftype (function (t) function) resolve-command-prompt-reader))
+(defun resolve-command-prompt-reader (reader)
+  "Resolve READER into a callable function for minibuffer prompts."
   (cond
     ((null reader) #'identity)
     ((functionp reader) reader)
@@ -455,33 +378,31 @@ Filters out :USER-ONLY commands when caller is not :USER."
           (symbolp (second reader)))
      (fdefinition (second reader)))
     (t
-     (error "Invalid interactive reader designator: ~S" reader))))
+     (error "Invalid command prompt reader designator: ~S" reader))))
 
 ;;; --------------------------------------------------------------------------
 ;;; defcommand Macro
 ;;; --------------------------------------------------------------------------
 
-(defmacro defcommand (name (&key (permission :user-only)
-                                 (keys nil)
-                                 (interactive nil interactive-supplied-p))
+(defmacro defcommand (name (&key (keys nil)
+                                 (prompts nil prompts-supplied-p))
                       docstring lambda-list &body body)
-  "Define a command as a generic function with access control.
+  "Define an interactive command as a generic function.
 
 Expands to:
 1. Registration of command metadata in *command-table*
 2. A generic function definition
-3. An :around method that checks permissions
-4. A primary method with BODY
+3. A primary method with BODY
 
 Example:
-  (defcommand send-message (:permission :user-only :keys ((#\\Return)))
+  (defcommand send-message (:keys ((#\\Return)))
     \"Send the current input.\"
     (buffer)
     (buffer-finalize-input buffer))"
   (let* ((lambda-list (validate-command-lambda-list name lambda-list))
-         (interactive-spec
-           (normalize-command-interactive-spec name lambda-list
-                                               interactive interactive-supplied-p))
+         (prompts
+           (normalize-command-prompts name lambda-list
+                                      prompts prompts-supplied-p))
          (buffer-var (first lambda-list))
          (other-args (rest lambda-list))
          (meta-var (gensym "META")))
@@ -489,22 +410,15 @@ Example:
        ;; Register metadata
        (let ((,meta-var (make-command-metadata
                          :name ',name
-                         :permission ,permission
                          :docstring ,docstring
                          :keybindings ',keys
                          :lambda-list ',lambda-list
-                         :interactive-spec ',interactive-spec)))
+                         :prompts ',prompts)))
          (setf (gethash ',name *command-table*) ,meta-var))
 
        ;; Define the generic function (idempotent in CLOS)
        (defgeneric ,name ,lambda-list
          (:documentation ,docstring))
-
-       ;; Define the access control :around method
-       (defmethod ,name :around ((,buffer-var buffer) ,@other-args)
-         ,@(when other-args `((declare (ignorable ,@other-args))))
-         (check-permission ',name)
-         (call-next-method))
 
        ;; Define the primary method
        (defmethod ,name ((,buffer-var buffer) ,@other-args)

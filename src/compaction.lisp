@@ -339,7 +339,7 @@ Returns values COMPACTED-P, ESTIMATE, and THRESHOLD."
             (values nil estimate threshold)))
         (values nil estimate threshold))))
 
-(defcommand compact-buffer-command (:permission :user-only)
+(defcommand compact-buffer-command ()
   "Compact the current chat buffer now."
   (buffer)
   (cond
