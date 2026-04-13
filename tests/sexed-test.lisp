@@ -18,6 +18,41 @@
                           :if-does-not-exist :create)
     (write-string text stream)))
 
+(defmacro with-sexed-tool-registry-restored (&body body)
+  "Run BODY with tool registries restored afterwards."
+  `(let ((tool-snapshot
+           (make-hash-table :test (hash-table-test clawmacs::*tool-table*)))
+         (agent-tool-snapshot
+           (make-hash-table
+            :test (hash-table-test clawmacs::*agent-tool-metadata-table*)))
+         (agent-tool-name-snapshot
+           (make-hash-table
+            :test (hash-table-test clawmacs::*agent-tool-name-table*))))
+     (maphash (lambda (key value)
+                (setf (gethash key tool-snapshot) value))
+              clawmacs::*tool-table*)
+     (maphash (lambda (key value)
+                (setf (gethash key agent-tool-snapshot) value))
+              clawmacs::*agent-tool-metadata-table*)
+     (maphash (lambda (key value)
+                (setf (gethash key agent-tool-name-snapshot) value))
+              clawmacs::*agent-tool-name-table*)
+     (unwind-protect
+          (progn ,@body)
+       (clrhash clawmacs::*tool-table*)
+       (maphash (lambda (key value)
+                  (setf (gethash key clawmacs::*tool-table*) value))
+                tool-snapshot)
+       (clrhash clawmacs::*agent-tool-metadata-table*)
+       (maphash (lambda (key value)
+                  (setf (gethash key clawmacs::*agent-tool-metadata-table*)
+                        value))
+                agent-tool-snapshot)
+       (clrhash clawmacs::*agent-tool-name-table*)
+       (maphash (lambda (key value)
+                  (setf (gethash key clawmacs::*agent-tool-name-table*) value))
+                agent-tool-name-snapshot))))
+
 (test sexed-balanced-p-ignores-strings-comments-and-character-literals
   "Structural scanning ignores parens inside strings, comments, and char literals."
   (let ((text (format nil
@@ -269,3 +304,100 @@
       (is (string= "(workspace (todo alpha) (done beta) (note \"sexed edited scratch\") (notes (keep old)))"
                    (scratch-buffer-text)))
       (is-true (getf insert-result :balanced)))))
+
+(test sexed-package-prompt-points-to-tools-not-lisp-eval
+  "The package prompt advertises provider tools instead of function-call examples."
+  (with-sexed-tool-registry-restored
+    (with-package-state-override ((default-package-test-channels))
+      (clawmacs::init-tools)
+      (set-package-enablement-scope "sexed" :global)
+      (load-active-packages)
+      (let ((prompt (render-package-prompt-sections
+                     (list-package-prompt-sections))))
+        (is (search "sexed_project_outline" prompt))
+        (is (search "sexed_project_edit" prompt))
+        (is-false (search "lisp_eval" prompt :test #'char-equal))
+        (is-false (search "raw Lisp" prompt :test #'char-equal))
+        (is-false (search "evaluate" prompt :test #'char-equal))
+        (is-false (search "(sexed-" prompt :test #'char=))))))
+
+(test sexed-package-tools-edit-project-files
+  "Enabled sexed package tools expose project and staged edit adapters."
+  (with-sexed-tool-registry-restored
+    (with-package-state-override ((default-package-test-channels))
+      (let* ((dir (sexed-test-directory))
+             (*project-registry* (make-hash-table :test #'equal))
+             (*change-set-registry* (make-hash-table :test #'equal))
+             (*current-change-set* nil)
+             (*change-set-counter* 0)
+             (file (merge-pathnames "source.lisp" dir)))
+        (write-sexed-test-file file "(defun foo () (+ 1 2))")
+        (define-project "sexed-tool" :root dir)
+        (clawmacs::init-tools)
+        (set-package-enablement-scope "sexed" :global)
+        (load-active-packages)
+        (let* ((*current-caller* :user)
+               (tools (coerce (tool-definitions-for-api) 'list))
+               (tool-names (mapcar (lambda (tool)
+                                     (cdr (assoc :name tool)))
+                                   tools)))
+          (is (member "sexed_project_outline" tool-names :test #'string=))
+          (is (member "sexed_project_edit" tool-names :test #'string=))
+          (is (member "sexed_stage_project_edit" tool-names :test #'string=))
+          (is (member "sexed_text_diagnostics" tool-names :test #'string=))
+          (let ((diagnostics
+                  (clawmacs::lisp-data-read
+                   (execute-tool "sexed_text_diagnostics"
+                                 '(:text "(defun broken ()")))))
+            (is-false (getf diagnostics :balanced))
+            (is (eq :missing-close-paren
+                    (getf (first (getf diagnostics :diagnostics)) :kind))))
+          (is (search "defun foo"
+                      (execute-tool
+                       "sexed_project_outline"
+                       '(:project "sexed-tool"
+                         :path "source.lisp"
+                         :head "defun"))))
+          (let ((result
+                  (clawmacs::lisp-data-read
+                   (execute-tool
+                    "sexed_project_edit"
+                    '(:project "sexed-tool"
+                      :path "source.lisp"
+                      :operation "replace"
+                      :selector (("head" . "+"))
+                      :new-text "(list 1 2)")))))
+            (is (eq :ok (getf result :status)))
+            (is-true (getf result :balanced)))
+          (is (string= "(defun foo () (list 1 2))"
+                       (project-read-file "sexed-tool" "source.lisp")))
+          (let* ((change-set
+                   (clawmacs::lisp-data-read
+                    (execute-tool "sexed_change_set_begin"
+                                  '(:name "sexed-stage"))))
+                 (change-set-id (getf change-set :id))
+                 (stage-result
+                   (clawmacs::lisp-data-read
+                    (execute-tool
+                     "sexed_stage_project_edit"
+                     `(:project "sexed-tool"
+                       :path "source.lisp"
+                       :operation "insert-after"
+                       :selector (("head" . "defun") ("name" . "foo"))
+                       :new-text "(defun bar () :ok)"
+                       :change-set ,change-set-id)))))
+            (is (eq :staged (getf stage-result :status)))
+            (is (search "(defun bar () :ok)"
+                        (execute-tool "sexed_change_set_diff"
+                                      `(:change-set ,change-set-id))))
+            (is-false (search "defun bar"
+                              (project-read-file "sexed-tool"
+                                                 "source.lisp")))
+            (let ((apply-result
+                    (clawmacs::lisp-data-read
+                     (execute-tool "sexed_change_set_apply"
+                                   `(:change-set ,change-set-id)))))
+              (is (eq :applied (getf apply-result :status))))
+            (is (search "defun bar"
+                        (project-read-file "sexed-tool"
+                                           "source.lisp")))))))))

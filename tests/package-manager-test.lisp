@@ -247,7 +247,9 @@
       (is (= 1 (length loaded)))
       (let ((prompt-section (clawmacs:render-package-prompt-sections)))
         (is (search "Structural editing with sexed" prompt-section))
-        (is (search "(sexed-outline-to-string TEXT :max-depth 2)" prompt-section))))))
+        (is (search "sexed_project_outline" prompt-section))
+        (is-false (search "lisp_eval" prompt-section :test #'char-equal))
+        (is-false (search "(sexed-" prompt-section :test #'char=))))))
 
 (test package-enablement-scope-resolves-buffer-agent-global-default
   "Package enablement inherits global, agent, and buffer scopes without explicit disables."

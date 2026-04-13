@@ -1351,3 +1351,471 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
    (sexed-barf-forward-message-form (sexed-scratch-message)
                                     selector
                                     :count count)))
+
+;;; --------------------------------------------------------------------------
+;;; Sexed Agent Tool Adapters
+;;; --------------------------------------------------------------------------
+
+(defun sexed-tool-arg-value (args key &optional default)
+  "Return KEY's value from tool ARGS, distinguishing missing from NIL."
+  (loop :for (arg-key . value) :in (tool-args-alist args)
+        :when (tool-key= arg-key key)
+          :return (values value t)
+        :finally (return (values default nil))))
+
+(defun sexed-tool-required-arg (args key)
+  "Return required KEY from tool ARGS."
+  (multiple-value-bind (value present-p)
+      (sexed-tool-arg-value args key)
+    (unless present-p
+      (error "Missing required sexed tool argument :~A." (tool-key-name key)))
+    value))
+
+(defun sexed-tool-required-string (args key)
+  "Return required string KEY from tool ARGS."
+  (let ((value (sexed-tool-required-arg args key)))
+    (unless (stringp value)
+      (error "Sexed tool argument :~A must be a string, got ~S."
+             (tool-key-name key)
+             value))
+    value))
+
+(defun sexed-tool-optional-integer (args key default)
+  "Return optional integer KEY from tool ARGS."
+  (multiple-value-bind (value present-p)
+      (sexed-tool-arg-value args key)
+    (cond
+      ((not present-p) default)
+      ((or (null value) (integerp value)) value)
+      (t
+       (error "Sexed tool argument :~A must be an integer, got ~S."
+              (tool-key-name key)
+              value)))))
+
+(defun sexed-tool-keyword (key)
+  "Normalize KEY into a keyword symbol."
+  (intern (string-upcase (substitute #\- #\_ (tool-key-name key))) :keyword))
+
+(defun sexed-tool-normalize-plist (plist)
+  "Normalize PLIST keys into keywords."
+  (loop :for (key value) :on plist :by #'cddr
+        :append (list (sexed-tool-keyword key) value)))
+
+(defun sexed-tool-alist-p (value)
+  "Return true when VALUE looks like an alist."
+  (and (listp value)
+       (every #'consp value)))
+
+(defun sexed-tool-normalize-alist (alist)
+  "Normalize ALIST keys into a keyword plist."
+  (loop :for (key . value) :in alist
+        :append (list (sexed-tool-keyword key) value)))
+
+(defun sexed-tool-selector (value)
+  "Normalize a provider selector value into a sexed selector."
+  (cond
+    ((integerp value) value)
+    ((stringp value)
+     (handler-case
+         (sexed-tool-selector (lisp-data-read value))
+       (error ()
+         (error "Selector string must contain Lisp data such as (:id 0), got ~S."
+                value))))
+    ((tool-plist-p value)
+     (sexed-tool-normalize-plist value))
+    ((sexed-tool-alist-p value)
+     (sexed-tool-normalize-alist value))
+    (t
+     (error "Invalid sexed selector: ~S." value))))
+
+(defun sexed-tool-required-selector (args)
+  "Return required :SELECTOR from tool ARGS."
+  (sexed-tool-selector (sexed-tool-required-arg args :selector)))
+
+(defun sexed-tool-options (args)
+  "Return outline options from tool ARGS as keyword arguments."
+  (let ((options nil))
+    (dolist (key '(:depth :max-depth :head :limit :preview-chars))
+      (multiple-value-bind (value present-p)
+          (sexed-tool-arg-value args key)
+        (when present-p
+          (setf options (append options (list key value))))))
+    options))
+
+(defun sexed-tool-edit-operation (args)
+  "Return the normalized edit operation requested by tool ARGS."
+  (let* ((raw (sexed-tool-required-arg args :operation))
+         (name (substitute #\- #\_ (tool-key-name raw)))
+         (operation (intern (string-upcase name) :keyword)))
+    (unless (member operation
+                    '(:replace :delete :insert-before :insert-after
+                      :wrap :splice :raise :slurp-forward :barf-forward)
+                    :test #'eq)
+      (error "Unsupported sexed edit operation: ~S." raw))
+    operation))
+
+(defun sexed-tool-count (args)
+  "Return edit count from tool ARGS."
+  (or (sexed-tool-optional-integer args :count 1) 1))
+
+(defun sexed-tool-blank-string-p (value)
+  "Return true when VALUE is nil or an empty/whitespace string."
+  (or (null value)
+      (and (stringp value)
+           (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                       value))))))
+
+(defun sexed-tool-change-set (args)
+  "Return optional change-set designator from tool ARGS."
+  (multiple-value-bind (value present-p)
+      (sexed-tool-arg-value args :change-set)
+    (and present-p
+         (not (sexed-tool-blank-string-p value))
+         value)))
+
+(defun sexed-tool-apply-text-edit (text args)
+  "Apply a structural edit described by ARGS to TEXT."
+  (let ((selector (sexed-tool-required-selector args)))
+    (ecase (sexed-tool-edit-operation args)
+      (:replace
+       (sexed-replace-form text selector
+                           (sexed-tool-required-string args :new-text)))
+      (:delete
+       (sexed-delete-form text selector))
+      (:insert-before
+       (sexed-insert-before-form text selector
+                                 (sexed-tool-required-string args :new-text)))
+      (:insert-after
+       (sexed-insert-after-form text selector
+                                (sexed-tool-required-string args :new-text)))
+      (:wrap
+       (sexed-wrap-form text
+                        selector
+                        (sexed-tool-required-string args :prefix)
+                        (sexed-tool-required-string args :suffix)))
+      (:splice
+       (sexed-splice-form text selector))
+      (:raise
+       (sexed-raise-form
+        text
+        selector
+        (sexed-tool-selector (sexed-tool-required-arg args :child-selector))))
+      (:slurp-forward
+       (sexed-slurp-forward text selector :count (sexed-tool-count args)))
+      (:barf-forward
+       (sexed-barf-forward text selector :count (sexed-tool-count args))))))
+
+(defun sexed-tool-text-diagnostics (args)
+  "Return diagnostics for :TEXT."
+  (let ((text (sexed-tool-required-string args :text)))
+    (list :balanced (sexed-balanced-p text)
+          :diagnostics (sexed-diagnostics text))))
+
+(defun sexed-tool-text-outline (args)
+  "Return a structural outline for :TEXT."
+  (apply #'sexed-outline-to-string
+         (sexed-tool-required-string args :text)
+         (sexed-tool-options args)))
+
+(defun sexed-tool-text-form-text (args)
+  "Return selected source form text from :TEXT."
+  (sexed-form-text (sexed-tool-required-string args :text)
+                   (sexed-tool-required-selector args)))
+
+(defun sexed-tool-text-edit (args)
+  "Return :TEXT after a structural edit."
+  (sexed-tool-apply-text-edit (sexed-tool-required-string args :text) args))
+
+(defun sexed-tool-file-outline (args)
+  "Return a structural outline for a sandbox-local file."
+  (apply #'sexed-file-outline-to-string
+         (sexed-tool-required-string args :path)
+         (sexed-tool-options args)))
+
+(defun sexed-tool-file-form-text (args)
+  "Return selected source form text from a sandbox-local file."
+  (sexed-file-form-text (sexed-tool-required-string args :path)
+                        (sexed-tool-required-selector args)))
+
+(defun sexed-tool-file-edit (args)
+  "Structurally edit a sandbox-local file."
+  (let* ((path (sexed-tool-required-string args :path))
+         (selector (sexed-tool-required-selector args)))
+    (ecase (sexed-tool-edit-operation args)
+      (:replace
+       (sexed-replace-file-form path selector
+                                (sexed-tool-required-string args :new-text)))
+      (:delete
+       (sexed-delete-file-form path selector))
+      (:insert-before
+       (sexed-insert-before-file-form path selector
+                                      (sexed-tool-required-string args :new-text)))
+      (:insert-after
+       (sexed-insert-after-file-form path selector
+                                     (sexed-tool-required-string args :new-text)))
+      (:wrap
+       (sexed-wrap-file-form path
+                             selector
+                             (sexed-tool-required-string args :prefix)
+                             (sexed-tool-required-string args :suffix)))
+      (:splice
+       (sexed-splice-file-form path selector))
+      (:raise
+       (sexed-raise-file-form
+        path
+        selector
+        (sexed-tool-selector (sexed-tool-required-arg args :child-selector))))
+      (:slurp-forward
+       (sexed-slurp-forward-file-form path selector
+                                      :count (sexed-tool-count args)))
+      (:barf-forward
+       (sexed-barf-forward-file-form path selector
+                                     :count (sexed-tool-count args))))))
+
+(defun sexed-tool-project-outline (args)
+  "Return a structural outline for PROJECT/PATH."
+  (apply #'sexed-project-outline-to-string
+         (sexed-tool-required-string args :project)
+         (sexed-tool-required-string args :path)
+         (sexed-tool-options args)))
+
+(defun sexed-tool-project-form-text (args)
+  "Return selected source form text from PROJECT/PATH."
+  (sexed-project-form-text (sexed-tool-required-string args :project)
+                           (sexed-tool-required-string args :path)
+                           (sexed-tool-required-selector args)))
+
+(defun sexed-tool-project-edit (args)
+  "Structurally edit PROJECT/PATH."
+  (let* ((project (sexed-tool-required-string args :project))
+         (path (sexed-tool-required-string args :path))
+         (selector (sexed-tool-required-selector args)))
+    (ecase (sexed-tool-edit-operation args)
+      (:replace
+       (sexed-replace-project-form project path selector
+                                   (sexed-tool-required-string args :new-text)))
+      (:delete
+       (sexed-delete-project-form project path selector))
+      (:insert-before
+       (sexed-insert-before-project-form
+        project path selector (sexed-tool-required-string args :new-text)))
+      (:insert-after
+       (sexed-insert-after-project-form
+        project path selector (sexed-tool-required-string args :new-text)))
+      (:wrap
+       (sexed-wrap-project-form project
+                                path
+                                selector
+                                (sexed-tool-required-string args :prefix)
+                                (sexed-tool-required-string args :suffix)))
+      (:splice
+       (sexed-splice-project-form project path selector))
+      (:raise
+       (sexed-raise-project-form
+        project
+        path
+        selector
+        (sexed-tool-selector (sexed-tool-required-arg args :child-selector))))
+      (:slurp-forward
+       (sexed-slurp-forward-project-form project path selector
+                                         :count (sexed-tool-count args)))
+      (:barf-forward
+       (sexed-barf-forward-project-form project path selector
+                                        :count (sexed-tool-count args))))))
+
+(defun sexed-tool-stage-project-edit (args)
+  "Stage a structural edit to PROJECT/PATH."
+  (let* ((project (sexed-tool-required-string args :project))
+         (path (sexed-tool-required-string args :path))
+         (selector (sexed-tool-required-selector args))
+         (change-set (sexed-tool-change-set args)))
+    (ecase (sexed-tool-edit-operation args)
+      (:replace
+       (sexed-stage-replace-project-form
+        project path selector (sexed-tool-required-string args :new-text)
+        :change-set change-set))
+      (:delete
+       (sexed-stage-delete-project-form project path selector
+                                        :change-set change-set))
+      (:insert-before
+       (sexed-stage-insert-before-project-form
+        project path selector (sexed-tool-required-string args :new-text)
+        :change-set change-set))
+      (:insert-after
+       (sexed-stage-insert-after-project-form
+        project path selector (sexed-tool-required-string args :new-text)
+        :change-set change-set))
+      (:wrap
+       (sexed-stage-wrap-project-form
+        project
+        path
+        selector
+        (sexed-tool-required-string args :prefix)
+        (sexed-tool-required-string args :suffix)
+        :change-set change-set))
+      (:splice
+       (sexed-stage-splice-project-form project path selector
+                                        :change-set change-set))
+      (:raise
+       (sexed-stage-raise-project-form
+        project
+        path
+        selector
+        (sexed-tool-selector (sexed-tool-required-arg args :child-selector))
+        :change-set change-set))
+      (:slurp-forward
+       (sexed-stage-slurp-forward-project-form
+        project path selector :count (sexed-tool-count args)
+        :change-set change-set))
+      (:barf-forward
+       (sexed-stage-barf-forward-project-form
+        project path selector :count (sexed-tool-count args)
+        :change-set change-set)))))
+
+(defun sexed-tool-ensure-init-file (args)
+  "Ensure init.lisp exists, creating it when missing."
+  (multiple-value-bind (content present-p)
+      (sexed-tool-arg-value args :content)
+    (if present-p
+        (sexed-ensure-init-file :content content)
+        (sexed-ensure-init-file))))
+
+(defun sexed-tool-init-outline (args)
+  "Return a structural outline for init.lisp."
+  (apply #'sexed-init-outline-to-string (sexed-tool-options args)))
+
+(defun sexed-tool-init-form-text (args)
+  "Return selected source form text from init.lisp."
+  (sexed-init-form-text (sexed-tool-required-selector args)))
+
+(defun sexed-tool-init-edit (args)
+  "Structurally edit init.lisp."
+  (let ((selector (sexed-tool-required-selector args)))
+    (ecase (sexed-tool-edit-operation args)
+      (:replace
+       (sexed-replace-init-form selector
+                                (sexed-tool-required-string args :new-text)))
+      (:delete
+       (error "Deleting init.lisp forms is not exposed as a direct sexed tool."))
+      (:insert-before
+       (sexed-insert-before-init-form
+        selector (sexed-tool-required-string args :new-text)))
+      (:insert-after
+       (sexed-insert-after-init-form
+        selector (sexed-tool-required-string args :new-text)))
+      (:wrap
+       (error "Wrapping init.lisp forms is not exposed as a direct sexed tool."))
+      (:splice
+       (error "Splicing init.lisp forms is not exposed as a direct sexed tool."))
+      (:raise
+       (error "Raising init.lisp forms is not exposed as a direct sexed tool."))
+      (:slurp-forward
+       (error "Slurping init.lisp forms is not exposed as a direct sexed tool."))
+      (:barf-forward
+       (error "Barfing init.lisp forms is not exposed as a direct sexed tool.")))))
+
+(defun sexed-tool-stage-init-edit (args)
+  "Stage a structural edit to init.lisp."
+  (let ((selector (sexed-tool-required-selector args))
+        (change-set (sexed-tool-change-set args)))
+    (ecase (sexed-tool-edit-operation args)
+      (:replace
+       (sexed-stage-replace-init-form
+        selector (sexed-tool-required-string args :new-text)
+        :change-set change-set))
+      (:delete
+       (error "Deleting init.lisp forms is not exposed as a staged sexed tool."))
+      (:insert-before
+       (sexed-stage-insert-before-init-form
+        selector (sexed-tool-required-string args :new-text)
+        :change-set change-set))
+      (:insert-after
+       (sexed-stage-insert-after-init-form
+        selector (sexed-tool-required-string args :new-text)
+        :change-set change-set))
+      (:wrap
+       (error "Wrapping init.lisp forms is not exposed as a staged sexed tool."))
+      (:splice
+       (error "Splicing init.lisp forms is not exposed as a staged sexed tool."))
+      (:raise
+       (error "Raising init.lisp forms is not exposed as a staged sexed tool."))
+      (:slurp-forward
+       (error "Slurping init.lisp forms is not exposed as a staged sexed tool."))
+      (:barf-forward
+       (error "Barfing init.lisp forms is not exposed as a staged sexed tool.")))))
+
+(defun sexed-tool-scratch-outline (args)
+  "Return a structural outline for the scratch buffer."
+  (apply #'sexed-scratch-outline-to-string (sexed-tool-options args)))
+
+(defun sexed-tool-scratch-form-text (args)
+  "Return selected source form text from the scratch buffer."
+  (sexed-scratch-form-text (sexed-tool-required-selector args)))
+
+(defun sexed-tool-scratch-edit (args)
+  "Structurally edit the scratch buffer."
+  (let ((selector (sexed-tool-required-selector args)))
+    (ecase (sexed-tool-edit-operation args)
+      (:replace
+       (sexed-replace-scratch-form selector
+                                   (sexed-tool-required-string args :new-text)))
+      (:delete
+       (sexed-delete-scratch-form selector))
+      (:insert-before
+       (sexed-insert-before-scratch-form
+        selector (sexed-tool-required-string args :new-text)))
+      (:insert-after
+       (sexed-insert-after-scratch-form
+        selector (sexed-tool-required-string args :new-text)))
+      (:wrap
+       (sexed-wrap-scratch-form selector
+                                (sexed-tool-required-string args :prefix)
+                                (sexed-tool-required-string args :suffix)))
+      (:splice
+       (sexed-splice-scratch-form selector))
+      (:raise
+       (sexed-raise-scratch-form
+        selector
+        (sexed-tool-selector (sexed-tool-required-arg args :child-selector))))
+      (:slurp-forward
+       (sexed-slurp-forward-scratch-form selector
+                                         :count (sexed-tool-count args)))
+      (:barf-forward
+       (sexed-barf-forward-scratch-form selector
+                                        :count (sexed-tool-count args))))))
+
+(defun sexed-change-set-summary-plist (change-set)
+  "Return an agent-readable summary plist for CHANGE-SET."
+  (list :id (change-set-id change-set)
+        :status (change-set-status change-set)
+        :name (change-set-name change-set)
+        :entries (length (change-set-entries change-set))))
+
+(defun sexed-tool-begin-change-set (args)
+  "Begin a change set for staged sexed edits."
+  (sexed-change-set-summary-plist
+   (begin-change-set :name (sexed-tool-arg-value args :name)
+                     :description (sexed-tool-arg-value args :description))))
+
+(defun sexed-tool-change-set-diff (args)
+  "Return a diff for a staged change set."
+  (let ((change-set (sexed-tool-change-set args)))
+    (if change-set
+        (change-set-diff-to-string change-set)
+        (change-set-diff-to-string))))
+
+(defun sexed-tool-apply-change-set (args)
+  "Apply a staged change set."
+  (sexed-change-set-summary-plist
+   (let ((change-set (sexed-tool-change-set args)))
+     (if change-set
+         (apply-change-set change-set)
+         (apply-change-set)))))
+
+(defun sexed-tool-discard-change-set (args)
+  "Discard a staged change set."
+  (sexed-change-set-summary-plist
+   (let ((change-set (sexed-tool-change-set args)))
+     (if change-set
+         (discard-change-set change-set)
+         (discard-change-set)))))
