@@ -227,7 +227,6 @@
    #:command-metadata-keybindings
    #:command-metadata-lambda-list
    #:command-metadata-interactive-spec
-   #:command-metadata-tool-spec
    #:defcommand
    #:check-permission
    #:permission-denied
@@ -242,6 +241,7 @@
    #:*extended-docs*
    #:defdoc
    #:extended-doc
+   #:deftool
    #:agent-tool-metadata
    #:agent-tool-metadata-symbol
    #:agent-tool-metadata-name

@@ -466,8 +466,8 @@ same
           (is-false (search "shell_exec" prompt))
           (is-false (search "file_read" prompt)))))))
 
-(test package-defdoc-tool-appears-in-system-prompt
-  "Package entrypoints can register provider tools by evaluating defdoc :tool."
+(test package-deftool-appears-in-system-prompt
+  "Package entrypoints can register provider tools by evaluating deftool."
   (let* ((channel-root
            (make-package-channel-root
             :label "package-tool-channel"
@@ -479,10 +479,10 @@ same
             :entrypoint-content
             "(defun package-tool-probe (value)
   (format nil \"package=~A\" value))
-(defdoc package-tool-probe
-  :tool (:name \"package_probe\"
-         :description \"Probe tool from a package.\"
-         :args ((value :type \"string\" :description \"Value to echo.\"))))")))
+(deftool package-tool-probe
+  :name \"package_probe\"
+  :description \"Probe tool from a package.\"
+  :args ((value :type \"string\" :description \"Value to echo.\")))")))
     (let ((clawmacs::*agent-tool-metadata-table* (make-hash-table :test #'eq))
           (clawmacs::*agent-tool-name-table* (make-hash-table :test #'equal)))
       (with-tool-table-restored

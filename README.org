@@ -55,8 +55,8 @@ changes. Tool inputs and tool results are represented as Lisp data, for example
 The =write= and =edit= tools reject content that leaves Lisp parentheses
 unbalanced.
 Custom tools may be registered explicitly with =register-tool= or tagged through
-=defdoc :tool= and =defcommand :tool=. Imported packages contribute tools as
-soon as their tagged documentation forms are evaluated.
+=deftool=. Imported packages contribute tools as soon as their =deftool= forms
+are evaluated.
 
 The =lisp_eval= tool is the fallback for Common Lisp tests, introspection, live
 system updates, and defining helper tools when no exposed tool fits. Standard

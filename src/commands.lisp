@@ -19,8 +19,7 @@ or an agent keyword (e.g., :CODER) during agent command dispatch.")
   (docstring   ""                            :type string   :read-only t)
   (keybindings nil                           :type list     :read-only t)
   (lambda-list '(buffer)                     :type list     :read-only t)
-  (interactive-spec t                        :type t        :read-only t)
-  (tool-spec nil                             :type t        :read-only t))
+  (interactive-spec t                        :type t        :read-only t))
 
 (defvar *command-table* (make-hash-table :test #'eq)
   "Global table mapping command symbols to command-metadata.")
@@ -132,7 +131,7 @@ or an agent keyword (e.g., :CODER) during agent command dispatch.")
 
 (defun normalize-agent-tool-spec (symbol tool-spec
                                   &key command-p lambda-list docstring)
-  "Normalize a DEFDOC/DEFCOMMAND :TOOL plist into AGENT-TOOL-METADATA."
+  "Normalize explicit tool metadata into AGENT-TOOL-METADATA."
   (unless (and (listp tool-spec) (or (null tool-spec) (keywordp (first tool-spec))))
     (error "Tool metadata for ~A must be a keyword plist, got ~S."
            symbol tool-spec))
@@ -246,6 +245,38 @@ or an agent keyword (e.g., :CODER) during agent command dispatch.")
                (push value metadata))
              *agent-tool-metadata-table*)
     (sort metadata #'string< :key #'agent-tool-metadata-name)))
+
+(defmacro deftool (symbol &rest tool-spec)
+  "Register SYMBOL as a provider-callable agent tool.
+
+When SYMBOL names a registered command, command call style and default
+permission are inferred: provider arguments map to the command's non-BUFFER
+parameters, and the current tool buffer is supplied automatically during
+execution."
+  (unless (symbolp symbol)
+    (error "deftool requires a symbol name, got ~S." symbol))
+  (unless tool-spec
+    (error "deftool ~A requires explicit metadata." symbol))
+  (unless (evenp (length tool-spec))
+    (error "deftool ~A metadata has an odd plist: ~S." symbol tool-spec))
+  (let ((metadata-var (gensym "COMMAND-METADATA"))
+        (tool-spec-var (gensym "TOOL-SPEC")))
+    `(let* ((,metadata-var (gethash ',symbol *command-table*))
+            (,tool-spec-var
+              (if (and ,metadata-var
+                       (not (member :permission ',tool-spec :test #'eq)))
+                  (append ',tool-spec
+                          (list :permission
+                                (command-metadata-permission ,metadata-var)))
+                  ',tool-spec)))
+       (register-agent-tool-metadata
+        ',symbol ,tool-spec-var
+        :command-p (not (null ,metadata-var))
+        :lambda-list (and ,metadata-var
+                          (command-metadata-lambda-list ,metadata-var))
+        :docstring (or (and ,metadata-var
+                            (command-metadata-docstring ,metadata-var))
+                       (documentation ',symbol 'function))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Command Validation Helpers
@@ -432,8 +463,7 @@ Filters out :USER-ONLY commands when caller is not :USER."
 
 (defmacro defcommand (name (&key (permission :user-only)
                                  (keys nil)
-                                 (interactive nil interactive-supplied-p)
-                                 (tool nil tool-supplied-p))
+                                 (interactive nil interactive-supplied-p))
                       docstring lambda-list &body body)
   "Define a command as a generic function with access control.
 
@@ -442,7 +472,6 @@ Expands to:
 2. A generic function definition
 3. An :around method that checks permissions
 4. A primary method with BODY
-5. Optional provider tool metadata when :TOOL is supplied
 
 Example:
   (defcommand send-message (:permission :user-only :keys ((#\\Return)))
@@ -464,8 +493,7 @@ Example:
                          :docstring ,docstring
                          :keybindings ',keys
                          :lambda-list ',lambda-list
-                         :interactive-spec ',interactive-spec
-                         :tool-spec ',tool)))
+                         :interactive-spec ',interactive-spec)))
          (setf (gethash ',name *command-table*) ,meta-var))
 
        ;; Define the generic function (idempotent in CLOS)
@@ -482,13 +510,6 @@ Example:
        (defmethod ,name ((,buffer-var buffer) ,@other-args)
          ,@body)
 
-       ,@(when tool-supplied-p
-           `((register-agent-tool-metadata
-              ',name ',tool
-              :command-p t
-              :lambda-list ',lambda-list
-              :docstring ,docstring)))
-
        ',name)))
 
 ;;; --------------------------------------------------------------------------
@@ -502,11 +523,9 @@ Each entry is a plist with optional keys:
   :returns      — return type and example value
   :see-also     — list of related symbols
   :category     — category string for grouping
-  :side-effects — description of mutations, I/O, or global state changes
-  :tool         — provider tool metadata for agent-facing functions")
+  :side-effects — description of mutations, I/O, or global state changes")
 
-(defmacro defdoc (name &key category usage returns see-also side-effects
-                            (tool nil tool-supplied-p))
+(defmacro defdoc (name &key category usage returns see-also side-effects)
   "Define extended documentation for SYMBOL.
 Stores a plist in *extended-docs* keyed by the symbol.
 
@@ -522,11 +541,7 @@ Example:
                           ,@(when usage `(:usage ,usage))
                           ,@(when returns `(:returns ,returns))
                           ,@(when see-also `(:see-also ',see-also))
-                          ,@(when side-effects `(:side-effects ,side-effects))
-                          ,@(when (and tool-supplied-p tool)
-                              `(:tool ',tool))))))
-     ,@(when tool-supplied-p
-         `((register-agent-tool-metadata ',name ',tool)))
+                          ,@(when side-effects `(:side-effects ,side-effects))))))
      doc))
 
 (defun extended-doc (symbol &optional key)
