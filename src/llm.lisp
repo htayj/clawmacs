@@ -60,6 +60,21 @@ When set, this takes highest priority over the static token file.")
   "Cached list of OpenRouter model ID strings fetched from the API.
 Populated on first call to fetch-openrouter-models.  Set to nil to force refresh.")
 
+(defvar *provider-http-max-retries* 3
+  "Maximum retries for transient provider HTTP failures.")
+
+(defvar *provider-http-initial-backoff-seconds* 0.5
+  "Initial delay before retrying a transient provider HTTP failure.")
+
+(defvar *provider-http-backoff-multiplier* 2.0
+  "Multiplier applied to provider HTTP retry delays.")
+
+(defvar *provider-http-max-backoff-seconds* 8.0
+  "Maximum delay before retrying a transient provider HTTP failure.")
+
+(defvar *provider-http-sleep-function* #'sleep
+  "Function used to sleep between provider HTTP retries.")
+
 ;;; OpenAI Codex OAuth 2.0 Configuration
 (defvar *openai-oauth-client-id* "app_EMoamEEZ73f0CkXaXp7hrann"
   "OpenAI Codex OAuth 2.0 public client identifier.")
@@ -743,16 +758,19 @@ Returns NIL when the file is missing or blank."
 (defun request-openai-codex-token-refresh (refresh-token)
   "Request a refreshed ChatGPT OAuth token set using REFRESH-TOKEN."
   (multiple-value-bind (body status-code)
-      (drakma:http-request
-       *openai-oauth-token-url*
-       :method :post
-       :content-type "application/json"
-       :content (api-json-encode
-                 `((:client--id . ,*openai-oauth-client-id*)
-                   (:grant--type . "refresh_token")
-                   (:refresh--token . ,refresh-token)))
-       :want-stream nil
-       :force-binary nil)
+      (provider-http-request-with-retries
+       "OpenAI Codex OAuth refresh"
+       (lambda ()
+         (drakma:http-request
+          *openai-oauth-token-url*
+          :method :post
+          :content-type "application/json"
+          :content (api-json-encode
+                    `((:client--id . ,*openai-oauth-client-id*)
+                      (:grant--type . "refresh_token")
+                      (:refresh--token . ,refresh-token)))
+          :want-stream nil
+          :force-binary nil)))
     (let ((body-string (http-body-string body)))
       (unless (= status-code 200)
         (error "OAuth refresh failed (~A): ~A" status-code body-string))
@@ -1063,17 +1081,20 @@ Returns (values auth-url code-verifier state)."
   "Exchange an OAuth authorization CODE for access/refresh tokens using CODE-VERIFIER.
 Returns a plist (:id-token ... :access-token ... :refresh-token ... :account-id ...)."
   (multiple-value-bind (body status-code)
-      (drakma:http-request
-       *openai-oauth-token-url*
-       :method :post
-       :content-type "application/x-www-form-urlencoded"
-       :content (format nil "grant_type=authorization_code&client_id=~A&code=~A&redirect_uri=~A&code_verifier=~A"
-                        (url-encode-param *openai-oauth-client-id*)
-                        (url-encode-param code)
-                        (url-encode-param redirect-uri)
-                        (url-encode-param code-verifier))
-       :want-stream nil
-       :force-binary nil)
+      (provider-http-request-with-retries
+       "OpenAI Codex OAuth exchange"
+       (lambda ()
+         (drakma:http-request
+          *openai-oauth-token-url*
+          :method :post
+          :content-type "application/x-www-form-urlencoded"
+          :content (format nil "grant_type=authorization_code&client_id=~A&code=~A&redirect_uri=~A&code_verifier=~A"
+                           (url-encode-param *openai-oauth-client-id*)
+                           (url-encode-param code)
+                           (url-encode-param redirect-uri)
+                           (url-encode-param code-verifier))
+          :want-stream nil
+          :force-binary nil)))
     (let ((body-string (http-body-string body)))
       (unless (= status-code 200)
         (error "OAuth token exchange failed (~A): ~A" status-code body-string))
@@ -1088,19 +1109,22 @@ Returns a plist (:id-token ... :access-token ... :refresh-token ... :account-id 
 (defun obtain-openai-codex-api-key (id-token)
   "Exchange ID-TOKEN for an API-key style token when the backend allows it."
   (multiple-value-bind (body status-code)
-      (drakma:http-request
-       *openai-oauth-token-url*
-       :method :post
-       :content-type "application/x-www-form-urlencoded"
-       :content (format nil
-                        "grant_type=~A&client_id=~A&requested_token=~A&subject_token=~A&subject_token_type=~A"
-                        (url-encode-param "urn:ietf:params:oauth:grant-type:token-exchange")
-                        (url-encode-param *openai-oauth-client-id*)
-                        (url-encode-param "openai-api-key")
-                        (url-encode-param id-token)
-                        (url-encode-param "urn:ietf:params:oauth:token-type:id_token"))
-       :want-stream nil
-       :force-binary nil)
+      (provider-http-request-with-retries
+       "OpenAI Codex API-key exchange"
+       (lambda ()
+         (drakma:http-request
+          *openai-oauth-token-url*
+          :method :post
+          :content-type "application/x-www-form-urlencoded"
+          :content (format nil
+                           "grant_type=~A&client_id=~A&requested_token=~A&subject_token=~A&subject_token_type=~A"
+                           (url-encode-param "urn:ietf:params:oauth:grant-type:token-exchange")
+                           (url-encode-param *openai-oauth-client-id*)
+                           (url-encode-param "openai-api-key")
+                           (url-encode-param id-token)
+                           (url-encode-param "urn:ietf:params:oauth:token-type:id_token"))
+          :want-stream nil
+          :force-binary nil)))
     (let ((body-string (http-body-string body)))
       (when (= status-code 200)
         (alist-string-value (api-json-decode body-string) :access--token)))))
@@ -1607,12 +1631,15 @@ nil to force a refresh. Returns the static fallback list on any error."
           (return-from fetch-openrouter-models
             (cdr (assoc :openrouter *provider-known-models*))))
         (multiple-value-bind (body status-code)
-            (drakma:http-request
-             *openrouter-models-url*
-             :method :get
-             :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token)))
-             :want-stream nil
-             :force-binary nil)
+            (provider-http-request-with-retries
+             "OpenRouter models"
+             (lambda ()
+               (drakma:http-request
+                *openrouter-models-url*
+                :method :get
+                :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token)))
+                :want-stream nil
+                :force-binary nil)))
           (if (= status-code 200)
               (let* ((body-string (http-body-string body))
                      (response (api-json-decode body-string))
@@ -1921,6 +1948,92 @@ and should not be sent to the API."
       body
       (flexi-streams:octets-to-string body :external-format :utf-8)))
 
+(defun provider-http-retryable-status-p (status-code)
+  "Return true when STATUS-CODE represents a transient provider failure."
+  (and (integerp status-code)
+       (member status-code '(408 409 425 429 500 502 503 504) :test #'=)))
+
+(defun provider-http-header-name (name)
+  "Return NAME as a lowercase HTTP header name."
+  (string-downcase
+   (typecase name
+     (string name)
+     (symbol (symbol-name name))
+     (t (princ-to-string name)))))
+
+(defun provider-http-header-value (headers name)
+  "Return HTTP header NAME from HEADERS."
+  (let ((wanted (provider-http-header-name name)))
+    (loop :for header :in headers
+          :for header-name := (provider-http-header-name (car header))
+          :when (string= wanted header-name)
+            :return (cdr header))))
+
+(defun provider-http-retry-after-seconds (headers)
+  "Return Retry-After seconds from HEADERS when it is a positive integer."
+  (let ((value (provider-http-header-value headers "retry-after")))
+    (when (and (stringp value) (plusp (length value)))
+      (handler-case
+          (let ((seconds (parse-integer value :junk-allowed nil)))
+            (and (plusp seconds) seconds))
+        (error () nil)))))
+
+(defun provider-http-backoff-delay (attempt headers)
+  "Return the retry delay for zero-based ATTEMPT and optional HEADERS."
+  (or (provider-http-retry-after-seconds headers)
+      (min *provider-http-max-backoff-seconds*
+           (* *provider-http-initial-backoff-seconds*
+              (expt *provider-http-backoff-multiplier* attempt)))))
+
+(defun provider-http-close-body-for-retry (body)
+  "Close BODY when it is a stream abandoned due to a retry."
+  (when (streamp body)
+    (ignore-errors (close body))))
+
+(defun provider-http-sleep-before-retry (label attempt headers reason)
+  "Sleep before retrying a provider HTTP request."
+  (let ((delay (provider-http-backoff-delay attempt headers)))
+    (file-debug-log "provider"
+                    "~A transient failure on attempt ~D/~D (~A); retrying in ~,2Fs"
+                    label
+                    (1+ attempt)
+                    (1+ *provider-http-max-retries*)
+                    reason
+                    delay)
+    (funcall *provider-http-sleep-function* delay)))
+
+(defun provider-http-request-with-retries (label thunk)
+  "Call THUNK, retrying transient provider HTTP failures with backoff.
+
+THUNK must perform one HTTP request and return the same values as
+drakma:http-request. Transient status codes and connection-level errors are
+retried up to *PROVIDER-HTTP-MAX-RETRIES*."
+  (loop :with attempt := 0
+        :do (let ((result
+                    (handler-case
+                        (multiple-value-list (funcall thunk))
+                      (error (condition)
+                        (if (< attempt *provider-http-max-retries*)
+                            (progn
+                              (provider-http-sleep-before-retry
+                               label attempt nil condition)
+                              (incf attempt)
+                              :retry)
+                            (error condition))))))
+              (unless (eq result :retry)
+                (let ((status-code (second result))
+                      (headers (third result)))
+                  (cond
+                    ((and (provider-http-retryable-status-p status-code)
+                          (< attempt *provider-http-max-retries*))
+                     (provider-http-close-body-for-retry (first result))
+                     (provider-http-sleep-before-retry
+                      label attempt headers
+                      (format nil "HTTP ~D" status-code))
+                     (incf attempt))
+                    (t
+                     (return (values-list result)))))))))
+
 (defun utf8-character-input-stream (stream)
   "Return STREAM as a UTF-8 character input stream."
   (if (nth-value 0 (subtypep (stream-element-type stream) 'character))
@@ -2221,15 +2334,18 @@ reasoning_content is present, falls back to reasoning_content."
 (defun openai-codex-http-request (auth request-body &key stream (allow-refresh t))
   "Perform one OpenAI Codex HTTP request, refreshing ChatGPT auth once on 401."
   (multiple-value-bind (body status-code headers)
-      (drakma:http-request
-       (openai-codex-responses-endpoint auth)
-       :method :post
-       :content-type "application/json"
-       :additional-headers (openai-codex-request-headers auth :stream stream)
-       :external-format-in :utf-8
-       :content request-body
-       :want-stream stream
-       :force-binary t)
+      (provider-http-request-with-retries
+       (if stream "OpenAI Codex streaming request" "OpenAI Codex request")
+       (lambda ()
+         (drakma:http-request
+          (openai-codex-responses-endpoint auth)
+          :method :post
+          :content-type "application/json"
+          :additional-headers (openai-codex-request-headers auth :stream stream)
+          :external-format-in :utf-8
+          :content request-body
+          :want-stream stream
+          :force-binary t)))
     (declare (ignore headers))
     (if (and (= status-code 401)
              allow-refresh
@@ -2632,16 +2748,19 @@ Uses the OpenAI-compatible chat completions protocol."
                 (push `(:tools . ,(tool-definitions->openai-tools tools)) body))
               (api-json-encode body))))
     (multiple-value-bind (body status-code)
-        (drakma:http-request
-         *openrouter-api-url*
-         :method :post
-         :content-type "application/json"
-         :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
-                               ("HTTP-Referer" . "https://github.com/clawmacs/clawmacs")
-                               ("X-Title" . "clawmacs"))
-         :content request-body
-         :want-stream nil
-         :force-binary nil)
+        (provider-http-request-with-retries
+         "OpenRouter request"
+         (lambda ()
+           (drakma:http-request
+            *openrouter-api-url*
+            :method :post
+            :content-type "application/json"
+            :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
+                                  ("HTTP-Referer" . "https://github.com/clawmacs/clawmacs")
+                                  ("X-Title" . "clawmacs"))
+            :content request-body
+            :want-stream nil
+            :force-binary nil)))
       (let ((body-string (http-body-string body)))
         (unless (= status-code 200)
           (error "OpenRouter API error (~A): ~A" status-code body-string))
@@ -2676,15 +2795,18 @@ Uses the same OpenAI-compatible streaming protocol."
               (api-json-encode body)))
          (state (make-stream-state)))
     (multiple-value-bind (body-stream status-code headers)
-        (drakma:http-request
-         *openrouter-api-url*
-         :method :post
-         :content-type "application/json"
-         :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
-                               ("HTTP-Referer" . "https://github.com/clawmacs/clawmacs")
-                               ("X-Title" . "clawmacs"))
-         :content request-body
-         :want-stream t)
+        (provider-http-request-with-retries
+         "OpenRouter streaming request"
+         (lambda ()
+           (drakma:http-request
+            *openrouter-api-url*
+            :method :post
+            :content-type "application/json"
+            :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
+                                  ("HTTP-Referer" . "https://github.com/clawmacs/clawmacs")
+                                  ("X-Title" . "clawmacs"))
+            :content request-body
+            :want-stream t)))
       (declare (ignore headers))
       (unless (= status-code 200)
         (let ((err (if (streamp body-stream)
@@ -2728,15 +2850,18 @@ The API follows the OpenAI Chat Completions format."
                 (push `(:tools . ,(tool-definitions->openai-tools tools)) body))
               (api-json-encode body))))
     (multiple-value-bind (body status-code)
-        (drakma:http-request
-         *zai-api-url*
-         :method :post
-         :content-type "application/json"
-         :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
-                               ("Accept-Language" . "en-US,en"))
-         :content request-body
-         :want-stream nil
-         :force-binary nil)
+        (provider-http-request-with-retries
+         "Z.AI request"
+         (lambda ()
+           (drakma:http-request
+            *zai-api-url*
+            :method :post
+            :content-type "application/json"
+            :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
+                                  ("Accept-Language" . "en-US,en"))
+            :content request-body
+            :want-stream nil
+            :force-binary nil)))
       (let ((body-string (http-body-string body)))
         (unless (= status-code 200)
           (error "Z.AI API error (~A): ~A" status-code body-string))
@@ -2771,14 +2896,17 @@ Uses the same OpenAI-compatible streaming protocol."
               (api-json-encode body)))
          (state (make-stream-state)))
     (multiple-value-bind (body-stream status-code headers)
-        (drakma:http-request
-         *zai-api-url*
-         :method :post
-         :content-type "application/json"
-         :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
-                               ("Accept-Language" . "en-US,en"))
-         :content request-body
-         :want-stream t)
+        (provider-http-request-with-retries
+         "Z.AI streaming request"
+         (lambda ()
+           (drakma:http-request
+            *zai-api-url*
+            :method :post
+            :content-type "application/json"
+            :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
+                                  ("Accept-Language" . "en-US,en"))
+            :content request-body
+            :want-stream t)))
       (declare (ignore headers))
       (unless (= status-code 200)
         (let ((err (if (streamp body-stream)

@@ -2172,6 +2172,126 @@ same
             (is (equal '("Bearer expired-token" "Bearer fresh-token")
                        (nreverse captured-authz)))))))))
 
+(test openai-codex-request-retries-transient-503-with-backoff
+  "OpenAI Codex retries transient 503 responses before failing the request."
+  (let ((calls 0)
+        (sleeps nil))
+    (let ((clawmacs::*provider-http-max-retries* 3)
+          (clawmacs::*provider-http-initial-backoff-seconds* 0.5)
+          (clawmacs::*provider-http-backoff-multiplier* 2.0)
+          (clawmacs::*provider-http-max-backoff-seconds* 8.0)
+          (clawmacs::*provider-http-sleep-function*
+            (lambda (seconds)
+              (push seconds sleeps))))
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                '(:source :token-override
+                                  :mode :api-key
+                                  :token "openai-token"
+                                  :base-url "https://api.openai.com/v1"
+                                  :refreshable-p nil))
+        (with-function-override (drakma:http-request (&rest args)
+                                  (declare (ignore args))
+                                  (incf calls)
+                                  (case calls
+                                    ((1 2)
+                                     (values "service unavailable" 503 nil))
+                                    (otherwise
+                                     (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
+                                             200))))
+          (let ((response (clawmacs::openai-codex-request '()
+                                                          :model "gpt-5.3-codex")))
+            (is (string= "end_turn"
+                         (clawmacs::response-stop-reason response)))))))
+    (is (= 3 calls))
+    (is (equalp '(0.5 1.0) (nreverse sleeps)))))
+
+(test openai-codex-request-honors-retry-after-header
+  "Retry-After controls the backoff delay for transient provider responses."
+  (let ((calls 0)
+        (sleeps nil))
+    (let ((clawmacs::*provider-http-max-retries* 2)
+          (clawmacs::*provider-http-sleep-function*
+            (lambda (seconds)
+              (push seconds sleeps))))
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                '(:source :token-override
+                                  :mode :api-key
+                                  :token "openai-token"
+                                  :base-url "https://api.openai.com/v1"
+                                  :refreshable-p nil))
+        (with-function-override (drakma:http-request (&rest args)
+                                  (declare (ignore args))
+                                  (incf calls)
+                                  (if (= calls 1)
+                                      (values "service unavailable"
+                                              503
+                                              '(("Retry-After" . "2")))
+                                      (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
+                                              200)))
+          (let ((response (clawmacs::openai-codex-request '()
+                                                          :model "gpt-5.3-codex")))
+            (is (string= "end_turn"
+                         (clawmacs::response-stop-reason response)))))))
+    (is (= 2 calls))
+    (is (equal '(2) (nreverse sleeps)))))
+
+(test openai-codex-request-does-not-retry-client-errors
+  "Non-transient HTTP errors are returned to the provider-specific handler."
+  (let ((calls 0)
+        (sleeps nil))
+    (let ((clawmacs::*provider-http-max-retries* 3)
+          (clawmacs::*provider-http-sleep-function*
+            (lambda (seconds)
+              (push seconds sleeps))))
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                '(:source :token-override
+                                  :mode :api-key
+                                  :token "openai-token"
+                                  :base-url "https://api.openai.com/v1"
+                                  :refreshable-p nil))
+        (with-function-override (drakma:http-request (&rest args)
+                                  (declare (ignore args))
+                                  (incf calls)
+                                  (values "bad request" 400 nil))
+          (signals error
+            (clawmacs::openai-codex-request '()
+                                            :model "gpt-5.3-codex")))))
+    (is (= 1 calls))
+    (is (null sleeps))))
+
+(test openai-codex-request-retries-connection-errors
+  "Connection-level provider failures are retried before surfacing."
+  (let ((calls 0)
+        (sleeps nil))
+    (let ((clawmacs::*provider-http-max-retries* 2)
+          (clawmacs::*provider-http-initial-backoff-seconds* 0.25)
+          (clawmacs::*provider-http-sleep-function*
+            (lambda (seconds)
+              (push seconds sleeps))))
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                '(:source :token-override
+                                  :mode :api-key
+                                  :token "openai-token"
+                                  :base-url "https://api.openai.com/v1"
+                                  :refreshable-p nil))
+        (with-function-override (drakma:http-request (&rest args)
+                                  (declare (ignore args))
+                                  (incf calls)
+                                  (if (= calls 1)
+                                      (error "connection refused")
+                                      (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
+                                              200)))
+          (let ((response (clawmacs::openai-codex-request '()
+                                                          :model "gpt-5.3-codex")))
+            (is (string= "end_turn"
+                         (clawmacs::response-stop-reason response)))))))
+    (is (= 2 calls))
+    (is (equalp '(0.25) (nreverse sleeps)))))
+
 (test openai-codex-streaming-normalizes-response-shape
   "OpenAI Codex streaming adapter accumulates Responses output deltas."
   (let ((captured-force-binary nil)
@@ -2748,6 +2868,32 @@ same
         (is (equal '(((:type . "text")
                       (:text . "你好世界")))
                     (clawmacs::response-content response)))))))
+
+(test zai-request-retries-transient-503
+  "Z.AI non-streaming requests use the shared transient HTTP retry path."
+  (let ((calls 0)
+        (sleeps nil))
+    (let ((clawmacs::*provider-http-max-retries* 1)
+          (clawmacs::*provider-http-initial-backoff-seconds* 0.5)
+          (clawmacs::*provider-http-sleep-function*
+            (lambda (seconds)
+              (push seconds sleeps))))
+      (with-function-override (drakma:http-request (&rest args)
+                                (declare (ignore args))
+                                (incf calls)
+                                (if (= calls 1)
+                                    (values "service unavailable" 503 nil)
+                                    (values
+                                     "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"ok\"}}]}"
+                                     200)))
+        (with-function-override (clawmacs::read-provider-token (provider)
+                                  (declare (ignore provider))
+                                  "zai-key")
+          (let ((response (clawmacs::zai-request '() :model "glm-5")))
+            (is (string= "end_turn"
+                         (clawmacs::response-stop-reason response)))))))
+    (is (= 2 calls))
+    (is (equalp '(0.5) (nreverse sleeps)))))
 
 (test zai-request-with-tool-calls
   "Z.AI non-streaming handles tool_calls responses correctly."
