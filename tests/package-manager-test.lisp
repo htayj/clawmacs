@@ -211,12 +211,21 @@
       (is (= 1 *package-entrypoint-load-count*)))))
 
 (test default-package-channel-discovers-sexed
-  "The bundled default channel advertises the sexed package."
+  "The bundled default channel advertises the built-in packages."
   (with-package-state-override ((default-package-test-channels))
     (let* ((definitions (clawmacs:reload-package-channels))
+           (names (sort (mapcar #'clawmacs:package-definition-name definitions)
+                        #'string<))
+           (lispi (find "lispi" definitions
+                        :key #'clawmacs:package-definition-name
+                        :test #'string=))
            (sexed (find "sexed" definitions
                         :key #'clawmacs:package-definition-name
                         :test #'string=)))
+      (is (equal '("lispi" "sexed") names))
+      (is (not (null lispi)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier lispi)))
+      (is (probe-file (clawmacs:package-definition-entrypoint lispi)))
       (is (not (null sexed)))
       (is (eq :builtin (clawmacs:package-definition-source-tier sexed)))
       (is (clawmacs:package-definition-autoload sexed))

@@ -89,7 +89,17 @@
        (setf (symbol-function ',name) original-function))))
 
 (defmacro with-tool-table-restored (&body body)
-  `(let ((snapshot (make-hash-table :test (hash-table-test clawmacs::*tool-table*))))
+  `(let* ((snapshot (make-hash-table :test (hash-table-test clawmacs::*tool-table*)))
+          (package-test-root (temp-package-test-directory "llm-package-config"))
+          (clawmacs::*package-configuration-path*
+           (merge-pathnames "packages.json"
+                            (uiop:ensure-directory-pathname package-test-root)))
+          (clawmacs::*package-configuration* nil)
+          (clawmacs::*package-channels* (default-package-test-channels))
+          (clawmacs::*available-packages* nil)
+          (clawmacs::*package-registry-loaded-p* nil)
+          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
+          (clawmacs::*package-prompt-sections* nil))
      (maphash (lambda (key value)
                 (setf (gethash key snapshot) value))
               clawmacs::*tool-table*)
@@ -100,6 +110,12 @@
        (maphash (lambda (key value)
                   (setf (gethash key clawmacs::*tool-table*) value))
                 snapshot))))
+
+(defun initialize-test-tools ()
+  "Initialize the tool table with the bundled lispi package enabled."
+  (clawmacs::init-tools)
+  (clawmacs:set-package-enablement-scope "lispi" :global)
+  (clawmacs:load-active-packages))
 
 (defun append-test-user-message (buf text)
   (clawmacs::set-message-text (buffer-input-message buf) text)
@@ -167,10 +183,10 @@
     (clawmacs::provider-token-path :unknown-provider)))
 
 (test init-tools-registers-pi-style-tools-by-default
-  "init-tools removes dormant built-ins and exposes Pi-style tools by default."
+  "Enabling the bundled lispi package exposes Pi-style tools."
   (with-tool-table-restored
     (clrhash clawmacs::*tool-table*)
-    (clawmacs::init-tools)
+    (initialize-test-tools)
     (let* ((*current-caller* :user)
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
@@ -187,6 +203,20 @@
       (is (null (gethash "file_edit" clawmacs::*tool-table*)))
       (is (null (gethash "shell_exec" clawmacs::*tool-table*))))))
 
+(test init-tools-hides-lispi-tools-until-package-enabled
+  "init-tools alone does not expose lispi package tools."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs::init-tools)
+    (let* ((*current-caller* :user)
+           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tool-names (sort (mapcar (lambda (tool)
+                                       (cdr (assoc :name tool)))
+                                     tools)
+                             #'string<)))
+      (is-false (member "read" tool-names :test #'string=))
+      (is-false (member "lisp_eval" tool-names :test #'string=)))))
+
 (test init-tools-preserves-custom-tools
   "init-tools resets built-ins without wiping user-added tools."
   (with-tool-table-restored
@@ -200,7 +230,7 @@
      (lambda (args)
        (declare (ignore args))
        "{\"ok\":true}"))
-    (clawmacs::init-tools)
+    (initialize-test-tools)
     (let* ((*current-caller* :user)
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
@@ -218,7 +248,7 @@
            (file (merge-pathnames "nested/demo.txt" root)))
       (ensure-directories-exist (merge-pathnames #P".keep" root))
       (let ((clawmacs::*sandbox-root* root))
-        (clawmacs::init-tools)
+        (initialize-test-tools)
         (let ((write-result
                 (clawmacs:execute-tool
                  "write"
@@ -286,7 +316,7 @@ needle here
       (write-test-file ignored "needle should not be seen
 ")
       (let ((clawmacs::*sandbox-root* root))
-        (clawmacs::init-tools)
+        (initialize-test-tools)
         (let ((find-result (clawmacs:execute-tool
                             "find"
                             '(:pattern "*.lisp"))))
@@ -363,7 +393,7 @@ TWO"
                      "(list \"(\" #\\) ; ignored )~% #| ignored ) #| nested ( |# |# :ok)")))
       (ensure-directories-exist (merge-pathnames #P".keep" root))
       (let ((clawmacs::*sandbox-root* root))
-        (clawmacs::init-tools)
+        (initialize-test-tools)
         (clawmacs:execute-tool
          "write"
          `(:path "sample.lisp"
@@ -401,7 +431,7 @@ TWO"
 same
 ")
       (let ((clawmacs::*sandbox-root* root))
-        (clawmacs::init-tools)
+        (initialize-test-tools)
         (signals error
           (clawmacs:execute-tool
            "edit"
@@ -424,10 +454,11 @@ same
 (test build-system-prompt-is-compact-and-pi-style
   "The default system prompt lists the active provider tool surface."
   (with-tool-table-restored
-    (clawmacs::init-tools)
+    (initialize-test-tools)
     (with-function-override (clawmacs::load-boot-files ()
                               nil)
       (with-package-state-override ((default-package-test-channels))
+        (clawmacs:set-package-enablement-scope "lispi" :global)
         (clawmacs:load-autoload-packages)
         (is-false (search "## Structural editing with sexed"
                           clawmacs::*default-core-system-prompt*))
@@ -821,7 +852,7 @@ same
                                        "provider reasoning summary"))))
         (clawmacs::init-default-keymap)
         (clawmacs::init-global-faces)
-        (clawmacs::init-tools)
+        (initialize-test-tools)
         (let ((result (clawmacs:run-single-prompt
                        "Say hello"
                        :provider :zai
@@ -867,7 +898,7 @@ same
                                                "the result is 5"))))))
           (clawmacs::init-default-keymap)
           (clawmacs::init-global-faces)
-          (clawmacs::init-tools)
+          (initialize-test-tools)
           (let* ((result (clawmacs:run-single-prompt
                           "Compute two plus three"
                           :provider :zai
@@ -921,7 +952,7 @@ same
                                          "delegated answer"))))
           (clawmacs::init-default-keymap)
           (clawmacs::init-global-faces)
-          (clawmacs::init-tools)
+          (initialize-test-tools)
           (let ((result (clawmacs:run-subagent
                          "Research this"
                          :agent-name "researcher"
@@ -957,7 +988,7 @@ same
                                            "custom answer"))))
             (clawmacs::init-default-keymap)
             (clawmacs::init-global-faces)
-            (clawmacs::init-tools)
+            (initialize-test-tools)
             (let ((result (clawmacs:run-subagent
                            "Use a custom prompt"
                            :agent-name "temporary-doc-agent"
@@ -980,7 +1011,7 @@ same
       (with-agent-definition-registry-override ()
         (with-tool-table-restored
           (clrhash clawmacs::*tool-table*)
-          (clawmacs::init-tools)
+          (initialize-test-tools)
           (clawmacs:register-tool
            "doc_lookup"
            "Look up docs."
@@ -1029,7 +1060,7 @@ same
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
         (clrhash clawmacs::*tool-table*)
-        (clawmacs::init-tools)
+        (initialize-test-tools)
         (with-function-override (clawmacs::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
@@ -1093,7 +1124,7 @@ same
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
         (clrhash clawmacs::*tool-table*)
-        (clawmacs::init-tools)
+        (initialize-test-tools)
         (with-function-override (clawmacs::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
@@ -1138,7 +1169,7 @@ same
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
         (clrhash clawmacs::*tool-table*)
-        (clawmacs::init-tools)
+        (initialize-test-tools)
         (clawmacs:register-tool
          "doc_lookup"
          "Look up docs."
@@ -1223,7 +1254,7 @@ same
                                          "async answer"))))
           (clawmacs::init-default-keymap)
           (clawmacs::init-global-faces)
-          (clawmacs::init-tools)
+          (initialize-test-tools)
           (let ((handle (clawmacs:run-subagent-async
                          "Do async work"
                          :agent-name "async-agent"
@@ -1263,7 +1294,7 @@ same
                                  (error "provider boom"))
           (clawmacs::init-default-keymap)
           (clawmacs::init-global-faces)
-          (clawmacs::init-tools)
+          (initialize-test-tools)
           (let ((handle (clawmacs:run-subagent-async
                          "Fail async work"
                          :provider :zai
@@ -1294,7 +1325,7 @@ same
                                          "late answer"))))
           (clawmacs::init-default-keymap)
           (clawmacs::init-global-faces)
-          (clawmacs::init-tools)
+          (initialize-test-tools)
           (let ((handle (clawmacs:run-subagent-async
                          "Cancel async work"
                          :provider :zai
@@ -1330,7 +1361,7 @@ same
     (let ((clawmacs::*lisp-eval-history* nil)
           (clawmacs::*last-eval-result* nil)
           (clawmacs::*last-eval-condition* nil))
-      (clawmacs::init-tools)
+      (initialize-test-tools)
       (let* ((data (clawmacs:execute-tool
                     "lisp_eval"
                     '(:code "(progn (format t \"hello\") (values 4 5))")))
@@ -1350,7 +1381,7 @@ same
     (let ((clawmacs::*lisp-eval-history* nil)
           (clawmacs::*last-eval-result* nil)
           (clawmacs::*last-eval-condition* nil))
-      (clawmacs::init-tools)
+      (initialize-test-tools)
       (let* ((data (clawmacs:execute-tool
                     "lisp_eval"
                     '(:code "(error \"boom\")")))
@@ -1382,7 +1413,7 @@ same
                                     '((:code . "(+ 1 1)"))))))
           (clawmacs::init-default-keymap)
           (clawmacs::init-global-faces)
-          (clawmacs::init-tools)
+          (initialize-test-tools)
           (handler-case
               (progn
                 (clawmacs:run-single-prompt

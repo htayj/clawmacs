@@ -479,6 +479,23 @@ TEXT may contain newlines, which are split into separate line objects."
           (setf (buffer-first-message buf) agent-msg)))
     agent-msg))
 
+(declaim (ftype (function (buffer string) message) buffer-insert-context-message))
+(defun buffer-insert-context-message (buf text)
+  "Create a read-only context message with TEXT before the input message.
+Context messages are sent to providers as user-context messages."
+  (let* ((context-msg (make-message :context :read-only-p t))
+         (input (buffer-input-message buf)))
+    (set-message-text context-msg text)
+    (setf (message-timestamp context-msg) (get-universal-time))
+    (let ((before-input (message-prev input)))
+      (setf (message-prev context-msg) before-input
+            (message-next context-msg) input
+            (message-prev input) context-msg)
+      (if before-input
+          (setf (message-next before-input) context-msg)
+          (setf (buffer-first-message buf) context-msg)))
+    context-msg))
+
 (declaim (ftype (function (buffer string) message) buffer-insert-system-message))
 (defun buffer-insert-system-message (buf text)
   "Create a read-only system message with TEXT and insert it before the input message.

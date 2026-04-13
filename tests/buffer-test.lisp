@@ -63,6 +63,12 @@
   "Return the message immediately before BUF's input message."
   (message-prev (buffer-input-message buf)))
 
+(defun buffer-test-history-messages (buf)
+  "Return read-only history messages before BUF's input message."
+  (loop :for msg := (buffer-first-message buf) :then (message-next msg)
+        :while (and msg (not (eq msg (buffer-input-message buf))))
+        :collect msg))
+
 (test buffer-creation
   "A new buffer has one message (the input message)."
   (let ((buf (make-buffer "test-session"
@@ -638,7 +644,13 @@
                                (getf entry :package-name))
                         :test #'string=)))
         (is (not (null item)))
-        (is (search "[default] sexed - " (getf item :display)))))))
+        (is (search "[default] sexed - " (getf item :display))))
+      (let ((item (find "lispi" *minibuffer-filtered-items*
+                        :key (lambda (entry)
+                               (getf entry :package-name))
+                        :test #'string=)))
+        (is (not (null item)))
+        (is (search "[default] lispi - " (getf item :display)))))))
 
 (test minibuffer-package-selector-cycles-and-refreshes
   "Confirming a package cycles scope and reopens the package selector."
@@ -656,11 +668,44 @@
       (is (eq :buffer
               (clawmacs:package-enablement-scope "sexed" :buffer buf)))
       (is (equal '("sexed") (buffer-enabled-packages buf)))
+      (is (null (find :context
+                      (buffer-test-history-messages buf)
+                      :key #'message-sender)))
       (let ((item (find "sexed" *minibuffer-filtered-items*
                         :key (lambda (entry)
                                (getf entry :package-name))
                         :test #'string=)))
         (is (search "[buffer] sexed - " (getf item :display)))))))
+
+(test minibuffer-package-selector-appends-context-when-enabling-in-context
+  "Enabling a package in an existing conversation appends package prompt context."
+  (with-interactive-command-test-buffer (buf)
+    (with-package-state-override ((default-package-test-channels))
+      (clawmacs::set-message-text (buffer-input-message buf)
+                                  "existing conversation context")
+      (buffer-finalize-input buf)
+      (clawmacs::minibuffer-toggle-package-command buf)
+      (let ((index (position "sexed" *minibuffer-filtered-items*
+                             :key (lambda (entry)
+                                    (getf entry :package-name))
+                             :test #'string=)))
+        (is (not (null index)))
+        (setf *minibuffer-selected-index* index)
+        (minibuffer-confirm))
+      (let* ((history (buffer-test-history-messages buf))
+             (context (find :context history :key #'message-sender))
+             (provider-messages (build-conversation-messages buf)))
+        (is (not (null context)))
+        (is (search "<package_context package=\"sexed\">"
+                    (message-text context)))
+        (is (search "Structural editing with sexed"
+                    (message-text context)))
+        (is (= 2 (length provider-messages)))
+        (let* ((last-message (car (last provider-messages)))
+               (content (cdr (assoc :content last-message)))
+               (text (cdr (assoc :text (aref content 0)))))
+          (is (string= "user" (cdr (assoc :role last-message))))
+          (is (search "<package_context package=\"sexed\">" text)))))))
 
 (test describe-installed-package-command-opens-help-buffer
   "The describe package command loads package metadata and opens a help buffer."

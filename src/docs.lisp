@@ -1706,7 +1706,7 @@ documentation in *extended-docs*."
 (defdoc build-conversation-messages
   :category "llm"
   :usage "(build-conversation-messages BUF:buffer) — (build-conversation-messages (current-buffer))"
-  :returns "list — API-format messages array (list of alists with :role and :content)."
+  :returns "list — API-format messages array. :context messages are sent as user context; :system messages are omitted."
   :see-also (provider-request buffer-first-message message-raw-content))
 
 (defdoc api-json-encode
@@ -1846,43 +1846,12 @@ documentation in *extended-docs*."
   :side-effects "Reads a text file within the current sandbox."
   :see-also (*file-read-default-limit* validate-sandbox-path deftool))
 
-(deftool execute-read
-  :name "read"
-  :description "Read the contents of a text file within the sandbox. Output is truncated to 2000 lines by default; use offset and limit to continue through large files."
-  :permission :agent-allowed
-  :call-style :raw-args
-  :args ((path :type "string"
-               :description "Lisp data :path, relative to the sandbox or absolute within it.")
-         (offset :type "integer"
-                 :required nil
-                 :description "Lisp data :offset, the 1-indexed line number to start reading from.")
-         (limit :type "integer"
-                :required nil
-                :description "Lisp data :limit, the maximum number of lines to read.")))
-
 (defdoc execute-find
   :category "tool"
   :usage "(execute-find ARGS:lisp-data)"
   :returns "string — Matching file paths as Lisp data."
   :side-effects "Searches file names within the current sandbox."
   :see-also (*find-default-limit* validate-sandbox-path deftool))
-
-(deftool execute-find
-  :name "find"
-  :description "Search for files by name or glob pattern within the sandbox. Returns matching file paths relative to the sandbox."
-  :permission :agent-allowed
-  :call-style :raw-args
-  :args ((pattern :type "string"
-                  :description "Lisp data :pattern, a filename substring or wildcard pattern such as *.lisp or src/*.lisp.")
-         (path :type "string"
-               :required nil
-               :description "Lisp data :path, the directory or file to search. Default: sandbox root.")
-         (limit :type "integer"
-                :required nil
-                :description "Lisp data :limit, the maximum number of file paths to return.")
-         (ignore-case :type "boolean"
-                      :required nil
-                      :description "Lisp data :ignore-case, true for case-insensitive matching.")))
 
 (defdoc execute-grep
   :category "tool"
@@ -1891,43 +1860,12 @@ documentation in *extended-docs*."
   :side-effects "Searches file contents within the current sandbox."
   :see-also (*grep-default-limit* *grep-max-file-bytes* validate-sandbox-path deftool))
 
-(deftool execute-grep
-  :name "grep"
-  :description "Search file contents for a literal pattern within the sandbox. Returns matching lines with file paths and line numbers."
-  :permission :agent-allowed
-  :call-style :raw-args
-  :args ((pattern :type "string"
-                  :description "Lisp data :pattern, the literal text to search for.")
-         (path :type "string"
-               :required nil
-               :description "Lisp data :path, the directory or file to search. Default: sandbox root.")
-         (glob :type "string"
-               :required nil
-               :description "Lisp data :glob, optional wildcard pattern limiting searched files, such as *.lisp.")
-         (ignore-case :type "boolean"
-                      :required nil
-                      :description "Lisp data :ignore-case, true for case-insensitive matching.")
-         (limit :type "integer"
-                :required nil
-                :description "Lisp data :limit, the maximum number of matching lines to return.")))
-
 (defdoc execute-write
   :category "tool"
   :usage "(execute-write ARGS:lisp-data)"
   :returns "string — Write result as Lisp data."
   :side-effects "Creates or overwrites a text file within the current sandbox."
   :see-also (file-write-approval-display validate-sandbox-path deftool))
-
-(deftool execute-write
-  :name "write"
-  :description "Create or overwrite a text file within the sandbox. Parent directories are created automatically."
-  :permission :agent-allowed
-  :call-style :raw-args
-  :approval-display-fn file-write-approval-display
-  :args ((path :type "string"
-               :description "Lisp data :path, relative to the sandbox or absolute within it.")
-         (content :type "string"
-                  :description "Lisp data :content, the complete file content to write. Parentheses must be balanced.")))
 
 (defdoc execute-edit
   :category "tool"
@@ -1936,36 +1874,12 @@ documentation in *extended-docs*."
   :side-effects "Replaces one exact text occurrence in a file within the current sandbox."
   :see-also (file-edit-approval-display validate-sandbox-path deftool))
 
-(deftool execute-edit
-  :name "edit"
-  :description "Edit a text file within the sandbox by replacing one exact :old-text occurrence with :new-text."
-  :permission :agent-allowed
-  :call-style :raw-args
-  :approval-display-fn file-edit-approval-display
-  :args ((path :type "string"
-               :description "Lisp data :path, relative to the sandbox or absolute within it.")
-         (old-text :type "string"
-                   :description "Lisp data :old-text, the exact text to find and replace. Must occur exactly once.")
-         (new-text :type "string"
-                   :description "Lisp data :new-text, the replacement text. Use an empty string to delete :old-text. The resulting file's parentheses must be balanced.")))
-
 (defdoc execute-lisp-eval
   :category "tool"
   :usage "(execute-lisp-eval ARGS:lisp-data)"
   :returns "string — Evaluation result as Lisp data."
   :side-effects "Evaluates one Common Lisp form in the running image and records lisp_eval history."
   :see-also (*lisp-eval-history* *last-eval-result* *last-eval-condition* deftool))
-
-(deftool execute-lisp-eval
-  :name "lisp_eval"
-  :description "Evaluate one Common Lisp form in the running clawmacs process for testing, introspection, live system updates, or defining helper tools."
-  :permission :agent-allowed
-  :call-style :raw-args
-  :args ((code :type "string"
-               :description "Lisp data :code, one Common Lisp form to read and evaluate.")
-         (package :type "string"
-                  :required nil
-                  :description "Lisp data :package, the package name used while reading and evaluating :code. Default: CLAWMACS.")))
 
 (defdoc *tool-table*
   :category "tool"
@@ -3777,7 +3691,7 @@ documentation in *extended-docs*."
   :category "packages"
   :usage "M-x minibuffer-toggle-package-command"
   :returns "nil"
-  :side-effects "Opens a minibuffer package selector; RET cycles default, buffer, agent, and global enablement."
+  :side-effects "Opens a minibuffer package selector; RET cycles default, buffer, agent, and global enablement. Newly enabled packages append their prompt/tool context to non-empty buffers."
   :see-also (cycle-package-enablement-scope describe-installed-package-command))
 
 (defdoc describe-installed-package-command

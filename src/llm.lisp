@@ -1881,6 +1881,7 @@ and should not be sent to the API."
                                  ((eq sender :user) "user")
                                  ((eq sender :tool-result) "user")
                                  ((eq sender :compaction-summary) "user")
+                                 ((eq sender :context) "user")
                                  (t "assistant")))
                          (content (canonicalize-message-content
                                    role

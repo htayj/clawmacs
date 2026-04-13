@@ -1846,8 +1846,15 @@ Returns true when KEY was consumed by completion."
            "Enable Package" items
            (lambda (item)
              (let* ((name (getf item :package-name))
+                    (definition (getf item :package))
+                    (previous-scope
+                      (package-enablement-scope name :buffer buffer))
+                    (had-context-p
+                      (buffer-has-conversation-context-p buffer))
                     (scope (cycle-package-enablement-scope name :buffer buffer)))
                (load-active-packages :buffer buffer)
+               (maybe-insert-enabled-package-context
+                buffer definition previous-scope scope had-context-p)
                (buffer-insert-system-message
                 buffer
                 (format nil "[Package ~A ~A]"
@@ -1890,6 +1897,65 @@ Returns true when KEY was consumed by completion."
                    (string= package-name
                             (or (package-prompt-section-package section) "")))
                  (list-package-prompt-sections)))
+
+(defun package-context-message-marker (package-name)
+  "Return the stable marker used for PACKAGE-NAME context messages."
+  (format nil "<package_context package=~S>" package-name))
+
+(defun buffer-has-conversation-context-p (buffer)
+  "Return true when BUFFER already has provider-visible context."
+  (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
+        :while (and msg (not (eq msg (buffer-input-message buffer))))
+        :thereis (not (eq (message-sender msg) :system))))
+
+(defun buffer-package-context-message-present-p (buffer package-name)
+  "Return true when BUFFER already contains PACKAGE-NAME's context marker."
+  (let ((marker (package-context-message-marker package-name)))
+    (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
+          :while (and msg (not (eq msg (buffer-input-message buffer))))
+          :thereis (and (eq (message-sender msg) :context)
+                        (search marker (message-text msg))))))
+
+(defun package-owned-tool-definitions-for-context (package-name)
+  "Return provider-style tool definitions owned by PACKAGE-NAME."
+  (mapcar (lambda (metadata)
+            `((:name . ,(agent-tool-metadata-name metadata))
+              (:description . ,(agent-tool-metadata-description metadata))
+              (:input--schema . ,(agent-tool-metadata-input-schema metadata))))
+          (package-owned-tool-metadata package-name)))
+
+(defun package-system-prompt-context-text (definition buffer)
+  "Return package prompt content that should be appended to existing context."
+  (when (load-clawmacs-package definition)
+    (let* ((name (package-definition-name definition))
+           (prompt-section
+             (render-package-prompt-sections
+              (package-owned-prompt-sections name)
+              :buffer buffer))
+           (tools-section
+             (render-agent-tools-section
+              (package-owned-tool-definitions-for-context name)))
+           (parts (remove nil (list prompt-section tools-section))))
+      (when parts
+        (with-output-to-string (s)
+          (format s "~A~%" (package-context-message-marker name))
+          (format s "The ~A package was enabled after earlier conversation context. Apply this package context to subsequent work.~%~%"
+                  name)
+          (format s "~{~A~^~%~%~}" parts)
+          (format s "~%</package_context>"))))))
+
+(defun maybe-insert-enabled-package-context
+    (buffer definition previous-scope new-scope had-context-p)
+  "Append newly enabled package prompt content to BUFFER context when needed."
+  (let ((name (and definition (package-definition-name definition))))
+    (when (and name
+               had-context-p
+               (eq previous-scope :default)
+               (not (eq new-scope :default))
+               (not (buffer-package-context-message-present-p buffer name)))
+      (let ((text (package-system-prompt-context-text definition buffer)))
+        (when text
+          (buffer-insert-context-message buffer text))))))
 
 (defun package-owned-extended-docs (package-name)
   "Return extended documentation entries registered by PACKAGE-NAME."
