@@ -46,6 +46,10 @@
   :description "Agent-oriented git package tests"
   :in clawmacs-suite)
 
+(def-suite netcons-suite
+  :description "Agent-oriented web lookup package tests"
+  :in clawmacs-suite)
+
 (def-suite package-manager-suite
   :description "Package loader tests"
   :in clawmacs-suite)

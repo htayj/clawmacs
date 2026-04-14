@@ -59,6 +59,7 @@
                  :components ((:file "packages")
                               (:file "package-manager-test")
                               (:file "git-package-test")
+                              (:file "netcons-package-test")
                               (:file "reference-test")
                               (:file "faces-test")
                               (:file "message-test")

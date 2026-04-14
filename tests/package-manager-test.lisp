@@ -222,13 +222,16 @@
            (lispi (find "lispi" definitions
                         :key #'clawmacs:package-definition-name
                         :test #'string=))
+           (netcons (find "netcons" definitions
+                          :key #'clawmacs:package-definition-name
+                          :test #'string=))
            (sexed (find "sexed" definitions
                         :key #'clawmacs:package-definition-name
                         :test #'string=))
            (slop (find "slop" definitions
                        :key #'clawmacs:package-definition-name
                        :test #'string=)))
-      (is (equal '("git" "lispi" "sexed" "slop") names))
+      (is (equal '("git" "lispi" "netcons" "sexed" "slop") names))
       (is (not (null git)))
       (is (eq :builtin (clawmacs:package-definition-source-tier git)))
       (is (clawmacs:package-definition-autoload git))
@@ -236,6 +239,10 @@
       (is (not (null lispi)))
       (is (eq :builtin (clawmacs:package-definition-source-tier lispi)))
       (is (probe-file (clawmacs:package-definition-entrypoint lispi)))
+      (is (not (null netcons)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier netcons)))
+      (is (clawmacs:package-definition-autoload netcons))
+      (is (probe-file (clawmacs:package-definition-entrypoint netcons)))
       (is (not (null sexed)))
       (is (eq :builtin (clawmacs:package-definition-source-tier sexed)))
       (is (clawmacs:package-definition-autoload sexed))
@@ -252,6 +259,7 @@
       (is (null loaded))
       (is (not (null (clawmacs:find-available-package "sexed"))))
       (is (not (null (clawmacs:find-available-package "slop"))))
+      (is (not (null (clawmacs:find-available-package "netcons"))))
       (is (null (clawmacs:render-package-prompt-sections))))))
 
 (test load-autoload-packages-registers-enabled-sexed-prompt-section
