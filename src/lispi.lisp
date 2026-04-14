@@ -770,6 +770,12 @@ Works for both existing and not-yet-existing files."
 (defvar *lisp-eval-max-output-chars* 20000
   "Maximum characters retained per lisp_eval result/output/error-output field.")
 
+(defvar *lisp-eval-print-length* 100
+  "Maximum sequence length used when printing lisp_eval result values.")
+
+(defvar *lisp-eval-print-level* 8
+  "Maximum nesting depth used when printing lisp_eval result values.")
+
 (defun truncate-lisp-eval-text (text)
   "Return values TRUNCATED-TEXT and TRUNCATED-P for TEXT."
   (let ((string (or text "")))
@@ -789,19 +795,53 @@ Works for both existing and not-yet-existing files."
           (subseq *lisp-eval-history* 0 *lisp-eval-history-limit*)))
   record)
 
+(defun safe-lisp-eval-value-string (value)
+  "Return a bounded printed representation of VALUE for lisp_eval output."
+  (handler-case
+      (let ((*print-length* *lisp-eval-print-length*)
+            (*print-level* *lisp-eval-print-level*)
+            (*print-circle* t)
+            (*print-pretty* nil)
+            (*print-readably* nil)
+            (*print-escape* t))
+        (prin1-to-string value))
+    (error ()
+      "#<unprintable value>")))
+
+(defun safe-lisp-eval-condition-string (condition)
+  "Return a bounded printed representation of CONDITION for lisp_eval errors."
+  (handler-case
+      (let ((*print-length* *lisp-eval-print-length*)
+            (*print-level* *lisp-eval-print-level*)
+            (*print-circle* t)
+            (*print-pretty* nil)
+            (*print-readably* nil))
+        (format nil "~A" condition))
+    (error ()
+      "#<unprintable condition>")))
+
+(defun lisp-eval-values-string (values)
+  "Return newline-separated safe printed values for lisp_eval."
+  (format nil "~{~A~^~%~}"
+          (mapcar #'safe-lisp-eval-value-string values)))
+
 (defun lisp-eval-preview (value &optional (max-length 160))
   "Return a compact printed preview for VALUE."
-  (let ((text (handler-case
-                  (let ((*print-length* 20)
-                        (*print-level* 4)
-                        (*print-circle* t)
-                        (*print-pretty* nil))
-                    (prin1-to-string value))
-                (error (condition)
-                  (format nil "#<error printing value: ~A>" condition)))))
-    (if (> (length text) max-length)
-        (concatenate 'string (subseq text 0 max-length) "...")
-        text)))
+  (let ((*lisp-eval-print-length* 20)
+        (*lisp-eval-print-level* 4))
+    (let ((text (safe-lisp-eval-value-string value)))
+      (if (> (length text) max-length)
+          (concatenate 'string (subseq text 0 max-length) "...")
+          text))))
+
+(defun lisp-eval-condition-preview (condition &optional (max-length 160))
+  "Return a compact printed preview for a lisp_eval condition."
+  (let ((*lisp-eval-print-length* 20)
+        (*lisp-eval-print-level* 4))
+    (let ((text (safe-lisp-eval-condition-string condition)))
+      (if (> (length text) max-length)
+          (concatenate 'string (subseq text 0 max-length) "...")
+          text))))
 
 (defun eval-history-to-string (&key (limit 10))
   "Return a compact newest-first summary of lisp_eval history."
@@ -818,7 +858,8 @@ Works for both existing and not-yet-existing files."
                            (lisp-eval-record-code record)))
                   (if (lisp-eval-record-condition record)
                       (format out "   error: ~A~%"
-                              (lisp-eval-record-condition record))
+                              (lisp-eval-condition-preview
+                               (lisp-eval-record-condition record)))
                       (format out "   result: ~A~%"
                               (lisp-eval-preview
                                (lisp-eval-record-result record))))
@@ -857,11 +898,11 @@ Works for both existing and not-yet-existing files."
               (setf results (multiple-value-list (eval form))
                     *last-eval-result* results
                     *last-eval-condition* nil
-                    result-output (format nil "~{~S~^~%~}" results))))
+                    result-output (lisp-eval-values-string results))))
         (error (condition)
           (setf *last-eval-result* nil
                 *last-eval-condition* condition
-                condition-text (format nil "~A" condition))))
+                condition-text (safe-lisp-eval-condition-string condition))))
       (let ((output (get-output-stream-string output-stream))
             (error-output (get-output-stream-string error-output-stream)))
         (multiple-value-bind (result-text result-truncated-p)

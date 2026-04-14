@@ -13,6 +13,33 @@
     (ensure-directories-exist (merge-pathnames #P".keep" dir))
     (truename dir)))
 
+(defun write-slop-test-file (path text)
+  "Write TEXT to PATH for tests that intentionally bypass projects."
+  (ensure-directories-exist path)
+  (with-open-file (stream path
+                          :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create)
+    (write-string text stream)))
+
+(defmacro with-slop-env-var ((var value) &body body)
+  "Temporarily set environment variable VAR to VALUE."
+  (let ((gvar (gensym "VAR-"))
+        (gval (gensym "VAL-"))
+        (gold (gensym "OLD-")))
+    `(let* ((,gvar ,var)
+            (,gval ,value)
+            (,gold (uiop:getenv ,gvar)))
+       (unwind-protect
+            (progn
+              (if ,gval
+                  (setf (uiop:getenv ,gvar) ,gval)
+                  (setf (uiop:getenv ,gvar) ""))
+              ,@body)
+         (if ,gold
+             (setf (uiop:getenv ,gvar) ,gold)
+             (setf (uiop:getenv ,gvar) ""))))))
+
 (defun slop-demo-source ()
   "Return a small package-qualified Lisp fixture for slop tests."
   "(defpackage :slop-demo
@@ -140,6 +167,75 @@
                :per-symbol-limit 1))))
       (is (= 2 (getf tool-result :count)))
       (is (= 2 (getf tool-result :total-definitions))))))
+
+(test slop-resolves-default-and-path-projects
+  "Slop accepts omitted projects and explicit source root paths."
+  (with-slop-project ("clawmacs" root source)
+    (is (search "(defun double" source))
+    (with-slop-env-var ("CLAWMACS_PROMPT_PROJECT_ROOT" nil)
+      (let* ((default-result (slop-find-definitions nil
+                                                    "double"
+                                                    :namespace "function"))
+             (definition (first (getf default-result :definitions))))
+        (is (= 1 (getf default-result :count)))
+        (is (string= "clawmacs" (getf default-result :project)))
+        (is (string= "clawmacs" (getf definition :project))))
+      (let ((tool-result
+              (clawmacs::slop-tool-find-definitions
+               '(:symbol "triple"
+                 :namespace "function"
+                 :path "src/main.lisp"))))
+        (is (= 1 (getf tool-result :count)))
+        (is (string= "clawmacs" (getf tool-result :project)))))
+    (let ((by-path (slop-find-definitions (namestring root)
+                                          "caller"
+                                          :path "src/main.lisp"
+                                          :namespace "function")))
+      (is (= 1 (getf by-path :count)))
+      (is (string= "clawmacs" (getf by-path :project))))))
+
+(test slop-registers-transient-workspace-for-omitted-project
+  "Omitted project arguments auto-register the current prompt workspace."
+  (let* ((base (slop-test-directory))
+         (root (merge-pathnames #P"workspace/" base))
+         (definitions (merge-pathnames #P"defs/" base))
+         (*project-registry* (make-hash-table :test #'equal))
+         (*project-definitions-directory* definitions)
+         (clawmacs::*project-definitions-loaded-p* nil)
+         (clawmacs::*slop-project-index-cache*
+          (make-hash-table :test #'equal)))
+    (ensure-directories-exist (merge-pathnames #P".keep" root))
+    (ensure-directories-exist (merge-pathnames #P".keep" definitions))
+    (write-slop-test-file (merge-pathnames #P"src/main.lisp" root)
+                          (slop-demo-source))
+    (with-slop-env-var ("CLAWMACS_PROMPT_PROJECT_ROOT" (namestring root))
+      (let ((current (slop-current-project)))
+        (is (string= "workspace" (getf current :project)))
+        (is (string= (namestring (truename root))
+                     (getf current :root))))
+      (let ((definitions-result
+              (clawmacs::slop-tool-find-definitions
+               '(:symbol "double"
+                 :path "src/main.lisp"
+                 :namespace "function"))))
+        (is (= 1 (getf definitions-result :count)))
+        (is (string= "workspace" (getf definitions-result :project))))
+      (let ((by-dot (slop-find-definitions "."
+                                           "triple"
+                                           :namespace "function"))
+            (by-path (slop-find-definitions (namestring root)
+                                            "caller"
+                                            :namespace "function")))
+        (is (= 1 (getf by-dot :count)))
+        (is (= 1 (getf by-path :count)))
+        (is (string= "workspace" (getf by-dot :project)))
+        (is (string= "workspace" (getf by-path :project))))
+      (let* ((projects (clawmacs::slop-tool-list-projects '()))
+             (names (mapcar (lambda (project)
+                              (getf project :name))
+                            (getf projects :projects))))
+        (is (string= "workspace" (getf projects :current-project)))
+        (is (member "workspace" names :test #'string=))))))
 
 (test slop-traces-call-flow-from-entrypoint
   "Trace call flow follows callees and returns resolved graph edges."
@@ -324,6 +420,8 @@
                                      tools)
                              #'string<))
            (prompt (render-package-prompt-sections)))
+      (is (member "slop_current_project" tool-names :test #'string=))
+      (is (member "slop_list_projects" tool-names :test #'string=))
       (is (member "slop_project_symbols" tool-names :test #'string=))
       (is (member "slop_find_definitions_batch" tool-names :test #'string=))
       (is (member "slop_find_references" tool-names :test #'string=))
@@ -335,4 +433,6 @@
       (is (search "slop_find_definitions" prompt))
       (is (search "slop_trace_calls" prompt))
       (is (search "slop_find_mentions" prompt))
-      (is-false (search "lisp_eval" prompt :test #'char=)))))
+      (is (search "Omit it for the current workspace" prompt))
+      (is (search "Avoid `lisp_eval`" prompt))
+      (is (search "command-to-helper" prompt)))))

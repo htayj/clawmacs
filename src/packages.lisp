@@ -625,6 +625,8 @@
    ;; Slop symbol intelligence
    #:*slop-default-result-limit*
    #:*slop-project-index-cache*
+   #:slop-list-projects
+   #:slop-current-project
    #:slop-index-project
    #:slop-project-symbols
    #:slop-symbol-at

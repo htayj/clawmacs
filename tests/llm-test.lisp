@@ -2,6 +2,16 @@
 
 (in-suite llm-suite)
 
+(defclass unprintable-eval-value () ())
+
+(defmethod print-object ((object unprintable-eval-value) stream)
+  (declare (ignore object stream))
+  (error "cannot print eval value"))
+
+(defun make-unprintable-eval-value ()
+  "Return an object whose printer signals for lisp_eval tests."
+  (make-instance 'unprintable-eval-value))
+
 (defun temp-test-token-path (provider)
   (let* ((base (make-pathname :directory (list :absolute "tmp"
                                                (format nil "clawmacs-llm-tests-~A"
@@ -1463,6 +1473,27 @@ same
         (is (equal '(4 5) clawmacs:*last-eval-result*))
         (is (null clawmacs:*last-eval-condition*))
         (is (search "hello" (clawmacs:eval-history-to-string)))))))
+
+(test execute-lisp-eval-prints-values-defensively
+  "Result printing failures do not turn successful lisp_eval calls into errors."
+  (with-tool-table-restored
+    (let ((clawmacs::*lisp-eval-history* nil)
+          (clawmacs::*last-eval-result* nil)
+          (clawmacs::*last-eval-condition* nil))
+      (initialize-test-tools)
+      (let* ((data (clawmacs:execute-tool
+                    "lisp_eval"
+                    '(:code "(clawmacs/tests::make-unprintable-eval-value)")))
+             (decoded (clawmacs::lisp-data-read data)))
+        (is (= 1 (getf decoded :values)))
+        (is (search "unprintable value" (getf decoded :result)))
+        (is (null (getf decoded :error)))
+        (is (not (null clawmacs:*last-eval-result*)))
+        (is (typep (first clawmacs:*last-eval-result*)
+                   'unprintable-eval-value))
+        (is (null clawmacs:*last-eval-condition*))
+        (is (search "unprintable value"
+                    (clawmacs:eval-history-to-string)))))))
 
 (test execute-lisp-eval-records-errors
   "Failed lisp_eval executions expose the condition and still record history."

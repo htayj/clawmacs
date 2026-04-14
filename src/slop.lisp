@@ -7,6 +7,12 @@
 (defparameter *slop-default-result-limit* 100
   "Default maximum number of SLOP results returned by provider tools.")
 
+(defparameter *slop-default-project-candidates* '("clawmacs" "workspace")
+  "Project names tried when a SLOP tool call omits :PROJECT.")
+
+(defparameter *slop-fallback-project-name* "workspace"
+  "Project name used for transient SLOP analysis of the current directory.")
+
 (defvar *slop-project-index-cache* (make-hash-table :test #'equal)
   "Cache of parsed project indexes keyed by normalized project name.")
 
@@ -896,9 +902,180 @@
                                      0)))))
                      paths)))))
 
+(defun slop-blank-project-designator-p (project-designator)
+  "Return true when PROJECT-DESIGNATOR should mean the current project."
+  (or (null project-designator)
+      (and (stringp project-designator)
+           (blank-string-p project-designator))))
+
+(defun slop-existing-directory-root (designator)
+  "Return DESIGNATOR as a true directory pathname when it names a directory."
+  (when designator
+    (let* ((pathname
+             (ignore-errors
+              (uiop:ensure-directory-pathname (pathname designator))))
+           (directory
+             (and pathname
+                  (ignore-errors (uiop:directory-exists-p pathname)))))
+      (and directory (truename directory)))))
+
+(defun slop-project-root= (left right)
+  "Return true when LEFT and RIGHT name the same true directory."
+  (let ((left-root (ignore-errors
+                    (truename (uiop:ensure-directory-pathname left))))
+        (right-root (ignore-errors
+                     (truename (uiop:ensure-directory-pathname right)))))
+    (and left-root
+         right-root
+         (string= (namestring left-root) (namestring right-root)))))
+
+(defun slop-find-project-by-root (root)
+  "Return a registered project rooted at ROOT, when one exists."
+  (find-if (lambda (project)
+             (slop-project-root= (project-root project) root))
+           (list-projects)))
+
+(defun slop-default-workspace-root ()
+  "Return the default directory used for omitted SLOP project arguments."
+  (let ((env-root (uiop:getenv "CLAWMACS_PROMPT_PROJECT_ROOT")))
+    (or (and (not (blank-string-p env-root))
+             (slop-existing-directory-root env-root))
+        (truename "."))))
+
+(defun slop-directory-base-name (directory)
+  "Return DIRECTORY's final path component, or NIL."
+  (let* ((pathname (uiop:ensure-directory-pathname directory))
+         (components (remove-if (lambda (component)
+                                  (member component '(:absolute :relative)
+                                          :test #'eq))
+                                (pathname-directory pathname)))
+         (name (first (last components))))
+    (and (stringp name)
+         (plusp (length name))
+         name)))
+
+(defun slop-register-transient-project (root &optional preferred-name)
+  "Register ROOT as a transient SLOP project and return it."
+  (let* ((true-root (truename (uiop:ensure-directory-pathname root)))
+         (root-project (slop-find-project-by-root true-root))
+         (name (or preferred-name
+                   (slop-directory-base-name true-root)
+                   *slop-fallback-project-name*))
+         (existing (and name (find-project name))))
+    (or root-project
+        (cond
+          ((and existing
+                (slop-project-root= (project-root existing) true-root))
+           existing)
+          ((and existing
+                (eq :slop-transient (project-source existing)))
+           (define-project name
+             :root true-root
+             :description "Transient SLOP project for source analysis"
+             :source :slop-transient
+             :replace t))
+          ((null existing)
+           (define-project name
+             :root true-root
+             :description "Transient SLOP project for source analysis"
+             :source :slop-transient
+             :replace t))
+          (t
+           (define-project (format nil "~A-sources" name)
+             :root true-root
+             :description "Transient SLOP project for source analysis"
+             :source :slop-transient
+             :replace t))))))
+
+(defun slop-default-project ()
+  "Return the best current project for SLOP, registering one if needed."
+  (let* ((env-root (uiop:getenv "CLAWMACS_PROMPT_PROJECT_ROOT"))
+         (current-root (and (not (blank-string-p env-root))
+                            (slop-existing-directory-root env-root))))
+    (or (and current-root
+             (or (slop-find-project-by-root current-root)
+                 (slop-register-transient-project
+                  current-root
+                  *slop-fallback-project-name*)))
+        (loop :for name :in *slop-default-project-candidates*
+              :for project := (find-project name)
+              :when project
+                :return project)
+        (slop-register-transient-project
+         (slop-default-workspace-root)
+         *slop-fallback-project-name*))))
+
+(defun slop-resolve-project (project-designator)
+  "Resolve PROJECT-DESIGNATOR, accepting omitted values and path aliases."
+  (cond
+    ((slop-blank-project-designator-p project-designator)
+     (slop-default-project))
+    ((project-p project-designator)
+     project-designator)
+    ((and (stringp project-designator)
+          (member project-designator '("." "./") :test #'string=))
+     (slop-register-transient-project
+      (slop-default-workspace-root)
+      *slop-fallback-project-name*))
+    ((or (stringp project-designator)
+         (symbolp project-designator))
+     (or (find-project project-designator)
+         (let ((root (and (stringp project-designator)
+                          (slop-existing-directory-root project-designator))))
+           (when root
+             (slop-register-transient-project root)))
+         (when (and (stringp project-designator)
+                    (string= "workspace"
+                             (slop-normalize-name project-designator)))
+           (slop-register-transient-project
+            (slop-default-workspace-root)
+            *slop-fallback-project-name*))
+         (error "Unknown SLOP project: ~A. Use slop_list_projects or omit :project for the current workspace."
+                project-designator)))
+    ((pathnamep project-designator)
+     (let ((root (slop-existing-directory-root project-designator)))
+       (if root
+           (slop-register-transient-project root)
+           (error "SLOP project path does not name an existing directory: ~A."
+                  project-designator))))
+    (t
+     (error "Invalid SLOP project designator: ~S." project-designator))))
+
+(defun slop-project->plist (project &key current)
+  "Return PROJECT as an agent-facing plist."
+  (append
+   (list :name (project-name project)
+         :root (namestring (project-root project))
+         :description (or (project-description project) "")
+         :source (project-source project)
+         :systems (or (project-systems project) '()))
+   (when current
+     (list :current t))))
+
+(defun slop-current-project (&optional project)
+  "Return the current or supplied SLOP project."
+  (let ((resolved (slop-resolve-project project)))
+    (list :project (project-name resolved)
+          :root (namestring (project-root resolved))
+          :definition (slop-project->plist resolved :current t)
+          :aliases '("omit :project" "." "workspace" "/workspace"))))
+
+(defun slop-list-projects (&key (include-default t))
+  "Return registered SLOP projects and the current default project."
+  (let* ((current (and include-default (slop-resolve-project nil)))
+         (projects (list-projects)))
+    (list :current-project (and current (project-name current))
+          :count (length projects)
+          :projects
+          (mapcar (lambda (project)
+                    (slop-project->plist
+                     project
+                     :current (and current (eq project current))))
+                  projects))))
+
 (defun slop-index-project (project-designator &key path)
   "Return a cached, mtime-invalidated SLOP project index."
-  (let* ((project (ensure-project project-designator))
+  (let* ((project (slop-resolve-project project-designator))
          (project-key (normalize-project-name (project-name project)))
          (paths (sort (slop-project-lisp-paths project path) #'string<))
          (cache-key (list project-key (or path "")))
@@ -2067,10 +2244,27 @@
   (let ((value (slop-tool-arg args key)))
     (and value t)))
 
+(defun slop-tool-project (args)
+  "Return optional SLOP project designator from ARGS."
+  (slop-tool-optional-string args :project))
+
+(defun slop-tool-list-projects (args)
+  "Provider adapter for slop_list_projects."
+  (slop-list-projects
+   :include-default
+   (let ((value (slop-tool-arg args :include-default :missing)))
+     (if (eq value :missing)
+         t
+         (slop-tool-optional-boolean args :include-default)))))
+
+(defun slop-tool-current-project (args)
+  "Provider adapter for slop_current_project."
+  (slop-current-project (slop-tool-project args)))
+
 (defun slop-tool-project-symbols (args)
   "Provider adapter for slop_project_symbols."
   (slop-project-symbols
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    :path (slop-tool-optional-string args :path)
    :package (slop-tool-optional-string args :package)
    :kind (slop-tool-optional-string args :kind)
@@ -2083,7 +2277,7 @@
 (defun slop-tool-symbol-at (args)
   "Provider adapter for slop_symbol_at."
   (slop-symbol-at
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    (slop-tool-required-string args :path)
    :offset (slop-tool-optional-integer args :offset)
    :line (slop-tool-optional-integer args :line)
@@ -2092,7 +2286,7 @@
 (defun slop-tool-find-definitions (args)
   "Provider adapter for slop_find_definitions."
   (slop-find-definitions
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    (slop-tool-required-string args :symbol)
    :path (slop-tool-optional-string args :path)
    :package (slop-tool-optional-string args :package)
@@ -2105,7 +2299,7 @@
 (defun slop-tool-find-definitions-batch (args)
   "Provider adapter for slop_find_definitions_batch."
   (slop-find-definitions-batch
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    (slop-tool-required-string-list args :symbols)
    :path (slop-tool-optional-string args :path)
    :package (slop-tool-optional-string args :package)
@@ -2119,7 +2313,7 @@
 (defun slop-tool-find-references (args)
   "Provider adapter for slop_find_references."
   (slop-find-references
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    :path (slop-tool-optional-string args :path)
    :symbol (slop-tool-optional-string args :symbol)
    :package (slop-tool-optional-string args :package)
@@ -2133,7 +2327,7 @@
 (defun slop-tool-find-callers (args)
   "Provider adapter for slop_find_callers."
   (slop-find-callers
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    :path (slop-tool-optional-string args :path)
    :symbol (slop-tool-optional-string args :symbol)
    :definition-id (slop-tool-optional-string args :definition-id)
@@ -2143,7 +2337,7 @@
 (defun slop-tool-find-callees (args)
   "Provider adapter for slop_find_callees."
   (slop-find-callees
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    :path (slop-tool-optional-string args :path)
    :symbol (slop-tool-optional-string args :symbol)
    :definition-id (slop-tool-optional-string args :definition-id)
@@ -2153,7 +2347,7 @@
 (defun slop-tool-trace-calls (args)
   "Provider adapter for slop_trace_calls."
   (slop-trace-calls
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    :path (slop-tool-optional-string args :path)
    :symbol (slop-tool-optional-string args :symbol)
    :definition-id (slop-tool-optional-string args :definition-id)
@@ -2166,7 +2360,7 @@
 (defun slop-tool-find-mentions (args)
   "Provider adapter for slop_find_mentions."
   (slop-find-mentions
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    (slop-tool-required-string args :query)
    :path (slop-tool-optional-string args :path)
    :substring (slop-tool-optional-boolean args :substring)
@@ -2177,7 +2371,7 @@
 (defun slop-tool-definition-context (args)
   "Provider adapter for slop_definition_context."
   (slop-definition-context
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    :path (slop-tool-optional-string args :path)
    :symbol (slop-tool-optional-string args :symbol)
    :definition-id (slop-tool-optional-string args :definition-id)
@@ -2190,7 +2384,7 @@
 (defun slop-tool-find-variable-uses (args)
   "Provider adapter for slop_find_variable_uses."
   (slop-find-variable-uses
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    :path (slop-tool-optional-string args :path)
    :binding-id (slop-tool-optional-string args :binding-id)
    :offset (slop-tool-optional-integer args :offset)
@@ -2202,7 +2396,7 @@
 (defun slop-tool-rename-variable (args)
   "Provider adapter for slop_rename_variable."
   (slop-rename-variable
-   (slop-tool-required-string args :project)
+   (slop-tool-project args)
    :path (slop-tool-optional-string args :path)
    :binding-id (slop-tool-optional-string args :binding-id)
    :offset (slop-tool-optional-integer args :offset)
