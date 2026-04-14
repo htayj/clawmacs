@@ -1265,16 +1265,7 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
                                           :min-height (* 2 char-h)
                                           :max-height (* 2 char-h)))))))
 
-(defun redisplay-all (frame &key force-p)
-  "Resize panes and redisplay main, who-line, and modeline.
-When FORCE-P is nil (default), uses incremental redisplay — CLIM compares
-output records and only repaints changed regions. When FORCE-P is t, forces
-a full redraw of all panes (used after resize or mode changes)."
-  (update-pane-sizes frame)
-  (dolist (pane-name '(main-pane who-line-pane modeline-pane))
-    (let ((pane (clim:find-pane-named frame pane-name)))
-      (when pane
-        (clim:redisplay-frame-pane frame pane :force-p force-p)))))
+
 
 ;;; --------------------------------------------------------------------------
 ;;; Custom Top-Level Event Loop
@@ -1294,32 +1285,48 @@ and all mediums are connected to the X11 backend."
     (loop :until (frame-quit-flag frame)
           :for buf := (current-buffer)
           :for streaming := (buffer-pending-stream buf)
+          :for oauth-pending := *openai-oauth-pending*
           :for need-redisplay := nil
           :for force-redisplay := nil
-          :do (let ((event (if (or streaming poll-mode)
-                                (clim:event-read-no-hang
-                                 (clim:frame-top-level-sheet frame))
-                                (clim:event-read
-                                 (clim:frame-top-level-sheet frame)))))
-                 (cond
-                   ;; Timeout path: sleep before next poll
-                   ((null event)
-                    (sleep (if (and poll-mode (not streaming)) 0.2 0.05)))
-                   ;; Key press event — suppress in popup to avoid corrupting
-                   ;; shared prefix key state (*meta-pending* etc.)
-                   ((typep event 'clim:key-press-event)
-                    (unless poll-mode
-                      (let* ((key (mcclim-normalize-key event)))
-                        (when key
-                          (let ((result (handle-key-event buf key)))
-                            (when (eq result :quit)
-                              (setf (frame-quit-flag frame) t))
-                            (when (eq result :redraw)
-                              (setf force-redisplay t))))))
-                    (setf need-redisplay t))
-                   ;; Other events (pointer, exposure, etc.) — let CLIM handle
-                   (t
-                    (clim:handle-event (clim:event-sheet event) event))))
+          :for event := (if (or streaming poll-mode oauth-pending)
+                            (clim:event-read-no-hang
+                             (clim:frame-top-level-sheet frame))
+                            (clim:event-read
+                             (clim:frame-top-level-sheet frame)))
+          :do (cond
+                ;; Timeout path: sleep before next poll
+                ((null event)
+                 (sleep (if (and poll-mode (not streaming) (not oauth-pending))
+                            0.2
+                            0.05)))
+                ;; Key press event — suppress in popup to avoid corrupting
+                ;; shared prefix key state (*meta-pending* etc.)
+                ((typep event 'clim:key-press-event)
+                 (unless poll-mode
+                   (let* ((key (mcclim-normalize-key event)))
+                     (when key
+                       (let ((result (handle-key-event buf key)))
+                         (when (eq result :quit)
+                           (setf (frame-quit-flag frame) t)
+                           (clim:frame-exit frame))
+                         (when (eq result :redraw)
+                           (setf force-redisplay t))
+                         (setf need-redisplay t)))))
+                 ;; Keep CLIM's input context machinery alive for presentations.
+                 ;; This mirrors the standard top-level behavior while preserving
+                 ;; clawmacs key dispatch.
+                 (clim:handle-event (clim:event-sheet event) event))
+                ;; Explicit redraw triggers
+                ((or (typep event 'clim:window-repaint-event)
+                     (typep event 'clim:window-configuration-event))
+                 (setf force-redisplay t
+                       need-redisplay t)
+                 (clim:handle-event (clim:event-sheet event) event))
+                ;; Other events (pointer, exposure, menu, etc.) — let CLIM handle
+                ;; and schedule a redisplay after handling.
+                (t
+                 (clim:handle-event (clim:event-sheet event) event)
+                 (setf need-redisplay t)))
               ;; Always poll streaming when active — regardless of event type.
               ;; This prevents X11 events (exposure, pointer) from starving
               ;; the streaming poll, and ensures the final response is
@@ -1328,9 +1335,12 @@ and all mediums are connected to the X11 backend."
                 (let ((cur (current-buffer)))
                   (when (buffer-pending-stream cur)
                     (update-streaming-response cur)
+                    (setf need-redisplay t))
+                  (when *openai-oauth-pending*
+                    (update-openai-oauth-login)
                     (setf need-redisplay t))))
               ;; Redisplay when something changed
-              (when (or need-redisplay streaming poll-mode)
+              (when (or need-redisplay streaming poll-mode oauth-pending)
                 ;; Update scroll page size (window may have resized)
                 ;; — but only for the primary frame, not popups
                 (unless poll-mode
@@ -1342,10 +1352,11 @@ and all mediums are connected to the X11 backend."
                           (pane-grid-dimensions main-pane char-w char-h)
                         (declare (ignore cols))
                         (setf *scroll-page-size* (max 1 (- rows 3)))))))
-                ;; Use incremental redisplay: modeline and who-line use
-                ;; updating-output with cache keys, so CLIM skips unchanged panes.
-                ;; Force full redraw only on exposure/resize events.
-                (redisplay-all frame :force-p force-redisplay)))))
+                ;; Keep who-line/modeline fixed heights in character rows.
+                (update-pane-sizes frame)
+                ;; Use CLIM's frame-level redisplay dispatch rather than
+                ;; manually iterating panes.
+                (clim:redisplay-frame-panes frame :force-p force-redisplay)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Popup Frame Lifecycle (read-only X11 viewer from terminal mode)
