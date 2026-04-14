@@ -216,6 +216,9 @@
     (let* ((definitions (clawmacs:reload-package-channels))
            (names (sort (mapcar #'clawmacs:package-definition-name definitions)
                         #'string<))
+           (git (find "git" definitions
+                      :key #'clawmacs:package-definition-name
+                      :test #'string=))
            (lispi (find "lispi" definitions
                         :key #'clawmacs:package-definition-name
                         :test #'string=))
@@ -225,7 +228,11 @@
            (slop (find "slop" definitions
                        :key #'clawmacs:package-definition-name
                        :test #'string=)))
-      (is (equal '("lispi" "sexed" "slop") names))
+      (is (equal '("git" "lispi" "sexed" "slop") names))
+      (is (not (null git)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier git)))
+      (is (clawmacs:package-definition-autoload git))
+      (is (probe-file (clawmacs:package-definition-entrypoint git)))
       (is (not (null lispi)))
       (is (eq :builtin (clawmacs:package-definition-source-tier lispi)))
       (is (probe-file (clawmacs:package-definition-entrypoint lispi)))

@@ -42,6 +42,10 @@
   :description "Agent-oriented Common Lisp symbol lookup tests"
   :in clawmacs-suite)
 
+(def-suite git-package-suite
+  :description "Agent-oriented git package tests"
+  :in clawmacs-suite)
+
 (def-suite package-manager-suite
   :description "Package loader tests"
   :in clawmacs-suite)
