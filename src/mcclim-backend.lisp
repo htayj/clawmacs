@@ -236,6 +236,60 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
   :description "a model reference")
 
 ;;; --------------------------------------------------------------------------
+;;; CLIM Command Tables + Presentation Translators
+;;;
+;;; These provide canonical CLIM object interaction paths (presentation →
+;;; command) for clickable buffer/model selector entries.
+;;; --------------------------------------------------------------------------
+
+(clim:define-command-table clawmacs-mcclim-command-table
+  :inherit-from nil)
+
+(clim:define-command (com-select-buffer
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((target-buffer 'buffer-ref))
+  (let ((current (current-buffer)))
+    (when (and target-buffer (member target-buffer *buffer-ring*))
+      (switch-to-buffer target-buffer)
+      (setf *buffer-selector-active* nil)
+      (unless (eq target-buffer current)
+        (setf (buffer-scroll-offset target-buffer) 0)))))
+
+(clim:define-command (com-select-model-entry
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((entry 'model-ref))
+  (let ((buf (current-buffer)))
+    (when (and entry (listp entry))
+      (cond
+        (*model-selector-active*
+         (let ((provider (getf entry :provider))
+               (model (getf entry :model)))
+           (when (and provider model)
+             (apply-buffer-model-selection buf provider model)
+             (setf *model-selector-active* nil))))
+        (*think-selector-active*
+         (apply-buffer-think-level-selection buf entry)
+         (setf *think-selector-active* nil))))))
+
+(clim:define-presentation-to-command-translator click-buffer-ref
+    (buffer-ref com-select-buffer clawmacs-mcclim-command-table
+                :gesture :select
+                :priority 10
+                :documentation "Switch to this buffer")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-model-ref
+    (model-ref com-select-model-entry clawmacs-mcclim-command-table
+               :gesture :select
+               :priority 10
+               :documentation "Apply selection")
+    (object)
+  (list object))
+
+;;; --------------------------------------------------------------------------
 ;;; Application Frame
 ;;; --------------------------------------------------------------------------
 
@@ -245,6 +299,7 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
    (char-width :accessor frame-char-width :initform 0)
    (char-height :accessor frame-char-height :initform 0)
    (quit-flag :accessor frame-quit-flag :initform nil))
+  (:command-table (clawmacs-mcclim-command-table :inherit-from nil))
   (:panes
    (main-pane :application
               :display-function 'display-main-pane
