@@ -125,6 +125,8 @@
     ;; buffer's major mode (e.g. chat-specific toggles, mode actions).
     ;; Note: C-x C-c quits the application (handled in handle-key-event).
     (keymap-bind km '(:ctrl-c #\t) 'toggle-tool-results-command) ; C-c t = toggle tool results
+    (keymap-bind km '(:ctrl-c #\V) 'toggle-reasoning-output-command) ; C-c V = toggle verbose/reasoning output
+    (keymap-bind km '(:ctrl-c #\I) 'toggle-metadata-output-command) ; C-c I = toggle response metadata
     (keymap-bind km '(:ctrl-c #\c) 'compact-buffer-command) ; C-c c = compact conversation
     ;; C-c A = minibuffer agent selector
     (keymap-bind km '(:ctrl-c #\A) 'minibuffer-select-agent-command)

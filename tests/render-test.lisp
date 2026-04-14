@@ -193,6 +193,87 @@
       (message-insert-char m #\x))
     (is (= 3 (clawmacs::message-visual-height m 80)))))
 
+(test message-display-lines-include-reasoning-when-enabled
+  "Reasoning blocks are display-only lines hidden unless explicitly enabled."
+  (let ((m (make-message :agent)))
+    (clawmacs::set-message-text m "Final answer")
+    (setf (message-raw-content m)
+          (list (clawmacs::canonical-text-block "Final answer")
+                (clawmacs::canonical-reasoning-block "provider thoughts")))
+    (is (equal '("Final answer")
+               (clawmacs::message-display-line-strings m)))
+    (is (equal '("Final answer" ";; reasoning" "provider thoughts")
+               (clawmacs::message-display-line-strings
+                m
+                :show-reasoning-p t)))
+    (is (= 1 (clawmacs::message-visual-height m 80)))
+    (is (= 3 (clawmacs::message-visual-height
+              m 80
+              :show-reasoning-p t)))))
+
+(test reasoning-only-message-visibility-follows-buffer-toggle
+  "Messages containing only reasoning are hidden until reasoning output is enabled."
+  (let ((buf (make-buffer "reasoning-toggle"))
+        (m (make-message :agent)))
+    (setf (message-raw-content m)
+          (list (clawmacs::canonical-reasoning-block "provider thoughts")))
+    (is (not (clawmacs::message-visible-for-buffer-p m buf)))
+    (setf (buffer-show-reasoning-p buf) t)
+    (is (clawmacs::message-visible-for-buffer-p m buf))))
+
+(test message-display-lines-note-missing-requested-reasoning
+  "Reasoning output shows an unavailable marker when the provider returns none."
+  (let ((m (make-message :agent)))
+    (clawmacs::set-message-text m "Final answer")
+    (setf (message-raw-content m)
+          (list (clawmacs::canonical-text-block "Final answer")))
+    (clawmacs::put-message-metadata
+     m
+     :provider :openai-codex
+     :reasoning-summary-mode "detailed")
+    (is (equal '("Final answer")
+               (clawmacs::message-display-line-strings m)))
+    (is (equal '("Final answer"
+                 ";; reasoning"
+                 ";; no provider-supplied reasoning blocks captured")
+               (clawmacs::message-display-line-strings
+                m
+                :show-reasoning-p t)))))
+
+(test message-display-lines-include-metadata-when-enabled
+  "Message metadata is display-only text hidden unless explicitly enabled."
+  (let ((m (make-message :agent)))
+    (clawmacs::set-message-text m "Final answer")
+    (clawmacs::put-message-metadata
+     m
+     :agent "agent"
+     :provider :openai-codex
+     :model "gpt-5.4"
+     :think-level "high"
+     :reasoning-summary-mode "detailed"
+     :stop-reason "end_turn"
+     :content-block-count 2
+     :tool-call-count 1
+     :reasoning-block-count 1)
+    (is (equal '("Final answer")
+               (clawmacs::message-display-line-strings m)))
+    (let ((lines (clawmacs::message-display-line-strings
+                  m
+                  :show-metadata-p t)))
+      (is (member ";; metadata" lines :test #'string=))
+      (is (member ";; provider/model: openai-codex/gpt-5.4"
+                  lines
+                  :test #'string=))
+      (is (member ";; reasoning-summary: detailed"
+                  lines
+                  :test #'string=))
+      (is (member ";; stop-reason: end_turn" lines :test #'string=))
+      (is (= 10 (length lines))))
+    (is (= 1 (clawmacs::message-visual-height m 80)))
+    (is (= 10 (clawmacs::message-visual-height
+              m 80
+              :show-metadata-p t)))))
+
 (test init-global-faces-registers-tool-highlight-faces
   "Global theme initialization includes dedicated tool-call/result faces."
   (clawmacs::init-global-faces)

@@ -166,7 +166,10 @@ Fills the rest of the row with spaces for background color."
       (apply-face-to-window window base-resolved))))
 
 (defun render-message-lines (window msg start-row width
-                             &key show-cursor (prefix (message-sender-prefix msg)))
+                             &key show-cursor
+                               (prefix (message-sender-prefix msg))
+                               show-reasoning-p
+                               show-metadata-p)
   "Render MSG's lines into WINDOW starting at START-ROW with line wrapping.
 Returns the number of visual rows consumed.
 If SHOW-CURSOR is true, positions the cursor at MSG's point."
@@ -181,12 +184,16 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
          (cursor-y nil)
          (cursor-x nil))
     (apply-face-to-window window resolved)
-    (loop :for line := (message-first-line msg) :then (line-next line)
+    (loop :for entry :in (message-display-line-entries
+                          msg
+                          :show-reasoning-p show-reasoning-p
+                          :show-metadata-p show-metadata-p)
+          :for content := (car entry)
+          :for line := (cdr entry)
           :for line-idx :from 0
-          :while (and line (< row (croatoan:height window)))
+          :while (< row (croatoan:height window))
           :do
-             (let* ((content (line-content line))
-                    (tool-face-name (tool-line-base-face-name msg content))
+             (let* ((tool-face-name (tool-line-base-face-name msg content))
                     (content-len (length content))
                     (num-wraps (wrapped-line-count content display-width)))
                ;; Render each visual row of this line
@@ -218,6 +225,7 @@ If SHOW-CURSOR is true, positions the cursor at MSG's point."
                            (render-wrapped-row window row col chunk width)))
                      ;; Track cursor position
                      (when (and show-cursor
+                                line
                                 (>= row 0)
                                 (eq line (message-point-line msg)))
                        (let ((point-off (message-point-offset msg)))
@@ -291,27 +299,22 @@ Respects buffer-scroll-offset for history scrolling."
          (history-height (- total-height input-height))
          (input-start-row history-height))
     (croatoan:clear main-window)
-    ;; Collect history messages (all except the input message)
-    ;; Optionally filter out tool-related messages
-    (let ((history-messages nil)
-          (hide-tool-results (not (buffer-show-tool-results-p buf))))
+    ;; Collect history messages (all except the input message), respecting
+    ;; display toggles for tool and reasoning output.
+    (let ((history-messages nil))
       (loop :for msg := (buffer-first-message buf) :then (message-next msg)
             :while (and msg (not (eq msg (buffer-input-message buf))))
-            :do (unless (and hide-tool-results
-                             (or ;; Hide tool-result messages
-                                 (eq :tool-result (message-sender msg))
-                                 ;; Hide assistant messages that are purely tool calls
-                                 ;; (raw-content has tool_use blocks but no text)
-                                 (and (message-raw-content msg)
-                                      (not (eq :user (message-sender msg)))
-                                      (every (lambda (block)
-                                               (let ((btype (cdr (assoc :type block))))
-                                                 (not (string= "text" (or btype "")))))
-                                             (message-raw-content msg)))))
+            :do (when (message-visible-for-buffer-p msg buf)
                   (push msg history-messages)))
       (setf history-messages (nreverse history-messages))
       ;; Calculate visual heights for all history messages
-      (let* ((msg-heights (mapcar (lambda (m) (message-visual-height m width))
+      (let* ((show-reasoning-p (buffer-show-reasoning-p buf))
+             (show-metadata-p (buffer-show-metadata-p buf))
+             (msg-heights (mapcar (lambda (m)
+                                    (message-visual-height
+                                     m width
+                                     :show-reasoning-p show-reasoning-p
+                                     :show-metadata-p show-metadata-p))
                                   history-messages))
              (total-history-rows (reduce #'+ msg-heights :initial-value 0))
              ;; Clamp scroll-offset: can't scroll past the beginning of history
@@ -335,7 +338,9 @@ Respects buffer-scroll-offset for history scrolling."
                                (> msg-bottom visible-top))
                       ;; This message is at least partially visible
                       (let ((screen-row (- msg-top visible-top)))
-                        (render-message-lines main-window msg screen-row width)))))))
+                        (render-message-lines main-window msg screen-row width
+                                              :show-reasoning-p show-reasoning-p
+                                              :show-metadata-p show-metadata-p)))))))
     ;; Render input area: either approval prompt or normal input
     (if (buffer-approval-pending buf)
         (render-approval-prompt main-window buf input-start-row width)

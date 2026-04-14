@@ -528,22 +528,20 @@ When the minibuffer is active, draws a centered popup overlay on top."
     (clear-pane-with-ink pane *mcclim-bg-ink*)
     (mcclim-render-buffer-title pane buf cols char-w char-h)
     ;; Collect history messages
-    (let ((history-messages nil)
-          (hide-tool-results (not (buffer-show-tool-results-p buf))))
+    (let ((history-messages nil))
       (loop :for msg := (buffer-first-message buf) :then (message-next msg)
             :while (and msg (not (eq msg (buffer-input-message buf))))
-            :do (unless (and hide-tool-results
-                             (or (eq :tool-result (message-sender msg))
-                                 (and (message-raw-content msg)
-                                      (not (eq :user (message-sender msg)))
-                                      (every (lambda (block)
-                                               (let ((btype (cdr (assoc :type block))))
-                                                 (not (string= "text" (or btype "")))))
-                                             (message-raw-content msg)))))
+            :do (when (message-visible-for-buffer-p msg buf)
                   (push msg history-messages)))
       (setf history-messages (nreverse history-messages))
       ;; Calculate visual heights
-      (let* ((msg-heights (mapcar (lambda (m) (message-visual-height m width))
+      (let* ((show-reasoning-p (buffer-show-reasoning-p buf))
+             (show-metadata-p (buffer-show-metadata-p buf))
+             (msg-heights (mapcar (lambda (m)
+                                    (message-visual-height
+                                     m width
+                                     :show-reasoning-p show-reasoning-p
+                                     :show-metadata-p show-metadata-p))
                                   history-messages))
              (total-history-rows (reduce #'+ msg-heights :initial-value 0))
              (max-scroll (max 0 (- total-history-rows history-height)))
@@ -571,7 +569,9 @@ When the minibuffer is active, draws a centered popup overlay on top."
                         (clim:with-output-as-presentation (pane msg ptype)
                           (mcclim-render-message-lines pane msg screen-row width
                                                        char-w char-h
-                                                       :max-rows history-height))))))))
+                                                       :max-rows history-height
+                                                       :show-reasoning-p show-reasoning-p
+                                                       :show-metadata-p show-metadata-p))))))))
     ;; Render input area
     (if (buffer-approval-pending buf)
         (mcclim-render-approval-prompt pane buf input-start-row cols char-w char-h rows)
@@ -609,7 +609,9 @@ When the minibuffer is active, draws a centered popup overlay on top."
 
 (defun mcclim-render-message-lines (pane msg start-row width char-w char-h
                                     &key show-cursor (max-rows 1000)
-                                      (prefix (message-sender-prefix msg)))
+                                      (prefix (message-sender-prefix msg))
+                                      show-reasoning-p
+                                      show-metadata-p)
   "Render MSG's lines into PANE starting at START-ROW with line wrapping.
 Returns the number of visual rows consumed."
   (let* ((prefix-len (length prefix))
@@ -624,11 +626,15 @@ Returns the number of visual rows consumed."
          (cursor-x nil))
     (multiple-value-bind (fg bg ts) (resolve-face-inks resolved)
       (let ((underline-p (resolved-face-underline-p resolved)))
-        (loop :for line := (message-first-line msg) :then (line-next line)
+        (loop :for entry :in (message-display-line-entries
+                              msg
+                              :show-reasoning-p show-reasoning-p
+                              :show-metadata-p show-metadata-p)
+              :for content := (car entry)
+              :for line := (cdr entry)
               :for line-idx :from 0
-              :while (and line (< row max-rows))
-              :do (let* ((content (line-content line))
-                         (tool-face-name (tool-line-base-face-name msg content))
+              :while (< row max-rows)
+              :do (let* ((tool-face-name (tool-line-base-face-name msg content))
                          (content-len (length content))
                          (num-wraps (wrapped-line-count content display-width)))
                     (dotimes (wrap-idx num-wraps)
@@ -668,6 +674,7 @@ Returns the number of visual rows consumed."
                                       (draw-underline-at pane row prefix-len (length chunk)
                                                          fg char-w char-h))))))
                           (when (and show-cursor
+                                     line
                                      (>= row 0)
                                      (eq line (message-point-line msg)))
                             (let ((point-off (message-point-offset msg)))

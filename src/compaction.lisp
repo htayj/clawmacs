@@ -167,7 +167,9 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
           (string-trim '(#\Space #\Tab #\Newline #\Return)
                        (or summary ""))))
 
-(defun buffer-insert-read-only-message (buf sender text &key raw-content timestamp)
+(defun buffer-insert-read-only-message (buf sender text
+                                        &key raw-content timestamp
+                                             (record-p t))
   "Insert a read-only message before BUF's input message."
   (let* ((msg (make-message sender :read-only-p t))
          (input (buffer-input-message buf))
@@ -185,6 +187,8 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
     (if before-input
         (setf (message-next before-input) msg)
         (setf (buffer-first-message buf) msg))
+    (when record-p
+      (record-buffer-message buf msg))
     msg))
 
 (defun clear-buffer-history-before-input (buf)
@@ -277,7 +281,6 @@ TRIMMED-MESSAGES and TRIMMED-COUNT."
 
 (defun default-compact-buffer (buf &key (reason :auto))
   "Compact BUF using the active provider and return BUF on success."
-  (declare (ignore reason))
   (unless (some #'compaction-message-visible-p
                 (loop :for msg := (buffer-first-message buf) :then (message-next msg)
                       :while (and msg (not (eq msg (buffer-input-message buf))))
@@ -292,6 +295,8 @@ TRIMMED-MESSAGES and TRIMMED-COUNT."
       (when (blank-string-p summary)
         (error "Compaction provider returned an empty summary"))
       (let ((summary-text (compaction-summary-with-prefix summary)))
+        (when (buffer-session buf)
+          (rotate-session-transcript (buffer-session buf) :reason reason))
         (replace-buffer-with-compacted-history buf summary-text recent-users)
         (let ((estimate (buffer-conversation-token-estimate buf)))
           (setf (buffer-token-count buf) estimate)

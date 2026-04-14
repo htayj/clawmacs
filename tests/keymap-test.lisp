@@ -108,6 +108,22 @@ and C-x b to the old overlay buffer selector."
   ;; C-x t should NOT be bound (it was moved away)
   (is (null (keymap-lookup *default-keymap* '(:ctrl-x #\t)))))
 
+(test default-keymap-toggle-reasoning-output-uses-c-c-prefix
+  "Toggle reasoning output is bound under C-c (mode-specific), not C-x."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::toggle-reasoning-output-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\V))))
+  (is (eq 'clawmacs::describe-variable-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\v))))
+  (is (null (keymap-lookup *default-keymap* '(:ctrl-x #\V)))))
+
+(test default-keymap-toggle-metadata-output-uses-c-c-prefix
+  "Toggle metadata output is bound under C-c (mode-specific), not C-x."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::toggle-metadata-output-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\I))))
+  (is (null (keymap-lookup *default-keymap* '(:ctrl-x #\I)))))
+
 (test default-keymap-compaction-binding
   "Manual compaction is bound under the chat-mode C-c prefix."
   (clawmacs::init-default-keymap)

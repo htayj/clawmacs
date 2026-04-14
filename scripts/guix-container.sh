@@ -13,6 +13,7 @@ WORKSPACE_XDG_CACHE=/workspace/.cache
 MCP_TUI_DRIVER_GIT_URL='https://github.com/michaellee8/mcp-tui-driver'
 HOST_HOME=''
 HOST_QUICKLISP_SETUP=''
+HOST_CONFIG_DIR=''
 RESOLVED_SSL_LIB_PATH=''
 CONTAINER_LAUNCH_DIR=/tmp
 GUIX_MANIFEST_PATH=''
@@ -205,18 +206,13 @@ validate_quicklisp_pin_values() {
 set_quicklisp_runtime_env() {
   HOST_HOME="$REPO_ROOT/.cache/home"
   HOST_QUICKLISP_SETUP="$HOST_HOME/quicklisp/setup.lisp"
-  host_config_dir="$HOST_HOME/.config/clawmacs"
-  source_config_dir=''
-
-  if [ -n "$HOST_USER_HOME" ]; then
-    source_config_dir="$HOST_USER_HOME/.config/clawmacs"
-  fi
+  HOST_CONFIG_DIR=''
 
   mkdir -p "$HOST_HOME"
+  mkdir -p "$HOST_HOME/.config"
 
-  if [ -n "$source_config_dir" ] && [ -d "$source_config_dir" ]; then
-    mkdir -p "$host_config_dir"
-    cp -R "$source_config_dir/." "$host_config_dir/"
+  if [ -n "$HOST_USER_HOME" ]; then
+    HOST_CONFIG_DIR="$HOST_USER_HOME/.config/clawmacs"
   fi
 
   export HOME="$WORKSPACE_HOME"
@@ -669,6 +665,10 @@ launch_payload() {
 
   # User init directory: share ~/.clawmacs.d/ so init.lisp is available
   extra_container_args=""
+  if [ -n "$HOST_CONFIG_DIR" ]; then
+    mkdir -p "$HOST_CONFIG_DIR"
+    extra_container_args="$extra_container_args --share=$HOST_CONFIG_DIR=$WORKSPACE_HOME/.config/clawmacs"
+  fi
   if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.clawmacs.d" ]; then
     extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.clawmacs.d=$WORKSPACE_HOME/.clawmacs.d"
   fi

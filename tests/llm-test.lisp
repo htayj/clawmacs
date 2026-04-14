@@ -867,6 +867,57 @@ same
       (is (not (search "Conversation compacted"
                        (clawmacs:api-json-encode provider-messages)))))))
 
+(test default-compact-buffer-rotates-session-transcript
+  "Compaction starts a new transcript segment referencing the previous one."
+  (let* ((*sessions-dir* (temp-session-test-directory "compact-rotate"))
+         (session (load-or-create-session "compact-rotate"))
+         (buf (make-buffer "compact-rotate"
+                           :agent-name "agent"
+                           :context-limit 100000
+                           :session session)))
+    (append-test-user-message buf "first user context")
+    (buffer-insert-agent-message buf "assistant work that should be summarized")
+    (append-test-user-message buf "latest user request")
+    (let ((previous-path (session-current-transcript-path session)))
+      (with-function-override (clawmacs::provider-request-streaming
+                               (provider messages callback
+                                         &key model max-tokens tools
+                                         reasoning-effort system-prompt)
+                               (declare (ignore provider messages callback model
+                                                max-tokens tools reasoning-effort
+                                                system-prompt))
+                               (make-completed-stream-state-response
+                                "end_turn"
+                                (list (clawmacs::canonical-text-block
+                                       "summary body"))))
+        (let ((clawmacs::*compaction-preserved-user-message-token-limit* 1000))
+          (is (eq buf (clawmacs:default-compact-buffer
+                       buf
+                       :reason :manual)))))
+      (is (not (equal (namestring previous-path)
+                      (namestring (session-current-transcript-path session)))))
+      (let* ((old-events (read-jsonl-events previous-path))
+             (new-events (session-current-events session))
+             (first-new (first new-events))
+             (message-events
+               (remove-if-not (lambda (event)
+                                (string= "message"
+                                         (event-value event :event)))
+                              new-events)))
+        (is (= 4 (length old-events)))
+        (is (string= "previous-transcript"
+                     (event-value first-new :event)))
+        (is (string= (clawmacs::session-path-string previous-path)
+                     (event-value first-new :previous-transcript-path)))
+        (is (find "COMPACTION-SUMMARY" message-events
+                  :key (lambda (event)
+                         (event-value event :sender))
+                  :test #'string=))
+        (is (find "SYSTEM" message-events
+                  :key (lambda (event)
+                         (event-value event :sender))
+                  :test #'string=))))))
+
 (test send-message-compacts-before-finalizing-current-input
   "Interactive sending runs pre-send compaction while current input is editable."
   (let ((buf (make-buffer "compact-send"))
@@ -926,6 +977,24 @@ same
           (is-true provider-requested-p)
           (is (string= "final after compaction"
                        (clawmacs:prompt-run-result-final-text result))))))))
+
+(test make-prompt-buffer-attaches-session-transcript
+  "Prompt-mode buffers are real sessions and record their seeded user prompt."
+  (let* ((*sessions-dir* (temp-session-test-directory "prompt-buffer"))
+         (buf (clawmacs::make-prompt-buffer "hello from prompt" "agent"))
+         (session (buffer-session buf)))
+    (is (not (null session)))
+    (is (probe-file (session-current-transcript-path session)))
+    (let* ((events (session-current-events session))
+           (message-events
+             (remove-if-not (lambda (event)
+                              (string= "message"
+                                       (event-value event :event)))
+                            events))
+           (event (first message-events)))
+      (is (= 1 (length message-events)))
+      (is (string= "USER" (event-value event :sender)))
+      (is (string= "hello from prompt" (event-value event :text))))))
 
 (test run-single-prompt-returns-final-response
   "Non-interactive prompt mode returns a final assistant response without a UI."
@@ -2038,7 +2107,16 @@ same
             (is (eq :openai-codex captured-provider))
             (is (string= "gpt-5.3-codex" captured-model))
             (is (string= "high" captured-reasoning))
-            (is (string= "prompt for spark" captured-system-prompt)))))))))
+            (is (string= "prompt for spark" captured-system-prompt))
+            (let ((metadata (message-metadata (buffer-streaming-message buf))))
+              (is (string= "spark"
+                           (clawmacs::message-metadata-value
+                            metadata :agent)))
+              (is (eq :openai-codex
+                      (clawmacs::message-metadata-value metadata :provider)))
+              (is (string= "gpt-5.3-codex"
+                           (clawmacs::message-metadata-value
+                            metadata :model)))))))))))
 
 (test start-streaming-response-surfaces-resolver-errors-in-buffer
   "Resolver failures are caught and rendered into the buffer as agent errors."
@@ -2088,6 +2166,12 @@ same
   (let* ((buf (make-buffer "stream-final" :agent-name "agent"))
          (msg (buffer-insert-agent-message buf "partial"))
          (state (clawmacs::make-stream-state)))
+    (clawmacs::put-message-metadata
+     msg
+     :agent "agent"
+     :provider :zai
+     :model "glm-5"
+     :think-level nil)
     (bt:with-lock-held ((clawmacs::stream-state-lock state))
       (setf (clawmacs::stream-state-text state) "final answer"
             (clawmacs::stream-state-content-blocks state)
@@ -2099,10 +2183,97 @@ same
           (buffer-status buf) :streaming)
     (is-false (clawmacs::update-streaming-response buf))
     (is (string= "final answer" (message-text msg)))
+    (let ((metadata (message-metadata msg)))
+      (is (eq :zai (clawmacs::message-metadata-value metadata :provider)))
+      (is (string= "end_turn"
+                   (clawmacs::message-metadata-value metadata :stop-reason)))
+      (is (= 1 (clawmacs::message-metadata-value
+                metadata :content-block-count)))
+      (is (= 0 (clawmacs::message-metadata-value
+                metadata :tool-call-count))))
     (is (= 2 (buffer-message-count buf)))
     (is (null (buffer-pending-stream buf)))
     (is (null (buffer-streaming-message buf)))
     (is (eq :idle (buffer-status buf)))))
+
+(test update-streaming-response-records-completed-placeholder-once
+  "Streaming placeholders are written to transcripts only after finalization."
+  (let* ((*sessions-dir* (temp-session-test-directory "stream-final"))
+         (session (load-or-create-session "stream-final"))
+         (buf (make-buffer "stream-final"
+                           :agent-name "agent"
+                           :session session))
+         (msg (buffer-insert-agent-message buf "" :record-p nil))
+         (state (clawmacs::make-stream-state)))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (setf (clawmacs::stream-state-content-blocks state)
+            (list (clawmacs::canonical-text-block "final answer"))
+            (clawmacs::stream-state-stop-reason state) "end_turn"
+            (clawmacs::stream-state-done-p state) t))
+    (setf (buffer-pending-stream buf) state
+          (buffer-streaming-message buf) msg
+          (buffer-status buf) :streaming)
+    (is (= 1 (length (session-current-events session))))
+    (is-false (clawmacs::update-streaming-response buf))
+    (let* ((events (session-current-events session))
+           (message-events
+             (remove-if-not (lambda (event)
+                              (string= "message"
+                                       (event-value event :event)))
+                            events))
+           (event (first message-events)))
+      (is (= 1 (length message-events)))
+      (is (string= "AGENT" (event-value event :sender)))
+      (is (string= "final answer" (event-value event :text)))
+      (is (vectorp (event-value event :raw-content))))))
+
+(test update-streaming-response-records-streaming-error
+  "Streaming errors are recorded as durable transcript messages."
+  (let* ((*sessions-dir* (temp-session-test-directory "stream-error"))
+         (session (load-or-create-session "stream-error"))
+         (buf (make-buffer "stream-error"
+                           :agent-name "agent"
+                           :session session))
+         (msg (buffer-insert-agent-message buf "" :record-p nil))
+         (state (clawmacs::make-stream-state)))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (setf (clawmacs::stream-state-error-p state) "boom"))
+    (setf (buffer-pending-stream buf) state
+          (buffer-streaming-message buf) msg
+          (buffer-status buf) :streaming)
+    (is-false (clawmacs::update-streaming-response buf))
+    (let* ((message-events
+             (remove-if-not (lambda (event)
+                              (string= "message"
+                                       (event-value event :event)))
+                            (session-current-events session)))
+           (event (first message-events)))
+      (is (= 1 (length message-events)))
+      (is (string= "AGENT" (event-value event :sender)))
+      (is (search "Streaming error"
+                  (event-value event :text))))))
+
+(test insert-tool-results-message-records-raw-content
+  "Tool result transcript events preserve canonical raw content."
+  (let* ((*sessions-dir* (temp-session-test-directory "tool-result"))
+         (session (load-or-create-session "tool-result"))
+         (buf (make-buffer "tool-result"
+                           :agent-name "agent"
+                           :session session)))
+    (clawmacs::insert-tool-results-message
+     buf
+     (list `((:result . "done")
+             (:display . "[read_file] done")
+             (:tool-id . "toolu_1"))))
+    (let* ((message-events
+             (remove-if-not (lambda (event)
+                              (string= "message"
+                                       (event-value event :event)))
+                            (session-current-events session)))
+           (event (first message-events)))
+      (is (= 1 (length message-events)))
+      (is (string= "TOOL-RESULT" (event-value event :sender)))
+      (is (vectorp (event-value event :raw-content))))))
 
 (test openai-codex-request-normalizes-response-shape
   "OpenAI Codex non-streaming normalizes Responses output items."
@@ -2127,6 +2298,40 @@ same
                       (:name . "read_file")
                       (:input . ((:path . "/tmp/codex.txt")))))
                    (clawmacs::response-content response)))))))
+
+(test openai-codex-request-normalizes-reasoning-summary
+  "OpenAI Codex non-streaming preserves Responses reasoning summaries."
+  (let* ((response '((:output . #(((:type . "reasoning")
+                                  (:summary . #(((:type . "summary_text")
+                                                 (:text . "provider summary")))))
+                                 ((:type . "message")
+                                  (:role . "assistant")
+                                  (:content . #(((:type . "output_text")
+                                                 (:text . "final")))))))))
+         (canonical (clawmacs::responses-api-response->canonical-response
+                     response))
+         (content (clawmacs::response-content canonical)))
+    (is (string= "end_turn" (clawmacs::response-stop-reason canonical)))
+    (is (string= "final" (clawmacs::content-text-blocks content)))
+    (is (equal '("provider summary")
+               (clawmacs::content-reasoning-blocks content)))))
+
+(test openai-codex-request-normalizes-reasoning-content
+  "OpenAI Codex non-streaming preserves Responses reasoning content parts."
+  (let* ((response '((:output . #(((:type . "reasoning")
+                                  (:content . #(((:type . "reasoning_text")
+                                                 (:text . "provider reasoning")))))
+                                 ((:type . "message")
+                                  (:role . "assistant")
+                                  (:content . #(((:type . "output_text")
+                                                 (:text . "final")))))))))
+         (canonical (clawmacs::responses-api-response->canonical-response
+                     response))
+         (content (clawmacs::response-content canonical)))
+    (is (string= "end_turn" (clawmacs::response-stop-reason canonical)))
+    (is (string= "final" (clawmacs::content-text-blocks content)))
+    (is (equal '("provider reasoning")
+               (clawmacs::content-reasoning-blocks content)))))
 
 (test openai-codex-request-uses-responses-api-and-chatgpt-headers
   "OpenAI Codex requests target /responses and use instructions + ChatGPT headers."
@@ -2167,7 +2372,9 @@ same
       (is (search "\"store\":false" captured-request-body))
       (is (search "\"stream\":false" captured-request-body))
       (is (not (search "max_output_tokens" captured-request-body)))
-      (is (null (assoc :reasoning body)))
+      (let ((reasoning (cdr (assoc :reasoning body))))
+        (is (string= "detailed" (cdr (assoc :summary reasoning))))
+        (is (null (assoc :effort reasoning))))
       (is (string= "boot prompt" (cdr (assoc :instructions body))))
       (is (not (assoc :messages body)))
       (is (string= "message" (cdr (assoc :type message-item))))
@@ -2195,7 +2402,8 @@ same
     (let* ((body (clawmacs::api-json-decode captured-request-body))
            (reasoning (cdr (assoc :reasoning body)))
            (effort (cdr (assoc :effort reasoning))))
-      (is (string= "xhigh" effort)))))
+      (is (string= "xhigh" effort))
+      (is (string= "detailed" (cdr (assoc :summary reasoning)))))))
 
 (test openai-codex-request-retries-on-401-after-refresh
   "OpenAI Codex retries once after a 401 when ChatGPT auth is refreshable."
@@ -2392,6 +2600,35 @@ same
                      (bt:with-lock-held ((clawmacs::stream-state-lock state))
                        (reverse (clawmacs::stream-state-content-blocks state))))))))))
 
+(test openai-codex-streaming-preserves-reasoning-summary
+  "OpenAI Codex streaming adapter preserves reasoning summary events."
+  (let ((state (clawmacs::make-stream-state)))
+    (clawmacs::process-openai-codex-responses-sse-event
+     "{\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"provider \"}"
+     state)
+    (clawmacs::process-openai-codex-responses-sse-event
+     "{\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"summary\"}"
+     state)
+    (clawmacs::process-openai-codex-responses-sse-event
+     "{\"type\":\"response.reasoning_summary_text.done\",\"text\":\"provider summary\"}"
+     state)
+    (clawmacs::process-openai-codex-responses-sse-event
+     "{\"type\":\"response.output_text.delta\",\"delta\":\"final\"}"
+     state)
+    (clawmacs::process-openai-codex-responses-sse-event
+     "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}"
+     state)
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (let ((content (reverse
+                      (copy-list
+                       (clawmacs::stream-state-content-blocks state)))))
+        (is (string= "end_turn"
+                     (clawmacs::stream-state-stop-reason state)))
+        (is (string= "final"
+                     (clawmacs::content-text-blocks content)))
+        (is (equal '("provider summary")
+                   (clawmacs::content-reasoning-blocks content)))))))
+
 (test openai-codex-streaming-uses-responses-instructions
   "OpenAI Codex streaming requests send instructions + input, not chat messages."
   (let* ((captured-request-body nil)
@@ -2436,7 +2673,9 @@ same
       (is (search "\"store\":false" captured-request-body))
       (is (search "\"stream\":true" captured-request-body))
       (is (not (search "max_output_tokens" captured-request-body)))
-      (is (null (assoc :reasoning body)))
+      (let ((reasoning (cdr (assoc :reasoning body))))
+        (is (string= "detailed" (cdr (assoc :summary reasoning))))
+        (is (null (assoc :effort reasoning))))
       (is (string= "boot prompt" (cdr (assoc :instructions body))))
       (is (string= "message" (cdr (assoc :type message-item))))
       (is (string= "input_text" (cdr (assoc :type content-item))))
@@ -2465,7 +2704,8 @@ same
                 do (sleep 0.01)))))
     (let* ((body (clawmacs::api-json-decode captured-request-body))
            (reasoning (cdr (assoc :reasoning body))))
-      (is (string= "high" (cdr (assoc :effort reasoning)))))))
+      (is (string= "high" (cdr (assoc :effort reasoning))))
+      (is (string= "detailed" (cdr (assoc :summary reasoning)))))))
 
 (test openai-codex-streaming-decodes-utf8-punctuation-from-octets
   "OpenAI Codex streaming decodes UTF-8 punctuation correctly from octet streams."
@@ -3186,7 +3426,7 @@ same
                      (cdr (assoc :text (first (clawmacs::response-content response))))))))))
 
 (test reasoning-content-streaming-with-reasoning-then-content
-  "Streaming: reasoning_content chunks accumulate, then content chunks append."
+  "Streaming: reasoning_content chunks are preserved separately from content."
   (let ((payloads '("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Thinking...\"}}]}"
                     ""
                     "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" more thoughts\"}}]}"
@@ -3211,13 +3451,25 @@ same
                 until (bt:with-lock-held ((clawmacs::stream-state-lock state))
                         (clawmacs::stream-state-done-p state))
                 do (sleep 0.01))
-          ;; Should have accumulated both reasoning and content
-          (is (string= "Thinking... more thoughtsHello"
-                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                         (clawmacs::stream-state-text state)))))))))
+          (let ((content-blocks
+                  (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                    (is (string= "Hello" (clawmacs::stream-state-text state)))
+                    (nreverse
+                     (copy-list
+                      (clawmacs::stream-state-content-blocks state))))))
+            (is (equal '("Thinking... more thoughts")
+                       (clawmacs::content-reasoning-blocks content-blocks)))
+            (is (string= "Hello"
+                         (clawmacs::content-text-blocks content-blocks)))
+            (is (string= "Hello"
+                         (clawmacs::stream-state-display-text state)))
+            (is (string= (format nil "Hello~%;; reasoning~%Thinking... more thoughts")
+                         (clawmacs::stream-state-display-text
+                          state
+                          :show-reasoning-p t)))))))))
 
 (test reasoning-content-streaming-reasoning-only
-  "Streaming: when only reasoning_content chunks arrive (no content), still works."
+  "Streaming: when only reasoning_content chunks arrive, it is captured as reasoning."
   (let ((payloads '("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Step 1: analyze...\"}}]}"
                     ""
                     "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" Step 2: decide...\"}}]}"
@@ -3240,13 +3492,22 @@ same
                 until (bt:with-lock-held ((clawmacs::stream-state-lock state))
                         (clawmacs::stream-state-done-p state))
                 do (sleep 0.01))
-          ;; Should have accumulated the reasoning text
-          (is (string= "Step 1: analyze... Step 2: decide..."
-                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                         (clawmacs::stream-state-text state))))
-          (is (string= "max_tokens"
-                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                         (clawmacs::stream-state-stop-reason state)))))))))
+          (let ((content-blocks
+                  (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                    (is (string= "" (clawmacs::stream-state-text state)))
+                    (is (string= "max_tokens"
+                                 (clawmacs::stream-state-stop-reason state)))
+                    (nreverse
+                     (copy-list
+                      (clawmacs::stream-state-content-blocks state))))))
+            (is (equal '("Step 1: analyze... Step 2: decide...")
+                       (clawmacs::content-reasoning-blocks content-blocks)))
+            (is (string= ""
+                         (clawmacs::stream-state-display-text state)))
+            (is (string= (format nil ";; reasoning~%Step 1: analyze... Step 2: decide...")
+                         (clawmacs::stream-state-display-text
+                          state
+                          :show-reasoning-p t)))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Known Models Tests

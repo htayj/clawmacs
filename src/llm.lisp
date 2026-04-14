@@ -28,6 +28,10 @@ is configured. Should be a valid model name for *default-provider*.")
 (defvar *openai-codex-chatgpt-base-url* "https://chatgpt.com/backend-api/codex"
   "The ChatGPT backend base URL used for Codex ChatGPT OAuth requests.")
 
+(defvar *openai-codex-reasoning-summary* "detailed"
+  "Reasoning summary mode requested from OpenAI Codex Responses calls.
+Set to NIL to avoid requesting provider-supplied reasoning summaries.")
+
 ;;; Z.AI (Zhipu AI) Configuration
 (defvar *zai-model* "glm-5"
   "The Z.AI model to use for chat completions.
@@ -2246,6 +2250,24 @@ reasoning_content is present, falls back to reasoning_content."
         (unless (blank-string-p text)
           text)))))
 
+(defun responses-summary-part-text (part)
+  "Extract text from one Responses reasoning summary PART."
+  (or (cdr (assoc :text part))
+      (cdr (assoc :summary--text part))
+      (cdr (assoc :content part))))
+
+(defun responses-texts-from-parts (parts)
+  "Extract non-blank text strings from a Responses content PARTS sequence."
+  (loop :for part :in (coerce (or parts #()) 'list)
+        :for text := (responses-summary-part-text part)
+        :when (and text (not (blank-string-p text)))
+          :collect text))
+
+(defun responses-reasoning-summary-texts (item)
+  "Extract displayable reasoning text blocks from a Responses reasoning ITEM."
+  (append (responses-texts-from-parts (cdr (assoc :summary item)))
+          (responses-texts-from-parts (cdr (assoc :content item)))))
+
 (defun responses-function-call->canonical-block (item)
   "Convert a Responses API function_call ITEM to a canonical tool_use block."
   (let ((arguments (cdr (assoc :arguments item))))
@@ -2269,8 +2291,24 @@ reasoning_content is present, falls back to reasoning_content."
            (list (canonical-text-block text)))))
       ((string= item-type "function_call")
        (list (responses-function-call->canonical-block item)))
+      ((string= item-type "reasoning")
+       (mapcar #'canonical-reasoning-block
+               (responses-reasoning-summary-texts item)))
       (t
        nil))))
+
+(defun openai-codex-reasoning-options (reasoning-effort)
+  "Return the Responses API reasoning object, or NIL when not needed."
+  (let ((summary (and *openai-codex-reasoning-summary*
+                      (not (and reasoning-effort
+                                (string= reasoning-effort "none")))
+                      *openai-codex-reasoning-summary*))
+        (options nil))
+    (when reasoning-effort
+      (push `(:effort . ,reasoning-effort) options))
+    (when summary
+      (push `(:summary . ,summary) options))
+    (nreverse options)))
 
 (defun responses-api-response->canonical-response (response)
   "Normalize an OpenAI Responses API RESPONSE to the canonical clawmacs shape."
@@ -2296,6 +2334,7 @@ reasoning_content is present, falls back to reasoning_content."
   (declare (ignore max-tokens))
   (let* ((input-items (conversation-messages->responses-input messages))
          (response-tools (or (tool-definitions->responses-tools tools) #()))
+         (reasoning-options (openai-codex-reasoning-options reasoning-effort))
          (body `((:model . ,model)
                  (:instructions . ,system-prompt)
                  (:input . ,(coerce input-items 'vector))
@@ -2305,9 +2344,18 @@ reasoning_content is present, falls back to reasoning_content."
                  (:store . ,+json-false+)
                  (:stream . ,(if stream t +json-false+))
                  (:include . #()))))
-    (when reasoning-effort
+    (when reasoning-options
       (setf body (append body
-                         (list `(:reasoning . ((:effort . ,reasoning-effort)))))))
+                         (list `(:reasoning . ,reasoning-options)))))
+    (file-debug-log "openai-codex-request"
+                    "model=~A stream=~A reasoning=~A input-items=~D tools=~D"
+                    model
+                    (if stream t nil)
+                    (if reasoning-options
+                        (api-json-encode reasoning-options)
+                        "none")
+                    (length input-items)
+                    (length response-tools))
     (api-json-encode body)))
 
 (defun openai-codex-request-headers (auth &key stream)
@@ -2372,6 +2420,48 @@ reasoning_content is present, falls back to reasoning_content."
     (if cell
         (setf (car cell) (canonical-text-block text))
         (push (canonical-text-block text) (stream-state-content-blocks state)))))
+
+(defun stream-state-reasoning-block-cell (state)
+  "Return the cons cell holding STATE's reasoning block, or NIL."
+  (loop :for cell :on (stream-state-content-blocks state)
+        :when (let ((block (car cell)))
+                (and block
+                     (string= "reasoning" (cdr (assoc :type block)))))
+          :return cell))
+
+(defun set-stream-state-reasoning-block (state text)
+  "Set or create STATE's canonical reasoning block to TEXT."
+  (let ((cell (stream-state-reasoning-block-cell state)))
+    (if cell
+        (setf (car cell) (canonical-reasoning-block text))
+        (push (canonical-reasoning-block text)
+              (stream-state-content-blocks state)))))
+
+(defun append-stream-state-reasoning-delta (state delta)
+  "Append a streamed reasoning DELTA to STATE."
+  (when (and delta (not (zerop (length delta))))
+    (setf (stream-state-reasoning-text state)
+          (concatenate 'string
+                       (stream-state-reasoning-text state)
+                       delta))
+    (set-stream-state-reasoning-block
+     state
+     (stream-state-reasoning-text state))))
+
+(defun merge-stream-state-reasoning-summary (state text)
+  "Merge a complete reasoning summary TEXT into STATE without duplicating deltas."
+  (when (and text (not (blank-string-p text)))
+    (let ((current (stream-state-reasoning-text state)))
+      (unless (or (string= current text)
+                  (and (plusp (length current))
+                       (search text current)))
+        (setf (stream-state-reasoning-text state)
+              (if (blank-string-p current)
+                  text
+                  (format nil "~A~%~A" current text)))
+        (set-stream-state-reasoning-block
+         state
+         (stream-state-reasoning-text state))))))
 
 (defun provider-request (provider messages
                          &key model
@@ -2462,6 +2552,7 @@ reasoning_content is present, falls back to reasoning_content."
 (defstruct stream-state
   "Mutable state for an in-progress streaming response."
   (text ""             :type string)
+  (reasoning-text ""   :type string)
   (content-blocks nil  :type list)
   (tool-input-json ""  :type string)   ; accumulates input_json_delta for tool_use
   (openai-tool-call-states (make-hash-table :test #'equal))
@@ -2548,9 +2639,7 @@ SSE format: 'field: value' or just 'data: {...}'."
      (bt:with-lock-held ((stream-state-lock state))
        (finalize-openai-stream-tool-blocks state)
        (when (plusp (length (stream-state-text state)))
-         (ensure-openai-stream-text-block state)
-         (setf (first (stream-state-content-blocks state))
-               (canonical-text-block (stream-state-text state))))
+         (set-stream-state-text-block state (stream-state-text state)))
        (unless (stream-state-stop-reason state)
          (setf (stream-state-stop-reason state) "end_turn"))
        (setf (stream-state-done-p state) t)))
@@ -2561,18 +2650,16 @@ SSE format: 'field: value' or just 'data: {...}'."
             (text (and delta (cdr (assoc :content delta))))
             (reasoning (and delta (cdr (assoc :reasoning--content delta))))
             (tool-calls (and delta (cdr (assoc :tool--calls delta))))
-            (finish-reason (and choice (cdr (assoc :finish--reason choice))))
-            ;; Use whichever text field is present in this chunk.
-            ;; Reasoning models (Z.AI GLM, DeepSeek R1) stream
-            ;; reasoning_content first, then content.
-            (effective-text (or text reasoning)))
+            (finish-reason (and choice (cdr (assoc :finish--reason choice)))))
+        ;; Reasoning models (Z.AI GLM, DeepSeek R1) stream reasoning_content
+        ;; first, then content. Keep those channels separate so UI rendering
+        ;; can hide or show reasoning output.
         (bt:with-lock-held ((stream-state-lock state))
-          (when effective-text
-            (ensure-openai-stream-text-block state)
+          (append-stream-state-reasoning-delta state reasoning)
+          (when text
             (setf (stream-state-text state)
-                  (concatenate 'string (stream-state-text state) effective-text)
-                  (first (stream-state-content-blocks state))
-                  (canonical-text-block (stream-state-text state))))
+                  (concatenate 'string (stream-state-text state) text))
+            (set-stream-state-text-block state (stream-state-text state)))
           (dolist (tool-call (coerce (or tool-calls #()) 'list))
             (upsert-openai-stream-tool-call state tool-call))
           (when finish-reason
@@ -2617,6 +2704,23 @@ SSE format: 'field: value' or just 'data: {...}'."
   "Process one Responses API SSE DATA payload into STATE."
   (let* ((event (api-json-decode data))
          (event-type (cdr (assoc :type event))))
+    (unless (string= event-type "response.output_text.delta")
+      (let* ((item (cdr (assoc :item event)))
+             (item-type (and item (cdr (assoc :type item))))
+             (summary-count
+               (and item (length (coerce (or (cdr (assoc :summary item))
+                                              #())
+                                          'list))))
+             (content-count
+               (and item (length (coerce (or (cdr (assoc :content item))
+                                              #())
+                                          'list)))))
+        (file-debug-log "openai-codex-sse"
+                        "type=~A~@[ item-type=~A~]~@[ summary-parts=~D~]~@[ content-parts=~D~]"
+                        event-type
+                        item-type
+                        summary-count
+                        content-count)))
     (cond
       ((string= event-type "response.output_text.delta")
        (let ((delta (cdr (assoc :delta event))))
@@ -2625,6 +2729,23 @@ SSE format: 'field: value' or just 'data: {...}'."
              (setf (stream-state-text state)
                    (concatenate 'string (stream-state-text state) delta))
              (set-stream-state-text-block state (stream-state-text state))))))
+      ((member event-type
+               '("response.reasoning_summary_text.delta"
+                 "response.reasoning_text.delta")
+               :test #'string=)
+       (let ((delta (or (cdr (assoc :delta event))
+                        (cdr (assoc :text event)))))
+         (when delta
+           (bt:with-lock-held ((stream-state-lock state))
+             (append-stream-state-reasoning-delta state delta)))))
+      ((member event-type
+               '("response.reasoning_summary_text.done"
+                 "response.reasoning_text.done")
+               :test #'string=)
+       (let ((text (cdr (assoc :text event))))
+         (when text
+           (bt:with-lock-held ((stream-state-lock state))
+             (merge-stream-state-reasoning-summary state text)))))
       ((string= event-type "response.output_item.done")
        (let ((item (cdr (assoc :item event))))
          (when item
@@ -2640,7 +2761,12 @@ SSE format: 'field: value' or just 'data: {...}'."
                  ((string= item-type "function_call")
                   (push (responses-function-call->canonical-block item)
                         (stream-state-content-blocks state))
-                  (setf (stream-state-stop-reason state) "tool_use"))))))))
+                  (setf (stream-state-stop-reason state) "tool_use"))
+                 ((string= item-type "reasoning")
+                  (dolist (text (responses-reasoning-summary-texts item))
+                    (merge-stream-state-reasoning-summary
+                     state
+                     text)))))))))
       ((string= event-type "response.completed")
        (bt:with-lock-held ((stream-state-lock state))
          (unless (stream-state-stop-reason state)

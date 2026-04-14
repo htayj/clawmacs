@@ -126,8 +126,23 @@
    #:message-next
    #:message-prev
    #:message-raw-content
+   #:message-metadata
    #:message-text
    #:message-line-count
+
+   ;; Sessions
+   #:*sessions-dir*
+   #:session
+   #:session-name
+   #:session-id
+   #:session-directory
+   #:session-manifest-path
+   #:session-transcript-directory
+   #:session-current-transcript-index
+   #:session-current-transcript-path
+   #:load-or-create-session
+   #:record-session-message
+   #:rotate-session-transcript
 
    ;; Message editing
    #:message-insert-char
@@ -156,6 +171,8 @@
    #:*default-context-limit*
    #:*default-agent-name*
    #:*default-show-tool-results*
+   #:*default-show-reasoning-output*
+   #:*default-show-metadata-output*
    #:*scratch-buffer-name*
    #:*scratch-buffer-initial-text*
    #:buffer
@@ -171,24 +188,27 @@
    #:buffer-resource-path
    #:buffer-original-text
    #:buffer-dirty-p
-    #:buffer-token-count
-    #:buffer-context-limit
-    #:buffer-status
-    #:buffer-provider-override
-    #:buffer-model-override
-    #:buffer-think-level-override
-    #:buffer-enabled-packages
-    #:set-buffer-provider-override
-    #:set-buffer-model-override
-    #:set-buffer-think-level-override
-    #:clear-buffer-provider-override
-    #:clear-buffer-model-override
-    #:clear-buffer-think-level-override
-    #:clear-buffer-routing-overrides
-     #:buffer-face-registry
+   #:buffer-token-count
+   #:buffer-context-limit
+   #:buffer-status
+   #:buffer-provider-override
+   #:buffer-model-override
+   #:buffer-think-level-override
+   #:buffer-enabled-packages
+   #:buffer-session
+   #:set-buffer-provider-override
+   #:set-buffer-model-override
+   #:set-buffer-think-level-override
+   #:clear-buffer-provider-override
+   #:clear-buffer-model-override
+   #:clear-buffer-think-level-override
+   #:clear-buffer-routing-overrides
+   #:buffer-face-registry
    #:buffer-keymap
    #:buffer-scroll-offset
    #:buffer-show-tool-results-p
+   #:buffer-show-reasoning-p
+   #:buffer-show-metadata-p
    #:buffer-pending-stream
    #:buffer-streaming-message
    #:*buffer-ring*
@@ -215,7 +235,6 @@
    #:save-session
    #:load-session
    #:list-saved-sessions
-   #:*sessions-dir*
 
    ;; Commands
    #:*current-caller*
@@ -448,6 +467,7 @@
    #:*default-provider*
    #:*default-model*
    #:*default-max-tokens*
+   #:*openai-codex-reasoning-summary*
    #:api-json-encode
    #:api-json-decode
 
@@ -809,6 +829,8 @@
    #:debug-log
    #:file-debug-log
    #:toggle-debug-mode-command
+   #:toggle-reasoning-output-command
+   #:toggle-metadata-output-command
    #:redraw-screen-command
 
    ;; Package loader

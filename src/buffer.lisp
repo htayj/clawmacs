@@ -13,6 +13,12 @@
 (defvar *default-show-tool-results* t
   "When nil, new buffers hide tool-result messages by default.")
 
+(defvar *default-show-reasoning-output* nil
+  "When non-nil, new buffers show provider-supplied reasoning blocks by default.")
+
+(defvar *default-show-metadata-output* nil
+  "When non-nil, new buffers show provider/response metadata by default.")
+
 (defvar *scratch-buffer-name* "*scratch*"
   "Name used for the process-local scratch buffer.")
 
@@ -102,6 +108,11 @@
                      :initform nil
                      :type list
                      :documentation "Package names explicitly enabled for this buffer.")
+   (session           :initarg :session
+                      :accessor buffer-session
+                      :initform nil
+                      :type (or null session)
+                      :documentation "Persistent session metadata for chat buffers, when attached.")
     (face-registry     :initarg :face-registry
                        :accessor buffer-face-registry
                        :type hash-table
@@ -121,6 +132,16 @@
                          :initform *default-show-tool-results*
                          :type boolean
                          :documentation "When nil, tool-result messages are hidden from display.")
+   (show-reasoning-p    :initarg :show-reasoning-p
+                         :accessor buffer-show-reasoning-p
+                         :initform *default-show-reasoning-output*
+                         :type boolean
+                         :documentation "When nil, provider-supplied reasoning blocks are hidden from display.")
+   (show-metadata-p     :initarg :show-metadata-p
+                         :accessor buffer-show-metadata-p
+                         :initform *default-show-metadata-output*
+                         :type boolean
+                         :documentation "When nil, provider/response metadata is hidden from display.")
    (pending-stream      :initarg :pending-stream
                          :accessor buffer-pending-stream
                          :initform nil
@@ -179,7 +200,8 @@ Enforces the invariant that it is not read-only."
                                        (:original-text string)
                                        (:dirty-p boolean)
                                        (:context-limit integer)
-                                       (:enabled-packages list))
+                                       (:enabled-packages list)
+                                       (:session (or null session)))
                           buffer)
                 make-buffer))
 (defun make-buffer (name &key (agent-name *default-agent-name*)
@@ -190,7 +212,8 @@ Enforces the invariant that it is not read-only."
                               (original-text "")
                               (dirty-p nil)
                               (context-limit *default-context-limit*)
-                              (enabled-packages nil))
+                              (enabled-packages nil)
+                              (session nil))
   "Create a new buffer with a single empty input message."
   (let* ((input-msg (make-message :user))
          (registry (make-hash-table :test #'eq))
@@ -207,6 +230,7 @@ Enforces the invariant that it is not read-only."
                 :dirty-p dirty-p
                 :context-limit context-limit
                 :enabled-packages (copy-list enabled-packages)
+                :session session
                 :face-registry registry)))
     buf))
 
@@ -225,6 +249,32 @@ Enforces the invariant that it is not read-only."
   "Return true when BUF is an editable document buffer rather than a chat buffer."
   (or (scratch-buffer-p buf)
       (file-buffer-p buf)))
+
+(defvar *suppress-session-transcript-recording* nil
+  "When non-nil, buffer message helpers do not append transcript events.")
+
+(defun attach-buffer-session (buf session)
+  "Attach SESSION to BUF and return BUF."
+  (setf (buffer-session buf) session)
+  buf)
+
+(defun ensure-buffer-session (buf)
+  "Ensure BUF has persistent session metadata when it is a chat buffer."
+  (when (and buf
+             (not (document-buffer-p buf))
+             (null (buffer-session buf)))
+    (attach-buffer-session buf
+                           (load-or-create-session (buffer-name buf))))
+  (buffer-session buf))
+
+(defun record-buffer-message (buf msg)
+  "Record MSG in BUF's transcript when session recording is active."
+  (when (and buf
+             msg
+             (not *suppress-session-transcript-recording*)
+             (buffer-session buf))
+    (record-session-message (buffer-session buf) msg))
+  msg)
 
 (declaim (ftype (function (buffer) fixnum) buffer-message-count))
 (defun buffer-message-count (buf)
@@ -393,6 +443,7 @@ and create a new empty input message at the tail."
     (setf (message-read-only-p input) t
           (message-timestamp input) (get-universal-time)
           (message-sender input) :user)
+    (record-buffer-message buf input)
     (let ((new-input (make-message :user)))
       (setf (message-prev new-input) input
             (message-next input) new-input
@@ -461,8 +512,9 @@ and create a new empty input message at the tail."
           (message-point-offset msg) 0))
   msg)
 
-(declaim (ftype (function (buffer string) message) buffer-insert-agent-message))
-(defun buffer-insert-agent-message (buf text)
+(declaim (ftype (function (buffer string &key (:record-p boolean)) message)
+                buffer-insert-agent-message))
+(defun buffer-insert-agent-message (buf text &key (record-p t))
   "Create a read-only agent message with TEXT and insert it before the input message.
 TEXT may contain newlines, which are split into separate line objects."
   (let* ((agent-keyword (intern (string-upcase (buffer-agent-name buf)) :keyword))
@@ -477,10 +529,13 @@ TEXT may contain newlines, which are split into separate line objects."
       (if before-input
           (setf (message-next before-input) agent-msg)
           (setf (buffer-first-message buf) agent-msg)))
+    (when record-p
+      (record-buffer-message buf agent-msg))
     agent-msg))
 
-(declaim (ftype (function (buffer string) message) buffer-insert-context-message))
-(defun buffer-insert-context-message (buf text)
+(declaim (ftype (function (buffer string &key (:record-p boolean)) message)
+                buffer-insert-context-message))
+(defun buffer-insert-context-message (buf text &key (record-p t))
   "Create a read-only context message with TEXT before the input message.
 Context messages are sent to providers as user-context messages."
   (let* ((context-msg (make-message :context :read-only-p t))
@@ -494,10 +549,13 @@ Context messages are sent to providers as user-context messages."
       (if before-input
           (setf (message-next before-input) context-msg)
           (setf (buffer-first-message buf) context-msg)))
+    (when record-p
+      (record-buffer-message buf context-msg))
     context-msg))
 
-(declaim (ftype (function (buffer string) message) buffer-insert-system-message))
-(defun buffer-insert-system-message (buf text)
+(declaim (ftype (function (buffer string &key (:record-p boolean)) message)
+                buffer-insert-system-message))
+(defun buffer-insert-system-message (buf text &key (record-p t))
   "Create a read-only system message with TEXT and insert it before the input message.
 System messages are display-only — they are excluded from API conversation history.
 Assigns the :system face set from the buffer's face registry if available."
@@ -516,15 +574,13 @@ Assigns the :system face set from the buffer's face registry if available."
       (if before-input
           (setf (message-next before-input) sys-msg)
           (setf (buffer-first-message buf) sys-msg)))
+    (when record-p
+      (record-buffer-message buf sys-msg))
     sys-msg))
 
 ;;; --------------------------------------------------------------------------
 ;;; Session Persistence
 ;;; --------------------------------------------------------------------------
-
-(defvar *sessions-dir*
-  (merge-pathnames #P".config/clawmacs/sessions/" (user-homedir-pathname))
-  "Directory for saved session files.")
 
 (defun session-path (session-name)
   "Return the file path for a session by name."
@@ -537,7 +593,9 @@ Assigns the :system face set from the buffer's face registry if available."
     (:timestamp . ,(message-timestamp msg))
     (:read-only-p . ,(message-read-only-p msg))
     ,@(when (message-raw-content msg)
-        `((:raw-content . ,(coerce (message-raw-content msg) 'vector))))))
+        `((:raw-content . ,(coerce (message-raw-content msg) 'vector))))
+    ,@(when (message-metadata msg)
+        `((:metadata . ,(message-metadata msg))))))
 
 (defun serialize-buffer (buf)
   "Serialize a buffer's conversation to JSON-ready alist."
@@ -581,7 +639,8 @@ Assigns the :system face set from the buffer's face registry if available."
              (enabled-packages (cdr (assoc :enabled-packages data)))
              (messages (cdr (assoc :messages data)))
              (buf (make-buffer name :agent-name agent
-                                     :working-directory (truename "."))))
+                                     :working-directory (truename ".")
+                                     :session (load-or-create-session name))))
         (setf (buffer-provider-override buf)
               (and provider-override
                    (ignore-errors
@@ -594,28 +653,32 @@ Assigns the :system face set from the buffer's face registry if available."
               (loop :for package :in (coerce (or enabled-packages #()) 'list)
                     :when (stringp package)
                       :collect package))
-        ;; Replay messages into the buffer
-        (loop :for msg-data :across messages
-              :for sender-str := (cdr (assoc :sender msg-data))
-              :for text := (cdr (assoc :text msg-data))
-              :for raw-content := (cdr (assoc :raw-content msg-data))
-              :for sender-kw := (intern sender-str :keyword)
-              :do (let ((msg (make-message sender-kw :read-only-p t)))
-                    (set-message-text msg (or text ""))
-                     (setf (message-timestamp msg)
-                           (cdr (assoc :timestamp msg-data)))
-                     (when raw-content
-                       (setf (message-raw-content msg)
-                            (normalize-legacy-raw-content raw-content)))
-                     ;; Insert before input
-                     (let ((input (buffer-input-message buf))
-                           (before (message-prev (buffer-input-message buf))))
-                      (setf (message-prev msg) before
-                            (message-next msg) input
-                            (message-prev input) msg)
-                      (if before
-                          (setf (message-next before) msg)
-                          (setf (buffer-first-message buf) msg)))))
+        ;; Replay messages into the buffer without duplicating transcript events.
+        (let ((*suppress-session-transcript-recording* t))
+          (loop :for msg-data :across messages
+                :for sender-str := (cdr (assoc :sender msg-data))
+                :for text := (cdr (assoc :text msg-data))
+                :for raw-content := (cdr (assoc :raw-content msg-data))
+                :for metadata := (cdr (assoc :metadata msg-data))
+                :for sender-kw := (intern sender-str :keyword)
+                :do (let ((msg (make-message sender-kw :read-only-p t)))
+                      (set-message-text msg (or text ""))
+                      (setf (message-timestamp msg)
+                            (cdr (assoc :timestamp msg-data)))
+                      (when raw-content
+                        (setf (message-raw-content msg)
+                              (normalize-legacy-raw-content raw-content)))
+                      (when metadata
+                        (setf (message-metadata msg) metadata))
+                      ;; Insert before input
+                      (let ((input (buffer-input-message buf))
+                            (before (message-prev (buffer-input-message buf))))
+                        (setf (message-prev msg) before
+                              (message-next msg) input
+                              (message-prev input) msg)
+                        (if before
+                            (setf (message-next before) msg)
+                            (setf (buffer-first-message buf) msg))))))
         (ignore-errors
           (reconcile-buffer-think-level-override buf))
         buf))))

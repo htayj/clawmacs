@@ -95,7 +95,13 @@
                   :documentation "When non-nil, holds the API-format content blocks
 (list of alists) for this message. Used for tool_use assistant messages
 and tool_result user messages to preserve structured content for API
-round-tripping."))
+round-tripping.")
+   (metadata      :initarg :metadata
+                  :accessor message-metadata
+                  :initform nil
+                  :type list
+                  :documentation "Display-only metadata alist for a message.
+This is not sent to providers."))
   (:documentation
    "A message in the chat buffer. Contains a doubly-linked list of lines,
 a point and optional mark for intra-message cursor/selection, sender
@@ -116,6 +122,20 @@ identity, and links to adjacent messages in the buffer."))
                 :sender sender
                 :face-set face-set
                 :read-only-p read-only-p)))
+    msg))
+
+(defun message-metadata-value (metadata key)
+  "Return KEY's value from a message metadata alist."
+  (cdr (assoc key metadata :test #'eq)))
+
+(defun put-message-metadata (msg &rest pairs)
+  "Set metadata PAIRS on MSG and return MSG."
+  (let ((metadata (copy-list (message-metadata msg))))
+    (loop :for (key value) :on pairs :by #'cddr
+          :do (setf metadata
+                    (acons key value
+                           (remove key metadata :key #'car :test #'eq))))
+    (setf (message-metadata msg) metadata)
     msg))
 
 (declaim (ftype (function (message) string) message-text))

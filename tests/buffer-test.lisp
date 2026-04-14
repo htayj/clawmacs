@@ -4,6 +4,35 @@
 (defvar *mx-test-command-log* nil
   "Records command invocations during buffer tests.")
 
+(defun temp-session-test-directory (label)
+  "Return a fresh temporary directory for session transcript tests."
+  (make-pathname :directory
+                 (list :absolute "tmp"
+                       (format nil "clawmacs-session-tests-~A-~A-~A"
+                               label
+                               (get-universal-time)
+                               (gensym)))))
+
+(defun read-jsonl-events (path)
+  "Read JSONL transcript events from PATH."
+  (let ((events nil))
+    (when (probe-file path)
+      (with-open-file (stream path :direction :input :external-format :utf-8)
+        (loop :for line := (read-line stream nil nil)
+              :while line
+              :unless (zerop (length line))
+                :do (let ((cl-json:*json-array-type* 'vector))
+                      (push (cl-json:decode-json-from-string line) events)))))
+    (nreverse events)))
+
+(defun event-value (event key)
+  "Return KEY's value from decoded transcript EVENT."
+  (cdr (assoc key event)))
+
+(defun session-current-events (session)
+  "Return decoded events from SESSION's current transcript."
+  (read-jsonl-events (session-current-transcript-path session)))
+
 (defun mx-test-noarg-command (buffer)
   "Test command used to verify M-x invocation without arguments."
   (declare (ignore buffer))
@@ -83,6 +112,66 @@
     (is (not (message-read-only-p (buffer-input-message buf))))
     (is (= 1 (buffer-message-count buf)))
     (is (eq :idle (buffer-status buf)))))
+
+(test toggle-reasoning-output-command-flips-buffer-flag
+  "The reasoning output toggle controls per-buffer reasoning display."
+  (let ((buf (make-buffer "reasoning-toggle")))
+    (is (not (buffer-show-reasoning-p buf)))
+    (clawmacs::toggle-reasoning-output-command buf)
+    (is (buffer-show-reasoning-p buf))
+    (clawmacs::toggle-reasoning-output-command buf)
+    (is (not (buffer-show-reasoning-p buf)))))
+
+(test toggle-metadata-output-command-flips-buffer-flag
+  "The metadata output toggle controls per-buffer metadata display."
+  (let ((buf (make-buffer "metadata-toggle")))
+    (is (not (buffer-show-metadata-p buf)))
+    (clawmacs::toggle-metadata-output-command buf)
+    (is (buffer-show-metadata-p buf))
+    (clawmacs::toggle-metadata-output-command buf)
+    (is (not (buffer-show-metadata-p buf)))))
+
+(test explicit-session-records-transcript-events
+  "Buffers with an attached session append durable JSONL message events."
+  (let* ((*sessions-dir* (temp-session-test-directory "explicit"))
+         (session (load-or-create-session "Real Session"))
+         (buf (make-buffer "Real Session"
+                           :agent-name "agent"
+                           :session session)))
+    (is (probe-file (session-manifest-path session)))
+    (is (probe-file (session-current-transcript-path session)))
+    (let ((initial-events (session-current-events session)))
+      (is (= 1 (length initial-events)))
+      (is (string= "session-start"
+                   (event-value (first initial-events) :event))))
+    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (buffer-finalize-input buf)
+    (buffer-insert-system-message buf "display-only")
+    (clawmacs::buffer-insert-context-message buf "late context")
+    (buffer-insert-agent-message buf "answer")
+    (let* ((events (session-current-events session))
+           (message-events
+             (remove-if-not (lambda (event)
+                              (string= "message"
+                                       (event-value event :event)))
+                            events)))
+      (is (= 4 (length message-events)))
+      (is (equal '("USER" "SYSTEM" "CONTEXT" "AGENT")
+                 (mapcar (lambda (event)
+                           (event-value event :sender))
+                         message-events)))
+      (is (string= "hello" (event-value (first message-events) :text)))
+      (is (string= "answer" (event-value (fourth message-events) :text))))))
+
+(test buffers-without-session-do-not-write-transcripts
+  "Plain unit-test buffers stay transcript-free unless a session is attached."
+  (let* ((*sessions-dir* (temp-session-test-directory "quiet"))
+         (buf (make-buffer "plain-buffer")))
+    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (buffer-finalize-input buf)
+    (buffer-insert-agent-message buf "answer")
+    (is (null (buffer-session buf)))
+    (is (not (probe-file *sessions-dir*)))))
 
 (test ensure-scratch-buffer-creates-loaded-scratch-without-stealing-current
   "The scratch buffer is loaded into the ring but does not become current."
@@ -217,6 +306,42 @@
         (is (null (buffer-model-override buf)))
        (is (null (buffer-think-level-override buf)))
        (is (null (buffer-enabled-packages buf)))))))
+
+(test load-session-does-not-duplicate-snapshot-into-transcript
+  "Loading a snapshot attaches a session but does not replay old messages into JSONL."
+  (let* ((session-name "legacy-transcript-replay")
+         (*sessions-dir* (temp-session-test-directory "load"))
+         (path (clawmacs::session-path session-name)))
+    (ensure-directories-exist path)
+    (with-open-file (stream path :direction :output
+                                 :if-exists :supersede
+                                 :if-does-not-exist :create)
+      (write-string
+       (cl-json:encode-json-to-string
+        '((:name . "legacy-transcript-replay")
+          (:agent-name . "echo")
+          (:messages . #(((:sender . "USER")
+                          (:text . "old message")
+                          (:timestamp . 10)
+                          (:read-only-p . t))))))
+       stream))
+    (let ((buf (load-session session-name)))
+      (is (not (null buf)))
+      (is (not (null (buffer-session buf))))
+      (let ((events (session-current-events (buffer-session buf))))
+        (is (= 1 (length events)))
+        (is (string= "session-start"
+                     (event-value (first events) :event))))
+      (buffer-insert-system-message buf "new display event")
+      (let* ((events (session-current-events (buffer-session buf)))
+             (message-events
+               (remove-if-not (lambda (event)
+                                (string= "message"
+                                         (event-value event :event)))
+                              events)))
+        (is (= 1 (length message-events)))
+        (is (string= "new display event"
+                     (event-value (first message-events) :text)))))))
 
 (test save-and-load-session-round-trips-overrides
   "Saved sessions preserve override values and types when reloaded."

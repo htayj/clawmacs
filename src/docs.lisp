@@ -316,6 +316,12 @@ documentation in *extended-docs*."
   :returns "list or nil — API-format content blocks for round-tripping tool_use/tool_result."
   :see-also (message message-text build-conversation-messages))
 
+(defdoc message-metadata
+  :category "message"
+  :usage "(message-metadata MSG:message) — (message-metadata my-msg)"
+  :returns "alist or nil — Display-only provider/response metadata for a message."
+  :see-also (message toggle-metadata-output-command))
+
 (defdoc message-text
   :category "message"
   :usage "(message-text MSG:message) — (message-text my-msg)"
@@ -481,6 +487,14 @@ documentation in *extended-docs*."
   :category "buffer"
   :see-also (buffer-show-tool-results-p))
 
+(defdoc *default-show-reasoning-output*
+  :category "buffer"
+  :see-also (buffer-show-reasoning-p))
+
+(defdoc *default-show-metadata-output*
+  :category "buffer"
+  :see-also (buffer-show-metadata-p))
+
 (defdoc *scratch-buffer-name*
   :category "buffer"
   :see-also (ensure-scratch-buffer scratch-buffer))
@@ -497,10 +511,10 @@ documentation in *extended-docs*."
 
 (defdoc make-buffer
   :category "buffer"
-  :usage "(make-buffer NAME:string &key AGENT-NAME:string KIND:keyword WORKING-DIRECTORY:pathname CONTEXT-LIMIT:integer) — (make-buffer \"session-01\" :agent-name \"agent\")"
+  :usage "(make-buffer NAME:string &key AGENT-NAME:string KIND:keyword WORKING-DIRECTORY:pathname CONTEXT-LIMIT:integer SESSION:session) — (make-buffer \"session-01\" :agent-name \"agent\")"
   :returns "buffer — A new buffer with a single empty input message."
   :side-effects "Allocates a buffer with an empty face registry."
-  :see-also (buffer buffer-name buffer-kind add-buffer-to-ring current-buffer))
+  :see-also (buffer buffer-name buffer-kind buffer-session add-buffer-to-ring current-buffer))
 
 (defdoc buffer-name
   :category "buffer"
@@ -544,6 +558,13 @@ documentation in *extended-docs*."
   :returns "list — package names explicitly enabled for this buffer."
   :side-effects "Setf updates buffer-local package enablement; saved sessions persist the list."
   :see-also (active-package-names package-enablement-scope save-session load-session))
+
+(defdoc buffer-session
+  :category "buffer"
+  :usage "(buffer-session BUF:buffer)"
+  :returns "session or nil — Persistent session metadata attached to this buffer."
+  :side-effects "Setf changes which transcript receives future finalized messages."
+  :see-also (session load-or-create-session session-current-transcript-path))
 
 (defdoc buffer-working-directory
   :category "buffer"
@@ -753,6 +774,18 @@ documentation in *extended-docs*."
   :returns "boolean — T if tool result messages are shown."
   :see-also (buffer toggle-tool-results-command))
 
+(defdoc buffer-show-reasoning-p
+  :category "buffer"
+  :usage "(buffer-show-reasoning-p BUF:buffer) — (buffer-show-reasoning-p (current-buffer))"
+  :returns "boolean — T if provider-supplied reasoning blocks are shown."
+  :see-also (buffer toggle-reasoning-output-command))
+
+(defdoc buffer-show-metadata-p
+  :category "buffer"
+  :usage "(buffer-show-metadata-p BUF:buffer) — (buffer-show-metadata-p (current-buffer))"
+  :returns "boolean — T if provider/response metadata is shown."
+  :see-also (buffer toggle-metadata-output-command))
+
 (defdoc buffer-pending-stream
   :category "buffer"
   :usage "(buffer-pending-stream BUF:buffer) — (buffer-pending-stream (current-buffer))"
@@ -912,21 +945,91 @@ documentation in *extended-docs*."
 
 (defdoc *sessions-dir*
   :category "session"
-  :see-also (save-session load-session list-saved-sessions))
+  :returns "pathname — Root directory for saved session snapshots and transcript sidecars."
+  :see-also (save-session load-session list-saved-sessions load-or-create-session))
+
+(defdoc session
+  :category "session"
+  :usage "(load-or-create-session \"session-01\")"
+  :returns "Structure — Persistent metadata for a chat session and its current transcript segment."
+  :see-also (buffer-session load-or-create-session session-current-transcript-path))
+
+(defdoc session-name
+  :category "session"
+  :usage "(session-name SESSION:session)"
+  :returns "string — Display name of the session."
+  :see-also (session buffer-name))
+
+(defdoc session-id
+  :category "session"
+  :usage "(session-id SESSION:session)"
+  :returns "string — Filesystem-safe session id derived from the session name."
+  :see-also (session session-directory))
+
+(defdoc session-directory
+  :category "session"
+  :usage "(session-directory SESSION:session)"
+  :returns "pathname — Sidecar directory containing session metadata and transcripts."
+  :see-also (session-manifest-path session-transcript-directory))
+
+(defdoc session-manifest-path
+  :category "session"
+  :usage "(session-manifest-path SESSION:session)"
+  :returns "pathname — JSON metadata file for the session sidecar."
+  :see-also (session-directory load-or-create-session))
+
+(defdoc session-transcript-directory
+  :category "session"
+  :usage "(session-transcript-directory SESSION:session)"
+  :returns "pathname — Directory containing numbered JSONL transcript segments."
+  :see-also (session-current-transcript-path rotate-session-transcript))
+
+(defdoc session-current-transcript-index
+  :category "session"
+  :usage "(session-current-transcript-index SESSION:session)"
+  :returns "integer — Number of the current transcript segment."
+  :see-also (session-current-transcript-path rotate-session-transcript))
+
+(defdoc load-or-create-session
+  :category "session"
+  :usage "(load-or-create-session NAME:string)"
+  :returns "session — Existing or newly initialized session metadata."
+  :side-effects "Creates a session sidecar directory, manifest, and initial JSONL transcript when missing."
+  :see-also (*sessions-dir* buffer-session session-current-transcript-path))
+
+(defdoc session-current-transcript-path
+  :category "session"
+  :usage "(session-current-transcript-path SESSION:session)"
+  :returns "pathname — Current append-only JSONL transcript segment."
+  :see-also (session rotate-session-transcript record-session-message))
+
+(defdoc record-session-message
+  :category "session"
+  :usage "(record-session-message SESSION:session MESSAGE:message)"
+  :returns "message — The recorded message."
+  :side-effects "Appends one JSONL message event to the current transcript."
+  :see-also (session-current-transcript-path message-text))
+
+(defdoc rotate-session-transcript
+  :category "session"
+  :usage "(rotate-session-transcript SESSION:session :reason :manual)"
+  :returns "values — New transcript path and previous transcript path."
+  :side-effects "Starts a new transcript segment whose first event references the previous transcript path."
+  :see-also (default-compact-buffer session-current-transcript-path))
 
 (defdoc save-session
   :category "session"
   :usage "(save-session BUF:buffer) — (save-session (current-buffer))"
   :returns "pathname — Path to the saved session file."
-  :side-effects "Writes buffer's conversation to a JSON file in *sessions-dir*."
-  :see-also (load-session list-saved-sessions save-session-command *sessions-dir*))
+  :side-effects "Writes buffer's current snapshot to a JSON file in *sessions-dir*; attached sessions also maintain append-only transcript sidecars."
+  :see-also (load-session list-saved-sessions save-session-command *sessions-dir* buffer-session))
 
 (defdoc load-session
   :category "session"
   :usage "(load-session SESSION-NAME:string &key AGENT-NAME:string) — (load-session \"session-01\")"
   :returns "buffer or nil — The loaded buffer, or nil if session file not found."
-  :side-effects "Reads a JSON session file and creates a new buffer with replayed messages."
-  :see-also (save-session list-saved-sessions *sessions-dir*))
+  :side-effects "Reads a JSON snapshot, creates a buffer with replayed messages, and attaches session transcript metadata."
+  :see-also (save-session list-saved-sessions *sessions-dir* buffer-session))
 
 (defdoc list-saved-sessions
   :category "session"
@@ -1502,6 +1605,12 @@ documentation in *extended-docs*."
 (defdoc *default-max-tokens*
   :category "llm"
   :see-also (*default-model* *default-provider* provider-request))
+
+(defdoc *openai-codex-reasoning-summary*
+  :category "llm"
+  :usage "*openai-codex-reasoning-summary*"
+  :returns "string or nil — Responses API reasoning.summary mode requested for OpenAI Codex calls; defaults to \"detailed\"."
+  :see-also (openai-codex-request openai-codex-request-streaming buffer-show-reasoning-p))
 
 (defdoc *zai-env-var*
   :category "llm"
@@ -3249,6 +3358,20 @@ documentation in *extended-docs*."
   :returns "nil"
   :side-effects "Flips buffer-show-tool-results-p."
   :see-also (buffer-show-tool-results-p))
+
+(defdoc toggle-reasoning-output-command
+  :category "buffer-command"
+  :usage "Bound to C-c V. Toggles visibility of provider-supplied reasoning/verbose output."
+  :returns "nil"
+  :side-effects "Flips buffer-show-reasoning-p."
+  :see-also (buffer-show-reasoning-p))
+
+(defdoc toggle-metadata-output-command
+  :category "buffer-command"
+  :usage "Bound to C-c I. Toggles visibility of provider/response metadata."
+  :returns "nil"
+  :side-effects "Flips buffer-show-metadata-p."
+  :see-also (buffer-show-metadata-p))
 
 (defdoc redraw-screen-command
   :category "buffer-command"

@@ -121,10 +121,15 @@ Shows text parts and tool call summaries. Stores raw-content for round-trip."
                        (when (plusp (length text-parts))
                          (write-char #\Newline s))
                        (write-string (format-tool-call-display tu) s))))
-          (agent-msg (buffer-insert-agent-message buf (string-trim '(#\Space #\Tab #\Newline #\Return) display))))
+          (agent-msg (buffer-insert-agent-message
+                      buf
+                      (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                   display)
+                      :record-p nil)))
     (setf (message-raw-content agent-msg) canonical-content)
     (setf (message-face-set agent-msg)
           (gethash agent-kw (buffer-face-registry buf)))
+    (record-buffer-message buf agent-msg)
     agent-msg))
 
 (defun begin-tool-approval (buf tool-use-blocks)
@@ -259,6 +264,7 @@ and :TOOL-ID entries. Returns the inserted message."
       (if before-input
           (setf (message-next before-input) tr-msg)
           (setf (buffer-first-message buf) tr-msg)))
+    (record-buffer-message buf tr-msg)
     tr-msg))
 
 (defun finalize-tool-results (buf)
@@ -320,8 +326,17 @@ polls for updates via update-streaming-response."
                        :tools tools
                        :system-prompt system-prompt
                        :reasoning-effort think-level))
-                 ;; Create placeholder message that will be updated as tokens arrive
-                 (agent-msg (buffer-insert-agent-message buf "")))
+                 ;; Create placeholder message that will be updated as tokens arrive.
+                 ;; It becomes durable only when the stream completes or errors.
+                 (agent-msg (buffer-insert-agent-message buf "" :record-p nil)))
+          (put-message-metadata agent-msg
+                                :agent (buffer-agent-name buf)
+                                :provider provider
+                                :model model
+                                :think-level think-level
+                                :reasoning-summary-mode
+                                (and (eq provider :openai-codex)
+                                     *openai-codex-reasoning-summary*))
           (setf (message-face-set agent-msg)
                 (gethash agent-kw (buffer-face-registry buf)))
           (setf (buffer-pending-stream buf) state
@@ -341,7 +356,7 @@ polls for updates via update-streaming-response."
       (when (string= "text" (content-block-type block))
         (setf latest (or (cdr (assoc :text block)) ""))))))
 
-(defun stream-state-display-text (state)
+(defun stream-state-display-text (state &key show-reasoning-p)
   "Return STATE's in-progress text without double-counting accumulators.
 Some providers keep the current partial text only in STREAM-STATE-TEXT, while
 OpenAI-compatible providers also mirror it into CONTENT-BLOCKS on every delta."
@@ -349,8 +364,18 @@ OpenAI-compatible providers also mirror it into CONTENT-BLOCKS on every delta."
     (let* ((accumulator (stream-state-text state))
            (content-blocks (reverse (copy-list (stream-state-content-blocks state))))
            (content-text (content-text-blocks content-blocks))
+           (reasoning-text
+             (and show-reasoning-p
+                  (display-text-from-line-strings
+                   (reasoning-block-display-lines
+                    (content-reasoning-blocks content-blocks)
+                    :visible-text content-text))))
            (latest-text (latest-text-block-text content-blocks)))
       (cond
+        ((and reasoning-text (not (blank-string-p reasoning-text)))
+         (if (blank-string-p content-text)
+             reasoning-text
+             (format nil "~A~%~A" content-text reasoning-text)))
         ((zerop (length accumulator))
          content-text)
         ((and latest-text (string= latest-text accumulator))
@@ -374,13 +399,16 @@ Returns T if still streaming, NIL if done."
       ;; (stream-state-text accumulates the CURRENT block's text;
       ;; completed blocks have their text finalized in content-blocks)
       (unless done
-        (let ((all-text (stream-state-display-text state)))
+        (let ((all-text (stream-state-display-text
+                         state
+                         :show-reasoning-p (buffer-show-reasoning-p buf))))
           (when (plusp (length all-text))
             (set-message-text msg (string-trim '(#\Space #\Tab #\Newline #\Return) all-text)))))
       (cond
         ;; Error during streaming
         (err
          (set-message-text msg (format nil "[Streaming error: ~A]" err))
+         (record-buffer-message buf msg)
          (setf (buffer-pending-stream buf) nil
                (buffer-streaming-message buf) nil
                (buffer-status buf) :error)
@@ -405,6 +433,14 @@ Returns T if still streaming, NIL if done."
                                (write-string (format-tool-call-display tu) s)))))
               (set-message-text msg (string-trim '(#\Space #\Tab #\Newline #\Return) display))
               (setf (message-raw-content msg) canonical-content))
+            (put-message-metadata
+             msg
+             :stop-reason (or stop-reason "nil")
+             :content-block-count (length content-blocks)
+             :tool-call-count (length tool-uses)
+             :reasoning-block-count (length (content-reasoning-blocks
+                                              canonical-content)))
+            (record-buffer-message buf msg)
             ;; Debug: echo the completed response
             (let ((resp-json (api-json-encode (coerce canonical-content 'vector))))
               (debug-log buf
@@ -444,18 +480,16 @@ Returns T if still streaming, NIL if done."
       (setf *openai-oauth-pending* nil)
       (when buf
         (setf (buffer-status buf) :idle)
-        (let ((sys-msg
-                (buffer-insert-agent-message
-                 buf
-                 (cond
-                   ((getf snapshot :success-p)
-                    "[OpenAI Codex OAuth: Login successful. Credentials saved to ~/.codex/auth.json.]")
-                   ((getf snapshot :cancelled-p)
-                    "[OAuth cancelled]")
-                   (t
-                    (format nil "[OAuth error: ~A]"
-                            (or (getf snapshot :error) "Unknown error")))))))
-          (setf (message-sender sys-msg) :system)))
+        (buffer-insert-system-message
+         buf
+         (cond
+           ((getf snapshot :success-p)
+            "[OpenAI Codex OAuth: Login successful. Credentials saved to ~/.codex/auth.json.]")
+           ((getf snapshot :cancelled-p)
+            "[OAuth cancelled]")
+           (t
+            (format nil "[OAuth error: ~A]"
+                    (or (getf snapshot :error) "Unknown error"))))))
       nil)))
 
 (declaim (ftype (function (buffer) buffer) send-to-agent-with-context))
@@ -615,7 +649,9 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
   "Create a buffer seeded with PROMPT as the only finalized user message."
   (let ((buf (make-buffer "clawmacs:prompt"
                           :agent-name agent-name
-                          :working-directory (truename "."))))
+                          :working-directory (truename ".")
+                          :session (load-or-create-session
+                                    "clawmacs:prompt"))))
     (init-face-registry buf)
     (setf (buffer-keymap buf) *default-keymap*)
     (set-message-text (buffer-input-message buf) prompt)
@@ -1230,17 +1266,15 @@ If so, call the handler and return T. Otherwise return NIL."
         (let* ((snapshot (openai-oauth-flow-snapshot *openai-oauth-pending*))
                (auth-url (getf snapshot :auth-url))
                (redirect-uri (getf snapshot :redirect-uri)))
-          (let ((sys-msg
-                  (buffer-insert-agent-message
-                   buffer
-                   (format nil "[OpenAI Codex OAuth]~%~%A browser login was started for shared Codex auth.~%If the browser did not open, use this URL:~%~%  ~A~%~%The callback server is listening at:~%  ~A~%~%Press C-g to cancel."
-                           auth-url redirect-uri))))
-            (setf (message-sender sys-msg) :system))
+          (buffer-insert-system-message
+           buffer
+           (format nil "[OpenAI Codex OAuth]~%~%A browser login was started for shared Codex auth.~%If the browser did not open, use this URL:~%~%  ~A~%~%The callback server is listening at:~%  ~A~%~%Press C-g to cancel."
+                   auth-url redirect-uri))
           (setf (buffer-status buffer) :oauth)))
     (error (e)
-      (let ((sys-msg (buffer-insert-agent-message
-                      buffer (format nil "[OAuth error: ~A]" e))))
-        (setf (message-sender sys-msg) :system)))))
+      (buffer-insert-system-message
+       buffer
+       (format nil "[OAuth error: ~A]" e)))))
 (defcommand openai-codex-oauth-command)
 
 ;;; --------------------------------------------------------------------------
@@ -2241,9 +2275,8 @@ Builds the available model list based on configured API keys."
   (let ((entries (available-models-for-selector buffer)))
     (cond
       ((null entries)
-       (let ((sys-msg (buffer-insert-agent-message
-                       buffer "[No API keys configured. Cannot list models.]")))
-         (setf (message-sender sys-msg) :system)))
+       (buffer-insert-system-message
+        buffer "[No API keys configured. Cannot list models.]"))
       (t
        ;; Pre-select the currently active model (if found)
        (let ((active-idx (position-if (lambda (e) (getf e :active-p)) entries)))
@@ -2261,9 +2294,8 @@ to navigate."
   (let ((entries (available-models-for-selector buffer)))
     (cond
       ((null entries)
-       (let ((sys-msg (buffer-insert-agent-message
-                       buffer "[No API keys configured. Cannot list models.]")))
-         (setf (message-sender sys-msg) :system)))
+       (buffer-insert-system-message
+        buffer "[No API keys configured. Cannot list models.]"))
       (t
        (let* ((items (build-model-selector-items entries))
               ;; Sort: by recency (from history), then active, then alphabetical
@@ -2420,9 +2452,9 @@ to navigate. Shows buffer name, agent, status, and message count."
     (t
      (let ((path (save-session buffer)))
        ;; Insert a system message confirming the save
-       (let ((sys-msg (buffer-insert-agent-message
-                       buffer (format nil "[Session saved to ~A]" path))))
-         (setf (message-sender sys-msg) :system))))))
+       (buffer-insert-system-message
+        buffer
+        (format nil "[Session saved to ~A]" path))))))
 (defcommand save-session-command)
 
 (defun execute-extended-command (buffer)
@@ -2446,6 +2478,18 @@ to navigate. Shows buffer name, agent, status, and message count."
   (setf (buffer-show-tool-results-p buffer)
         (not (buffer-show-tool-results-p buffer))))
 (defcommand toggle-tool-results-command)
+
+(defun toggle-reasoning-output-command (buffer)
+  "Toggle visibility of provider-supplied reasoning blocks in the chat."
+  (setf (buffer-show-reasoning-p buffer)
+        (not (buffer-show-reasoning-p buffer))))
+(defcommand toggle-reasoning-output-command)
+
+(defun toggle-metadata-output-command (buffer)
+  "Toggle visibility of provider/response metadata in the chat."
+  (setf (buffer-show-metadata-p buffer)
+        (not (buffer-show-metadata-p buffer))))
+(defcommand toggle-metadata-output-command)
 
 (defun toggle-debug-mode-command (buffer)
   "Toggle API debug mode on/off. When enabled, every outgoing API request
@@ -2839,10 +2883,9 @@ so this just closes the buffer and confirms."
       (setf *customize-face-state* nil)
       (kill-buffer-from-ring buf)
       ;; Show confirmation in the new current buffer
-      (let ((sys-msg (buffer-insert-agent-message
-                      (current-buffer)
-                      (format nil "[Face ~A customized successfully]" label))))
-        (setf (message-sender sys-msg) :system)))))
+      (buffer-insert-system-message
+       (current-buffer)
+       (format nil "[Face ~A customized successfully]" label)))))
 
 (defun customize-face-cancel ()
   "Cancel face customization, reverting all changes to original values.
@@ -2945,10 +2988,9 @@ Bound to C-h F."
   (declare (ignore buffer))
   (let ((faces (collect-all-faces)))
     (if (null faces)
-        (let ((sys-msg (buffer-insert-agent-message
-                        (current-buffer)
-                        "[No faces found to customize]")))
-          (setf (message-sender sys-msg) :system))
+        (buffer-insert-system-message
+         (current-buffer)
+         "[No faces found to customize]")
         (minibuffer-activate
          "Customize Face"
          (mapcar (lambda (entry)
@@ -4030,7 +4072,8 @@ Strips any meta/ctrl-x prefix so the selector has simple key bindings."
        (let* ((name (next-buffer-name))
               (new-buf (make-buffer name
                                     :agent-name *default-agent-name*
-                                    :working-directory (truename "."))))
+                                    :working-directory (truename ".")
+                                    :session (load-or-create-session name))))
          (init-face-registry new-buf)
          (setf (buffer-keymap new-buf) *default-keymap*)
          (add-buffer-to-ring new-buf)
@@ -4194,8 +4237,7 @@ KEY is already normalized by the backend before calling this."
           (cancel-openai-codex-oauth-login *openai-oauth-pending*)
           (setf *openai-oauth-pending* nil
                 (buffer-status buf) :idle)
-          (let ((sys-msg (buffer-insert-agent-message buf "[OAuth cancelled]")))
-            (setf (message-sender sys-msg) :system)))
+          (buffer-insert-system-message buf "[OAuth cancelled]"))
          ;; Ignore other input while the browser flow is pending.
          (t nil))
        nil)
@@ -4417,7 +4459,8 @@ Environment variables:
   "Create and register the initial interactive chat buffer."
   (let ((buf (make-buffer session-name
                           :agent-name agent-name
-                          :working-directory (truename "."))))
+                          :working-directory (truename ".")
+                          :session (load-or-create-session session-name))))
     (init-face-registry buf)
     (setf (buffer-keymap buf) *default-keymap*)
     (add-buffer-to-ring buf)

@@ -432,14 +432,165 @@ An empty string takes 1 row. A string exactly DISPLAY-WIDTH chars takes 1 row."
       1
       (ceiling (length content) display-width)))
 
-(defun message-visual-height (msg width &key (prefix (message-sender-prefix msg)))
+(defun message-line-entries (msg)
+  "Return display line entries for MSG as (TEXT . SOURCE-LINE)."
+  (loop :for line := (message-first-line msg) :then (line-next line)
+        :while line
+        :collect (cons (line-content line) line)))
+
+(defun message-has-content-block-type-p (msg block-type)
+  "Return non-nil when MSG has a raw content block of BLOCK-TYPE."
+  (and (message-raw-content msg)
+       (some (lambda (block)
+               (string= block-type (or (cdr (assoc :type block)) "")))
+             (message-raw-content msg))))
+
+(defun message-reasoning-blocks (msg)
+  "Return provider-supplied reasoning text blocks stored on MSG."
+  (when (message-raw-content msg)
+    (content-reasoning-blocks (message-raw-content msg))))
+
+(defun display-text-from-line-strings (lines)
+  "Join LINES into a newline-delimited display string."
+  (with-output-to-string (stream)
+    (loop :for line :in lines
+          :for first := t :then nil
+          :do (unless first (write-char #\Newline stream))
+              (write-string line stream))))
+
+(defun reasoning-block-display-lines (reasoning-blocks &key visible-text)
+  "Return display lines for provider reasoning blocks.
+VISIBLE-TEXT is used to avoid showing the same provider fallback text twice."
+  (let ((visible (string-trim '(#\Space #\Tab #\Newline #\Return)
+                              (or visible-text "")))
+        (lines nil))
+    (dolist (reasoning reasoning-blocks)
+      (let ((text (or reasoning "")))
+        (unless (or (blank-string-p text)
+                    (string= visible
+                             (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                          text)))
+          (push ";; reasoning" lines)
+          (dolist (line (split-string-by-newline text))
+            (push line lines)))))
+    (nreverse lines)))
+
+(defun message-reasoning-summary-requested-p (msg)
+  "Return non-nil when MSG metadata says a reasoning summary was requested."
+  (let ((metadata (message-metadata msg)))
+    (and metadata
+         (message-metadata-value metadata :reasoning-summary-mode))))
+
+(defun message-reasoning-display-lines (msg &key visible-text)
+  "Return reasoning sidecar lines for MSG, including an unavailable marker."
+  (let ((blocks (message-reasoning-blocks msg)))
+    (if blocks
+        (reasoning-block-display-lines blocks :visible-text visible-text)
+        (when (message-reasoning-summary-requested-p msg)
+          (list ";; reasoning"
+                ";; no provider-supplied reasoning blocks captured")))))
+
+(defun message-metadata-display-lines (metadata)
+  "Return display lines for provider/response METADATA."
+  (when metadata
+    (let ((agent (message-metadata-value metadata :agent))
+          (provider (message-metadata-value metadata :provider))
+          (model (message-metadata-value metadata :model))
+          (think-level (message-metadata-value metadata :think-level))
+          (reasoning-summary-mode
+            (message-metadata-value metadata :reasoning-summary-mode))
+          (stop-reason (message-metadata-value metadata :stop-reason))
+          (content-block-count
+            (message-metadata-value metadata :content-block-count))
+          (tool-call-count
+            (message-metadata-value metadata :tool-call-count))
+          (reasoning-block-count
+            (message-metadata-value metadata :reasoning-block-count)))
+      (remove nil
+              (list ";; metadata"
+                    (and agent (format nil ";; agent: ~A" agent))
+                    (and provider model
+                         (format nil ";; provider/model: ~(~A~)/~A"
+                                 provider model))
+                    (format nil ";; think: ~A" (or think-level "default"))
+                    (and reasoning-summary-mode
+                         (format nil ";; reasoning-summary: ~A"
+                                 reasoning-summary-mode))
+                    (and stop-reason
+                         (format nil ";; stop-reason: ~A" stop-reason))
+                    (and content-block-count
+                         (format nil ";; content-blocks: ~D"
+                                 content-block-count))
+                    (and tool-call-count
+                         (format nil ";; tool-calls: ~D" tool-call-count))
+                    (and reasoning-block-count
+                         (format nil ";; reasoning-blocks: ~D"
+                                 reasoning-block-count)))))))
+
+(defun message-display-line-entries (msg &key show-reasoning-p show-metadata-p)
+  "Return display line entries for MSG, including optional sidecar output."
+  (let* ((entries (message-line-entries msg))
+         (visible-text (display-text-from-line-strings (mapcar #'car entries)))
+         (reasoning-lines
+           (and show-reasoning-p
+                (message-reasoning-display-lines
+                 msg
+                 :visible-text visible-text)))
+         (metadata-lines
+           (and show-metadata-p
+                (message-metadata-display-lines (message-metadata msg))))
+         (sidecar-lines (append reasoning-lines metadata-lines)))
+    (if sidecar-lines
+        (append (if (and (= (length entries) 1)
+                         (blank-string-p (caar entries)))
+                    nil
+                    entries)
+                (mapcar (lambda (line) (cons line nil)) sidecar-lines))
+        entries)))
+
+(defun message-display-line-strings (msg &key show-reasoning-p show-metadata-p)
+  "Return rendered line strings for MSG."
+  (mapcar #'car
+          (message-display-line-entries msg
+                                        :show-reasoning-p show-reasoning-p
+                                        :show-metadata-p show-metadata-p)))
+
+(defun message-hidden-by-tool-results-toggle-p (msg)
+  "Return non-nil when MSG should disappear while tool output is hidden."
+  (or (eq :tool-result (message-sender msg))
+      (and (message-raw-content msg)
+           (not (eq :user (message-sender msg)))
+           (message-has-content-block-type-p msg "tool_use")
+           (not (message-has-content-block-type-p msg "text"))
+           (not (message-has-content-block-type-p msg "reasoning")))))
+
+(defun message-hidden-by-reasoning-toggle-p (msg)
+  "Return non-nil when MSG only contains hidden reasoning output."
+  (and (message-raw-content msg)
+       (not (eq :user (message-sender msg)))
+       (message-has-content-block-type-p msg "reasoning")
+       (not (message-has-content-block-type-p msg "text"))
+       (not (message-has-content-block-type-p msg "tool_use"))))
+
+(defun message-visible-for-buffer-p (msg buf)
+  "Return non-nil when MSG should be rendered for BUF's display toggles."
+  (and (or (buffer-show-tool-results-p buf)
+           (not (message-hidden-by-tool-results-toggle-p msg)))
+       (or (buffer-show-reasoning-p buf)
+           (not (message-hidden-by-reasoning-toggle-p msg)))))
+
+(defun message-visual-height (msg width &key (prefix (message-sender-prefix msg))
+                                             show-reasoning-p
+                                             show-metadata-p)
   "Return the total visual rows MSG needs at the given terminal WIDTH.
 Accounts for the sender prefix and line wrapping."
   (let* ((prefix-len (length prefix))
          (display-width (max 1 (- width prefix-len))))
-    (loop :for line := (message-first-line msg) :then (line-next line)
-          :while line
-          :sum (wrapped-line-count (line-content line) display-width))))
+    (loop :for line :in (message-display-line-strings
+                         msg
+                         :show-reasoning-p show-reasoning-p
+                         :show-metadata-p show-metadata-p)
+          :sum (wrapped-line-count line display-width))))
 
 (defun scratch-buffer-scroll-geometry (buf viewport-height width)
   "Return scratch render geometry as values START-ROW, SCROLL-OFFSET, MAX-SCROLL.

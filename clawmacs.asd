@@ -21,6 +21,7 @@
                 :components ((:file "packages")
                              (:file "faces")
                              (:file "message")
+                             (:file "session")
                              (:file "buffer")
                              (:file "package-manager")
                              (:file "commands")
