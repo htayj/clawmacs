@@ -50,6 +50,10 @@
   :description "Agent-oriented web lookup package tests"
   :in clawmacs-suite)
 
+(def-suite subagent-package-suite
+  :description "Agent-oriented subagent package tests"
+  :in clawmacs-suite)
+
 (def-suite package-manager-suite
   :description "Package loader tests"
   :in clawmacs-suite)

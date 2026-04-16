@@ -230,8 +230,12 @@
                         :test #'string=))
            (slop (find "slop" definitions
                        :key #'clawmacs:package-definition-name
-                       :test #'string=)))
-      (is (equal '("git" "lispi" "netcons" "sexed" "slop") names))
+                       :test #'string=))
+           (subagent (find "subagent" definitions
+                           :key #'clawmacs:package-definition-name
+                           :test #'string=)))
+      (is (equal '("git" "lispi" "netcons" "sexed" "slop" "subagent")
+                 names))
       (is (not (null git)))
       (is (eq :builtin (clawmacs:package-definition-source-tier git)))
       (is (clawmacs:package-definition-autoload git))
@@ -250,7 +254,11 @@
       (is (not (null slop)))
       (is (eq :builtin (clawmacs:package-definition-source-tier slop)))
       (is (clawmacs:package-definition-autoload slop))
-      (is (probe-file (clawmacs:package-definition-entrypoint slop))))))
+      (is (probe-file (clawmacs:package-definition-entrypoint slop)))
+      (is (not (null subagent)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier subagent)))
+      (is (clawmacs:package-definition-autoload subagent))
+      (is (probe-file (clawmacs:package-definition-entrypoint subagent))))))
 
 (test load-autoload-packages-skips-disabled-builtin-sexed
   "Bundled sexed stays discoverable but does not autoload by default."
@@ -260,6 +268,7 @@
       (is (not (null (clawmacs:find-available-package "sexed"))))
       (is (not (null (clawmacs:find-available-package "slop"))))
       (is (not (null (clawmacs:find-available-package "netcons"))))
+      (is (not (null (clawmacs:find-available-package "subagent"))))
       (is (null (clawmacs:render-package-prompt-sections))))))
 
 (test load-autoload-packages-registers-enabled-sexed-prompt-section
