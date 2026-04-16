@@ -225,6 +225,9 @@
            (netcons (find "netcons" definitions
                           :key #'clawmacs:package-definition-name
                           :test #'string=))
+           (pipelines (find "pipelines" definitions
+                            :key #'clawmacs:package-definition-name
+                            :test #'string=))
            (sexed (find "sexed" definitions
                         :key #'clawmacs:package-definition-name
                         :test #'string=))
@@ -234,7 +237,8 @@
            (subagent (find "subagent" definitions
                            :key #'clawmacs:package-definition-name
                            :test #'string=)))
-      (is (equal '("git" "lispi" "netcons" "sexed" "slop" "subagent")
+      (is (equal '("git" "lispi" "netcons" "pipelines" "sexed" "slop"
+                   "subagent")
                  names))
       (is (not (null git)))
       (is (eq :builtin (clawmacs:package-definition-source-tier git)))
@@ -247,6 +251,10 @@
       (is (eq :builtin (clawmacs:package-definition-source-tier netcons)))
       (is (clawmacs:package-definition-autoload netcons))
       (is (probe-file (clawmacs:package-definition-entrypoint netcons)))
+      (is (not (null pipelines)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier pipelines)))
+      (is (clawmacs:package-definition-autoload pipelines))
+      (is (probe-file (clawmacs:package-definition-entrypoint pipelines)))
       (is (not (null sexed)))
       (is (eq :builtin (clawmacs:package-definition-source-tier sexed)))
       (is (clawmacs:package-definition-autoload sexed))
@@ -268,8 +276,35 @@
       (is (not (null (clawmacs:find-available-package "sexed"))))
       (is (not (null (clawmacs:find-available-package "slop"))))
       (is (not (null (clawmacs:find-available-package "netcons"))))
+      (is (not (null (clawmacs:find-available-package "pipelines"))))
       (is (not (null (clawmacs:find-available-package "subagent"))))
       (is (null (clawmacs:render-package-prompt-sections))))))
+
+(test load-autoload-packages-registers-enabled-pipelines-surface
+  "The bundled pipelines package owns its prompt, commands, and docs."
+  (with-package-state-override ((default-package-test-channels))
+    (clawmacs:set-package-enablement-scope "pipelines" :global)
+    (let ((loaded (clawmacs:load-autoload-packages)))
+      (is (= 1 (length loaded)))
+      (is (string= "pipelines"
+                   (clawmacs:package-definition-name (first loaded))))
+      (let ((prompt-section (clawmacs:render-package-prompt-sections)))
+        (is (search "Deterministic pipelines" prompt-section))
+        (is (search "define-pipeline" prompt-section))
+        (is (search "defpipeline" prompt-section)))
+      (is (member 'clawmacs:set-buffer-pipeline
+                  (clawmacs:list-available-commands)
+                  :test #'eq))
+      (is (member 'clawmacs:clear-buffer-pipeline
+                  (clawmacs:list-available-commands)
+                  :test #'eq))
+      (is (string= "pipelines"
+                   (clawmacs:command-metadata-package
+                    (gethash 'clawmacs:set-buffer-pipeline
+                             clawmacs::*command-table*))))
+      (is (string= "pipelines"
+                   (getf (clawmacs:extended-doc 'clawmacs:define-pipeline)
+                         :package))))))
 
 (test load-autoload-packages-registers-enabled-sexed-prompt-section
   "Explicitly enabled bundled packages still register their prompt contributions."
