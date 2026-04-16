@@ -314,12 +314,14 @@
   (let ((buf (make-buffer "test" :agent-name "echo")))
     (setf (buffer-provider-override buf) :zai
           (buffer-model-override buf) "glm-5"
+          (buffer-pipeline-name buf) "plan-build"
           (buffer-enabled-packages buf) '("sexed"))
     (set-buffer-think-level-override buf "medium")
     (let ((data (clawmacs::serialize-buffer buf)))
       (is (eq :zai (cdr (assoc :provider-override data))))
       (is (string= "glm-5" (cdr (assoc :model-override data))))
       (is (string= "medium" (cdr (assoc :think-level-override data))))
+      (is (string= "plan-build" (cdr (assoc :pipeline-name data))))
       (is (equal '("sexed")
                  (coerce (cdr (assoc :enabled-packages data)) 'list))))))
 
@@ -392,6 +394,7 @@
          (buf (make-buffer session-name :agent-name "echo")))
     (setf (buffer-provider-override buf) :openai-codex
           (buffer-model-override buf) "gpt-5.4"
+          (buffer-pipeline-name buf) "plan-build"
           (buffer-enabled-packages buf) '("sexed" "lispi"))
     (set-buffer-think-level-override buf "high")
     (message-insert-char (buffer-input-message buf) #\h)
@@ -406,6 +409,7 @@
       (is (typep (buffer-model-override loaded) 'string))
       (is (string= "high" (buffer-think-level-override loaded)))
       (is (typep (buffer-think-level-override loaded) 'string))
+      (is (string= "plan-build" (buffer-pipeline-name loaded)))
       (is (equal '("sexed" "lispi")
                  (buffer-enabled-packages loaded))))))
 

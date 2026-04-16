@@ -1602,6 +1602,33 @@ documentation in *extended-docs*."
   :returns "list of agent-definition — Sorted by agent name."
   :see-also (register-agent-definition find-agent-definition))
 
+(defdoc define-pipeline
+  :category "llm"
+  :usage "(define-pipeline NAME :stages '((:name \"plan\" :agent \"planner\" :prompt \"Plan {{input}}\" :next \"implement\") ...))"
+  :returns "pipeline-definition — The registered deterministic pipeline."
+  :side-effects "Updates the process-local pipeline registry. Buffers run a pipeline when BUFFER-PIPELINE-NAME names one, and prompt.sh can run one with --pipeline NAME."
+  :see-also (defpipeline register-pipeline-definition set-buffer-pipeline run-pipeline-prompt))
+
+(defdoc defpipeline
+  :category "llm"
+  :usage "(defpipeline plan-implement-test :stages '((:name \"plan\" ...)))"
+  :returns "pipeline-definition — The registered deterministic pipeline."
+  :see-also (define-pipeline register-pipeline-definition))
+
+(defdoc set-buffer-pipeline
+  :category "buffer"
+  :usage "(set-buffer-pipeline BUFFER PIPELINE-NAME) — (clear-buffer-pipeline BUFFER)"
+  :returns "buffer — The updated buffer."
+  :side-effects "Causes SEND-MESSAGE to run the named deterministic pipeline instead of a single streaming agent response."
+  :see-also (define-pipeline run-pipeline-for-buffer buffer-pipeline-name))
+
+(defdoc run-pipeline-prompt
+  :category "main"
+  :usage "(run-pipeline-prompt PROMPT PIPELINE-NAME &key :session-name :agent-name :provider :model :think-level :max-tool-iterations :auto-approve-tools-p :package-names)"
+  :returns "prompt-run-result — The final pipeline stage summarized as prompt-mode output."
+  :side-effects "Creates or loads a prompt buffer, inserts provider-visible context messages for each stage, runs stages sequentially, and follows deterministic :NEXT routes until a terminal stage or max-steps."
+  :see-also (define-pipeline run-pipeline-on-buffer pipeline-stage-result-final-text))
+
 (defdoc *default-max-tokens*
   :category "llm"
   :see-also (*default-model* *default-provider* provider-request))

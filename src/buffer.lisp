@@ -19,6 +19,9 @@
 (defvar *default-show-metadata-output* nil
   "When non-nil, new buffers show provider/response metadata by default.")
 
+(defvar *default-pipeline-name* nil
+  "When non-nil, new chat buffers run this pipeline when the user sends input.")
+
 (defvar *scratch-buffer-name* "*scratch*"
   "Name used for the process-local scratch buffer.")
 
@@ -103,6 +106,11 @@
                          :initform nil
                          :type (or null string)
                          :documentation "When non-nil, overrides the model's default reasoning effort.")
+   (pipeline-name :initarg :pipeline-name
+                  :accessor buffer-pipeline-name
+                  :initform *default-pipeline-name*
+                  :type (or null string)
+                  :documentation "Optional deterministic pipeline run instead of a normal single agent response.")
    (enabled-packages :initarg :enabled-packages
                      :accessor buffer-enabled-packages
                      :initform nil
@@ -200,6 +208,7 @@ Enforces the invariant that it is not read-only."
                                        (:original-text string)
                                        (:dirty-p boolean)
                                        (:context-limit integer)
+                                       (:pipeline-name (or null string))
                                        (:enabled-packages list)
                                        (:session (or null session)))
                           buffer)
@@ -212,6 +221,7 @@ Enforces the invariant that it is not read-only."
                               (original-text "")
                               (dirty-p nil)
                               (context-limit *default-context-limit*)
+                              (pipeline-name *default-pipeline-name*)
                               (enabled-packages nil)
                               (session nil))
   "Create a new buffer with a single empty input message."
@@ -229,6 +239,7 @@ Enforces the invariant that it is not read-only."
                 :original-text original-text
                 :dirty-p dirty-p
                 :context-limit context-limit
+                :pipeline-name pipeline-name
                 :enabled-packages (copy-list enabled-packages)
                 :session session
                 :face-registry registry)))
@@ -353,6 +364,25 @@ Enforces the invariant that it is not read-only."
   (clear-buffer-provider-override buf)
   (clear-buffer-model-override buf)
   (clear-buffer-think-level-override buf)
+  buf)
+
+(declaim (ftype (function (buffer (or null string symbol)) buffer)
+                set-buffer-pipeline))
+(defun set-buffer-pipeline (buf pipeline-name)
+  "Set BUF's deterministic pipeline name, or clear it when PIPELINE-NAME is NIL."
+  (let ((trimmed (and pipeline-name
+                      (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                   (string pipeline-name)))))
+    (setf (buffer-pipeline-name buf)
+          (and trimmed
+               (plusp (length trimmed))
+               (string-downcase trimmed))))
+  buf)
+
+(declaim (ftype (function (buffer) buffer) clear-buffer-pipeline))
+(defun clear-buffer-pipeline (buf)
+  "Clear BUF's deterministic pipeline."
+  (setf (buffer-pipeline-name buf) nil)
   buf)
 
 ;;; --------------------------------------------------------------------------
@@ -635,6 +665,7 @@ Assigns the :system face set from the buffer's face registry if available."
       (:provider-override . ,(buffer-provider-override buf))
       (:model-override . ,(buffer-model-override buf))
       (:think-level-override . ,(buffer-think-level-override buf))
+      (:pipeline-name . ,(buffer-pipeline-name buf))
       (:enabled-packages . ,(coerce (copy-list (buffer-enabled-packages buf))
                                     'vector))
       (:messages . ,(coerce (nreverse messages) 'vector)))))
@@ -722,6 +753,7 @@ Assigns the :system face set from the buffer's face registry if available."
            (provider-override (cdr (assoc :provider-override data)))
            (model-override (cdr (assoc :model-override data)))
            (think-level-override (cdr (assoc :think-level-override data)))
+           (pipeline-name (cdr (assoc :pipeline-name data)))
            (enabled-packages (cdr (assoc :enabled-packages data)))
            (messages (cdr (assoc :messages data)))
            (buf (make-buffer name :agent-name agent
@@ -735,6 +767,12 @@ Assigns the :system face set from the buffer's face registry if available."
             model-override
             (buffer-think-level-override buf)
             (normalize-think-level-override think-level-override)
+            (buffer-pipeline-name buf)
+            (and (stringp pipeline-name)
+                 (plusp (length (string-trim
+                                  '(#\Space #\Tab #\Newline #\Return)
+                                  pipeline-name)))
+                 (string-downcase pipeline-name))
             (buffer-enabled-packages buf)
             (loop :for package :in (coerce (or enabled-packages #()) 'list)
                   :when (stringp package)

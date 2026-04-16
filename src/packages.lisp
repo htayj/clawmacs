@@ -173,6 +173,7 @@
    #:*default-show-tool-results*
    #:*default-show-reasoning-output*
    #:*default-show-metadata-output*
+   #:*default-pipeline-name*
    #:*scratch-buffer-name*
    #:*scratch-buffer-initial-text*
    #:buffer
@@ -194,6 +195,7 @@
    #:buffer-provider-override
    #:buffer-model-override
    #:buffer-think-level-override
+   #:buffer-pipeline-name
    #:buffer-enabled-packages
    #:buffer-session
    #:set-buffer-provider-override
@@ -203,6 +205,8 @@
    #:clear-buffer-model-override
    #:clear-buffer-think-level-override
    #:clear-buffer-routing-overrides
+   #:set-buffer-pipeline
+   #:clear-buffer-pipeline
    #:buffer-face-registry
    #:buffer-keymap
    #:buffer-scroll-offset
@@ -922,6 +926,63 @@
    #:clawmacs-session-prompt-main
    #:run-single-prompt
    #:run-session-prompt
+   #:pipeline-stage
+   #:make-pipeline-stage
+   #:pipeline-stage-name
+   #:pipeline-stage-agent-name
+   #:pipeline-stage-prompt
+   #:pipeline-stage-next
+   #:pipeline-stage-provider
+   #:pipeline-stage-model
+   #:pipeline-stage-think-level
+   #:pipeline-stage-tool-names
+   #:pipeline-stage-tool-names-supplied-p
+   #:pipeline-stage-package-names
+   #:pipeline-stage-max-tool-iterations
+   #:pipeline-stage-auto-approve-tools-p
+   #:pipeline-definition
+   #:make-pipeline-definition
+   #:pipeline-definition-name
+   #:pipeline-definition-description
+   #:pipeline-definition-stages
+   #:pipeline-definition-entry-stage
+   #:pipeline-definition-max-steps
+   #:pipeline-definition-max-tool-iterations
+   #:pipeline-definition-auto-approve-tools-p
+   #:pipeline-context
+   #:pipeline-context-definition
+   #:pipeline-context-original-prompt
+   #:pipeline-context-buffer
+   #:pipeline-context-stage-results
+   #:pipeline-stage-result
+   #:pipeline-stage-result-stage-name
+   #:pipeline-stage-result-prompt
+   #:pipeline-stage-result-result
+   #:pipeline-stage-result-status
+   #:pipeline-stage-result-error
+   #:pipeline-stage-result-started-at
+   #:pipeline-stage-result-finished-at
+   #:pipeline-stage-result-final-text
+   #:pipeline-stage-result-succeeded-p
+   #:pipeline-run-result
+   #:pipeline-run-result-pipeline-name
+   #:pipeline-run-result-original-prompt
+   #:pipeline-run-result-stage-results
+   #:pipeline-run-result-final-stage-result
+   #:pipeline-run-result-status
+   #:pipeline-run-result-error
+   #:pipeline-run-result-final-text
+   #:define-pipeline
+   #:defpipeline
+   #:register-pipeline-definition
+   #:find-pipeline-definition
+   #:list-pipeline-definitions
+   #:pipeline-last-stage-result
+   #:pipeline-stage-output
+   #:run-pipeline-on-buffer
+   #:run-pipeline-prompt
+   #:run-pipeline-for-buffer
+   #:buffer-has-active-pipeline-p
    #:run-subagent
    #:run-subagent-async
    #:*prompt-max-tool-iterations*

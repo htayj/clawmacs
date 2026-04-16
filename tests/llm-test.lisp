@@ -67,6 +67,12 @@
            (bt:make-lock "test-subagent-registry")))
      ,@body))
 
+(defmacro with-pipeline-definition-registry-override (() &body body)
+  `(let ((clawmacs::*pipeline-definition-registry*
+           (make-hash-table :test #'equal))
+         (clawmacs:*default-pipeline-name* nil))
+     ,@body))
+
 (defun temp-codex-auth-path ()
   (let ((base (make-pathname :directory (list :absolute "tmp"
                                               (format nil "clawmacs-codex-auth-~A"
@@ -682,6 +688,232 @@ same
       (is (equal '("pair" "Writer")
                  (mapcar #'clawmacs:agent-definition-name listed))))))
 
+(test register-pipeline-definition-round-trips-through-registry
+  "Programmatic pipeline definitions normalize stages and can be listed."
+  (with-pipeline-definition-registry-override ()
+    (let ((definition
+            (clawmacs:define-pipeline
+             "Plan Build Test"
+             :description "plan then build"
+             :entry-stage "plan"
+             :max-steps 4
+             :stages '((:name "plan"
+                        :agent "planner"
+                        :prompt "Plan {{input}}"
+                        :next "build")
+                       (:name build
+                        :agent "builder"
+                        :prompt "Build {{stage:plan}}")))))
+      (is (string= "plan build test"
+                   (clawmacs:pipeline-definition-name definition)))
+      (is (string= "plan"
+                   (clawmacs:pipeline-definition-entry-stage definition)))
+      (is (= 2 (length (clawmacs:pipeline-definition-stages definition))))
+      (is (eq definition
+              (clawmacs:find-pipeline-definition "PLAN BUILD TEST")))
+      (is (equal '("plan build test")
+                 (mapcar #'clawmacs:pipeline-definition-name
+                         (clawmacs:list-pipeline-definitions)))))))
+
+(test run-pipeline-prompt-pipes-stage-output
+  "Pipeline stages can template the original prompt and prior stage output."
+  (let ((path (temp-agent-defaults-path))
+        (request-count 0)
+        (request-payloads nil))
+    (with-agent-defaults-path-override (path)
+      (with-pipeline-definition-registry-override ()
+        (let ((*sessions-dir* (temp-session-test-directory "pipeline-prompt")))
+          (clawmacs:define-pipeline
+           "plan-build"
+           :stages '((:name "plan"
+                      :agent "planner"
+                      :prompt "Plan this request: {{input}}"
+                      :next "build")
+                     (:name "build"
+                      :agent "builder"
+                      :prompt "Build from this plan: {{stage:plan}}")))
+          (with-function-override (clawmacs::provider-request-streaming
+                                   (provider messages callback
+                                             &key model max-tokens tools
+                                             reasoning-effort system-prompt)
+                                   (declare (ignore provider callback model
+                                                    max-tokens tools
+                                                    reasoning-effort
+                                                    system-prompt))
+                                   (incf request-count)
+                                   (push (clawmacs::api-json-encode messages)
+                                         request-payloads)
+                                   (make-completed-stream-state-response
+                                    "end_turn"
+                                    (list (clawmacs::canonical-text-block
+                                           (if (= request-count 1)
+                                               "PLAN OK"
+                                               "BUILD OK")))))
+            (clawmacs::init-default-keymap)
+            (clawmacs::init-global-faces)
+            (initialize-test-tools)
+            (let ((result (clawmacs:run-pipeline-prompt
+                           "ship fizzbuzz"
+                           "plan-build"
+                           :provider :zai
+                           :model "glm-5")))
+              (is (= 2 request-count))
+              (is (string= "BUILD OK"
+                           (clawmacs:prompt-run-result-final-text result)))
+              (is (string= "plan-build"
+                           (clawmacs:prompt-run-result-agent-name result)))
+              (is (= 2 (clawmacs:prompt-run-result-iterations result)))
+              (let ((payloads (nreverse request-payloads)))
+                (is (search "Plan this request: ship fizzbuzz"
+                            (first payloads)))
+                (is (search "Build from this plan: PLAN OK"
+                            (second payloads)))))))))))
+
+(test run-pipeline-on-buffer-supports-decision-loops
+  "A stage :next function can deterministically route back to an earlier stage."
+  (let ((path (temp-agent-defaults-path))
+        (responses '("PLAN 1" "FAIL tests" "PLAN 2" "PASS tests"))
+        (stage-order nil))
+    (with-agent-defaults-path-override (path)
+      (with-pipeline-definition-registry-override ()
+        (let ((*sessions-dir* (temp-session-test-directory "pipeline-loop")))
+          (clawmacs:define-pipeline
+           "repair"
+           :max-steps 6
+           :stages `((:name "plan"
+                      :agent "planner"
+                      :prompt "Plan: {{input}} {{previous}}"
+                      :next "test")
+                     (:name "test"
+                      :agent "tester"
+                      :prompt "Test the latest plan: {{stage:plan}}"
+                      :next ,(lambda (_context result)
+                               (declare (ignore _context))
+                               (if (search "FAIL"
+                                           (or (clawmacs:pipeline-stage-result-final-text
+                                                result)
+                                               "")
+                                           :test #'char-equal)
+                                   "plan"
+                                   nil)))))
+          (with-function-override (clawmacs::provider-request-streaming
+                                   (provider messages callback
+                                             &key model max-tokens tools
+                                             reasoning-effort system-prompt)
+                                   (declare (ignore provider messages callback
+                                                    model max-tokens tools
+                                                    reasoning-effort
+                                                    system-prompt))
+                                   (let ((text (pop responses)))
+                                     (make-completed-stream-state-response
+                                      "end_turn"
+                                      (list (clawmacs::canonical-text-block
+                                             text)))))
+            (clawmacs::init-default-keymap)
+            (clawmacs::init-global-faces)
+            (initialize-test-tools)
+            (let* ((buf (clawmacs::make-prompt-buffer "fix failing tests"
+                                                       "agent"))
+                   (result (clawmacs:run-pipeline-on-buffer
+                            "repair"
+                            "fix failing tests"
+                            :buffer buf)))
+              (setf stage-order
+                    (mapcar #'clawmacs:pipeline-stage-result-stage-name
+                            (clawmacs:pipeline-run-result-stage-results
+                             result)))
+              (is (equal '("plan" "test" "plan" "test")
+                         stage-order))
+              (is (eq :succeeded
+                      (clawmacs:pipeline-run-result-status result)))
+              (is (string= "PASS tests"
+                           (clawmacs:pipeline-run-result-final-text
+                            result))))))))))
+
+(test run-pipeline-on-buffer-reports-invalid-route
+  "Pipeline route errors are returned as failed pipeline results."
+  (let ((path (temp-agent-defaults-path)))
+    (with-agent-defaults-path-override (path)
+      (with-pipeline-definition-registry-override ()
+        (let ((*sessions-dir* (temp-session-test-directory "pipeline-route")))
+          (clawmacs:define-pipeline
+           "bad-route"
+           :stages '((:name "start"
+                      :prompt "Start: {{input}}"
+                      :next "missing")))
+          (with-function-override (clawmacs::provider-request-streaming
+                                   (provider messages callback
+                                             &key model max-tokens tools
+                                             reasoning-effort system-prompt)
+                                   (declare (ignore provider messages callback
+                                                    model max-tokens tools
+                                                    reasoning-effort
+                                                    system-prompt))
+                                   (make-completed-stream-state-response
+                                    "end_turn"
+                                    (list (clawmacs::canonical-text-block
+                                           "DONE"))))
+            (clawmacs::init-default-keymap)
+            (clawmacs::init-global-faces)
+            (initialize-test-tools)
+            (let* ((buf (clawmacs::make-prompt-buffer "go" "agent"))
+                   (result (clawmacs:run-pipeline-on-buffer
+                            "bad-route"
+                            "go"
+                            :buffer buf)))
+              (is (eq :failed
+                      (clawmacs:pipeline-run-result-status result)))
+              (is (= 1
+                     (length (clawmacs:pipeline-run-result-stage-results
+                              result))))
+              (is (search "no stage named missing"
+                          (clawmacs:pipeline-run-result-error result)
+                          :test #'char-equal)))))))))
+
+(test send-message-runs-active-buffer-pipeline
+  "Interactive send-message dispatches to a buffer pipeline when one is set."
+  (let ((path (temp-agent-defaults-path))
+        (request-payload nil))
+    (with-agent-defaults-path-override (path)
+      (with-pipeline-definition-registry-override ()
+        (let ((*sessions-dir* (temp-session-test-directory "pipeline-send")))
+          (clawmacs:define-pipeline
+           "one-stage"
+           :stages '((:name "stage"
+                      :agent "pipeline-agent"
+                      :prompt "Pipeline saw: {{input}}")))
+          (with-function-override (clawmacs::provider-request-streaming
+                                   (provider messages callback
+                                             &key model max-tokens tools
+                                             reasoning-effort system-prompt)
+                                   (declare (ignore provider callback model
+                                                    max-tokens tools
+                                                    reasoning-effort
+                                                    system-prompt))
+                                   (setf request-payload
+                                         (clawmacs::api-json-encode messages))
+                                   (make-completed-stream-state-response
+                                    "end_turn"
+                                    (list (clawmacs::canonical-text-block
+                                           "PIPELINE DONE"))))
+            (clawmacs::init-default-keymap)
+            (clawmacs::init-global-faces)
+            (initialize-test-tools)
+            (let ((buf (make-buffer "pipeline-chat"
+                                    :pipeline-name "one-stage")))
+              (clawmacs::init-face-registry buf)
+              (clawmacs:set-buffer-provider-override buf :zai)
+              (clawmacs:set-buffer-model-override buf "glm-5")
+              (clawmacs::set-message-text (buffer-input-message buf)
+                                          "hello pipeline")
+              (clawmacs::send-message buf)
+              (is (string= "PIPELINE DONE"
+                           (message-text
+                            (message-prev (buffer-input-message buf)))))
+              (is (eq :idle (buffer-status buf)))
+              (is (search "Pipeline saw: hello pipeline"
+                          request-payload)))))))))
+
 (test build-agent-system-prompt-composes-boot-core-and-personality
   "Agent prompts are composed in boot -> core -> personality -> runtime order."
   (with-isolated-skills (root)
@@ -737,6 +969,7 @@ same
                     "--package" "sexed"
                     "--package" "lispi"
                     "--session" "cache-probe"
+                    "--pipeline" "plan-build"
                     "--max-tool-iterations" "7"
                     "summarize" "this"))))
     (is (string= "writer" (clawmacs::prompt-options-agent-name options)))
@@ -752,6 +985,8 @@ same
                (clawmacs::prompt-options-packages options)))
     (is (string= "cache-probe"
                  (clawmacs::prompt-options-session-name options)))
+    (is (string= "plan-build"
+                 (clawmacs::prompt-options-pipeline-name options)))
     (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
     (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
 
@@ -785,6 +1020,7 @@ same
     (is (search "Default without --agent: gpt-5.3-codex" usage))
     (is (search "--package NAME" usage))
     (is (search "--session NAME" usage))
+    (is (search "--pipeline NAME" usage))
     (is (search "Skip ~/.clawmacs.d/init.lisp" usage))))
 
 (test compaction-threshold-policy
