@@ -505,7 +505,10 @@ VISIBLE-TEXT is used to avoid showing the same provider fallback text twice."
           (tool-call-count
             (message-metadata-value metadata :tool-call-count))
           (reasoning-block-count
-            (message-metadata-value metadata :reasoning-block-count)))
+            (message-metadata-value metadata :reasoning-block-count))
+          (usage-line
+            (format-token-usage-summary
+             (token-usage-from-metadata metadata))))
       (remove nil
               (list ";; metadata"
                     (and agent (format nil ";; agent: ~A" agent))
@@ -525,7 +528,9 @@ VISIBLE-TEXT is used to avoid showing the same provider fallback text twice."
                          (format nil ";; tool-calls: ~D" tool-call-count))
                     (and reasoning-block-count
                          (format nil ";; reasoning-blocks: ~D"
-                                 reasoning-block-count)))))))
+                                 reasoning-block-count))
+                    (and usage-line
+                         (format nil ";; ~A" usage-line)))))))
 
 (defun message-display-line-entries (msg &key show-reasoning-p show-metadata-p)
   "Return display line entries for MSG, including optional sidecar output."

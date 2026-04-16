@@ -173,6 +173,48 @@
     (is (null (buffer-session buf)))
     (is (not (probe-file *sessions-dir*)))))
 
+(test persistent-session-autosaves-snapshot-on-message
+  "Buffers with attached sessions refresh loadable snapshots automatically."
+  (let* ((session-name "autosaved-session")
+         (*sessions-dir* (temp-session-test-directory "autosave"))
+         (session (load-or-create-session session-name))
+         (buf (make-buffer session-name
+                           :agent-name "echo"
+                           :session session))
+         (path (clawmacs::session-path session-name)))
+    (is (not (probe-file path)))
+    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (buffer-finalize-input buf)
+    (is (probe-file path))
+    (is (member session-name (list-saved-sessions) :test #'string=))
+    (let ((loaded (load-session session-name)))
+      (is (not (null loaded)))
+      (is (string= session-name (buffer-name loaded)))
+      (is (string= "echo" (buffer-agent-name loaded)))
+      (let ((msg (buffer-first-message loaded)))
+        (is (eq :user (message-sender msg)))
+        (is (string= "hello" (message-text msg)))))))
+
+(test sidecar-only-session-is-listed-and-loadable
+  "Transcript sidecars are visible to the load-session command before a snapshot exists."
+  (let* ((session-name "sidecar-only-session")
+         (*sessions-dir* (temp-session-test-directory "sidecar"))
+         (session (load-or-create-session session-name))
+         (path (clawmacs::session-path session-name))
+         (msg (make-message :user :read-only-p t)))
+    (clawmacs::set-message-text msg "from transcript")
+    (setf (message-timestamp msg) 42)
+    (record-session-message session msg)
+    (is (not (probe-file path)))
+    (is (member session-name (list-saved-sessions) :test #'string=))
+    (let ((loaded (load-session session-name)))
+      (is (not (null loaded)))
+      (is (string= session-name (buffer-name loaded)))
+      (is (probe-file path))
+      (let ((loaded-msg (buffer-first-message loaded)))
+        (is (eq :user (message-sender loaded-msg)))
+        (is (string= "from transcript" (message-text loaded-msg)))))))
+
 (test ensure-scratch-buffer-creates-loaded-scratch-without-stealing-current
   "The scratch buffer is loaded into the ring but does not become current."
   (let ((*buffer-ring* nil)
@@ -752,6 +794,67 @@
         (is (not (null notice)))
         (is (eq :system (message-sender notice)))
         (is (search "not saved" (message-text notice)))))))
+
+(test load-session-command-opens-minibuffer-selector
+  "Loading sessions opens the minibuffer with saved-session candidates."
+  (with-interactive-command-test-buffer (buf)
+    (let* ((session-name-a "saved-session-a")
+           (session-name-b "saved-session-b")
+           (*sessions-dir* (temp-session-test-directory "selector")))
+      (save-session (make-buffer session-name-b :agent-name "echo"))
+      (save-session (make-buffer session-name-a :agent-name "echo"))
+      (clawmacs::load-session-command buf)
+      (is (eq t *minibuffer-active*))
+      (is (eq :completion *minibuffer-mode*))
+      (is (string= "Load Session" *minibuffer-prompt*))
+      (is (equal (list session-name-a session-name-b)
+                 (mapcar (lambda (item)
+                           (getf item :session-name))
+                         *minibuffer-filtered-items*))))))
+
+(test load-session-command-loads-selected-session-into-a-new-buffer
+  "Selecting a saved session loads it into a new current buffer."
+  (with-interactive-command-test-buffer (buf)
+    (let* ((session-name "saved-session-load")
+           (*sessions-dir* (temp-session-test-directory "load-command"))
+           (saved (make-buffer session-name :agent-name "echo")))
+      (clawmacs::set-message-text (buffer-input-message saved) "hello")
+      (buffer-finalize-input saved)
+      (save-session saved)
+      (clawmacs::load-session-command buf)
+      (let ((index (position session-name *minibuffer-filtered-items*
+                             :key (lambda (item)
+                                    (getf item :session-name))
+                             :test #'string=)))
+        (is (not (null index)))
+        (setf *minibuffer-selected-index* index)
+        (minibuffer-confirm))
+      (let ((loaded (current-buffer)))
+        (is (not (eq buf loaded)))
+        (is (string= session-name (buffer-name loaded)))
+        (is (string= "echo" (buffer-agent-name loaded)))
+        (is (eq *default-keymap* (buffer-keymap loaded)))
+        (is (not (null (buffer-session loaded))))
+        (is (member session-name *buffer-selection-history* :test #'string=))
+        (let ((msg (buffer-first-message loaded)))
+          (is (not (eq msg (buffer-input-message loaded))))
+          (is (eq :user (message-sender msg)))
+          (is (string= "hello" (message-text msg))))))))
+
+(test new-buffer-command-creates-loadable-session
+  "New interactive chat buffers are saved immediately for later loading."
+  (with-interactive-command-test-buffer (buf)
+    (let ((*sessions-dir* (temp-session-test-directory "new-command")))
+      (clawmacs::new-buffer-command buf)
+      (let* ((created (current-buffer))
+             (session-name (buffer-name created)))
+        (is (not (eq buf created)))
+        (is (not (null (buffer-session created))))
+        (is (probe-file (clawmacs::session-path session-name)))
+        (is (member session-name (list-saved-sessions) :test #'string=))
+        (let ((loaded (load-session session-name)))
+          (is (not (null loaded)))
+          (is (string= session-name (buffer-name loaded))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Package Selector Tests

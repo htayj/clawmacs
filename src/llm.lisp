@@ -32,6 +32,12 @@ is configured. Should be a valid model name for *default-provider*.")
   "Reasoning summary mode requested from OpenAI Codex Responses calls.
 Set to NIL to avoid requesting provider-supplied reasoning summaries.")
 
+(defvar *openai-codex-prompt-cache-key* nil
+  "Optional prompt_cache_key sent with OpenAI Codex Responses requests.")
+
+(defvar *openai-codex-prompt-cache-retention* nil
+  "Optional prompt_cache_retention sent with OpenAI Codex Responses requests.")
+
 ;;; Z.AI (Zhipu AI) Configuration
 (defvar *zai-model* "glm-5"
   "The Z.AI model to use for chat completions.
@@ -1941,10 +1947,165 @@ and should not be sent to the API."
     (:name . ,name)
     (:input . ,input)))
 
-(defun canonical-response (stop-reason content-blocks)
+(defun token-usage-value (usage &rest keys)
+  "Return the first numeric value from USAGE under one of KEYS."
+  (loop :for key :in keys
+        :for cell := (and usage (assoc key usage))
+        :for value := (and cell (cdr cell))
+        :when (numberp value)
+          :return value))
+
+(defun token-usage-nested-value (usage details-key value-key)
+  "Return numeric VALUE-KEY from USAGE's DETAILS-KEY object."
+  (let* ((details-cell (and usage (assoc details-key usage)))
+         (details (and details-cell (cdr details-cell)))
+         (value-cell (and details (assoc value-key details)))
+         (value (and value-cell (cdr value-cell))))
+    (and (numberp value) value)))
+
+(defun normalize-openai-token-usage (usage)
+  "Normalize OpenAI token USAGE into clawmacs cache telemetry.
+Supports both Responses-style names (input_tokens/output_tokens) and
+Chat/documented names (prompt_tokens/completion_tokens)."
+  (when usage
+    (let* ((input (token-usage-value usage :input--tokens :prompt--tokens))
+           (output (token-usage-value usage :output--tokens
+                                      :completion--tokens))
+           (total (or (token-usage-value usage :total--tokens)
+                      (and (or input output)
+                           (+ (or input 0) (or output 0)))))
+           (cached (or (token-usage-nested-value usage
+                                                 :input--tokens--details
+                                                 :cached--tokens)
+                       (token-usage-nested-value usage
+                                                 :prompt--tokens--details
+                                                 :cached--tokens)
+                       (and input 0)))
+           (uncached (and input cached (max 0 (- input cached))))
+           (hit-rate (and input
+                          cached
+                          (plusp input)
+                          (/ (float cached) input)))
+           (result nil))
+      (labels ((put (key value)
+                 (when value
+                   (setf (getf result key) value))))
+        (put :input-tokens input)
+        (put :output-tokens output)
+        (put :total-tokens total)
+        (put :cached-input-tokens cached)
+        (put :uncached-input-tokens uncached)
+        (put :cache-hit-rate hit-rate)
+        result))))
+
+(defun token-usage-total-count (usage)
+  "Return explicit or derived total token count for normalized USAGE."
+  (or (getf usage :total-tokens)
+      (let ((input (getf usage :input-tokens))
+            (output (getf usage :output-tokens)))
+        (and (or input output)
+             (+ (or input 0) (or output 0))))))
+
+(defun merge-token-usage (left right)
+  "Return aggregate token usage for LEFT and RIGHT normalized usage plists."
+  (cond
+    ((null left) (copy-list right))
+    ((null right) (copy-list left))
+    (t
+     (let* ((input (and (or (getf left :input-tokens)
+                            (getf right :input-tokens))
+                        (+ (or (getf left :input-tokens) 0)
+                           (or (getf right :input-tokens) 0))))
+            (output (and (or (getf left :output-tokens)
+                             (getf right :output-tokens))
+                         (+ (or (getf left :output-tokens) 0)
+                            (or (getf right :output-tokens) 0))))
+            (cached (and (or (getf left :cached-input-tokens)
+                             (getf right :cached-input-tokens))
+                         (+ (or (getf left :cached-input-tokens) 0)
+                            (or (getf right :cached-input-tokens) 0))))
+            (uncached (and input cached (max 0 (- input cached))))
+            (total (cond
+                     ((or (token-usage-total-count left)
+                          (token-usage-total-count right))
+                      (+ (or (token-usage-total-count left) 0)
+                         (or (token-usage-total-count right) 0)))
+                     ((or input output)
+                      (+ (or input 0) (or output 0)))))
+            (hit-rate (and input cached (plusp input)
+                           (/ (float cached) input)))
+            (result nil))
+       (labels ((put (key value)
+                  (when value
+                    (setf (getf result key) value))))
+         (put :input-tokens input)
+         (put :output-tokens output)
+         (put :total-tokens total)
+         (put :cached-input-tokens cached)
+         (put :uncached-input-tokens uncached)
+         (put :cache-hit-rate hit-rate)
+         result)))))
+
+(defun token-usage-metadata-pairs (usage)
+  "Return message metadata PAIRS for normalized token USAGE."
+  (let ((pairs nil))
+    (dolist (key '(:input-tokens :output-tokens :total-tokens
+                   :cached-input-tokens :uncached-input-tokens
+                   :cache-hit-rate)
+             pairs)
+      (when (member key usage :test #'eq)
+        (push (getf usage key) pairs)
+        (push key pairs)))))
+
+(defun token-usage-from-metadata (metadata)
+  "Return normalized token usage from message METADATA."
+  (let ((usage nil))
+    (dolist (key '(:input-tokens :output-tokens :total-tokens
+                   :cached-input-tokens :uncached-input-tokens
+                   :cache-hit-rate)
+             usage)
+      (let ((cell (assoc key metadata :test #'eq)))
+        (when cell
+          (push (cdr cell) usage)
+          (push key usage))))))
+
+(defun format-token-usage-summary (usage)
+  "Return a compact one-line token/cache summary for normalized USAGE."
+  (when usage
+    (let ((parts nil))
+      (labels ((add (label key)
+                 (let ((value (getf usage key)))
+                   (when value
+                     (push (format nil "~A=~D" label value) parts)))))
+        (add "input" :input-tokens)
+        (add "cached" :cached-input-tokens)
+        (add "uncached" :uncached-input-tokens)
+        (add "output" :output-tokens)
+        (add "total" :total-tokens)
+        (let ((hit-rate (getf usage :cache-hit-rate)))
+          (when hit-rate
+            (push (format nil "cache-hit=~,1F%" (* 100.0 hit-rate))
+                  parts)))
+        (when parts
+          (format nil "tokens: ~{~A~^ ~}" (nreverse parts)))))))
+
+(defun token-usage-json (usage)
+  "Return normalized token USAGE as a JSON-ready alist."
+  (when usage
+    (remove nil
+            `((:input--tokens . ,(getf usage :input-tokens))
+              (:output--tokens . ,(getf usage :output-tokens))
+              (:total--tokens . ,(getf usage :total-tokens))
+              (:cached--input--tokens . ,(getf usage :cached-input-tokens))
+              (:uncached--input--tokens . ,(getf usage :uncached-input-tokens))
+              (:cache--hit--rate . ,(getf usage :cache-hit-rate)))
+            :key #'cdr)))
+
+(defun canonical-response (stop-reason content-blocks &key usage)
   "Return a provider-agnostic response payload."
   `((:stop--reason . ,stop-reason)
-    (:content . ,(coerce content-blocks 'vector))))
+    (:content . ,(coerce content-blocks 'vector))
+    ,@(when usage `((:usage . ,usage)))))
 
 (defun http-body-string (body)
   "Return BODY as a UTF-8 string."
@@ -2313,7 +2474,8 @@ reasoning_content is present, falls back to reasoning_content."
 (defun responses-api-response->canonical-response (response)
   "Normalize an OpenAI Responses API RESPONSE to the canonical clawmacs shape."
   (let ((content-blocks nil)
-        (saw-tool-use nil))
+        (saw-tool-use nil)
+        (usage (normalize-openai-token-usage (cdr (assoc :usage response)))))
     (dolist (item (coerce (or (cdr (assoc :output response)) #()) 'list))
       (dolist (block (responses-item->canonical-blocks item))
         (when (string= (cdr (assoc :type block)) "tool_use")
@@ -2324,8 +2486,13 @@ reasoning_content is present, falls back to reasoning_content."
                  (stringp fallback-text)
                  (plusp (length fallback-text)))
         (push (canonical-text-block fallback-text) content-blocks)))
+    (when usage
+      (file-debug-log "openai-codex-response"
+                      "~A"
+                      (format-token-usage-summary usage)))
     (canonical-response (if saw-tool-use "tool_use" "end_turn")
-                        (nreverse content-blocks))))
+                        (nreverse content-blocks)
+                        :usage usage)))
 
 (defun openai-codex-responses-request-body (messages model max-tokens tools
                                             &key stream reasoning-effort
@@ -2337,26 +2504,35 @@ reasoning_content is present, falls back to reasoning_content."
          (reasoning-options (openai-codex-reasoning-options reasoning-effort))
          (body `((:model . ,model)
                  (:instructions . ,system-prompt)
-                 (:input . ,(coerce input-items 'vector))
                  (:tools . ,response-tools)
                  (:tool--choice . "auto")
                  (:parallel--tool--calls . t)
                  (:store . ,+json-false+)
                  (:stream . ,(if stream t +json-false+))
-                 (:include . #()))))
+                 (:include . #())
+                 ,@(when *openai-codex-prompt-cache-key*
+                     `((:prompt--cache--key
+                        . ,*openai-codex-prompt-cache-key*)))
+                 ,@(when *openai-codex-prompt-cache-retention*
+                     `((:prompt--cache--retention
+                        . ,*openai-codex-prompt-cache-retention*))))))
     (when reasoning-options
       (setf body (append body
                          (list `(:reasoning . ,reasoning-options)))))
-    (file-debug-log "openai-codex-request"
-                    "model=~A stream=~A reasoning=~A input-items=~D tools=~D"
-                    model
-                    (if stream t nil)
-                    (if reasoning-options
-                        (api-json-encode reasoning-options)
-                        "none")
-                    (length input-items)
-                    (length response-tools))
-    (api-json-encode body)))
+    (setf body (append body
+                       (list `(:input . ,(coerce input-items 'vector)))))
+    (let ((request-body (api-json-encode body)))
+      (file-debug-log "openai-codex-request"
+                      "model=~A stream=~A reasoning=~A input-items=~D tools=~D"
+                      model
+                      (if stream t nil)
+                      (if reasoning-options
+                          (api-json-encode reasoning-options)
+                          "none")
+                      (length input-items)
+                      (length response-tools))
+      (file-debug-log "openai-codex-request-body" "~A" request-body)
+      request-body)))
 
 (defun openai-codex-request-headers (auth &key stream)
   "Build request headers for AUTH, optionally enabling streaming."
@@ -2558,6 +2734,7 @@ reasoning_content is present, falls back to reasoning_content."
   (openai-tool-call-states (make-hash-table :test #'equal))
   (openai-tool-call-order nil :type list)
   (stop-reason nil)
+  (usage nil)
   (done-p nil          :type boolean)
   (error-p nil)
   (lock (bt:make-lock "stream-state")))
@@ -2768,13 +2945,22 @@ SSE format: 'field: value' or just 'data: {...}'."
                      state
                      text)))))))))
       ((string= event-type "response.completed")
-       (bt:with-lock-held ((stream-state-lock state))
-         (unless (stream-state-stop-reason state)
-           (setf (stream-state-stop-reason state)
-                 (if (responses-stream-tool-use-present-p state)
-                     "tool_use"
-                     "end_turn")))
-         (setf (stream-state-done-p state) t)))
+       (let* ((response (cdr (assoc :response event)))
+              (usage (normalize-openai-token-usage
+                      (or (and response (cdr (assoc :usage response)))
+                          (cdr (assoc :usage event))))))
+         (bt:with-lock-held ((stream-state-lock state))
+           (when usage
+             (setf (stream-state-usage state) usage)
+             (file-debug-log "openai-codex-sse"
+                             "~A"
+                             (format-token-usage-summary usage)))
+           (unless (stream-state-stop-reason state)
+             (setf (stream-state-stop-reason state)
+                   (if (responses-stream-tool-use-present-p state)
+                       "tool_use"
+                       "end_turn")))
+           (setf (stream-state-done-p state) t))))
       ((or (string= event-type "response.failed")
            (string= event-type "error"))
        (let ((message (or (cdr (assoc :message event))
@@ -3062,6 +3248,10 @@ Uses the same OpenAI-compatible streaming protocol."
   "Extract content blocks from an API response as a list."
   (let ((content (cdr (assoc :content response))))
     (coerce content 'list)))
+
+(defun response-usage (response)
+  "Extract normalized token usage from an API response."
+  (cdr (assoc :usage response)))
 
 (defun content-block-type (block)
   "Return the type string of a content block."

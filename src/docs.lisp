@@ -1021,20 +1021,20 @@ documentation in *extended-docs*."
   :category "session"
   :usage "(save-session BUF:buffer) — (save-session (current-buffer))"
   :returns "pathname — Path to the saved session file."
-  :side-effects "Writes buffer's current snapshot to a JSON file in *sessions-dir*; attached sessions also maintain append-only transcript sidecars."
+  :side-effects "Writes buffer's current snapshot to a JSON file in *sessions-dir*. Persistent chat buffers also refresh this snapshot automatically after transcripted messages."
   :see-also (load-session list-saved-sessions save-session-command *sessions-dir* buffer-session))
 
 (defdoc load-session
   :category "session"
   :usage "(load-session SESSION-NAME:string &key AGENT-NAME:string) — (load-session \"session-01\")"
-  :returns "buffer or nil — The loaded buffer, or nil if session file not found."
-  :side-effects "Reads a JSON snapshot, creates a buffer with replayed messages, and attaches session transcript metadata."
+  :returns "buffer or nil — The loaded buffer, or nil if no snapshot or transcript sidecar exists."
+  :side-effects "Reads a JSON snapshot or transcript sidecar, creates a buffer with replayed messages, and attaches session transcript metadata."
   :see-also (save-session list-saved-sessions *sessions-dir* buffer-session))
 
 (defdoc list-saved-sessions
   :category "session"
   :usage "(list-saved-sessions) — (list-saved-sessions)"
-  :returns "list of strings — (\"session-01\" \"session-02\") or nil."
+  :returns "list of strings from saved snapshots and transcript sidecar manifests — (\"session-01\" \"session-02\") or nil."
   :see-also (save-session load-session *sessions-dir*))
 
 ;;; ==========================================================================
@@ -3323,6 +3323,13 @@ documentation in *extended-docs*."
   :returns "nil"
   :side-effects "Writes project file text or conversation JSON. Inserts confirmation system message."
   :see-also (project-save-buffer save-session load-session *sessions-dir*))
+
+(defdoc load-session-command
+  :category "buffer-command"
+  :usage "Bound to C-x C-r. Opens the minibuffer saved-session selector and loads the selected session into a new buffer."
+  :returns "nil"
+  :side-effects "Reads a saved session JSON snapshot, creates a chat buffer for it, and switches to that buffer."
+  :see-also (load-session list-saved-sessions minibuffer-activate save-session-command))
 
 (defdoc minibuffer-select-project-command
   :category "buffer-command"

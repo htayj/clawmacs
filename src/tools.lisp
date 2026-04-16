@@ -363,7 +363,10 @@ Only includes tools visible to the current *current-caller*."
                  (:description . ,(tool-definition-description def))
                  (:input--schema . ,(tool-definition-input-schema def)))
                tools))))
-    (coerce tools 'vector)))
+    (coerce (sort tools #'string<
+                  :key (lambda (tool)
+                         (cdr (assoc :name tool))))
+            'vector)))
 
 (defun rendered-tool-description (tool)
   "Return TOOL's provider name and description values."

@@ -253,6 +253,9 @@ Enforces the invariant that it is not read-only."
 (defvar *suppress-session-transcript-recording* nil
   "When non-nil, buffer message helpers do not append transcript events.")
 
+(defvar *suppress-session-autosave* nil
+  "When non-nil, buffer message helpers do not refresh session snapshots.")
+
 (defun attach-buffer-session (buf session)
   "Attach SESSION to BUF and return BUF."
   (setf (buffer-session buf) session)
@@ -267,13 +270,29 @@ Enforces the invariant that it is not read-only."
                            (load-or-create-session (buffer-name buf))))
   (buffer-session buf))
 
+(defun autosave-session-snapshot (buf)
+  "Refresh BUF's session snapshot when automatic persistence is active."
+  (when (and buf
+             (not *suppress-session-autosave*)
+             (not (document-buffer-p buf))
+             (buffer-session buf))
+    (handler-case
+        (save-session buf)
+      (error (e)
+        (format *error-output*
+                "~&;; Warning: failed to autosave session ~A: ~A~%"
+                (buffer-name buf)
+                e))))
+  buf)
+
 (defun record-buffer-message (buf msg)
   "Record MSG in BUF's transcript when session recording is active."
   (when (and buf
              msg
              (not *suppress-session-transcript-recording*)
              (buffer-session buf))
-    (record-session-message (buffer-session buf) msg))
+    (record-session-message (buffer-session buf) msg)
+    (autosave-session-snapshot buf))
   msg)
 
 (declaim (ftype (function (buffer) fixnum) buffer-message-count))
@@ -443,11 +462,13 @@ and create a new empty input message at the tail."
     (setf (message-read-only-p input) t
           (message-timestamp input) (get-universal-time)
           (message-sender input) :user)
-    (record-buffer-message buf input)
+    (let ((*suppress-session-autosave* t))
+      (record-buffer-message buf input))
     (let ((new-input (make-message :user)))
       (setf (message-prev new-input) input
             (message-next input) new-input
-            (buffer-last-message buf) new-input)))
+            (buffer-last-message buf) new-input))
+    (autosave-session-snapshot buf))
   buf)
 
 (defun whitespace-char-p (char)
@@ -586,6 +607,11 @@ Assigns the :system face set from the buffer's face registry if available."
   "Return the file path for a session by name."
   (merge-pathnames (format nil "~A.json" session-name) *sessions-dir*))
 
+(defun session-sidecar-manifest-path (session-name)
+  "Return SESSION-NAME's sidecar manifest path."
+  (merge-pathnames "session.json"
+                   (session-sidecar-directory session-name)))
+
 (defun serialize-message (msg)
   "Serialize a message to an alist for JSON encoding."
   `((:sender . ,(symbol-name (message-sender msg)))
@@ -623,68 +649,147 @@ Assigns the :system face set from the buffer's face registry if available."
       (write-string (cl-json:encode-json-to-string (serialize-buffer buf)) s))
     path))
 
+(defun replay-serialized-message (buf msg-data)
+  "Insert one serialized message into BUF without transcript side effects."
+  (let* ((sender-str (or (cdr (assoc :sender msg-data)) "SYSTEM"))
+         (text (cdr (assoc :text msg-data)))
+         (raw-content (cdr (assoc :raw-content msg-data)))
+         (metadata (cdr (assoc :metadata msg-data)))
+         (sender-kw (intern sender-str :keyword))
+         (msg (make-message sender-kw :read-only-p t)))
+    (set-message-text msg (or text ""))
+    (setf (message-timestamp msg)
+          (cdr (assoc :timestamp msg-data)))
+    (when raw-content
+      (setf (message-raw-content msg)
+            (normalize-legacy-raw-content raw-content)))
+    (when metadata
+      (setf (message-metadata msg) metadata))
+    (let ((input (buffer-input-message buf))
+          (before (message-prev (buffer-input-message buf))))
+      (setf (message-prev msg) before
+            (message-next msg) input
+            (message-prev input) msg)
+      (if before
+          (setf (message-next before) msg)
+          (setf (buffer-first-message buf) msg)))
+    msg))
+
+(defun replay-serialized-messages (buf messages)
+  "Replay serialized MESSAGES into BUF without transcript or autosave writes."
+  (let ((*suppress-session-transcript-recording* t)
+        (*suppress-session-autosave* t))
+    (loop :for msg-data :in (coerce (or messages #()) 'list)
+          :do (replay-serialized-message buf msg-data)))
+  buf)
+
+(defun read-session-transcript-events (path)
+  "Read transcript JSONL events from PATH, returning decoded alists."
+  (let ((events nil))
+    (when (probe-file path)
+      (with-open-file (stream path :direction :input :external-format :utf-8)
+        (loop :for line := (read-line stream nil nil)
+              :while line
+              :unless (zerop (length line))
+                :do (let ((cl-json:*json-array-type* 'vector))
+                      (push (cl-json:decode-json-from-string line) events)))))
+    (nreverse events)))
+
+(defun session-transcript-paths (session)
+  "Return SESSION's transcript segment paths in chronological order."
+  (sort (copy-list
+         (or (directory (merge-pathnames "*.jsonl"
+                                         (session-transcript-directory session)))
+             nil))
+        #'string<
+        :key #'namestring))
+
+(defun session-transcript-message-events (session)
+  "Return durable message events from all transcript segments for SESSION."
+  (loop :for path :in (session-transcript-paths session)
+        :append (remove-if-not
+                 (lambda (event)
+                   (string= "message" (or (cdr (assoc :event event)) "")))
+                 (read-session-transcript-events path))))
+
+(defun load-session-snapshot (session-name path agent-name)
+  "Load SESSION-NAME from snapshot PATH."
+  (let ((cl-json:*json-array-type* 'vector))
+    (let* ((json-str (uiop:read-file-string path))
+           (data (cl-json:decode-json-from-string json-str))
+           (name (or (cdr (assoc :name data)) session-name))
+           (agent (or (cdr (assoc :agent-name data)) agent-name))
+           (provider-override (cdr (assoc :provider-override data)))
+           (model-override (cdr (assoc :model-override data)))
+           (think-level-override (cdr (assoc :think-level-override data)))
+           (enabled-packages (cdr (assoc :enabled-packages data)))
+           (messages (cdr (assoc :messages data)))
+           (buf (make-buffer name :agent-name agent
+                                  :working-directory (truename ".")
+                                  :session (load-or-create-session name))))
+      (setf (buffer-provider-override buf)
+            (and provider-override
+                 (ignore-errors
+                   (normalize-provider provider-override)))
+            (buffer-model-override buf)
+            model-override
+            (buffer-think-level-override buf)
+            (normalize-think-level-override think-level-override)
+            (buffer-enabled-packages buf)
+            (loop :for package :in (coerce (or enabled-packages #()) 'list)
+                  :when (stringp package)
+                    :collect package))
+      (replay-serialized-messages buf messages)
+      (ignore-errors
+        (reconcile-buffer-think-level-override buf))
+      buf)))
+
+(defun load-session-sidecar (session-name &key (agent-name *default-agent-name*))
+  "Load SESSION-NAME from its transcript sidecar when no snapshot exists."
+  (let* ((manifest-path (session-sidecar-manifest-path session-name))
+         (manifest (read-session-manifest manifest-path)))
+    (unless manifest
+      (return-from load-session-sidecar nil))
+    (let* ((name (or (cdr (assoc :name manifest)) session-name))
+           (session (load-or-create-session name))
+           (buf (make-buffer name :agent-name agent-name
+                                  :working-directory (truename ".")
+                                  :session session)))
+      (replay-serialized-messages
+       buf
+       (session-transcript-message-events session))
+      (autosave-session-snapshot buf)
+      buf)))
+
 (defun load-session (session-name &key (agent-name *default-agent-name*))
   "Load a saved session into a new buffer. Returns the buffer or nil."
   (let ((path (session-path session-name)))
-    (unless (probe-file path)
-      (return-from load-session nil))
-    (let ((cl-json:*json-array-type* 'vector))
-      (let* ((json-str (uiop:read-file-string path))
-             (data (cl-json:decode-json-from-string json-str))
-             (name (or (cdr (assoc :name data)) session-name))
-             (agent (or (cdr (assoc :agent-name data)) agent-name))
-             (provider-override (cdr (assoc :provider-override data)))
-             (model-override (cdr (assoc :model-override data)))
-             (think-level-override (cdr (assoc :think-level-override data)))
-             (enabled-packages (cdr (assoc :enabled-packages data)))
-             (messages (cdr (assoc :messages data)))
-             (buf (make-buffer name :agent-name agent
-                                     :working-directory (truename ".")
-                                     :session (load-or-create-session name))))
-        (setf (buffer-provider-override buf)
-              (and provider-override
-                   (ignore-errors
-                     (normalize-provider provider-override)))
-              (buffer-model-override buf)
-              model-override
-              (buffer-think-level-override buf)
-              (normalize-think-level-override think-level-override)
-              (buffer-enabled-packages buf)
-              (loop :for package :in (coerce (or enabled-packages #()) 'list)
-                    :when (stringp package)
-                      :collect package))
-        ;; Replay messages into the buffer without duplicating transcript events.
-        (let ((*suppress-session-transcript-recording* t))
-          (loop :for msg-data :across messages
-                :for sender-str := (cdr (assoc :sender msg-data))
-                :for text := (cdr (assoc :text msg-data))
-                :for raw-content := (cdr (assoc :raw-content msg-data))
-                :for metadata := (cdr (assoc :metadata msg-data))
-                :for sender-kw := (intern sender-str :keyword)
-                :do (let ((msg (make-message sender-kw :read-only-p t)))
-                      (set-message-text msg (or text ""))
-                      (setf (message-timestamp msg)
-                            (cdr (assoc :timestamp msg-data)))
-                      (when raw-content
-                        (setf (message-raw-content msg)
-                              (normalize-legacy-raw-content raw-content)))
-                      (when metadata
-                        (setf (message-metadata msg) metadata))
-                      ;; Insert before input
-                      (let ((input (buffer-input-message buf))
-                            (before (message-prev (buffer-input-message buf))))
-                        (setf (message-prev msg) before
-                              (message-next msg) input
-                              (message-prev input) msg)
-                        (if before
-                            (setf (message-next before) msg)
-                            (setf (buffer-first-message buf) msg))))))
-        (ignore-errors
-          (reconcile-buffer-think-level-override buf))
-        buf))))
+    (if (probe-file path)
+        (load-session-snapshot session-name path agent-name)
+        (load-session-sidecar session-name :agent-name agent-name))))
+
+(defun saved-session-snapshot-names ()
+  "Return session names with legacy JSON snapshots."
+  (when (probe-file *sessions-dir*)
+    (mapcar #'pathname-name
+            (directory (merge-pathnames "*.json" *sessions-dir*)))))
+
+(defun saved-session-sidecar-names ()
+  "Return session names with transcript sidecar manifests."
+  (when (probe-file *sessions-dir*)
+    (loop :for path :in (directory (merge-pathnames #P"*/session.json"
+                                                    *sessions-dir*))
+          :for manifest := (read-session-manifest path)
+          :for name := (cdr (assoc :name manifest))
+          :when (and (stringp name)
+                     (plusp (length name)))
+            :collect name)))
 
 (defun list-saved-sessions ()
   "Return a list of saved session names."
   (when (probe-file *sessions-dir*)
-    (let ((files (directory (merge-pathnames "*.json" *sessions-dir*))))
-      (mapcar (lambda (f) (pathname-name f)) files))))
+    (sort (remove-duplicates
+           (append (saved-session-snapshot-names)
+                   (saved-session-sidecar-names))
+           :test #'string=)
+          #'string<)))

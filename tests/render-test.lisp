@@ -254,7 +254,13 @@
      :stop-reason "end_turn"
      :content-block-count 2
      :tool-call-count 1
-     :reasoning-block-count 1)
+     :reasoning-block-count 1
+     :input-tokens 2006
+     :cached-input-tokens 1920
+     :uncached-input-tokens 86
+     :output-tokens 300
+     :total-tokens 2306
+     :cache-hit-rate 0.9571286)
     (is (equal '("Final answer")
                (clawmacs::message-display-line-strings m)))
     (let ((lines (clawmacs::message-display-line-strings
@@ -268,9 +274,12 @@
                   lines
                   :test #'string=))
       (is (member ";; stop-reason: end_turn" lines :test #'string=))
-      (is (= 10 (length lines))))
+      (is (member ";; tokens: input=2006 cached=1920 uncached=86 output=300 total=2306 cache-hit=95.7%"
+                  lines
+                  :test #'string=))
+      (is (= 11 (length lines))))
     (is (= 1 (clawmacs::message-visual-height m 80)))
-    (is (= 10 (clawmacs::message-visual-height
+    (is (= 12 (clawmacs::message-visual-height
               m 80
               :show-metadata-p t)))))
 

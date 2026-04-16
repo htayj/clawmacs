@@ -750,6 +750,7 @@
    #:minibuffer-select-model-command
    #:minibuffer-select-think-level-command
    #:minibuffer-select-buffer-command
+   #:load-session-command
 
    ;; Introspection / Help
    #:list-functions
@@ -918,7 +919,9 @@
    ;; Main
    #:clawmacs-main
    #:clawmacs-prompt-main
+   #:clawmacs-session-prompt-main
    #:run-single-prompt
+   #:run-session-prompt
    #:run-subagent
    #:run-subagent-async
    #:*prompt-max-tool-iterations*
@@ -954,6 +957,7 @@
    #:prompt-run-result-think-level
    #:prompt-run-result-iterations
    #:prompt-run-result-stop-reason
+   #:prompt-run-result-usage
    #:prompt-run-error
    #:prompt-run-error-message
    #:prompt-run-error-tool-events

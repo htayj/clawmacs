@@ -20,6 +20,9 @@
 (defparameter +prompt-default-model+ "gpt-5.3-codex"
   "Default model used by prompt.sh when no agent or model is specified.")
 
+(defparameter +session-prompt-default-session-name+ "clawmacs:session-prompt"
+  "Default saved session name used by session-prompt.sh.")
+
 (defvar *default-subagent-name* "subagent"
   "Default transient agent name used by RUN-SUBAGENT.")
 
@@ -52,7 +55,8 @@
   model
   think-level
   iterations
-  stop-reason)
+  stop-reason
+  usage)
 
 (defstruct prompt-options
   "Command-line options for CLAWMACS-PROMPT-MAIN."
@@ -69,6 +73,7 @@
   (max-tool-iterations *prompt-max-tool-iterations* :type integer)
   (skill-roots nil :type list)
   (packages nil :type list)
+  session-name
   debug-log-path
   (isolated-p nil :type boolean)
   (inhibit-user-init-p nil :type boolean)
@@ -423,6 +428,9 @@ Returns T if still streaming, NIL if done."
                  (stop-reason
                    (bt:with-lock-held ((stream-state-lock state))
                      (stream-state-stop-reason state)))
+                 (usage
+                   (bt:with-lock-held ((stream-state-lock state))
+                     (copy-list (stream-state-usage state))))
                  (tool-uses (content-tool-use-blocks canonical-content))
                  (final-text (content-text-blocks canonical-content)))
             ;; Build final display from content-blocks (not the accumulator)
@@ -440,18 +448,25 @@ Returns T if still streaming, NIL if done."
              :tool-call-count (length tool-uses)
              :reasoning-block-count (length (content-reasoning-blocks
                                               canonical-content)))
+            (when usage
+              (apply #'put-message-metadata
+                     msg
+                     (token-usage-metadata-pairs usage)))
             (record-buffer-message buf msg)
             ;; Debug: echo the completed response
-            (let ((resp-json (api-json-encode (coerce canonical-content 'vector))))
+            (let ((resp-json (api-json-encode (coerce canonical-content 'vector)))
+                  (usage-line (format-token-usage-summary usage)))
               (debug-log buf
-                (format nil "[API RESPONSE  stop:~A  blocks:~D]~%~A"
+                (format nil "[API RESPONSE  stop:~A  blocks:~D~@[  ~A~]]~%~A"
                         (or stop-reason "nil")
                         (length content-blocks)
+                        usage-line
                         resp-json))
               (file-debug-log "api-response"
-                              "stop=~A blocks=~D content=~A"
+                              "stop=~A blocks=~D~@[ ~A~] content=~A"
                               (or stop-reason "nil")
                               (length content-blocks)
+                              usage-line
                               resp-json))
             ;; Clear streaming state
             (setf (buffer-pending-stream buf) nil
@@ -658,6 +673,37 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
     (buffer-finalize-input buf)
     buf))
 
+(defun make-empty-session-prompt-buffer (session-name agent-name)
+  "Create an empty prompt-mode buffer attached to SESSION-NAME."
+  (let ((buf (make-buffer session-name
+                          :agent-name agent-name
+                          :working-directory (truename ".")
+                          :session (load-or-create-session session-name))))
+    (init-face-registry buf)
+    (setf (buffer-keymap buf) *default-keymap*)
+    (autosave-session-snapshot buf)
+    buf))
+
+(defun make-session-prompt-buffer (session-name agent-name)
+  "Load SESSION-NAME for prompt mode, or create it when missing."
+  (let ((buf (or (load-session session-name :agent-name agent-name)
+                 (make-empty-session-prompt-buffer session-name agent-name))))
+    (init-face-registry buf)
+    (setf (buffer-keymap buf) *default-keymap*)
+    buf))
+
+(defun append-session-prompt-input (buf prompt)
+  "Append PROMPT as BUF's next finalized user message."
+  (set-message-text (buffer-input-message buf) prompt)
+  (buffer-finalize-input buf)
+  buf)
+
+(defun prompt-cache-key-for-buffer (buf)
+  "Return a stable OpenAI prompt cache routing key for BUF."
+  (format nil "clawmacs-~(~A~)-~(~A~)"
+          (buffer-agent-name buf)
+          (session-name-hash (buffer-name buf))))
+
 (defun maybe-apply-prompt-routing-overrides (buf provider model think-level)
   "Apply optional provider, model, and think-level overrides to BUF."
   (when provider
@@ -675,7 +721,8 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
       (error "Streaming error: ~A" (stream-state-error-p state)))
     (canonical-response
      (or (stream-state-stop-reason state) "end_turn")
-     (nreverse (copy-list (stream-state-content-blocks state))))))
+     (nreverse (copy-list (stream-state-content-blocks state)))
+     :usage (copy-list (stream-state-usage state)))))
 
 (defun wait-for-prompt-stream-state (state)
   "Block until streaming STATE completes, then return its canonical response."
@@ -699,22 +746,30 @@ Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
                                                      :buffer buf))))
     (multiple-value-bind (provider model think-level)
         (resolve-buffer-provider-and-model buf)
-      (file-debug-log "prompt-request"
-                      "provider=~(~A~) model=~A think=~A msgs=~D tools=~D"
-                      provider model (or think-level "default")
-                      (length messages)
-                      (if tools (length tools) 0))
-      (let ((state (provider-request-streaming
-                    provider messages
-                    (lambda (state) (declare (ignore state)))
-                    :model model
-                    :tools tools
-                    :system-prompt system-prompt
-                    :reasoning-effort think-level)))
-        (values (wait-for-prompt-stream-state state)
-                provider
-                model
-                think-level)))))
+      (let ((prompt-cache-key (and (eq provider :openai-codex)
+                                   (prompt-cache-key-for-buffer buf)))
+            (prompt-cache-retention nil))
+        (file-debug-log "prompt-request"
+                        "provider=~(~A~) model=~A think=~A msgs=~D tools=~D cache-key=~A cache-retention=~A"
+                        provider model (or think-level "default")
+                        (length messages)
+                        (if tools (length tools) 0)
+                        (or prompt-cache-key "none")
+                        (or prompt-cache-retention "none"))
+        (let ((*openai-codex-prompt-cache-key* prompt-cache-key)
+              (*openai-codex-prompt-cache-retention*
+                prompt-cache-retention))
+          (let ((state (provider-request-streaming
+                        provider messages
+                        (lambda (state) (declare (ignore state)))
+                        :model model
+                        :tools tools
+                        :system-prompt system-prompt
+                        :reasoning-effort think-level)))
+            (values (wait-for-prompt-stream-state state)
+                    provider
+                    model
+                    think-level)))))))
 
 (defun denied-tool-result-data (reason)
   "Return a Lisp data denial payload for a non-interactive tool denial."
@@ -769,6 +824,91 @@ PROMPT-TOOL-EVENT for terminal/debug output."
     (insert-tool-results-message buf (nreverse results))
     (nreverse events)))
 
+(defun run-prompt-buffer-loop (buf prompt max-tool-iterations
+                               auto-approve-tools-p)
+  "Run BUF through prompt-mode provider/tool iterations for PROMPT."
+  (let ((tool-events nil)
+        (final-provider nil)
+        (final-model nil)
+        (final-think-level nil)
+        (aggregate-usage nil)
+        (iterations 0))
+    (labels ((fail (format-string &rest format-args)
+               (error 'prompt-run-error
+                      :message (apply #'format nil format-string format-args)
+                      :tool-events tool-events
+                      :iterations iterations
+                      :provider final-provider
+                      :model final-model
+                      :think-level final-think-level)))
+      (loop
+        (when (>= iterations max-tool-iterations)
+          (fail "Exceeded maximum tool iterations (~D)"
+                max-tool-iterations))
+        (incf iterations)
+        (multiple-value-bind (response provider* model* think-level*)
+            (handler-case
+                (prompt-request-once buf)
+              (error (condition)
+                (fail "Prompt provider request failed: ~A" condition)))
+          (setf final-provider provider*
+                final-model model*
+                final-think-level think-level*)
+          (setf aggregate-usage
+                (merge-token-usage aggregate-usage
+                                   (response-usage response)))
+          (let* ((content-blocks (response-content response))
+                 (canonical-content (canonicalize-message-content
+                                     "assistant"
+                                     content-blocks))
+                 (tool-uses (content-tool-use-blocks canonical-content))
+                 (stop-reason (response-stop-reason response))
+                 (agent-kw (intern (string-upcase (buffer-agent-name buf))
+                                   :keyword)))
+            (insert-agent-message-from-content buf canonical-content agent-kw)
+            (if tool-uses
+                (setf tool-events
+                      (append tool-events
+                              (handler-case
+                                  (execute-prompt-tool-calls
+                                   buf tool-uses auto-approve-tools-p)
+                                (error (condition)
+                                  (fail "Prompt tool loop failed: ~A"
+                                        condition)))))
+                (return
+                  (make-prompt-run-result
+                   :prompt prompt
+                   :final-text (content-text-blocks canonical-content)
+                   :tool-events tool-events
+                   :reasoning-blocks (content-reasoning-blocks
+                                      canonical-content)
+                   :agent-name (buffer-agent-name buf)
+                   :provider final-provider
+                   :model final-model
+                   :think-level final-think-level
+                   :iterations iterations
+                   :stop-reason stop-reason
+                   :usage aggregate-usage)))))))))
+
+(defun run-prompt-with-buffer (buf prompt custom-tool-definitions
+                               max-tool-iterations auto-approve-tools-p
+                               tool-names tool-names-supplied-p)
+  "Run a prepared prompt BUF with optional custom tools."
+  (let* ((temporary-tool-table
+           (temporary-tool-table-from-definitions custom-tool-definitions))
+         (effective-tool-names
+           (resolve-prompt-tool-names (buffer-agent-name buf)
+                                      custom-tool-definitions
+                                      tool-names
+                                      tool-names-supplied-p)))
+    (let ((*active-tool-names* effective-tool-names)
+          (*temporary-tool-table* (or temporary-tool-table
+                                      *temporary-tool-table*)))
+      (run-prompt-buffer-loop buf
+                              prompt
+                              max-tool-iterations
+                              auto-approve-tools-p))))
+
 (defun run-single-prompt (prompt &key (agent-name *default-agent-name*)
                                  provider model think-level
                                  (max-tool-iterations *prompt-max-tool-iterations*)
@@ -782,77 +922,47 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
   (when (blank-string-p prompt)
     (error "Prompt must be non-empty"))
   (let* ((custom-tool-definitions (normalize-run-custom-tools custom-tools))
-         (temporary-tool-table
-           (temporary-tool-table-from-definitions custom-tool-definitions))
-         (effective-tool-names
-           (resolve-prompt-tool-names agent-name
-                                      custom-tool-definitions
-                                      tool-names
-                                      tool-names-supplied-p))
-         (buf (make-prompt-buffer prompt agent-name))
-         (tool-events nil)
-         (final-provider nil)
-         (final-model nil)
-         (final-think-level nil)
-         (iterations 0))
+         (buf (make-prompt-buffer prompt agent-name)))
     (maybe-apply-prompt-routing-overrides buf provider model think-level)
     (when package-names
       (setf (buffer-enabled-packages buf)
             (normalize-package-name-list package-names)))
-    (let ((*active-tool-names* effective-tool-names)
-          (*temporary-tool-table* (or temporary-tool-table
-                                      *temporary-tool-table*)))
-      (labels ((fail (format-string &rest format-args)
-                 (error 'prompt-run-error
-                        :message (apply #'format nil format-string format-args)
-                        :tool-events tool-events
-                        :iterations iterations
-                        :provider final-provider
-                        :model final-model
-                        :think-level final-think-level)))
-        (loop
-          (when (>= iterations max-tool-iterations)
-            (fail "Exceeded maximum tool iterations (~D)"
-                  max-tool-iterations))
-          (incf iterations)
-          (multiple-value-bind (response provider* model* think-level*)
-              (handler-case
-                  (prompt-request-once buf)
-                (error (condition)
-                  (fail "Prompt provider request failed: ~A" condition)))
-            (setf final-provider provider*
-                  final-model model*
-                  final-think-level think-level*)
-            (let* ((content-blocks (response-content response))
-                   (canonical-content (canonicalize-message-content
-                                       "assistant"
-                                       content-blocks))
-                   (tool-uses (content-tool-use-blocks canonical-content))
-                   (stop-reason (response-stop-reason response))
-                   (agent-kw (intern (string-upcase (buffer-agent-name buf))
-                                     :keyword)))
-              (insert-agent-message-from-content buf canonical-content agent-kw)
-              (if tool-uses
-                  (setf tool-events
-                        (append tool-events
-                                (handler-case
-                                    (execute-prompt-tool-calls
-                                     buf tool-uses auto-approve-tools-p)
-                                  (error (condition)
-                                    (fail "Prompt tool loop failed: ~A"
-                                          condition)))))
-                  (return
-                    (make-prompt-run-result
-                     :prompt prompt
-                     :final-text (content-text-blocks canonical-content)
-                     :tool-events tool-events
-                     :reasoning-blocks (content-reasoning-blocks canonical-content)
-                     :agent-name (buffer-agent-name buf)
-                     :provider final-provider
-                     :model final-model
-                     :think-level final-think-level
-                     :iterations iterations
-                     :stop-reason stop-reason))))))))))
+    (run-prompt-with-buffer buf
+                            prompt
+                            custom-tool-definitions
+                            max-tool-iterations
+                            auto-approve-tools-p
+                            tool-names
+                            tool-names-supplied-p)))
+
+(defun run-session-prompt (prompt &key session-name
+                                  (agent-name *default-agent-name*)
+                                  provider model think-level
+                                  (max-tool-iterations *prompt-max-tool-iterations*)
+                                  auto-approve-tools-p
+                                  package-names
+                                  (tool-names nil tool-names-supplied-p)
+                                  custom-tools)
+  "Append PROMPT to SESSION-NAME, run the agent, and save the session."
+  (when (blank-string-p prompt)
+    (error "Prompt must be non-empty"))
+  (unless (and (stringp session-name)
+               (not (blank-string-p session-name)))
+    (error "Session prompt mode requires a non-empty session name"))
+  (let* ((custom-tool-definitions (normalize-run-custom-tools custom-tools))
+         (buf (make-session-prompt-buffer session-name agent-name)))
+    (maybe-apply-prompt-routing-overrides buf provider model think-level)
+    (when package-names
+      (setf (buffer-enabled-packages buf)
+            (normalize-package-name-list package-names)))
+    (append-session-prompt-input buf prompt)
+    (run-prompt-with-buffer buf
+                            prompt
+                            custom-tool-definitions
+                            max-tool-iterations
+                            auto-approve-tools-p
+                            tool-names
+                            tool-names-supplied-p)))
 
 (defun run-subagent (prompt &key (agent-name *default-subagent-name*)
                                   provider model think-level
@@ -2408,10 +2518,12 @@ to navigate. Shows buffer name, agent, status, and message count."
   (let* ((name (next-buffer-name))
          (new-buf (make-buffer name
                                :agent-name *default-agent-name*
-                               :working-directory (truename "."))))
+                               :working-directory (truename ".")
+                               :session (load-or-create-session name))))
     (init-face-registry new-buf)
     (setf (buffer-keymap new-buf) *default-keymap*)
     (add-buffer-to-ring new-buf)
+    (autosave-session-snapshot new-buf)
     (switch-to-buffer new-buf)))
 (defcommand new-buffer-command)
 
@@ -2456,6 +2568,67 @@ to navigate. Shows buffer name, agent, status, and message count."
         buffer
         (format nil "[Session saved to ~A]" path))))))
 (defcommand save-session-command)
+
+(defun load-session-command (buffer)
+  "Load a saved chat session into a new buffer via minibuffer completion."
+  (labels ((record-selection (name)
+             (setf *buffer-selection-history*
+                   (cons name
+                         (remove name *buffer-selection-history*
+                                 :test #'string=))))
+           (unique-loaded-buffer-name (base-name)
+             (if (null (find-buffer-by-name base-name))
+                 base-name
+                 (loop :for suffix :from 2
+                       :for candidate := (format nil "~A<~D>" base-name suffix)
+                       :unless (find-buffer-by-name candidate)
+                         :return candidate))))
+    (let* ((session-names (sort (copy-list (or (list-saved-sessions) nil))
+                                #'string<))
+           (items (mapcar (lambda (session-name)
+                            (let ((open-p (not (null (find-buffer-by-name
+                                                      session-name)))))
+                              (list :session-name session-name
+                                    :open-p open-p
+                                    :display (if open-p
+                                                 (format nil "~A  [open]"
+                                                         session-name)
+                                                 session-name)
+                                    :match-text session-name)))
+                          session-names)))
+      (if items
+          (minibuffer-activate
+           "Load Session"
+           items
+           (lambda (item)
+             (let ((session-name (getf item :session-name)))
+               (handler-case
+                   (let ((loaded (load-session session-name)))
+                     (if loaded
+                         (progn
+                           (setf (buffer-name loaded)
+                                 (unique-loaded-buffer-name
+                                  (buffer-name loaded)))
+                           (unless *default-keymap*
+                             (init-default-keymap))
+                           (init-face-registry loaded)
+                           (setf (buffer-keymap loaded) *default-keymap*)
+                           (add-buffer-to-ring loaded)
+                           (switch-to-buffer loaded)
+                           (record-selection (buffer-name loaded)))
+                         (buffer-insert-system-message
+                          buffer
+                          (format nil
+                                  "[Saved session ~A is no longer available.]"
+                                  session-name))))
+                 (error (e)
+                   (buffer-insert-system-message
+                    buffer
+                    (format nil "[Load session failed: ~A]" e)))))))
+          (buffer-insert-system-message
+           buffer
+           "[No saved sessions available.]")))))
+(defcommand load-session-command)
 
 (defun execute-extended-command (buffer)
   "Select and run a command via the minibuffer. Bound to M-x."
@@ -3555,7 +3728,9 @@ Used to group keybindings in the describe-bindings listing."
            (search "yank" name) (search "insert-newline" name)
            (search "self-insert" name))
        "Editing")
-      ((or (search "buffer" name) (search "save-session" name))
+      ((or (search "buffer" name)
+           (search "save-session" name)
+           (search "load-session" name))
        "Buffers & Sessions")
       ((or (search "model" name) (search "select-model" name))
        "Model Selection")
@@ -4077,6 +4252,7 @@ Strips any meta/ctrl-x prefix so the selector has simple key bindings."
          (init-face-registry new-buf)
          (setf (buffer-keymap new-buf) *default-keymap*)
          (add-buffer-to-ring new-buf)
+         (autosave-session-snapshot new-buf)
          (switch-to-buffer new-buf))
        (setf *buffer-selector-active* nil))
       ;; k: kill highlighted buffer (unless it is the last one)
@@ -4466,6 +4642,7 @@ Environment variables:
     (add-buffer-to-ring buf)
     (setf *sandbox-root* (truename "."))
     (run-hook-list '*initial-buffer-hook* *initial-buffer-hook* buf)
+    (autosave-session-snapshot buf)
     buf))
 
 (defun ensure-scratch-buffer ()
@@ -4509,6 +4686,7 @@ Options:
   --max-tool-iterations N   Stop after N tool-call turns (default: 20).
   --package NAME            Enable an installed package for this prompt run. May repeat.
   --skill-root PATH         Add a skill root for this prompt run. May repeat.
+  --session NAME            Load/update a saved session instead of one-shot mode.
   --debug-log PATH          Write low-level debug logs to PATH.
   --isolated                Use temporary prompt config/project/session dirs.
   --clean-build             Clear cached Lisp build artifacts before loading.
@@ -4519,6 +4697,33 @@ Options:
 If PROMPT is omitted, non-interactive stdin is read as the prompt."
           +prompt-default-provider+
           +prompt-default-model+))
+
+(defun default-session-prompt-session-name ()
+  "Return the default saved session name for session-prompt.sh."
+  (let ((name (uiop:getenv "CLAWMACS_SESSION_PROMPT_SESSION")))
+    (if (and name (not (blank-string-p name)))
+        name
+        +session-prompt-default-session-name+)))
+
+(defun session-prompt-usage-string ()
+  "Return command-line help for saved-session prompt mode."
+  (format nil "Usage: session-prompt.sh [options] PROMPT...
+
+Runs PROMPT against a saved prompt-mode session. The next invocation with the
+same session name reloads the prior transcript before sending the new prompt.
+
+Session options:
+  --session NAME            Saved session to load/update.
+                            Default: ~A
+  CLAWMACS_SESSION_PROMPT_SESSION
+                            Environment default for --session.
+
+All prompt.sh routing/output options are also supported.
+
+Example:
+  ./session-prompt.sh \"Reply with exactly: CACHE-PROBE-ONE\"
+  ./session-prompt.sh \"Reply with exactly: CACHE-PROBE-TWO\""
+          (default-session-prompt-session-name)))
 
 (defun require-option-value (option args)
   "Pop and return OPTION's value from ARGS, or signal a clear error."
@@ -4630,6 +4835,11 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt."
                    (setf (prompt-options-packages options)
                          (append (prompt-options-packages options)
                                  (list value))
+                         remaining rest)))
+                ((string= arg "--session")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-session-name options) value
                          remaining rest)))
                 ((string= arg "--debug-log")
                  (multiple-value-bind (value rest)
@@ -4763,6 +4973,8 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt."
     (:reasoning--effort . ,(prompt-run-result-think-level result))
     (:iterations . ,(prompt-run-result-iterations result))
     (:stop--reason . ,(prompt-run-result-stop-reason result))
+    ,@(when (prompt-run-result-usage result)
+        `((:usage . ,(token-usage-json (prompt-run-result-usage result)))))
     (:tool--events . ,(coerce (mapcar #'prompt-tool-event-json
                                        (prompt-run-result-tool-events result))
                               'vector))
@@ -4787,7 +4999,11 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt."
   (format stream ";; iterations: ~D~%"
           (prompt-run-result-iterations result))
   (format stream ";; stop-reason: ~A~%"
-          (or (prompt-run-result-stop-reason result) "nil")))
+          (or (prompt-run-result-stop-reason result) "nil"))
+  (let ((usage-line (format-token-usage-summary
+                     (prompt-run-result-usage result))))
+    (when usage-line
+      (format stream ";; ~A~%" usage-line))))
 
 (defun write-prompt-tool-events (result stream)
   "Write prompt tool events to STREAM in Lisp-oriented display form."
@@ -4839,18 +5055,50 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt."
       (prompt-run-result-final-text result)
       *standard-output*))))
 
-(defun clawmacs-prompt-main ()
-  "CLI entry point for one-shot prompt execution.
-This function exits the Lisp image with status 0 on success and 1 on errors."
+(defun run-prompt-options (options)
+  "Run parsed prompt OPTIONS and return a PROMPT-RUN-RESULT."
+  (if (prompt-options-session-name options)
+      (run-session-prompt
+       (prompt-options-prompt options)
+       :session-name (prompt-options-session-name options)
+       :agent-name (prompt-options-agent-name options)
+       :provider (prompt-options-provider options)
+       :model (prompt-options-model options)
+       :think-level (prompt-options-think-level options)
+       :max-tool-iterations
+       (prompt-options-max-tool-iterations options)
+       :auto-approve-tools-p
+       (prompt-options-auto-approve-tools-p options)
+       :package-names
+       (prompt-options-packages options))
+      (run-single-prompt
+       (prompt-options-prompt options)
+       :agent-name (prompt-options-agent-name options)
+       :provider (prompt-options-provider options)
+       :model (prompt-options-model options)
+       :think-level (prompt-options-think-level options)
+       :max-tool-iterations
+       (prompt-options-max-tool-iterations options)
+       :auto-approve-tools-p
+       (prompt-options-auto-approve-tools-p options)
+       :package-names
+       (prompt-options-packages options))))
+
+(defun clawmacs-prompt-main* (&key default-session-name usage-string-function)
+  "Shared CLI entry point for one-shot and saved-session prompt modes."
   (let ((options nil))
     (handler-case
       (progn
         (setf options (parse-clawmacs-prompt-args))
+        (when (and default-session-name
+                   (not (prompt-options-session-name options)))
+          (setf (prompt-options-session-name options) default-session-name))
         (when (prompt-options-help-p options)
-          (write-string-with-final-newline (prompt-usage-string) *standard-output*)
+          (write-string-with-final-newline (funcall usage-string-function)
+                                           *standard-output*)
           (uiop:quit 0))
         (unless (prompt-options-prompt options)
-          (error "No prompt supplied.~%~A" (prompt-usage-string)))
+          (error "No prompt supplied.~%~A" (funcall usage-string-function)))
         (maybe-enable-prompt-debug-log options)
         (when (prompt-options-isolated-p options)
           (let ((root (apply-prompt-isolation)))
@@ -4865,19 +5113,7 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
           (reset-interaction-state)
           (setf *sandbox-root* (truename "."))
           (ensure-prompt-workspace-project)
-          (let ((result
-                  (run-single-prompt
-                   (prompt-options-prompt options)
-                   :agent-name (prompt-options-agent-name options)
-                   :provider (prompt-options-provider options)
-                   :model (prompt-options-model options)
-                   :think-level (prompt-options-think-level options)
-                   :max-tool-iterations
-                   (prompt-options-max-tool-iterations options)
-                   :auto-approve-tools-p
-                   (prompt-options-auto-approve-tools-p options)
-                   :package-names
-                   (prompt-options-packages options))))
+          (let ((result (run-prompt-options options)))
             (write-prompt-run-result result options)))
         (uiop:quit 0))
       (prompt-run-error (e)
@@ -4900,6 +5136,18 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
     (error (e)
       (format *error-output* "~&clawmacs prompt error: ~A~%" e)
       (uiop:quit 1)))))
+
+(defun clawmacs-prompt-main ()
+  "CLI entry point for one-shot prompt execution.
+This function exits the Lisp image with status 0 on success and 1 on errors."
+  (clawmacs-prompt-main*
+   :usage-string-function #'prompt-usage-string))
+
+(defun clawmacs-session-prompt-main ()
+  "CLI entry point for saved-session prompt execution."
+  (clawmacs-prompt-main*
+   :default-session-name (default-session-prompt-session-name)
+   :usage-string-function #'session-prompt-usage-string))
 
 (defun clawmacs-main (&key (session-name "clawmacs:session-01")
                            (agent-name *default-agent-name*))

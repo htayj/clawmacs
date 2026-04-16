@@ -161,11 +161,13 @@
 (defun test-buffer-history-senders (buf)
   (mapcar #'message-sender (test-buffer-history-messages buf)))
 
-(defun make-completed-stream-state-response (stop-reason content-blocks)
+(defun make-completed-stream-state-response (stop-reason content-blocks
+                                             &optional usage)
   (let ((state (clawmacs::make-stream-state)))
     (bt:with-lock-held ((clawmacs::stream-state-lock state))
       (setf (clawmacs::stream-state-stop-reason state) stop-reason
             (clawmacs::stream-state-content-blocks state) (reverse content-blocks)
+            (clawmacs::stream-state-usage state) usage
             (clawmacs::stream-state-done-p state) t))
     state))
 
@@ -233,6 +235,19 @@
       (is (null (gethash "file_write" clawmacs::*tool-table*)))
       (is (null (gethash "file_edit" clawmacs::*tool-table*)))
       (is (null (gethash "shell_exec" clawmacs::*tool-table*))))))
+
+(test tool-definitions-for-api-returns-stable-name-order
+  "Provider tool definitions are sorted by name for deterministic prompts."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (initialize-test-tools)
+    (let* ((*current-caller* :user)
+           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tool-names (mapcar (lambda (tool)
+                                 (cdr (assoc :name tool)))
+                               tools)))
+      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "write")
+                 tool-names)))))
 
 (test init-tools-hides-lispi-tools-until-package-enabled
   "init-tools exposes built-in lisp_eval without lispi package tools."
@@ -721,6 +736,7 @@ same
                     "--json"
                     "--package" "sexed"
                     "--package" "lispi"
+                    "--session" "cache-probe"
                     "--max-tool-iterations" "7"
                     "summarize" "this"))))
     (is (string= "writer" (clawmacs::prompt-options-agent-name options)))
@@ -734,6 +750,8 @@ same
     (is (clawmacs::prompt-options-isolated-p options))
     (is (equal '("sexed" "lispi")
                (clawmacs::prompt-options-packages options)))
+    (is (string= "cache-probe"
+                 (clawmacs::prompt-options-session-name options)))
     (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
     (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
 
@@ -766,6 +784,7 @@ same
     (is (search "Default without --agent: openai-codex" usage))
     (is (search "Default without --agent: gpt-5.3-codex" usage))
     (is (search "--package NAME" usage))
+    (is (search "--session NAME" usage))
     (is (search "Skip ~/.clawmacs.d/init.lisp" usage))))
 
 (test compaction-threshold-policy
@@ -1057,13 +1076,25 @@ same
                                        (clawmacs::canonical-tool-use-block
                                         "call-1"
                                         "lisp_eval"
-                                        '((:code . "(+ 2 3)")))))
+                                        '((:code . "(+ 2 3)"))))
+                                      '(:input-tokens 100
+                                        :output-tokens 10
+                                        :total-tokens 110
+                                        :cached-input-tokens 64
+                                        :uncached-input-tokens 36
+                                        :cache-hit-rate 0.64))
                                      (progn
                                        (setf second-request-messages messages)
                                        (make-completed-stream-state-response
                                         "end_turn"
                                         (list (clawmacs::canonical-text-block
-                                               "the result is 5"))))))
+                                               "the result is 5"))
+                                        '(:input-tokens 120
+                                          :output-tokens 20
+                                          :total-tokens 140
+                                          :cached-input-tokens 80
+                                          :uncached-input-tokens 40
+                                          :cache-hit-rate 0.6666667)))))
           (clawmacs::init-default-keymap)
           (clawmacs::init-global-faces)
           (initialize-test-tools)
@@ -1078,6 +1109,20 @@ same
             (is (string= "the result is 5"
                          (clawmacs:prompt-run-result-final-text result)))
             (is (= 2 (clawmacs:prompt-run-result-iterations result)))
+            (let ((usage (clawmacs:prompt-run-result-usage result)))
+              (is (= 220 (getf usage :input-tokens)))
+              (is (= 30 (getf usage :output-tokens)))
+              (is (= 250 (getf usage :total-tokens)))
+              (is (= 144 (getf usage :cached-input-tokens)))
+              (is (= 76 (getf usage :uncached-input-tokens)))
+              (is (< (abs (- (getf usage :cache-hit-rate)
+                              (/ 144.0 220)))
+                     0.0001))
+              (let ((json-usage
+                      (cdr (assoc :usage
+                                  (clawmacs::prompt-run-result-json result)))))
+                (is (= 144 (cdr (assoc :cached--input--tokens
+                                        json-usage))))))
             (is (= 1 (length events)))
             (is (string= "lisp_eval" (clawmacs:prompt-tool-event-name event)))
             (is (search "(+ 2 3)" (clawmacs:prompt-tool-event-display event)))
@@ -1091,6 +1136,112 @@ same
               (is (string= "call-1"
                            (cdr (assoc :tool--use--id tool-result))))
               (is (search "5" (cdr (assoc :content tool-result)))))))))))
+
+(test run-session-prompt-reuses-saved-session-context
+  "Session prompt mode reloads prior turns before sending the next prompt."
+  (let ((path (temp-agent-defaults-path))
+        (*sessions-dir* (temp-session-test-directory "session-prompt"))
+        (request-count 0)
+        (second-request-messages nil))
+    (with-agent-defaults-path-override (path)
+      (with-tool-table-restored
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore callback))
+                                 (declare (ignore provider model max-tokens tools
+                                                  reasoning-effort system-prompt))
+                                 (incf request-count)
+                                 (if (= request-count 1)
+                                     (make-completed-stream-state-response
+                                      "end_turn"
+                                      (list (clawmacs::canonical-text-block
+                                             "first answer")))
+                                     (progn
+                                       (setf second-request-messages messages)
+                                       (make-completed-stream-state-response
+                                        "end_turn"
+                                        (list (clawmacs::canonical-text-block
+                                               "second answer"))))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (initialize-test-tools)
+          (let* ((first (clawmacs:run-session-prompt
+                         "First prompt"
+                         :session-name "cache-probe"
+                         :provider :zai
+                         :model "glm-5"))
+                 (second (clawmacs:run-session-prompt
+                          "Second prompt"
+                          :session-name "cache-probe"
+                          :provider :zai
+                          :model "glm-5")))
+            (is (string= "first answer"
+                         (clawmacs:prompt-run-result-final-text first)))
+            (is (string= "second answer"
+                         (clawmacs:prompt-run-result-final-text second)))
+            (is (= 2 request-count))
+            (is (= 3 (length second-request-messages)))
+            (is (string= "First prompt"
+                         (clawmacs::content-text-blocks
+                          (coerce (cdr (assoc :content
+                                              (first second-request-messages)))
+                                  'list))))
+            (is (string= "first answer"
+                         (clawmacs::content-text-blocks
+                          (coerce (cdr (assoc :content
+                                              (second second-request-messages)))
+                                  'list))))
+            (is (string= "Second prompt"
+                         (clawmacs::content-text-blocks
+                          (coerce (cdr (assoc :content
+                                              (third second-request-messages)))
+                                  'list))))
+            (let ((loaded (load-session "cache-probe")))
+              (is (equal '(:user :agent :user :agent)
+                         (test-buffer-history-senders loaded))))))))))
+
+(test run-session-prompt-binds-openai-prompt-cache-controls
+  "OpenAI session prompt mode sends a stable cache key for the saved session."
+  (let ((path (temp-agent-defaults-path))
+        (*sessions-dir* (temp-session-test-directory "session-prompt-cache"))
+        (captured-cache-key nil)
+        (captured-cache-retention nil))
+    (with-agent-defaults-path-override (path)
+      (with-tool-table-restored
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore messages callback max-tokens
+                                                  tools reasoning-effort
+                                                  system-prompt))
+                                 (is (eq :openai-codex provider))
+                                 (is (string= "gpt-5.4" model))
+                                 (setf captured-cache-key
+                                       clawmacs::*openai-codex-prompt-cache-key*
+                                       captured-cache-retention
+                                       clawmacs::*openai-codex-prompt-cache-retention*)
+                                 (make-completed-stream-state-response
+                                  "end_turn"
+                                  (list (clawmacs::canonical-text-block
+                                         "cached"))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (initialize-test-tools)
+          (let ((result (clawmacs:run-session-prompt
+                         "Cache probe"
+                         :session-name "cache-probe"
+                         :provider :openai-codex
+                         :model "gpt-5.4")))
+            (is (string= "cached"
+                         (clawmacs:prompt-run-result-final-text result)))
+            (is (string= (format nil "clawmacs-agent-~(~A~)"
+                                  (clawmacs::session-name-hash
+                                   "cache-probe"))
+                         captured-cache-key))
+            (is (null captured-cache-retention))))))))
 
 (test run-subagent-uses-registered-agent-and-routing-overrides
   "run-subagent can delegate to a registered agent with explicit routing overrides."
@@ -2177,6 +2328,13 @@ same
             (clawmacs::stream-state-content-blocks state)
             (list (clawmacs::canonical-text-block "final answer"))
             (clawmacs::stream-state-stop-reason state) "end_turn"
+            (clawmacs::stream-state-usage state)
+            '(:input-tokens 2006
+              :output-tokens 300
+              :total-tokens 2306
+              :cached-input-tokens 1920
+              :uncached-input-tokens 86
+              :cache-hit-rate 0.9571286)
             (clawmacs::stream-state-done-p state) t))
     (setf (buffer-pending-stream buf) state
           (buffer-streaming-message buf) msg
@@ -2190,7 +2348,11 @@ same
       (is (= 1 (clawmacs::message-metadata-value
                 metadata :content-block-count)))
       (is (= 0 (clawmacs::message-metadata-value
-                metadata :tool-call-count))))
+                metadata :tool-call-count)))
+      (is (= 1920 (clawmacs::message-metadata-value
+                   metadata :cached-input-tokens)))
+      (is (= 86 (clawmacs::message-metadata-value
+                 metadata :uncached-input-tokens))))
     (is (= 2 (buffer-message-count buf)))
     (is (null (buffer-pending-stream buf)))
     (is (null (buffer-streaming-message buf)))
@@ -2275,6 +2437,39 @@ same
       (is (string= "TOOL-RESULT" (event-value event :sender)))
       (is (vectorp (event-value event :raw-content))))))
 
+(test normalize-openai-token-usage-responses-shape
+  "OpenAI Responses usage is normalized into prompt-cache telemetry."
+  (let ((usage (clawmacs::normalize-openai-token-usage
+                '((:input--tokens . 2006)
+                  (:output--tokens . 300)
+                  (:total--tokens . 2306)
+                  (:input--tokens--details . ((:cached--tokens . 1920)))))))
+    (is (= 2006 (getf usage :input-tokens)))
+    (is (= 300 (getf usage :output-tokens)))
+    (is (= 2306 (getf usage :total-tokens)))
+    (is (= 1920 (getf usage :cached-input-tokens)))
+    (is (= 86 (getf usage :uncached-input-tokens)))
+    (is (< (abs (- (getf usage :cache-hit-rate)
+                    (/ 1920.0 2006)))
+           0.0001))
+    (is (string= "tokens: input=2006 cached=1920 uncached=86 output=300 total=2306 cache-hit=95.7%"
+                 (clawmacs::format-token-usage-summary usage)))))
+
+(test normalize-openai-token-usage-chat-shape
+  "Chat-style prompt token usage is normalized into the same telemetry shape."
+  (let ((usage (clawmacs::normalize-openai-token-usage
+                '((:prompt--tokens . 1000)
+                  (:completion--tokens . 50)
+                  (:total--tokens . 1050)
+                  (:prompt--tokens--details . ((:cached--tokens . 768)))))))
+    (is (= 1000 (getf usage :input-tokens)))
+    (is (= 50 (getf usage :output-tokens)))
+    (is (= 1050 (getf usage :total-tokens)))
+    (is (= 768 (getf usage :cached-input-tokens)))
+    (is (= 232 (getf usage :uncached-input-tokens)))
+    (is (< (abs (- (getf usage :cache-hit-rate) 0.768))
+           0.0001))))
+
 (test openai-codex-request-normalizes-response-shape
   "OpenAI Codex non-streaming normalizes Responses output items."
   (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
@@ -2287,7 +2482,7 @@ same
     (with-function-override (drakma:http-request (&rest args)
                               (declare (ignore args))
                               (values
-                               "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi from codex\"}]},{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/codex.txt\\\"}\"}]}"
+                               "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi from codex\"}]},{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/codex.txt\\\"}\"}],\"usage\":{\"input_tokens\":2006,\"output_tokens\":300,\"total_tokens\":2306,\"input_tokens_details\":{\"cached_tokens\":1920}}}"
                                200))
       (let ((response (clawmacs::openai-codex-request '() :model "gpt-5.3-codex")))
         (is (string= "tool_use" (clawmacs::response-stop-reason response)))
@@ -2297,7 +2492,11 @@ same
                       (:id . "call_1")
                       (:name . "read_file")
                       (:input . ((:path . "/tmp/codex.txt")))))
-                   (clawmacs::response-content response)))))))
+                   (clawmacs::response-content response)))
+        (let ((usage (clawmacs::response-usage response)))
+          (is (= 2006 (getf usage :input-tokens)))
+          (is (= 1920 (getf usage :cached-input-tokens)))
+          (is (= 86 (getf usage :uncached-input-tokens))))))))
 
 (test openai-codex-request-normalizes-reasoning-summary
   "OpenAI Codex non-streaming preserves Responses reasoning summaries."
@@ -2372,6 +2571,8 @@ same
       (is (search "\"store\":false" captured-request-body))
       (is (search "\"stream\":false" captured-request-body))
       (is (not (search "max_output_tokens" captured-request-body)))
+      (is (< (search "\"tools\"" captured-request-body)
+             (search "\"input\"" captured-request-body)))
       (let ((reasoning (cdr (assoc :reasoning body))))
         (is (string= "detailed" (cdr (assoc :summary reasoning))))
         (is (null (assoc :effort reasoning))))
@@ -2404,6 +2605,32 @@ same
            (effort (cdr (assoc :effort reasoning))))
       (is (string= "xhigh" effort))
       (is (string= "detailed" (cdr (assoc :summary reasoning)))))))
+
+(test openai-codex-request-includes-prompt-cache-controls
+  "OpenAI Codex requests include prompt cache routing controls when bound."
+  (let ((captured-request-body nil))
+    (with-function-override (drakma:http-request (&rest args)
+                              (setf captured-request-body
+                                    (getf (rest args) :content))
+                              (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
+                                      200))
+      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+                                (declare (ignore refresh-if-needed))
+                                '(:source :token-override
+                                  :mode :api-key
+                                  :token "openai-token"
+                                  :base-url "https://api.openai.com/v1"
+                                  :refreshable-p nil))
+        (let ((clawmacs::*openai-codex-prompt-cache-key*
+                "clawmacs-agent-cache-probe")
+              (clawmacs::*openai-codex-prompt-cache-retention* "24h"))
+          (clawmacs::openai-codex-request '()
+                                          :model "gpt-5.4"))))
+    (let ((body (clawmacs::api-json-decode captured-request-body)))
+      (is (string= "clawmacs-agent-cache-probe"
+                   (cdr (assoc :prompt--cache--key body))))
+      (is (string= "24h"
+                   (cdr (assoc :prompt--cache--retention body)))))))
 
 (test openai-codex-request-retries-on-401-after-refresh
   "OpenAI Codex retries once after a 401 when ChatGPT auth is refreshable."
@@ -2628,6 +2855,21 @@ same
                      (clawmacs::content-text-blocks content)))
         (is (equal '("provider summary")
                    (clawmacs::content-reasoning-blocks content)))))))
+
+(test openai-codex-streaming-records-completed-usage
+  "OpenAI Codex streaming adapter records usage from response.completed."
+  (let ((state (clawmacs::make-stream-state)))
+    (clawmacs::process-openai-codex-responses-sse-event
+     "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":2006,\"output_tokens\":300,\"total_tokens\":2306,\"input_tokens_details\":{\"cached_tokens\":1920}}}}"
+     state)
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (is-true (clawmacs::stream-state-done-p state))
+      (let ((usage (clawmacs::stream-state-usage state)))
+        (is (= 2006 (getf usage :input-tokens)))
+        (is (= 300 (getf usage :output-tokens)))
+        (is (= 2306 (getf usage :total-tokens)))
+        (is (= 1920 (getf usage :cached-input-tokens)))
+        (is (= 86 (getf usage :uncached-input-tokens)))))))
 
 (test openai-codex-streaming-uses-responses-instructions
   "OpenAI Codex streaming requests send instructions + input, not chat messages."
