@@ -418,7 +418,10 @@ Returns a string result or signals an error."
         (:user-only
          (unless (eq *current-caller* :user)
            (error "Tool ~A is user-only" normalized-name)))))
-    (funcall (tool-definition-execute-fn def) args)))
+    (run-hook-with-args '*before-tool-hook* normalized-name args)
+    (let ((result (funcall (tool-definition-execute-fn def) args)))
+      (run-hook-with-args '*after-tool-hook* normalized-name args result)
+      result)))
 
 (defun format-tool-call-sexpr (name args)
   "Format a tool call as a raw s-expression string.

@@ -3598,29 +3598,144 @@ documentation in *extended-docs*."
   :usage "Boolean — set to T via --no-init flag to skip loading the user init file."
   :see-also (*user-init-file* load-user-init-file))
 
+(defdoc hook-metadata
+  :category "init"
+  :usage "Returned by list-hooks and find-hook-metadata."
+  :returns "Metadata describing a hook variable name, argument list, and docstring."
+  :see-also (defhook list-hooks find-hook-metadata))
+
+(defdoc defhook
+  :category "init"
+  :usage "(defhook *example-hook* (buffer) \"Called with BUFFER.\")"
+  :returns "hook-metadata for the registered hook variable."
+  :side-effects "Defines a special hook variable and records its argument metadata."
+  :see-also (add-hook run-hook-with-args list-hooks))
+
+(defdoc find-hook-metadata
+  :category "init"
+  :usage "(find-hook-metadata '*startup-hook*)"
+  :returns "hook-metadata or nil."
+  :see-also (defhook list-hooks hook-metadata))
+
+(defdoc list-hooks
+  :category "init"
+  :usage "(list-hooks)"
+  :returns "list of hook-metadata sorted by hook variable name."
+  :see-also (defhook find-hook-metadata))
+
 (defdoc *startup-hook*
   :category "init"
   :usage "List of function designators run after init.lisp loads and before backend startup."
-  :see-also (add-hook remove-hook *initial-buffer-hook* clawmacs-main))
+  :see-also (add-hook remove-hook run-hooks *initial-buffer-hook* clawmacs-main))
 
 (defdoc *initial-buffer-hook*
   :category "init"
   :usage "List of function designators run with the initial buffer after it is created."
-  :see-also (add-hook remove-hook *startup-hook* clawmacs-main))
+  :see-also (add-hook remove-hook run-hook-with-args *startup-hook* clawmacs-main))
+
+(defdoc *before-command-hook*
+  :category "init"
+  :usage "List of functions called as (FUNCTION BUFFER COMMAND) before an interactive command runs."
+  :see-also (*after-command-hook* invoke-command add-hook))
+
+(defdoc *after-command-hook*
+  :category "init"
+  :usage "List of functions called as (FUNCTION BUFFER COMMAND RESULT) after an interactive command returns."
+  :see-also (*before-command-hook* invoke-command add-hook))
+
+(defdoc *before-tool-hook*
+  :category "init"
+  :usage "List of functions called as (FUNCTION TOOL-NAME ARGS) before an agent tool runs."
+  :see-also (*after-tool-hook* execute-tool add-hook))
+
+(defdoc *after-tool-hook*
+  :category "init"
+  :usage "List of functions called as (FUNCTION TOOL-NAME ARGS RESULT) after an agent tool returns."
+  :see-also (*before-tool-hook* execute-tool add-hook))
+
+(defdoc *before-send-message-hook*
+  :category "init"
+  :usage "List of functions called as (FUNCTION BUFFER INPUT-TEXT) before a non-empty chat input is sent."
+  :see-also (*after-send-message-hook* send-message add-hook))
+
+(defdoc *after-send-message-hook*
+  :category "init"
+  :usage "List of functions called as (FUNCTION BUFFER INPUT-TEXT RESULT) after a non-empty chat input send returns."
+  :see-also (*before-send-message-hook* send-message add-hook))
 
 (defdoc add-hook
   :category "init"
   :usage "(add-hook '*startup-hook* #'my-fn &key APPEND)"
   :returns "The function designator that was added."
   :side-effects "Mutates the hook variable named by HOOK-VAR."
-  :see-also (remove-hook *startup-hook* *initial-buffer-hook*))
+  :see-also (remove-hook run-hooks run-hook-with-args list-hooks))
 
 (defdoc remove-hook
   :category "init"
   :usage "(remove-hook '*startup-hook* #'my-fn)"
   :returns "The function designator that was removed."
   :side-effects "Mutates the hook variable named by HOOK-VAR."
-  :see-also (add-hook *startup-hook* *initial-buffer-hook*))
+  :see-also (add-hook run-hooks run-hook-with-args))
+
+(defdoc run-hooks
+  :category "init"
+  :usage "(run-hooks '*startup-hook*)"
+  :returns "nil"
+  :side-effects "Calls every function in each named hook variable with no arguments. Individual hook errors are reported and do not stop later hooks."
+  :see-also (run-hook-with-args add-hook remove-hook))
+
+(defdoc run-hook-with-args
+  :category "init"
+  :usage "(run-hook-with-args '*initial-buffer-hook* buffer)"
+  :returns "nil"
+  :side-effects "Calls every function in the named hook variable with ARGS. Individual hook errors are reported and do not stop later hooks."
+  :see-also (run-hooks add-hook remove-hook))
+
+(defdoc advice-entry
+  :category "init"
+  :usage "Returned by add-advice, list-advices, and advice-member-p."
+  :returns "Metadata describing an advice name, position, and function designator."
+  :see-also (add-advice list-advices defadvice))
+
+(defdoc add-advice
+  :category "init"
+  :usage "(add-advice 'send-message :before #'my-before-send :name 'my-before-send)"
+  :returns "advice-entry for the registered advice."
+  :side-effects "Replaces SYMBOL's fdefinition with an advice dispatcher while preserving the original function."
+  :see-also (remove-advice clear-advices defadvice))
+
+(defdoc remove-advice
+  :category "init"
+  :usage "(remove-advice 'send-message 'my-before-send)"
+  :returns "list of removed advice-entry values, or nil."
+  :side-effects "Removes matching advice and restores the original function when the last advice is removed."
+  :see-also (add-advice advice-member-p clear-advices))
+
+(defdoc advice-member-p
+  :category "init"
+  :usage "(advice-member-p 'send-message 'my-before-send)"
+  :returns "advice-entry or nil."
+  :see-also (add-advice remove-advice list-advices))
+
+(defdoc list-advices
+  :category "init"
+  :usage "(list-advices 'send-message)"
+  :returns "list of advice-entry values in invocation order."
+  :see-also (add-advice remove-advice advice-member-p))
+
+(defdoc clear-advices
+  :category "init"
+  :usage "(clear-advices 'send-message)"
+  :returns "T when advice was present, otherwise nil."
+  :side-effects "Removes every advice entry from SYMBOL and restores its original function."
+  :see-also (add-advice remove-advice list-advices))
+
+(defdoc defadvice
+  :category "init"
+  :usage "(defadvice send-message log-send :before (buffer) ...)"
+  :returns "advice-entry for the newly defined advice function."
+  :side-effects "Defines the advice function and registers it on the target symbol."
+  :see-also (add-advice remove-advice clear-advices))
 
 (defdoc load-user-init-file
   :category "init"

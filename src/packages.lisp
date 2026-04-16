@@ -891,10 +891,35 @@
    #:*user-init-directory*
    #:*user-init-file*
    #:*inhibit-user-init*
+   #:hook-metadata
+   #:hook-metadata-name
+   #:hook-metadata-args
+   #:hook-metadata-docstring
+   #:defhook
+   #:find-hook-metadata
+   #:list-hooks
    #:*startup-hook*
    #:*initial-buffer-hook*
+   #:*before-command-hook*
+   #:*after-command-hook*
+   #:*before-tool-hook*
+   #:*after-tool-hook*
+   #:*before-send-message-hook*
+   #:*after-send-message-hook*
    #:add-hook
    #:remove-hook
+   #:run-hooks
+   #:run-hook-with-args
+   #:advice-entry
+   #:advice-entry-name
+   #:advice-entry-where
+   #:advice-entry-designator
+   #:add-advice
+   #:remove-advice
+   #:advice-member-p
+   #:list-advices
+   #:clear-advices
+   #:defadvice
    #:load-user-init-file
 
    ;; UI Backend Protocol

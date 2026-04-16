@@ -24,6 +24,7 @@
                              (:file "session")
                              (:file "buffer")
                              (:file "package-manager")
+                             (:file "hooks")
                              (:file "commands")
                              (:file "keymap")
                              (:file "projects")

@@ -1736,11 +1736,19 @@ If so, call the handler and return T. Otherwise return NIL."
                 #'string<
                 :key #'command-display-name)))
 
+(defun call-command-function (buffer command args)
+  "Invoke COMMAND with BUFFER and ARGS, running command hooks around it."
+  (run-hook-with-args '*before-command-hook* buffer command)
+  (let ((values (multiple-value-list
+                 (apply (symbol-function command) buffer args))))
+    (run-hook-with-args '*after-command-hook* buffer command (first values))
+    (values-list values)))
+
 (defun prompt-command-arguments (buffer command specs &optional (collected nil)
                                                    (initial-input ""))
   "Prompt for SPECS sequentially in the minibuffer, then invoke COMMAND."
   (if (endp specs)
-      (apply (symbol-function command) buffer (nreverse collected))
+      (call-command-function buffer command (nreverse collected))
       (let* ((spec (first specs))
              (arg-name (getf spec :name))
              (prompt (getf spec :prompt))
@@ -1775,7 +1783,7 @@ If so, call the handler and return T. Otherwise return NIL."
       ((not (command-metadata-visible-p metadata :buffer buffer))
        (error "Command ~A belongs to an inactive package." command))
       ((null required-args)
-       (funcall command buffer))
+       (call-command-function buffer command nil))
       (prompts
        (prompt-command-arguments buffer command prompts)
        nil)
@@ -1793,6 +1801,7 @@ If so, call the handler and return T. Otherwise return NIL."
       (insert-newline-command buffer)
       (let ((input-text (message-text (buffer-input-message buffer))))
         (when (plusp (length (string-trim '(#\Space #\Tab #\Newline) input-text)))
+          (run-hook-with-args '*before-send-message-hook* buffer input-text)
           (unless (find-prefix-handler input-text)
             (maybe-compact-buffer buffer
                                   :reason :pre-user-message
@@ -1800,11 +1809,15 @@ If so, call the handler and return T. Otherwise return NIL."
           (buffer-finalize-input buffer)
           (setf (message-face-set (buffer-input-message buffer))
                 (gethash :user (buffer-face-registry buffer)))
-          ;; Check for prefix commands before sending to the LLM
-          (unless (process-prefix-command buffer input-text)
-            (if (buffer-pipeline-name buffer)
-                (run-pipeline-for-buffer buffer input-text)
-                (send-to-agent-with-context buffer)))))))
+          (let ((result
+                  ;; Check for prefix commands before sending to the LLM
+                  (or (process-prefix-command buffer input-text)
+                      (if (buffer-pipeline-name buffer)
+                          (run-pipeline-for-buffer buffer input-text)
+                          (send-to-agent-with-context buffer)))))
+            (run-hook-with-args '*after-send-message-hook*
+                                buffer input-text result)
+            result)))))
 (defcommand send-message :keys (#\Return))
 
 (defun insert-newline-command (buffer)
@@ -5071,57 +5084,6 @@ KEY is already normalized by the backend before calling this."
 (defvar *inhibit-user-init* nil
   "When non-nil, skip loading the user init file at startup.")
 
-(defvar *startup-hook* nil
-  "List of functions run after init.lisp loads and before backend startup.
-Each function is called with no arguments.")
-
-(defvar *initial-buffer-hook* nil
-  "List of functions run with the initial buffer after it is created.
-Each function is called with the initial buffer as its sole argument.")
-
-(defun add-hook (hook-var function &key append)
-  "Add FUNCTION to the hook list stored in HOOK-VAR and return FUNCTION.
-HOOK-VAR should name a special variable containing a list of function
-designators. When APPEND is non-nil, add FUNCTION at the end instead of the
-front."
-  (check-type hook-var symbol)
-  (let ((hooks (symbol-value hook-var)))
-    (unless (member function hooks :test #'eq)
-      (setf (symbol-value hook-var)
-            (if append
-                (append hooks (list function))
-                (cons function hooks)))))
-  function)
-
-(defun remove-hook (hook-var function)
-  "Remove FUNCTION from the hook list stored in HOOK-VAR.
-Returns FUNCTION."
-  (check-type hook-var symbol)
-  (setf (symbol-value hook-var)
-        (remove function (symbol-value hook-var) :test #'eq))
-  function)
-
-(defun call-hook-safely (hook hook-name &rest args)
-  "Invoke HOOK with ARGS, reporting and logging errors without aborting startup."
-  (handler-case
-      (apply (etypecase hook
-               (function hook)
-               (symbol (symbol-function hook)))
-             args)
-    (error (e)
-      (format *error-output*
-              "~&;; Warning: error running hook ~S from ~S:~%;; ~A~%"
-              hook hook-name e)
-      (file-debug-log "init" "error running hook ~S from ~S: ~A"
-                      hook hook-name e)
-      nil)))
-
-(defun run-hook-list (hook-name hooks &rest args)
-  "Run HOOKS with ARGS, catching and reporting individual hook errors."
-  (dolist (hook hooks)
-    (apply #'call-hook-safely hook hook-name args))
-  nil)
-
 (defun load-user-init-file ()
   "Load ~/.clawmacs.d/init.lisp if it exists. Errors are caught and reported."
   (when *inhibit-user-init*
@@ -5181,7 +5143,7 @@ Environment variables:
   (reload-package-channels)
   (load-autoload-packages)
   (load-project-definitions)
-  (run-hook-list '*startup-hook* *startup-hook*))
+  (run-hooks '*startup-hook*))
 
 (defun reset-interaction-state ()
   "Reset buffer selectors, minibuffer state, OAuth state, and key prefixes."
@@ -5222,7 +5184,7 @@ Environment variables:
     (setf (buffer-keymap buf) *default-keymap*)
     (add-buffer-to-ring buf)
     (setf *sandbox-root* (truename "."))
-    (run-hook-list '*initial-buffer-hook* *initial-buffer-hook* buf)
+    (run-hook-with-args '*initial-buffer-hook* buf)
     (autosave-session-snapshot buf)
     buf))
 

@@ -13,6 +13,209 @@
            (make-hash-table :test #'equal)))
      ,@body))
 
+(clawmacs:defhook *commands-test-hook* (value)
+  "Hook used by command-system tests.")
+
+(defvar *advice-test-log* nil
+  "Records advice execution order during command tests.")
+
+(defvar *hook-dispatch-test-log* nil
+  "Records command dispatch hook execution order during command tests.")
+
+(defun advice-target (value)
+  "Function used by advice tests."
+  (push (list :body value) *advice-test-log*)
+  (format nil "body-~A" value))
+
+(defun advice-values-target (value)
+  "Function used to verify advised functions preserve multiple values."
+  (values value :second))
+
+(defun hook-dispatch-test-command (buffer)
+  "Command used by hook dispatch tests."
+  (push (list :body buffer) *hook-dispatch-test-log*)
+  :command-result)
+(clawmacs:defcommand hook-dispatch-test-command)
+
+(test defhook-registers-hook-metadata
+  "defhook defines a hook var and records its argument metadata."
+  (let ((metadata (clawmacs:find-hook-metadata
+                   'clawmacs/tests::*commands-test-hook*)))
+    (is (not (null metadata)))
+    (is (equal '(value) (clawmacs:hook-metadata-args metadata)))
+    (is (find 'clawmacs/tests::*commands-test-hook*
+              (clawmacs:list-hooks)
+              :key #'clawmacs:hook-metadata-name))))
+
+(test run-hook-with-args-isolates-hook-errors
+  "Hook errors are reported without preventing later hook functions."
+  (let ((*commands-test-hook* nil)
+        (log nil)
+        (*error-output* (make-string-output-stream)))
+    (clawmacs:add-hook
+     '*commands-test-hook*
+     (lambda (value)
+       (declare (ignore value))
+       (error "expected hook failure"))
+     :append t)
+    (clawmacs:add-hook
+     '*commands-test-hook*
+     (lambda (value)
+       (push (list :after-error value) log))
+     :append t)
+    (clawmacs:run-hook-with-args '*commands-test-hook* "ok")
+    (is (equal '((:after-error "ok")) (reverse log)))))
+
+(test advice-before-after-and-around-wrap-function
+  "Advice entries run around the preserved original fdefinition."
+  (let ((*advice-test-log* nil))
+    (unwind-protect
+         (progn
+           (clawmacs:clear-advices 'advice-target)
+           (clawmacs:add-advice
+            'advice-target
+            :before
+            (lambda (value)
+              (push (list :before value) *advice-test-log*))
+            :name 'advice-test-before
+            :append t)
+           (clawmacs:add-advice
+            'advice-target
+            :around
+            (lambda (next value)
+              (push (list :around-before value) *advice-test-log*)
+              (let ((result (funcall next (format nil "~A!" value))))
+                (push (list :around-after result) *advice-test-log*)
+                (format nil "around-~A" result)))
+            :name 'advice-test-around
+            :append t)
+           (clawmacs:add-advice
+            'advice-target
+            :after
+            (lambda (result value)
+              (push (list :after result value) *advice-test-log*))
+            :name 'advice-test-after
+            :append t)
+           (is (string= "around-body-x!" (funcall 'advice-target "x")))
+           (is (equal '((:before "x")
+                        (:around-before "x")
+                        (:body "x!")
+                        (:around-after "body-x!")
+                        (:after "around-body-x!" "x"))
+                      (reverse *advice-test-log*))))
+      (clawmacs:clear-advices 'advice-target))))
+
+(test advice-removal-and-multiple-values
+  "Removing the last advice restores the original function and values."
+  (clawmacs:clear-advices 'advice-values-target)
+  (let ((original (symbol-function 'advice-values-target)))
+    (unwind-protect
+         (progn
+           (clawmacs:add-advice
+            'advice-values-target
+            :after
+            (lambda (result value)
+              (declare (ignore result value))
+              nil)
+            :name 'advice-values-after)
+           (is (clawmacs:advice-member-p 'advice-values-target
+                                          'advice-values-after))
+           (is (equal '(:first :second)
+                      (multiple-value-list
+                       (funcall 'advice-values-target :first))))
+           (is (not (null (clawmacs:remove-advice
+                           'advice-values-target
+                           'advice-values-after))))
+           (is (null (clawmacs:list-advices 'advice-values-target)))
+           (is (eq original (symbol-function 'advice-values-target))))
+      (clawmacs:clear-advices 'advice-values-target))))
+
+(test invoke-command-runs-command-hooks
+  "Interactive command dispatch runs before and after command hooks."
+  (let ((clawmacs::*before-command-hook* nil)
+        (clawmacs::*after-command-hook* nil)
+        (*hook-dispatch-test-log* nil))
+    (clawmacs:add-hook
+     'clawmacs:*before-command-hook*
+     (lambda (buffer command)
+       (push (list :before buffer command) *hook-dispatch-test-log*))
+     :append t)
+    (clawmacs:add-hook
+     'clawmacs:*after-command-hook*
+     (lambda (buffer command result)
+       (push (list :after buffer command result) *hook-dispatch-test-log*))
+     :append t)
+    (let ((buffer (make-buffer "command-hook-test")))
+      (is (eq :command-result
+              (clawmacs:invoke-command
+               buffer 'clawmacs/tests::hook-dispatch-test-command)))
+      (is (equal `((:before ,buffer
+                            clawmacs/tests::hook-dispatch-test-command)
+                   (:body ,buffer)
+                   (:after ,buffer
+                           clawmacs/tests::hook-dispatch-test-command
+                           :command-result))
+                 (reverse *hook-dispatch-test-log*))))))
+
+(test execute-tool-runs-tool-hooks
+  "Tool execution runs before and after tool hooks."
+  (let ((clawmacs::*tool-table* (make-hash-table :test #'equal))
+        (clawmacs::*before-tool-hook* nil)
+        (clawmacs::*after-tool-hook* nil)
+        (log nil))
+    (clawmacs:register-tool
+     "hook_probe"
+     "Probe tool hooks."
+     '((:type . "object"))
+     :agent-allowed
+     (lambda (args)
+       (push (list :body args) log)
+       "tool-result"))
+    (clawmacs:add-hook
+     'clawmacs:*before-tool-hook*
+     (lambda (tool-name args)
+       (push (list :before tool-name args) log))
+     :append t)
+    (clawmacs:add-hook
+     'clawmacs:*after-tool-hook*
+     (lambda (tool-name args result)
+       (push (list :after tool-name args result) log))
+     :append t)
+    (let ((args '(:value "ok")))
+      (is (string= "tool-result"
+                   (clawmacs:execute-tool "hook_probe" args)))
+      (is (equal `((:before "hook_probe" ,args)
+                   (:body ,args)
+                   (:after "hook_probe" ,args "tool-result"))
+                 (reverse log))))))
+
+(test send-message-runs-send-hooks
+  "Sending a non-empty input runs before and after send hooks."
+  (let ((clawmacs::*before-send-message-hook* nil)
+        (clawmacs::*after-send-message-hook* nil)
+        (log nil))
+    (clawmacs:add-hook
+     'clawmacs:*before-send-message-hook*
+     (lambda (buffer input-text)
+       (push (list :before buffer input-text) log))
+     :append t)
+    (clawmacs:add-hook
+     'clawmacs:*after-send-message-hook*
+     (lambda (buffer input-text result)
+       (push (list :after buffer input-text result) log))
+     :append t)
+    (let* ((buffer (make-buffer "send-hook-test"))
+           (clawmacs::*prefix-handlers*
+             (list (cons "?"
+                         (lambda (buf remaining)
+                           (push (list :handler buf remaining) log))))))
+      (clawmacs::set-message-text (buffer-input-message buffer) "?payload")
+      (is (eq t (clawmacs::send-message buffer)))
+      (is (equal `((:before ,buffer "?payload")
+                   (:handler ,buffer "payload")
+                   (:after ,buffer "?payload" t))
+                 (reverse log))))))
+
 (test command-metadata-registration
   "defcommand registers metadata in the command table."
   (let ((*command-table* (make-hash-table :test #'eq)))
