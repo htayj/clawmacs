@@ -1249,6 +1249,46 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
 ;;; Key Normalization (McCLIM-specific)
 ;;; --------------------------------------------------------------------------
 
+(defun mcclim-key-name-control-character (key-name)
+  "Return the ASCII control character represented by symbolic KEY-NAME.
+Some X backends report control events as symbolic control names such as :ETX
+or :EM rather than as characters. Normalize those to the same control
+characters delivered by terminal backends."
+  (when (keywordp key-name)
+    (let ((code (cdr (assoc key-name
+                            '((:soh . 1) (:stx . 2) (:etx . 3)
+                              (:eot . 4) (:enq . 5) (:ack . 6)
+                              (:bel . 7) (:bs . 8) (:ht . 9)
+                              (:lf . 10) (:nl . 10) (:vt . 11)
+                              (:ff . 12) (:cr . 13) (:so . 14)
+                              (:si . 15) (:dle . 16) (:dc1 . 17)
+                              (:dc2 . 18) (:dc3 . 19) (:dc4 . 20)
+                              (:nak . 21) (:syn . 22) (:etb . 23)
+                              (:can . 24) (:em . 25) (:sub . 26))
+                            :test #'eq))))
+      (and code (code-char code)))))
+
+(defun mcclim-letter-key-name-control-character (key-name)
+  "Return the ASCII control character represented by Control+letter KEY-NAME."
+  (when (keywordp key-name)
+    (let* ((name (symbol-name key-name)))
+      (when (= (length name) 1)
+        (let ((char (char name 0)))
+          (when (alpha-char-p char)
+            (code-char (- (char-code (char-upcase char)) 64))))))))
+
+(defun mcclim-modifier-key-name-p (key-name)
+  "Return true when KEY-NAME names a standalone modifier key."
+  (when (keywordp key-name)
+    (let ((name (symbol-name key-name)))
+      (or (search "SHIFT" name)
+          (search "CONTROL" name)
+          (search "CTRL" name)
+          (search "META" name)
+          (search "ALT" name)
+          (search "SUPER" name)
+          (search "HYPER" name)))))
+
 (defun mcclim-normalize-key (key-event)
   "Normalize a McCLIM key-press-event to the same abstract format as croatoan.
 Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
@@ -1276,11 +1316,22 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
                    ;; Control + letter: produce the control character
                    ((and ctrl-p char (alpha-char-p char))
                     (code-char (- (char-code (char-upcase char)) 64)))
+                   ;; Some CLX/X11 paths provide only KEY-NAME for Ctrl+letter.
+                   ((and ctrl-p
+                         (mcclim-letter-key-name-control-character key-name))
+                    (mcclim-letter-key-name-control-character key-name))
+                   ;; Other paths provide symbolic control names like :EM.
+                   ((mcclim-key-name-control-character key-name)
+                    (mcclim-key-name-control-character key-name))
                    ;; Regular character
                    (char char)
                    ;; Named key with no character → keyword
                    (t key-name))))))
     (cond
+      ;; X11 sends standalone modifier key-presses before modified keys. They
+      ;; should not self-insert or consume a pending C-x/C-c/C-h/ESC prefix.
+      ((and (null char) (mcclim-modifier-key-name-p key-name))
+       nil)
       ;; C-h prefix — McCLIM delivers Control+h with key-name :backspace
       ;; (ASCII 8 = BS), so we must check the modifier+character explicitly
       ;; before the generic backspace handling below.

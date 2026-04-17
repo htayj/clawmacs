@@ -27,7 +27,7 @@
     (:read-only . ,(message-read-only-p message))
     (:timestamp . ,(message-timestamp message))))
 
-(defun buffer-message-tail (buffer &key (limit 8))
+(defun buffer-message-tail (buffer &key (limit 80))
   (let ((items nil))
     (loop :for message := (buffer-first-message buffer) :then (message-next message)
           :while (and message (not (eq message (buffer-input-message buffer))))
@@ -54,6 +54,11 @@
     (when (and items (<= 0 index) (< index (length items)))
       (minibuffer-item-display (nth index items)))))
 
+(defun minibuffer-candidates ()
+  (coerce (mapcar #'minibuffer-item-display
+                  clawmacs::*minibuffer-filtered-items*)
+          'vector))
+
 (defun minibuffer-state ()
   `((:active . ,clawmacs::*minibuffer-active*)
     (:mode . ,(string-downcase (symbol-name clawmacs::*minibuffer-mode*)))
@@ -62,6 +67,7 @@
     (:point . ,clawmacs::*minibuffer-point*)
     (:selected-index . ,clawmacs::*minibuffer-selected-index*)
     (:selected . ,(or (selected-minibuffer-display) ""))
+    (:candidates . ,(minibuffer-candidates))
     (:filtered-count . ,(length clawmacs::*minibuffer-filtered-items*))))
 
 (defun selector-state ()
@@ -71,6 +77,49 @@
     (:model-selector-index . ,clawmacs::*model-selector-index*)
     (:think-selector-active . ,clawmacs::*think-selector-active*)
     (:think-selector-index . ,clawmacs::*think-selector-index*)))
+
+(defun buffer-ring-state ()
+  (let ((current (current-buffer)))
+    (coerce
+     (loop :for buffer :in *buffer-ring*
+           :collect `((:name . ,(buffer-name buffer))
+                      (:agent . ,(buffer-agent-name buffer))
+                      (:status . ,(string-downcase
+                                    (symbol-name (buffer-status buffer))))
+                      (:message-count . ,(max 0 (1- (buffer-message-count buffer))))
+                      (:current . ,(eq buffer current))))
+     'vector)))
+
+(defun skill-completion-selected-display ()
+  (let ((items clawmacs::*skill-completion-filtered-items*)
+        (index clawmacs::*skill-completion-selected-index*))
+    (when (and items (<= 0 index) (< index (length items)))
+      (minibuffer-item-display (nth index items)))))
+
+(defun skill-completion-candidates ()
+  (coerce (mapcar #'minibuffer-item-display
+                  clawmacs::*skill-completion-filtered-items*)
+          'vector))
+
+(defun skill-completion-state ()
+  `((:active . ,clawmacs::*skill-completion-active*)
+    (:query . ,clawmacs::*skill-completion-query*)
+    (:token . ,(or clawmacs::*skill-completion-token-text* ""))
+    (:selected-index . ,clawmacs::*skill-completion-selected-index*)
+    (:selected . ,(or (skill-completion-selected-display) ""))
+    (:candidates . ,(skill-completion-candidates))
+    (:filtered-count . ,(length clawmacs::*skill-completion-filtered-items*))))
+
+(defun approval-state (buffer)
+  (when (buffer-approval-pending buffer)
+    `((:pending . t)
+      (:tool-name . ,(or (getf (buffer-approval-pending buffer) :tool-name)
+                         ""))
+      (:display . ,(truncate-string
+                    (or (getf (buffer-approval-pending buffer) :display-expanded)
+                        (getf (buffer-approval-pending buffer) :display-raw)
+                        "")
+                    2000)))))
 
 (defun buffer-state (buffer)
   `((:name . ,(buffer-name buffer))
@@ -85,6 +134,7 @@
     (:show-metadata . ,(buffer-show-metadata-p buffer))
     (:modeline . ,(modeline-string buffer))
     (:who-line . ,(who-line-vector buffer))
+    (:approval . ,(approval-state buffer))
     (:messages . ,(buffer-message-tail buffer))))
 
 (defun snapshot ()
@@ -94,7 +144,9 @@
         `((:ready . ,(not (null buffer)))
           (:timestamp . ,(get-universal-time))
           (:buffer . ,(when buffer (buffer-state buffer)))
+          (:buffers . ,(buffer-ring-state))
           (:minibuffer . ,(minibuffer-state))
+          (:skill-completion . ,(skill-completion-state))
           (:selectors . ,(selector-state))))
     (error (condition)
       `((:ready . nil)

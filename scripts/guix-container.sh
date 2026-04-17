@@ -672,6 +672,9 @@ launch_payload() {
   if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.clawmacs.d" ]; then
     extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.clawmacs.d=$WORKSPACE_HOME/.clawmacs.d"
   fi
+  if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.codex" ]; then
+    extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.codex=$WORKSPACE_HOME/.codex"
+  fi
   # X11 forwarding: expose the X socket and Xauthority so McCLIM (and any
   # other graphical toolkit) can connect to the host display server. McCLIM
   # E2E starts Xvfb inside the container, so it needs a private writable X
