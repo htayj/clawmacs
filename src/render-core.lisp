@@ -303,6 +303,28 @@ Uses the global :system face if available, otherwise cyan on black."
              :background nil :foreground nil
              :bold-p nil :underline-p nil :reverse-p nil)))))
 
+(defun ensure-buffer-agent-face-set
+    (buf &optional (agent-name (buffer-agent-name buf)))
+  "Ensure BUF has a face set for AGENT-NAME and return it."
+  (let* ((registry (buffer-face-registry buf))
+         (agent-kw (intern (string-upcase agent-name) :keyword)))
+    (or (gethash agent-kw registry)
+        (setf (gethash agent-kw registry)
+              (make-default-agent-face-set agent-kw)))))
+
+(defun init-face-registry (buf)
+  "Populate BUF's face registry with default user, agent, and system faces."
+  (let* ((registry (buffer-face-registry buf))
+         (user-fs (make-default-user-face-set))
+         (system-fs (make-default-system-face-set))
+         (summary-fs (make-default-compaction-summary-face-set)))
+    (setf (gethash :user registry) user-fs
+          (gethash :system registry) system-fs
+          (gethash :compaction-summary registry) summary-fs)
+    (ensure-buffer-agent-face-set buf)
+    (setf (message-face-set (buffer-input-message buf)) user-fs)
+    buf))
+
 (defun make-modeline-face ()
   "Return the modeline face from the global registry, or create a default.
 Prefers the stored global face for customizability."

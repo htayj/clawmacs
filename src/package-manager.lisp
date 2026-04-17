@@ -514,6 +514,12 @@ removes the package from the other scopes in the same context."
        (set-package-name-enabled-in-table
         name (package-configuration-global-table configuration) t)))
     (save-package-configuration)
+    (maybe-run-hook-with-args
+     '*package-enablement-changed-hook*
+     name
+     scope
+     buffer
+     agent)
     scope))
 
 (defun cycle-package-enablement-scope (package &key buffer agent-name)
@@ -612,6 +618,171 @@ removes the package from the other scopes in the same context."
             (format stream "<!-- ~A -->~%" (package-prompt-section-title section)))
           (format stream "~A~%~%" (package-prompt-section-body section)))
         (format stream "</package_instructions>")))))
+
+(defun package-display-description (definition)
+  "Return DEFINITION's single-line selector/help description."
+  (let ((description (package-definition-description definition)))
+    (if (and description (plusp (length description)))
+        description
+        "No description.")))
+
+(defun package-scope-label (scope)
+  "Return the selector label for package enablement SCOPE."
+  (ecase scope
+    (:default "default")
+    (:buffer "buffer")
+    (:agent "agent")
+    (:global "global")))
+
+(defun package-scope-message (scope)
+  "Return a short user-facing description for package SCOPE."
+  (ecase scope
+    (:default "default")
+    (:buffer "enabled for this buffer")
+    (:agent "enabled for this agent")
+    (:global "enabled globally")))
+
+(defun package-owned-command-metadata (package-name)
+  "Return command metadata registered by PACKAGE-NAME."
+  (let ((entries nil))
+    (maphash (lambda (_name metadata)
+               (declare (ignore _name))
+               (when (string= package-name
+                              (or (command-metadata-package metadata) ""))
+                 (push metadata entries)))
+             *command-table*)
+    (sort entries #'string<
+          :key (lambda (metadata)
+                 (symbol-name (command-metadata-name metadata))))))
+
+(defun package-owned-tool-metadata (package-name)
+  "Return tool metadata registered by PACKAGE-NAME."
+  (remove-if-not (lambda (metadata)
+                   (string= package-name
+                            (or (agent-tool-metadata-package metadata) "")))
+                 (list-agent-tool-metadata)))
+
+(defun package-owned-prompt-sections (package-name)
+  "Return prompt sections registered by PACKAGE-NAME."
+  (remove-if-not (lambda (section)
+                   (string= package-name
+                            (or (package-prompt-section-package section) "")))
+                 (list-package-prompt-sections)))
+
+(defun package-context-message-marker (package-name)
+  "Return the stable marker used for PACKAGE-NAME context messages."
+  (format nil "<package_context package=~S>" package-name))
+
+(defun buffer-has-conversation-context-p (buffer)
+  "Return true when BUFFER already has provider-visible context."
+  (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
+        :while (and msg (not (eq msg (buffer-input-message buffer))))
+        :thereis (not (eq (message-sender msg) :system))))
+
+(defun buffer-package-context-message-present-p (buffer package-name)
+  "Return true when BUFFER already contains PACKAGE-NAME's context marker."
+  (let ((marker (package-context-message-marker package-name)))
+    (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
+          :while (and msg (not (eq msg (buffer-input-message buffer))))
+          :thereis (and (eq (message-sender msg) :context)
+                        (search marker (message-text msg))))))
+
+(defun package-owned-tool-definitions-for-context (package-name)
+  "Return provider-style tool definitions owned by PACKAGE-NAME."
+  (mapcar (lambda (metadata)
+            `((:name . ,(agent-tool-metadata-name metadata))
+              (:description . ,(agent-tool-metadata-description metadata))
+              (:input--schema . ,(agent-tool-metadata-input-schema metadata))))
+          (package-owned-tool-metadata package-name)))
+
+(defun package-system-prompt-context-text (definition buffer)
+  "Return package prompt content that should be appended to existing context."
+  (when (load-clawmacs-package definition)
+    (let* ((name (package-definition-name definition))
+           (prompt-section
+             (render-package-prompt-sections
+              (package-owned-prompt-sections name)
+              :buffer buffer))
+           (tools-section
+             (render-agent-tools-section
+              (package-owned-tool-definitions-for-context name)))
+           (parts (remove nil (list prompt-section tools-section))))
+      (when parts
+        (with-output-to-string (s)
+          (format s "~A~%" (package-context-message-marker name))
+          (format s "The ~A package was enabled after earlier conversation context. Apply this package context to subsequent work.~%~%"
+                  name)
+          (format s "~{~A~^~%~%~}" parts)
+          (format s "~%</package_context>"))))))
+
+(defun maybe-insert-enabled-package-context
+    (buffer definition previous-scope new-scope had-context-p)
+  "Append newly enabled package prompt content to BUFFER context when needed."
+  (let ((name (and definition (package-definition-name definition))))
+    (when (and name
+               had-context-p
+               (eq previous-scope :default)
+               (not (eq new-scope :default))
+               (not (buffer-package-context-message-present-p buffer name)))
+      (let ((text (package-system-prompt-context-text definition buffer)))
+        (when text
+          (buffer-insert-context-message buffer text))))))
+
+(defun package-owned-extended-docs (package-name)
+  "Return extended documentation entries registered by PACKAGE-NAME."
+  (let ((entries nil))
+    (maphash (lambda (symbol doc)
+               (when (string= package-name (or (getf doc :package) ""))
+                 (push (cons symbol doc) entries)))
+             *extended-docs*)
+    (sort entries #'string< :key (lambda (entry)
+                                   (symbol-name (car entry))))))
+
+(defun describe-installed-package-to-string (definition buffer)
+  "Return the help text for installed package DEFINITION."
+  (load-clawmacs-package definition)
+  (let* ((name (package-definition-name definition))
+         (scope (package-enablement-scope name :buffer buffer)))
+    (with-output-to-string (s)
+      (format s "Package: ~A~%" name)
+      (format s "Enabled: [~A]~%" (package-scope-label scope))
+      (format s "Source: ~(~A~)~%" (package-definition-source-tier definition))
+      (format s "Root: ~A~%~%" (namestring (package-definition-root definition)))
+      (format s "~A~%~%" (package-display-description definition))
+      (let ((sections (package-owned-prompt-sections name)))
+        (when sections
+          (format s "Prompt Sections:~%")
+          (dolist (section sections)
+            (format s "  - ~A~%"
+                    (or (package-prompt-section-title section)
+                        (package-prompt-section-name section))))
+          (format s "~%")))
+      (let ((tools (package-owned-tool-metadata name)))
+        (when tools
+          (format s "Tools:~%")
+          (dolist (tool tools)
+            (format s "  - ~A (~(~A~)): ~A~%"
+                    (agent-tool-metadata-name tool)
+                    (agent-tool-metadata-permission tool)
+                    (agent-tool-metadata-description tool)))
+          (format s "~%")))
+      (let ((commands (package-owned-command-metadata name)))
+        (when commands
+          (format s "Commands:~%")
+          (dolist (command commands)
+            (format s "  - ~(~A~): ~A~%"
+                    (command-metadata-name command)
+                    (command-metadata-docstring command)))
+          (format s "~%")))
+      (let ((docs (package-owned-extended-docs name)))
+        (when docs
+          (format s "Documentation:~%")
+          (dolist (entry docs)
+            (let ((doc (cdr entry)))
+              (format s "  - ~(~A~)~@[: ~A~]~%"
+                      (car entry)
+                      (getf doc :category))))
+          (format s "~%"))))))
 
 (defun manifest-entrypoint-pathname (value)
   "Normalize a manifest :ENTRYPOINT value to a relative pathname."

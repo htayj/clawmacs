@@ -167,30 +167,6 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
           (string-trim '(#\Space #\Tab #\Newline #\Return)
                        (or summary ""))))
 
-(defun buffer-insert-read-only-message (buf sender text
-                                        &key raw-content timestamp
-                                             (record-p t))
-  "Insert a read-only message before BUF's input message."
-  (let* ((msg (make-message sender :read-only-p t))
-         (input (buffer-input-message buf))
-         (before-input (message-prev input)))
-    (set-message-text msg (or text ""))
-    (setf (message-timestamp msg) (or timestamp (get-universal-time))
-          (message-raw-content msg) raw-content
-          (message-face-set msg)
-          (or (gethash sender (buffer-face-registry buf))
-              (and (eq sender :compaction-summary)
-                   (gethash :system (buffer-face-registry buf)))))
-    (setf (message-prev msg) before-input
-          (message-next msg) input
-          (message-prev input) msg)
-    (if before-input
-        (setf (message-next before-input) msg)
-        (setf (buffer-first-message buf) msg))
-    (when record-p
-      (record-buffer-message buf msg))
-    msg))
-
 (defun clear-buffer-history-before-input (buf)
   "Remove all finalized history messages from BUF, preserving the input message."
   (let ((input (buffer-input-message buf)))

@@ -28,6 +28,12 @@
 (defvar *scratch-buffer-initial-text* ""
   "Initial text inserted into the scratch buffer when it is created.")
 
+(defun maybe-run-hook-with-args (hook-var &rest args)
+  "Run HOOK-VAR with ARGS when the hooks system has been loaded."
+  (when (and (boundp hook-var)
+             (fboundp 'run-hook-with-args))
+    (apply (symbol-function 'run-hook-with-args) hook-var args)))
+
 (defclass buffer ()
   ((name              :initarg :name
                       :accessor buffer-name
@@ -243,6 +249,7 @@ Enforces the invariant that it is not read-only."
                 :enabled-packages (copy-list enabled-packages)
                 :session session
                 :face-registry registry)))
+    (maybe-run-hook-with-args '*after-buffer-create-hook* buf)
     buf))
 
 (declaim (ftype (function (buffer) boolean) scratch-buffer-p))
@@ -492,6 +499,7 @@ and create a new empty input message at the tail."
     (setf (message-read-only-p input) t
           (message-timestamp input) (get-universal-time)
           (message-sender input) :user)
+    (maybe-run-hook-with-args '*after-message-insert-hook* buf input)
     (let ((*suppress-session-autosave* t))
       (record-buffer-message buf input))
     (let ((new-input (make-message :user)))
@@ -563,71 +571,147 @@ and create a new empty input message at the tail."
           (message-point-offset msg) 0))
   msg)
 
-(declaim (ftype (function (buffer string &key (:record-p boolean)) message)
-                buffer-insert-agent-message))
-(defun buffer-insert-agent-message (buf text &key (record-p t))
-  "Create a read-only agent message with TEXT and insert it before the input message.
-TEXT may contain newlines, which are split into separate line objects."
-  (let* ((agent-keyword (intern (string-upcase (buffer-agent-name buf)) :keyword))
-         (agent-msg (make-message agent-keyword :read-only-p t))
-         (input (buffer-input-message buf)))
-    (set-message-text agent-msg text)
-    (setf (message-timestamp agent-msg) (get-universal-time))
-    (let ((before-input (message-prev input)))
-      (setf (message-prev agent-msg) before-input
-            (message-next agent-msg) input
-            (message-prev input) agent-msg)
-      (if before-input
-          (setf (message-next before-input) agent-msg)
-          (setf (buffer-first-message buf) agent-msg)))
-    (when record-p
-      (record-buffer-message buf agent-msg))
-    agent-msg))
+(defun insert-message-before-input (buf msg)
+  "Insert MSG before BUF's editable input message."
+  (let* ((input (buffer-input-message buf))
+         (before-input (message-prev input)))
+    (setf (message-prev msg) before-input
+          (message-next msg) input
+          (message-prev input) msg)
+    (if before-input
+        (setf (message-next before-input) msg)
+        (setf (buffer-first-message buf) msg)))
+  msg)
 
-(declaim (ftype (function (buffer string &key (:record-p boolean)) message)
-                buffer-insert-context-message))
-(defun buffer-insert-context-message (buf text &key (record-p t))
-  "Create a read-only context message with TEXT before the input message.
+(defun buffer-insert-read-only-message
+    (buf sender text &key raw-content metadata face-set timestamp
+                      (record-p t) (run-hook-p t))
+  "Create a read-only SENDER message with TEXT before BUF's input message."
+  (let ((msg (make-message sender :read-only-p t)))
+    (set-message-text msg text)
+    (setf (message-timestamp msg) (or timestamp (get-universal-time)))
+    (when raw-content
+      (setf (message-raw-content msg) raw-content))
+    (when metadata
+      (setf (message-metadata msg) metadata))
+    (let ((resolved-face-set (or face-set
+                                 (gethash sender
+                                          (buffer-face-registry buf)))))
+      (when resolved-face-set
+        (setf (message-face-set msg) resolved-face-set)))
+    (insert-message-before-input buf msg)
+    (when run-hook-p
+      (maybe-run-hook-with-args '*after-message-insert-hook* buf msg))
+    (when record-p
+      (record-buffer-message buf msg))
+    msg))
+
+(defun buffer-insert-agent-message
+    (buf text &key (record-p t) raw-content metadata face-set (run-hook-p t))
+  "Create a read-only agent message with TEXT before BUF's input message."
+  (let ((agent-keyword (intern (string-upcase (buffer-agent-name buf)) :keyword)))
+    (buffer-insert-read-only-message
+     buf agent-keyword text
+     :raw-content raw-content
+     :metadata metadata
+     :face-set face-set
+     :record-p record-p
+     :run-hook-p run-hook-p)))
+
+(defun buffer-insert-context-message
+    (buf text &key (record-p t) raw-content metadata face-set (run-hook-p t))
+  "Create a read-only context message with TEXT before BUF's input message.
 Context messages are sent to providers as user-context messages."
-  (let* ((context-msg (make-message :context :read-only-p t))
-         (input (buffer-input-message buf)))
-    (set-message-text context-msg text)
-    (setf (message-timestamp context-msg) (get-universal-time))
-    (let ((before-input (message-prev input)))
-      (setf (message-prev context-msg) before-input
-            (message-next context-msg) input
-            (message-prev input) context-msg)
-      (if before-input
-          (setf (message-next before-input) context-msg)
-          (setf (buffer-first-message buf) context-msg)))
-    (when record-p
-      (record-buffer-message buf context-msg))
-    context-msg))
+  (buffer-insert-read-only-message
+   buf :context text
+   :raw-content raw-content
+   :metadata metadata
+   :face-set face-set
+   :record-p record-p
+   :run-hook-p run-hook-p))
 
-(declaim (ftype (function (buffer string &key (:record-p boolean)) message)
-                buffer-insert-system-message))
-(defun buffer-insert-system-message (buf text &key (record-p t))
-  "Create a read-only system message with TEXT and insert it before the input message.
-System messages are display-only — they are excluded from API conversation history.
-Assigns the :system face set from the buffer's face registry if available."
-  (let* ((sys-msg (make-message :system :read-only-p t))
-         (input (buffer-input-message buf)))
-    (set-message-text sys-msg text)
-    (setf (message-timestamp sys-msg) (get-universal-time))
-    ;; Assign system face set if registered
-    (let ((sys-fs (gethash :system (buffer-face-registry buf))))
-      (when sys-fs
-        (setf (message-face-set sys-msg) sys-fs)))
-    (let ((before-input (message-prev input)))
-      (setf (message-prev sys-msg) before-input
-            (message-next sys-msg) input
-            (message-prev input) sys-msg)
-      (if before-input
-          (setf (message-next before-input) sys-msg)
-          (setf (buffer-first-message buf) sys-msg)))
-    (when record-p
-      (record-buffer-message buf sys-msg))
-    sys-msg))
+(defun buffer-insert-system-message
+    (buf text &key (record-p t) raw-content metadata face-set (run-hook-p t))
+  "Create a read-only display-only system message before BUF's input message."
+  (buffer-insert-read-only-message
+   buf :system text
+   :raw-content raw-content
+   :metadata metadata
+   :face-set face-set
+   :record-p record-p
+   :run-hook-p run-hook-p))
+
+(defun ensure-default-keymap-initialized ()
+  "Ensure the default keymap exists when keymap code is loaded."
+  (when (and (boundp '*default-keymap*)
+             (null (symbol-value '*default-keymap*))
+             (fboundp 'init-default-keymap))
+    (funcall (symbol-function 'init-default-keymap)))
+  (and (boundp '*default-keymap*)
+       (symbol-value '*default-keymap*)))
+
+(defun ensure-scratch-keymap-initialized ()
+  "Ensure the scratch keymap exists when keymap code is loaded."
+  (ensure-default-keymap-initialized)
+  (when (and (boundp '*scratch-keymap*)
+             (null (symbol-value '*scratch-keymap*))
+             (fboundp 'init-scratch-keymap))
+    (funcall (symbol-function 'init-scratch-keymap)))
+  (or (and (boundp '*scratch-keymap*)
+           (symbol-value '*scratch-keymap*))
+      (ensure-default-keymap-initialized)))
+
+(defun initialize-buffer-display-defaults (buf &key keymap)
+  "Install default faces and KEYMAP on BUF when those systems are loaded."
+  (when (fboundp 'init-face-registry)
+    (funcall (symbol-function 'init-face-registry) buf))
+  (setf (buffer-keymap buf)
+        (or keymap
+            (ensure-default-keymap-initialized)))
+  buf)
+
+(defun make-chat-buffer
+    (name &key (agent-name *default-agent-name*)
+               (working-directory (truename "."))
+               (session (load-or-create-session name))
+               (add-to-ring-p nil))
+  "Create a chat buffer with default faces, keymap, and optional ring entry."
+  (let ((buf (make-buffer name
+                          :agent-name agent-name
+                          :working-directory working-directory
+                          :session session)))
+    (initialize-buffer-display-defaults buf)
+    (when add-to-ring-p
+      (add-buffer-to-ring buf))
+    buf))
+
+(defun make-help-buffer (name content)
+  "Create a help buffer with NAME containing CONTENT as read-only text."
+  (let ((buf (make-buffer name :agent-name "help" :kind :help)))
+    (initialize-buffer-display-defaults buf)
+    (setf (buffer-major-mode buf) "help")
+    (buffer-insert-agent-message buf content)
+    (add-buffer-to-ring buf)
+    buf))
+
+(defun ensure-scratch-buffer ()
+  "Ensure the process-local scratch buffer is loaded in the buffer ring.
+The current buffer remains current when a current buffer already exists."
+  (or (scratch-buffer)
+      (let* ((current (current-buffer))
+             (buf (make-buffer *scratch-buffer-name*
+                               :agent-name "scratch"
+                               :kind :scratch
+                               :working-directory (truename "."))))
+        (initialize-buffer-display-defaults
+         buf
+         :keymap (ensure-scratch-keymap-initialized))
+        (setf (buffer-major-mode buf) "scratch")
+        (setf (scratch-buffer-text buf) *scratch-buffer-initial-text*)
+        (add-buffer-to-ring buf)
+        (when current
+          (switch-to-buffer current))
+        buf)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Session Persistence
@@ -678,6 +762,7 @@ Assigns the :system face set from the buffer's face registry if available."
                             :if-exists :supersede
                             :if-does-not-exist :create)
       (write-string (cl-json:encode-json-to-string (serialize-buffer buf)) s))
+    (maybe-run-hook-with-args '*after-session-save-hook* buf path)
     path))
 
 (defun replay-serialized-message (buf msg-data)
@@ -686,25 +771,15 @@ Assigns the :system face set from the buffer's face registry if available."
          (text (cdr (assoc :text msg-data)))
          (raw-content (cdr (assoc :raw-content msg-data)))
          (metadata (cdr (assoc :metadata msg-data)))
-         (sender-kw (intern sender-str :keyword))
-         (msg (make-message sender-kw :read-only-p t)))
-    (set-message-text msg (or text ""))
-    (setf (message-timestamp msg)
-          (cdr (assoc :timestamp msg-data)))
-    (when raw-content
-      (setf (message-raw-content msg)
-            (normalize-legacy-raw-content raw-content)))
-    (when metadata
-      (setf (message-metadata msg) metadata))
-    (let ((input (buffer-input-message buf))
-          (before (message-prev (buffer-input-message buf))))
-      (setf (message-prev msg) before
-            (message-next msg) input
-            (message-prev input) msg)
-      (if before
-          (setf (message-next before) msg)
-          (setf (buffer-first-message buf) msg)))
-    msg))
+         (sender-kw (intern sender-str :keyword)))
+    (buffer-insert-read-only-message
+     buf sender-kw (or text "")
+     :raw-content (and raw-content
+                       (normalize-legacy-raw-content raw-content))
+     :metadata metadata
+     :timestamp (cdr (assoc :timestamp msg-data))
+     :record-p nil
+     :run-hook-p nil)))
 
 (defun replay-serialized-messages (buf messages)
   "Replay serialized MESSAGES into BUF without transcript or autosave writes."
@@ -802,9 +877,12 @@ Assigns the :system face set from the buffer's face registry if available."
 (defun load-session (session-name &key (agent-name *default-agent-name*))
   "Load a saved session into a new buffer. Returns the buffer or nil."
   (let ((path (session-path session-name)))
-    (if (probe-file path)
-        (load-session-snapshot session-name path agent-name)
-        (load-session-sidecar session-name :agent-name agent-name))))
+    (let ((buf (if (probe-file path)
+                   (load-session-snapshot session-name path agent-name)
+                   (load-session-sidecar session-name :agent-name agent-name))))
+      (when buf
+        (maybe-run-hook-with-args '*after-session-load-hook* buf session-name))
+      buf)))
 
 (defun saved-session-snapshot-names ()
   "Return session names with legacy JSON snapshots."

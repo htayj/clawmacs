@@ -137,6 +137,24 @@ Returns FUNCTION."
 (defhook *after-send-message-hook* (buffer input-text result)
   "List of functions run after a non-empty chat input send returns normally.")
 
+(defhook *after-buffer-create-hook* (buffer)
+  "List of functions run after a buffer object is created.")
+
+(defhook *after-message-insert-hook* (buffer message)
+  "List of functions run after a read-only message is inserted into a buffer.")
+
+(defhook *after-provider-response-hook* (buffer response provider model usage)
+  "List of functions run after a provider response has been received.")
+
+(defhook *package-enablement-changed-hook* (package scope buffer agent-name)
+  "List of functions run after a package enablement scope changes.")
+
+(defhook *after-session-save-hook* (buffer path)
+  "List of functions run after a session snapshot is saved.")
+
+(defhook *after-session-load-hook* (buffer session-name)
+  "List of functions run after a session is loaded into a buffer.")
+
 ;;; --------------------------------------------------------------------------
 ;;; Advice
 ;;; --------------------------------------------------------------------------

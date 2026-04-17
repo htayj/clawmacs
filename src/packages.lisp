@@ -102,6 +102,8 @@
    #:make-default-system-face-set
    #:make-default-compaction-summary-face-set
    #:make-default-text-face
+   #:init-face-registry
+   #:ensure-buffer-agent-face-set
 
    ;; Lines
    #:line
@@ -224,6 +226,7 @@
    #:scratch-buffer-p
    #:file-buffer-p
    #:document-buffer-p
+   #:make-chat-buffer
    #:scratch-buffer
    #:ensure-scratch-buffer
    #:scratch-buffer-text
@@ -233,8 +236,10 @@
    #:next-buffer-name
    #:buffer-names
    #:buffer-finalize-input
+   #:buffer-insert-read-only-message
    #:buffer-insert-agent-message
    #:buffer-insert-system-message
+   #:buffer-insert-context-message
    #:buffer-message-count
    #:save-session
    #:load-session
@@ -879,6 +884,15 @@
    #:set-package-enablement-scope
    #:cycle-package-enablement-scope
    #:active-package-names
+   #:package-display-description
+   #:package-scope-label
+   #:package-scope-message
+   #:package-owned-command-metadata
+   #:package-owned-tool-metadata
+   #:package-owned-prompt-sections
+   #:package-system-prompt-context-text
+   #:maybe-insert-enabled-package-context
+   #:describe-installed-package-to-string
    #:load-clawmacs-package
    #:load-active-packages
    #:load-autoload-packages
@@ -906,6 +920,12 @@
    #:*after-tool-hook*
    #:*before-send-message-hook*
    #:*after-send-message-hook*
+   #:*after-buffer-create-hook*
+   #:*after-message-insert-hook*
+   #:*after-provider-response-hook*
+   #:*package-enablement-changed-hook*
+   #:*after-session-save-hook*
+   #:*after-session-load-hook*
    #:add-hook
    #:remove-hook
    #:run-hooks
