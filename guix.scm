@@ -18,4 +18,7 @@
     "git"
     "font-dejavu"
     "curl"
+    "xorg-server"
+    "xdotool"
+    "imagemagick"
     "cl-mcclim"))

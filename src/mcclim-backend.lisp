@@ -229,11 +229,22 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
 (clim:define-presentation-type tool-call ()
   :description "a tool call")
 
+(clim:define-presentation-type tool-result ()
+  :description "a tool result")
+
 (clim:define-presentation-type buffer-ref ()
   :description "a buffer reference")
 
+(clim:define-presentation-type selector-entry-ref ()
+  :description "a selector entry")
+
 (clim:define-presentation-type model-ref ()
+  :inherit-from 'selector-entry-ref
   :description "a model reference")
+
+(clim:define-presentation-type think-level-ref ()
+  :inherit-from 'selector-entry-ref
+  :description "a think-level reference")
 
 ;;; --------------------------------------------------------------------------
 ;;; CLIM Command Tables + Presentation Translators
@@ -259,8 +270,8 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
 (clim:define-command (com-select-model-entry
                       :command-table clawmacs-mcclim-command-table
                       :name t)
-    ((entry 'model-ref))
-  (let ((buf (current-buffer)))
+    ((entry 'selector-entry-ref))
+  (let ((buf (frame-visible-buffer clim:*application-frame*)))
     (when (and entry (listp entry))
       (cond
         (*model-selector-active*
@@ -289,32 +300,56 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
     (object)
   (list object))
 
+(clim:define-presentation-to-command-translator click-think-level-ref
+    (think-level-ref com-select-model-entry clawmacs-mcclim-command-table
+                     :gesture :select
+                     :priority 10
+                     :documentation "Apply think-level selection")
+    (object)
+  (list object))
+
 ;;; --------------------------------------------------------------------------
 ;;; Application Frame
 ;;; --------------------------------------------------------------------------
 
 (clim:define-application-frame clawmacs-gui ()
   ((backend :initarg :backend :accessor frame-backend)
+   (display-buffer :initarg :display-buffer
+                   :initform nil
+                   :accessor frame-display-buffer)
+   (follow-current-buffer-p :initarg :follow-current-buffer-p
+                            :initform t
+                            :accessor frame-follow-current-buffer-p)
    (always-poll-p :initarg :always-poll-p :accessor frame-always-poll-p :initform nil)
    (char-width :accessor frame-char-width :initform 0)
    (char-height :accessor frame-char-height :initform 0)
+   (pane-space-char-height :accessor frame-pane-space-char-height :initform 0)
    (quit-flag :accessor frame-quit-flag :initform nil))
   (:command-table (clawmacs-mcclim-command-table :inherit-from nil))
   (:panes
    (main-pane :application
               :display-function 'display-main-pane
+              :display-time :command-loop
               :text-style (clim:make-text-style :fix :roman :normal)
               :scroll-bars nil
               :background (clim:make-rgb-color 1.0 1.0 1.0)
               :foreground (clim:make-rgb-color 0.0 0.0 0.0))
    (modeline-pane :application
                   :display-function 'display-modeline-pane
+                  :display-time :command-loop
+                  :height 14
+                  :min-height 14
+                  :max-height 14
                   :text-style (clim:make-text-style :fix :roman :normal)
                   :scroll-bars nil
                   :background (clim:make-rgb-color 0.67 0.67 0.67)
                   :foreground (clim:make-rgb-color 0.0 0.0 0.0))
    (who-line-pane :application
                   :display-function 'display-who-line-pane
+                  :display-time :command-loop
+                  :height 28
+                  :min-height 28
+                  :max-height 28
                   :text-style (clim:make-text-style :fix :roman :normal)
                   :scroll-bars nil
                   :background (clim:make-rgb-color 0.93 0.93 0.93)
@@ -409,6 +444,17 @@ top-level sheet dimensions to prevent exponential growth."
     (values (max 1 (floor width char-w))
             (max 1 (floor height char-h)))))
 
+(defun mcclim-primary-frame-p (frame)
+  "Return true when FRAME is the interactive Clawmacs frame."
+  (not (null (frame-backend frame))))
+
+(defun frame-visible-buffer (frame)
+  "Return the buffer FRAME should display."
+  (or (and (frame-follow-current-buffer-p frame)
+           (current-buffer))
+      (frame-display-buffer frame)
+      (current-buffer)))
+
 ;;; --------------------------------------------------------------------------
 ;;; Modeline Display
 ;;; --------------------------------------------------------------------------
@@ -418,18 +464,49 @@ top-level sheet dimensions to prevent exponential growth."
   (ensure-char-metrics frame pane)
   (let* ((char-w (frame-char-width frame))
          (char-h (frame-char-height frame))
-         (buf (current-buffer)))
+         (buf (frame-visible-buffer frame)))
     (when (zerop char-w) (return-from display-modeline-pane))
     (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
       (declare (ignore rows))
       (mcclim-render-modeline pane buf cols char-w char-h))))
+
+(defun mcclim-fit-modeline-text (text cols)
+  "Pad or truncate TEXT to exactly COLS display columns."
+  (if (<= (length text) cols)
+      (concatenate 'string text
+                   (make-string (- cols (length text))
+                                :initial-element #\Space))
+      (subseq text 0 cols)))
+
+(defun mcclim-selector-modeline-text (buf cols)
+  "Return selector-specific modeline text, or NIL for the normal modeline."
+  (let ((text
+          (cond
+            (*buffer-selector-active*
+             (format nil " [buffer-selector] Agent Sessions | ~D session~:[s~;~]"
+                     (length *buffer-ring*) (= (length *buffer-ring*) 1)))
+            (*model-selector-active*
+             (format nil " [model-selector] ~A | ~D model~:[s~;~] available"
+                     (resolve-modeline-provider-model buf)
+                     (length *model-selector-entries*)
+                     (= (length *model-selector-entries*) 1)))
+            (*think-selector-active*
+             (format nil " [think-selector] ~A | ~D level~:[s~;~] available"
+                     (resolve-modeline-provider-model buf)
+                     (length *think-selector-entries*)
+                     (= (length *think-selector-entries*) 1)))
+            (t nil))))
+    (when text
+      (mcclim-fit-modeline-text text cols))))
 
 (defun mcclim-render-modeline (pane buf cols char-w char-h)
   "Render the modeline string into PANE using the modeline face.
 Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
   (let* ((ml-face (make-modeline-face))
          (resolved (resolve-face ml-face))
-         (text (format-modeline buf cols :major-mode (buffer-major-mode buf))))
+         (text (or (mcclim-selector-modeline-text buf cols)
+                   (format-modeline buf cols
+                                    :major-mode (buffer-major-mode buf)))))
     (clim:updating-output (pane :unique-id 'modeline-content
                                 :cache-value text
                                 :cache-test #'string=)
@@ -446,7 +523,7 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
   (ensure-char-metrics frame pane)
   (let* ((char-w (frame-char-width frame))
          (char-h (frame-char-height frame))
-         (buf (current-buffer)))
+         (buf (frame-visible-buffer frame)))
     (when (zerop char-w) (return-from display-who-line-pane))
     (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
       (declare (ignore rows))
@@ -474,26 +551,22 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
 When the minibuffer is active, draws a centered popup overlay on top."
   (ensure-char-metrics frame pane)
   (let* ((char-w (frame-char-width frame))
-         (char-h (frame-char-height frame)))
+         (char-h (frame-char-height frame))
+         (buf (frame-visible-buffer frame)))
     (when (zerop char-w) (return-from display-main-pane))
     (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
-      (let ((modeline-pane (clim:find-pane-named frame 'modeline-pane)))
-        (cond
-          (*buffer-selector-active*
-           (mcclim-render-buffer-selector pane modeline-pane rows cols
-                                          char-w char-h frame))
-          (*model-selector-active*
-           (mcclim-render-model-selector pane modeline-pane rows cols
-                                         char-w char-h frame))
-          (*think-selector-active*
-           (mcclim-render-think-selector pane modeline-pane rows cols
-                                         char-w char-h frame))
-          (t
-           (mcclim-render-buffer pane (current-buffer) rows cols
-                                 char-w char-h)))
-        ;; Popup overlay for minibuffer and automatic skill completion.
-        (when (or *minibuffer-active* *skill-completion-active*)
-          (mcclim-render-completion-popup pane cols rows char-w char-h))))))
+      (cond
+        (*buffer-selector-active*
+         (mcclim-render-buffer-selector pane rows cols char-w char-h frame))
+        (*model-selector-active*
+         (mcclim-render-model-selector pane rows cols char-w char-h frame))
+        (*think-selector-active*
+         (mcclim-render-think-selector pane rows cols char-w char-h frame))
+        (t
+         (mcclim-render-buffer pane buf rows cols char-w char-h)))
+      ;; Popup overlay for minibuffer and automatic skill completion.
+      (when (or *minibuffer-active* *skill-completion-active*)
+        (mcclim-render-completion-popup pane cols rows char-w char-h)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Title Bar
@@ -564,7 +637,7 @@ When the minibuffer is active, draws a centered popup overlay on top."
                                (> msg-bottom visible-top))
                       (let ((screen-row (+ 1 (- msg-top visible-top)))
                             (ptype (if (eq :tool-result (message-sender msg))
-                                       'tool-call
+                                       'tool-result
                                        'chat-message)))
                         (clim:with-output-as-presentation (pane msg ptype)
                           (mcclim-render-message-lines pane msg screen-row width
@@ -776,14 +849,13 @@ Returns the number of visual rows consumed."
 ;;; Buffer Selector Rendering
 ;;; --------------------------------------------------------------------------
 
-(defun mcclim-render-buffer-selector (pane modeline-pane rows cols
-                                      char-w char-h frame)
+(defun mcclim-render-buffer-selector (pane rows cols char-w char-h frame)
   "Render the buffer selector overlay."
   (let* ((width cols)
          (height rows)
          (buffers *buffer-ring*)
          (num-buffers (length buffers))
-         (current (first *buffer-ring*))
+         (current (frame-visible-buffer frame))
          (max-entries (max 1 (- height 7)))
          (scroll (cond
                    ((< *buffer-selector-index* *buffer-selector-scroll*)
@@ -857,36 +929,19 @@ Returns the number of visual rows consumed."
         (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-footer)
           (draw-text-at pane footer-row 2
                         "[RET] select  [C-g/q] cancel  [n] new  [k] kill"
-                        fg bg ts char-w char-h))))
-    ;; Custom modeline for selector
-    (let* ((ml-face (make-modeline-face))
-           (resolved (resolve-face ml-face))
-           (ml-text (format nil " [buffer-selector] Agent Sessions | ~D session~:[s~;~]"
-                            num-buffers (= num-buffers 1))))
-      (multiple-value-bind (cols-ml _rows-ml)
-          (pane-grid-dimensions modeline-pane char-w char-h)
-        (declare (ignore _rows-ml))
-        (multiple-value-bind (fg bg ts) (resolve-face-inks resolved)
-          (let ((padded (if (<= (length ml-text) cols-ml)
-                            (concatenate 'string ml-text
-                                         (make-string (- cols-ml (length ml-text))
-                                                      :initial-element #\Space))
-                            (subseq ml-text 0 cols-ml))))
-            (fill-row modeline-pane 0 cols-ml bg char-w char-h)
-            (draw-text-at modeline-pane 0 0 padded fg bg ts char-w char-h)))))))
+                        fg bg ts char-w char-h))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Model Selector Rendering
 ;;; --------------------------------------------------------------------------
 
-(defun mcclim-render-model-selector (pane modeline-pane rows cols
-                                     char-w char-h frame)
+(defun mcclim-render-model-selector (pane rows cols char-w char-h frame)
   "Render the model selector overlay."
+  (declare (ignore frame))
   (let* ((width cols)
          (height rows)
          (entries *model-selector-entries*)
          (num-entries (length entries))
-         (current-buf (current-buffer))
          (max-visible (max 1 (- height 7)))
          (scroll (cond
                    ((< *model-selector-index* *model-selector-scroll*)
@@ -930,7 +985,7 @@ Returns the number of visual rows consumed."
                                (active-p " *")
                                (t "  "))
           :for line := (format-model-selector-line marker provider model width)
-          :do (clim:with-output-as-presentation (pane entry 'model-ref)
+          :do (clim:with-output-as-presentation (pane entry 'think-level-ref)
                 (multiple-value-bind (fg bg ts)
                     (resolve-global-face-inks (if selected-p
                                                   :selector-selected
@@ -957,38 +1012,19 @@ Returns the number of visual rows consumed."
         (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-footer)
           (draw-text-at pane footer-row 2
                         "[RET] select  [C-g/q] cancel  * = active"
-                        fg bg ts char-w char-h))))
-    ;; Custom modeline
-    (let* ((ml-face (make-modeline-face))
-           (resolved (resolve-face ml-face))
-           (pm (resolve-modeline-provider-model current-buf))
-           (ml-text (format nil " [model-selector] ~A | ~D model~:[s~;~] available"
-                            pm num-entries (= num-entries 1))))
-      (multiple-value-bind (cols-ml _rows-ml)
-          (pane-grid-dimensions modeline-pane char-w char-h)
-        (declare (ignore _rows-ml))
-        (multiple-value-bind (fg bg ts) (resolve-face-inks resolved)
-          (let ((padded (if (<= (length ml-text) cols-ml)
-                            (concatenate 'string ml-text
-                                         (make-string (- cols-ml (length ml-text))
-                                                      :initial-element #\Space))
-                            (subseq ml-text 0 cols-ml))))
-            (fill-row modeline-pane 0 cols-ml bg char-w char-h)
-            (draw-text-at modeline-pane 0 0 padded fg bg ts char-w char-h)))))))
+                        fg bg ts char-w char-h))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Think Selector Rendering
 ;;; --------------------------------------------------------------------------
 
-(defun mcclim-render-think-selector (pane modeline-pane rows cols
-                                     char-w char-h frame)
+(defun mcclim-render-think-selector (pane rows cols char-w char-h frame)
   "Render the think-level selector overlay."
   (declare (ignore frame))
   (let* ((width cols)
          (height rows)
          (entries *think-selector-entries*)
          (num-entries (length entries))
-         (current-buf (current-buffer))
          (max-visible (max 1 (- height 7)))
          (scroll (cond
                    ((< *think-selector-index* *think-selector-scroll*)
@@ -1052,23 +1088,7 @@ Returns the number of visual rows consumed."
         (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-footer)
           (draw-text-at pane footer-row 2
                         "[RET] select  [C-g/q] cancel  default = clear  * = active"
-                        fg bg ts char-w char-h))))
-    (let* ((ml-face (make-modeline-face))
-           (resolved (resolve-face ml-face))
-           (pm (resolve-modeline-provider-model current-buf))
-           (ml-text (format nil " [think-selector] ~A | ~D level~:[s~;~] available"
-                            pm num-entries (= num-entries 1))))
-      (multiple-value-bind (cols-ml _rows-ml)
-          (pane-grid-dimensions modeline-pane char-w char-h)
-        (declare (ignore _rows-ml))
-        (multiple-value-bind (fg bg ts) (resolve-face-inks resolved)
-          (let ((padded (if (<= (length ml-text) cols-ml)
-                            (concatenate 'string ml-text
-                                         (make-string (- cols-ml (length ml-text))
-                                                      :initial-element #\Space))
-                            (subseq ml-text 0 cols-ml))))
-            (fill-row modeline-pane 0 cols-ml bg char-w char-h)
-            (draw-text-at modeline-pane 0 0 padded fg bg ts char-w char-h)))))))
+                        fg bg ts char-w char-h))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Popup Completion Overlay
@@ -1313,7 +1333,9 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
 (defun update-pane-sizes (frame)
   "Resize modeline (1 row) and who-line (2 rows) panes based on char metrics."
   (let ((char-h (frame-char-height frame)))
-    (when (plusp char-h)
+    (when (and (plusp char-h)
+               (/= char-h (frame-pane-space-char-height frame)))
+      (setf (frame-pane-space-char-height frame) char-h)
       (let ((ml-pane (clim:find-pane-named frame 'modeline-pane)))
         (when ml-pane
           (clim:change-space-requirements ml-pane
@@ -1327,7 +1349,74 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
                                           :min-height (* 2 char-h)
                                           :max-height (* 2 char-h)))))))
 
+(defun mcclim-poll-timeout (frame)
+  "Return the event-read timeout for FRAME, or NIL for blocking reads."
+  (cond
+    ((frame-always-poll-p frame) 0.2)
+    ((or (buffer-pending-stream (frame-visible-buffer frame))
+         *openai-oauth-pending*)
+     0.05)
+    (t nil)))
 
+(defun mcclim-read-next-event (frame)
+  "Read the next event for FRAME using McCLIM's event queue API."
+  (let ((sheet (clim:frame-top-level-sheet frame))
+        (timeout (mcclim-poll-timeout frame)))
+    (if timeout
+        (clime:event-read-with-timeout sheet :timeout timeout)
+        (clim:event-read sheet))))
+
+(defun mcclim-dispatch-key-event (frame event)
+  "Dispatch EVENT through the Clawmacs keymap.
+Returns (values need-redisplay-p force-redisplay-p)."
+  (if (not (mcclim-primary-frame-p frame))
+      ;; Popup viewers are read-only; do not let keyboard input mutate shared
+      ;; prefix state or fall through to CLIM's input editor.
+      (values nil nil)
+      (let ((key (mcclim-normalize-key event))
+            (force-redisplay-p nil))
+        (when key
+          (let ((result (handle-key-event (frame-visible-buffer frame) key)))
+            (when (eq result :quit)
+              (setf (frame-quit-flag frame) t)
+              (clim:frame-exit frame))
+            (when (eq result :redraw)
+              (setf force-redisplay-p t))))
+        ;; Even prefix-only keys return NIL from normalization but may change
+        ;; who-line state, so the interactive frame should still redisplay.
+        (values t force-redisplay-p))))
+
+(defun mcclim-poll-external-updates (frame)
+  "Poll streaming/OAuth state for FRAME.
+Returns true when application state may have changed."
+  (when (mcclim-primary-frame-p frame)
+    (let ((changed-p nil)
+          (buf (frame-visible-buffer frame)))
+      (when (buffer-pending-stream buf)
+        (update-streaming-response buf)
+        (setf changed-p t))
+      (when *openai-oauth-pending*
+        (update-openai-oauth-login)
+        (setf changed-p t))
+      changed-p)))
+
+(defun mcclim-update-scroll-page-size (frame)
+  "Update the shared page-scroll size from FRAME's main pane geometry."
+  (when (mcclim-primary-frame-p frame)
+    (let* ((main-pane (clim:find-pane-named frame 'main-pane))
+           (char-w (frame-char-width frame))
+           (char-h (frame-char-height frame)))
+      (when (and main-pane (plusp char-w) (plusp char-h))
+        (multiple-value-bind (cols rows)
+            (pane-grid-dimensions main-pane char-w char-h)
+          (declare (ignore cols))
+          (setf *scroll-page-size* (max 1 (- rows 3))))))))
+
+(defun mcclim-redisplay-frame (frame &key force-p)
+  "Refresh FRAME through the standard CLIM redisplay path."
+  (mcclim-update-scroll-page-size frame)
+  (update-pane-sizes frame)
+  (clim:redisplay-frame-panes frame :force-p force-p))
 
 ;;; --------------------------------------------------------------------------
 ;;; Custom Top-Level Event Loop
@@ -1335,90 +1424,42 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
 
 (defmethod clim:default-frame-top-level ((frame clawmacs-gui) &key &allow-other-keys)
   "Custom event loop for clawmacs — mirrors the croatoan event loop structure.
-Blocking reads when idle, polling with sleep when streaming.
+Blocking reads when idle, timed McCLIM event reads when streaming.
 Called by the standard run-frame-top-level AFTER the frame is adopted/enabled
 and all mediums are connected to the X11 backend."
   ;; Char metrics are initialized lazily by ensure-char-metrics inside
   ;; the display functions when the medium is ready.
-  ;; Let CLIM handle initial display via its own redisplay machinery,
-  ;; then force a redisplay once we enter the event loop.
-  ;; Main event loop
-  (let ((poll-mode (frame-always-poll-p frame)))
-    (loop :until (frame-quit-flag frame)
-          :for buf := (current-buffer)
-          :for streaming := (buffer-pending-stream buf)
-          :for oauth-pending := *openai-oauth-pending*
-          :for need-redisplay := nil
-          :for force-redisplay := nil
-          :for event := (if (or streaming poll-mode oauth-pending)
-                            (clim:event-read-no-hang
-                             (clim:frame-top-level-sheet frame))
-                            (clim:event-read
-                             (clim:frame-top-level-sheet frame)))
-          :do (cond
-                ;; Timeout path: sleep before next poll
+  (mcclim-redisplay-frame frame :force-p t)
+  (loop :until (frame-quit-flag frame)
+        :for event := (mcclim-read-next-event frame)
+        :do (let ((need-redisplay-p nil)
+                  (force-redisplay-p nil))
+              (cond
                 ((null event)
-                 (sleep (if (and poll-mode (not streaming) (not oauth-pending))
-                            0.2
-                            0.05)))
-                ;; Key press event — suppress in popup to avoid corrupting
-                ;; shared prefix key state (*meta-pending* etc.)
+                 nil)
                 ((typep event 'clim:key-press-event)
-                 (unless poll-mode
-                   (let* ((key (mcclim-normalize-key event)))
-                     (when key
-                       (let ((result (handle-key-event buf key)))
-                         (when (eq result :quit)
-                           (setf (frame-quit-flag frame) t)
-                           (clim:frame-exit frame))
-                         (when (eq result :redraw)
-                           (setf force-redisplay t))
-                         (setf need-redisplay t)))))
-                 ;; Keep CLIM's input context machinery alive for presentations.
-                 ;; This mirrors the standard top-level behavior while preserving
-                 ;; clawmacs key dispatch.
-                 (clim:handle-event (clim:event-sheet event) event))
-                ;; Explicit redraw triggers
+                 (multiple-value-bind (need-p force-p)
+                     (mcclim-dispatch-key-event frame event)
+                   (setf need-redisplay-p (or need-redisplay-p need-p)
+                         force-redisplay-p (or force-redisplay-p force-p))))
                 ((or (typep event 'clim:window-repaint-event)
                      (typep event 'clim:window-configuration-event))
-                 (setf force-redisplay t
-                       need-redisplay t)
+                 (setf need-redisplay-p t
+                       force-redisplay-p t)
                  (clim:handle-event (clim:event-sheet event) event))
-                ;; Other events (pointer, exposure, menu, etc.) — let CLIM handle
-                ;; and schedule a redisplay after handling.
                 (t
                  (clim:handle-event (clim:event-sheet event) event)
-                 (setf need-redisplay t)))
-              ;; Always poll streaming when active — regardless of event type.
-              ;; This prevents X11 events (exposure, pointer) from starving
-              ;; the streaming poll, and ensures the final response is
-              ;; displayed immediately when the stream completes.
-              (unless poll-mode
-                (let ((cur (current-buffer)))
-                  (when (buffer-pending-stream cur)
-                    (update-streaming-response cur)
-                    (setf need-redisplay t))
-                  (when *openai-oauth-pending*
-                    (update-openai-oauth-login)
-                    (setf need-redisplay t))))
-              ;; Redisplay when something changed
-              (when (or need-redisplay streaming poll-mode oauth-pending)
-                ;; Update scroll page size (window may have resized)
-                ;; — but only for the primary frame, not popups
-                (unless poll-mode
-                  (let* ((main-pane (clim:find-pane-named frame 'main-pane))
-                         (char-w (frame-char-width frame))
-                         (char-h (frame-char-height frame)))
-                    (when (and (plusp char-w) (plusp char-h))
-                      (multiple-value-bind (cols rows)
-                          (pane-grid-dimensions main-pane char-w char-h)
-                        (declare (ignore cols))
-                        (setf *scroll-page-size* (max 1 (- rows 3)))))))
-                ;; Keep who-line/modeline fixed heights in character rows.
-                (update-pane-sizes frame)
-                ;; Use CLIM's frame-level redisplay dispatch rather than
-                ;; manually iterating panes.
-                (clim:redisplay-frame-panes frame :force-p force-redisplay)))))
+                 (setf need-redisplay-p t)))
+              ;; Polling is deliberately outside event dispatch so high-volume
+              ;; pointer/window events cannot starve streaming or OAuth updates.
+              (when (mcclim-poll-external-updates frame)
+                (setf need-redisplay-p t))
+              (when (and (not (frame-quit-flag frame))
+                         (or need-redisplay-p
+                             (frame-always-poll-p frame)
+                             (buffer-pending-stream (frame-visible-buffer frame))
+                             *openai-oauth-pending*))
+                (mcclim-redisplay-frame frame :force-p force-redisplay-p)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Popup Frame Lifecycle (read-only X11 viewer from terminal mode)
@@ -1455,7 +1496,10 @@ Keyboard input is suppressed to avoid corrupting shared prefix key state."
                (handler-case
                    (let ((frame (clim:make-application-frame
                                  'clawmacs-gui
+                                 :pretty-name "Clawmacs Popup"
                                  :backend nil
+                                 :display-buffer (current-buffer)
+                                 :follow-current-buffer-p t
                                  :always-poll-p t
                                  :width 900
                                  :height 700)))
@@ -1486,7 +1530,10 @@ Creates the Genera-style frame (main, who-line, modeline), then enters
 the event loop reading input and rendering until :QUIT."
   (mcclim-apply-genera-theme)
   (let ((frame (clim:make-application-frame 'clawmacs-gui
+                 :pretty-name "Clawmacs"
                  :backend b
+                 :display-buffer initial-buffer
+                 :follow-current-buffer-p t
                  :width 900
                  :height 700)))
     (setf (backend-frame b) frame)

@@ -673,12 +673,16 @@ launch_payload() {
     extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.clawmacs.d=$WORKSPACE_HOME/.clawmacs.d"
   fi
   # X11 forwarding: expose the X socket and Xauthority so McCLIM (and any
-  # other graphical toolkit) can connect to the host display server.
-  if [ -d "/tmp/.X11-unix" ]; then
-    extra_container_args="$extra_container_args --expose=/tmp/.X11-unix"
-  fi
-  if [ -n "${XAUTHORITY:-}" ] && [ -f "$XAUTHORITY" ]; then
-    extra_container_args="$extra_container_args --expose=$XAUTHORITY"
+  # other graphical toolkit) can connect to the host display server. McCLIM
+  # E2E starts Xvfb inside the container, so it needs a private writable X
+  # socket directory instead of the host socket exposed read-only.
+  if [ "${CLAWMACS_CONTAINER_DISABLE_HOST_X:-0}" != "1" ]; then
+    if [ -d "/tmp/.X11-unix" ]; then
+      extra_container_args="$extra_container_args --expose=/tmp/.X11-unix"
+    fi
+    if [ -n "${XAUTHORITY:-}" ] && [ -f "$XAUTHORITY" ]; then
+      extra_container_args="$extra_container_args --expose=$XAUTHORITY"
+    fi
   fi
 
   # shellcheck disable=SC2086
