@@ -39,6 +39,39 @@
   "List of think-level entries for the selector, each a plist
 (:provider :keyword :model \"string\" :level (or null string) :active-p bool).")
 
+(defvar *session-tree-selector-active* nil
+  "When non-nil, the session tree selector overlay is displayed.")
+
+(defvar *session-tree-selector-buffer* nil
+  "Buffer whose session tree is currently being selected.")
+
+(defvar *session-tree-selector-items* nil
+  "All flattened session tree selector items before filtering.")
+
+(defvar *session-tree-selector-filtered-items* nil
+  "Filtered flattened session tree selector items.")
+
+(defvar *session-tree-selector-index* 0
+  "The currently highlighted index in the session tree selector.")
+
+(defvar *session-tree-selector-scroll* 0
+  "Scroll offset for the session tree selector.")
+
+(defvar *session-tree-selector-search* ""
+  "Search text for the session tree selector.")
+
+(defvar *session-tree-selector-filter-mode* :default
+  "Session tree selector filter mode.")
+
+(defvar *session-tree-selector-folded-ids* nil
+  "Entry ids whose descendants are hidden in the session tree selector.")
+
+(defvar *session-tree-selector-callback* nil
+  "Function called with the selected session tree item.")
+
+(defvar *session-tree-selector-label-callback* nil
+  "Function called with a session tree item when the user edits its label.")
+
 ;;; --------------------------------------------------------------------------
 ;;; Minibuffer State
 ;;; --------------------------------------------------------------------------
@@ -318,6 +351,401 @@ are sorted with the current buffer first, then alphabetically."
                      ((and (getf a :current-p) (not (getf b :current-p))) t)
                      ((and (getf b :current-p) (not (getf a :current-p))) nil)
                      (t (string< a-disp b-disp)))))))
+
+;;; --------------------------------------------------------------------------
+;;; Session Tree Selector
+;;; --------------------------------------------------------------------------
+
+(defun session-tree-blank-string-p (value)
+  "Return true when VALUE is NIL or contains only whitespace."
+  (or (null value)
+      (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                  (string value))))))
+
+(defun session-tree-normalize-one-line (text &key (limit 96))
+  "Return TEXT as a compact one-line selector snippet."
+  (let* ((source (or text ""))
+         (normalized
+           (with-output-to-string (out)
+             (let ((space-p nil))
+               (loop :for char :across source
+                     :do (if (find char '(#\Space #\Tab #\Newline #\Return)
+                                   :test #'char=)
+                             (unless space-p
+                               (write-char #\Space out)
+                               (setf space-p t))
+                             (progn
+                               (write-char char out)
+                               (setf space-p nil)))))))
+         (trimmed (string-trim '(#\Space #\Tab #\Newline #\Return)
+                               normalized)))
+    (if (> (length trimmed) limit)
+        (concatenate 'string (subseq trimmed 0 (max 0 (- limit 3))) "...")
+        trimmed)))
+
+(defun session-tree-event-sender (event)
+  "Return EVENT's sender string, if any."
+  (or (session-alist-value event :sender) ""))
+
+(defun session-tree-event-kind-label (event)
+  "Return a compact kind label for EVENT."
+  (let ((kind (session-event-kind event)))
+    (cond
+      ((string= kind "message")
+       (string-downcase (session-tree-event-sender event)))
+      ((string= kind "branch-summary") "branch")
+      ((string= kind "model-change") "model")
+      ((string= kind "think-level-change") "think")
+      ((string= kind "session-info") "session")
+      (t kind))))
+
+(defun session-tree-event-display-text (event)
+  "Return EVENT's selector display body."
+  (let ((kind (session-event-kind event)))
+    (cond
+      ((string= kind "message")
+       (let ((text (session-tree-normalize-one-line
+                    (session-alist-value event :text))))
+         (if (session-tree-blank-string-p text)
+             "[empty]"
+             text)))
+      ((string= kind "branch-summary")
+       (session-tree-normalize-one-line
+        (session-alist-value event :summary)))
+      ((string= kind "compaction")
+       (format nil "compaction: ~A"
+               (or (session-alist-value event :reason) "manual")))
+      ((string= kind "model-change")
+       (format nil "~A/~A"
+               (or (session-alist-value event :provider) "provider")
+               (or (session-alist-value event :model) "model")))
+      ((string= kind "think-level-change")
+       (format nil "think ~A"
+               (or (session-alist-value event :think-level) "default")))
+      ((string= kind "label")
+       (format nil "label ~A"
+               (or (session-alist-value event :label) "(clear)")))
+      (t
+       (session-tree-normalize-one-line
+        (or (session-alist-value event :summary)
+            (session-alist-value event :text)
+            kind))))))
+
+(defun session-tree-active-id-p (entry-id active-ids)
+  "Return true when ENTRY-ID is on ACTIVE-IDS."
+  (and entry-id (member entry-id active-ids :test #'string=)))
+
+(defun session-tree-sort-nodes-for-selector (nodes active-ids)
+  "Return NODES with active branch nodes before side branches."
+  (stable-sort
+   (copy-list nodes)
+   (lambda (a b)
+     (let* ((a-id (session-event-id (session-tree-node-entry a)))
+            (b-id (session-event-id (session-tree-node-entry b)))
+            (a-active (session-tree-active-id-p a-id active-ids))
+            (b-active (session-tree-active-id-p b-id active-ids)))
+       (cond
+         ((and a-active (not b-active)) t)
+         ((and b-active (not a-active)) nil)
+         (t (< (session-event-timestamp (session-tree-node-entry a))
+               (session-event-timestamp (session-tree-node-entry b)))))))))
+
+(defun session-tree-selector-flatten-nodes (nodes active-ids)
+  "Flatten NODES into selector item plists."
+  (labels ((walk (node depth prefix last-p ancestors)
+             (let* ((event (session-tree-node-entry node))
+                    (id (session-event-id event))
+                    (children (session-tree-sort-nodes-for-selector
+                               (session-tree-node-children node)
+                               active-ids))
+                    (connector (cond
+                                 ((zerop depth) "")
+                                 (last-p "`- ")
+                                 (t "|- ")))
+                    (tree-prefix (concatenate 'string prefix connector))
+                    (next-prefix (concatenate 'string
+                                             prefix
+                                             (cond
+                                               ((zerop depth) "")
+                                               (last-p "   ")
+                                               (t "|  "))))
+                    (kind (session-event-kind event))
+                    (kind-label (session-tree-event-kind-label event))
+                    (label (session-tree-node-label node))
+                    (content (session-tree-event-display-text event))
+                    (active-p (session-tree-active-id-p id active-ids))
+                    (match-text (format nil "~A ~A ~A ~A"
+                                        id kind-label (or label "") content))
+                    (item (list :id id
+                                :parent-id (session-event-parent-id event)
+                                :event event
+                                :kind kind
+                                :kind-label kind-label
+                                :sender (session-tree-event-sender event)
+                                :label label
+                                :content content
+                                :tree-prefix tree-prefix
+                                :depth depth
+                                :active-p active-p
+                                :children-count (length children)
+                                :ancestor-ids ancestors
+                                :match-text match-text))
+                    (items (list item)))
+               (loop :for child :in children
+                     :for index :from 0
+                     :for child-last-p := (= index (1- (length children)))
+                     :do (setf items
+                               (append items
+                                       (walk child
+                                             (1+ depth)
+                                             next-prefix
+                                             child-last-p
+                                             (cons id ancestors)))))
+               items)))
+    (let ((ordered-roots (session-tree-sort-nodes-for-selector nodes active-ids)))
+      (loop :for node :in ordered-roots
+            :for index :from 0
+            :for last-p := (= index (1- (length ordered-roots)))
+            :append (walk node 0 "" last-p nil)))))
+
+(defun session-tree-selector-build-items (buffer)
+  "Return flattened selector items for BUFFER's session tree."
+  (let ((session (and buffer (buffer-session buffer))))
+    (when session
+      (session-tree-selector-flatten-nodes
+       (session-tree-roots session)
+       (session-active-path-ids session)))))
+
+(defun session-tree-selector-filter-kind-p (item)
+  "Return true when ITEM passes the active kind filter."
+  (let ((kind (getf item :kind))
+        (sender (getf item :sender)))
+    (case *session-tree-selector-filter-mode*
+      (:user-only
+       (and (string= kind "message")
+            (string= sender "USER")))
+      (:no-tools
+       (and (not (member kind
+                         '("label" "model-change" "think-level-change"
+                           "session-info")
+                         :test #'string=))
+            (not (string= sender "TOOL-RESULT"))))
+      (:labeled-only
+       (not (null (getf item :label))))
+      (:all t)
+      (otherwise
+       (not (member kind
+                    '("label" "model-change" "think-level-change"
+                      "session-info")
+                    :test #'string=))))))
+
+(defun session-tree-selector-folded-hidden-p (item)
+  "Return true when ITEM is hidden by a folded ancestor."
+  (some (lambda (ancestor-id)
+          (member ancestor-id *session-tree-selector-folded-ids*
+                  :test #'string=))
+        (getf item :ancestor-ids)))
+
+(defun session-tree-selector-search-match-p (item)
+  "Return true when ITEM matches the active session tree search."
+  (or (session-tree-blank-string-p *session-tree-selector-search*)
+      (fuzzy-match-p *session-tree-selector-search*
+                     (getf item :match-text))))
+
+(defun session-tree-selector-update-filter ()
+  "Refresh session tree selector items and filtered view."
+  (setf *session-tree-selector-items*
+        (session-tree-selector-build-items *session-tree-selector-buffer*))
+  (setf *session-tree-selector-filtered-items*
+        (remove-if-not
+         (lambda (item)
+           (and (session-tree-selector-filter-kind-p item)
+                (not (session-tree-selector-folded-hidden-p item))
+                (session-tree-selector-search-match-p item)))
+         *session-tree-selector-items*))
+  (dolist (item *session-tree-selector-filtered-items*)
+    (setf (getf item :folded-p)
+          (member (getf item :id) *session-tree-selector-folded-ids*
+                  :test #'string=)))
+  (setf *session-tree-selector-index*
+        (max 0 (min *session-tree-selector-index*
+                    (1- (max 1
+                             (length *session-tree-selector-filtered-items*))))))
+  *session-tree-selector-filtered-items*)
+
+(defun session-tree-selector-current-item ()
+  "Return the currently selected tree item, if any."
+  (when (and *session-tree-selector-filtered-items*
+             (<= 0 *session-tree-selector-index*)
+             (< *session-tree-selector-index*
+                (length *session-tree-selector-filtered-items*)))
+    (nth *session-tree-selector-index*
+         *session-tree-selector-filtered-items*)))
+
+(defun session-tree-selector-preselect (entry-id)
+  "Move selection to ENTRY-ID when it is visible."
+  (let ((index (and entry-id
+                    (position entry-id *session-tree-selector-filtered-items*
+                              :key (lambda (item) (getf item :id))
+                              :test #'string=))))
+    (when index
+      (setf *session-tree-selector-index* index
+            *session-tree-selector-scroll* (max 0 (- index 5))))))
+
+(defun session-tree-selector-activate
+    (buffer callback &key label-callback initial-entry-id)
+  "Activate the session tree selector for BUFFER."
+  (setf *session-tree-selector-active* t
+        *session-tree-selector-buffer* buffer
+        *session-tree-selector-index* 0
+        *session-tree-selector-scroll* 0
+        *session-tree-selector-search* ""
+        *session-tree-selector-filter-mode* :default
+        *session-tree-selector-folded-ids* nil
+        *session-tree-selector-callback* callback
+        *session-tree-selector-label-callback* label-callback)
+  (session-tree-selector-update-filter)
+  (session-tree-selector-preselect
+   (or initial-entry-id
+       (and (buffer-session buffer)
+            (session-effective-leaf-id (buffer-session buffer)))))
+  (session-tree-selector-update-filter))
+
+(defun session-tree-selector-deactivate ()
+  "Deactivate the session tree selector."
+  (setf *session-tree-selector-active* nil
+        *session-tree-selector-buffer* nil
+        *session-tree-selector-items* nil
+        *session-tree-selector-filtered-items* nil
+        *session-tree-selector-index* 0
+        *session-tree-selector-scroll* 0
+        *session-tree-selector-search* ""
+        *session-tree-selector-filter-mode* :default
+        *session-tree-selector-folded-ids* nil
+        *session-tree-selector-callback* nil
+        *session-tree-selector-label-callback* nil))
+
+(defun session-tree-selector-cycle-filter ()
+  "Cycle the session tree selector filter mode."
+  (let* ((modes '(:default :no-tools :user-only :labeled-only :all))
+         (pos (or (position *session-tree-selector-filter-mode* modes)
+                  0)))
+    (setf *session-tree-selector-filter-mode*
+          (nth (mod (1+ pos) (length modes)) modes))))
+
+(defun session-tree-selector-set-filter (mode)
+  "Set the session tree selector filter MODE."
+  (setf *session-tree-selector-filter-mode* mode
+        *session-tree-selector-folded-ids* nil)
+  (session-tree-selector-update-filter))
+
+(defun session-tree-selector-delete-search-char ()
+  "Delete one search character in the session tree selector."
+  (when (plusp (length *session-tree-selector-search*))
+    (setf *session-tree-selector-search*
+          (subseq *session-tree-selector-search*
+                  0
+                  (1- (length *session-tree-selector-search*))))
+    (setf *session-tree-selector-folded-ids* nil)
+    (session-tree-selector-update-filter)))
+
+(defun session-tree-selector-insert-search-char (char)
+  "Append CHAR to the session tree selector search."
+  (setf *session-tree-selector-search*
+        (concatenate 'string *session-tree-selector-search* (string char))
+        *session-tree-selector-folded-ids* nil)
+  (session-tree-selector-update-filter))
+
+(defun session-tree-selector-toggle-fold (item fold-p)
+  "Fold or unfold ITEM according to FOLD-P."
+  (let ((id (getf item :id)))
+    (when (and id (plusp (getf item :children-count)))
+      (if fold-p
+          (pushnew id *session-tree-selector-folded-ids* :test #'string=)
+          (setf *session-tree-selector-folded-ids*
+                (remove id *session-tree-selector-folded-ids*
+                        :test #'string=)))
+      (session-tree-selector-update-filter))))
+
+(defun handle-session-tree-selector-key (key)
+  "Handle a key event while the session tree selector is active."
+  (let ((base-key (if (and (listp key) (= (length key) 2)
+                           (member (first key) '(:alt :ctrl-x :ctrl-c)))
+                      (second key)
+                      key))
+        (count (length *session-tree-selector-filtered-items*)))
+    (cond
+      ((and (characterp base-key) (char= base-key (code-char 7)))
+       (if (plusp (length *session-tree-selector-search*))
+           (progn
+             (setf *session-tree-selector-search* "")
+             (session-tree-selector-update-filter))
+           (session-tree-selector-deactivate)))
+      ((and (characterp base-key) (char= base-key #\q))
+       (session-tree-selector-deactivate))
+      ((and (characterp base-key) (or (char= base-key #\Return)
+                                      (char= base-key #\Newline)))
+       (let ((item (session-tree-selector-current-item))
+             (callback *session-tree-selector-callback*))
+         (session-tree-selector-deactivate)
+         (when (and item callback)
+           (funcall callback item))))
+      ((or (eq base-key :down)
+           (and (characterp base-key) (char= base-key (code-char 14))))
+       (when (< *session-tree-selector-index* (1- count))
+         (incf *session-tree-selector-index*))
+       (session-tree-selector-update-filter))
+      ((or (eq base-key :up)
+           (and (characterp base-key) (char= base-key (code-char 16))))
+       (when (plusp *session-tree-selector-index*)
+         (decf *session-tree-selector-index*))
+       (session-tree-selector-update-filter))
+      ((or (eq base-key :page-down) (eq base-key :right))
+       (let ((item (session-tree-selector-current-item)))
+         (if (and (eq base-key :right) item
+                  (member (getf item :id) *session-tree-selector-folded-ids*
+                          :test #'string=))
+             (session-tree-selector-toggle-fold item nil)
+             (setf *session-tree-selector-index*
+                   (min (max 0 (1- count))
+                        (+ *session-tree-selector-index* 10)))))
+       (session-tree-selector-update-filter))
+      ((or (eq base-key :page-up) (eq base-key :left))
+       (let ((item (session-tree-selector-current-item)))
+         (if (and (eq base-key :left) item
+                  (plusp (getf item :children-count)))
+             (session-tree-selector-toggle-fold item t)
+             (setf *session-tree-selector-index*
+                   (max 0 (- *session-tree-selector-index* 10)))))
+       (session-tree-selector-update-filter))
+      ((or (eq base-key :backspace)
+           (and (characterp base-key)
+                (or (char= base-key #\Backspace)
+                    (char= base-key #\Rubout))))
+       (session-tree-selector-delete-search-char))
+      ((and (characterp base-key) (char= base-key (code-char 4)))
+       (session-tree-selector-set-filter :default))
+      ((and (characterp base-key) (char= base-key (code-char 20)))
+       (session-tree-selector-set-filter :no-tools))
+      ((and (characterp base-key) (char= base-key (code-char 21)))
+       (session-tree-selector-set-filter :user-only))
+      ((and (characterp base-key) (char= base-key (code-char 1)))
+       (session-tree-selector-set-filter :all))
+      ((and (characterp base-key) (char= base-key (code-char 18)))
+       (session-tree-selector-set-filter :labeled-only))
+      ((and (characterp base-key) (char= base-key (code-char 15)))
+       (session-tree-selector-cycle-filter)
+       (setf *session-tree-selector-folded-ids* nil)
+       (session-tree-selector-update-filter))
+      ((and (characterp base-key) (char= base-key #\L))
+       (let ((item (session-tree-selector-current-item))
+             (callback *session-tree-selector-label-callback*))
+         (session-tree-selector-deactivate)
+         (when (and item callback)
+           (funcall callback item))))
+      ((and (characterp base-key) (graphic-char-p base-key))
+       (session-tree-selector-insert-search-char base-key))
+      (t nil))))
 
 (defun handle-minibuffer-key (key)
   "Handle a key event while the minibuffer is active.

@@ -73,6 +73,24 @@
 (defun selector-state ()
   `((:buffer-selector-active . ,clawmacs::*buffer-selector-active*)
     (:buffer-selector-index . ,clawmacs::*buffer-selector-index*)
+    (:session-tree-selector-active
+     . ,clawmacs::*session-tree-selector-active*)
+    (:session-tree-selector-index
+     . ,clawmacs::*session-tree-selector-index*)
+    (:session-tree-selector-filter
+     . ,(string-downcase
+         (symbol-name clawmacs::*session-tree-selector-filter-mode*)))
+    (:session-tree-selector-search
+     . ,clawmacs::*session-tree-selector-search*)
+    (:session-tree-selector-selected
+     . ,(let ((item (clawmacs::session-tree-selector-current-item)))
+          (or (and item (getf item :id)) "")))
+    (:session-tree-selector-rows
+     . ,(coerce
+         (mapcar (lambda (item)
+                   (clawmacs::format-session-tree-selector-line "" item 120))
+                 clawmacs::*session-tree-selector-filtered-items*)
+         'vector))
     (:model-selector-active . ,clawmacs::*model-selector-active*)
     (:model-selector-index . ,clawmacs::*model-selector-index*)
     (:think-selector-active . ,clawmacs::*think-selector-active*)

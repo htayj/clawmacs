@@ -272,7 +272,13 @@ TRIMMED-MESSAGES and TRIMMED-COUNT."
         (error "Compaction provider returned an empty summary"))
       (let ((summary-text (compaction-summary-with-prefix summary)))
         (when (buffer-session buf)
-          (rotate-session-transcript (buffer-session buf) :reason reason))
+          (let ((tokens-before (buffer-conversation-token-estimate buf)))
+            (rotate-session-transcript (buffer-session buf) :reason reason)
+            (record-session-compaction
+             (buffer-session buf)
+             :reason reason
+             :summary summary-text
+             :tokens-before tokens-before)))
         (replace-buffer-with-compacted-history buf summary-text recent-users)
         (let ((estimate (buffer-conversation-token-estimate buf)))
           (setf (buffer-token-count buf) estimate)

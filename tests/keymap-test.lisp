@@ -102,13 +102,15 @@ and C-x b to the old overlay buffer selector."
           (keymap-lookup *default-keymap* (list :ctrl-x (code-char 18))))))
 
 (test default-keymap-toggle-tool-results-uses-c-c-prefix
-  "Toggle tool results is bound under C-c (mode-specific), not C-x (global)."
+  "Toggle tool results stays under C-c; C-x t is session-tree navigation."
   (clawmacs::init-default-keymap)
   ;; C-c t should be bound
   (is (eq 'clawmacs::toggle-tool-results-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\t))))
-  ;; C-x t should NOT be bound (it was moved away)
-  (is (null (keymap-lookup *default-keymap* '(:ctrl-x #\t)))))
+  (is (eq 'clawmacs::session-tree-command
+          (keymap-lookup *default-keymap* '(:ctrl-x #\t))))
+  (is (eq 'clawmacs::fork-session-command
+          (keymap-lookup *default-keymap* '(:ctrl-x #\T)))))
 
 (test default-keymap-toggle-reasoning-output-uses-c-c-prefix
   "Toggle reasoning output is bound under C-c (mode-specific), not C-x."

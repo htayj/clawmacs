@@ -848,6 +848,34 @@ LABEL is typically \"default\", \"low\", or another reasoning-effort value."
                      (make-string (- width (length line)) :initial-element #\Space))
         (subseq line 0 width))))
 
+(defun format-session-tree-selector-line (marker item width)
+  "Format a single session tree selector ITEM."
+  (let* ((prefix (or (getf item :tree-prefix) ""))
+         (active (if (getf item :active-p) "*" " "))
+         (kind (or (getf item :kind-label) "entry"))
+         (label (getf item :label))
+         (label-part (if label
+                         (format nil " [~A]" label)
+                         ""))
+         (fold-part (cond
+                      ((getf item :folded-p) "+ ")
+                      ((plusp (or (getf item :children-count) 0))
+                       "- ")
+                      (t "  ")))
+         (line (format nil "~A~A ~A~A~A ~A ~A"
+                       marker
+                       active
+                       prefix
+                       fold-part
+                       kind
+                       label-part
+                       (or (getf item :content) ""))))
+    (if (<= (length line) width)
+        (concatenate 'string line
+                     (make-string (- width (length line))
+                                  :initial-element #\Space))
+        (subseq line 0 width))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Minibuffer State Query (pure function)
 ;;; --------------------------------------------------------------------------

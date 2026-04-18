@@ -129,6 +129,8 @@
    #:message-prev
    #:message-raw-content
    #:message-metadata
+   #:message-entry-id
+   #:message-parent-entry-id
    #:message-text
    #:message-line-count
 
@@ -142,6 +144,28 @@
    #:session-transcript-directory
    #:session-current-transcript-index
    #:session-current-transcript-path
+   #:session-current-leaf-id
+   #:session-parent-session
+   #:session-tree-node
+   #:session-tree-node-entry
+   #:session-tree-node-label
+   #:session-tree-node-children
+   #:session-normalized-tree-events
+   #:session-tree-roots
+   #:session-active-path-ids
+   #:session-active-branch-message-events
+   #:session-branch-state
+   #:session-effective-leaf-id
+   #:session-find-entry
+   #:session-navigation-leaf-for-entry
+   #:session-entry-user-message-text
+   #:set-session-current-leaf
+   #:record-session-compaction
+   #:record-session-branch-summary
+   #:record-session-label-change
+   #:record-session-model-change
+   #:record-session-think-level-change
+   #:create-branched-session
    #:load-or-create-session
    #:record-session-message
    #:rotate-session-transcript
@@ -236,12 +260,14 @@
    #:next-buffer-name
    #:buffer-names
    #:buffer-finalize-input
+   #:buffer-clear-history-before-input
    #:buffer-insert-read-only-message
    #:buffer-insert-agent-message
    #:buffer-insert-system-message
    #:buffer-insert-context-message
    #:buffer-message-count
    #:save-session
+   #:replace-buffer-history-with-serialized-messages
    #:load-session
    #:list-saved-sessions
 
@@ -685,6 +711,22 @@
    ;; Buffer selector
    #:*buffer-selector-active*
    #:*buffer-selector-index*
+   #:*session-tree-selector-active*
+   #:*session-tree-selector-buffer*
+   #:*session-tree-selector-items*
+   #:*session-tree-selector-filtered-items*
+   #:*session-tree-selector-index*
+   #:*session-tree-selector-scroll*
+   #:*session-tree-selector-search*
+   #:*session-tree-selector-filter-mode*
+   #:*session-tree-selector-folded-ids*
+   #:session-tree-selector-activate
+   #:session-tree-selector-deactivate
+   #:session-tree-selector-update-filter
+   #:session-tree-selector-current-item
+   #:handle-session-tree-selector-key
+   #:session-tree-command
+   #:fork-session-command
    #:list-buffers-command
    #:minibuffer-select-project-command
    #:open-project-file-command
@@ -696,6 +738,7 @@
    #:minibuffer-toggle-package-command
    #:describe-installed-package-command
    #:render-buffer-selector
+   #:render-session-tree-selector
 
    ;; Model selector (overlay)
    #:*model-selector-active*
@@ -765,6 +808,7 @@
    #:list-functions
    #:find-keybindings-for-command
    #:format-key-binding
+   #:format-session-tree-selector-line
    #:describe-function-to-string
    #:make-help-buffer
    #:describe-function-command

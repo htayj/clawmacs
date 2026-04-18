@@ -58,9 +58,18 @@ Ring operations belong beside the data they operate on: buffer ring logic in
 ### Sessions And Transcripts
 
 A session is the durable identity for a conversation. Buffers display sessions,
-but sessions persist transcripts to disk. Compaction rotates transcripts: the
-new transcript records a reference to the previous transcript so context can be
-audited without carrying all historical text in memory.
+but sessions persist transcripts to disk. Transcript entries form a tree:
+messages, compaction markers, branch summaries, labels, and model/think changes
+all have stable ids and optional parent ids. The session manifest records the
+current leaf, so loading a session replays only the active branch while keeping
+older branches available for navigation or forking.
+
+Compaction rotates transcript segments. The new transcript records a reference
+to the previous transcript so context can be audited without carrying all
+historical text in memory. Buffer snapshots remain compatibility/load-speed
+artifacts for buffer-facing state such as agent names, package overrides,
+provider overrides, and legacy raw-content normalization; tree sidecars are the
+authoritative source for branch structure.
 
 Session storage belongs in `src/session.lisp`; buffer save/load helpers live in
 `src/buffer.lisp` because they serialize buffer-facing state. Prompt runners and

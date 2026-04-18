@@ -313,6 +313,13 @@ Enforces the invariant that it is not read-only."
     (autosave-session-snapshot buf))
   msg)
 
+(defun buffer-clear-history-before-input (buf)
+  "Remove all finalized history messages from BUF, preserving the input."
+  (let ((input (buffer-input-message buf)))
+    (setf (message-prev input) nil
+          (buffer-first-message buf) input))
+  buf)
+
 (declaim (ftype (function (buffer) fixnum) buffer-message-count))
 (defun buffer-message-count (buf)
   "Count the number of messages in BUF."
@@ -728,7 +735,9 @@ The current buffer remains current when a current buffer already exists."
 
 (defun serialize-message (msg)
   "Serialize a message to an alist for JSON encoding."
-  `((:sender . ,(symbol-name (message-sender msg)))
+  `((:entry-id . ,(message-entry-id msg))
+    (:parent-entry-id . ,(message-parent-entry-id msg))
+    (:sender . ,(symbol-name (message-sender msg)))
     (:text . ,(message-text msg))
     (:timestamp . ,(message-timestamp msg))
     (:read-only-p . ,(message-read-only-p msg))
@@ -771,15 +780,20 @@ The current buffer remains current when a current buffer already exists."
          (text (cdr (assoc :text msg-data)))
          (raw-content (cdr (assoc :raw-content msg-data)))
          (metadata (cdr (assoc :metadata msg-data)))
-         (sender-kw (intern sender-str :keyword)))
-    (buffer-insert-read-only-message
-     buf sender-kw (or text "")
-     :raw-content (and raw-content
-                       (normalize-legacy-raw-content raw-content))
-     :metadata metadata
-     :timestamp (cdr (assoc :timestamp msg-data))
-     :record-p nil
-     :run-hook-p nil)))
+         (entry-id (cdr (assoc :entry-id msg-data)))
+         (parent-entry-id (cdr (assoc :parent-entry-id msg-data)))
+         (sender-kw (intern sender-str :keyword))
+         (msg (buffer-insert-read-only-message
+               buf sender-kw (or text "")
+               :raw-content (and raw-content
+                                 (normalize-legacy-raw-content raw-content))
+               :metadata metadata
+               :timestamp (cdr (assoc :timestamp msg-data))
+               :record-p nil
+               :run-hook-p nil)))
+    (setf (message-entry-id msg) entry-id
+          (message-parent-entry-id msg) parent-entry-id)
+    msg))
 
 (defun replay-serialized-messages (buf messages)
   "Replay serialized MESSAGES into BUF without transcript or autosave writes."
@@ -789,34 +803,41 @@ The current buffer remains current when a current buffer already exists."
           :do (replay-serialized-message buf msg-data)))
   buf)
 
-(defun read-session-transcript-events (path)
-  "Read transcript JSONL events from PATH, returning decoded alists."
-  (let ((events nil))
-    (when (probe-file path)
-      (with-open-file (stream path :direction :input :external-format :utf-8)
-        (loop :for line := (read-line stream nil nil)
-              :while line
-              :unless (zerop (length line))
-                :do (let ((cl-json:*json-array-type* 'vector))
-                      (push (cl-json:decode-json-from-string line) events)))))
-    (nreverse events)))
+(defun replace-buffer-history-with-serialized-messages
+    (buf messages &key input-text (autosave-p t))
+  "Replace BUF history with serialized MESSAGES and optional INPUT-TEXT."
+  (let ((*suppress-session-transcript-recording* t)
+        (*suppress-session-autosave* t))
+    (buffer-clear-history-before-input buf)
+    (replay-serialized-messages buf messages)
+    (when input-text
+      (set-message-text (buffer-input-message buf) input-text)))
+  (when autosave-p
+    (autosave-session-snapshot buf))
+  buf)
 
-(defun session-transcript-paths (session)
-  "Return SESSION's transcript segment paths in chronological order."
-  (sort (copy-list
-         (or (directory (merge-pathnames "*.jsonl"
-                                         (session-transcript-directory session)))
-             nil))
-        #'string<
-        :key #'namestring))
+(defun buffer-tree-backed-history-p (buf)
+  "Return true when BUF's loaded history points at transcript tree entries."
+  (loop :for msg := (buffer-first-message buf) :then (message-next msg)
+        :while (and msg (not (eq msg (buffer-input-message buf))))
+        :thereis (message-entry-id msg)))
+
+(defun apply-session-branch-state-to-buffer (buf session &key overwrite-nil-p)
+  "Apply SESSION's branch-local provider state to BUF.
+When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
+  (multiple-value-bind (provider model think-level)
+      (session-branch-state session)
+    (when (or provider overwrite-nil-p)
+      (setf (buffer-provider-override buf) provider))
+    (when (or model overwrite-nil-p)
+      (setf (buffer-model-override buf) model))
+    (when (or think-level overwrite-nil-p)
+      (setf (buffer-think-level-override buf) think-level)))
+  buf)
 
 (defun session-transcript-message-events (session)
-  "Return durable message events from all transcript segments for SESSION."
-  (loop :for path :in (session-transcript-paths session)
-        :append (remove-if-not
-                 (lambda (event)
-                   (string= "message" (or (cdr (assoc :event event)) "")))
-                 (read-session-transcript-events path))))
+  "Return durable serialized messages for SESSION's active branch."
+  (session-active-branch-message-events session))
 
 (defun load-session-snapshot (session-name path agent-name)
   "Load SESSION-NAME from snapshot PATH."
@@ -858,7 +879,7 @@ The current buffer remains current when a current buffer already exists."
       buf)))
 
 (defun load-session-sidecar (session-name &key (agent-name *default-agent-name*))
-  "Load SESSION-NAME from its transcript sidecar when no snapshot exists."
+  "Load SESSION-NAME from its transcript sidecar."
   (let* ((manifest-path (session-sidecar-manifest-path session-name))
          (manifest (read-session-manifest manifest-path)))
     (unless manifest
@@ -871,6 +892,7 @@ The current buffer remains current when a current buffer already exists."
       (replay-serialized-messages
        buf
        (session-transcript-message-events session))
+      (apply-session-branch-state-to-buffer buf session :overwrite-nil-p t)
       (autosave-session-snapshot buf)
       buf)))
 
@@ -878,8 +900,25 @@ The current buffer remains current when a current buffer already exists."
   "Load a saved session into a new buffer. Returns the buffer or nil."
   (let ((path (session-path session-name)))
     (let ((buf (if (probe-file path)
-                   (load-session-snapshot session-name path agent-name)
-                   (load-session-sidecar session-name :agent-name agent-name))))
+                   (let ((snapshot
+                           (load-session-snapshot session-name path agent-name)))
+                     (when snapshot
+                       (let* ((session (buffer-session snapshot))
+                              (sidecar-messages
+                                (and session
+                                     (session-transcript-message-events
+                                      session))))
+                         (if (buffer-tree-backed-history-p snapshot)
+                             (when sidecar-messages
+                               (replace-buffer-history-with-serialized-messages
+                                snapshot sidecar-messages :autosave-p nil)
+                               (apply-session-branch-state-to-buffer
+                                snapshot session))
+                             (when session
+                               (set-session-current-leaf session nil)))))
+                     snapshot)
+                   (load-session-sidecar session-name
+                                         :agent-name agent-name))))
       (when buf
         (maybe-run-hook-with-args '*after-session-load-hook* buf session-name))
       buf)))

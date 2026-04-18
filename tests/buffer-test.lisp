@@ -33,6 +33,13 @@
   "Return decoded events from SESSION's current transcript."
   (read-jsonl-events (session-current-transcript-path session)))
 
+(defun make-recorded-test-message (sender text)
+  "Return a read-only test message."
+  (let ((msg (make-message sender :read-only-p t)))
+    (clawmacs::set-message-text msg text)
+    (setf (message-timestamp msg) (get-universal-time))
+    msg))
+
 (defun mx-test-noarg-command (buffer)
   "Test command used to verify M-x invocation without arguments."
   (declare (ignore buffer))
@@ -51,6 +58,15 @@
   `(let ((*buffer-ring* nil)
          (clawmacs::*buffer-counter* 0)
          (*buffer-selector-active* nil)
+         (clawmacs::*session-tree-selector-active* nil)
+         (clawmacs::*session-tree-selector-buffer* nil)
+         (clawmacs::*session-tree-selector-items* nil)
+         (clawmacs::*session-tree-selector-filtered-items* nil)
+         (clawmacs::*session-tree-selector-index* 0)
+         (clawmacs::*session-tree-selector-scroll* 0)
+         (clawmacs::*session-tree-selector-search* "")
+         (clawmacs::*session-tree-selector-filter-mode* :default)
+         (clawmacs::*session-tree-selector-folded-ids* nil)
          (*model-selector-active* nil)
          (*think-selector-active* nil)
          (*customize-face-state* nil)
@@ -214,6 +230,81 @@
       (let ((loaded-msg (buffer-first-message loaded)))
         (is (eq :user (message-sender loaded-msg)))
         (is (string= "from transcript" (message-text loaded-msg)))))))
+
+(test session-transcripts-are-tree-shaped
+  "Recorded transcript messages get ids, parent ids, and advance the leaf."
+  (let* ((*sessions-dir* (temp-session-test-directory "tree-shape"))
+         (session (load-or-create-session "Tree Shape"))
+         (buf (make-buffer "Tree Shape"
+                           :agent-name "agent"
+                           :session session)))
+    (clawmacs::set-message-text (buffer-input-message buf) "root")
+    (buffer-finalize-input buf)
+    (buffer-insert-agent-message buf "answer")
+    (let* ((events (session-current-events session))
+           (messages (remove-if-not
+                      (lambda (event)
+                        (string= "message" (event-value event :event)))
+                      events))
+           (first-id (event-value (first messages) :id))
+           (second-id (event-value (second messages) :id)))
+      (is (= 2 (length messages)))
+      (is (stringp first-id))
+      (is (stringp second-id))
+      (is (null (event-value (first messages) :parent-id)))
+      (is (string= first-id
+                   (event-value (second messages) :parent-id)))
+      (is (string= second-id (session-current-leaf-id session)))
+      (is (string= first-id
+                   (message-entry-id (buffer-first-message buf)))))))
+
+(test session-load-replays-active-branch-only
+  "Loading a branched sidecar follows the manifest leaf path."
+  (let* ((*sessions-dir* (temp-session-test-directory "branch-load"))
+         (session-name "branch-load-session")
+         (session (load-or-create-session session-name))
+         (root (make-recorded-test-message :user "root"))
+         (old-answer (make-recorded-test-message :agent "old answer"))
+         (new-answer (make-recorded-test-message :agent "new answer")))
+    (record-session-message session root)
+    (let ((root-id (message-entry-id root)))
+      (record-session-message session old-answer)
+      (set-session-current-leaf session root-id)
+      (record-session-message session new-answer)
+      (let* ((loaded (load-session session-name))
+             (texts (loop :for msg := (and loaded (buffer-first-message loaded))
+                            :then (message-next msg)
+                          :while (and msg
+                                      (not (eq msg
+                                               (buffer-input-message loaded))))
+                          :collect (message-text msg))))
+        (is (not (null loaded)))
+        (is (string= "root" (message-text (buffer-first-message loaded))))
+        (is (string= "new answer"
+                     (message-text
+                      (message-next (buffer-first-message loaded)))))
+        (is (not (member "old answer" texts :test #'string=)))))))
+
+(test session-labels-feed-tree-selector
+  "Label changes are resolved onto selector entries and filterable."
+  (let* ((*sessions-dir* (temp-session-test-directory "tree-label"))
+         (session (load-or-create-session "Tree Labels"))
+         (buf (make-buffer "Tree Labels"
+                           :agent-name "agent"
+                           :session session))
+         (msg (make-recorded-test-message :user "bookmark me")))
+    (record-session-message session msg)
+    (record-session-label-change session (message-entry-id msg) "mark")
+    (session-tree-selector-activate buf (lambda (item) (declare (ignore item))))
+    (let ((item (find (message-entry-id msg)
+                      clawmacs::*session-tree-selector-filtered-items*
+                      :key (lambda (candidate) (getf candidate :id))
+                      :test #'string=)))
+      (is (not (null item)))
+      (is (string= "mark" (getf item :label))))
+    (clawmacs::session-tree-selector-set-filter :labeled-only)
+    (is (= 1 (length clawmacs::*session-tree-selector-filtered-items*)))
+    (session-tree-selector-deactivate)))
 
 (test ensure-scratch-buffer-creates-loaded-scratch-without-stealing-current
   "The scratch buffer is loaded into the ring but does not become current."
@@ -473,6 +564,7 @@
   (let ((*minibuffer-active* t)
         (*minibuffer-mode* :completion)
         (*buffer-selector-active* nil)
+        (clawmacs::*session-tree-selector-active* nil)
         (*model-selector-active* nil)
         (*think-selector-active* nil)
         (*customize-face-state* nil)

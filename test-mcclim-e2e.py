@@ -555,7 +555,12 @@ def run_test(name, fn, session):
         snapshot = session.snapshot()
         if (snapshot.get("minibuffer") or {}).get("active") or any(
             (snapshot.get("selectors") or {}).get(key)
-            for key in ("bufferSelectorActive", "modelSelectorActive", "thinkSelectorActive")
+            for key in (
+                "bufferSelectorActive",
+                "sessionTreeSelectorActive",
+                "modelSelectorActive",
+                "thinkSelectorActive",
+            )
         ):
             session.press("Ctrl+g")
 

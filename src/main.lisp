@@ -952,6 +952,11 @@ Returns true when KEY was consumed by completion."
       (reconcile-buffer-think-level-override buffer
                                              :provider provider
                                              :model model)
+    (when (buffer-session buffer)
+      (record-session-model-change (buffer-session buffer)
+                                   provider
+                                   model
+                                   :think-level think-level))
     (values think-status think-level)))
 
 (defun record-model-selection-history (display)
@@ -1011,6 +1016,8 @@ Returns true when KEY was consumed by completion."
     (if level
         (set-buffer-think-level-override buffer level)
         (clear-buffer-think-level-override buffer))
+    (when (buffer-session buffer)
+      (record-session-think-level-change (buffer-session buffer) level))
     (insert-think-selection-message buffer provider model level)))
 
 (defun preselect-minibuffer-active-item (items)
@@ -1284,6 +1291,228 @@ to navigate. Shows buffer name, agent, status, and message count."
         buffer
         (format nil "[Session saved to ~A]" path))))))
 (defcommand save-session-command)
+
+(defun apply-session-branch-to-buffer
+    (buffer leaf-id &key input-text (autosave-p t))
+  "Move BUFFER's session to LEAF-ID and display that branch."
+  (let ((session (or (buffer-session buffer)
+                     (ensure-buffer-session buffer))))
+    (set-session-current-leaf session leaf-id)
+    (multiple-value-bind (provider model think-level)
+        (session-branch-state session leaf-id)
+      (setf (buffer-provider-override buffer) provider
+            (buffer-model-override buffer) model
+            (buffer-think-level-override buffer) think-level))
+    (replace-buffer-history-with-serialized-messages
+     buffer
+     (session-active-branch-message-events session leaf-id)
+     :input-text input-text
+     :autosave-p autosave-p)
+    buffer))
+
+(defun session-branch-summary-source-text (buffer)
+  "Return a text transcript of BUFFER's current visible branch."
+  (with-output-to-string (out)
+    (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
+          :while (and msg (not (eq msg (buffer-input-message buffer))))
+          :do (format out "~(~A~)> ~A~%~%"
+                      (message-sender msg)
+                      (message-text msg)))))
+
+(defun generate-session-branch-summary (buffer &key custom-instructions)
+  "Generate a branch summary for BUFFER using its active provider."
+  (let* ((source (session-branch-summary-source-text buffer))
+         (instructions
+           (if (session-tree-blank-string-p custom-instructions)
+               "Summarize this abandoned conversation branch. Preserve decisions, facts, files touched, and unresolved work. Keep it concise and useful as future context."
+               custom-instructions))
+         (prompt (format nil "~A~%~%Branch transcript:~%~A"
+                         instructions source)))
+    (multiple-value-bind (provider model think-level)
+        (resolve-buffer-provider-and-model buffer)
+      (let* ((state (provider-request-streaming
+                     provider
+                     (list `((:role . "user")
+                             (:content . ,(coerce
+                                           (canonicalize-message-content
+                                            "user"
+                                            prompt)
+                                           'vector))))
+                     (lambda (s) (declare (ignore s)))
+                     :model model
+                     :tools #()
+                     :system-prompt "You summarize abandoned chat branches for future context."
+                     :reasoning-effort think-level))
+             (response (wait-for-compaction-stream-state state))
+             (summary (content-text-blocks (response-content response))))
+        (when (session-tree-blank-string-p summary)
+          (error "Branch summary provider returned an empty summary"))
+        summary))))
+
+(defun complete-session-tree-navigation
+    (buffer entry-id leaf-id input-text &key summarize custom-instructions)
+  "Finish navigation to ENTRY-ID in BUFFER."
+  (let* ((session (buffer-session buffer))
+         (target-leaf leaf-id))
+    (when summarize
+      (let ((summary (generate-session-branch-summary
+                      buffer
+                      :custom-instructions custom-instructions)))
+        (setf target-leaf
+              (record-session-branch-summary session leaf-id summary))))
+    (apply-session-branch-to-buffer buffer target-leaf :input-text input-text)
+    (buffer-insert-system-message
+     buffer
+     (format nil "[Navigated session tree to ~A]" entry-id)
+     :record-p nil)))
+
+(defun session-tree-summary-choice-items ()
+  "Return minibuffer choices for branch navigation summaries."
+  (list (list :choice :none
+              :display "No summary"
+              :match-text "none no summary")
+        (list :choice :summary
+              :display "Summarize abandoned branch"
+              :match-text "summarize abandoned branch")
+        (list :choice :custom
+              :display "Summarize with custom prompt"
+              :match-text "summarize custom prompt")))
+
+(defun prompt-session-tree-summary-choice (buffer entry-id leaf-id input-text)
+  "Ask how to summarize before navigating the session tree."
+  (minibuffer-activate
+   "Branch Summary"
+   (session-tree-summary-choice-items)
+   (lambda (item)
+     (case (getf item :choice)
+       (:none
+        (complete-session-tree-navigation
+         buffer entry-id leaf-id input-text))
+       (:summary
+        (handler-case
+            (complete-session-tree-navigation
+             buffer entry-id leaf-id input-text :summarize t)
+          (error (e)
+            (buffer-insert-system-message
+             buffer
+             (format nil "[Branch summary failed: ~A]" e)
+             :record-p nil))))
+       (:custom
+        (minibuffer-prompt
+         "Summary Prompt"
+         (lambda (custom)
+           (handler-case
+               (complete-session-tree-navigation
+                buffer entry-id leaf-id input-text
+                :summarize t
+                :custom-instructions custom)
+             (error (e)
+               (buffer-insert-system-message
+                buffer
+                (format nil "[Branch summary failed: ~A]" e)
+                :record-p nil))))))))))
+
+(defun session-tree-navigation-needs-summary-p (session leaf-id)
+  "Return true when moving to LEAF-ID abandons the current leaf."
+  (let ((current (session-effective-leaf-id session)))
+    (and current
+         (not (and leaf-id (string= current leaf-id))))))
+
+(defun navigate-session-tree-item (buffer item)
+  "Navigate BUFFER's session according to selected tree ITEM."
+  (let* ((session (buffer-session buffer))
+         (entry-id (getf item :id))
+         (leaf-id (session-navigation-leaf-for-entry session entry-id))
+         (input-text (session-entry-user-message-text session entry-id)))
+    (if (session-tree-navigation-needs-summary-p session leaf-id)
+        (prompt-session-tree-summary-choice buffer entry-id leaf-id input-text)
+        (complete-session-tree-navigation buffer entry-id leaf-id input-text))))
+
+(defun edit-session-tree-label (buffer item)
+  "Prompt for a label for selected session tree ITEM."
+  (let ((entry-id (getf item :id))
+        (current-label (or (getf item :label) "")))
+    (minibuffer-prompt
+     "Entry Label"
+     (lambda (label)
+       (record-session-label-change (buffer-session buffer) entry-id label)
+       (buffer-insert-system-message
+        buffer
+        (if (session-tree-blank-string-p label)
+            (format nil "[Cleared label on ~A]" entry-id)
+            (format nil "[Labeled ~A: ~A]" entry-id label))
+        :record-p nil)
+       (session-tree-selector-activate
+        buffer
+        (lambda (selected)
+          (navigate-session-tree-item buffer selected))
+        :label-callback
+        (lambda (selected)
+          (edit-session-tree-label buffer selected))
+        :initial-entry-id entry-id))
+     :initial-input current-label)))
+
+(defun session-tree-command (buffer)
+  "Open the current session's tree selector."
+  (let ((session (ensure-buffer-session buffer)))
+    (if (null (session-normalized-tree-events session))
+        (buffer-insert-system-message
+         buffer
+         "[Current session has no tree entries yet.]"
+         :record-p nil)
+        (session-tree-selector-activate
+         buffer
+         (lambda (item)
+           (navigate-session-tree-item buffer item))
+         :label-callback
+         (lambda (item)
+           (edit-session-tree-label buffer item))))))
+(defcommand session-tree-command)
+
+(defun fork-session-from-tree-item (buffer item)
+  "Fork BUFFER's session from selected tree ITEM into a new buffer."
+  (let* ((session (buffer-session buffer))
+         (entry-id (getf item :id))
+         (leaf-id (session-navigation-leaf-for-entry session entry-id))
+         (input-text (session-entry-user-message-text session entry-id))
+         (new-session (create-branched-session session leaf-id))
+         (new-buffer (make-buffer (session-name new-session)
+                                  :agent-name (buffer-agent-name buffer)
+                                  :working-directory (buffer-working-directory buffer)
+                                  :session new-session)))
+    (multiple-value-bind (provider model think-level)
+        (session-branch-state new-session leaf-id)
+      (setf (buffer-provider-override new-buffer) provider
+            (buffer-model-override new-buffer) model
+            (buffer-think-level-override new-buffer) think-level))
+    (initialize-buffer-display-defaults new-buffer)
+    (replace-buffer-history-with-serialized-messages
+     new-buffer
+     (session-active-branch-message-events new-session leaf-id)
+     :input-text input-text)
+    (add-buffer-to-ring new-buffer)
+    (switch-to-buffer new-buffer)
+    (buffer-insert-system-message
+     new-buffer
+     (format nil "[Forked from ~A]" entry-id)
+     :record-p nil)))
+
+(defun fork-session-command (buffer)
+  "Fork a selected session tree point into a new session buffer."
+  (let ((session (ensure-buffer-session buffer)))
+    (if (null (session-normalized-tree-events session))
+        (buffer-insert-system-message
+         buffer
+         "[Current session has no tree entries to fork.]"
+         :record-p nil)
+        (session-tree-selector-activate
+         buffer
+         (lambda (item)
+           (fork-session-from-tree-item buffer item))
+         :label-callback
+         (lambda (item)
+           (edit-session-tree-label buffer item))))))
+(defcommand fork-session-command)
 
 (defun load-session-command (buffer)
   "Load a saved chat session into a new buffer via minibuffer completion."
@@ -2500,6 +2729,12 @@ KEY is already normalized by the backend before calling this."
        (handle-minibuffer-key key)
        nil)
 
+      ;; === SESSION TREE SELECTOR MODE ===
+      ;; Navigation, folding, filtering, and branch selection.
+      (*session-tree-selector-active*
+       (handle-session-tree-selector-key key)
+       nil)
+
       ;; === BUFFER SELECTOR MODE ===
       ;; Navigation and selection within the buffer list overlay
       (*buffer-selector-active*
@@ -2691,6 +2926,7 @@ Environment variables:
         *think-selector-index* 0
         *think-selector-scroll* 0
         *think-selector-entries* nil)
+  (session-tree-selector-deactivate)
   (setf *minibuffer-active* nil
         *minibuffer-mode* :completion
         *minibuffer-prompt* ""

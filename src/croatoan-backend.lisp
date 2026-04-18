@@ -749,6 +749,121 @@ Handles scrolling when there are more models than visible rows."
       (croatoan:refresh modeline-window))))
 
 ;;; --------------------------------------------------------------------------
+;;; Session Tree Selector Rendering
+;;; --------------------------------------------------------------------------
+
+(defun session-tree-filter-label ()
+  "Return the current session tree filter as a display string."
+  (string-downcase (symbol-name *session-tree-selector-filter-mode*)))
+
+(defun render-session-tree-selector (main-window modeline-window)
+  "Render the session tree selector overlay."
+  (session-tree-selector-update-filter)
+  (let* ((width (croatoan:width main-window))
+         (height (croatoan:height main-window))
+         (items *session-tree-selector-filtered-items*)
+         (num-items (length items))
+         (max-visible (max 1 (- height 7)))
+         (scroll (cond
+                   ((< *session-tree-selector-index*
+                       *session-tree-selector-scroll*)
+                    *session-tree-selector-index*)
+                   ((>= *session-tree-selector-index*
+                        (+ *session-tree-selector-scroll* max-visible))
+                    (max 0
+                         (1+ (- *session-tree-selector-index*
+                                max-visible))))
+                   (t *session-tree-selector-scroll*))))
+    (setf *session-tree-selector-scroll* scroll)
+    (croatoan:clear main-window)
+    (when (< 1 height)
+      (apply-global-face main-window :selector-title)
+      (croatoan:move main-window 1 2)
+      (let ((title (format nil "Session Tree: ~A"
+                           (if *session-tree-selector-buffer*
+                               (buffer-name *session-tree-selector-buffer*)
+                               ""))))
+        (croatoan:add-string
+         main-window
+         (subseq title 0 (min (length title) (- width 4))))))
+    (when (< 2 height)
+      (apply-global-face main-window :selector-separator)
+      (croatoan:move main-window 2 2)
+      (let ((sep (make-string (min (- width 4) 50)
+                              :initial-element #\─)))
+        (croatoan:add-string main-window sep)))
+    (when (< 3 height)
+      (apply-global-face main-window :selector-header)
+      (let ((header (format nil "  filter:~A  search:~A"
+                            (session-tree-filter-label)
+                            *session-tree-selector-search*)))
+        (croatoan:move main-window 3 0)
+        (croatoan:add-string
+         main-window
+         (subseq header 0 (min (length header) width)))))
+    (loop :for absolute-idx :from scroll
+          :below (min (+ scroll max-visible) num-items)
+          :for item := (nth absolute-idx items)
+          :for row := (+ 5 (- absolute-idx scroll))
+          :while (< row (- height 2))
+          :for selected-p := (= absolute-idx *session-tree-selector-index*)
+          :for marker := (if selected-p "> " "  ")
+          :for line := (format-session-tree-selector-line marker item width)
+          :do (progn
+                (if selected-p
+                    (apply-global-face main-window :selector-selected)
+                    (apply-global-face main-window :selector-entry))
+                (croatoan:move main-window row 0)
+                (croatoan:add-string main-window
+                                     (make-string width :initial-element #\Space))
+                (croatoan:move main-window row 0)
+                (croatoan:add-string main-window
+                                     (subseq line 0
+                                             (min (length line) width)))))
+    (when (> num-items max-visible)
+      (let ((indicator (format nil "[~D-~D of ~D]"
+                               (1+ scroll)
+                               (min (+ scroll max-visible) num-items)
+                               num-items))
+            (ind-row (+ 5 (min max-visible (- num-items scroll)))))
+        (when (< ind-row (- height 1))
+          (apply-global-face main-window :selector-scroll)
+          (croatoan:move main-window ind-row 2)
+          (croatoan:add-string
+           main-window
+           (subseq indicator 0
+                   (min (length indicator) (- width 4)))))))
+    (let ((footer-row (1- height)))
+      (when (plusp footer-row)
+        (apply-global-face main-window :selector-footer)
+        (croatoan:move main-window footer-row 2)
+        (let ((footer "[RET] select  [C-g/q] cancel  L label  <- fold  -> unfold  C-o filter"))
+          (croatoan:add-string
+           main-window
+           (subseq footer 0
+                   (min (length footer) (- width 4)))))))
+    (croatoan:refresh main-window)
+    (let* ((ml-face (make-modeline-face))
+           (resolved (resolve-face ml-face))
+           (ml-text (format nil " [session-tree] ~A | ~D entr~:@P | filter ~A"
+                            (if *session-tree-selector-buffer*
+                                (buffer-name *session-tree-selector-buffer*)
+                                "")
+                            num-items
+                            (session-tree-filter-label)))
+           (ml-width (croatoan:width modeline-window))
+           (padded (if (<= (length ml-text) ml-width)
+                       (concatenate 'string ml-text
+                                    (make-string (- ml-width (length ml-text))
+                                                 :initial-element #\Space))
+                       (subseq ml-text 0 ml-width))))
+      (apply-face-to-window modeline-window resolved)
+      (croatoan:clear modeline-window)
+      (croatoan:move modeline-window 0 0)
+      (croatoan:add-string modeline-window padded)
+      (croatoan:refresh modeline-window))))
+
+;;; --------------------------------------------------------------------------
 ;;; Minibuffer Rendering
 ;;; --------------------------------------------------------------------------
 
@@ -1056,6 +1171,8 @@ the event loop reading input and rendering until :QUIT is returned."
                    (croatoan:refresh scr))
                  (update-window-layout scr main-win modeline-win minibuffer-win)
                  (cond
+                   (*session-tree-selector-active*
+                    (render-session-tree-selector main-win modeline-win))
                    (*buffer-selector-active*
                     (render-buffer-selector main-win modeline-win))
                    (*model-selector-active*

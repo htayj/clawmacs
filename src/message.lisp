@@ -101,7 +101,17 @@ round-tripping.")
                   :initform nil
                   :type list
                   :documentation "Display-only metadata alist for a message.
-This is not sent to providers."))
+This is not sent to providers.")
+   (entry-id      :initarg :entry-id
+                  :accessor message-entry-id
+                  :initform nil
+                  :type (or null string)
+                  :documentation "Durable session tree entry id for this message.")
+   (parent-entry-id :initarg :parent-entry-id
+                    :accessor message-parent-entry-id
+                    :initform nil
+                    :type (or null string)
+                    :documentation "Durable parent entry id for this message."))
   (:documentation
    "A message in the chat buffer. Contains a doubly-linked list of lines,
 a point and optional mark for intra-message cursor/selection, sender

@@ -527,6 +527,20 @@ resolve_runtime_ncurses_path() {
   fi
 }
 
+resolve_runtime_libgcc_path() {
+  resolved_libgcc_file=''
+
+  resolved_libgcc_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --share="$REPO_ROOT=/workspace" -- bash -lc 'ldconfig -p 2>/dev/null | while IFS= read -r line; do case "$line" in *" => "*) lib=${line%% *}; case "$lib" in libgcc_s.so*) printf "%s\n" "${line##* => }"; break ;; esac ;; esac; done' 2>/dev/null || true)
+
+  if [ -z "$resolved_libgcc_file" ]; then
+    resolved_libgcc_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --share="$REPO_ROOT=/workspace" -- bash -lc 'for lib in /run/current-system/profile/lib/libgcc_s.so* /run/current-system/profile/lib64/libgcc_s.so* /gnu/store/*/lib/libgcc_s.so* /gnu/store/*/lib64/libgcc_s.so* /lib/libgcc_s.so* /lib64/libgcc_s.so* /usr/lib/libgcc_s.so* /usr/lib64/libgcc_s.so*; do if [ -e "$lib" ]; then printf "%s\n" "$lib"; break; fi; done' 2>/dev/null || true)
+  fi
+
+  if [ -n "$resolved_libgcc_file" ]; then
+    prepend_ld_library_path "${resolved_libgcc_file%/*}"
+  fi
+}
+
 validate_e2e_args() {
   if [ "$MODE" != "e2e" ]; then
     return 0
@@ -565,8 +579,9 @@ payload_uses_mcp_driver() {
 
 probe_payload_mcp_driver() {
   container_mcp_bin="$1"
+  runtime_ld_library_path="${LD_LIBRARY_PATH:-}"
 
-  run_in_container 'set -eu; mcp_bin="$1"; home_path="$2"; xdg_cache_path="$3"; HOME="$home_path" XDG_CACHE_HOME="$xdg_cache_path" "$mcp_bin" --help >/dev/null 2>&1' "$container_mcp_bin" "$WORKSPACE_HOME" "$WORKSPACE_XDG_CACHE"
+  run_in_container 'set -eu; mcp_bin="$1"; home_path="$2"; xdg_cache_path="$3"; runtime_ld_library_path="$4"; export HOME="$home_path" XDG_CACHE_HOME="$xdg_cache_path"; if [ -n "$runtime_ld_library_path" ]; then export LD_LIBRARY_PATH="$runtime_ld_library_path"; fi; "$mcp_bin" --help >/dev/null 2>&1' "$container_mcp_bin" "$WORKSPACE_HOME" "$WORKSPACE_XDG_CACHE" "$runtime_ld_library_path"
 }
 
 install_payload_mcp_driver() {
@@ -637,6 +652,7 @@ run_preflight() {
   validate_override_path
   validate_runtime_openssl_path
   resolve_runtime_ncurses_path
+  resolve_runtime_libgcc_path
   validate_quicklisp_bootstrap
 }
 

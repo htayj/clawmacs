@@ -482,6 +482,13 @@ top-level sheet dimensions to prevent exponential growth."
   "Return selector-specific modeline text, or NIL for the normal modeline."
   (let ((text
           (cond
+            (*session-tree-selector-active*
+             (format nil " [session-tree] ~A | ~D entr~:@P | filter ~(~A~)"
+                     (if *session-tree-selector-buffer*
+                         (buffer-name *session-tree-selector-buffer*)
+                         "")
+                     (length *session-tree-selector-filtered-items*)
+                     *session-tree-selector-filter-mode*))
             (*buffer-selector-active*
              (format nil " [buffer-selector] Agent Sessions | ~D session~:[s~;~]"
                      (length *buffer-ring*) (= (length *buffer-ring*) 1)))
@@ -556,6 +563,8 @@ When the minibuffer is active, draws a centered popup overlay on top."
     (when (zerop char-w) (return-from display-main-pane))
     (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
       (cond
+        (*session-tree-selector-active*
+         (mcclim-render-session-tree-selector pane rows cols char-w char-h frame))
         (*buffer-selector-active*
          (mcclim-render-buffer-selector pane rows cols char-w char-h frame))
         (*model-selector-active*
@@ -1088,6 +1097,85 @@ Returns the number of visual rows consumed."
         (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-footer)
           (draw-text-at pane footer-row 2
                         "[RET] select  [C-g/q] cancel  default = clear  * = active"
+                        fg bg ts char-w char-h))))))
+
+(defun mcclim-render-session-tree-selector (pane rows cols char-w char-h frame)
+  "Render the session tree selector overlay."
+  (declare (ignore frame))
+  (session-tree-selector-update-filter)
+  (let* ((width cols)
+         (height rows)
+         (items *session-tree-selector-filtered-items*)
+         (num-items (length items))
+         (max-visible (max 1 (- height 7)))
+         (scroll (cond
+                   ((< *session-tree-selector-index*
+                       *session-tree-selector-scroll*)
+                    *session-tree-selector-index*)
+                   ((>= *session-tree-selector-index*
+                        (+ *session-tree-selector-scroll* max-visible))
+                    (max 0
+                         (1+ (- *session-tree-selector-index*
+                                max-visible))))
+                   (t *session-tree-selector-scroll*))))
+    (setf *session-tree-selector-scroll* scroll)
+    (clear-pane-with-ink pane *mcclim-bg-ink*)
+    (when (< 1 height)
+      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-title)
+        (draw-text-at pane 1 2
+                      (format nil "Session Tree: ~A"
+                              (if *session-tree-selector-buffer*
+                                  (buffer-name *session-tree-selector-buffer*)
+                                  ""))
+                      fg bg ts char-w char-h)))
+    (when (< 2 height)
+      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-separator)
+        (draw-text-at pane 2 2
+                      (make-string (min (- width 4) 50)
+                                   :initial-element #\─)
+                      fg bg ts char-w char-h)))
+    (when (< 3 height)
+      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-header)
+        (let ((header (format nil "  filter:~(~A~)  search:~A"
+                              *session-tree-selector-filter-mode*
+                              *session-tree-selector-search*)))
+          (fill-row pane 3 width bg char-w char-h)
+          (draw-text-at pane 3 0
+                        (subseq header 0 (min (length header) width))
+                        fg bg ts char-w char-h))))
+    (loop :for absolute-idx :from scroll
+          :below (min (+ scroll max-visible) num-items)
+          :for item := (nth absolute-idx items)
+          :for row := (+ 5 (- absolute-idx scroll))
+          :while (< row (- height 2))
+          :for selected-p := (= absolute-idx *session-tree-selector-index*)
+          :for marker := (if selected-p "> " "  ")
+          :for line := (format-session-tree-selector-line marker item width)
+          :do (multiple-value-bind (fg bg ts)
+                  (resolve-global-face-inks (if selected-p
+                                                :selector-selected
+                                                :selector-entry))
+                (fill-row pane row width bg char-w char-h)
+                (draw-text-at pane row 0
+                              (subseq line 0 (min (length line) width))
+                              fg bg ts char-w char-h)))
+    (when (> num-items max-visible)
+      (let ((indicator (format nil "[~D-~D of ~D]"
+                               (1+ scroll)
+                               (min (+ scroll max-visible) num-items)
+                               num-items))
+            (ind-row (+ 5 (min max-visible (- num-items scroll)))))
+        (when (< ind-row (- height 1))
+          (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-scroll)
+            (draw-text-at pane ind-row 2
+                          (subseq indicator 0
+                                  (min (length indicator) (- width 4)))
+                          fg bg ts char-w char-h)))))
+    (let ((footer-row (1- height)))
+      (when (plusp footer-row)
+        (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-footer)
+          (draw-text-at pane footer-row 2
+                        "[RET] select  [C-g/q] cancel  L label  <- fold  -> unfold  C-o filter"
                         fg bg ts char-w char-h))))))
 
 ;;; --------------------------------------------------------------------------
