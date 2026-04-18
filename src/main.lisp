@@ -273,7 +273,8 @@
            buffer
            (format nil "[OpenAI Codex OAuth]~%~%A browser login was started for shared Codex auth.~%If the browser did not open, use this URL:~%~%  ~A~%~%The callback server is listening at:~%  ~A~%~%Press C-g to cancel."
                    auth-url redirect-uri))
-          (setf (buffer-status buffer) :oauth)))
+          (setf (buffer-status buffer) :oauth)
+          (notify-buffer-display-change buffer :status)))
     (error (e)
       (buffer-insert-system-message
        buffer
@@ -1591,19 +1592,22 @@ to navigate. Shows buffer name, agent, status, and message count."
 (defun toggle-tool-results-command (buffer)
   "Toggle visibility of tool-result messages in the chat."
   (setf (buffer-show-tool-results-p buffer)
-        (not (buffer-show-tool-results-p buffer))))
+        (not (buffer-show-tool-results-p buffer)))
+  (notify-buffer-display-change buffer :visibility))
 (defcommand toggle-tool-results-command)
 
 (defun toggle-reasoning-output-command (buffer)
   "Toggle visibility of provider-supplied reasoning blocks in the chat."
   (setf (buffer-show-reasoning-p buffer)
-        (not (buffer-show-reasoning-p buffer))))
+        (not (buffer-show-reasoning-p buffer)))
+  (notify-buffer-display-change buffer :visibility))
 (defcommand toggle-reasoning-output-command)
 
 (defun toggle-metadata-output-command (buffer)
   "Toggle visibility of provider/response metadata in the chat."
   (setf (buffer-show-metadata-p buffer)
-        (not (buffer-show-metadata-p buffer))))
+        (not (buffer-show-metadata-p buffer)))
+  (notify-buffer-display-change buffer :visibility))
 (defcommand toggle-metadata-output-command)
 
 (defun toggle-debug-mode-command (buffer)

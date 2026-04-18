@@ -324,6 +324,8 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
    (char-width :accessor frame-char-width :initform 0)
    (char-height :accessor frame-char-height :initform 0)
    (pane-space-char-height :accessor frame-pane-space-char-height :initform 0)
+   (last-render-snapshot :accessor frame-last-render-snapshot :initform nil)
+   (render-sequence :accessor frame-render-sequence :initform 0)
    (quit-flag :accessor frame-quit-flag :initform nil))
   (:command-table (clawmacs-mcclim-command-table :inherit-from nil))
   (:panes
@@ -360,6 +362,51 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
       (:fill main-pane)
       who-line-pane
       modeline-pane))))
+
+(defclass clawmacs-display-change-event (climi::standard-event)
+  ((buffer :initarg :buffer :reader display-change-event-buffer)
+   (reason :initarg :reason :reader display-change-event-reason)
+   (force-p :initarg :force-p :reader display-change-event-force-p
+            :initform t)))
+
+(defvar *mcclim-live-frames* nil
+  "Application frames that should wake when shared buffer display state changes.")
+
+(defvar *mcclim-live-frames-lock*
+  (bt:make-lock "mcclim-live-frames"))
+
+;;; --------------------------------------------------------------------------
+;;; Render Snapshots
+;;; --------------------------------------------------------------------------
+
+(defun mcclim-render-snapshot-message (message)
+  "Return a JSON-ready summary of MESSAGE as rendered by McCLIM."
+  `((:sender . ,(string-downcase (symbol-name (message-sender message))))
+    (:text . ,(message-text message))
+    (:entry-id . ,(or (message-entry-id message) ""))))
+
+(defun mcclim-record-render-snapshot
+    (frame pane buf mode rows cols &key input-start-row history-height
+                                  visible-messages)
+  "Record the latest actual McCLIM display pass for e2e observation."
+  (multiple-value-bind (pixel-width pixel-height)
+      (pane-pixel-size pane)
+    (setf (frame-last-render-snapshot frame)
+          `((:ready . t)
+            (:sequence . ,(incf (frame-render-sequence frame)))
+            (:mode . ,(string-downcase (symbol-name mode)))
+            (:buffer-name . ,(if buf (buffer-name buf) ""))
+            (:rows . ,rows)
+            (:cols . ,cols)
+            (:pixel-width . ,pixel-width)
+            (:pixel-height . ,pixel-height)
+            (:input-start-row . ,(or input-start-row -1))
+            (:history-height . ,(or history-height -1))
+            (:visible-messages
+             . ,(coerce (mapcar #'mcclim-render-snapshot-message
+                                 (or visible-messages nil))
+                        'vector)))))
+  frame)
 
 ;;; --------------------------------------------------------------------------
 ;;; Drawing Primitives
@@ -427,16 +474,25 @@ Fills a background rectangle first, then draws the text on top."
 
 (defun pane-pixel-size (pane)
   "Return (values width height) — the allocated pixel size of PANE.
-Clamps sheet-region (which grows with output records) to the frame's
-top-level sheet dimensions to prevent exponential growth."
-  (let* ((frame (clim:pane-frame pane))
-         (top-sheet (clim:frame-top-level-sheet frame))
-         (top-region (clim:sheet-region top-sheet))
-         (max-w (floor (clim:bounding-rectangle-width top-region)))
-         (max-h (floor (clim:bounding-rectangle-height top-region)))
-         (region (clim:sheet-region pane)))
-    (values (min max-w (floor (clim:bounding-rectangle-width region)))
-            (min max-h (floor (clim:bounding-rectangle-height region))))))
+Caps the pane viewport by the current top-level sheet region so external
+window-manager tiling/resizing remains authoritative even when stream output
+history grows a pane's own sheet-region."
+  (labels ((region-size (region)
+             (values (max 1 (floor (clim:bounding-rectangle-width region)))
+                     (max 1 (floor (clim:bounding-rectangle-height region))))))
+    (let* ((frame (clim:pane-frame pane))
+           (top-sheet (clim:frame-top-level-sheet frame))
+           (top-region (clim:sheet-region top-sheet))
+           (pane-region (handler-case
+                            (clim:window-viewport pane)
+                          (error ()
+                            (clim:sheet-region pane)))))
+      (multiple-value-bind (top-width top-height)
+          (region-size top-region)
+        (multiple-value-bind (pane-width pane-height)
+            (region-size pane-region)
+          (values (min top-width pane-width)
+                  (min top-height pane-height)))))))
 
 (defun pane-grid-dimensions (pane char-w char-h)
   "Return (values cols rows) — the character grid size of PANE."
@@ -564,13 +620,21 @@ When the minibuffer is active, draws a centered popup overlay on top."
     (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
       (cond
         (*session-tree-selector-active*
-         (mcclim-render-session-tree-selector pane rows cols char-w char-h frame))
+         (mcclim-render-session-tree-selector pane rows cols char-w char-h frame)
+         (mcclim-record-render-snapshot frame pane buf :session-tree-selector
+                                        rows cols))
         (*buffer-selector-active*
-         (mcclim-render-buffer-selector pane rows cols char-w char-h frame))
+         (mcclim-render-buffer-selector pane rows cols char-w char-h frame)
+         (mcclim-record-render-snapshot frame pane buf :buffer-selector
+                                        rows cols))
         (*model-selector-active*
-         (mcclim-render-model-selector pane rows cols char-w char-h frame))
+         (mcclim-render-model-selector pane rows cols char-w char-h frame)
+         (mcclim-record-render-snapshot frame pane buf :model-selector
+                                        rows cols))
         (*think-selector-active*
-         (mcclim-render-think-selector pane rows cols char-w char-h frame))
+         (mcclim-render-think-selector pane rows cols char-w char-h frame)
+         (mcclim-record-render-snapshot frame pane buf :think-selector
+                                        rows cols))
         (t
          (mcclim-render-buffer pane buf rows cols char-w char-h)))
       ;; Popup overlay for minibuffer and automatic skill completion.
@@ -605,7 +669,8 @@ When the minibuffer is active, draws a centered popup overlay on top."
          (width cols)
          (input-height (calculate-input-height buf total-height width))
          (history-height (- total-height input-height))
-         (input-start-row (1+ history-height)))
+         (input-start-row (1+ history-height))
+         (visible-messages nil))
     ;; Clear pane and render title bar
     (clear-pane-with-ink pane *mcclim-bg-ink*)
     (mcclim-render-buffer-title pane buf cols char-w char-h)
@@ -648,6 +713,7 @@ When the minibuffer is active, draws a centered popup overlay on top."
                             (ptype (if (eq :tool-result (message-sender msg))
                                        'tool-result
                                        'chat-message)))
+                        (push msg visible-messages)
                         (clim:with-output-as-presentation (pane msg ptype)
                           (mcclim-render-message-lines pane msg screen-row width
                                                        char-w char-h
@@ -659,15 +725,26 @@ When the minibuffer is active, draws a centered popup overlay on top."
         (mcclim-render-approval-prompt pane buf input-start-row cols char-w char-h rows)
         (mcclim-render-message-lines pane (buffer-input-message buf)
                                      input-start-row cols char-w char-h
-                                     :show-cursor t :max-rows rows))))
+                                     :show-cursor t :max-rows rows))
+    (mcclim-record-render-snapshot (clim:pane-frame pane)
+                                   pane
+                                   buf
+                                   :buffer
+                                   rows
+                                   cols
+                                   :input-start-row input-start-row
+                                   :history-height history-height
+                                   :visible-messages (nreverse visible-messages))))
 
 (defun mcclim-render-document-buffer (pane buf rows cols char-w char-h)
   "Render BUF as a full-pane editable document buffer."
   (clear-pane-with-ink pane *mcclim-bg-ink*)
-  (let ((row 0))
+  (let ((row 0)
+        (visible-messages nil))
     (loop :for msg := (buffer-first-message buf) :then (message-next msg)
           :while (and msg (not (eq msg (buffer-input-message buf))) (< row rows))
-          :do (incf row (mcclim-render-message-lines pane msg row cols
+          :do (push msg visible-messages)
+              (incf row (mcclim-render-message-lines pane msg row cols
                                                      char-w char-h
                                                      :max-rows rows)))
     (let ((text-height (max 1 (- rows row))))
@@ -683,7 +760,17 @@ When the minibuffer is active, draws a centered popup overlay on top."
                                      char-h
                                      :show-cursor t
                                      :max-rows rows
-                                     :prefix "")))))
+                                     :prefix "")
+        (mcclim-record-render-snapshot (clim:pane-frame pane)
+                                       pane
+                                       buf
+                                       :document-buffer
+                                       rows
+                                       cols
+                                       :input-start-row (+ row start-row)
+                                       :history-height row
+                                       :visible-messages
+                                       (nreverse visible-messages))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Message Line Rendering
@@ -1469,6 +1556,49 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
 ;;; Redisplay Helper
 ;;; --------------------------------------------------------------------------
 
+(defun mcclim-live-frames ()
+  "Return a stable list of active McCLIM frames."
+  (bt:with-lock-held (*mcclim-live-frames-lock*)
+    (copy-list *mcclim-live-frames*)))
+
+(defun mcclim-register-frame (frame)
+  "Register FRAME for queued redisplay notifications."
+  (bt:with-lock-held (*mcclim-live-frames-lock*)
+    (pushnew frame *mcclim-live-frames* :test #'eq))
+  (add-hook '*after-buffer-display-change-hook*
+            'mcclim-buffer-display-change-hook)
+  frame)
+
+(defun mcclim-unregister-frame (frame)
+  "Stop sending queued redisplay notifications to FRAME."
+  (bt:with-lock-held (*mcclim-live-frames-lock*)
+    (setf *mcclim-live-frames*
+          (remove frame *mcclim-live-frames* :test #'eq))
+    (unless *mcclim-live-frames*
+      (remove-hook '*after-buffer-display-change-hook*
+                   'mcclim-buffer-display-change-hook)))
+  frame)
+
+(defun mcclim-queue-display-change (frame buffer reason &key (force-p t))
+  "Wake FRAME's CLIM event loop because BUFFER changed for display REASON."
+  (when (and frame (not (frame-quit-flag frame)))
+    (ignore-errors
+      (let ((sheet (clim:frame-top-level-sheet frame)))
+        (clim:queue-event
+         sheet
+         (make-instance 'clawmacs-display-change-event
+                        :sheet sheet
+                        :buffer buffer
+                        :reason reason
+                        :force-p force-p)))))
+  frame)
+
+(defun mcclim-buffer-display-change-hook (buffer reason)
+  "Hook function that turns buffer display changes into CLIM events."
+  (dolist (frame (mcclim-live-frames))
+    (mcclim-queue-display-change frame buffer reason :force-p t))
+  nil)
+
 (defun update-pane-sizes (frame)
   "Resize modeline (1 row) and who-line (2 rows) panes based on char metrics."
   (let ((char-h (frame-char-height frame)))
@@ -1576,6 +1706,11 @@ and all mediums are connected to the X11 backend."
               (cond
                 ((null event)
                  nil)
+                ((typep event 'clawmacs-display-change-event)
+                 (setf need-redisplay-p t
+                       force-redisplay-p
+                       (or force-redisplay-p
+                           (display-change-event-force-p event))))
                 ((typep event 'clim:key-press-event)
                  (multiple-value-bind (need-p force-p)
                      (mcclim-dispatch-key-event frame event)
@@ -1583,9 +1718,9 @@ and all mediums are connected to the X11 backend."
                          force-redisplay-p (or force-redisplay-p force-p))))
                 ((or (typep event 'clim:window-repaint-event)
                      (typep event 'clim:window-configuration-event))
+                 (clim:handle-event (clim:event-sheet event) event)
                  (setf need-redisplay-p t
-                       force-redisplay-p t)
-                 (clim:handle-event (clim:event-sheet event) event))
+                       force-redisplay-p t))
                 (t
                  (clim:handle-event (clim:event-sheet event) event)
                  (setf need-redisplay-p t)))
@@ -1642,8 +1777,11 @@ Keyboard input is suppressed to avoid corrupting shared prefix key state."
                                  :always-poll-p t
                                  :width 900
                                  :height 700)))
+                     (mcclim-register-frame frame)
                      (push (cons frame (bt:current-thread)) *popup-frames*)
-                     (clim:run-frame-top-level frame))
+                     (unwind-protect
+                          (clim:run-frame-top-level frame)
+                       (mcclim-unregister-frame frame)))
                  (error (c)
                    (ignore-errors
                      (format *error-output*
@@ -1676,4 +1814,9 @@ the event loop reading input and rendering until :QUIT."
                  :width 900
                  :height 700)))
     (setf (backend-frame b) frame)
-    (clim:run-frame-top-level frame)))
+    (mcclim-register-frame frame)
+    (unwind-protect
+         (clim:run-frame-top-level frame)
+      (mcclim-unregister-frame frame)
+      (when (eq (backend-frame b) frame)
+        (setf (backend-frame b) nil)))))

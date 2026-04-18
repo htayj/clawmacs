@@ -265,6 +265,7 @@
    #:buffer-insert-agent-message
    #:buffer-insert-system-message
    #:buffer-insert-context-message
+   #:notify-buffer-display-change
    #:buffer-message-count
    #:save-session
    #:replace-buffer-history-with-serialized-messages
@@ -966,6 +967,7 @@
    #:*after-send-message-hook*
    #:*after-buffer-create-hook*
    #:*after-message-insert-hook*
+   #:*after-buffer-display-change-hook*
    #:*after-provider-response-hook*
    #:*package-enablement-changed-hook*
    #:*after-session-save-hook*

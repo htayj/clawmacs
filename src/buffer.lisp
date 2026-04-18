@@ -34,6 +34,12 @@
              (fboundp 'run-hook-with-args))
     (apply (symbol-function 'run-hook-with-args) hook-var args)))
 
+(defun notify-buffer-display-change (buf reason)
+  "Notify UI backends that BUF needs redisplay for REASON."
+  (when buf
+    (maybe-run-hook-with-args '*after-buffer-display-change-hook* buf reason))
+  buf)
+
 (defclass buffer ()
   ((name              :initarg :name
                       :accessor buffer-name
@@ -331,12 +337,14 @@ Enforces the invariant that it is not read-only."
 (defun set-buffer-provider-override (buf provider)
   "Set BUF's provider override to PROVIDER and return BUF."
   (setf (buffer-provider-override buf) provider)
+  (notify-buffer-display-change buf :routing)
   buf)
 
 (declaim (ftype (function (buffer string) buffer) set-buffer-model-override))
 (defun set-buffer-model-override (buf model)
   "Set BUF's model override to MODEL and return BUF."
   (setf (buffer-model-override buf) model)
+  (notify-buffer-display-change buf :routing)
   buf)
 
 (defun normalize-think-level-override (value)
@@ -352,24 +360,28 @@ Enforces the invariant that it is not read-only."
   "Set BUF's think-level override to THINK-LEVEL and return BUF."
   (setf (buffer-think-level-override buf)
         (normalize-think-level-override think-level))
+  (notify-buffer-display-change buf :routing)
   buf)
 
 (declaim (ftype (function (buffer) buffer) clear-buffer-provider-override))
 (defun clear-buffer-provider-override (buf)
   "Clear BUF's provider override and return BUF."
   (setf (buffer-provider-override buf) nil)
+  (notify-buffer-display-change buf :routing)
   buf)
 
 (declaim (ftype (function (buffer) buffer) clear-buffer-model-override))
 (defun clear-buffer-model-override (buf)
   "Clear BUF's model override and return BUF."
   (setf (buffer-model-override buf) nil)
+  (notify-buffer-display-change buf :routing)
   buf)
 
 (declaim (ftype (function (buffer) buffer) clear-buffer-think-level-override))
 (defun clear-buffer-think-level-override (buf)
   "Clear BUF's think-level override and return BUF."
   (setf (buffer-think-level-override buf) nil)
+  (notify-buffer-display-change buf :routing)
   buf)
 
 (declaim (ftype (function (buffer) buffer) clear-buffer-routing-overrides))
@@ -391,12 +403,14 @@ Enforces the invariant that it is not read-only."
           (and trimmed
                (plusp (length trimmed))
                (string-downcase trimmed))))
+  (notify-buffer-display-change buf :routing)
   buf)
 
 (declaim (ftype (function (buffer) buffer) clear-buffer-pipeline))
 (defun clear-buffer-pipeline (buf)
   "Clear BUF's deterministic pipeline."
   (setf (buffer-pipeline-name buf) nil)
+  (notify-buffer-display-change buf :routing)
   buf)
 
 ;;; --------------------------------------------------------------------------
@@ -492,6 +506,7 @@ Enforces the invariant that it is not read-only."
   "Mark BUF dirty when it is a project-backed file buffer."
   (when (file-buffer-p buf)
     (setf (buffer-dirty-p buf) t))
+  (notify-buffer-display-change buf :dirty)
   buf)
 
 ;;; --------------------------------------------------------------------------
@@ -514,6 +529,7 @@ and create a new empty input message at the tail."
             (message-next input) new-input
             (buffer-last-message buf) new-input))
     (autosave-session-snapshot buf))
+  (notify-buffer-display-change buf :message)
   buf)
 
 (defun whitespace-char-p (char)
@@ -611,6 +627,7 @@ and create a new empty input message at the tail."
       (maybe-run-hook-with-args '*after-message-insert-hook* buf msg))
     (when record-p
       (record-buffer-message buf msg))
+    (notify-buffer-display-change buf :message)
     msg))
 
 (defun buffer-insert-agent-message

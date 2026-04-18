@@ -39,23 +39,40 @@ OFFLINE_AGENT_EVAL = r"""
 (setf (symbol-function 'clawmacs::send-to-agent-with-context)
       (lambda (buf)
         (let ((text (or (clawmacs::buffer-previous-user-command-text buf) "")))
-          (clawmacs::buffer-insert-agent-message
-           buf
-           (cond
-             ((search "(+ 40 2)" text :test #'char-equal)
-              "42")
-             ((search "describe-common-lisp-symbol-to-string" text
-                      :test #'char-equal)
-              "format~%Reference: CL Community Spec")
-             ((search "file_write" text :test #'char-equal)
-              "first second")
-             ((search "alpha" text :test #'char-equal)
-              "alpha")
-             ((search "beta" text :test #'char-equal)
-              "beta")
-             (t
-              (format nil "offline echo: ~A" text))))
-          (setf (clawmacs::buffer-status buf) :idle)
+          (if (search "async-render-probe" text :test #'char-equal)
+              (progn
+                (setf (clawmacs::buffer-status buf) :thinking)
+                (clawmacs:notify-buffer-display-change buf :async-render-test)
+                (bt:make-thread
+                 (lambda ()
+                   (sleep 0.6)
+                   (clawmacs::buffer-insert-agent-message
+                    buf
+                    "MCCLIM-ASYNC-RENDER-VISIBLE")
+                   (setf (clawmacs::buffer-status buf) :idle)
+                   (clawmacs:notify-buffer-display-change buf :async-render-test))
+                 :name "mcclim-e2e-async-render"))
+              (progn
+                (clawmacs::buffer-insert-agent-message
+                 buf
+                 (cond
+                   ((search "(+ 40 2)" text :test #'char-equal)
+                    "42")
+                   ((search "describe-common-lisp-symbol-to-string" text
+                            :test #'char-equal)
+                    "format~%Reference: CL Community Spec")
+                   ((search "file_write" text :test #'char-equal)
+                    "first second")
+                   ((search "alpha" text :test #'char-equal)
+                    "alpha")
+                   ((search "beta" text :test #'char-equal)
+                    "beta")
+                   ((search "tiling-resize-probe" text :test #'char-equal)
+                    "MCCLIM-TILING-RESIZE-VISIBLE")
+                   (t
+                    (format nil "offline echo: ~A" text))))
+                (setf (clawmacs::buffer-status buf) :idle)
+                (clawmacs:notify-buffer-display-change buf :offline-agent)))
           buf)))
 """
 
@@ -227,6 +244,39 @@ def wait_for_non_user_message_text(session, text, timeout=120):
     )
 
 
+def render_visible_messages(snapshot):
+    render = snapshot.get("render") or {}
+    return render.get("visibleMessages") or render.get("visible-messages") or []
+
+
+def render_contains_text(snapshot, text):
+    for message in render_visible_messages(snapshot):
+        if text in str(message.get("text", "")):
+            return True
+    return False
+
+
+def wait_for_rendered_message_text(session, text, timeout=15):
+    return wait_until(
+        lambda: session._snapshot_if(lambda snap: render_contains_text(snap, text)),
+        timeout=timeout,
+        interval=0.1,
+        description=f"rendered message containing {text}",
+    )
+
+
+def wait_for_render_width(session, predicate, description, timeout=10):
+    def observe():
+        snapshot = session.snapshot()
+        render = snapshot.get("render") or {}
+        width = render.get("pixelWidth") or render.get("pixel-width") or 0
+        if predicate(width):
+            return snapshot
+        return None
+
+    return wait_until(observe, timeout=timeout, interval=0.1, description=description)
+
+
 class McclimSession:
     def __init__(self, extra_evals=None):
         self.proc = None
@@ -339,6 +389,20 @@ class McclimSession:
 
     def press_keys(self, keys):
         self.key(*keys)
+
+    def resize(self, width, height):
+        run_checked(
+            [
+                "xdotool",
+                "windowsize",
+                "--sync",
+                self.window_id,
+                str(width),
+                str(height),
+            ],
+            timeout=5,
+        )
+        time.sleep(0.5)
 
     def type_text(self, text):
         text = compact_deterministic_prompt(text)
@@ -608,8 +672,62 @@ def online_test_registry(spec):
     ]
 
 
+def test_53_async_agent_reply_renders_without_next_input(session):
+    """Async agent messages must render without waiting for another user key."""
+    expected = "MCCLIM-ASYNC-RENDER-VISIBLE"
+    TERMINAL_E2E.set_input(session, "async-render-probe")
+    session.press("Enter")
+    snapshot = wait_for_rendered_message_text(session, expected, timeout=10)
+    TERMINAL_E2E.assert_contains(
+        session.text(),
+        expected,
+        "async agent response in semantic snapshot",
+    )
+    if not render_contains_text(snapshot, expected):
+        fail("async agent response reached buffer but not McCLIM render snapshot")
+    session.screenshot("53-async-agent-reply-renders")
+
+
+def test_54_tiling_resize_keeps_latest_message_visible(session):
+    """Externally imposed resizes should recompute the visible McCLIM pane."""
+    expected = "MCCLIM-TILING-RESIZE-VISIBLE"
+    TERMINAL_E2E.set_input(session, "tiling-resize-probe")
+    session.press("Enter")
+    first = wait_for_rendered_message_text(session, expected, timeout=10)
+    initial_render = first.get("render") or {}
+    initial_width = initial_render.get("pixelWidth") or initial_render.get("pixel-width") or 0
+
+    session.resize(640, 420)
+    narrow = wait_for_render_width(
+        session,
+        lambda width: width and width < initial_width,
+        "narrow McCLIM render width",
+        timeout=10,
+    )
+    if not render_contains_text(narrow, expected):
+        fail("latest agent message disappeared after narrow resize")
+    narrow_render = narrow.get("render") or {}
+    if (narrow_render.get("inputStartRow") or narrow_render.get("input-start-row") or -1) < 0:
+        fail("input row was not present after narrow resize")
+
+    session.resize(1000, 680)
+    wide = wait_for_render_width(
+        session,
+        lambda width: width and width > (narrow_render.get("pixelWidth")
+                                         or narrow_render.get("pixel-width")
+                                         or 0),
+        "wide McCLIM render width",
+        timeout=10,
+    )
+    if not render_contains_text(wide, expected):
+        fail("latest agent message disappeared after wide resize")
+    session.screenshot("54-tiling-resize-latest-visible")
+
+
 def test_registry(group):
     offline_tests = [
+        ("53-async-agent-reply-renders", test_53_async_agent_reply_renders_without_next_input),
+        ("54-tiling-resize-latest-visible", test_54_tiling_resize_keeps_latest_message_visible),
         ("38-shell-prefix", TERMINAL_E2E.test_38_shell_prefix),
         ("39-debug-mode", TERMINAL_E2E.test_39_debug_mode_toggle),
         ("40-save-session", TERMINAL_E2E.test_40_save_session),

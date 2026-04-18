@@ -143,6 +143,9 @@ Returns FUNCTION."
 (defhook *after-message-insert-hook* (buffer message)
   "List of functions run after a read-only message is inserted into a buffer.")
 
+(defhook *after-buffer-display-change-hook* (buffer reason)
+  "List of functions run after buffer state that affects display changes.")
+
 (defhook *after-provider-response-hook* (buffer response provider model usage)
   "List of functions run after a provider response has been received.")
 

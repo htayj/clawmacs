@@ -155,6 +155,17 @@
     (:approval . ,(approval-state buffer))
     (:messages . ,(buffer-message-tail buffer))))
 
+(defun render-state ()
+  "Return the latest render snapshot recorded by the McCLIM display path."
+  (let ((frame (and (boundp 'clawmacs::*ui-backend*)
+                    (typep clawmacs::*ui-backend*
+                           'clawmacs::mcclim-backend)
+                    (clawmacs::backend-frame
+                     clawmacs::*ui-backend*))))
+    (or (and frame
+             (clawmacs::frame-last-render-snapshot frame))
+        '((:ready . nil)))))
+
 (defun snapshot ()
   "Return a JSON-ready semantic snapshot of the running McCLIM session."
   (handler-case
@@ -163,6 +174,7 @@
           (:timestamp . ,(get-universal-time))
           (:buffer . ,(when buffer (buffer-state buffer)))
           (:buffers . ,(buffer-ring-state))
+          (:render . ,(render-state))
           (:minibuffer . ,(minibuffer-state))
           (:skill-completion . ,(skill-completion-state))
           (:selectors . ,(selector-state))))

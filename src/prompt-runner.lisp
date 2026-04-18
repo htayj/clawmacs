@@ -70,6 +70,7 @@ When all tools are done, finalizes the results."
                    ;; Clear input area for the prompt
                    (set-message-text (buffer-input-message buf) "")
                    (setf (buffer-status buf) :approval)
+                   (notify-buffer-display-change buf :approval)
                    (return)))  ; exit loop, wait for user
                 ;; Tool is auto-approved: execute immediately
                 (t
@@ -133,6 +134,7 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
     (when (buffer-stashed-input buf)
       (set-message-text (buffer-input-message buf) (buffer-stashed-input buf))
       (setf (buffer-stashed-input buf) nil))
+    (notify-buffer-display-change buf :approval)
     ;; Continue with remaining tools
     (advance-tool-approval buf)))
 
@@ -167,6 +169,7 @@ and :TOOL-ID entries. Returns the inserted message."
     (when (buffer-stashed-input buf)
       (set-message-text (buffer-input-message buf) (buffer-stashed-input buf))
       (setf (buffer-stashed-input buf) nil))
+    (notify-buffer-display-change buf :tool-results)
     ;; Continue: start next streaming request
     (start-streaming-response buf)))
 
@@ -233,13 +236,15 @@ polls for updates via update-streaming-response."
                 (gethash agent-kw (buffer-face-registry buf)))
           (setf (buffer-pending-stream buf) state
                 (buffer-streaming-message buf) agent-msg
-                (buffer-status buf) :thinking)))
+                (buffer-status buf) :thinking)
+          (notify-buffer-display-change buf :stream-started)))
       (error (e)
         (setf (buffer-status buf) :error)
         (let ((err-msg (buffer-insert-agent-message
                          buf (format nil "[Error: ~A]" e))))
           (setf (message-face-set err-msg)
-                (gethash agent-kw (buffer-face-registry buf))))))))
+                (gethash agent-kw (buffer-face-registry buf))))
+        (notify-buffer-display-change buf :status)))))
 
 (defun latest-text-block-text (content-blocks)
   "Return the text of the last text block in CONTENT-BLOCKS, or NIL."
@@ -295,7 +300,11 @@ Returns T if still streaming, NIL if done."
                          state
                          :show-reasoning-p (buffer-show-reasoning-p buf))))
           (when (plusp (length all-text))
-            (set-message-text msg (string-trim '(#\Space #\Tab #\Newline #\Return) all-text)))))
+            (let ((text (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                     all-text)))
+              (unless (string= text (message-text msg))
+                (set-message-text msg text)
+                (notify-buffer-display-change buf :streaming))))))
       (cond
         ;; Error during streaming
         (err
@@ -304,6 +313,7 @@ Returns T if still streaming, NIL if done."
          (setf (buffer-pending-stream buf) nil
                (buffer-streaming-message buf) nil
                (buffer-status buf) :error)
+         (notify-buffer-display-change buf :stream-error)
          nil)
         ;; Streaming complete
         (done
@@ -366,6 +376,7 @@ Returns T if still streaming, NIL if done."
             ;; Clear streaming state
             (setf (buffer-pending-stream buf) nil
                   (buffer-streaming-message buf) nil)
+            (notify-buffer-display-change buf :stream-complete)
            ;; Handle tool calls
             (if (and (string= "tool_use" (or stop-reason ""))
                      tool-uses)
@@ -374,6 +385,7 @@ Returns T if still streaming, NIL if done."
                   t)
                (progn
                  (setf (buffer-status buf) :idle)
+                 (notify-buffer-display-change buf :status)
                  nil))))
         ;; Still streaming
         (t t)))))
@@ -407,6 +419,7 @@ Returns T if still streaming, NIL if done."
   "Start a streaming conversation with the LLM. Non-blocking --
 the event loop polls for updates via update-streaming-response."
   (setf (buffer-status buf) :thinking)
+  (notify-buffer-display-change buf :status)
   (start-streaming-response buf)
   buf)
 

@@ -178,8 +178,23 @@ class ClawmacsSession:
 
     def launch(self):
         ql_setup = os.path.expanduser("~/quicklisp/setup.lisp")
+        default_evals = [
+            "(setf clawmacs:*inhibit-user-init* t)",
+            "(clawmacs::apply-prompt-isolation)",
+            "(setf clawmacs:*ui-backend* (make-instance 'clawmacs:croatoan-backend))",
+            """(let ((handler (lambda (buf text)
+                                (clawmacs:buffer-insert-system-message
+                                 buf
+                                 (format nil "[e2e command fixture] ~A" text)))))
+                 (dolist (prefix '("git " "echo "))
+                   (setf clawmacs::*prefix-handlers*
+                         (acons prefix handler
+                                (remove prefix clawmacs::*prefix-handlers*
+                                        :key #'car :test #'string=)))))""",
+        ]
         extra_eval_args = " ".join(
-            f"--eval {shlex.quote(form)}" for form in self.extra_evals
+            f"--eval {shlex.quote(form)}"
+            for form in default_evals + self.extra_evals
         )
         cmd = (
             f"LD_LIBRARY_PATH={SSL_LIB}:${{LD_LIBRARY_PATH:-}} "
@@ -201,13 +216,17 @@ class ClawmacsSession:
         self.session_id = json.loads(text).get("session_id")
         return self.session_id
 
-    def wait_ready(self, timeout=20):
+    def wait_ready(self, timeout=None):
         """Wait for clawmacs to finish loading."""
+        if timeout is None:
+            timeout = int(os.environ.get("CLAWMACS_E2E_READY_TIMEOUT", "60"))
         r = self.client.call_tool("tui_wait_for_text", {
             "session_id": self.session_id,
             "text": "user>",
             "timeout_ms": timeout * 1000,
-        })
+        }, timeout=timeout + 5)
+        if not r:
+            return False
         content = r.get("result", {}).get("content", [])
         text = next((c["text"] for c in content if c.get("type") == "text"), "{}")
         return json.loads(text).get("found", False)
@@ -269,12 +288,15 @@ class ClawmacsSession:
 
     def close(self):
         if self.session_id:
-            self.client.call_tool("tui_press_key", {
-                "session_id": self.session_id,
-                "key": "Ctrl+c",
-            })
-            time.sleep(0.3)
-            self.client.call_tool("tui_close", {"session_id": self.session_id})
+            try:
+                self.client.call_tool("tui_press_key", {
+                    "session_id": self.session_id,
+                    "key": "Ctrl+c",
+                })
+                time.sleep(0.3)
+                self.client.call_tool("tui_close", {"session_id": self.session_id})
+            except (BrokenPipeError, ValueError, OSError):
+                pass
 
 
 def assert_contains(screen_text, expected, msg=""):
