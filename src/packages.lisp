@@ -881,6 +881,9 @@
    #:minibuffer-select-think-level-command
    #:minibuffer-select-buffer-command
    #:load-session-command
+   #:help-buffer-p
+   #:customize-buffer-p
+   #:help-buffer-text
 
    ;; Introspection / Help
    #:list-functions

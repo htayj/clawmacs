@@ -158,6 +158,59 @@
     (let ((buf (make-buffer "dashboard" :kind :dashboard)))
       (is (string= "dashboard" (buffer-major-mode buf))))))
 
+(test built-in-special-buffer-types-are-registered
+  "Help and customize buffers are first-class non-document buffer kinds."
+  (let ((clawmacs::*buffer-type-registry*
+          (clawmacs::make-buffer-type-registry)))
+    (let ((help (find-buffer-type :help))
+          (customize (find-buffer-type :customize)))
+      (is (not (null help)))
+      (is (not (null customize)))
+      (is (string= "help" (buffer-type-major-mode help)))
+      (is (string= "customize" (buffer-type-major-mode customize)))
+      (is (not (buffer-type-document-p help)))
+      (is (not (buffer-type-document-p customize))))))
+
+(test mcclim-registers-built-in-special-presentations
+  "The McCLIM UI installs presentation renderers for special built-in buffers."
+  (let ((clawmacs::*buffer-type-registry*
+          (clawmacs::make-buffer-type-registry)))
+    (clawmacs::register-mcclim-core-buffer-presentations)
+    (let ((help (make-buffer "help" :kind :help))
+          (customize (make-buffer "customize" :kind :customize)))
+      (is (eq 'clawmacs::mcclim-render-help-buffer
+              (buffer-presentation-function help)))
+      (is (eq 'clawmacs::mcclim-render-empty-input-pane
+              (buffer-input-presentation-function help)))
+      (is (eq 'clawmacs::mcclim-render-customize-buffer
+              (buffer-presentation-function customize)))
+      (is (eq 'clawmacs::mcclim-render-empty-input-pane
+              (buffer-input-presentation-function customize))))))
+
+(test make-help-buffer-stores-read-only-help-content
+  "Help buffers expose their text through help-buffer-text."
+  (let ((*buffer-ring* nil))
+    (let ((buf (make-help-buffer "*help:test*" "Help title~%==========")))
+      (is (help-buffer-p buf))
+      (is (string= "help" (buffer-major-mode buf)))
+      (is (search "Help title" (help-buffer-text buf)))
+      (is (= 1 (length (buffer-test-history-messages buf)))))))
+
+(test make-customize-face-buffer-uses-dedicated-buffer-kind
+  "Customize buffers are not backed by a rendered agent message."
+  (let ((*buffer-ring* nil)
+        (*customize-face-state* nil))
+    (clawmacs::init-default-keymap)
+    (let* ((style (make-drawing-style :test-customize
+                                      :ink (make-cga-ink 1)))
+           (buf (clawmacs::make-customize-face-buffer
+                 style "test-customize")))
+      (is (customize-buffer-p buf))
+      (is (string= "customize" (buffer-major-mode buf)))
+      (is (eq buf (getf *customize-face-state* :buffer)))
+      (is (= 0 (length (buffer-test-history-messages buf))))
+      (is (= 1 (buffer-message-count buf))))))
+
 (test toggle-reasoning-output-command-flips-buffer-flag
   "The reasoning output toggle controls per-buffer reasoning display."
   (let ((buf (make-buffer "reasoning-toggle")))

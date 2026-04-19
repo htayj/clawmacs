@@ -426,9 +426,12 @@ Mode dispatch priority matches handle-key-event in main.lisp."
         (*think-selector-active*
          (setf row1 " RET: select  C-g/q: cancel"
                row2 " C-p/C-n: navigate  default=clear  *=active"))
-        (*customize-face-state*
-         (setf row1 " C-n/C-p: next/prev  RET: cycle value  C-c C-c: save"
-               row2 " C-g: cancel  Navigate fields with C-n/C-p"))
+        ((and buf (help-buffer-p buf))
+         (setf row1 " Help buffer: PgUp/PgDn scroll  q/C-g close"
+               row2 " C-x C-b: buffers  M-x: command"))
+        ((and buf (customize-buffer-p buf) *customize-face-state*)
+         (setf row1 " Customize: C-n/C-p move  RET/click edit  SPC toggle"
+               row2 " C-c C-c apply  C-c C-k/C-g cancel  r revert"))
         (*openai-oauth-pending*
          (setf row1 " Browser login in progress"
                row2 " C-g: cancel"))

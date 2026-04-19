@@ -427,6 +427,25 @@
       (setf (buffer-scroll-offset buffer) 0))))
 (defcommand scroll-down-command)
 
+(defun handle-help-key (buffer key)
+  "Handle KEY in a read-only help buffer."
+  (cond
+    ((or (eq key :page-up)
+         (eq key :page-down)
+         (and (characterp key) (char= key (code-char 22))))
+     (let ((command (keymap-lookup *default-keymap* key)))
+       (when command
+         (invoke-command buffer command))))
+    ((and (characterp key)
+          (or (char= key #\q)
+              (char= key (code-char 7))))
+     (kill-buffer-from-ring buffer))
+    ((and (listp key) (member (first key) '(:ctrl-x :meta :alt)))
+     (let ((command (keymap-lookup *default-keymap* key)))
+       (when command
+         (invoke-command buffer command))))
+    (t nil)))
+
 ;;; --------------------------------------------------------------------------
 ;;; OpenAI Codex OAuth Command
 ;;; --------------------------------------------------------------------------
@@ -2011,18 +2030,22 @@ FIELD-INDEX is the currently selected field (0-5)."
     (format s "[C-c C-c] Apply  [C-c C-k] Cancel  [r] Revert")))
 
 (defun rebuild-customize-face-display ()
-  "Rebuild the customize buffer content from current *customize-face-state*.
-Updates the form display message in-place."
+  "Notify the active customize buffer that its presentation should redisplay."
   (when *customize-face-state*
-    (let* ((face (getf *customize-face-state* :face))
-           (label (getf *customize-face-state* :label))
-           (field-index (getf *customize-face-state* :field-index))
-           (buf (getf *customize-face-state* :buffer))
-           (content (build-customize-face-content face label field-index)))
-      ;; Find the first message (the form display) and update it
-      (let ((msg (buffer-first-message buf)))
-        (when (and msg (message-read-only-p msg))
-          (set-message-text msg content))))))
+    (notify-buffer-display-change (getf *customize-face-state* :buffer)
+                                  :customize)))
+
+(defun customize-face-select-field (index &key edit-p)
+  "Select customize field INDEX, optionally opening the field editor."
+  (when (and *customize-face-state*
+             (integerp index)
+             (<= 0 index)
+             (< index (length *customize-face-fields*)))
+    (setf (getf *customize-face-state* :field-index) index)
+    (rebuild-customize-face-display)
+    (when edit-p
+      (customize-face-edit-field))
+    t))
 
 (defun customize-face-next-field ()
   "Move to the next field in the customize form."
@@ -2226,10 +2249,13 @@ Sets up the customize state and returns the new buffer."
     (when existing
       (kill-buffer-from-ring existing))
     (let* ((snapshot (customize-face-snapshot face))
-           (buf (make-buffer buf-name :agent-name "customize")))
+           (buf (make-buffer buf-name
+                             :agent-name "customize"
+                             :kind :customize)))
       (init-face-registry buf)
       (setf (buffer-keymap buf) *default-keymap*)
-      (setf (buffer-major-mode buf) "customize")
+      (setf (buffer-major-mode buf) "customize"
+            (buffer-scroll-offset buf) most-positive-fixnum)
       ;; Set up customize state
       (setf *customize-face-state*
             (list :face face
@@ -2237,9 +2263,6 @@ Sets up the customize state and returns the new buffer."
                   :field-index 0
                   :original-values snapshot
                   :buffer buf))
-      ;; Build initial content
-      (let ((content (build-customize-face-content face label 0)))
-        (buffer-insert-agent-message buf content))
       (add-buffer-to-ring buf)
       buf)))
 
@@ -3036,6 +3059,12 @@ KEY is already normalized by the interface before calling this."
       ;; Navigation and selection within the think-level overlay
       (*think-selector-active*
        (handle-think-selector-key key buf)
+       nil)
+
+      ;; === HELP MODE ===
+      ;; Help buffers are read-only views with a dedicated presentation.
+      ((and buf (help-buffer-p buf))
+       (handle-help-key buf key)
        nil)
 
       ;; === CUSTOMIZE MODE ===

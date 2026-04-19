@@ -121,6 +121,40 @@
         (is (search "C-x C-s save" row2))
         (is (search "C-x C-v revert" row2))))))
 
+(test format-who-line-help-describes-read-only-navigation
+  "Help buffers advertise read-only navigation and close keys."
+  (let ((*minibuffer-active* nil)
+        (*buffer-selector-active* nil)
+        (*model-selector-active* nil)
+        (*think-selector-active* nil)
+        (*customize-face-state* nil)
+        (*openai-oauth-pending* nil)
+        (*deny-message-mode* nil)
+        (clawmacs::*buffer-ring* nil))
+    (let ((buf (make-buffer "*help:test*" :kind :help)))
+      (multiple-value-bind (row1 row2)
+          (clawmacs::format-who-line buf 120)
+        (is (search "Help buffer" row1))
+        (is (search "q/C-g close" row1))
+        (is (search "M-x" row2))))))
+
+(test format-who-line-customize-describes-field-actions
+  "Customize buffers advertise field editing actions."
+  (let ((*minibuffer-active* nil)
+        (*buffer-selector-active* nil)
+        (*model-selector-active* nil)
+        (*think-selector-active* nil)
+        (*customize-face-state* (list :field-index 0))
+        (*openai-oauth-pending* nil)
+        (*deny-message-mode* nil)
+        (clawmacs::*buffer-ring* nil))
+    (let ((buf (make-buffer "*customize:test*" :kind :customize)))
+      (multiple-value-bind (row1 row2)
+          (clawmacs::format-who-line buf 120)
+        (is (search "Customize" row1))
+        (is (search "click edit" row1))
+        (is (search "r revert" row2))))))
+
 (test format-modeline-file-shows-position-and-mark
   "Document buffers show point and mark status in the modeline."
   (let ((buf (make-buffer "p:file.txt" :kind :file

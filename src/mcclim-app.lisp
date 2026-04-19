@@ -203,6 +203,12 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
   :inherit-from 'selector-entry-ref
   :description "a session tree entry")
 
+(clim:define-presentation-type help-line-ref ()
+  :description "a line in a help buffer")
+
+(clim:define-presentation-type customize-field-ref ()
+  :description "a customize buffer field")
+
 ;;; --------------------------------------------------------------------------
 ;;; CLIM Command Tables + Presentation Translators
 ;;;
@@ -360,6 +366,22 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
     ((candidate 'skill-candidate-ref))
   (mcclim-select-skill-candidate candidate))
 
+(defun mcclim-select-customize-field (field-ref)
+  "Select and edit FIELD-REF from a customize buffer presentation."
+  (when (and (listp field-ref)
+             *customize-face-state*)
+    (let ((buf (getf field-ref :buffer))
+          (index (getf field-ref :index)))
+      (when (and (eq buf (getf *customize-face-state* :buffer))
+                 (customize-face-select-field index :edit-p t))
+        field-ref))))
+
+(clim:define-command (com-select-customize-field
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((field 'customize-field-ref))
+  (mcclim-select-customize-field field))
+
 (clim:define-presentation-to-command-translator click-buffer-ref
     (buffer-ref com-select-buffer clawmacs-mcclim-command-table
                 :gesture :select
@@ -455,6 +477,16 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
                          :priority 30
                          :documentation "Insert this skill mention"
                          :pointer-documentation "Insert this skill mention")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-customize-field
+    (customize-field-ref com-select-customize-field
+                         clawmacs-mcclim-command-table
+                         :gesture :select
+                         :priority 30
+                         :documentation "Edit this customize field"
+                         :pointer-documentation "Edit this customize field")
     (object)
   (list object))
 
@@ -1467,6 +1499,236 @@ display through the same renderer as the transcript keeps repaint stable."
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Rendering
 ;;; --------------------------------------------------------------------------
+
+(defun mcclim-fit-line (line cols)
+  "Return LINE truncated to COLS display columns."
+  (let ((width (max 0 cols)))
+    (if (> (length line) width)
+        (subseq line 0 width)
+        line)))
+
+(defun mcclim-wrap-display-line (line cols)
+  "Wrap LINE into fixed-width chunks."
+  (let* ((width (max 1 cols))
+         (len (length line)))
+    (if (zerop len)
+        (list "")
+        (loop :for start :from 0 :below len :by width
+              :collect (subseq line start (min len (+ start width)))))))
+
+(defun mcclim-ruler-line-p (line)
+  "Return true when LINE is a simple help underline or separator."
+  (let ((trimmed (string-trim '(#\Space #\Tab) line)))
+    (and (plusp (length trimmed))
+         (every (lambda (ch)
+                  (or (char= ch #\=)
+                      (char= ch #\-)))
+                trimmed))))
+
+(defun mcclim-help-face-for-line (line next-line index)
+  "Return the global drawing-style name for one help buffer LINE."
+  (cond
+    ((zerop index) :selector-title)
+    ((mcclim-ruler-line-p line) :selector-separator)
+    ((and next-line (mcclim-ruler-line-p next-line)) :selector-title)
+    ((blank-string-p line) :default-text)
+    ((and (plusp (length line))
+          (not (find (char line 0) '(#\Space #\Tab))))
+     :selector-header)
+    (t :default-text)))
+
+(defun mcclim-help-display-entries (buf cols)
+  "Return styled row entries for the dedicated help buffer presentation."
+  (let ((lines (split-string-by-newline (help-buffer-text buf)))
+        (entries nil))
+    (loop :for line :in lines
+          :for index :from 0
+          :for tail :on lines
+          :for next-line := (second tail)
+          :for face := (mcclim-help-face-for-line line next-line index)
+          :do (dolist (chunk (mcclim-wrap-display-line line cols))
+                (push (list :text chunk
+                            :face face
+                            :object (list :buffer buf
+                                          :line index
+                                          :text line)
+                            :presentation-type 'help-line-ref)
+                      entries)))
+    (nreverse entries)))
+
+(defun mcclim-customize-field-line (face field index selected-p)
+  "Return the display line for one customize FIELD."
+  (let* ((label (format nil "~A:" (customize-face-field-label field)))
+         (value (customize-face-field-display face field))
+         (marker (if selected-p ">" " "))
+         (left (format nil "~A ~2D. ~A" marker (1+ index) label)))
+    (format nil "~26A ~A" left value)))
+
+(defun mcclim-customize-preview-entries (face)
+  "Return styled preview entries for FACE's resolved drawing values."
+  (handler-case
+      (let ((resolved (resolve-drawing-style face)))
+        (list
+         (list :text "Resolved CLIM drawing values"
+               :face :selector-header)
+         (list :text (format nil "Ink: ~A"
+                             (format-clim-ink-display
+                              (resolved-drawing-style-ink resolved)))
+               :face :default-text)
+         (list :text (format nil "Background Ink: ~A"
+                             (format-clim-ink-display
+                              (resolved-drawing-style-background-ink resolved)))
+               :face :default-text)
+         (list :text (format nil "Text Style: ~A"
+                             (format-clim-text-style-display
+                              (resolved-drawing-style-text-style resolved)))
+               :face :default-text)
+         (list :text (format nil "Drawing Options: ~A"
+                             (format-drawing-options-display
+                              (resolved-drawing-style-drawing-options resolved)))
+               :face :default-text)
+         (list :text (format nil "Underline: ~:[no~;yes~]"
+                             (resolved-drawing-style-underline-p resolved))
+               :face :default-text)))
+    (error (condition)
+      (list (list :text (format nil "Cannot resolve drawing style: ~A"
+                                condition)
+                  :face :system)))))
+
+(defun mcclim-customize-display-entries (buf cols)
+  "Return styled row entries for the dedicated customize buffer presentation."
+  (declare (ignore cols))
+  (let ((state *customize-face-state*))
+    (if (and state (eq buf (getf state :buffer)))
+        (let* ((face (getf state :face))
+               (label (getf state :label))
+               (field-index (getf state :field-index))
+               (entries
+                 (list
+                  (list :text (format nil "Customize Drawing Style: ~A" label)
+                        :face :selector-title)
+                  (list :text "Use C-n/C-p or click a field. RET edits; SPC toggles booleans."
+                        :face :selector-footer)
+                  (list :text "" :face :default-text)
+                  (list :text "Fields" :face :selector-header))))
+          (loop :for field :in *customize-face-fields*
+                :for index :from 0
+                :for selected-p := (= index field-index)
+                :do (setf entries
+                          (append entries
+                                  (list
+                                   (list
+                                    :text (mcclim-customize-field-line
+                                           face field index selected-p)
+                                    :face (if selected-p
+                                              :selector-selected
+                                              :selector-entry)
+                                    :object (list :buffer buf
+                                                  :index index
+                                                  :field field)
+                                    :presentation-type
+                                    'customize-field-ref)))))
+          (append entries
+                  (list (list :text "" :face :default-text))
+                  (mcclim-customize-preview-entries face)
+                  (list (list :text "" :face :default-text)
+                        (list :text "C-c C-c applies. C-c C-k, C-g, or q cancels. r reverts."
+                              :face :selector-footer))))
+        (list
+         (list :text "No active customize state for this buffer."
+               :face :system)
+         (list :text "Use q or C-g to close this buffer."
+               :face :selector-footer)))))
+
+(defun mcclim-draw-styled-entry (pane row cols entry char-w char-h)
+  "Draw one styled row ENTRY."
+  (let ((text (getf entry :text))
+        (face (or (getf entry :face) :default-text)))
+    (multiple-value-bind (fg bg ts opts)
+        (resolve-global-face-inks face)
+      (fill-row pane row cols bg char-w char-h)
+      (when (plusp cols)
+        (draw-text-at pane row 0
+                      (mcclim-fit-line (or text "") cols)
+                      fg bg ts char-w char-h
+                      :drawing-options opts)))))
+
+(defun mcclim-entry-scroll-window (buf total-rows viewport-rows)
+  "Return visible top and bottom row indices for a scrollable entry list."
+  (let* ((height (max 0 viewport-rows))
+         (max-scroll (max 0 (- total-rows height)))
+         (scroll-offset (min (max 0 (buffer-scroll-offset buf)) max-scroll))
+         (visible-bottom (- total-rows scroll-offset))
+         (visible-top (max 0 (- visible-bottom height))))
+    (setf (buffer-scroll-offset buf) scroll-offset)
+    (values visible-top visible-bottom)))
+
+(defun mcclim-render-entry-buffer
+    (pane buf rows cols char-w char-h entries mode)
+  "Render BUF using precomputed styled ENTRIES."
+  (clear-pane-with-ink pane *mcclim-bg-ink*)
+  (when (plusp rows)
+    (mcclim-render-buffer-title pane buf cols char-w char-h))
+  (let* ((content-rows (max 0 (1- rows)))
+         (total-rows (length entries)))
+    (multiple-value-bind (visible-top visible-bottom)
+        (mcclim-entry-scroll-window buf total-rows content-rows)
+      (loop :for index :from visible-top :below visible-bottom
+            :for screen-row :from 1
+            :for entry := (nth index entries)
+            :while (and entry (< screen-row rows))
+            :do (let ((object (getf entry :object))
+                      (presentation-type (getf entry :presentation-type)))
+                  (if presentation-type
+                      (clim:with-output-as-presentation
+                          (pane object presentation-type)
+                        (mcclim-draw-styled-entry pane screen-row cols
+                                                  entry char-w char-h))
+                      (mcclim-draw-styled-entry pane screen-row cols
+                                                entry char-w char-h))))
+      (mcclim-record-render-snapshot (clim:pane-frame pane)
+                                     pane
+                                     buf
+                                     mode
+                                     rows
+                                     cols
+                                     :input-start-row -1
+                                     :history-height content-rows
+                                     :visible-messages nil))))
+
+(defun mcclim-render-help-buffer (pane buf rows cols char-w char-h)
+  "Render BUF as a dedicated read-only help buffer presentation."
+  (mcclim-render-entry-buffer pane buf rows cols char-w char-h
+                              (mcclim-help-display-entries buf cols)
+                              :help-buffer))
+
+(defun mcclim-render-customize-buffer (pane buf rows cols char-w char-h)
+  "Render BUF as a dedicated customize buffer presentation."
+  (mcclim-render-entry-buffer pane buf rows cols char-w char-h
+                              (mcclim-customize-display-entries buf cols)
+                              :customize-buffer))
+
+(defun mcclim-render-empty-input-pane (pane buf rows cols char-w char-h)
+  "Render no editable input for read-only/special-purpose buffers."
+  (declare (ignore buf rows cols char-w char-h))
+  (clear-pane-with-ink pane *mcclim-bg-ink*))
+
+(defun register-mcclim-core-buffer-presentations ()
+  "Install McCLIM presentation functions for built-in special buffers."
+  (register-buffer-type
+   :help
+   :description "Read-only help buffer."
+   :major-mode "help"
+   :presentation-function 'mcclim-render-help-buffer
+   :input-presentation-function 'mcclim-render-empty-input-pane)
+  (register-buffer-type
+   :customize
+   :description "Interactive customization buffer."
+   :major-mode "customize"
+   :presentation-function 'mcclim-render-customize-buffer
+   :input-presentation-function 'mcclim-render-empty-input-pane))
+
+(register-mcclim-core-buffer-presentations)
 
 (defun mcclim-render-buffer (pane buf rows cols char-w char-h)
   "Render the transcript pane: title bar at row 0, then message history.

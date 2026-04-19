@@ -120,7 +120,8 @@
                     :document-p document-p
                     :package nil))))
       (install :chat "Default agent conversation buffer." "chat" nil)
-      (install :help "Read-only help buffer rendered as conversation output." "help" nil)
+      (install :help "Read-only help buffer." "help" nil)
+      (install :customize "Interactive customization buffer." "customize" nil)
       (install :scratch "Editable scratch buffer." "scratch" t)
       (install :file "Project-backed editable file buffer." "file" t))
     registry))
@@ -218,7 +219,7 @@ major-mode label, and optional McCLIM presentation functions."
                       :accessor buffer-kind
                       :initform :chat
                       :type keyword
-                      :documentation "Buffer kind. Built-ins include :chat and :scratch.")
+                      :documentation "Buffer kind. Built-ins include :chat, :help, :customize, :scratch, and :file.")
    (working-directory :initarg :working-directory
                       :accessor buffer-working-directory
                       :initform (truename ".")
@@ -433,6 +434,16 @@ Enforces the invariant that it is not read-only."
 (defun file-buffer-p (buf)
   "Return true when BUF is a project-backed editable file buffer."
   (eq (buffer-kind buf) :file))
+
+(declaim (ftype (function (buffer) boolean) help-buffer-p))
+(defun help-buffer-p (buf)
+  "Return true when BUF is a read-only help buffer."
+  (eq (buffer-kind buf) :help))
+
+(declaim (ftype (function (buffer) boolean) customize-buffer-p))
+(defun customize-buffer-p (buf)
+  "Return true when BUF is an interactive customize buffer."
+  (eq (buffer-kind buf) :customize))
 
 (declaim (ftype (function (buffer) boolean) document-buffer-p))
 (defun document-buffer-p (buf)
@@ -874,10 +885,20 @@ Context messages are sent to providers as user-context messages."
   "Create a help buffer with NAME containing CONTENT as read-only text."
   (let ((buf (make-buffer name :agent-name "help" :kind :help)))
     (initialize-buffer-display-defaults buf)
-    (setf (buffer-major-mode buf) "help")
+    (setf (buffer-major-mode buf) "help"
+          (buffer-scroll-offset buf) most-positive-fixnum)
     (buffer-insert-agent-message buf content)
     (add-buffer-to-ring buf)
     buf))
+
+(defun help-buffer-text (buf)
+  "Return the read-only help text stored in BUF."
+  (unless (help-buffer-p buf)
+    (error "Not a help buffer: ~S" buf))
+  (let ((msg (message-prev (buffer-input-message buf))))
+    (if msg
+        (message-text msg)
+        "")))
 
 (defun ensure-scratch-buffer ()
   "Ensure the process-local scratch buffer is loaded in the buffer ring.
