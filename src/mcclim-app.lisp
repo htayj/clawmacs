@@ -2954,13 +2954,28 @@ Returns true when application state may have changed."
           (declare (ignore cols))
           (setf *scroll-page-size* (max 1 (- rows 3))))))))
 
+(defun mcclim-frame-output-panes (frame)
+  "Return FRAME panes that may have pending CLIM output."
+  (remove nil
+          (mapcar (lambda (name)
+                    (clim:find-pane-named frame name))
+                  '(main-pane input-pane who-line-pane
+                    modeline-pane minibuffer-pane))))
+
+(defun mcclim-flush-frame-output (frame)
+  "Force pending output for FRAME's visible pane streams."
+  (dolist (pane (mcclim-frame-output-panes frame))
+    (ignore-errors
+      (force-output pane))))
+
 (defun mcclim-redisplay-frame (frame &key force-p)
   "Refresh FRAME through the standard CLIM redisplay path."
   (with-mcclim-frame-ui-state (frame)
     (mcclim-update-scroll-page-size frame)
     (update-pane-sizes frame)
     (mcclim-sync-drei-from-buffer frame)
-    (clim:redisplay-frame-panes frame :force-p force-p)))
+    (clim:redisplay-frame-panes frame :force-p force-p)
+    (mcclim-flush-frame-output frame)))
 
 ;;; --------------------------------------------------------------------------
 ;;; ESA/Pulse Event Integration
@@ -2971,16 +2986,70 @@ Returns true when application state may have changed."
   (or (buffer-pending-stream (frame-visible-buffer frame))
       *openai-oauth-pending*))
 
+(defun mcclim-input-event-sources (frame)
+  "Return sheets/streams that may receive interactive gestures for FRAME.
+
+McCLIM's click-to-focus policy can focus a child pane.  Window managers differ
+in whether keyboard focus is restored to the top-level sheet or to the child
+sheet that was clicked, so Clawmacs' custom top level has to watch the panes
+that can receive keyboard/pointer gestures instead of blocking only on the
+top-level sheet."
+  (remove-duplicates
+   (remove nil
+           (list (ignore-errors (clim:frame-standard-input frame))
+                 (clim:find-pane-named frame 'main-pane)
+                 (frame-drei-input-pane frame)))
+   :test #'eq))
+
+(defun mcclim-input-event-available-p (frame)
+  "Return true when any interactive pane for FRAME has queued raw input."
+  (some (lambda (source)
+          (ignore-errors
+            (clim:event-listen source)))
+        (mcclim-input-event-sources frame)))
+
+(defun mcclim-actionable-input-event-p (event)
+  "Return true when EVENT is a gesture Clawmacs should dispatch directly."
+  (or (typep event 'clim:key-press-event)
+      (typep event 'clim:pointer-button-press-event)
+      (typep event 'clime:pointer-scroll-event)))
+
+(defun mcclim-read-input-event-no-hang (frame)
+  "Read one queued gesture from FRAME's interactive panes, if available.
+
+Child panes may accumulate repaint, configure, pointer boundary, and other
+window-system events while the window manager is resizing a tiled frame.  Those
+events are not input gestures, and returning them here can starve key delivery
+under StumpWM, so this reader drains pane queues until it finds an actionable
+gesture or the queues are empty."
+  (dolist (source (mcclim-input-event-sources frame))
+    (loop
+      :for event := (ignore-errors
+                      (clim:event-read-no-hang source))
+      :while event
+      :do (when (mcclim-actionable-input-event-p event)
+            (return-from mcclim-read-input-event-no-hang event)))))
+
 (defun mcclim-read-event (frame)
   "Read the next CLIM event, timing out while provider/OAuth polling is needed.
-McCLIM timer events are useful when the command loop reads the application
-pane's event queue directly.  Clawmacs reads the top-level sheet so window
-manager events route correctly; the timeout keeps provider streams moving even
-when no key or window event arrives."
+McCLIM timer events are useful when the command loop reads application-pane
+event queues directly.  Clawmacs reads the top-level sheet for window-manager
+events and also watches focused child panes for raw gestures; the timeout keeps
+provider streams moving even when no key or window event arrives."
   (let ((sheet (clim:frame-top-level-sheet frame)))
-    (if (mcclim-poll-needed-p frame)
-        (clime:event-read-with-timeout sheet :timeout 0.05)
-        (clim:event-read sheet))))
+    (or (mcclim-read-input-event-no-hang frame)
+        (multiple-value-bind (event reason)
+            (clime:event-read-with-timeout
+             sheet
+             :timeout (and (mcclim-poll-needed-p frame) 0.05)
+             :wait-function
+             (lambda ()
+               (mcclim-input-event-available-p frame)))
+          (cond
+            (event event)
+            ((eq reason :wait-function)
+             (mcclim-read-input-event-no-hang frame))
+            (t nil))))))
 
 (defun mcclim-poll-sheet (frame)
   "Return the sheet used for McCLIM pulse events."
@@ -3091,10 +3160,10 @@ when no key or window event arrives."
 (defmethod clawmacs-esa-top-level ((frame clawmacs-gui)
                                    &key &allow-other-keys)
   "Run Clawmacs' McCLIM top level using ESA command processing.
-The loop reads from the top-level sheet, which matches McCLIM/CLX focus
-behavior for Clawmacs under window managers. Keyboard gestures are dispatched
-through Clawmacs' keymap so keys like C-u keep their editor meaning; CLIM
-presentation and window events stay on the standard CLIM event path."
+The loop reads window-system events from the top-level sheet and raw gestures
+from focused child panes. Keyboard gestures are dispatched through Clawmacs'
+keymap so keys like C-u keep their editor meaning; CLIM presentation and window
+events stay on the standard CLIM event path."
   (unless (eq (clim:frame-state frame) :enabled)
     (clim:enable-frame frame))
   (mcclim-install-frame-command-table frame)
@@ -3117,10 +3186,21 @@ presentation and window events stay on the standard CLIM event path."
                  (mcclim-ensure-polling frame))
                 ((clim:event-matches-gesture-name-p event :clawmacs-poll)
                  (clim:execute-frame-command frame '(com-clawmacs-poll)))
-                ((typep event 'clim:key-press-event)
+                ((or (typep event 'clim:key-press-event)
+                     (characterp event))
                  (clim:execute-frame-command
                   frame
                   (list 'com-clawmacs-dispatch-gestures (list event)))
+                 (mcclim-redisplay-frame frame :force-p t))
+                ((typep event 'clim:pointer-button-press-event)
+                 (let ((sheet (clim:event-sheet event)))
+                   (cond
+                     ((typep sheet 'clawmacs-transcript-pane)
+                      (mcclim-handle-main-pane-click frame sheet event))
+                     ((typep sheet 'clawmacs-drei-input-pane)
+                      (mcclim-handle-input-pane-click frame sheet event))
+                     (t
+                      (clim:handle-event sheet event))))
                  (mcclim-redisplay-frame frame))
                 ((mcclim-handle-pointer-scroll frame event)
                  (mcclim-redisplay-frame frame))
