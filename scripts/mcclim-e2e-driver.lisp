@@ -48,6 +48,20 @@
     (error (condition)
       (vector (format nil "[who-line unavailable: ~A]" condition) ""))))
 
+(defun current-mcclim-frame ()
+  "Return the primary McCLIM frame when the GUI is running."
+  (and (boundp 'clawmacs::*clawmacs-frame*)
+       clawmacs::*clawmacs-frame*))
+
+(defmacro with-current-mcclim-ui-state (&body body)
+  "Bind frame-local McCLIM UI state while observing the running application."
+  (let ((frame-var (gensym "FRAME-")))
+    `(let ((,frame-var (current-mcclim-frame)))
+       (if (and ,frame-var (typep ,frame-var 'clawmacs::clawmacs-gui))
+           (clawmacs::with-mcclim-frame-ui-state (,frame-var)
+             ,@body)
+           (progn ,@body)))))
+
 (defun selected-minibuffer-display ()
   (let ((items clawmacs::*minibuffer-filtered-items*)
         (index clawmacs::*minibuffer-selected-index*))
@@ -166,15 +180,16 @@
 (defun snapshot ()
   "Return a JSON-ready semantic snapshot of the running McCLIM session."
   (handler-case
-      (let ((buffer (current-buffer)))
-        `((:ready . ,(not (null buffer)))
-          (:timestamp . ,(get-universal-time))
-          (:buffer . ,(when buffer (buffer-state buffer)))
-          (:buffers . ,(buffer-ring-state))
-          (:render . ,(render-state))
-          (:minibuffer . ,(minibuffer-state))
-          (:skill-completion . ,(skill-completion-state))
-          (:selectors . ,(selector-state))))
+      (with-current-mcclim-ui-state
+        (let ((buffer (current-buffer)))
+          `((:ready . ,(not (null buffer)))
+            (:timestamp . ,(get-universal-time))
+            (:buffer . ,(when buffer (buffer-state buffer)))
+            (:buffers . ,(buffer-ring-state))
+            (:render . ,(render-state))
+            (:minibuffer . ,(minibuffer-state))
+            (:skill-completion . ,(skill-completion-state))
+            (:selectors . ,(selector-state)))))
     (error (condition)
       `((:ready . nil)
         (:timestamp . ,(get-universal-time))

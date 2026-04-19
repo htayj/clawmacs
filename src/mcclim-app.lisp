@@ -301,6 +301,125 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
     (mcclim-ensure-polling frame)))
 
 ;;; --------------------------------------------------------------------------
+;;; Frame-Owned UI State
+;;;
+;;; Core interaction code still uses special variables because commands,
+;;; tests, and prompt-only entry points call it directly.  The McCLIM frame
+;;; owns its own copy of those modal values and dynamically binds the existing
+;;; specials while rendering or handling events.
+;;; --------------------------------------------------------------------------
+
+(defparameter *mcclim-ui-state-symbols*
+  '(*buffer-selector-active*
+    *buffer-selector-index*
+    *buffer-selector-scroll*
+    *model-selector-active*
+    *model-selector-index*
+    *model-selector-scroll*
+    *model-selector-entries*
+    *think-selector-active*
+    *think-selector-index*
+    *think-selector-scroll*
+    *think-selector-entries*
+    *session-tree-selector-active*
+    *session-tree-selector-buffer*
+    *session-tree-selector-items*
+    *session-tree-selector-filtered-items*
+    *session-tree-selector-index*
+    *session-tree-selector-scroll*
+    *session-tree-selector-search*
+    *session-tree-selector-filter-mode*
+    *session-tree-selector-folded-ids*
+    *session-tree-selector-callback*
+    *session-tree-selector-label-callback*
+    *minibuffer-active*
+    *minibuffer-mode*
+    *minibuffer-prompt*
+    *minibuffer-input*
+    *minibuffer-point*
+    *minibuffer-items*
+    *minibuffer-filtered-items*
+    *minibuffer-match-positions*
+    *minibuffer-selected-index*
+    *minibuffer-scroll-offset*
+    *minibuffer-callback*
+    *skill-completion-active*
+    *skill-completion-buffer*
+    *skill-completion-query*
+    *skill-completion-token-start*
+    *skill-completion-token-end*
+    *skill-completion-token-text*
+    *skill-completion-dismissed-token*
+    *skill-completion-items*
+    *skill-completion-filtered-items*
+    *skill-completion-match-positions*
+    *skill-completion-selected-index*
+    *skill-completion-scroll-offset*
+    *customize-face-state*
+    *deny-message-mode*
+    *meta-pending*
+    *alt-pending*
+    *cx-pending*
+    *cc-pending*
+    *ch-pending*
+    *scroll-page-size*)
+  "Special variables that are frame-local in the McCLIM interface.")
+
+(defvar *mcclim-bound-ui-state* nil
+  "The McCLIM UI state currently bound into interaction special variables.")
+
+(defstruct (mcclim-ui-state
+            (:constructor %make-mcclim-ui-state (values)))
+  (values nil :type list))
+
+(defun mcclim-capture-ui-state-values ()
+  "Return current values for McCLIM's frame-local interaction specials."
+  (mapcar (lambda (symbol)
+            (if (boundp symbol)
+                (symbol-value symbol)
+                nil))
+          *mcclim-ui-state-symbols*))
+
+(defun make-mcclim-ui-state ()
+  "Create a UI state object initialized from the current interaction state."
+  (%make-mcclim-ui-state (mcclim-capture-ui-state-values)))
+
+(defun mcclim-ui-state-binding-values (state)
+  "Return STATE values padded to the current frame-local symbol list."
+  (let* ((values (mcclim-ui-state-values state))
+         (symbols *mcclim-ui-state-symbols*)
+         (missing (- (length symbols) (length values))))
+    (if (plusp missing)
+        (append values
+                (subseq (mcclim-capture-ui-state-values)
+                        (length values)))
+        values)))
+
+(defmacro with-mcclim-ui-state ((state) &body body)
+  "Run BODY with McCLIM frame-local interaction specials bound from STATE."
+  (let ((state-var (gensym "STATE-"))
+        (symbols-var (gensym "SYMBOLS-")))
+    `(let ((,state-var ,state))
+       (if (or (null ,state-var)
+               (eq *mcclim-bound-ui-state* ,state-var))
+           (progn ,@body)
+           (let ((,symbols-var *mcclim-ui-state-symbols*))
+             (progv ,symbols-var (mcclim-ui-state-binding-values ,state-var)
+               (unwind-protect
+                    (let ((*mcclim-bound-ui-state* ,state-var))
+                      ,@body)
+                 (setf (mcclim-ui-state-values ,state-var)
+                       (mapcar #'symbol-value ,symbols-var)))))))))
+
+(defmacro with-mcclim-frame-ui-state ((frame) &body body)
+  "Run BODY with FRAME's interaction specials dynamically bound."
+  (let ((frame-var (gensym "FRAME-")))
+    `(let ((,frame-var ,frame))
+       (with-mcclim-ui-state
+           ((and ,frame-var (frame-ui-state ,frame-var)))
+         ,@body))))
+
+;;; --------------------------------------------------------------------------
 ;;; McCLIM Pane Classes
 ;;; --------------------------------------------------------------------------
 
@@ -382,7 +501,9 @@ recursive repainting display function."
    (quit-flag :accessor frame-quit-flag :initform nil)
    (poll-pulse-event :accessor frame-poll-pulse-event :initform nil)
    (syncing-drei-p :accessor frame-syncing-drei-p :initform nil)
-   (last-drei-buffer :accessor frame-last-drei-buffer :initform nil))
+   (last-drei-buffer :accessor frame-last-drei-buffer :initform nil)
+   (ui-state :accessor frame-ui-state
+             :initform (make-mcclim-ui-state)))
   (:command-table (clawmacs-mcclim-command-table :inherit-from nil))
   (:panes
    (main-pane clawmacs-transcript-pane)
@@ -484,12 +605,13 @@ to the existing Clawmacs command/keymap system."
 
 (defmethod clim:adopt-frame :after (frame-manager (frame clawmacs-gui))
   (declare (ignore frame-manager))
-  (let ((main-pane (clim:find-pane-named frame 'main-pane)))
-    (when main-pane
-      (setf (esa:windows frame) (list main-pane))))
-  (mcclim-install-frame-command-table frame)
-  (mcclim-sync-drei-from-buffer frame :force-p t)
-  (mcclim-ensure-polling frame))
+  (with-mcclim-frame-ui-state (frame)
+    (let ((main-pane (clim:find-pane-named frame 'main-pane)))
+      (when main-pane
+        (setf (esa:windows frame) (list main-pane))))
+    (mcclim-install-frame-command-table frame)
+    (mcclim-sync-drei-from-buffer frame :force-p t)
+    (mcclim-ensure-polling frame)))
 
 (defmethod clim:frame-exit :before ((frame clawmacs-gui))
   (mcclim-stop-polling frame))
@@ -892,14 +1014,15 @@ history grows a pane's own sheet-region."
 
 (defun display-modeline-pane (frame pane)
   "Display function for the modeline pane."
-  (ensure-char-metrics frame pane)
-  (let* ((char-w (frame-char-width frame))
-         (char-h (frame-char-height frame))
-         (buf (frame-visible-buffer frame)))
-    (when (zerop char-w) (return-from display-modeline-pane))
-    (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
-      (declare (ignore rows))
-      (mcclim-render-modeline pane buf cols char-w char-h))))
+  (with-mcclim-frame-ui-state (frame)
+    (ensure-char-metrics frame pane)
+    (let* ((char-w (frame-char-width frame))
+           (char-h (frame-char-height frame))
+           (buf (frame-visible-buffer frame)))
+      (when (zerop char-w) (return-from display-modeline-pane))
+      (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
+        (declare (ignore rows))
+        (mcclim-render-modeline pane buf cols char-w char-h)))))
 
 (defun mcclim-fit-modeline-text (text cols)
   "Pad or truncate TEXT to exactly COLS display columns."
@@ -959,30 +1082,31 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
 
 (defun display-who-line-pane (frame pane)
   "Display function for the who-line pane. Shows 2 rows of context-dependent hints."
-  (ensure-char-metrics frame pane)
-  (let* ((char-w (frame-char-width frame))
-         (char-h (frame-char-height frame))
-         (buf (frame-visible-buffer frame)))
-    (when (zerop char-w) (return-from display-who-line-pane))
-    (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
-      (declare (ignore rows))
-      (multiple-value-bind (row1 row2) (format-who-line buf cols)
-        (let ((cache-key (concatenate 'string row1 "|" row2)))
-          (clim:updating-output (pane :unique-id 'who-line-content
-                                      :cache-value cache-key
-                                      :cache-test #'string=)
-            (multiple-value-bind (wl-fg wl-bg wl-ts wl-opts)
-                (resolve-global-face-inks :who-line)
-              (fill-row pane 0 cols wl-bg char-w char-h)
-              (fill-row pane 1 cols wl-bg char-w char-h)
-              (draw-text-at pane 0 0
-                            (subseq row1 0 (min (length row1) cols))
-                            wl-fg wl-bg wl-ts char-w char-h
-                            :drawing-options wl-opts)
-              (draw-text-at pane 1 0
-                            (subseq row2 0 (min (length row2) cols))
-                            wl-fg wl-bg wl-ts char-w char-h
-                            :drawing-options wl-opts))))))))
+  (with-mcclim-frame-ui-state (frame)
+    (ensure-char-metrics frame pane)
+    (let* ((char-w (frame-char-width frame))
+           (char-h (frame-char-height frame))
+           (buf (frame-visible-buffer frame)))
+      (when (zerop char-w) (return-from display-who-line-pane))
+      (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
+        (declare (ignore rows))
+        (multiple-value-bind (row1 row2) (format-who-line buf cols)
+          (let ((cache-key (concatenate 'string row1 "|" row2)))
+            (clim:updating-output (pane :unique-id 'who-line-content
+                                        :cache-value cache-key
+                                        :cache-test #'string=)
+              (multiple-value-bind (wl-fg wl-bg wl-ts wl-opts)
+                  (resolve-global-face-inks :who-line)
+                (fill-row pane 0 cols wl-bg char-w char-h)
+                (fill-row pane 1 cols wl-bg char-w char-h)
+                (draw-text-at pane 0 0
+                              (subseq row1 0 (min (length row1) cols))
+                              wl-fg wl-bg wl-ts char-w char-h
+                              :drawing-options wl-opts)
+                (draw-text-at pane 1 0
+                              (subseq row2 0 (min (length row2) cols))
+                              wl-fg wl-bg wl-ts char-w char-h
+                              :drawing-options wl-opts)))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Main Pane Display
@@ -1004,53 +1128,55 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
 (defun display-main-pane (frame pane)
   "Display function for the main pane. Dispatches to buffer/selector rendering.
 When the minibuffer is active, draws a centered popup overlay on top."
-  (ensure-char-metrics frame pane)
-  (let* ((char-w (frame-char-width frame))
-         (char-h (frame-char-height frame))
-         (buf (frame-visible-buffer frame)))
-    (when (zerop char-w) (return-from display-main-pane))
-    (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
-      (cond
-        (*session-tree-selector-active*
-         (mcclim-render-session-tree-selector pane rows cols char-w char-h frame)
-         (mcclim-record-render-snapshot frame pane buf :session-tree-selector
-                                        rows cols))
-        (*buffer-selector-active*
-         (mcclim-render-buffer-selector pane rows cols char-w char-h frame)
-         (mcclim-record-render-snapshot frame pane buf :buffer-selector
-                                        rows cols))
-        (*model-selector-active*
-         (mcclim-render-model-selector pane rows cols char-w char-h frame)
-         (mcclim-record-render-snapshot frame pane buf :model-selector
-                                        rows cols))
-        (*think-selector-active*
-         (mcclim-render-think-selector pane rows cols char-w char-h frame)
-         (mcclim-record-render-snapshot frame pane buf :think-selector
-                                        rows cols))
-        (t
-         (mcclim-render-buffer pane buf rows cols char-w char-h)))
-      ;; Popup overlay for minibuffer and automatic skill completion.
-      (when (or *minibuffer-active* *skill-completion-active*)
-        (mcclim-render-completion-popup pane cols rows char-w char-h)))))
+  (with-mcclim-frame-ui-state (frame)
+    (ensure-char-metrics frame pane)
+    (let* ((char-w (frame-char-width frame))
+           (char-h (frame-char-height frame))
+           (buf (frame-visible-buffer frame)))
+      (when (zerop char-w) (return-from display-main-pane))
+      (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
+        (cond
+          (*session-tree-selector-active*
+           (mcclim-render-session-tree-selector pane rows cols char-w char-h frame)
+           (mcclim-record-render-snapshot frame pane buf :session-tree-selector
+                                          rows cols))
+          (*buffer-selector-active*
+           (mcclim-render-buffer-selector pane rows cols char-w char-h frame)
+           (mcclim-record-render-snapshot frame pane buf :buffer-selector
+                                          rows cols))
+          (*model-selector-active*
+           (mcclim-render-model-selector pane rows cols char-w char-h frame)
+           (mcclim-record-render-snapshot frame pane buf :model-selector
+                                          rows cols))
+          (*think-selector-active*
+           (mcclim-render-think-selector pane rows cols char-w char-h frame)
+           (mcclim-record-render-snapshot frame pane buf :think-selector
+                                          rows cols))
+          (t
+           (mcclim-render-buffer pane buf rows cols char-w char-h)))
+        ;; Popup overlay for minibuffer and automatic skill completion.
+        (when (or *minibuffer-active* *skill-completion-active*)
+          (mcclim-render-completion-popup pane cols rows char-w char-h))))))
 
 (defun display-drei-input-pane (frame pane)
   "Display the Drei-backed input pane using Clawmacs' text renderer.
 Drei owns the editable text buffer; Clawmacs renders it here so the McCLIM UI
 uses the same face/cursor behavior as the transcript pane."
-  (ensure-char-metrics frame pane)
-  (let* ((char-w (frame-char-width frame))
-         (char-h (frame-char-height frame))
-         (buf (frame-visible-buffer frame)))
-    (when (zerop char-w) (return-from display-drei-input-pane))
-    (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
-      (clear-pane-with-ink pane *mcclim-bg-ink*)
-      (when (and buf (not (document-buffer-p buf)))
-        (mcclim-render-message-lines pane (buffer-input-message buf)
-                                     0 cols char-w char-h
-                                     :show-cursor t
-                                     :max-rows rows
-                                     :prefix ""
-                                     :render-images-p nil)))))
+  (with-mcclim-frame-ui-state (frame)
+    (ensure-char-metrics frame pane)
+    (let* ((char-w (frame-char-width frame))
+           (char-h (frame-char-height frame))
+           (buf (frame-visible-buffer frame)))
+      (when (zerop char-w) (return-from display-drei-input-pane))
+      (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
+        (clear-pane-with-ink pane *mcclim-bg-ink*)
+        (when (and buf (not (document-buffer-p buf)))
+          (mcclim-render-message-lines pane (buffer-input-message buf)
+                                       0 cols char-w char-h
+                                       :show-cursor t
+                                       :max-rows rows
+                                       :prefix ""
+                                       :render-images-p nil))))))
 
 (defmethod drei:display-drei-view-contents
     ((pane clawmacs-drei-input-pane) view)
@@ -2250,24 +2376,25 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
 (defun mcclim-dispatch-gesture (frame gesture)
   "Dispatch one ESA/CLIM GESTURE through the Clawmacs keymap.
 Returns (values need-redisplay-p force-redisplay-p)."
-  (if (not (mcclim-primary-frame-p frame))
-      ;; Popup viewers are read-only; do not let keyboard input mutate shared
-      ;; prefix state or fall through to CLIM's input editor.
-      (values nil nil)
-      (let ((key (mcclim-normalize-gesture gesture))
-            (force-redisplay-p nil))
-        (file-debug-log "mcclim-input" "gesture ~S normalized to ~S"
-                        gesture key)
-        (when key
-          (let ((result (handle-key-event (frame-visible-buffer frame) key)))
-            (when (eq result :quit)
-              (setf (frame-quit-flag frame) t)
-              (clim:frame-exit frame))
-            (when (eq result :redraw)
-              (setf force-redisplay-p t))))
-        ;; Even prefix-only keys return NIL from normalization but may change
-        ;; who-line state, so the interactive frame should still redisplay.
-        (values t force-redisplay-p))))
+  (with-mcclim-frame-ui-state (frame)
+    (if (not (mcclim-primary-frame-p frame))
+        ;; Popup viewers are read-only; do not let keyboard input mutate shared
+        ;; prefix state or fall through to CLIM's input editor.
+        (values nil nil)
+        (let ((key (mcclim-normalize-gesture gesture))
+              (force-redisplay-p nil))
+          (file-debug-log "mcclim-input" "gesture ~S normalized to ~S"
+                          gesture key)
+          (when key
+            (let ((result (handle-key-event (frame-visible-buffer frame) key)))
+              (when (eq result :quit)
+                (setf (frame-quit-flag frame) t)
+                (clim:frame-exit frame))
+              (when (eq result :redraw)
+                (setf force-redisplay-p t))))
+          ;; Even prefix-only keys return NIL from normalization but may change
+          ;; who-line state, so the interactive frame should still redisplay.
+          (values t force-redisplay-p)))))
 
 (defun mcclim-poll-external-updates (frame)
   "Poll streaming/OAuth state for FRAME.
@@ -2297,10 +2424,11 @@ Returns true when application state may have changed."
 
 (defun mcclim-redisplay-frame (frame &key force-p)
   "Refresh FRAME through the standard CLIM redisplay path."
-  (mcclim-update-scroll-page-size frame)
-  (update-pane-sizes frame)
-  (mcclim-sync-drei-from-buffer frame)
-  (clim:redisplay-frame-panes frame :force-p force-p))
+  (with-mcclim-frame-ui-state (frame)
+    (mcclim-update-scroll-page-size frame)
+    (update-pane-sizes frame)
+    (mcclim-sync-drei-from-buffer frame)
+    (clim:redisplay-frame-panes frame :force-p force-p)))
 
 ;;; --------------------------------------------------------------------------
 ;;; ESA/Pulse Event Integration
@@ -2353,59 +2481,66 @@ when no key or window event arrives."
 (defmethod clim:handle-event ((pane clawmacs-transcript-pane)
                               (event clawmacs-display-change-event))
   (let ((frame (clim:pane-frame pane)))
-    (mcclim-sync-drei-from-buffer frame :force-p t)
-    (mcclim-poll-external-updates frame)
-    (mcclim-redisplay-frame frame
-                            :force-p (display-change-event-force-p event))
-    (mcclim-ensure-polling frame)))
+    (with-mcclim-frame-ui-state (frame)
+      (mcclim-sync-drei-from-buffer frame :force-p t)
+      (mcclim-poll-external-updates frame)
+      (mcclim-redisplay-frame frame
+                              :force-p (display-change-event-force-p event))
+      (mcclim-ensure-polling frame))))
 
 (defmethod clim:handle-event :after ((pane clawmacs-drei-input-pane)
                                      (event clim:key-press-event))
   (declare (ignore event))
   (let ((frame (clim:pane-frame pane)))
-    (mcclim-sync-buffer-from-drei frame)
-    (mcclim-redisplay-frame frame :force-p t)))
+    (with-mcclim-frame-ui-state (frame)
+      (mcclim-sync-buffer-from-drei frame)
+      (mcclim-redisplay-frame frame :force-p t))))
 
 (defmethod clim:handle-repaint ((pane clawmacs-drei-input-pane) region)
   (declare (ignore region))
-  (display-drei-input-pane (clim:pane-frame pane) pane))
+  (let ((frame (clim:pane-frame pane)))
+    (with-mcclim-frame-ui-state (frame)
+      (display-drei-input-pane frame pane))))
 
 (defmethod clim:redisplay-frame-panes :before ((frame clawmacs-gui)
                                                &key force-p)
   (declare (ignore force-p))
-  (mcclim-update-scroll-page-size frame)
-  (update-pane-sizes frame)
-  (mcclim-sync-drei-from-buffer frame))
+  (with-mcclim-frame-ui-state (frame)
+    (mcclim-update-scroll-page-size frame)
+    (update-pane-sizes frame)
+    (mcclim-sync-drei-from-buffer frame)))
 
 (defmethod clim:execute-frame-command :around ((frame clawmacs-gui) command)
   (declare (ignore command))
-  (mcclim-sync-buffer-from-drei frame)
-  (prog1 (call-next-method)
-    (mcclim-sync-drei-from-buffer frame :force-p t)
-    (mcclim-ensure-polling frame)))
+  (with-mcclim-frame-ui-state (frame)
+    (mcclim-sync-buffer-from-drei frame)
+    (prog1 (call-next-method)
+      (mcclim-sync-drei-from-buffer frame :force-p t)
+      (mcclim-ensure-polling frame))))
 
 (defun mcclim-process-esa-gesture (frame gesture)
   "Feed GESTURE into ESA command processing for FRAME."
-  (let ((*standard-output* (clim:frame-standard-output frame))
-        (*standard-input* (clim:frame-standard-input frame))
-        (esa:*minibuffer* (esa:minibuffer frame))
-        (esa:*command-processor* frame)
-        (clim:*abort-gestures* esa:*esa-abort-gestures*)
-        (clim:*command-parser* 'esa:esa-command-parser)
-        (clim:*command-unparser* 'clim:command-line-command-unparser)
-        (clim:*partial-command-parser* 'esa:esa-partial-command-parser)
-        (esa:*extended-command-prompt* "Extended Command: ")
-        (clim:*pointer-documentation-output*
-         (clim:frame-pointer-documentation-output frame))
-        (esa:*esa-instance* frame))
-    (handler-case
-        (esa:process-gesture frame gesture)
-      (esa:unbound-gesture-sequence (condition)
-        (file-debug-log "mcclim-input" "unbound ESA gesture sequence: ~S"
-                        (esa:gestures condition))
-        (setf (esa::accumulated-gestures frame) nil))
-      (clim:abort-gesture ()
-        (setf (esa::accumulated-gestures frame) nil)))))
+  (with-mcclim-frame-ui-state (frame)
+    (let ((*standard-output* (clim:frame-standard-output frame))
+          (*standard-input* (clim:frame-standard-input frame))
+          (esa:*minibuffer* (esa:minibuffer frame))
+          (esa:*command-processor* frame)
+          (clim:*abort-gestures* esa:*esa-abort-gestures*)
+          (clim:*command-parser* 'esa:esa-command-parser)
+          (clim:*command-unparser* 'clim:command-line-command-unparser)
+          (clim:*partial-command-parser* 'esa:esa-partial-command-parser)
+          (esa:*extended-command-prompt* "Extended Command: ")
+          (clim:*pointer-documentation-output*
+           (clim:frame-pointer-documentation-output frame))
+          (esa:*esa-instance* frame))
+      (handler-case
+          (esa:process-gesture frame gesture)
+        (esa:unbound-gesture-sequence (condition)
+          (file-debug-log "mcclim-input" "unbound ESA gesture sequence: ~S"
+                          (esa:gestures condition))
+          (setf (esa::accumulated-gestures frame) nil))
+        (clim:abort-gesture ()
+          (setf (esa::accumulated-gestures frame) nil))))))
 
 (defmethod clawmacs-esa-top-level ((frame clawmacs-gui)
                                    &key &allow-other-keys)
@@ -2421,37 +2556,38 @@ presentation and window events stay on the standard CLIM event path."
   (mcclim-redisplay-frame frame :force-p t)
   (loop :until (frame-quit-flag frame)
         :for event := (mcclim-read-event frame)
-        :do (cond
-              ((null event)
-               (when (mcclim-poll-external-updates frame)
+        :do (with-mcclim-frame-ui-state (frame)
+              (cond
+                ((null event)
+                 (when (mcclim-poll-external-updates frame)
+                   (mcclim-sync-drei-from-buffer frame :force-p t)
+                   (mcclim-redisplay-frame frame :force-p t)
+                   (mcclim-ensure-polling frame)))
+                ((typep event 'clawmacs-display-change-event)
                  (mcclim-sync-drei-from-buffer frame :force-p t)
-                 (mcclim-redisplay-frame frame :force-p t)
-                 (mcclim-ensure-polling frame)))
-              ((typep event 'clawmacs-display-change-event)
-               (mcclim-sync-drei-from-buffer frame :force-p t)
-               (mcclim-poll-external-updates frame)
-               (mcclim-redisplay-frame
-                frame :force-p (display-change-event-force-p event))
-               (mcclim-ensure-polling frame))
-              ((clim:event-matches-gesture-name-p event :clawmacs-poll)
-               (clim:execute-frame-command frame '(com-clawmacs-poll)))
-              ((typep event 'clim:key-press-event)
-               (clim:execute-frame-command
-                frame
-                (list 'com-clawmacs-dispatch-gestures (list event)))
-               (mcclim-redisplay-frame frame))
-              ((let ((key (mcclim-pointer-scroll-key event)))
-                 (when key
-                   (handle-key-event (frame-visible-buffer frame) key)
-                   t))
-               (mcclim-redisplay-frame frame))
-              ((or (typep event 'clim:window-repaint-event)
-                   (typep event 'clim:window-configuration-event))
-               (clim:handle-event (clim:event-sheet event) event)
-               (mcclim-redisplay-frame frame :force-p t))
-              (t
-               (clim:handle-event (clim:event-sheet event) event)
-               (mcclim-redisplay-frame frame)))))
+                 (mcclim-poll-external-updates frame)
+                 (mcclim-redisplay-frame
+                  frame :force-p (display-change-event-force-p event))
+                 (mcclim-ensure-polling frame))
+                ((clim:event-matches-gesture-name-p event :clawmacs-poll)
+                 (clim:execute-frame-command frame '(com-clawmacs-poll)))
+                ((typep event 'clim:key-press-event)
+                 (clim:execute-frame-command
+                  frame
+                  (list 'com-clawmacs-dispatch-gestures (list event)))
+                 (mcclim-redisplay-frame frame))
+                ((let ((key (mcclim-pointer-scroll-key event)))
+                   (when key
+                     (handle-key-event (frame-visible-buffer frame) key)
+                     t))
+                 (mcclim-redisplay-frame frame))
+                ((or (typep event 'clim:window-repaint-event)
+                     (typep event 'clim:window-configuration-event))
+                 (clim:handle-event (clim:event-sheet event) event)
+                 (mcclim-redisplay-frame frame :force-p t))
+                (t
+                 (clim:handle-event (clim:event-sheet event) event)
+                 (mcclim-redisplay-frame frame))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Application Entry Point

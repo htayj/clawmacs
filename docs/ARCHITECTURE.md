@@ -171,9 +171,9 @@ types.
 The McCLIM interface renders buffers and translates CLIM input events into
 command dispatch. `src/mcclim-app.lisp` owns the ESA-backed application frame,
 CLIM command table, presentation translators, transcript pane, Drei-backed input
-pane, fixed minibuffer stream, queued display-change events, pulse polling, and
-redisplay. `src/render-core.lisp` owns pure rendering geometry and string
-formatting that the frame draws into CLIM panes.
+pane, fixed minibuffer stream, frame-local UI state, queued display-change
+events, pulse polling, and redisplay. `src/render-core.lisp` owns pure rendering
+geometry and string formatting that the frame draws into CLIM panes.
 
 Keyboard editing remains owned by Clawmacs keymaps. McCLIM key-press events are
 routed through a small CLIM command and then into the core command/keymap
@@ -183,6 +183,13 @@ active command table for CLIM presentation interactions. Semantic objects drawn
 in panes should be wrapped as CLIM presentations, and dynamic transcript output
 should use stable output records or `updating-output` cache keys when the object
 identity is known.
+
+Core commands still use special variables for modal editor state because tests
+and prompt-only entry points call them directly. The McCLIM frame owns a
+`mcclim-ui-state` object and dynamically binds those specials from the frame
+while rendering, handling input, or serving self-visibility tools. This keeps
+selector, minibuffer, skill-completion, prefix, and scroll-page state local to
+the frame without making the core command layer depend on McCLIM classes.
 
 McCLIM code should not own prompt execution, package enablement, or provider
 transport. It should ask the core to perform operations and then render the

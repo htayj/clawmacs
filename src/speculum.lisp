@@ -326,12 +326,16 @@
 
 (defun speculum-interaction-state (frame buffer)
   "Return current GUI interaction state."
-  (declare (ignore frame))
-  (list :minibuffer (speculum-minibuffer-state)
-        :selectors (speculum-selectors-state)
-        :skill-completion (speculum-skill-completion-state)
-        :approval (speculum-approval-state buffer)
-        :key-prefixes (speculum-key-prefix-state)))
+  (flet ((collect ()
+           (list :minibuffer (speculum-minibuffer-state)
+                 :selectors (speculum-selectors-state)
+                 :skill-completion (speculum-skill-completion-state)
+                 :approval (speculum-approval-state buffer)
+                 :key-prefixes (speculum-key-prefix-state))))
+    (if (and frame (typep frame 'clawmacs-gui))
+        (with-mcclim-frame-ui-state (frame)
+          (collect))
+        (collect))))
 
 (defun speculum-render-state (frame)
   "Return FRAME's latest render snapshot, or an unavailable marker."
@@ -534,64 +538,70 @@
 
 (defun speculum-inspection-value (name frame message-limit)
   "Return an allowlisted inspection result for NAME."
-  (let* ((normalized (speculum-normalize-inspect-name name))
-         (buffer (and frame (frame-visible-buffer frame))))
-    (list :name (or (speculum-trim-string name) "")
-          :key normalized
-          :available
-          (cond
-            ((not (member normalized *speculum-inspect-allowlist*
-                          :test #'string=))
-             nil)
-            ((string= normalized "live-frame-count") t)
-            (t (not (null frame))))
-          :value
-          (cond
-            ((not (member normalized *speculum-inspect-allowlist*
-                          :test #'string=))
-             nil)
-            ((string= normalized "clawmacs-frame")
-             (speculum-frame-summary frame))
-            ((string= normalized "live-frame-count")
-             (length (mcclim-live-frames)))
-            ((string= normalized "frame-state")
-             (and frame (speculum-symbol-name
-                         (ignore-errors (clim:frame-state frame)))))
-            ((string= normalized "frame-metrics")
-             (and frame
-                  (list :char-width (frame-char-width frame)
-                        :char-height (frame-char-height frame)
-                        :pane-space-char-height
-                        (frame-pane-space-char-height frame)
-                        :render-sequence (frame-render-sequence frame))))
-            ((string= normalized "visible-buffer")
-             (speculum-buffer-summary buffer :message-limit 0))
-            ((string= normalized "recent-messages")
-             (speculum-recent-messages buffer message-limit))
-            ((string= normalized "render-snapshot")
-             (speculum-render-state frame))
-            ((string= normalized "pane-sizes")
-             (speculum-panes-summary frame))
-            ((string= normalized "minibuffer")
-             (speculum-minibuffer-state))
-            ((string= normalized "selectors")
-             (speculum-selectors-state))
-            ((string= normalized "skill-completion")
-             (speculum-skill-completion-state))
-            ((string= normalized "approval")
-             (speculum-approval-state buffer))
-            ((string= normalized "key-prefixes")
-             (speculum-key-prefix-state))
-            (t nil))
-          :reason
-          (cond
-            ((not (member normalized *speculum-inspect-allowlist*
-                          :test #'string=))
-             "Unknown speculum inspection name.")
-            ((and (null frame)
-                  (not (string= normalized "live-frame-count")))
-             "No live Clawmacs McCLIM frame is available.")
-            (t nil)))))
+  (flet ((collect ()
+           (let* ((normalized (speculum-normalize-inspect-name name))
+                  (buffer (and frame (frame-visible-buffer frame))))
+             (list :name (or (speculum-trim-string name) "")
+                   :key normalized
+                   :available
+                   (cond
+                     ((not (member normalized *speculum-inspect-allowlist*
+                                   :test #'string=))
+                      nil)
+                     ((string= normalized "live-frame-count") t)
+                     (t (not (null frame))))
+                   :value
+                   (cond
+                     ((not (member normalized *speculum-inspect-allowlist*
+                                   :test #'string=))
+                      nil)
+                     ((string= normalized "clawmacs-frame")
+                      (speculum-frame-summary frame))
+                     ((string= normalized "live-frame-count")
+                      (length (mcclim-live-frames)))
+                     ((string= normalized "frame-state")
+                      (and frame (speculum-symbol-name
+                                  (ignore-errors (clim:frame-state frame)))))
+                     ((string= normalized "frame-metrics")
+                      (and frame
+                           (list :char-width (frame-char-width frame)
+                                 :char-height (frame-char-height frame)
+                                 :pane-space-char-height
+                                 (frame-pane-space-char-height frame)
+                                 :render-sequence
+                                 (frame-render-sequence frame))))
+                     ((string= normalized "visible-buffer")
+                      (speculum-buffer-summary buffer :message-limit 0))
+                     ((string= normalized "recent-messages")
+                      (speculum-recent-messages buffer message-limit))
+                     ((string= normalized "render-snapshot")
+                      (speculum-render-state frame))
+                     ((string= normalized "pane-sizes")
+                      (speculum-panes-summary frame))
+                     ((string= normalized "minibuffer")
+                      (speculum-minibuffer-state))
+                     ((string= normalized "selectors")
+                      (speculum-selectors-state))
+                     ((string= normalized "skill-completion")
+                      (speculum-skill-completion-state))
+                     ((string= normalized "approval")
+                      (speculum-approval-state buffer))
+                     ((string= normalized "key-prefixes")
+                      (speculum-key-prefix-state))
+                     (t nil))
+                   :reason
+                   (cond
+                     ((not (member normalized *speculum-inspect-allowlist*
+                                   :test #'string=))
+                      "Unknown speculum inspection name.")
+                     ((and (null frame)
+                           (not (string= normalized "live-frame-count")))
+                      "No live Clawmacs McCLIM frame is available.")
+                     (t nil))))))
+    (if (and frame (typep frame 'clawmacs-gui))
+        (with-mcclim-frame-ui-state (frame)
+          (collect))
+        (collect))))
 
 (defun speculum-inspect-data (args)
   "Inspect allowlisted McCLIM state names."

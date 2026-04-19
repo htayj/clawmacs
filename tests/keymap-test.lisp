@@ -116,6 +116,34 @@
                (clawmacs::mcclim-normalize-key
                 (mcclim-test-key-event :|x| #\x clim:+meta-key+))))))
 
+(test mcclim-ui-state-dynamically-binds-interaction-specials
+  "McCLIM frame-local UI state shadows and persists modal interaction specials."
+  (let ((clawmacs::*minibuffer-active* nil)
+        (clawmacs::*minibuffer-input* "global")
+        (clawmacs::*skill-completion-active* nil)
+        (clawmacs::*meta-pending* nil)
+        (clawmacs::*scroll-page-size* nil))
+    (let ((state (clawmacs::make-mcclim-ui-state)))
+      (clawmacs::with-mcclim-ui-state (state)
+        (setf clawmacs::*minibuffer-active* t
+              clawmacs::*minibuffer-input* "frame"
+              clawmacs::*skill-completion-active* t
+              clawmacs::*meta-pending* t
+              clawmacs::*scroll-page-size* 17)
+        (clawmacs::with-mcclim-ui-state (state)
+          (setf clawmacs::*minibuffer-input* "nested-frame")))
+      (is (null clawmacs::*minibuffer-active*))
+      (is (string= "global" clawmacs::*minibuffer-input*))
+      (is (null clawmacs::*skill-completion-active*))
+      (is (null clawmacs::*meta-pending*))
+      (is (null clawmacs::*scroll-page-size*))
+      (clawmacs::with-mcclim-ui-state (state)
+        (is (eq t clawmacs::*minibuffer-active*))
+        (is (string= "nested-frame" clawmacs::*minibuffer-input*))
+        (is (eq t clawmacs::*skill-completion-active*))
+        (is (eq t clawmacs::*meta-pending*))
+        (is (= 17 clawmacs::*scroll-page-size*))))))
+
 (test default-keymap-buffer-selector-binding
   "Default keymap binds C-x C-b to the minibuffer buffer selector,
 and C-x b to the old overlay buffer selector."
