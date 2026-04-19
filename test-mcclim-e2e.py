@@ -282,6 +282,58 @@ def render_get(render, camel_key, kebab_key, default=None):
     return default
 
 
+def assert_rendered_message_row_has_dark_pixels(png_path, snapshot, text):
+    """Assert the physical screenshot has ink on TEXT's rendered row.
+
+    The McCLIM control JSON is semantic state; this catches bugs where a
+    message is listed as visible but the pane draw loop skipped its row.
+    """
+    try:
+        from PIL import Image
+    except Exception as exc:
+        fail(f"Pillow is required for McCLIM visual assertions: {exc}")
+
+    render = snapshot.get("render") or {}
+    messages = render_visible_messages(snapshot)
+    message_index = None
+    for index, message in enumerate(messages):
+        if text in str(message.get("text", "")):
+            message_index = index
+            break
+    if message_index is None:
+        fail(f"{text} was not present in render snapshot")
+
+    rows = int(render_get(render, "rows", "rows", 0) or 0)
+    history_height = int(render_get(render, "historyHeight", "history-height", 0) or 0)
+    pixel_height = int(render_get(render, "pixelHeight", "pixel-height", 0) or 0)
+    pixel_width = int(render_get(render, "pixelWidth", "pixel-width", 0) or 0)
+    if rows <= 0 or history_height <= 0 or pixel_height <= 0 or pixel_width <= 0:
+        fail("render snapshot did not include usable pane geometry")
+
+    row = 1 + max(0, history_height - len(messages)) + message_index
+    char_height = max(1, pixel_height // rows)
+    y0 = row * char_height
+    y1 = y0 + char_height
+
+    image = Image.open(png_path).convert("RGB")
+    if y0 >= image.height:
+        fail(f"render row {row} was outside screenshot bounds")
+    y1 = min(y1, image.height)
+    x1 = min(max(1, pixel_width), image.width)
+    dark_pixels = 0
+    for y in range(y0, y1):
+        for x in range(0, x1):
+            red, green, blue = image.getpixel((x, y))
+            if red < 80 and green < 80 and blue < 80:
+                dark_pixels += 1
+
+    if dark_pixels < 200:
+        fail(
+            f"{text} was in render JSON but its screenshot row had only "
+            f"{dark_pixels} dark pixels"
+        )
+
+
 def wait_for_rendered_message_text(session, text, timeout=15):
     return wait_until(
         lambda: session._snapshot_if(lambda snap: render_contains_text(snap, text)),
@@ -772,7 +824,8 @@ def test_55_stream_poll_renders_without_next_input(session):
     )
     if not render_contains_text(snapshot, expected):
         fail("streamed response reached buffer but not McCLIM render snapshot")
-    session.screenshot("55-stream-poll-renders")
+    png_path = session.screenshot("55-stream-poll-renders")
+    assert_rendered_message_row_has_dark_pixels(png_path, snapshot, expected)
 
 
 def test_registry(group):

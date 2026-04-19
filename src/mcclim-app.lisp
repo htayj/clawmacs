@@ -910,7 +910,8 @@ ordinary input text."
              (max-scroll (max 0 (- total-history-rows history-height)))
              (scroll-offset (min (buffer-scroll-offset buf) max-scroll))
              (visible-bottom (- total-history-rows scroll-offset))
-             (visible-top (- visible-bottom history-height)))
+             (visible-top (- visible-bottom history-height))
+             (history-end-row (1+ history-height)))
         (setf (buffer-scroll-offset buf) scroll-offset)
         ;; Render visible history messages — wrapped in presentation types
         ;; so they are clickable objects in CLIM's semantic interaction model.
@@ -930,7 +931,7 @@ ordinary input text."
                         (clim:with-output-as-presentation (pane msg ptype)
                           (mcclim-render-message-lines pane msg screen-row width
                                                        char-w char-h
-                                                       :max-rows history-height
+                                                       :max-rows history-end-row
                                                        :show-reasoning-p show-reasoning-p
                                                        :show-metadata-p show-metadata-p))))))))
     (when approval-p
