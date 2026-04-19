@@ -1674,6 +1674,13 @@ characters used by Clawmacs keymaps."
           (search "SUPER" name)
           (search "HYPER" name)))))
 
+(defun mcclim-meta-modifier-key-name-p (key-name)
+  "Return true when KEY-NAME names a standalone Meta/Alt key."
+  (when (keywordp key-name)
+    (let ((name (symbol-name key-name)))
+      (or (search "META" name)
+          (search "ALT" name)))))
+
 (defun mcclim-normalize-key (key-event)
   "Normalize a McCLIM key-press-event to Clawmacs' abstract key format.
 Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
@@ -1715,6 +1722,12 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
     (cond
       ;; X11 sends standalone modifier key-presses before modified keys. They
       ;; should not self-insert or consume a pending C-x/C-c/C-h/ESC prefix.
+      ;; Some X server/window-manager combinations do not preserve the Meta
+      ;; modifier on the following key event, so standalone Alt/Meta acts like
+      ;; an ESC prefix for the next gesture.
+      ((and (null char) (mcclim-meta-modifier-key-name-p key-name))
+       (setf *meta-pending* t)
+       nil)
       ((and (null char) (mcclim-modifier-key-name-p key-name))
        nil)
       ;; C-h prefix — McCLIM delivers Control+h with key-name :backspace

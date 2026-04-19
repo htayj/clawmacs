@@ -828,11 +828,27 @@ def test_55_stream_poll_renders_without_next_input(session):
     assert_rendered_message_row_has_dark_pixels(png_path, snapshot, expected)
 
 
+def test_56_meta_x_opens_extended_command(session):
+    """Direct Alt+x should open Clawmacs' M-x command selector."""
+    session.press("Alt+x")
+
+    def observe():
+        screen = session.text()
+        if "M-x" in screen and "execute-extended-command" in screen:
+            return screen
+        return None
+
+    wait_until(observe, timeout=10, interval=0.1, description="M-x minibuffer")
+    session.screenshot("56-meta-x-command-picker")
+    session.press("Ctrl+g")
+
+
 def test_registry(group):
     offline_tests = [
         ("53-async-agent-reply-renders", test_53_async_agent_reply_renders_without_next_input),
         ("54-tiling-resize-latest-visible", test_54_tiling_resize_keeps_latest_message_visible),
         ("55-stream-poll-renders", test_55_stream_poll_renders_without_next_input),
+        ("56-meta-x-command-picker", test_56_meta_x_opens_extended_command),
         ("38-shell-prefix", E2E.test_38_shell_prefix),
         ("39-debug-mode", E2E.test_39_debug_mode_toggle),
         ("40-save-session", E2E.test_40_save_session),
