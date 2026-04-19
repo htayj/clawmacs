@@ -10,7 +10,6 @@ QUICKLISP_ENV_LOADED=0
 WORKSPACE_HOME=/workspace/.cache/home
 WORKSPACE_QUICKLISP_SETUP=/workspace/.cache/home/quicklisp/setup.lisp
 WORKSPACE_XDG_CACHE=/workspace/.cache
-MCP_TUI_DRIVER_GIT_URL='https://github.com/michaellee8/mcp-tui-driver'
 HOST_HOME=''
 HOST_QUICKLISP_SETUP=''
 HOST_CONFIG_DIR=''
@@ -334,18 +333,16 @@ e2e_invocation_requires_credential() {
   fi
 
   case "$command_name" in
-    python3|python)
+    test-mcclim-e2e.py|*/test-mcclim-e2e.py|scripts/mcclim-e2e-xvfb-run.sh|*/scripts/mcclim-e2e-xvfb-run.sh)
       ;;
     *)
-      return 1
-      ;;
-  esac
-
-  case "$command_target" in
-    test-e2e.py|*/test-e2e.py)
-      ;;
-    *)
-      return 1
+      case "$command_target" in
+        test-mcclim-e2e.py|*/test-mcclim-e2e.py|scripts/mcclim-e2e-xvfb-run.sh|*/scripts/mcclim-e2e-xvfb-run.sh)
+          ;;
+        *)
+          return 1
+          ;;
+      esac
       ;;
   esac
 
@@ -362,11 +359,14 @@ e2e_invocation_requires_credential() {
     shift
   done
 
-  if [ "$only_target" = "readline" ] || [ "$only_target" = "offline" ]; then
-    return 1
-  fi
-
-  return 0
+  case "$only_target" in
+    online|online-zai|online-openai-codex)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 validate_provider_credential() {
@@ -396,7 +396,6 @@ validate_override_path() {
 
   validate_canonical_override CLAWMACS_SSL_LIB directory
   validate_canonical_override CLAWMACS_FONT_PATH readable-file
-  validate_canonical_override CLAWMACS_MCP_BIN executable-file
 }
 
 resolve_canonical_path() {
@@ -513,20 +512,6 @@ validate_runtime_openssl_path() {
   prepend_ld_library_path "$RESOLVED_SSL_LIB_PATH"
 }
 
-resolve_runtime_ncurses_path() {
-  resolved_ncurses_file=''
-
-  resolved_ncurses_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --share="$REPO_ROOT=/workspace" -- bash -lc 'ldconfig -p 2>/dev/null | while IFS= read -r line; do case "$line" in *" => "*) lib=${line%% *}; case "$lib" in libncursesw.so*) printf "%s\n" "${line##* => }"; break ;; esac ;; esac; done' 2>/dev/null || true)
-
-  if [ -z "$resolved_ncurses_file" ]; then
-    resolved_ncurses_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --share="$REPO_ROOT=/workspace" -- bash -lc 'for lib in /run/current-system/profile/lib/libncursesw.so* /run/current-system/profile/lib64/libncursesw.so* /gnu/store/*/lib/libncursesw.so* /gnu/store/*/lib64/libncursesw.so* /lib/libncursesw.so* /lib64/libncursesw.so* /usr/lib/libncursesw.so* /usr/lib64/libncursesw.so*; do if [ -e "$lib" ]; then printf "%s\n" "$lib"; break; fi; done' 2>/dev/null || true)
-  fi
-
-  if [ -n "$resolved_ncurses_file" ]; then
-    prepend_ld_library_path "${resolved_ncurses_file%/*}"
-  fi
-}
-
 resolve_runtime_libgcc_path() {
   resolved_libgcc_file=''
 
@@ -552,72 +537,6 @@ validate_e2e_args() {
 
   if e2e_invocation_requires_credential "$@"; then
     :
-  fi
-}
-
-payload_uses_mcp_driver() {
-  command_name="${1:-}"
-  command_target="${2:-}"
-
-  case "$command_name" in
-    python3|python)
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-
-  case "$command_target" in
-    test-e2e.py|*/test-e2e.py)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-probe_payload_mcp_driver() {
-  container_mcp_bin="$1"
-  runtime_ld_library_path="${LD_LIBRARY_PATH:-}"
-
-  run_in_container 'set -eu; mcp_bin="$1"; home_path="$2"; xdg_cache_path="$3"; runtime_ld_library_path="$4"; export HOME="$home_path" XDG_CACHE_HOME="$xdg_cache_path"; if [ -n "$runtime_ld_library_path" ]; then export LD_LIBRARY_PATH="$runtime_ld_library_path"; fi; "$mcp_bin" --help >/dev/null 2>&1' "$container_mcp_bin" "$WORKSPACE_HOME" "$WORKSPACE_XDG_CACHE" "$runtime_ld_library_path"
-}
-
-install_payload_mcp_driver() {
-  cargo_target_dir="$WORKSPACE_XDG_CACHE/cargo-target"
-
-  stderr "installing mcp-tui-driver into workspace cache"
-  run_in_container 'set -eu; repo_url="$1"; home_path="$2"; xdg_cache_path="$3"; cargo_target_dir="$4"; export HOME="$home_path" XDG_CACHE_HOME="$xdg_cache_path" CARGO_HOME="$home_path/.cargo" CARGO_TARGET_DIR="$cargo_target_dir" CC=gcc CXX=g++ CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc; mkdir -p "$CARGO_HOME/bin" "$cargo_target_dir"; cargo install --locked --force --git "$repo_url" mcp-tui-driver' "$MCP_TUI_DRIVER_GIT_URL" "$WORKSPACE_HOME" "$WORKSPACE_XDG_CACHE" "$cargo_target_dir"
-}
-
-ensure_payload_mcp_driver() {
-  if [ "$MODE" != "e2e" ]; then
-    return 0
-  fi
-
-  if ! payload_uses_mcp_driver "$@"; then
-    return 0
-  fi
-
-  if [ -n "${CLAWMACS_MCP_BIN:-}" ]; then
-    return 0
-  fi
-
-  host_mcp_bin="$HOST_HOME/.cargo/bin/mcp-tui-driver"
-  container_mcp_bin="$WORKSPACE_HOME/.cargo/bin/mcp-tui-driver"
-  export CLAWMACS_MCP_BIN="$container_mcp_bin"
-
-  if [ -x "$host_mcp_bin" ] && probe_payload_mcp_driver "$container_mcp_bin"; then
-    return 0
-  fi
-
-  if ! install_payload_mcp_driver; then
-    fail 123 "missing required binary: mcp-tui-driver"
-  fi
-
-  if [ ! -x "$host_mcp_bin" ] || ! probe_payload_mcp_driver "$container_mcp_bin"; then
-    fail 123 "missing required binary: mcp-tui-driver"
   fi
 }
 
@@ -651,7 +570,6 @@ run_preflight() {
   validate_provider_credential "$@"
   validate_override_path
   validate_runtime_openssl_path
-  resolve_runtime_ncurses_path
   resolve_runtime_libgcc_path
   validate_quicklisp_bootstrap
 }
@@ -676,8 +594,6 @@ launch_payload() {
   if [ ! -f "$HOST_QUICKLISP_SETUP" ]; then
     fail 112 "quicklisp bootstrap failed"
   fi
-
-  ensure_payload_mcp_driver "$@"
 
   # User init directory: share ~/.clawmacs.d/ so init.lisp is available
   extra_container_args=""
@@ -705,7 +621,7 @@ launch_payload() {
   fi
 
   # shellcheck disable=SC2086
-  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_MCP_BIN|CLAWMACS_DEBUG_LOG|CLAWMACS_PROMPT_PROJECT_ROOT|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}" CLAWMACS_PROMPT_PROJECT_ROOT="${CLAWMACS_PROMPT_PROJECT_ROOT:-/workspace}"; exec "$@"' bash "$@"
+  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_DEBUG_LOG|CLAWMACS_PROMPT_PROJECT_ROOT|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}" CLAWMACS_PROMPT_PROJECT_ROOT="${CLAWMACS_PROMPT_PROJECT_ROOT:-/workspace}"; exec "$@"' bash "$@"
 }
 
 main() {

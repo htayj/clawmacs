@@ -31,18 +31,6 @@ printf 'font\n' > "$TMP_FONT_FILE"
 TMP_FONT_UNREADABLE="$TMP_FONT_DIR/unreadable.ttf"
 cp "$TMP_FONT_FILE" "$TMP_FONT_UNREADABLE"
 chmod 000 "$TMP_FONT_UNREADABLE"
-TMP_MCP_DIR="$TMP_DIR/mcp"
-mkdir -p "$TMP_MCP_DIR"
-TMP_MCP_BIN="$TMP_MCP_DIR/mcp-tui-driver"
-cat > "$TMP_MCP_BIN" <<'EOF'
-#!/bin/sh
-exit 0
-EOF
-chmod +x "$TMP_MCP_BIN"
-TMP_MCP_NONEXEC="$TMP_MCP_DIR/nonexec-driver"
-cp "$TMP_MCP_BIN" "$TMP_MCP_NONEXEC"
-chmod 644 "$TMP_MCP_NONEXEC"
-
 REAL_SHA256SUM=$(command -v sha256sum)
 EXPECTED_SHA=$(printf 'quicklisp\n' | "$REAL_SHA256SUM" | cut -d' ' -f1)
 export REAL_SHA256SUM
@@ -135,41 +123,11 @@ exec "$TEST_CONTAINER_PATH/python3" "$@"
 EOF
 chmod +x "$TMP_BIN/python3"
 
-cat > "$TMP_BIN/cargo" <<'EOF'
-#!/bin/sh
-if [ "${CLAWMACS_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
-  exit 98
-fi
-exec "$TEST_CONTAINER_PATH/cargo" "$@"
-EOF
-chmod +x "$TMP_BIN/cargo"
-
 cat > "$TMP_CONTAINER_BIN/python3" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
 chmod +x "$TMP_CONTAINER_BIN/python3"
-
-cat > "$TMP_CONTAINER_BIN/cargo" <<'EOF'
-#!/bin/sh
-if [ "${TEST_CARGO_FAIL:-0}" = "1" ]; then
-  exit 1
-fi
-
-if [ "${1:-}" = "install" ]; then
-  target_bin="${CARGO_HOME:-$HOME/.cargo}/bin/mcp-tui-driver"
-  mkdir -p "$(dirname "$target_bin")"
-  cat > "$target_bin" <<'SCRIPT'
-#!/bin/sh
-exit 0
-SCRIPT
-  chmod +x "$target_bin"
-  exit 0
-fi
-
-exit 0
-EOF
-chmod +x "$TMP_CONTAINER_BIN/cargo"
 
 cat > "$TMP_BIN/guix" <<'EOF'
 #!/bin/sh
@@ -427,16 +385,16 @@ run_case invalid-e2e-args-toggle 122 yes CLAWMACS_TEST_INVALID_E2E_ARGS --mode e
 run_env_case preflight-precedence-credential-over-bootstrap 116 CLAWMACS_TEST_MISSING_PROVIDER_CREDENTIAL=1 CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
 run_env_case preflight-precedence-override-over-bootstrap 117 CLAWMACS_TEST_INVALID_OVERRIDE_PATH=1 CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
 run_env_case preflight-precedence-openssl-over-bootstrap 121 CLAWMACS_TEST_MISSING_OPENSSL_PATH=1 CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
-run_env_case e2e-credential-missing-required 116 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only provider
-run_env_case e2e-credential-openai-present 0 OPENAI_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only provider
-run_env_case e2e-credential-zai-present 0 ZAI_CODING_MAX_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only provider
-run_env_case e2e-credential-openrouter-present 0 OPENROUTER_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only provider
-run_env_case e2e-credential-optional-readline 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only readline
+run_env_case e2e-credential-missing-required 116 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only online
+run_env_case e2e-credential-openai-present 0 OPENAI_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only online
+run_env_case e2e-credential-zai-present 0 ZAI_CODING_MAX_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only online
+run_env_case e2e-credential-openrouter-present 0 OPENROUTER_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only online
+run_env_case e2e-credential-optional-readline 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only readline
 run_env_case e2e-credential-generic-command-optional 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 -c 'print("ok")'
-run_env_case e2e-credential-default-test-e2e-required 116 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py
-run_env_case e2e-credential-last-only-wins-required 116 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only readline --only provider
-run_env_case e2e-credential-last-only-wins-optional 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only provider --only readline
-run_env_case e2e-args-only-missing-value 122 OPENAI_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-e2e.py --only
+run_env_case e2e-credential-default-mcclim-optional 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py
+run_env_case e2e-credential-last-only-wins-required 116 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only readline --only online
+run_env_case e2e-credential-last-only-wins-optional 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only online --only readline
+run_env_case e2e-args-only-missing-value 122 OPENAI_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only
 run_env_case host-tools-not-required-for-run-preflight 0 CLAWMACS_FAIL_HOST_TOOL_USE=1 "$LAUNCHER" --mode run --preflight-only
 run_env_case host-tools-not-required-for-e2e-preflight 0 CLAWMACS_FAIL_HOST_TOOL_USE=1 OPENAI_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 --version
 run_case payload-exit-code-passthrough 37 no - --mode run -- sh -c 'exit 37'
@@ -451,11 +409,6 @@ run_override_case font-override-unreadable CLAWMACS_FONT_PATH="$TMP_FONT_UNREADA
 run_override_case font-override-non-file CLAWMACS_FONT_PATH="$TMP_FONT_DIR"
 run_override_case font-override-traversal CLAWMACS_FONT_PATH="$TMP_FONT_DIR/../fonts/ok.ttf"
 run_override_case font-override-disallowed-prefix CLAWMACS_FONT_PATH="/etc/passwd"
-
-run_override_case mcp-override-missing CLAWMACS_MCP_BIN="$TMP_MCP_DIR/missing-driver"
-run_override_case mcp-override-non-executable CLAWMACS_MCP_BIN="$TMP_MCP_NONEXEC"
-run_override_case mcp-override-traversal CLAWMACS_MCP_BIN="$TMP_MCP_DIR/../mcp/mcp-tui-driver"
-run_override_case mcp-override-disallowed-prefix CLAWMACS_MCP_BIN="/bin/sh"
 
 write_bootstrap_env "$EXPECTED_SHA"
 printf '%s\n' \
@@ -548,40 +501,6 @@ fi
 if ! grep -q 'existing' "$REPO_ROOT/.cache/home/quicklisp/setup.lisp"; then
   echo "FAIL bootstrap-failure-preserves-existing-cache: expected existing setup content" >&2
   cat "$TMP_DIR/bootstrap-preserve.stderr" >&2
-  exit 1
-fi
-
-rm -rf "$REPO_ROOT/.cache/home/.cargo"
-set +e
-env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  "$LAUNCHER" --mode e2e -- python3 test-e2e.py --only offline 2>"$TMP_DIR/e2e-mcp-install.stderr"
-actual_code=$?
-set -e
-if [ "$actual_code" -ne 0 ]; then
-  echo "FAIL e2e-mcp-install: expected exit 0 got $actual_code" >&2
-  cat "$TMP_DIR/e2e-mcp-install.stderr" >&2
-  exit 1
-fi
-if [ ! -x "$REPO_ROOT/.cache/home/.cargo/bin/mcp-tui-driver" ]; then
-  echo "FAIL e2e-mcp-install: expected cached mcp-tui-driver" >&2
-  cat "$TMP_DIR/e2e-mcp-install.stderr" >&2
-  exit 1
-fi
-
-rm -rf "$REPO_ROOT/.cache/home/.cargo"
-set +e
-env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  TEST_CARGO_FAIL=1 \
-  "$LAUNCHER" --mode e2e -- python3 test-e2e.py --only offline 2>"$TMP_DIR/e2e-mcp-install-fail.stderr"
-actual_code=$?
-set -e
-if [ "$actual_code" -ne 123 ]; then
-  echo "FAIL e2e-mcp-install-fail: expected exit 123 got $actual_code" >&2
-  cat "$TMP_DIR/e2e-mcp-install-fail.stderr" >&2
   exit 1
 fi
 

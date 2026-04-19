@@ -35,7 +35,7 @@
     (apply (symbol-function 'run-hook-with-args) hook-var args)))
 
 (defun notify-buffer-display-change (buf reason)
-  "Notify UI backends that BUF needs redisplay for REASON."
+  "Notify UI observers that BUF needs redisplay for REASON."
   (when buf
     (maybe-run-hook-with-args '*after-buffer-display-change-hook* buf reason))
   buf)

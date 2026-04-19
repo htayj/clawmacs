@@ -1,9 +1,5 @@
 (defpackage #:clawmacs/matching-core
-  (:use #:coalton
-        #:coalton-prelude)
-  (:local-nicknames
-   (#:list #:coalton-library/list)
-   (#:str #:coalton-library/string))
+  (:use #:cl)
   (:export
    #:split-query-tokens
    #:fuzzy-token-match-p
@@ -98,7 +94,6 @@
    #:global-face
    #:init-global-faces
    #:collect-global-faces
-   #:apply-global-face
    #:make-default-system-face-set
    #:make-default-compaction-summary-face-set
    #:make-default-text-face
@@ -706,8 +701,6 @@
 
    ;; Rendering
    #:resolve-modeline-provider-model
-   #:render-modeline
-   #:render-buffer
 
    ;; Buffer selector
    #:*buffer-selector-active*
@@ -738,21 +731,17 @@
    #:list-skills-command
    #:minibuffer-toggle-package-command
    #:describe-installed-package-command
-   #:render-buffer-selector
-   #:render-session-tree-selector
 
    ;; Model selector (overlay)
    #:*model-selector-active*
    #:*model-selector-index*
    #:*model-selector-entries*
    #:select-model-command
-   #:render-model-selector
    #:handle-model-selector-key
    #:*think-selector-active*
    #:*think-selector-index*
    #:*think-selector-entries*
    #:select-think-level-command
-   #:render-think-selector
    #:handle-think-selector-key
 
    ;; Minibuffer
@@ -795,8 +784,6 @@
    #:*buffer-selection-history*
    #:sort-buffers-by-recency
    #:minibuffer-current-height
-   #:update-window-layout
-   #:render-minibuffer
    #:invoke-command
    #:execute-extended-command
    #:minibuffer-select-agent-command
@@ -988,31 +975,15 @@
    #:defadvice
    #:load-user-init-file
 
-   ;; UI Backend Protocol
-   #:ui-backend
-   #:*ui-backend*
-   #:backend-run
-   #:croatoan-backend
-   #:mcclim-backend
-
-   ;; Croatoan color support
-   #:*terminal-color-count*
-
    ;; McCLIM presentation types
    #:chat-message
    #:tool-call
    #:buffer-ref
    #:model-ref
 
-   ;; Popup GUI
-   #:*popup-frames*
-   #:spawn-mcclim-popup
-   #:cleanup-popup-frames
-   #:close-all-popup-frames
-   #:popup-gui-command
-
    ;; Main
    #:clawmacs-main
+   #:run-clawmacs-mcclim
    #:clawmacs-prompt-main
    #:clawmacs-session-prompt-main
    #:run-single-prompt

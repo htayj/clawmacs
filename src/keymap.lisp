@@ -62,13 +62,12 @@
 (defun init-default-keymap ()
   "Build and install the default keymap with standard chat buffer bindings."
   (let ((km (make-keymap :default)))
-    ;; Send message: both #\Return (CR, ASCII 13) and #\Newline (LF, ASCII 10).
-    ;; Terminals with nl() mode translate CR→LF, so Enter arrives as #\Newline.
-    ;; Bind both to catch either terminal behavior.
+    ;; Send message: bind both #\Return (CR, ASCII 13) and #\Newline
+    ;; (LF, ASCII 10), since CLIM ports can report Enter either way.
     (keymap-bind km #\Return 'send-message)
     (keymap-bind km #\Newline 'send-message)
     ;; Insert newline: C-o (open-line, ASCII 15) since C-j (#\Newline)
-    ;; is indistinguishable from Enter in most terminals.
+    ;; is indistinguishable from Enter in this key abstraction.
     (keymap-bind km (code-char 15) 'insert-newline-command) ; C-o = ASCII 15
     ;; Cursor movement
     (keymap-bind km #\Soh 'beginning-of-line-command)       ; C-a = ASCII 1
@@ -95,10 +94,7 @@
     (keymap-bind km '(:alt #\.) 'yank-previous-command-last-arg-command)    ; M-.
     (keymap-bind km '(:alt #\_) 'yank-previous-command-last-arg-command)    ; M-_
     ;; Delete
-    ;; Bind direct Backspace variants for backends that distinguish them.
-    ;; In the croatoan input path raw ASCII 8 is still consumed as the C-h help
-    ;; prefix before keymap lookup, but other backends or normalized events may
-    ;; still deliver #\Backspace directly.
+    ;; Bind direct Backspace variants for normalized events that distinguish them.
     (keymap-bind km #\Backspace 'delete-char-backward-command)
     (keymap-bind km (code-char 4) 'delete-char-forward-command) ; C-d = ASCII 4
     (keymap-bind km #\Rubout 'delete-char-backward-command)
@@ -108,8 +104,6 @@
     (keymap-bind km :home 'beginning-of-line-command)
     (keymap-bind km :end 'end-of-line-command)
     ;; Scroll: Page Up / Page Down
-    ;; Croatoan delivers special keys as KEY structs; we extract :name
-    ;; in handle-key-event, so bind by the keyword name.
     (keymap-bind km :page-up 'scroll-up-command)
     (keymap-bind km :page-down 'scroll-down-command)
     ;; Emacs-style scroll: M-v (scroll up/back), C-v (scroll down/forward)
@@ -134,8 +128,8 @@
     (keymap-bind km '(:ctrl-c #\s) 'minibuffer-insert-skill-command)
     (keymap-bind km '(:ctrl-c #\S) 'minibuffer-toggle-skill-command)
     ;; C-c C-m = minibuffer model selector (helm/ivy/vertico style).
-    ;; C-m = ASCII 13 = #\Return.
-    ;; Some terminals send #\Newline (LF, ASCII 10) for Enter, so bind both.
+    ;; C-m = ASCII 13 = #\Return. Some CLIM ports send #\Newline
+    ;; (LF, ASCII 10) for Enter, so bind both.
     (keymap-bind km '(:ctrl-c #\Return) 'minibuffer-select-model-command)  ; C-c C-m
     (keymap-bind km '(:ctrl-c #\Newline) 'minibuffer-select-model-command) ; C-c C-m (LF variant)
     ;; C-c M (capital M) = old overlay model selector
@@ -144,15 +138,13 @@
     (keymap-bind km (list :ctrl-c (code-char 18)) 'minibuffer-select-think-level-command)
     ;; C-c R (capital R) = old overlay think selector
     (keymap-bind km '(:ctrl-c #\R) 'select-think-level-command)
-    ;; C-c g = spawn read-only McCLIM popup window
-    (keymap-bind km '(:ctrl-c #\g) 'popup-gui-command)
     ;; C-c C-d = toggle API debug mode (echo requests/responses in chat)
     ;; C-d = ASCII 4 = #\Eot (end of transmission)
     (keymap-bind km (list :ctrl-c (code-char 4)) 'toggle-debug-mode-command)
     ;; ----- C-h prefix: help & introspection commands -----
     ;; C-h is the help prefix key (Emacs standard).
-    ;; Keep C-c aliases for compatibility with older bindings and terminals
-    ;; where users prefer avoiding the C-h / Backspace ambiguity.
+    ;; Keep C-c aliases for compatibility with older bindings and users who
+    ;; prefer avoiding the C-h / Backspace ambiguity.
     (keymap-bind km '(:ctrl-h #\b) 'describe-bindings-command)  ; C-h b = describe keybindings
     (keymap-bind km '(:ctrl-h #\f) 'describe-function-command)  ; C-h f = describe function
     (keymap-bind km '(:ctrl-h #\v) 'describe-variable-command)  ; C-h v = describe variable

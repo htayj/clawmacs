@@ -16,7 +16,7 @@ This section defines the Common Lisp engineering posture for KVC's Codex Vector.
 
 3. **Static typing discipline**
    - Use strict SBCL declarations in all Common Lisp code (`declaim`, `ftype`, local `declare`).
-   - Use Coalton for core modules that benefit from stronger compile-time guarantees.
+   - Prefer ordinary Common Lisp for core modules unless a stronger typed layer is justified by the dependency cost.
    - Build with safety- and warning-strict settings in CI.
 
 4. **Metaphor-rich design communication**

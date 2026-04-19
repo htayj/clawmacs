@@ -3,7 +3,6 @@ pkgs.mkShell {
   packages = with pkgs; [
     sbcl
     openssl
-    ncurses
     python3
     python3Packages.pillow
     cacert

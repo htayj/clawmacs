@@ -5,7 +5,7 @@
 ;;; --------------------------------------------------------------------------
 
 (defun matching-core-available-p ()
-  "Return T when the Coalton minibuffer matching core is loaded."
+  "Return T when the minibuffer matching core is loaded."
   (and (find-package '#:clawmacs/matching-core)
        (fboundp 'clawmacs/matching-core:fuzzy-match-p)))
 

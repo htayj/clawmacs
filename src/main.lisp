@@ -1631,23 +1631,6 @@ Bound to C-c C-d."
 (defcommand redraw-screen-command)
 
 ;;; --------------------------------------------------------------------------
-;;; Popup GUI Command
-;;; --------------------------------------------------------------------------
-
-(defun popup-gui-command (buffer)
-  "Spawn a read-only McCLIM X11 popup window showing the current buffer.
-Requires clawmacs/mcclim to be loaded. Bound to C-c g."
-  (let ((sym (find-symbol "SPAWN-MCCLIM-POPUP" :clawmacs)))
-    (if (and sym (fboundp sym))
-        (progn
-          (funcall sym)
-          (buffer-insert-system-message
-           buffer "[GUI popup spawned — read-only X11 viewer]"))
-        (buffer-insert-system-message
-         buffer "[McCLIM not loaded. Add (asdf:load-system :clawmacs/mcclim) to init.lisp]"))))
-(defcommand popup-gui-command)
-
-;;; --------------------------------------------------------------------------
 ;;; Customize Face
 ;;; --------------------------------------------------------------------------
 
@@ -2704,7 +2687,7 @@ C-h is the help prefix (e.g. C-h b = describe bindings).")
   "Dispatch a normalized key through the buffer's keymap.
 Returns :QUIT if the application should exit, or nil otherwise.
 Handles approval mode, deny-message mode, and normal dispatch.
-KEY is already normalized by the backend before calling this."
+KEY is already normalized by the interface before calling this."
   (flet ((redraw-key-p (candidate)
            (or (and (characterp candidate)
                     (char= candidate (code-char 12)))
@@ -3460,17 +3443,15 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
    :default-session-name (default-session-prompt-session-name)
    :usage-string-function #'session-prompt-usage-string))
 
+(declaim (ftype (function (buffer) *) run-clawmacs-mcclim))
+
 (defun clawmacs-main (&key (session-name "clawmacs:session-01")
                            (agent-name *default-agent-name*))
-  "Entry point for clawmacs. Initializes state and delegates to the UI backend."
+  "Entry point for clawmacs. Initializes state and starts the McCLIM app."
   (parse-clawmacs-args)
   (initialize-clawmacs-runtime)
-  ;; Default to croatoan terminal backend
-  (unless *ui-backend*
-    (setf *ui-backend* (make-instance 'croatoan-backend)))
   ;; Create initial buffer and initialize global state
   (reset-interaction-state)
   (let ((buf (make-initial-chat-buffer session-name agent-name)))
     (ensure-scratch-buffer)
-    ;; Delegate to the backend
-    (backend-run *ui-backend* buf)))
+    (run-clawmacs-mcclim buf)))

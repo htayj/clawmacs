@@ -23,7 +23,7 @@
   :in clawmacs-suite)
 
 (def-suite matching-suite
-  :description "Coalton-backed minibuffer matching tests"
+  :description "Minibuffer matching tests"
   :in clawmacs-suite)
 
 (def-suite projects-suite

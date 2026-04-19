@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""McCLIM E2E tests mirroring the terminal E2E suite.
+"""McCLIM E2E tests for Clawmacs.
 
 The harness runs Clawmacs under an existing X display, drives the McCLIM UI with
 xdotool, captures ImageMagick screenshots, and reads structured state from
@@ -24,55 +24,73 @@ PASSED = []
 FAILED = []
 
 
-def load_terminal_e2e_module():
-    path = os.path.join(CLAWMACS_DIR, "test-e2e.py")
-    spec = importlib.util.spec_from_file_location("clawmacs_terminal_e2e", path)
+def load_e2e_scenarios_module():
+    path = os.path.join(CLAWMACS_DIR, "scripts", "e2e-scenarios.py")
+    spec = importlib.util.spec_from_file_location("clawmacs_e2e_scenarios", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-TERMINAL_E2E = load_terminal_e2e_module()
-DEFAULT_AGENT_NAME = TERMINAL_E2E.DEFAULT_AGENT_NAME
+E2E = load_e2e_scenarios_module()
+DEFAULT_AGENT_NAME = E2E.DEFAULT_AGENT_NAME
 
 OFFLINE_AGENT_EVAL = r"""
 (setf (symbol-function 'clawmacs::send-to-agent-with-context)
       (lambda (buf)
         (let ((text (or (clawmacs::buffer-previous-user-command-text buf) "")))
-          (if (search "async-render-probe" text :test #'char-equal)
-              (progn
-                (setf (clawmacs::buffer-status buf) :thinking)
-                (clawmacs:notify-buffer-display-change buf :async-render-test)
-                (bt:make-thread
-                 (lambda ()
-                   (sleep 0.6)
-                   (clawmacs::buffer-insert-agent-message
-                    buf
-                    "MCCLIM-ASYNC-RENDER-VISIBLE")
-                   (setf (clawmacs::buffer-status buf) :idle)
-                   (clawmacs:notify-buffer-display-change buf :async-render-test))
-                 :name "mcclim-e2e-async-render"))
-              (progn
+          (cond
+            ((search "async-render-probe" text :test #'char-equal)
+             (setf (clawmacs::buffer-status buf) :thinking)
+             (clawmacs:notify-buffer-display-change buf :async-render-test)
+             (bt:make-thread
+              (lambda ()
+                (sleep 0.6)
                 (clawmacs::buffer-insert-agent-message
                  buf
-                 (cond
-                   ((search "(+ 40 2)" text :test #'char-equal)
-                    "42")
-                   ((search "describe-common-lisp-symbol-to-string" text
-                            :test #'char-equal)
-                    "format~%Reference: CL Community Spec")
-                   ((search "file_write" text :test #'char-equal)
-                    "first second")
-                   ((search "alpha" text :test #'char-equal)
-                    "alpha")
-                   ((search "beta" text :test #'char-equal)
-                    "beta")
-                   ((search "tiling-resize-probe" text :test #'char-equal)
-                    "MCCLIM-TILING-RESIZE-VISIBLE")
-                   (t
-                    (format nil "offline echo: ~A" text))))
+                 "MCCLIM-ASYNC-RENDER-VISIBLE")
                 (setf (clawmacs::buffer-status buf) :idle)
-                (clawmacs:notify-buffer-display-change buf :offline-agent)))
+                (clawmacs:notify-buffer-display-change buf :async-render-test))
+              :name "mcclim-e2e-async-render"))
+            ((search "stream-poll-probe" text :test #'char-equal)
+             (let ((state (clawmacs::make-stream-state))
+                   (agent-msg (clawmacs::buffer-insert-agent-message
+                               buf "" :record-p nil :run-hook-p nil)))
+               (setf (clawmacs::buffer-pending-stream buf) state
+                     (clawmacs::buffer-streaming-message buf) agent-msg
+                     (clawmacs::buffer-status buf) :thinking)
+               (clawmacs:notify-buffer-display-change buf :stream-started)
+               (bt:make-thread
+                (lambda ()
+                  (sleep 0.6)
+                  (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                    (setf (clawmacs::stream-state-content-blocks state)
+                          (list (clawmacs::canonical-text-block
+                                 "MCCLIM-PULSE-STREAM-VISIBLE"))
+                          (clawmacs::stream-state-stop-reason state) "end_turn"
+                          (clawmacs::stream-state-done-p state) t)))
+                :name "mcclim-e2e-pulse-stream")))
+            (t
+             (clawmacs::buffer-insert-agent-message
+              buf
+              (cond
+                ((search "(+ 40 2)" text :test #'char-equal)
+                 "42")
+                ((search "describe-common-lisp-symbol-to-string" text
+                         :test #'char-equal)
+                 "format~%Reference: CL Community Spec")
+                ((search "file_write" text :test #'char-equal)
+                 "first second")
+                ((search "alpha" text :test #'char-equal)
+                 "alpha")
+                ((search "beta" text :test #'char-equal)
+                 "beta")
+                ((search "tiling-resize-probe" text :test #'char-equal)
+                 "MCCLIM-TILING-RESIZE-VISIBLE")
+                (t
+                 (format nil "offline echo: ~A" text))))
+             (setf (clawmacs::buffer-status buf) :idle)
+             (clawmacs:notify-buffer-display-change buf :offline-agent)))
           buf)))
 """
 
@@ -143,7 +161,7 @@ def run_checked(args, timeout=10, **kwargs):
 
 
 def lisp_string(value):
-    return TERMINAL_E2E.lisp_string(value)
+    return E2E.lisp_string(value)
 
 
 def key_name(name):
@@ -256,6 +274,14 @@ def render_contains_text(snapshot, text):
     return False
 
 
+def render_get(render, camel_key, kebab_key, default=None):
+    if camel_key in render:
+        return render[camel_key]
+    if kebab_key in render:
+        return render[kebab_key]
+    return default
+
+
 def wait_for_rendered_message_text(session, text, timeout=15):
     return wait_until(
         lambda: session._snapshot_if(lambda snap: render_contains_text(snap, text)),
@@ -308,19 +334,28 @@ class McclimSession:
             "--eval",
             '(push (truename ".") asdf:*central-registry*)',
             "--eval",
-            "(ql:quickload :clawmacs/mcclim :silent t)",
+            "(ql:quickload :clawmacs :silent t)",
             "--load",
             "scripts/mcclim-e2e-driver.lisp",
             "--eval",
             "(setf clawmacs:*inhibit-user-init* t)",
             "--eval",
-            "(setf clawmacs:*ui-backend* (make-instance 'clawmacs:mcclim-backend))",
-            "--eval",
             "(clawmacs/mcclim-e2e:start-control-thread)",
         ]
         for form in self.extra_evals:
             args.extend(["--eval", form])
-        args.extend(["--eval", f'(clawmacs:clawmacs-main :session-name "{SESSION_NAME}")'])
+        args.extend([
+            "--eval",
+            (
+                "(handler-bind "
+                "((error "
+                "(lambda (condition) "
+                "(format *error-output* \"~&MCCLIM-E2E-ERROR: ~A~%\" condition) "
+                "(sb-debug:print-backtrace :stream *error-output* :count 120) "
+                "(sb-ext:exit :code 70)))) "
+                f'(clawmacs:clawmacs-main :session-name "{SESSION_NAME}"))'
+            ),
+        ])
 
         log = open(self.log_path, "w", encoding="utf-8")
         self.proc = subprocess.Popen(
@@ -601,7 +636,7 @@ def run_test(name, fn, session):
     try:
         fn(session)
         screen_after = session.text()
-        TERMINAL_E2E.assert_not_contains(
+        E2E.assert_not_contains(
             screen_after,
             "[Error:",
             f"{name}: unexpected runtime error detected",
@@ -633,13 +668,13 @@ def make_online_modeline_test(spec):
     def test(session):
         screen = session.text()
         provider_model = f"{spec['provider_text']}/{spec['model']}"
-        TERMINAL_E2E.assert_contains(
+        E2E.assert_contains(
             screen,
             provider_model,
             f"{spec['name']} provider/model in modeline",
         )
         if spec.get("think_level"):
-            TERMINAL_E2E.assert_contains(
+            E2E.assert_contains(
                 screen,
                 f"think:{spec['think_level']}",
                 f"{spec['name']} think level in modeline",
@@ -652,10 +687,10 @@ def make_online_modeline_test(spec):
 def make_online_response_test(spec):
     def test(session):
         expected = spec["expected"]
-        TERMINAL_E2E.set_input(session, f"Reply with exactly: {expected}")
+        E2E.set_input(session, f"Reply with exactly: {expected}")
         session.press("Enter")
         screen = wait_for_non_user_message_text(session, expected, timeout=120)
-        TERMINAL_E2E.assert_contains(
+        E2E.assert_contains(
             screen,
             expected,
             f"{spec['name']} live provider response",
@@ -675,10 +710,10 @@ def online_test_registry(spec):
 def test_53_async_agent_reply_renders_without_next_input(session):
     """Async agent messages must render without waiting for another user key."""
     expected = "MCCLIM-ASYNC-RENDER-VISIBLE"
-    TERMINAL_E2E.set_input(session, "async-render-probe")
+    E2E.set_input(session, "async-render-probe")
     session.press("Enter")
     snapshot = wait_for_rendered_message_text(session, expected, timeout=10)
-    TERMINAL_E2E.assert_contains(
+    E2E.assert_contains(
         session.text(),
         expected,
         "async agent response in semantic snapshot",
@@ -691,7 +726,7 @@ def test_53_async_agent_reply_renders_without_next_input(session):
 def test_54_tiling_resize_keeps_latest_message_visible(session):
     """Externally imposed resizes should recompute the visible McCLIM pane."""
     expected = "MCCLIM-TILING-RESIZE-VISIBLE"
-    TERMINAL_E2E.set_input(session, "tiling-resize-probe")
+    E2E.set_input(session, "tiling-resize-probe")
     session.press("Enter")
     first = wait_for_rendered_message_text(session, expected, timeout=10)
     initial_render = first.get("render") or {}
@@ -707,7 +742,7 @@ def test_54_tiling_resize_keeps_latest_message_visible(session):
     if not render_contains_text(narrow, expected):
         fail("latest agent message disappeared after narrow resize")
     narrow_render = narrow.get("render") or {}
-    if (narrow_render.get("inputStartRow") or narrow_render.get("input-start-row") or -1) < 0:
+    if render_get(narrow_render, "inputStartRow", "input-start-row", -1) < 0:
         fail("input row was not present after narrow resize")
 
     session.resize(1000, 680)
@@ -724,68 +759,85 @@ def test_54_tiling_resize_keeps_latest_message_visible(session):
     session.screenshot("54-tiling-resize-latest-visible")
 
 
+def test_55_stream_poll_renders_without_next_input(session):
+    """Provider-style streaming must repaint from pulse polling alone."""
+    expected = "MCCLIM-PULSE-STREAM-VISIBLE"
+    E2E.set_input(session, "stream-poll-probe")
+    session.press("Enter")
+    snapshot = wait_for_rendered_message_text(session, expected, timeout=10)
+    E2E.assert_contains(
+        session.text(),
+        expected,
+        "streamed agent response in semantic snapshot",
+    )
+    if not render_contains_text(snapshot, expected):
+        fail("streamed response reached buffer but not McCLIM render snapshot")
+    session.screenshot("55-stream-poll-renders")
+
+
 def test_registry(group):
     offline_tests = [
         ("53-async-agent-reply-renders", test_53_async_agent_reply_renders_without_next_input),
         ("54-tiling-resize-latest-visible", test_54_tiling_resize_keeps_latest_message_visible),
-        ("38-shell-prefix", TERMINAL_E2E.test_38_shell_prefix),
-        ("39-debug-mode", TERMINAL_E2E.test_39_debug_mode_toggle),
-        ("40-save-session", TERMINAL_E2E.test_40_save_session),
-        ("41-buffer-persistence", TERMINAL_E2E.test_41_buffer_state_persistence),
-        ("42-minibuffer-selector", TERMINAL_E2E.test_42_minibuffer_buffer_selector),
-        ("43-describe-bindings", TERMINAL_E2E.test_43_describe_bindings),
-        ("44-describe-function", TERMINAL_E2E.test_44_describe_function),
-        ("45-describe-variable", TERMINAL_E2E.test_45_describe_variable),
-        ("46-describe-type", TERMINAL_E2E.test_46_describe_type),
-        ("47-customize-face", TERMINAL_E2E.test_47_customize_face),
-        ("52-skill-completion", TERMINAL_E2E.test_52_skill_completion),
+        ("55-stream-poll-renders", test_55_stream_poll_renders_without_next_input),
+        ("38-shell-prefix", E2E.test_38_shell_prefix),
+        ("39-debug-mode", E2E.test_39_debug_mode_toggle),
+        ("40-save-session", E2E.test_40_save_session),
+        ("41-buffer-persistence", E2E.test_41_buffer_state_persistence),
+        ("42-minibuffer-selector", E2E.test_42_minibuffer_buffer_selector),
+        ("43-describe-bindings", E2E.test_43_describe_bindings),
+        ("44-describe-function", E2E.test_44_describe_function),
+        ("45-describe-variable", E2E.test_45_describe_variable),
+        ("46-describe-type", E2E.test_46_describe_type),
+        ("47-customize-face", E2E.test_47_customize_face),
+        ("52-skill-completion", E2E.test_52_skill_completion),
     ]
     llm_new_tests = [
-        ("48-tool-lisp-eval", TERMINAL_E2E.test_48_tool_lisp_eval),
-        ("49-tool-spec-lookup", TERMINAL_E2E.test_49_tool_spec_lookup),
-        ("50-multi-turn", TERMINAL_E2E.test_50_multi_turn),
-        ("51-toggle-tool-results", TERMINAL_E2E.test_51_toggle_tool_results),
+        ("48-tool-lisp-eval", E2E.test_48_tool_lisp_eval),
+        ("49-tool-spec-lookup", E2E.test_49_tool_spec_lookup),
+        ("50-multi-turn", E2E.test_50_multi_turn),
+        ("51-toggle-tool-results", E2E.test_51_toggle_tool_results),
     ]
     readline_tests = [
-        ("22-ctrl-b", TERMINAL_E2E.test_22_ctrl_b),
-        ("23-ctrl-f", TERMINAL_E2E.test_23_ctrl_f),
-        ("24-alt-b", TERMINAL_E2E.test_24_alt_b),
-        ("25-alt-f", TERMINAL_E2E.test_25_alt_f),
-        ("26-ctrl-a", TERMINAL_E2E.test_26_ctrl_a),
-        ("27-ctrl-e", TERMINAL_E2E.test_27_ctrl_e),
-        ("28-ctrl-u", TERMINAL_E2E.test_28_ctrl_u),
-        ("29-ctrl-k", TERMINAL_E2E.test_29_ctrl_k),
-        ("30-alt-d", TERMINAL_E2E.test_30_alt_d),
-        ("31-ctrl-w", TERMINAL_E2E.test_31_ctrl_w),
-        ("32-ctrl-y", TERMINAL_E2E.test_32_ctrl_y),
-        ("33-alt-y", TERMINAL_E2E.test_33_alt_y),
-        ("34-alt-ctrl-y", TERMINAL_E2E.test_34_alt_ctrl_y),
-        ("35-alt-dot", TERMINAL_E2E.test_35_alt_dot),
-        ("36-alt-underscore", TERMINAL_E2E.test_36_alt_underscore),
-        ("37-ctrl-d", TERMINAL_E2E.test_37_ctrl_d),
+        ("22-ctrl-b", E2E.test_22_ctrl_b),
+        ("23-ctrl-f", E2E.test_23_ctrl_f),
+        ("24-alt-b", E2E.test_24_alt_b),
+        ("25-alt-f", E2E.test_25_alt_f),
+        ("26-ctrl-a", E2E.test_26_ctrl_a),
+        ("27-ctrl-e", E2E.test_27_ctrl_e),
+        ("28-ctrl-u", E2E.test_28_ctrl_u),
+        ("29-ctrl-k", E2E.test_29_ctrl_k),
+        ("30-alt-d", E2E.test_30_alt_d),
+        ("31-ctrl-w", E2E.test_31_ctrl_w),
+        ("32-ctrl-y", E2E.test_32_ctrl_y),
+        ("33-alt-y", E2E.test_33_alt_y),
+        ("34-alt-ctrl-y", E2E.test_34_alt_ctrl_y),
+        ("35-alt-dot", E2E.test_35_alt_dot),
+        ("36-alt-underscore", E2E.test_36_alt_underscore),
+        ("37-ctrl-d", E2E.test_37_ctrl_d),
     ]
     full_initial_tests = [
-        ("01-initial-render", TERMINAL_E2E.test_01_initial_render),
-        ("02-text-input", TERMINAL_E2E.test_02_text_input),
-        ("03-line-editing", TERMINAL_E2E.test_03_line_editing_c_a_c_e),
-        ("04-kill-yank", TERMINAL_E2E.test_04_kill_yank),
-        ("05-multiline-input", TERMINAL_E2E.test_05_multiline_input),
-        ("06-send-message", TERMINAL_E2E.test_06_send_message),
-        ("07-line-wrapping", TERMINAL_E2E.test_07_line_wrapping),
-        ("08-scroll", TERMINAL_E2E.test_08_scroll),
-        ("09-meta-scroll", TERMINAL_E2E.test_09_meta_scroll),
-        ("10-new-buffer", TERMINAL_E2E.test_10_new_buffer),
-        ("11-switch-buffer", TERMINAL_E2E.test_11_switch_buffer),
-        ("12-kill-buffer", TERMINAL_E2E.test_12_kill_buffer),
-        ("13-backspace", TERMINAL_E2E.test_13_backspace),
-        ("14-point-face", TERMINAL_E2E.test_14_point_face),
-        ("15-permission-approve", TERMINAL_E2E.test_15_permission_approve),
-        ("16-permission-deny", TERMINAL_E2E.test_16_permission_deny),
-        ("17-permission-deny-message", TERMINAL_E2E.test_17_permission_deny_with_message),
-        ("18-file-write-diff", TERMINAL_E2E.test_18_file_write_diff),
-        ("19-file-write-append", TERMINAL_E2E.test_19_file_write_append),
-        ("20-file-edit", TERMINAL_E2E.test_20_file_edit_search_replace),
-        ("21-modeline", TERMINAL_E2E.test_21_modeline_content),
+        ("01-initial-render", E2E.test_01_initial_render),
+        ("02-text-input", E2E.test_02_text_input),
+        ("03-line-editing", E2E.test_03_line_editing_c_a_c_e),
+        ("04-kill-yank", E2E.test_04_kill_yank),
+        ("05-multiline-input", E2E.test_05_multiline_input),
+        ("06-send-message", E2E.test_06_send_message),
+        ("07-line-wrapping", E2E.test_07_line_wrapping),
+        ("08-scroll", E2E.test_08_scroll),
+        ("09-meta-scroll", E2E.test_09_meta_scroll),
+        ("10-new-buffer", E2E.test_10_new_buffer),
+        ("11-switch-buffer", E2E.test_11_switch_buffer),
+        ("12-kill-buffer", E2E.test_12_kill_buffer),
+        ("13-backspace", E2E.test_13_backspace),
+        ("14-point-face", E2E.test_14_point_face),
+        ("15-permission-approve", E2E.test_15_permission_approve),
+        ("16-permission-deny", E2E.test_16_permission_deny),
+        ("17-permission-deny-message", E2E.test_17_permission_deny_with_message),
+        ("18-file-write-diff", E2E.test_18_file_write_diff),
+        ("19-file-write-append", E2E.test_19_file_write_append),
+        ("20-file-edit", E2E.test_20_file_edit_search_replace),
+        ("21-modeline", E2E.test_21_modeline_content),
     ]
 
     if group == "smoke":
@@ -871,7 +923,7 @@ def main():
     ensure_tool("import")
     os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
-    skill_root = TERMINAL_E2E.create_e2e_skill_root()
+    skill_root = E2E.create_e2e_skill_root()
     skill_root_path = skill_root if skill_root.endswith(os.sep) else skill_root + os.sep
     try:
         if args.only in ONLINE_GROUPS:

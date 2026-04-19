@@ -17,12 +17,14 @@
 (defvar *initial-buffer-hook-binding* nil
   "Captures a key binding observed from the initial buffer hook.")
 
-(defclass test-ui-backend (clawmacs:ui-backend)
-  ())
-
-(defmethod clawmacs:backend-run ((backend test-ui-backend) initial-buffer)
-  (declare (ignore backend))
-  initial-buffer)
+(defmacro with-mcclim-runner-override (&body body)
+  `(let ((original-runner (symbol-function 'clawmacs:run-clawmacs-mcclim)))
+     (unwind-protect
+          (progn
+            (setf (symbol-function 'clawmacs:run-clawmacs-mcclim) #'identity)
+            ,@body)
+       (setf (symbol-function 'clawmacs:run-clawmacs-mcclim)
+             original-runner))))
 
 (defun temp-package-test-directory (label)
   (make-pathname :directory (list :absolute "tmp"
@@ -583,7 +585,6 @@
           (clawmacs::*default-personality-prompt* "Default personality prompt")
           (clawmacs::*startup-hook* nil)
           (clawmacs::*initial-buffer-hook* nil)
-          (clawmacs::*ui-backend* (make-instance 'test-ui-backend))
           (clawmacs::*default-keymap* nil)
           (clawmacs::*debug-log-file* nil)
           (clawmacs::*package-channels* (default-package-test-channels))
@@ -595,7 +596,8 @@
           (*startup-hook-ran* nil)
           (*initial-buffer-hook-ran* nil)
           (*initial-buffer-hook-binding* nil))
-      (let ((buf (clawmacs:clawmacs-main :session-name "init-customization")))
+      (let ((buf (with-mcclim-runner-override
+                   (clawmacs:clawmacs-main :session-name "init-customization"))))
         (is (string= "Custom personality prompt from init file."
                      clawmacs:*default-personality-prompt*))
         (is (not (null *startup-hook-ran*)))

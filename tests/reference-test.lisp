@@ -99,7 +99,7 @@
   (let ((systems (clawmacs::list-project-systems)))
     (is (member "clawmacs" systems :test #'string=))
     (is (member "alexandria" systems :test #'string=))
-    (is (member "croatoan" systems :test #'string=))
+    (is (member "mcclim" systems :test #'string=))
     (is (member "drakma" systems :test #'string=))))
 
 (test describe-system-to-string-summarizes-clawmacs
@@ -107,7 +107,7 @@
   (let ((description (clawmacs::describe-system-to-string "clawmacs")))
     (is (search "clawmacs" description))
     (is (search "A Lisp-native Emacs-inspired LLM chat interface" description))
-    (is (search "croatoan" description))
+    (is (search "mcclim" description))
     (is (search "Packages: clawmacs" description))))
 
 (test search-system-docs-finds-clawmacs-source

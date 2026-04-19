@@ -4,11 +4,8 @@
   '(
     "sbcl"
     "openssl"
-    "ncurses"
     "python"
     "python-pillow"
-    "rust"
-    "rust:cargo"
     "gcc-toolchain"
     "nss-certs"
     "bash"

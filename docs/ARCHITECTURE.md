@@ -41,7 +41,7 @@ selector, or scratch area. It owns the message list, input message, scroll
 state, routing overrides, display toggles, enabled package overrides, keymap,
 session handle, and transient provider state.
 
-Buffer state lives in `src/buffer.lisp`. UI backends render buffers; providers
+Buffer state lives in `src/buffer.lisp`. The McCLIM interface renders buffers; providers
 and packages should update buffers through buffer operations such as
 `buffer-insert-system-message`, `buffer-insert-agent-message`,
 `record-buffer-message`, and `buffer-finalize-input`.
@@ -166,14 +166,22 @@ Subagent handle lifecycle belongs in `src/subagents.lisp`. Package tools should
 format and expose that lifecycle; the core should own the registry and result
 types.
 
-### UI Backends
+### McCLIM Interface
 
-UI backends render buffers and translate input events into command dispatch.
-Croatoan is the terminal backend; McCLIM is an optional graphical backend. The
-backend boundary is the protocol in `src/ui-protocol.lisp` plus shared rendering
-helpers in `src/render-core.lisp`.
+The McCLIM interface renders buffers and translates CLIM input events into
+command dispatch. `src/mcclim-app.lisp` owns the ESA-backed application frame,
+CLIM command table, presentation translators, transcript pane, Drei-backed input
+pane, fixed minibuffer stream, queued display-change events, pulse polling, and
+redisplay. `src/render-core.lisp` owns pure rendering geometry and string
+formatting that the frame draws into CLIM panes.
 
-Backend code should not own prompt execution, package enablement, or provider
+Keyboard editing remains owned by Clawmacs keymaps. McCLIM key-press events are
+routed through a Clawmacs CLIM command and then into the core command/keymap
+dispatcher so keys like `C-u` keep their editor meaning instead of becoming ESA
+numeric arguments. Presentation and pointer interactions stay CLIM-native via
+presentation translators.
+
+McCLIM code should not own prompt execution, package enablement, or provider
 transport. It should ask the core to perform operations and then render the
 resulting buffer state.
 
@@ -183,9 +191,9 @@ The minibuffer is short-lived typed input for commands. Selectors are transient
 buffer overlays for choosing commands, packages, models, sessions, buffers, or
 docs. They are UI state, not durable session state.
 
-Selector state and key handlers live in `src/minibuffer.lisp`. The main event
+Selector state and key handlers live in `src/minibuffer.lisp`. The McCLIM event
 loop dispatches into that module when a selector or minibuffer is active, while
-rendering remains in the UI backends and shared render helpers.
+rendering remains in the McCLIM app and shared render helpers.
 
 ### Startup And Init
 
@@ -201,10 +209,10 @@ bootstrap should stay thin and call concept-specific initialization functions.
 
 ### Interactive Send
 
-The UI backend sends a key event to command dispatch. `send-message` finalizes
+The McCLIM event loop sends a key event to command dispatch. `send-message` finalizes
 the buffer input message, runs send hooks, and either starts a normal prompt run
 through `send-to-agent-with-context` or dispatches the active buffer pipeline.
-The backend only polls stream state and re-renders buffer state.
+The interface only polls stream state and re-renders buffer state.
 
 ### `prompt.sh`
 
@@ -243,8 +251,7 @@ The core load order should keep data definitions before behavior and UI:
    commands, keymaps, projects, skills.
 3. Agent/provider/tool systems: matching, LLM providers, tools, prompt core,
    subagents, compaction, prompt runner, pipelines.
-4. UI boundary: UI protocol, render core, minibuffer state, backend
-   implementations.
+4. UI boundary: render core, minibuffer state, McCLIM application frame.
 5. App glue: prefix dispatch, interactive commands, startup, CLI.
 6. Package entrypoints and generated docs.
 
@@ -261,7 +268,7 @@ The codebase should continue moving toward these boundaries:
 - Keep package entrypoints package-scoped; do not hide core behavior in package
   prompts.
 - Route prompt execution through a reusable prompt-runner interface.
-- Keep UI backends passive: render buffers, collect input, call core APIs.
+- Keep McCLIM UI code passive: render buffers, collect input, call core APIs.
 - Add hooks at stable boundaries before adding special-purpose conditionals.
 - Preserve public exports and user init compatibility during module splits.
 

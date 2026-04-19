@@ -1,14 +1,13 @@
 (in-package :clawmacs)
 
 ;;; --------------------------------------------------------------------------
-;;; McCLIM Graphical Backend — Genera-Style Interface
+;;; McCLIM Application — Genera-Style Interface
 ;;;
-;;; A graphical UI backend using McCLIM with a Symbolics Genera-inspired
-;;; design: white background, italic buffer title bars, a who-line for
-;;; context-dependent action hints, modeline at the absolute bottom, and
-;;; popup completion overlay instead of an inline minibuffer.
-;;; Three-pane layout: main, who-line, modeline.
-;;; Optional dependency — load via (asdf:load-system :clawmacs/mcclim).
+;;; The interactive McCLIM application frame.  The frame follows the
+;;; McCLIM/ESA shape used by Climacs-style applications: an application
+;;; frame owns panes and command tables, ESA supplies frame/minibuffer command
+;;; infrastructure, Drei backs editable text panes, and Clawmacs core state
+;;; remains outside the UI layer.
 ;;; --------------------------------------------------------------------------
 
 ;;; --------------------------------------------------------------------------
@@ -16,13 +15,11 @@
 ;;; --------------------------------------------------------------------------
 
 (defvar *mcclim-bg-ink* (clim:make-rgb-color 1.0 1.0 1.0)
-  "Default background ink for the McCLIM backend. White for Genera theme.")
+  "Default background ink for the McCLIM app. White for Genera theme.")
 
 (defun mcclim-apply-genera-theme ()
   "Patch *global-face-registry* for Genera-style white background.
-Called once from backend-run before frame creation. Only affects the McCLIM
-backend — the terminal backend keeps its dark theme since it initializes
-its own face registry on startup."
+Called once before the McCLIM application frame is created."
   (let ((white-bg (make-color-spec :cga 15))
         (black-fg (make-color-spec :cga 0))
         (light-blue-bg (make-color-spec :hex "#D0E0F0"))
@@ -308,34 +305,121 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
     (object)
   (list object))
 
+(clim:define-command (com-clawmacs-dispatch-gestures
+                      :command-table clawmacs-mcclim-command-table
+                      :name nil)
+    ((gestures 'clim:expression))
+  (let ((frame clim:*application-frame*))
+    (mcclim-sync-buffer-from-drei frame)
+    (dolist (gesture gestures)
+      (mcclim-dispatch-gesture frame gesture))
+    (mcclim-sync-drei-from-buffer frame :force-p t)
+    (mcclim-ensure-polling frame)))
+
+(clim:define-command (com-clawmacs-poll
+                      :command-table clawmacs-mcclim-command-table
+                      :name nil
+                      :keystroke :clawmacs-poll)
+    ()
+  (let ((frame clim:*application-frame*))
+    (when (mcclim-poll-external-updates frame)
+      (mcclim-sync-drei-from-buffer frame :force-p t)
+      (mcclim-redisplay-frame frame :force-p t))
+    (mcclim-ensure-polling frame)))
+
+;;; --------------------------------------------------------------------------
+;;; McCLIM Pane Classes
+;;; --------------------------------------------------------------------------
+
+(defclass clawmacs-transcript-pane (esa:esa-pane-mixin clim:application-pane)
+  ()
+  (:default-initargs
+   :display-function 'display-main-pane
+   :display-time :command-loop
+   :text-style (clim:make-text-style :fix :roman :normal)
+   :background (clim:make-rgb-color 1.0 1.0 1.0)
+   :foreground (clim:make-rgb-color 0.0 0.0 0.0)
+   :command-table 'clawmacs-mcclim-command-table))
+
+(defclass clawmacs-drei-input-view (drei:textual-drei-syntax-view)
+  ()
+  (:metaclass esa-utils:modual-class)
+  (:default-initargs
+   :name "Clawmacs Input"
+   :use-editor-commands t))
+
+(defclass clawmacs-drei-input-pane (drei:drei-pane)
+  ()
+  (:metaclass esa-utils:modual-class)
+  (:default-initargs
+   :display-time :command-loop
+   :incremental-redisplay nil
+   :display-function 'display-drei-input-pane
+   :background (clim:make-rgb-color 1.0 1.0 1.0)
+   :foreground (clim:make-rgb-color 0.0 0.0 0.0)
+   :text-style (clim:make-text-style :fix :roman :normal)
+   :view (make-instance 'clawmacs-drei-input-view)))
+
+(defclass clawmacs-minibuffer-pane (esa:minibuffer-pane)
+  ()
+  (:default-initargs
+   :display-function 'display-clawmacs-minibuffer-pane
+   :incremental-redisplay nil
+   :height 20
+   :min-height 20
+   :max-height 20
+   :text-style (clim:make-text-style :fix :roman :normal)
+   :background (clim:make-rgb-color 0.93 0.93 0.93)
+   :foreground (clim:make-rgb-color 0.0 0.0 0.0)))
+
+(defmethod clim:compose-space ((pane clawmacs-minibuffer-pane)
+                               &key (width 900) height)
+  (declare (ignore pane height))
+  (clim:make-space-requirement :width width
+                               :min-width 0
+                               :height 20
+                               :min-height 20
+                               :max-height 20))
+
+(defun display-clawmacs-minibuffer-pane (frame pane)
+  "Display Clawmacs' fixed minibuffer strip.
+Clawmacs renders active minibuffer completion state in the transcript overlay;
+this pane exists so ESA has a standard minibuffer stream without using ESA's
+recursive repainting display function."
+  (declare (ignore frame))
+  (clear-pane-with-ink pane (clim:make-rgb-color 0.93 0.93 0.93)))
+
 ;;; --------------------------------------------------------------------------
 ;;; Application Frame
 ;;; --------------------------------------------------------------------------
 
-(clim:define-application-frame clawmacs-gui ()
-  ((backend :initarg :backend :accessor frame-backend)
-   (display-buffer :initarg :display-buffer
+(clim:define-application-frame clawmacs-gui
+    (esa:esa-frame-mixin clim:standard-application-frame)
+  ((display-buffer :initarg :display-buffer
                    :initform nil
                    :accessor frame-display-buffer)
    (follow-current-buffer-p :initarg :follow-current-buffer-p
                             :initform t
                             :accessor frame-follow-current-buffer-p)
-   (always-poll-p :initarg :always-poll-p :accessor frame-always-poll-p :initform nil)
    (char-width :accessor frame-char-width :initform 0)
    (char-height :accessor frame-char-height :initform 0)
    (pane-space-char-height :accessor frame-pane-space-char-height :initform 0)
    (last-render-snapshot :accessor frame-last-render-snapshot :initform nil)
    (render-sequence :accessor frame-render-sequence :initform 0)
-   (quit-flag :accessor frame-quit-flag :initform nil))
+   (quit-flag :accessor frame-quit-flag :initform nil)
+   (poll-pulse-event :accessor frame-poll-pulse-event :initform nil)
+   (syncing-drei-p :accessor frame-syncing-drei-p :initform nil)
+   (last-drei-buffer :accessor frame-last-drei-buffer :initform nil))
   (:command-table (clawmacs-mcclim-command-table :inherit-from nil))
   (:panes
-   (main-pane :application
-              :display-function 'display-main-pane
-              :display-time :command-loop
-              :text-style (clim:make-text-style :fix :roman :normal)
-              :scroll-bars nil
-              :background (clim:make-rgb-color 1.0 1.0 1.0)
-              :foreground (clim:make-rgb-color 0.0 0.0 0.0))
+   (main-pane clawmacs-transcript-pane)
+   (input-pane clawmacs-drei-input-pane
+               :display-function 'display-drei-input-pane
+               :display-time :command-loop
+               :height 42
+               :min-height 20
+               :max-height 90)
+   (minibuffer-pane clawmacs-minibuffer-pane)
    (modeline-pane :application
                   :display-function 'display-modeline-pane
                   :display-time :command-loop
@@ -360,14 +444,56 @@ Returns (values fg-ink bg-ink text-style), or nil values if face not found."
    (default
     (clim:vertically ()
       (:fill main-pane)
+      input-pane
       who-line-pane
-      modeline-pane))))
+      modeline-pane
+      minibuffer-pane)))
+  (:top-level (clawmacs-esa-top-level))
+  (:menu-bar nil)
+  (:pointer-documentation t))
 
-(defclass clawmacs-display-change-event (climi::standard-event)
+(defclass clawmacs-display-change-event (clim:window-event)
   ((buffer :initarg :buffer :reader display-change-event-buffer)
    (reason :initarg :reason :reader display-change-event-reason)
    (force-p :initarg :force-p :reader display-change-event-force-p
             :initform t)))
+
+(clim:define-gesture-name :clawmacs-poll :timer :clawmacs-poll)
+
+(defmethod clim:frame-standard-input ((frame clawmacs-gui))
+  (or (clim:find-pane-named frame 'main-pane)
+      (call-next-method)))
+
+(defmethod clim:frame-standard-output ((frame clawmacs-gui))
+  (or (clim:find-pane-named frame 'main-pane)
+      (call-next-method)))
+
+(defmethod esa:minibuffer ((frame clawmacs-gui))
+  (or (clim:find-pane-named frame 'minibuffer-pane)
+      (call-next-method)))
+
+(defmethod esa:find-applicable-command-table ((frame clawmacs-gui))
+  (declare (ignore frame))
+  'clawmacs-mcclim-command-table)
+
+(defmethod esa:command-for-unbound-gestures ((frame clawmacs-gui) gestures)
+  "Treat ordinary ESA gestures as Clawmacs keymap input.
+Presentation translators still use CLIM commands; keyboard input falls through
+to the existing Clawmacs command/keymap system."
+  (when gestures
+    (file-debug-log "mcclim-input" "unbound gestures: ~S" gestures)
+    (list 'com-clawmacs-dispatch-gestures (list 'quote gestures))))
+
+(defmethod clim:adopt-frame :after (frame-manager (frame clawmacs-gui))
+  (declare (ignore frame-manager))
+  (let ((main-pane (clim:find-pane-named frame 'main-pane)))
+    (when main-pane
+      (setf (esa:windows frame) (list main-pane))))
+  (mcclim-sync-drei-from-buffer frame :force-p t)
+  (mcclim-ensure-polling frame))
+
+(defmethod clim:frame-exit :before ((frame clawmacs-gui))
+  (mcclim-stop-polling frame))
 
 (defvar *mcclim-live-frames* nil
   "Application frames that should wake when shared buffer display state changes.")
@@ -502,7 +628,8 @@ history grows a pane's own sheet-region."
 
 (defun mcclim-primary-frame-p (frame)
   "Return true when FRAME is the interactive Clawmacs frame."
-  (not (null (frame-backend frame))))
+  (declare (ignore frame))
+  t)
 
 (defun frame-visible-buffer (frame)
   "Return the buffer FRAME should display."
@@ -510,6 +637,62 @@ history grows a pane's own sheet-region."
            (current-buffer))
       (frame-display-buffer frame)
       (current-buffer)))
+
+(defun frame-drei-input-pane (frame)
+  "Return FRAME's Drei-backed input pane, if it exists."
+  (clim:find-pane-named frame 'input-pane))
+
+(defun mcclim-drei-pane-text (pane)
+  "Return the current string stored in PANE's Drei buffer."
+  (handler-case
+      (let* ((view (drei:current-view pane))
+             (buffer (and view (drei:buffer view))))
+        (if buffer
+            (coerce (drei-buffer:buffer-sequence
+                     buffer 0 (drei-buffer:size buffer))
+                    'string)
+            ""))
+    (error ()
+      "")))
+
+(defun (setf mcclim-drei-pane-text) (text pane)
+  "Replace PANE's Drei buffer with TEXT."
+  (let* ((view (drei:current-view pane))
+         (buffer (and view (drei:buffer view))))
+    (when buffer
+      (drei:performing-drei-operations (pane :with-undo nil :redisplay nil)
+        (drei-buffer:delete-buffer-range buffer 0 (drei-buffer:size buffer))
+        (drei-buffer:insert-buffer-sequence buffer 0 text))))
+  text)
+
+(defun mcclim-sync-buffer-from-drei (frame)
+  "Copy the Drei input pane text into the visible Clawmacs buffer."
+  (when (and frame (not (frame-syncing-drei-p frame)))
+    (let ((pane (frame-drei-input-pane frame))
+          (buf (frame-visible-buffer frame)))
+      (when (and pane buf)
+        (let ((text (mcclim-drei-pane-text pane))
+              (input (buffer-input-message buf)))
+          (unless (string= text (message-text input))
+            (set-message-text input text)))))))
+
+(defun mcclim-sync-drei-from-buffer (frame &key force-p)
+  "Copy the visible Clawmacs buffer input into FRAME's Drei input pane."
+  (when frame
+    (let ((pane (frame-drei-input-pane frame))
+          (buf (frame-visible-buffer frame)))
+      (when (and pane buf)
+        (let* ((text (message-text (buffer-input-message buf)))
+               (pane-text (mcclim-drei-pane-text pane)))
+          (when (or force-p
+                    (not (eq buf (frame-last-drei-buffer frame)))
+                    (not (string= text pane-text)))
+            (unwind-protect
+                 (progn
+                   (setf (frame-syncing-drei-p frame) t
+                         (mcclim-drei-pane-text pane) text
+                         (frame-last-drei-buffer frame) buf))
+              (setf (frame-syncing-drei-p frame) nil))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Modeline Display
@@ -641,6 +824,33 @@ When the minibuffer is active, draws a centered popup overlay on top."
       (when (or *minibuffer-active* *skill-completion-active*)
         (mcclim-render-completion-popup pane cols rows char-w char-h)))))
 
+(defun display-drei-input-pane (frame pane)
+  "Display the Drei-backed input pane using Clawmacs' text renderer.
+Drei owns the editable text buffer; Clawmacs renders it here so the McCLIM UI
+uses the same face/cursor behavior as the transcript pane."
+  (ensure-char-metrics frame pane)
+  (let* ((char-w (frame-char-width frame))
+         (char-h (frame-char-height frame))
+         (buf (frame-visible-buffer frame)))
+    (when (zerop char-w) (return-from display-drei-input-pane))
+    (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
+      (clear-pane-with-ink pane *mcclim-bg-ink*)
+      (when (and buf (not (document-buffer-p buf)))
+        (mcclim-render-message-lines pane (buffer-input-message buf)
+                                     0 cols char-w char-h
+                                     :show-cursor t
+                                     :max-rows rows
+                                     :prefix "")))))
+
+(defmethod drei:display-drei-view-contents
+    ((pane clawmacs-drei-input-pane) view)
+  "Keep Drei's buffer storage, but paint the input with Clawmacs output.
+Some Drei redisplay paths compute text metrics on a basic medium before the
+pane has the backend medium methods needed by McCLIM/CLX. Routing content
+display through the same renderer as the transcript keeps repaint stable."
+  (declare (ignore view))
+  (display-drei-input-pane (clim:pane-frame pane) pane))
+
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Title Bar
 ;;; --------------------------------------------------------------------------
@@ -661,15 +871,21 @@ When the minibuffer is active, draws a centered popup overlay on top."
 ;;; --------------------------------------------------------------------------
 
 (defun mcclim-render-buffer (pane buf rows cols char-w char-h)
-  "Render the full buffer: title bar at row 0, then history + input below."
+  "Render the transcript pane: title bar at row 0, then message history.
+The editable input lives in the separate Drei input pane. Approval prompts
+still render in the transcript because they are modal interaction state, not
+ordinary input text."
   (when (document-buffer-p buf)
     (return-from mcclim-render-buffer
       (mcclim-render-document-buffer pane buf rows cols char-w char-h)))
-  (let* ((total-height (1- rows))
+  (let* ((approval-p (buffer-approval-pending buf))
+         (total-height (1- rows))
          (width cols)
-         (input-height (calculate-input-height buf total-height width))
+         (input-height (if approval-p
+                           (calculate-input-height buf total-height width)
+                           0))
          (history-height (- total-height input-height))
-         (input-start-row (1+ history-height))
+         (input-start-row (if approval-p (1+ history-height) 0))
          (visible-messages nil))
     ;; Clear pane and render title bar
     (clear-pane-with-ink pane *mcclim-bg-ink*)
@@ -695,10 +911,7 @@ When the minibuffer is active, draws a centered popup overlay on top."
              (scroll-offset (min (buffer-scroll-offset buf) max-scroll))
              (visible-bottom (- total-history-rows scroll-offset))
              (visible-top (- visible-bottom history-height)))
-        ;; Only write scroll-offset if this is the primary frame (not a popup),
-        ;; to avoid cross-thread writes from read-only popup viewers.
-        (unless (frame-always-poll-p (clim:pane-frame pane))
-          (setf (buffer-scroll-offset buf) scroll-offset))
+        (setf (buffer-scroll-offset buf) scroll-offset)
         ;; Render visible history messages — wrapped in presentation types
         ;; so they are clickable objects in CLIM's semantic interaction model.
         (let ((virtual-row 0))
@@ -720,12 +933,9 @@ When the minibuffer is active, draws a centered popup overlay on top."
                                                        :max-rows history-height
                                                        :show-reasoning-p show-reasoning-p
                                                        :show-metadata-p show-metadata-p))))))))
-    ;; Render input area
-    (if (buffer-approval-pending buf)
-        (mcclim-render-approval-prompt pane buf input-start-row cols char-w char-h rows)
-        (mcclim-render-message-lines pane (buffer-input-message buf)
-                                     input-start-row cols char-w char-h
-                                     :show-cursor t :max-rows rows))
+    (when approval-p
+      (mcclim-render-approval-prompt pane buf input-start-row
+                                     cols char-w char-h rows))
     (mcclim-record-render-snapshot (clim:pane-frame pane)
                                    pane
                                    buf
@@ -750,8 +960,7 @@ When the minibuffer is active, draws a centered popup overlay on top."
     (let ((text-height (max 1 (- rows row))))
       (multiple-value-bind (start-row scroll-offset)
           (scratch-buffer-scroll-geometry buf text-height cols)
-        (unless (frame-always-poll-p (clim:pane-frame pane))
-          (setf (buffer-scroll-offset buf) scroll-offset))
+        (setf (buffer-scroll-offset buf) scroll-offset)
         (mcclim-render-message-lines pane
                                      (buffer-input-message buf)
                                      (+ row start-row)
@@ -1428,7 +1637,7 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
   "Return the ASCII control character represented by symbolic KEY-NAME.
 Some X backends report control events as symbolic control names such as :ETX
 or :EM rather than as characters. Normalize those to the same control
-characters delivered by terminal backends."
+characters used by Clawmacs keymaps."
   (when (keywordp key-name)
     (let ((code (cdr (assoc key-name
                             '((:soh . 1) (:stx . 2) (:etx . 3)
@@ -1465,7 +1674,7 @@ characters delivered by terminal backends."
           (search "HYPER" name)))))
 
 (defun mcclim-normalize-key (key-event)
-  "Normalize a McCLIM key-press-event to the same abstract format as croatoan.
+  "Normalize a McCLIM key-press-event to Clawmacs' abstract key format.
 Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
   (let* ((char (clim:keyboard-event-character key-event))
          (key-name (clim:keyboard-event-key-name key-event))
@@ -1618,32 +1827,30 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
                                           :min-height (* 2 char-h)
                                           :max-height (* 2 char-h)))))))
 
-(defun mcclim-poll-timeout (frame)
-  "Return the event-read timeout for FRAME, or NIL for blocking reads."
+(defun mcclim-normalize-gesture (gesture)
+  "Normalize an ESA/CLIM GESTURE to Clawmacs' abstract key format."
   (cond
-    ((frame-always-poll-p frame) 0.2)
-    ((or (buffer-pending-stream (frame-visible-buffer frame))
-         *openai-oauth-pending*)
-     0.05)
+    ((typep gesture 'clim:key-press-event)
+     (mcclim-normalize-key gesture))
+    ((characterp gesture)
+     (case gesture
+       (#\Return #\Newline)
+       (otherwise gesture)))
+    ((symbolp gesture)
+     gesture)
     (t nil)))
 
-(defun mcclim-read-next-event (frame)
-  "Read the next event for FRAME using McCLIM's event queue API."
-  (let ((sheet (clim:frame-top-level-sheet frame))
-        (timeout (mcclim-poll-timeout frame)))
-    (if timeout
-        (clime:event-read-with-timeout sheet :timeout timeout)
-        (clim:event-read sheet))))
-
-(defun mcclim-dispatch-key-event (frame event)
-  "Dispatch EVENT through the Clawmacs keymap.
+(defun mcclim-dispatch-gesture (frame gesture)
+  "Dispatch one ESA/CLIM GESTURE through the Clawmacs keymap.
 Returns (values need-redisplay-p force-redisplay-p)."
   (if (not (mcclim-primary-frame-p frame))
       ;; Popup viewers are read-only; do not let keyboard input mutate shared
       ;; prefix state or fall through to CLIM's input editor.
       (values nil nil)
-      (let ((key (mcclim-normalize-key event))
+      (let ((key (mcclim-normalize-gesture gesture))
             (force-redisplay-p nil))
+        (file-debug-log "mcclim-input" "gesture ~S normalized to ~S"
+                        gesture key)
         (when key
           (let ((result (handle-key-event (frame-visible-buffer frame) key)))
             (when (eq result :quit)
@@ -1685,138 +1892,174 @@ Returns true when application state may have changed."
   "Refresh FRAME through the standard CLIM redisplay path."
   (mcclim-update-scroll-page-size frame)
   (update-pane-sizes frame)
+  (mcclim-sync-drei-from-buffer frame)
   (clim:redisplay-frame-panes frame :force-p force-p))
 
 ;;; --------------------------------------------------------------------------
-;;; Custom Top-Level Event Loop
+;;; ESA/Pulse Event Integration
 ;;; --------------------------------------------------------------------------
 
-(defmethod clim:default-frame-top-level ((frame clawmacs-gui) &key &allow-other-keys)
-  "Custom event loop for clawmacs — mirrors the croatoan event loop structure.
-Blocking reads when idle, timed McCLIM event reads when streaming.
-Called by the standard run-frame-top-level AFTER the frame is adopted/enabled
-and all mediums are connected to the X11 backend."
-  ;; Char metrics are initialized lazily by ensure-char-metrics inside
-  ;; the display functions when the medium is ready.
+(defun mcclim-poll-needed-p (frame)
+  "Return true when FRAME needs timer-driven provider/OAuth polling."
+  (or (buffer-pending-stream (frame-visible-buffer frame))
+      *openai-oauth-pending*))
+
+(defun mcclim-read-event (frame)
+  "Read the next CLIM event, timing out while provider/OAuth polling is needed.
+McCLIM timer events are useful when the command loop reads the application
+pane's event queue directly.  Clawmacs reads the top-level sheet so window
+manager events route correctly; the timeout keeps provider streams moving even
+when no key or window event arrives."
+  (let ((sheet (clim:frame-top-level-sheet frame)))
+    (if (mcclim-poll-needed-p frame)
+        (clime:event-read-with-timeout sheet :timeout 0.05)
+        (clim:event-read sheet))))
+
+(defun mcclim-poll-sheet (frame)
+  "Return the sheet used for McCLIM pulse events."
+  (or (clim:frame-standard-output frame)
+      (clim:find-pane-named frame 'main-pane)
+      (clim:frame-top-level-sheet frame)))
+
+(defun mcclim-stop-polling (frame)
+  "Cancel FRAME's provider/OAuth polling pulse, if any."
+  (let ((event (frame-poll-pulse-event frame)))
+    (when event
+      (clime:delete-pulse-event event)
+      (setf (frame-poll-pulse-event frame) nil)))
+  frame)
+
+(defun mcclim-ensure-polling (frame)
+  "Start or stop FRAME's McCLIM pulse polling as runtime state requires."
+  (cond
+    ((and (not (frame-quit-flag frame))
+          (mcclim-poll-needed-p frame)
+          (null (frame-poll-pulse-event frame)))
+     (setf (frame-poll-pulse-event frame)
+           (clime:schedule-pulse-event
+            (mcclim-poll-sheet frame) :clawmacs-poll 0.05)))
+    ((and (not (mcclim-poll-needed-p frame))
+          (frame-poll-pulse-event frame))
+     (mcclim-stop-polling frame)))
+  frame)
+
+(defmethod clim:handle-event ((pane clawmacs-transcript-pane)
+                              (event clawmacs-display-change-event))
+  (let ((frame (clim:pane-frame pane)))
+    (mcclim-sync-drei-from-buffer frame :force-p t)
+    (mcclim-poll-external-updates frame)
+    (mcclim-redisplay-frame frame
+                            :force-p (display-change-event-force-p event))
+    (mcclim-ensure-polling frame)))
+
+(defmethod clim:handle-event :after ((pane clawmacs-drei-input-pane)
+                                     (event clim:key-press-event))
+  (declare (ignore event))
+  (let ((frame (clim:pane-frame pane)))
+    (mcclim-sync-buffer-from-drei frame)
+    (mcclim-redisplay-frame frame :force-p t)))
+
+(defmethod clim:handle-repaint ((pane clawmacs-drei-input-pane) region)
+  (declare (ignore region))
+  (display-drei-input-pane (clim:pane-frame pane) pane))
+
+(defmethod clim:redisplay-frame-panes :before ((frame clawmacs-gui)
+                                               &key force-p)
+  (declare (ignore force-p))
+  (mcclim-update-scroll-page-size frame)
+  (update-pane-sizes frame)
+  (mcclim-sync-drei-from-buffer frame))
+
+(defmethod clim:execute-frame-command :around ((frame clawmacs-gui) command)
+  (declare (ignore command))
+  (mcclim-sync-buffer-from-drei frame)
+  (prog1 (call-next-method)
+    (mcclim-sync-drei-from-buffer frame :force-p t)
+    (mcclim-ensure-polling frame)))
+
+(defun mcclim-process-esa-gesture (frame gesture)
+  "Feed GESTURE into ESA command processing for FRAME."
+  (let ((*standard-output* (clim:frame-standard-output frame))
+        (*standard-input* (clim:frame-standard-input frame))
+        (esa:*minibuffer* (esa:minibuffer frame))
+        (esa:*command-processor* frame)
+        (clim:*abort-gestures* esa:*esa-abort-gestures*)
+        (clim:*command-parser* 'esa:esa-command-parser)
+        (clim:*command-unparser* 'clim:command-line-command-unparser)
+        (clim:*partial-command-parser* 'esa:esa-partial-command-parser)
+        (esa:*extended-command-prompt* "Extended Command: ")
+        (clim:*pointer-documentation-output*
+         (clim:frame-pointer-documentation-output frame))
+        (esa:*esa-instance* frame))
+    (handler-case
+        (esa:process-gesture frame gesture)
+      (esa:unbound-gesture-sequence (condition)
+        (file-debug-log "mcclim-input" "unbound ESA gesture sequence: ~S"
+                        (esa:gestures condition))
+        (setf (esa::accumulated-gestures frame) nil))
+      (clim:abort-gesture ()
+        (setf (esa::accumulated-gestures frame) nil)))))
+
+(defmethod clawmacs-esa-top-level ((frame clawmacs-gui)
+                                   &key &allow-other-keys)
+  "Run Clawmacs' McCLIM top level using ESA command processing.
+The loop reads from the top-level sheet, which matches McCLIM/CLX focus
+behavior for Clawmacs under window managers. Keyboard gestures are dispatched
+through Clawmacs' keymap, while presentation and window events stay on the
+standard CLIM event path."
+  (unless (eq (clim:frame-state frame) :enabled)
+    (clim:enable-frame frame))
+  (mcclim-sync-drei-from-buffer frame :force-p t)
   (mcclim-redisplay-frame frame :force-p t)
   (loop :until (frame-quit-flag frame)
-        :for event := (mcclim-read-next-event frame)
-        :do (let ((need-redisplay-p nil)
-                  (force-redisplay-p nil))
-              (cond
-                ((null event)
-                 nil)
-                ((typep event 'clawmacs-display-change-event)
-                 (setf need-redisplay-p t
-                       force-redisplay-p
-                       (or force-redisplay-p
-                           (display-change-event-force-p event))))
-                ((typep event 'clim:key-press-event)
-                 (multiple-value-bind (need-p force-p)
-                     (mcclim-dispatch-key-event frame event)
-                   (setf need-redisplay-p (or need-redisplay-p need-p)
-                         force-redisplay-p (or force-redisplay-p force-p))))
-                ((or (typep event 'clim:window-repaint-event)
-                     (typep event 'clim:window-configuration-event))
-                 (clim:handle-event (clim:event-sheet event) event)
-                 (setf need-redisplay-p t
-                       force-redisplay-p t))
-                (t
-                 (clim:handle-event (clim:event-sheet event) event)
-                 (setf need-redisplay-p t)))
-              ;; Polling is deliberately outside event dispatch so high-volume
-              ;; pointer/window events cannot starve streaming or OAuth updates.
-              (when (mcclim-poll-external-updates frame)
-                (setf need-redisplay-p t))
-              (when (and (not (frame-quit-flag frame))
-                         (or need-redisplay-p
-                             (frame-always-poll-p frame)
-                             (buffer-pending-stream (frame-visible-buffer frame))
-                             *openai-oauth-pending*))
-                (mcclim-redisplay-frame frame :force-p force-redisplay-p)))))
+        :for event := (mcclim-read-event frame)
+        :do (cond
+              ((null event)
+               (when (mcclim-poll-external-updates frame)
+                 (mcclim-sync-drei-from-buffer frame :force-p t)
+                 (mcclim-redisplay-frame frame :force-p t)
+                 (mcclim-ensure-polling frame)))
+              ((typep event 'clawmacs-display-change-event)
+               (mcclim-sync-drei-from-buffer frame :force-p t)
+               (mcclim-poll-external-updates frame)
+               (mcclim-redisplay-frame
+                frame :force-p (display-change-event-force-p event))
+               (mcclim-ensure-polling frame))
+              ((clim:event-matches-gesture-name-p event :clawmacs-poll)
+               (clim:execute-frame-command frame '(com-clawmacs-poll)))
+              ((typep event 'clim:key-press-event)
+               (clim:execute-frame-command
+                frame
+                (list 'com-clawmacs-dispatch-gestures (list event)))
+               (mcclim-redisplay-frame frame))
+              ((or (typep event 'clim:window-repaint-event)
+                   (typep event 'clim:window-configuration-event))
+               (clim:handle-event (clim:event-sheet event) event)
+               (mcclim-redisplay-frame frame :force-p t))
+              (t
+               (clim:handle-event (clim:event-sheet event) event)
+               (mcclim-redisplay-frame frame)))))
 
 ;;; --------------------------------------------------------------------------
-;;; Popup Frame Lifecycle (read-only X11 viewer from terminal mode)
+;;; Application Entry Point
 ;;; --------------------------------------------------------------------------
 
-(defvar *popup-frames* nil
-  "List of (frame . thread) pairs for active popup viewers.")
+(defvar *clawmacs-frame* nil
+  "The currently running primary Clawmacs McCLIM frame, or NIL.")
 
-(defun cleanup-popup-frames ()
-  "Remove entries from *popup-frames* whose threads are no longer alive."
-  (setf *popup-frames*
-        (remove-if-not (lambda (pair)
-                         (bt:thread-alive-p (cdr pair)))
-                       *popup-frames*)))
-
-(defun close-all-popup-frames ()
-  "Signal all popup frames to quit and wait for their threads to finish."
-  (dolist (pair *popup-frames*)
-    (let ((frame (car pair)))
-      (setf (frame-quit-flag frame) t)))
-  ;; Give threads a moment to exit, then clean up
-  (sleep 0.5)
-  (cleanup-popup-frames))
-
-(defun spawn-mcclim-popup ()
-  "Spawn a read-only McCLIM popup window in a background thread.
-Uses dark theme (black background) and polls for redisplay at ~200ms.
-Keyboard input is suppressed to avoid corrupting shared prefix key state."
-  (cleanup-popup-frames)
-  (let ((thread
-          (bt:make-thread
-           (lambda ()
-             (let ((*mcclim-bg-ink* (clim:make-rgb-color 0.0 0.0 0.0)))
-               (handler-case
-                   (let ((frame (clim:make-application-frame
-                                 'clawmacs-gui
-                                 :pretty-name "Clawmacs Popup"
-                                 :backend nil
-                                 :display-buffer (current-buffer)
-                                 :follow-current-buffer-p t
-                                 :always-poll-p t
-                                 :width 900
-                                 :height 700)))
-                     (mcclim-register-frame frame)
-                     (push (cons frame (bt:current-thread)) *popup-frames*)
-                     (unwind-protect
-                          (clim:run-frame-top-level frame)
-                       (mcclim-unregister-frame frame)))
-                 (error (c)
-                   (ignore-errors
-                     (format *error-output*
-                             "~&Popup frame error: ~A~%" c))))))
-           :name "clawmacs-popup")))
-    (declare (ignore thread))
-    t))
-
-;;; --------------------------------------------------------------------------
-;;; Backend Class and Entry Point
-;;; --------------------------------------------------------------------------
-
-(defclass mcclim-backend (ui-backend)
-  ((frame :accessor backend-frame :initform nil))
-  (:documentation "McCLIM graphical backend with Genera-style interface.
-Three-pane layout (main, who-line, modeline) with white background, italic
-buffer title bars, context-dependent who-line hints, and popup completion.
-Load via (asdf:load-system :clawmacs/mcclim)."))
-
-(defmethod backend-run ((b mcclim-backend) initial-buffer)
-  "Run the McCLIM graphical UI.
-Creates the Genera-style frame (main, who-line, modeline), then enters
-the event loop reading input and rendering until :QUIT."
+(defun run-clawmacs-mcclim (initial-buffer)
+  "Run the Clawmacs McCLIM application for INITIAL-BUFFER."
   (mcclim-apply-genera-theme)
   (let ((frame (clim:make-application-frame 'clawmacs-gui
                  :pretty-name "Clawmacs"
-                 :backend b
                  :display-buffer initial-buffer
                  :follow-current-buffer-p t
                  :width 900
                  :height 700)))
-    (setf (backend-frame b) frame)
+    (setf *clawmacs-frame* frame)
     (mcclim-register-frame frame)
     (unwind-protect
          (clim:run-frame-top-level frame)
       (mcclim-unregister-frame frame)
-      (when (eq (backend-frame b) frame)
-        (setf (backend-frame b) nil)))))
+      (when (eq *clawmacs-frame* frame)
+        (setf *clawmacs-frame* nil)))))

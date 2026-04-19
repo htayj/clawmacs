@@ -3,7 +3,7 @@
 (in-suite matching-suite)
 
 (test matching-core-is-loaded
-  "The minibuffer matching API is backed by the Coalton core package."
+  "The minibuffer matching API is backed by the matching core package."
   (is-true (matching-core-available-p)))
 
 (test split-query-tokens-removes-empty-space-runs

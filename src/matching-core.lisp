@@ -1,183 +1,117 @@
-(cl:in-package #:clawmacs/matching-core)
+(in-package #:clawmacs/matching-core)
 
-(named-readtables:in-readtable coalton:coalton)
+;;; --------------------------------------------------------------------------
+;;; Fuzzy Matching Core
+;;; --------------------------------------------------------------------------
 
-(coalton-toplevel
-  (declare split-query-tokens (String -> (List String)))
-  (define (split-query-tokens query)
-    "Split QUERY into non-empty space-separated matching tokens."
-    (list:filter (fn (token) (/= 0 (str:length token)))
-                 (str:split #\Space query)))
+(defun split-query-tokens (query)
+  "Split QUERY into non-empty space-separated matching tokens."
+  (remove "" (uiop:split-string query :separator '(#\Space))
+          :test #'string=))
 
-  (declare blank-query? (String -> Boolean))
-  (define (blank-query? query)
-    (list:null? (split-query-tokens query)))
+(defun blank-query-p (query)
+  "Return true when QUERY has no non-empty matching tokens."
+  (null (split-query-tokens query)))
 
-  (declare position-from (Char -> String -> UFix -> UFix))
-  (define (position-from character string start)
-    "Return CHARACTER's position in STRING at or after START, or string length."
-    (lisp UFix (character string start)
-      (cl:let ((position (cl:position character string :start start)))
-        (cl:if position position (cl:length string)))))
+(defun position-from (character string start)
+  "Return CHARACTER's position in STRING at or after START, or string length."
+  (or (position character string :start start :test #'char=)
+      (length string)))
 
-  (declare fuzzy-token-positions (String -> String -> (List UFix)))
-  (define (fuzzy-token-positions token candidate)
-    "Return greedy subsequence match positions for TOKEN in CANDIDATE."
-    (let ((token-length (str:length token)))
-      (rec scan ((token-index (the UFix 0))
-                 (candidate-start (the UFix 0))
-                 (positions Nil))
-        (if (== token-index token-length)
-            (list:reverse positions)
-            (let ((candidate-length (str:length candidate))
-                  (match-position
-                    (position-from (str:ref-unchecked token token-index)
-                                   candidate
-                                   candidate-start)))
-              (if (== match-position candidate-length)
-                  Nil
-                  (scan (+ token-index 1)
-                        (+ match-position 1)
-                        (Cons match-position positions))))))))
+(defun fuzzy-token-positions (token candidate)
+  "Return greedy subsequence match positions for TOKEN in CANDIDATE."
+  (let ((positions nil)
+        (candidate-start 0)
+        (candidate-length (length candidate)))
+    (loop :for character :across token
+          :for match-position := (position-from character candidate candidate-start)
+          :do (when (= match-position candidate-length)
+                (return-from fuzzy-token-positions nil))
+              (push match-position positions)
+              (setf candidate-start (1+ match-position)))
+    (nreverse positions)))
 
-  (declare fuzzy-token-match-p (String -> String -> Boolean))
-  (define (fuzzy-token-match-p token candidate)
-    "Return TRUE when TOKEN is a subsequence of CANDIDATE."
-    (if (== 0 (str:length token))
-        True
-        (not (list:null? (fuzzy-token-positions token candidate)))))
+(defun fuzzy-token-match-p (token candidate)
+  "Return true when TOKEN is a subsequence of CANDIDATE."
+  (or (zerop (length token))
+      (not (null (fuzzy-token-positions token candidate)))))
 
-  (declare fuzzy-match-p (String -> String -> Boolean))
-  (define (fuzzy-match-p query candidate)
-    "Return TRUE when every token in QUERY fuzzy-matches CANDIDATE."
-    (let ((tokens (split-query-tokens (str:downcase query)))
-          (normalized-candidate (str:downcase candidate)))
-      (list:all (fn (token)
-                  (fuzzy-token-match-p token normalized-candidate))
-                tokens)))
+(defun fuzzy-match-p (query candidate)
+  "Return true when every token in QUERY fuzzy-matches CANDIDATE."
+  (let ((tokens (split-query-tokens (string-downcase query)))
+        (normalized-candidate (string-downcase candidate)))
+    (every (lambda (token)
+             (fuzzy-token-match-p token normalized-candidate))
+           tokens)))
 
-  (declare fuzzy-match-positions (String -> String -> (List UFix)))
-  (define (fuzzy-match-positions query candidate)
-    "Return sorted unique CANDIDATE positions matched by QUERY."
-    (if (blank-query? query)
-        Nil
-        (let ((tokens (split-query-tokens (str:downcase query)))
-              (normalized-candidate (str:downcase candidate)))
-          (rec collect ((remaining tokens)
-                        (positions Nil))
-            (match remaining
-              ((Nil)
-               (list:sort (list:remove-duplicates positions)))
-              ((Cons token rest)
-               (let ((token-positions
-                       (fuzzy-token-positions token normalized-candidate)))
-                 (if (list:null? token-positions)
-                     Nil
-                     (collect rest
-                              (list:append token-positions positions))))))))))
+(defun fuzzy-match-positions (query candidate)
+  "Return sorted unique CANDIDATE positions matched by QUERY."
+  (if (blank-query-p query)
+      nil
+      (let ((normalized-candidate (string-downcase candidate))
+            (positions nil))
+        (dolist (token (split-query-tokens (string-downcase query)))
+          (let ((token-positions
+                  (fuzzy-token-positions token normalized-candidate)))
+            (when (null token-positions)
+              (return-from fuzzy-match-positions nil))
+            (setf positions (append token-positions positions))))
+        (sort (remove-duplicates positions) #'<))))
 
-  (declare string-prefix? (String -> String -> Boolean))
-  (define (string-prefix? prefix string)
-    (let ((prefix-length (str:length prefix))
-          (string-length (str:length string)))
-      (if (> prefix-length string-length)
-          False
-          (== prefix (str:substring string 0 prefix-length)))))
+(defun string-prefix-p (prefix string)
+  "Return true when PREFIX is a prefix of STRING."
+  (let ((prefix-length (length prefix)))
+    (and (<= prefix-length (length string))
+         (string= prefix string :end2 prefix-length))))
 
-  (declare word-boundary-character? (Char -> Boolean))
-  (define (word-boundary-character? character)
-    (or (== character #\-)
-        (== character #\_)
-        (== character #\/)
-        (== character #\.)
-        (== character #\Space)))
+(defun word-boundary-character-p (character)
+  "Return true when CHARACTER separates words for matching score purposes."
+  (member character '(#\- #\_ #\/ #\. #\Space) :test #'char=))
 
-  (declare word-boundary-position? (String -> UFix -> Boolean))
-  (define (word-boundary-position? candidate position)
-    (or (== position 0)
-        (word-boundary-character?
-         (str:ref-unchecked candidate (- position 1)))))
+(defun word-boundary-position-p (candidate position)
+  "Return true when POSITION is at the start of a word in CANDIDATE."
+  (or (zerop position)
+      (word-boundary-character-p (char candidate (1- position)))))
 
-  (declare consecutive-position-bonus ((List UFix) -> Integer))
-  (define (consecutive-position-bonus positions)
-    (match positions
-      ((Nil) 0)
-      ((Cons first rest)
-       (rec scan ((previous first)
-                  (remaining rest)
-                  (bonus (the Integer 0)))
-         (match remaining
-           ((Nil) bonus)
-           ((Cons position tail)
-            (scan position
-                  tail
-                  (if (== position (+ previous 1))
-                      (+ bonus (the Integer 5))
-                      bonus))))))))
+(defun consecutive-position-bonus (positions)
+  "Return score bonus for consecutive matched positions."
+  (loop :for previous :in positions
+        :for position :in (rest positions)
+        :sum (if (= position (1+ previous)) 5 0)))
 
-  (declare word-boundary-bonus (String -> (List UFix) -> Integer))
-  (define (word-boundary-bonus candidate positions)
-    (rec scan ((remaining positions)
-               (bonus (the Integer 0)))
-      (match remaining
-        ((Nil) bonus)
-        ((Cons position tail)
-         (scan tail
-               (if (word-boundary-position? candidate position)
-                   (+ bonus (the Integer 8))
-                   bonus))))))
+(defun word-boundary-bonus (candidate positions)
+  "Return score bonus for positions that start words in CANDIDATE."
+  (loop :for position :in positions
+        :sum (if (word-boundary-position-p candidate position) 8 0)))
 
-  (declare fuzzy-token-score-or-negative-one (String -> String -> Integer))
-  (define (fuzzy-token-score-or-negative-one token candidate)
-    "Score TOKEN against CANDIDATE, or return -1 when it does not match."
-    (let ((positions (fuzzy-token-positions token candidate)))
-      (if (list:null? positions)
-          (the Integer -1)
-          (let ((token-length (str:length token))
-                (candidate-length (str:length candidate))
-                (first-position (list:car positions)))
-            (let ((score1
-                    (+ (the Integer 1)
-                       (if (== token candidate)
-                           (the Integer 100)
-                           (the Integer 0)))))
-              (let ((score2
-                      (+ score1
+(defun fuzzy-token-score-or-negative-one (token candidate)
+  "Score TOKEN against CANDIDATE, or return -1 when it does not match."
+  (let ((positions (fuzzy-token-positions token candidate)))
+    (if (null positions)
+        -1
+        (let* ((token-length (length token))
+               (candidate-length (length candidate))
+               (first-position (first positions))
+               (score (+ 1
+                         (if (string= token candidate) 100 0)
                          (if (and (<= token-length candidate-length)
-                                  (string-prefix? token candidate))
-                             (the Integer 50)
-                             (the Integer 0)))))
-                (let ((score3
-                        (+ score2
-                           (if (str:substring? token candidate)
-                               (the Integer 30)
-                               (the Integer 0)))))
-                  (let ((score4
-                          (+ score3
-                             (max (the Integer 0)
-                                  (- (the Integer 20)
-                                     (as Integer first-position))))))
-                    (let ((score5
-                            (+ score4
-                               (consecutive-position-bonus positions))))
-                      (+ score5
-                         (word-boundary-bonus candidate positions)))))))))))
+                                  (string-prefix-p token candidate))
+                             50
+                             0)
+                         (if (search token candidate :test #'char=) 30 0)
+                         (max 0 (- 20 first-position))
+                         (consecutive-position-bonus positions)
+                         (word-boundary-bonus candidate positions))))
+          score))))
 
-  (declare fuzzy-score-or-negative-one (String -> String -> Integer))
-  (define (fuzzy-score-or-negative-one query candidate)
-    "Score QUERY against CANDIDATE, or return -1 when any token fails."
-    (let ((tokens (split-query-tokens (str:downcase query)))
-          (normalized-candidate (str:downcase candidate)))
-      (if (list:null? tokens)
-          (the Integer 0)
-          (rec score ((remaining tokens)
-                      (total (the Integer 0)))
-            (match remaining
-              ((Nil) total)
-              ((Cons token rest)
-               (let ((token-score
-                       (fuzzy-token-score-or-negative-one token
-                                                          normalized-candidate)))
-                 (if (< token-score 0)
-                     (the Integer -1)
-                     (score rest (+ total token-score)))))))))))
+(defun fuzzy-score-or-negative-one (query candidate)
+  "Score QUERY against CANDIDATE, or return -1 when any token fails."
+  (let ((tokens (split-query-tokens (string-downcase query)))
+        (normalized-candidate (string-downcase candidate))
+        (total 0))
+    (dolist (token tokens total)
+      (let ((token-score
+              (fuzzy-token-score-or-negative-one token normalized-candidate)))
+        (when (minusp token-score)
+          (return-from fuzzy-score-or-negative-one -1))
+        (incf total token-score)))))

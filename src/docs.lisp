@@ -802,7 +802,7 @@ documentation in *extended-docs*."
   :category "buffer"
   :usage "(buffer-major-mode BUF:buffer) — (buffer-major-mode (current-buffer))"
   :returns "string — \"chat\", \"scratch\", \"help\", etc."
-  :see-also (buffer make-help-buffer render-modeline))
+  :see-also (buffer make-help-buffer mcclim-render-modeline))
 
 (defdoc *buffer-ring*
   :category "buffer"
@@ -2175,7 +2175,7 @@ documentation in *extended-docs*."
   :category "global-face"
   :usage "(global-face NAME:keyword) — (global-face :modeline)"
   :returns "face or nil — the face object, or nil if not found."
-  :see-also (*global-face-registry* init-global-faces apply-global-face))
+  :see-also (*global-face-registry* init-global-faces collect-global-faces))
 
 (defdoc init-global-faces
   :category "global-face"
@@ -2189,13 +2189,6 @@ documentation in *extended-docs*."
   :usage "(collect-global-faces)"
   :returns "list of plists — each with :face, :owner (:global), :name, :label"
   :see-also (*global-face-registry* collect-all-faces))
-
-(defdoc apply-global-face
-  :category "global-face"
-  :usage "(apply-global-face WINDOW:croatoan-window NAME:keyword) — (apply-global-face win :modeline)"
-  :returns "nil"
-  :side-effects "Sets the window's color pair and attributes from the resolved global face."
-  :see-also (global-face apply-face-to-window resolve-face))
 
 (defdoc make-default-system-face-set
   :category "global-face"
@@ -2224,21 +2217,21 @@ documentation in *extended-docs*."
   :category "render"
   :usage "(resolve-modeline-provider-model BUF:buffer) — (resolve-modeline-provider-model (current-buffer))"
   :returns "string — \"zai/glm-5\" or \"openai-codex/gpt-5.4 [think:high]\", or \"??\" on error."
-  :see-also (render-modeline resolve-buffer-provider-and-model))
+  :see-also (mcclim-render-modeline resolve-buffer-provider-and-model))
 
-(defdoc render-modeline
+(defdoc mcclim-render-modeline
   :category "render"
-  :usage "(render-modeline BUF:buffer MODELINE-WINDOW:croatoan-window)"
+  :usage "(mcclim-render-modeline PANE BUF COLS CHAR-W CHAR-H)"
   :returns "nil"
-  :side-effects "Clears and redraws the modeline window with buffer status info."
-  :see-also (resolve-modeline-provider-model render-buffer buffer-major-mode))
+  :side-effects "Draws the modeline pane with buffer status info."
+  :see-also (resolve-modeline-provider-model mcclim-render-buffer buffer-major-mode))
 
-(defdoc render-buffer
+(defdoc mcclim-render-buffer
   :category "render"
-  :usage "(render-buffer BUF:buffer MAIN-WINDOW MODELINE-WINDOW)"
+  :usage "(mcclim-render-buffer PANE BUF ROWS COLS CHAR-W CHAR-H)"
   :returns "nil"
-  :side-effects "Clears and redraws the main window with buffer history and input, then renders modeline."
-  :see-also (render-modeline render-buffer-selector render-model-selector))
+  :side-effects "Draws the main pane with buffer history, input, and render snapshot state."
+  :see-also (mcclim-render-modeline mcclim-render-buffer-selector mcclim-render-model-selector))
 
 ;;; ==========================================================================
 ;;; Category: selector — Buffer selector, model selector, minibuffer
@@ -2246,7 +2239,7 @@ documentation in *extended-docs*."
 
 (defdoc *buffer-selector-active*
   :category "selector"
-  :see-also (*buffer-selector-index* list-buffers-command render-buffer-selector))
+  :see-also (*buffer-selector-index* list-buffers-command mcclim-render-buffer-selector))
 
 (defdoc *buffer-selector-index*
   :category "selector"
@@ -2257,13 +2250,13 @@ documentation in *extended-docs*."
   :usage "Bound to C-x b. Opens the overlay buffer selector."
   :returns "nil"
   :side-effects "Sets *buffer-selector-active* to T."
-  :see-also (*buffer-selector-active* minibuffer-select-buffer-command render-buffer-selector))
+  :see-also (*buffer-selector-active* minibuffer-select-buffer-command mcclim-render-buffer-selector))
 
-(defdoc render-buffer-selector
+(defdoc mcclim-render-buffer-selector
   :category "selector"
-  :usage "(render-buffer-selector WINDOW:croatoan-window)"
+  :usage "(mcclim-render-buffer-selector PANE ROWS COLS CHAR-W CHAR-H FRAME)"
   :returns "nil"
-  :side-effects "Renders the overlay buffer selector table."
+  :side-effects "Draws the overlay buffer selector table in the McCLIM main pane."
   :see-also (list-buffers-command *buffer-selector-active*))
 
 (defdoc *model-selector-active*
@@ -2370,7 +2363,7 @@ documentation in *extended-docs*."
 
 (defdoc *minibuffer-scroll-offset*
   :category "minibuffer"
-  :see-also (minibuffer-ensure-visible minibuffer-visible-item-count render-minibuffer))
+  :see-also (minibuffer-ensure-visible minibuffer-visible-item-count mcclim-render-completion-popup))
 
 (defdoc *minibuffer-callback*
   :category "minibuffer"
@@ -2497,22 +2490,15 @@ documentation in *extended-docs*."
 (defdoc minibuffer-current-height
   :category "minibuffer"
   :usage "(minibuffer-current-height) — (minibuffer-current-height)"
-  :returns "fixnum — Current height of the minibuffer in rows (1 when inactive)."
-  :see-also (*minibuffer-active* *minibuffer-max-height* update-window-layout))
+  :returns "fixnum — Current popup height hint in rows (1 when inactive)."
+  :see-also (*minibuffer-active* *minibuffer-max-height* mcclim-render-completion-popup))
 
-(defdoc update-window-layout
+(defdoc mcclim-render-completion-popup
   :category "minibuffer"
-  :usage "(update-window-layout MAIN-WINDOW MODELINE-WINDOW MINIBUFFER-WINDOW SCREEN-HEIGHT SCREEN-WIDTH)"
+  :usage "(mcclim-render-completion-popup PANE COLS ROWS CHAR-W CHAR-H)"
   :returns "nil"
-  :side-effects "Resizes and repositions all three windows based on minibuffer height."
-  :see-also (minibuffer-current-height render-minibuffer clawmacs-main))
-
-(defdoc render-minibuffer
-  :category "minibuffer"
-  :usage "(render-minibuffer MINIBUFFER-WINDOW:croatoan-window)"
-  :returns "nil"
-  :side-effects "Clears and redraws the minibuffer. Shows candidates with inverse video selection."
-  :see-also (minibuffer-current-height *minibuffer-active* update-window-layout))
+  :side-effects "Draws the centered completion popup over the McCLIM main pane."
+  :see-also (minibuffer-current-height *minibuffer-active* *skill-completion-active*))
 
 (defdoc minibuffer-select-model-command
   :category "minibuffer"
@@ -2696,7 +2682,7 @@ documentation in *extended-docs*."
 
 (defdoc describe-system-to-string
   :category "help"
-  :usage "(describe-system-to-string SYSTEM) — (describe-system-to-string \"croatoan\")"
+  :usage "(describe-system-to-string SYSTEM) — (describe-system-to-string \"mcclim\")"
   :returns "string — Local ASDF summary with root path, metadata, packages, and docs."
   :see-also (list-project-systems list-system-packages search-system-docs))
 
@@ -2732,7 +2718,7 @@ documentation in *extended-docs*."
 
 (defdoc search-system-docs
   :category "help"
-  :usage "(search-system-docs SYSTEM QUERY &key LIMIT) — (search-system-docs \"croatoan\" \"thread\")"
+  :usage "(search-system-docs SYSTEM QUERY &key LIMIT) — (search-system-docs \"mcclim\" \"pane\")"
   :returns "string — Matching README/docs/source hits with relative paths and line numbers."
   :see-also (describe-system-to-string describe-library-symbol-to-string list-project-systems))
 
@@ -3382,10 +3368,10 @@ documentation in *extended-docs*."
 
 (defdoc redraw-screen-command
   :category "buffer-command"
-  :usage "Bound to C-l. Requests a full screen redraw in the active UI backend."
+  :usage "Bound to C-l. Requests a full McCLIM redisplay."
   :returns ":redraw"
-  :side-effects "Causes the backend event loop to force a repaint of the current interface."
-  :see-also (backend-run clawmacs-main))
+  :side-effects "Causes the McCLIM event loop to force a repaint of the current interface."
+  :see-also (run-clawmacs-mcclim clawmacs-main))
 
 (defdoc openai-codex-oauth-command
   :category "buffer-command"
@@ -3625,7 +3611,7 @@ documentation in *extended-docs*."
 
 (defdoc *startup-hook*
   :category "init"
-  :usage "List of function designators run after init.lisp loads and before backend startup."
+  :usage "List of function designators run after init.lisp loads and before McCLIM startup."
   :see-also (add-hook remove-hook run-hooks *initial-buffer-hook* clawmacs-main))
 
 (defdoc *initial-buffer-hook*
@@ -3745,39 +3731,21 @@ documentation in *extended-docs*."
   :see-also (*user-init-file* *user-init-directory* *inhibit-user-init* *startup-hook* *initial-buffer-hook* clawmacs-main))
 
 ;;; ==========================================================================
-;;; Category: ui-backend — Pluggable UI backend protocol
+;;; Category: mcclim — McCLIM application
 ;;; ==========================================================================
 
-(defdoc ui-backend
-  :category "ui-backend"
-  :usage "(defclass my-backend (clawmacs:ui-backend) ()) — Subclass to create a custom UI backend."
-  :returns "CLOS class — Base class for all UI backends."
-  :see-also (backend-run *ui-backend* croatoan-backend mcclim-backend))
+(defdoc clawmacs-gui
+  :category "mcclim"
+  :usage "Application frame class used by the interactive Clawmacs UI."
+  :returns "McCLIM application frame class."
+  :see-also (run-clawmacs-mcclim clawmacs-main mcclim-redisplay-frame))
 
-(defdoc *ui-backend*
-  :category "ui-backend"
-  :usage "(setf clawmacs:*ui-backend* (make-instance 'my-backend)) — Set in ~/.clawmacs.d/init.lisp before startup."
-  :see-also (ui-backend backend-run croatoan-backend mcclim-backend)
-  :side-effects "When nil at startup, clawmacs-main sets it to a croatoan-backend instance.")
-
-(defdoc backend-run
-  :category "ui-backend"
-  :usage "(backend-run BACKEND:ui-backend INITIAL-BUFFER:buffer) — Called by clawmacs-main to start the UI."
+(defdoc run-clawmacs-mcclim
+  :category "mcclim"
+  :usage "(run-clawmacs-mcclim INITIAL-BUFFER)"
   :returns "nil — Returns when the user quits."
-  :side-effects "Takes over the display. Sets *scroll-page-size*. Calls handle-key-event and update-streaming-response."
-  :see-also (ui-backend *ui-backend* croatoan-backend mcclim-backend clawmacs-main))
-
-(defdoc croatoan-backend
-  :category "ui-backend"
-  :usage "(make-instance 'croatoan-backend) — The default terminal backend using ncurses via croatoan."
-  :returns "CLOS instance — Three-window terminal layout (main, modeline, minibuffer)."
-  :see-also (ui-backend backend-run *ui-backend* mcclim-backend))
-
-(defdoc mcclim-backend
-  :category "ui-backend"
-  :usage "(make-instance 'mcclim-backend) — McCLIM graphical backend. Load via (asdf:load-system :clawmacs/mcclim)."
-  :returns "CLOS instance — Three-pane GUI layout (main, modeline, minibuffer)."
-  :see-also (ui-backend backend-run *ui-backend* croatoan-backend))
+  :side-effects "Creates the Clawmacs McCLIM application frame, registers it for display-change events, and runs the frame top level."
+  :see-also (clawmacs-gui clawmacs-main mcclim-redisplay-frame))
 
 ;;; ==========================================================================
 ;;; Category: main — Application entry point
@@ -3906,15 +3874,15 @@ documentation in *extended-docs*."
   :category "main"
   :usage "(clawmacs-prompt-main) — CLI entry point used by prompt.sh."
   :returns "does not return — Exits the Lisp image with status 0 or 1."
-  :side-effects "Parses command-line options, defaults plain prompt.sh runs to openai-codex/gpt-5.3-codex unless --agent, --provider, or --model supplies routing, initializes the clawmacs runtime without a UI backend, runs one prompt through run-single-prompt, and writes the final response or JSON result to stdout."
+  :side-effects "Parses command-line options, defaults plain prompt.sh runs to openai-codex/gpt-5.3-codex unless --agent, --provider, or --model supplies routing, initializes the clawmacs runtime without starting McCLIM, runs one prompt through run-single-prompt, and writes the final response or JSON result to stdout."
   :see-also (run-single-prompt *prompt-max-tool-iterations* clawmacs-main))
 
 (defdoc clawmacs-main
   :category "main"
   :usage "(clawmacs-main) — Called once to start the application."
   :returns "nil — Returns when the user quits (C-x C-c)."
-  :side-effects "Initializes state, loads the configured personality prompt file, loads user init, runs *startup-hook*, creates the initial buffer, runs *initial-buffer-hook*, then delegates to the UI backend via backend-run."
-  :see-also (current-buffer *default-keymap* init-tools *ui-backend* *startup-hook* *initial-buffer-hook* backend-run))
+  :side-effects "Initializes state, loads the configured personality prompt file, loads user init, runs *startup-hook*, creates the initial buffer, runs *initial-buffer-hook*, then starts the McCLIM application via run-clawmacs-mcclim."
+  :see-also (current-buffer *default-keymap* init-tools *startup-hook* *initial-buffer-hook* run-clawmacs-mcclim))
 
 ;;; ==========================================================================
 ;;; Category: customize — Interactive face customization

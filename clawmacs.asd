@@ -13,8 +13,8 @@
   :description "A Lisp-native Emacs-inspired LLM chat interface"
   :version "0.1.0"
   :licence "AGPL-3.0-only"
-  :depends-on ("lispi" "croatoan" "alexandria" "drakma" "cl-json"
-               "bordeaux-threads" "coalton" "named-readtables")
+  :depends-on ("lispi" "mcclim" "esa-mcclim" "drei-mcclim"
+               "alexandria" "drakma" "cl-json" "bordeaux-threads")
   :serial t
   :components ((:module "src"
                 :serial t
@@ -39,23 +39,15 @@
                              (:file "compaction")
                              (:file "prompt-runner")
                              (:file "pipelines")
-                             (:file "ui-protocol")
                              (:file "render-core")
                              (:file "minibuffer")
-                             (:file "croatoan-backend")
                              (:file "prefix")
                              (:file "main")
+                             (:file "mcclim-app")
                              (:file "reference")
                              (:file "sexed")
                              (:file "slop")
                              (:file "docs")))))
-
-(defsystem "clawmacs/mcclim"
-  :description "McCLIM graphical backend for clawmacs"
-  :licence "AGPL-3.0-only"
-  :depends-on ("clawmacs" "mcclim")
-  :components ((:module "src"
-                :components ((:file "mcclim-backend")))))
 
 (defsystem "clawmacs/tests"
   :description "Tests for clawmacs"

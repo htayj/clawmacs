@@ -114,7 +114,7 @@ Returns FUNCTION."
   nil)
 
 (defhook *startup-hook* ()
-  "List of functions run after init.lisp loads and before backend startup.")
+  "List of functions run after init.lisp loads and before McCLIM startup.")
 
 (defhook *initial-buffer-hook* (buffer)
   "List of functions run with the initial buffer after it is created.")

@@ -287,14 +287,14 @@ Clawmacs keeps a process-local =*scratch*= buffer loaded in the buffer list for
 temporary notes and programmatic coordination. It is editable, never killed by
 normal buffer-kill commands, and lasts only until Clawmacs exits.
 
-** Pluggable UI Backends
+** McCLIM Interface
 
-The rendering layer is abstracted behind a backend protocol:
-
-- *Croatoan backend* (default) --- ncurses terminal UI
-- *McCLIM backend* (optional) --- X11/Wayland graphical UI with monospace grid rendering
-
-Switch backends in your init file. The McCLIM backend mirrors the terminal UI with the same three-pane layout, keybindings, and color scheme.
+Clawmacs runs as a McCLIM application with an ESA-backed application frame. The
+layout has a presentation-rich transcript pane, a Drei-backed input pane, a
+who-line, a modeline, and a fixed minibuffer stream for command input. The
+interface uses CLIM panes, commands, presentations, queued events, pulse polling,
+and redisplay for the interactive UI while Clawmacs keymaps continue to own
+editor keystrokes.
 
 ** Boot Files
 
@@ -309,7 +309,7 @@ Checked in the working directory first, then =~/.config/clawmacs/=. Compatible w
 ** Prerequisites
 
 - [[https://guix.gnu.org/][GNU Guix]] (for the containerized environment)
-- An X11 display (for the McCLIM backend)
+- An X11 display (for the McCLIM application)
 
 ** Running
 
@@ -318,7 +318,7 @@ Checked in the working directory first, then =~/.config/clawmacs/=. Compatible w
 ./run.sh --clean-build
 #+end_src
 
-This launches clawmacs in a Guix container with all dependencies (SBCL, ncurses, OpenSSL, fonts) automatically provisioned. Quicklisp is bootstrapped on first run.
+This launches clawmacs in a Guix container with all dependencies (SBCL, McCLIM, OpenSSL, fonts) automatically provisioned. Quicklisp is bootstrapped on first run.
 
 By default, =run.sh= reuses cached ASDF/FASL build artifacts for fast startup.
 Pass =--clean-build=, or its alias =--force-clean-build=, to clear the local
@@ -412,17 +412,13 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
                          '(:ctrl-c #\z)
                          'clawmacs:toggle-debug-mode-command)))
 
-;; Customize the initial buffer before the backend takes over
+;; Customize the initial buffer before the McCLIM interface starts
 (clawmacs:add-hook
  'clawmacs:*initial-buffer-hook*
  (lambda (buffer)
    (clawmacs:buffer-insert-system-message
     buffer
     "init.lisp customized this buffer")))
-
-;; Use the McCLIM graphical backend
-(asdf:load-system :clawmacs/mcclim)
-(setf clawmacs:*ui-backend* (make-instance 'clawmacs:mcclim-backend))
 #+end_src
 
 ** Packages
@@ -455,22 +451,20 @@ src/
   keymap.lisp          Keymap data structure, default bindings
   projects.lisp        Project/resource registry, manifests, file buffers
   skills.lisp          Codex-style local skill discovery and resource access
-  matching-core.lisp   Coalton fuzzy matching implementation
+  matching-core.lisp   Fuzzy matching implementation
   matching.lisp        Common Lisp wrappers for minibuffer matching
   llm.lisp             Multi-provider LLM integration, streaming, OAuth
   tools.lisp           Agent tool definitions and execution
   sexed.lisp           Agent-oriented structural s-expression editing
-  ui-protocol.lisp     Abstract UI backend protocol
   render-core.lisp     Pure rendering geometry and formatting functions
-  croatoan-backend.lisp  Terminal backend (ncurses via croatoan)
-  mcclim-backend.lisp  Graphical backend (X11 via McCLIM, optional)
-  main.lisp            Event loop, key dispatch, streaming, commands
+  mcclim-app.lisp      McCLIM application frame, panes, events, redisplay
+  main.lisp            Commands, key dispatch, startup, prompt entrypoints
   docs.lisp            Extended documentation entries
 #+end_example
 
-The core architecture follows Emacs patterns: buffers hold messages (not file lines), keymaps dispatch to commands, faces control rendering, and the display is a pluggable backend.
+The core architecture follows Emacs patterns: buffers hold messages (not file lines), keymaps dispatch to commands, faces control rendering, and McCLIM owns the interactive display.
 
-The rendering layer is split: =render-core.lisp= contains pure geometry and formatting functions (line wrapping, modeline formatting, selector line layout) reused by both backends. Each backend translates these into its native drawing calls.
+The rendering layer is split: =render-core.lisp= contains pure geometry and formatting functions (line wrapping, modeline formatting, selector line layout), while =mcclim-app.lisp= translates that state into CLIM drawing, presentations, and redisplay.
 
 * vs Emacs
 
