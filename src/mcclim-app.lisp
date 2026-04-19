@@ -598,6 +598,185 @@ Fills a background rectangle first, then draws the text on top."
         (draw-text-at pane row col (cdr span) fg bg ts char-w char-h))
       (incf col (length (cdr span))))))
 
+;;; --------------------------------------------------------------------------
+;;; Inline Image Rendering
+;;; --------------------------------------------------------------------------
+
+(defparameter *mcclim-inline-image-max-rows* 24
+  "Maximum transcript rows consumed by an inline image.")
+
+(defparameter *mcclim-inline-image-min-rows* 4
+  "Minimum display rows used when a tiny inline image can be scaled up.")
+
+(defstruct mcclim-image-cache-entry
+  "Cached McCLIM image pattern and source metadata."
+  pattern
+  (width 1 :type integer)
+  (height 1 :type integer)
+  (write-date 0 :type integer)
+  (path "" :type string))
+
+(defvar *mcclim-image-cache* (make-hash-table :test #'equal)
+  "Cache of loaded image patterns keyed by truename.")
+
+(defun mcclim-resolve-display-image-path (path)
+  "Resolve PATH as an existing sandbox-local image pathname."
+  (let ((resolved (validate-sandbox-path path)))
+    (or (probe-file resolved)
+        (error "Image file not found: ~A" path))))
+
+(defun mcclim-load-display-image-reference (reference)
+  "Return cached image entry for REFERENCE, or NIL and an error string."
+  (handler-case
+      (let* ((pathname (mcclim-resolve-display-image-path
+                        (display-image-reference-path reference)))
+             (true-path (truename pathname))
+             (key (namestring true-path))
+             (write-date (or (file-write-date true-path) 0))
+             (cached (gethash key *mcclim-image-cache*)))
+        (if (and cached
+                 (= write-date
+                    (mcclim-image-cache-entry-write-date cached)))
+            (values cached nil)
+            (let* ((pattern (clim:make-pattern-from-bitmap-file true-path))
+                   (width (max 1 (floor (clim:pattern-width pattern))))
+                   (height (max 1 (floor (clim:pattern-height pattern))))
+                   (entry (make-mcclim-image-cache-entry
+                           :pattern pattern
+                           :width width
+                           :height height
+                           :write-date write-date
+                           :path key)))
+              (setf (gethash key *mcclim-image-cache*) entry)
+              (values entry nil))))
+    (error (condition)
+      (values nil (format nil "~A" condition)))))
+
+(defun mcclim-inline-image-geometry (entry width prefix-len char-w char-h)
+  "Return display geometry for cached image ENTRY.
+Values are DISPLAY-WIDTH, DISPLAY-HEIGHT, ROWS, and SCALE."
+  (let* ((image-width (mcclim-image-cache-entry-width entry))
+         (image-height (mcclim-image-cache-entry-height entry))
+         (available-width (max char-w
+                               (* (max 1 (- width prefix-len 1)) char-w)))
+         (max-height (* (max 1 *mcclim-inline-image-max-rows*) char-h))
+         (min-height (* (max 1 *mcclim-inline-image-min-rows*) char-h))
+         (max-scale (min (/ available-width image-width)
+                         (/ max-height image-height)))
+         (desired-scale (if (< image-height min-height)
+                            (/ min-height image-height)
+                            1))
+         (scale (min max-scale desired-scale))
+         (display-width (max 1 (floor (* image-width scale))))
+         (display-height (max 1 (floor (* image-height scale))))
+         (rows (max 1 (ceiling display-height char-h))))
+    (values display-width display-height rows (float scale 1.0))))
+
+(defun mcclim-inline-image-caption (reference entry error-text)
+  "Return the one-line caption for an inline image block."
+  (let* ((alt (display-image-reference-alt reference))
+         (path (display-image-reference-path reference))
+         (label (if (blank-string-p alt) "image" alt)))
+    (cond
+      (error-text
+       (format nil "[image: ~A] ~A" label error-text))
+      (entry
+       (format nil "[image: ~A] ~A (~Dx~D)"
+               label
+               (mcclim-image-cache-entry-path entry)
+               (mcclim-image-cache-entry-width entry)
+               (mcclim-image-cache-entry-height entry)))
+      (t
+       (format nil "[image: ~A] ~A" label path)))))
+
+(defun mcclim-image-block-visual-height (reference width prefix-len char-w char-h)
+  "Return transcript rows consumed by image REFERENCE."
+  (multiple-value-bind (entry error-text)
+      (mcclim-load-display-image-reference reference)
+    (if (or error-text (null entry))
+        1
+        (multiple-value-bind (_display-width _display-height image-rows _scale)
+            (mcclim-inline-image-geometry entry width prefix-len char-w char-h)
+          (declare (ignore _display-width _display-height _scale))
+          (1+ image-rows)))))
+
+(defun mcclim-message-visual-height
+    (msg width char-w char-h &key (prefix (message-sender-prefix msg))
+       show-reasoning-p show-metadata-p render-images-p)
+  "Return MSG height using McCLIM image geometry when requested."
+  (let* ((prefix-len (length prefix))
+         (display-width (max 1 (- width prefix-len))))
+    (loop :for block :in (if render-images-p
+                             (message-display-blocks
+                              msg
+                              :show-reasoning-p show-reasoning-p
+                              :show-metadata-p show-metadata-p)
+                             (mapcar (lambda (entry)
+                                       (list :type :text
+                                             :text (car entry)
+                                             :source-line (cdr entry)))
+                                     (message-display-line-entries
+                                      msg
+                                      :show-reasoning-p show-reasoning-p
+                                      :show-metadata-p show-metadata-p)))
+          :sum (ecase (getf block :type)
+                 (:text
+                  (wrapped-line-count (getf block :text) display-width))
+                 (:image
+                  (mcclim-image-block-visual-height
+                   (getf block :reference)
+                   width prefix-len char-w char-h))))))
+
+(defun mcclim-render-image-block
+    (pane reference row width prefix prefix-len fg bg ts char-w char-h
+     max-rows first-row-p)
+  "Render image REFERENCE at ROW and return rows consumed."
+  (multiple-value-bind (entry error-text)
+      (mcclim-load-display-image-reference reference)
+    (let* ((caption (mcclim-inline-image-caption reference entry error-text))
+           (caption-col (if first-row-p 0 prefix-len))
+           (caption-text (if first-row-p
+                             (concatenate 'string prefix caption)
+                             caption))
+           (visible-caption (subseq caption-text
+                                    0
+                                    (min (length caption-text)
+                                         (max 1 (- width caption-col))))))
+      (when (and (>= row 0) (< row max-rows))
+        (fill-row pane row width bg char-w char-h)
+        (draw-text-at pane row caption-col visible-caption
+                      fg bg ts char-w char-h))
+      (if (or error-text (null entry))
+          1
+          (multiple-value-bind (display-width display-height image-rows scale)
+              (mcclim-inline-image-geometry entry width prefix-len char-w char-h)
+            (let* ((image-row (1+ row))
+                   (image-end-row (+ image-row image-rows))
+                   (x (* prefix-len char-w))
+                   (y (* image-row char-h))
+                   (clip-y1 (max 0 y))
+                   (clip-y2 (min (* max-rows char-h) (+ y display-height))))
+              (when (and (> image-end-row 0)
+                         (< image-row max-rows)
+                         (< clip-y1 clip-y2))
+                (clim:draw-rectangle* pane
+                                      0 clip-y1
+                                      (* width char-w) clip-y2
+                                      :ink bg)
+                (clim:with-drawing-options
+                    (pane :clipping-region
+                          (clim:make-rectangle*
+                           x clip-y1
+                           (+ x display-width) clip-y2))
+                  (clim:with-scaling (pane scale scale
+                                           (clim:make-point x y))
+                    (clim:draw-pattern*
+                     pane
+                     (mcclim-image-cache-entry-pattern entry)
+                     x
+                     y)))))
+            (1+ image-rows))))))
+
 (defun pane-pixel-size (pane)
   "Return (values width height) — the allocated pixel size of PANE.
 Caps the pane viewport by the current top-level sheet region so external
@@ -840,7 +1019,8 @@ uses the same face/cursor behavior as the transcript pane."
                                      0 cols char-w char-h
                                      :show-cursor t
                                      :max-rows rows
-                                     :prefix "")))))
+                                     :prefix ""
+                                     :render-images-p nil)))))
 
 (defmethod drei:display-drei-view-contents
     ((pane clawmacs-drei-input-pane) view)
@@ -901,10 +1081,11 @@ ordinary input text."
       (let* ((show-reasoning-p (buffer-show-reasoning-p buf))
              (show-metadata-p (buffer-show-metadata-p buf))
              (msg-heights (mapcar (lambda (m)
-                                    (message-visual-height
-                                     m width
+                                    (mcclim-message-visual-height
+                                     m width char-w char-h
                                      :show-reasoning-p show-reasoning-p
-                                     :show-metadata-p show-metadata-p))
+                                     :show-metadata-p show-metadata-p
+                                     :render-images-p t))
                                   history-messages))
              (total-history-rows (reduce #'+ msg-heights :initial-value 0))
              (max-scroll (max 0 (- total-history-rows history-height)))
@@ -970,7 +1151,8 @@ ordinary input text."
                                      char-h
                                      :show-cursor t
                                      :max-rows rows
-                                     :prefix "")
+                                     :prefix ""
+                                     :render-images-p nil)
         (mcclim-record-render-snapshot (clim:pane-frame pane)
                                        pane
                                        buf
@@ -986,11 +1168,74 @@ ordinary input text."
 ;;; Message Line Rendering
 ;;; --------------------------------------------------------------------------
 
+(defun mcclim-render-text-block
+    (pane msg content line row width display-width prefix prefix-len
+     fg bg ts char-w char-h underline-p show-cursor max-rows
+     first-output-p cursor-y cursor-x)
+  "Render one text display block and return updated row/cursor state."
+  (let* ((tool-face-name (tool-line-base-face-name msg content))
+         (content-len (length content))
+         (num-wraps (wrapped-line-count content display-width)))
+    (dotimes (wrap-idx num-wraps)
+      (when (< row max-rows)
+        (let* ((chunk-start (* wrap-idx display-width))
+               (chunk-end (min (* (1+ wrap-idx) display-width)
+                               content-len))
+               (chunk (subseq content chunk-start chunk-end))
+               (first-row-p first-output-p))
+          (when (>= row 0)
+            (if tool-face-name
+                (multiple-value-bind (_tool-fg tool-bg _tool-ts)
+                    (resolve-global-face-inks tool-face-name)
+                  (declare (ignore _tool-fg _tool-ts))
+                  (fill-row pane row width tool-bg char-w char-h)
+                  (draw-faced-spans
+                   pane row (if first-row-p 0 prefix-len)
+                   (tool-line-display-spans
+                    content tool-face-name
+                    :start chunk-start
+                    :end chunk-end
+                    :prefix (and first-row-p prefix))
+                   char-w char-h))
+                (progn
+                  (fill-row pane row width bg char-w char-h)
+                  (when first-row-p
+                    (draw-text-at pane row 0
+                                  (concatenate 'string prefix chunk)
+                                  fg bg ts char-w char-h)
+                    (when underline-p
+                      (draw-underline-at pane row 0
+                                         (+ prefix-len (length chunk))
+                                         fg char-w char-h))
+                    (setf chunk nil))
+                  (when chunk
+                    (draw-text-at pane row prefix-len chunk
+                                  fg bg ts char-w char-h)
+                    (when underline-p
+                      (draw-underline-at pane row prefix-len (length chunk)
+                                         fg char-w char-h))))))
+          (when (and show-cursor
+                     line
+                     (>= row 0)
+                     (eq line (message-point-line msg)))
+            (let ((point-off (message-point-offset msg)))
+              (when (and (>= point-off chunk-start)
+                         (or (< point-off chunk-end)
+                             (and (= wrap-idx (1- num-wraps))
+                                  (= point-off chunk-end))))
+                (setf cursor-y row
+                      cursor-x (+ prefix-len
+                                  (- point-off chunk-start)))))))
+          (setf first-output-p nil)
+          (incf row))))
+  (values row first-output-p cursor-y cursor-x))
+
 (defun mcclim-render-message-lines (pane msg start-row width char-w char-h
                                     &key show-cursor (max-rows 1000)
                                       (prefix (message-sender-prefix msg))
                                       show-reasoning-p
-                                      show-metadata-p)
+                                      show-metadata-p
+                                      (render-images-p t))
   "Render MSG's lines into PANE starting at START-ROW with line wrapping.
 Returns the number of visual rows consumed."
   (let* ((prefix-len (length prefix))
@@ -1005,66 +1250,43 @@ Returns the number of visual rows consumed."
          (cursor-x nil))
     (multiple-value-bind (fg bg ts) (resolve-face-inks resolved)
       (let ((underline-p (resolved-face-underline-p resolved)))
-        (loop :for entry :in (message-display-line-entries
-                              msg
-                              :show-reasoning-p show-reasoning-p
-                              :show-metadata-p show-metadata-p)
-              :for content := (car entry)
-              :for line := (cdr entry)
-              :for line-idx :from 0
-              :while (< row max-rows)
-              :do (let* ((tool-face-name (tool-line-base-face-name msg content))
-                         (content-len (length content))
-                         (num-wraps (wrapped-line-count content display-width)))
-                    (dotimes (wrap-idx num-wraps)
-                      (when (< row max-rows)
-                        (let* ((chunk-start (* wrap-idx display-width))
-                               (chunk-end (min (* (1+ wrap-idx) display-width) content-len))
-                               (chunk (subseq content chunk-start chunk-end))
-                               (first-row-p (and (= line-idx 0) (= wrap-idx 0))))
-                          (when (>= row 0)
-                            (if tool-face-name
-                                (multiple-value-bind (_tool-fg tool-bg _tool-ts)
-                                    (resolve-global-face-inks tool-face-name)
-                                  (declare (ignore _tool-fg _tool-ts))
-                                  (fill-row pane row width tool-bg char-w char-h)
-                                  (draw-faced-spans
-                                   pane row (if first-row-p 0 prefix-len)
-                                   (tool-line-display-spans
-                                    content tool-face-name
-                                    :start chunk-start :end chunk-end
-                                    :prefix (and first-row-p prefix))
-                                   char-w char-h))
-                                (progn
-                                  (fill-row pane row width bg char-w char-h)
-                                  (when first-row-p
-                                    (draw-text-at pane row 0
-                                                  (concatenate 'string prefix chunk)
-                                                  fg bg ts char-w char-h)
-                                    (when underline-p
-                                      (draw-underline-at pane row 0
-                                                         (+ prefix-len (length chunk))
-                                                         fg char-w char-h))
-                                    (setf chunk nil))
-                                  (when chunk
-                                    (draw-text-at pane row prefix-len chunk
-                                                  fg bg ts char-w char-h)
-                                    (when underline-p
-                                      (draw-underline-at pane row prefix-len (length chunk)
-                                                         fg char-w char-h))))))
-                          (when (and show-cursor
-                                     line
-                                     (>= row 0)
-                                     (eq line (message-point-line msg)))
-                            (let ((point-off (message-point-offset msg)))
-                              (when (and (>= point-off chunk-start)
-                                         (or (< point-off chunk-end)
-                                             (and (= wrap-idx (1- num-wraps))
-                                                  (= point-off chunk-end))))
-                                (setf cursor-y row
-                                      cursor-x (+ prefix-len
-                                                  (- point-off chunk-start))))))
-                          (incf row))))))
+        (let ((first-output-p t)
+              (blocks (if render-images-p
+                          (message-display-blocks
+                           msg
+                           :show-reasoning-p show-reasoning-p
+                           :show-metadata-p show-metadata-p)
+                          (mapcar (lambda (entry)
+                                    (list :type :text
+                                          :text (car entry)
+                                          :source-line (cdr entry)))
+                                  (message-display-line-entries
+                                   msg
+                                   :show-reasoning-p show-reasoning-p
+                                   :show-metadata-p show-metadata-p)))))
+          (loop :for block :in blocks
+                :while (< row max-rows)
+                :do (ecase (getf block :type)
+                      (:text
+                       (multiple-value-setq
+                           (row first-output-p cursor-y cursor-x)
+                         (mcclim-render-text-block
+                          pane msg
+                          (getf block :text)
+                          (getf block :source-line)
+                          row width display-width prefix prefix-len
+                          fg bg ts char-w char-h underline-p show-cursor
+                          max-rows first-output-p cursor-y cursor-x)))
+                      (:image
+                       (let ((consumed
+                               (mcclim-render-image-block
+                                pane
+                                (getf block :reference)
+                                row width prefix prefix-len
+                                fg bg ts char-w char-h
+                                max-rows first-output-p)))
+                         (setf first-output-p nil)
+                         (incf row consumed))))))
         ;; Render cursor as reverse-video block
         (when (and show-cursor cursor-y cursor-x)
           (let* ((cx (min cursor-x (1- width)))

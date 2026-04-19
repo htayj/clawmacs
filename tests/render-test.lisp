@@ -271,6 +271,22 @@
               m 80
               :show-metadata-p t)))))
 
+(test message-display-blocks-detect-markdown-image-lines
+  "Standalone Markdown image lines become display-only image blocks."
+  (let ((m (make-message :agent)))
+    (clawmacs::set-message-text
+     m
+     (format nil "Here is the image:~%![Probe image](screenshots/mcclim/probe.png)"))
+    (let ((blocks (clawmacs::message-display-blocks m)))
+      (is (= 2 (length blocks)))
+      (is (eq :text (getf (first blocks) :type)))
+      (is (eq :image (getf (second blocks) :type)))
+      (let ((reference (getf (second blocks) :reference)))
+        (is (string= "Probe image"
+                     (clawmacs::display-image-reference-alt reference)))
+        (is (string= "screenshots/mcclim/probe.png"
+                     (clawmacs::display-image-reference-path reference)))))))
+
 (test init-global-faces-registers-tool-highlight-faces
   "Global theme initialization includes dedicated tool-call/result faces."
   (clawmacs::init-global-faces)

@@ -112,6 +112,10 @@ OFFLINE_AGENT_EVAL = r"""
                           status
                           (or (getf result :path) "")
                           (or (getf result :file-bytes) 0)))))
+              ((search "inline-image-probe" text :test #'char-equal)
+               (finish
+                "INLINE-IMAGE-RENDER-PROBE
+![Inline red probe](screenshots/mcclim/inline-image-probe-source.png)"))
               (t
                (finish
                 (cond
@@ -389,6 +393,43 @@ def assert_rendered_message_row_has_dark_pixels(png_path, snapshot, text):
         fail(
             f"{text} was in render JSON but its screenshot row had only "
             f"{dark_pixels} dark pixels"
+        )
+
+
+def make_inline_image_probe_source():
+    try:
+        from PIL import Image, ImageDraw
+    except Exception as exc:
+        fail(f"Pillow is required for McCLIM image e2e tests: {exc}")
+
+    os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+    path = os.path.join(SCREENSHOT_DIR, "inline-image-probe-source.png")
+    image = Image.new("RGB", (120, 64), (230, 20, 20))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((12, 12, 108, 52), fill=(20, 180, 50))
+    draw.rectangle((30, 22, 90, 42), fill=(230, 20, 20))
+    image.save(path)
+    return path
+
+
+def assert_screenshot_has_inline_probe_pixels(png_path):
+    try:
+        from PIL import Image
+    except Exception as exc:
+        fail(f"Pillow is required for McCLIM visual assertions: {exc}")
+
+    image = Image.open(png_path).convert("RGB")
+    red_pixels = 0
+    green_pixels = 0
+    for red, green, blue in image.getdata():
+        if red > 180 and green < 80 and blue < 80:
+            red_pixels += 1
+        if green > 130 and red < 80 and blue < 100:
+            green_pixels += 1
+    if red_pixels < 500 or green_pixels < 500:
+        fail(
+            "inline image did not render visible probe colors: "
+            f"red={red_pixels} green={green_pixels}"
         )
 
 
@@ -999,6 +1040,22 @@ def test_59_speculum_self_visibility_tools(session):
     session.screenshot("59-speculum-self-visibility")
 
 
+def test_60_inline_image_markdown_renders(session):
+    make_inline_image_probe_source()
+    E2E.set_input(session, "inline-image-probe")
+    session.press("Enter")
+    wait_for_non_user_message_text(session, "INLINE-IMAGE-RENDER-PROBE", timeout=15)
+    snapshot = wait_for_rendered_message_text(
+        session,
+        "![Inline red probe](screenshots/mcclim/inline-image-probe-source.png)",
+        timeout=15,
+    )
+    png_path = session.screenshot("60-inline-image-render")
+    assert_screenshot_has_inline_probe_pixels(png_path)
+    if not render_contains_text(snapshot, "INLINE-IMAGE-RENDER-PROBE"):
+        fail("inline image message was not tracked in render snapshot")
+
+
 def test_registry(group):
     offline_tests = [
         ("53-async-agent-reply-renders", test_53_async_agent_reply_renders_without_next_input),
@@ -1008,6 +1065,7 @@ def test_registry(group):
         ("57-skill-completion-escape", test_57_skill_completion_escape_dismisses),
         ("58-page-and-wheel-scroll", test_58_page_and_wheel_scroll_history),
         ("59-speculum-self-visibility", test_59_speculum_self_visibility_tools),
+        ("60-inline-image-render", test_60_inline_image_markdown_renders),
         ("38-shell-prefix", E2E.test_38_shell_prefix),
         ("39-debug-mode", E2E.test_39_debug_mode_toggle),
         ("40-save-session", E2E.test_40_save_session),

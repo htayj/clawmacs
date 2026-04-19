@@ -170,7 +170,8 @@ Guidelines:
 - Use lisp_eval for Common Lisp tests, introspection, live system updates, or defining helper tools when no exposed tool fits.
 - Return Lisp values from lisp_eval; prefer (format nil ...) over printing when you need a composed string.
 - Be concise in user-facing replies.
-- Show file paths clearly when working with files."
+- Show file paths clearly when working with files.
+- To display a sandbox-local image to the user, put a Markdown image link on its own line, such as `![alt text](relative/path.png)`."
   "Built-in clawmacs operating instructions inserted ahead of the personality prompt.")
 
 (defvar *default-core-system-prompt*

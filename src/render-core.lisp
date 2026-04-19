@@ -460,6 +460,65 @@ An empty string takes 1 row. A string exactly DISPLAY-WIDTH chars takes 1 row."
         :while line
         :collect (cons (line-content line) line)))
 
+(defstruct (display-image-reference
+            (:constructor make-display-image-reference
+                (&key path alt raw-text source-line)))
+  "Display-only reference to a local image embedded in message text."
+  (path "" :type string :read-only t)
+  (alt "" :type string :read-only t)
+  (raw-text "" :type string :read-only t)
+  (source-line nil :type (or null line) :read-only t))
+
+(defun trim-display-image-path (path)
+  "Normalize a Markdown image PATH for local display."
+  (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) path)))
+    (if (alexandria:starts-with-subseq "file://" trimmed)
+        (subseq trimmed 7)
+        trimmed)))
+
+(defun parse-display-image-line (text &key source-line)
+  "Parse TEXT as a standalone Markdown image line.
+Returns a DISPLAY-IMAGE-REFERENCE or NIL.  The supported form is:
+
+  ![alt text](path/to/image.png)
+
+The renderer intentionally treats image references as display-only; the
+underlying message text remains ordinary Markdown for provider round-tripping."
+  (let* ((trimmed (string-trim '(#\Space #\Tab) text))
+         (len (length trimmed)))
+    (when (and (>= len 5)
+               (alexandria:starts-with-subseq "![" trimmed)
+               (char= (char trimmed (1- len)) #\)))
+      (let ((separator (search "](" trimmed :start2 2)))
+        (when separator
+          (let* ((alt (subseq trimmed 2 separator))
+                 (path-start (+ separator 2))
+                 (path-end (1- len))
+                 (path (and (< path-start path-end)
+                            (trim-display-image-path
+                             (subseq trimmed path-start path-end)))))
+            (when (and path (plusp (length path)))
+              (make-display-image-reference
+               :path path
+               :alt alt
+               :raw-text text
+               :source-line source-line))))))))
+
+(defun message-display-blocks (msg &key show-reasoning-p show-metadata-p)
+  "Return display blocks for MSG.
+Each block is a plist.  Text blocks have :TYPE :TEXT, :TEXT, and
+:SOURCE-LINE.  Image blocks have :TYPE :IMAGE and :REFERENCE."
+  (loop :for entry :in (message-display-line-entries
+                        msg
+                        :show-reasoning-p show-reasoning-p
+                        :show-metadata-p show-metadata-p)
+        :for text := (car entry)
+        :for line := (cdr entry)
+        :for image := (parse-display-image-line text :source-line line)
+        :collect (if image
+                     (list :type :image :reference image)
+                     (list :type :text :text text :source-line line))))
+
 (defun message-has-content-block-type-p (msg block-type)
   "Return non-nil when MSG has a raw content block of BLOCK-TYPE."
   (and (message-raw-content msg)
