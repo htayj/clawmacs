@@ -90,6 +90,20 @@ OFFLINE_AGENT_EVAL = r"""
                             (clawmacs::stream-state-stop-reason state) "end_turn"
                             (clawmacs::stream-state-done-p state) t)))
                   :name "mcclim-e2e-pulse-stream")))
+              ((search "stream-stop-probe" text :test #'char-equal)
+               (let ((state (clawmacs::make-stream-state))
+                     (agent-msg (clawmacs::buffer-insert-agent-message
+                                 buf "" :record-p nil :run-hook-p nil)))
+                 (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                   (setf (clawmacs::stream-state-text state)
+                         "MCCLIM-STOP-PARTIAL"
+                         (clawmacs::stream-state-content-blocks state)
+                         (list (clawmacs::canonical-text-block
+                                "MCCLIM-STOP-PARTIAL"))))
+                 (setf (clawmacs::buffer-pending-stream buf) state
+                       (clawmacs::buffer-streaming-message buf) agent-msg
+                       (clawmacs::buffer-status buf) :thinking)
+                 (clawmacs:notify-buffer-display-change buf :stream-started)))
               ((search "speculum-window-state-probe" text :test #'char-equal)
                (let ((state (speculum-tool-data
                              "speculum_window_state"
@@ -341,6 +355,14 @@ def render_get(render, camel_key, kebab_key, default=None):
         return render[camel_key]
     if kebab_key in render:
         return render[kebab_key]
+    return default
+
+
+def window_get(windows, camel_key, kebab_key, default=None):
+    if camel_key in windows:
+        return windows[camel_key]
+    if kebab_key in windows:
+        return windows[kebab_key]
     return default
 
 
@@ -724,6 +746,15 @@ class McclimSession:
             description=description,
         )
 
+    def control_command(self, command):
+        path = os.path.join(self.control_dir, "command.sexp")
+        temp = path + ".tmp"
+        with open(temp, "w", encoding="utf-8") as stream:
+            stream.write(command)
+            stream.write("\n")
+        os.replace(temp, path)
+        time.sleep(0.2)
+
     def _snapshot_if(self, predicate):
         snapshot = self.snapshot()
         if predicate(snapshot):
@@ -971,6 +1002,35 @@ def test_55_stream_poll_renders_without_next_input(session):
     assert_rendered_message_row_has_dark_pixels(png_path, snapshot, expected)
 
 
+def test_56_escape_stops_active_stream(session):
+    """Escape stops an active provider stream without turning into Meta."""
+    partial = "MCCLIM-STOP-PARTIAL"
+    E2E.set_input(session, "stream-stop-probe")
+    session.press("Enter")
+    wait_for_rendered_message_text(session, partial, timeout=10)
+    session.press("Escape")
+
+    def stopped_snapshot():
+        snapshot = session.snapshot()
+        buffer = snapshot.get("buffer") or {}
+        if buffer.get("status") != "idle":
+            return None
+        text = non_user_message_text_containing(session, partial)
+        if "[Stopped by user]" in text:
+            return snapshot
+        return None
+
+    snapshot = wait_until(stopped_snapshot, timeout=10, interval=0.1,
+                          description="stream stopped by Escape")
+    screen = session.text()
+    E2E.assert_contains(screen, partial, "partial stream text remains visible")
+    E2E.assert_contains(screen, "[Stopped by user]", "stop marker visible")
+    E2E.assert_not_contains(screen, "Streaming error", "stop is not an error")
+    if not render_contains_text(snapshot, "[Stopped by user]"):
+        fail("stop marker reached buffer but not McCLIM render snapshot")
+    session.screenshot("56-escape-stops-stream")
+
+
 def test_56_meta_x_opens_extended_command(session):
     """Direct Alt+x should open M-x while Alt emulates Meta by default."""
     session.press("Alt+x")
@@ -1191,11 +1251,69 @@ def test_63_mouse_click_completion_candidates(session):
     E2E.clear_input(session)
 
 
+def test_64_logical_window_commands(session):
+    """Frame window operations should split, cycle, and delete windows."""
+    session.control_command(":split-below")
+    split = session.wait_snapshot(
+        lambda snap: window_get(snap.get("windows") or {}, "count", "count", 0) == 2,
+        timeout=10,
+        description="split-below created two windows",
+    )
+    first_selected = window_get(split.get("windows") or {},
+                                "selectedId", "selected-id", -1)
+
+    session.control_command(":other-window")
+    other = session.wait_snapshot(
+        lambda snap: (
+            window_get(snap.get("windows") or {}, "count", "count", 0) == 2
+            and window_get(snap.get("windows") or {},
+                           "selectedId", "selected-id", -1) != first_selected
+        ),
+        timeout=10,
+        description="other-window selected another window",
+    )
+    second_selected = window_get(other.get("windows") or {},
+                                 "selectedId", "selected-id", -1)
+
+    session.control_command(":split-right")
+    session.wait_snapshot(
+        lambda snap: window_get(snap.get("windows") or {}, "count", "count", 0) == 3,
+        timeout=10,
+        description="split-right created third window",
+    )
+
+    session.control_command(":delete-other-windows")
+    narrowed = session.wait_snapshot(
+        lambda snap: window_get(snap.get("windows") or {}, "count", "count", 0) == 1,
+        timeout=10,
+        description="delete-other-windows deleted other windows",
+    )
+    narrowed_selected = window_get(narrowed.get("windows") or {},
+                                   "selectedId", "selected-id", -1)
+    if narrowed_selected != second_selected:
+        fail("delete-other-windows did not preserve the selected logical window")
+
+    session.control_command(":split-below")
+    session.wait_snapshot(
+        lambda snap: window_get(snap.get("windows") or {}, "count", "count", 0) == 2,
+        timeout=10,
+        description="second C-x 2 split",
+    )
+    session.control_command(":delete-window")
+    session.wait_snapshot(
+        lambda snap: window_get(snap.get("windows") or {}, "count", "count", 0) == 1,
+        timeout=10,
+        description="delete-window deleted selected window",
+    )
+    session.screenshot("64-logical-window-commands")
+
+
 def test_registry(group):
     offline_tests = [
         ("53-async-agent-reply-renders", test_53_async_agent_reply_renders_without_next_input),
         ("54-tiling-resize-latest-visible", test_54_tiling_resize_keeps_latest_message_visible),
         ("55-stream-poll-renders", test_55_stream_poll_renders_without_next_input),
+        ("56-escape-stops-stream", test_56_escape_stops_active_stream),
         ("56-meta-x-command-picker", test_56_meta_x_opens_extended_command),
         ("57-skill-completion-escape", test_57_skill_completion_escape_dismisses),
         ("58-page-and-wheel-scroll", test_58_page_and_wheel_scroll_history),
@@ -1204,6 +1322,7 @@ def test_registry(group):
         ("61-mouse-click-input-point", test_61_mouse_click_input_moves_point),
         ("62-mouse-click-buffer-selector", test_62_mouse_click_buffer_selector_row),
         ("63-mouse-click-completion-candidates", test_63_mouse_click_completion_candidates),
+        ("64-logical-window-commands", test_64_logical_window_commands),
         ("38-shell-prefix", E2E.test_38_shell_prefix),
         ("39-debug-mode", E2E.test_39_debug_mode_toggle),
         ("40-save-session", E2E.test_40_save_session),
@@ -1266,6 +1385,8 @@ def test_registry(group):
 
     if group == "smoke":
         return full_initial_tests[:2]
+    if group == "windows":
+        return [("64-logical-window-commands", test_64_logical_window_commands)]
     if group == "offline":
         return offline_tests + readline_tests
     if group == "readline":
@@ -1277,7 +1398,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run clawmacs McCLIM e2e tests")
     parser.add_argument(
         "--only",
-        choices=["all", "readline", "offline", "smoke", *ONLINE_GROUPS],
+        choices=["all", "readline", "offline", "smoke", "windows", *ONLINE_GROUPS],
         default="offline",
         help="run only a subset of tests",
     )

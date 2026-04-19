@@ -2739,7 +2739,49 @@ reasoning_content is present, falls back to reasoning_content."
   (usage nil)
   (done-p nil          :type boolean)
   (error-p nil)
+  (cancel-requested-p nil :type boolean)
+  (cancelled-p nil :type boolean)
+  close-stream
+  reader-thread
   (lock (bt:make-lock "stream-state")))
+
+(defun stream-state-cancel-requested-p-safe (state)
+  "Return true when STATE has been cancelled, holding its lock."
+  (and state
+       (bt:with-lock-held ((stream-state-lock state))
+         (stream-state-cancel-requested-p state))))
+
+(defun register-stream-state-reader (state stream &optional thread)
+  "Attach STREAM and THREAD to STATE so cancellation can interrupt reads."
+  (bt:with-lock-held ((stream-state-lock state))
+    (setf (stream-state-close-stream state) stream
+          (stream-state-reader-thread state) thread))
+  state)
+
+(defun cancel-stream-state (state &key (stop-reason "cancelled"))
+  "Request cancellation of STATE and close its provider stream.
+Returns true when cancellation changed an active stream."
+  (let ((stream nil)
+        (cancelled nil))
+    (when state
+      (bt:with-lock-held ((stream-state-lock state))
+        (unless (stream-state-done-p state)
+          (setf cancelled t
+                stream (stream-state-close-stream state)
+                (stream-state-cancel-requested-p state) t
+                (stream-state-cancelled-p state) t
+                (stream-state-stop-reason state) stop-reason
+                (stream-state-done-p state) t)))
+      (when stream
+        (ignore-errors (close stream))))
+    cancelled))
+
+(defun stream-state-final-content-blocks (state)
+  "Return STATE's canonical content blocks, flushing accumulated text first."
+  (bt:with-lock-held ((stream-state-lock state))
+    (when (plusp (length (stream-state-text state)))
+      (set-stream-state-text-block state (stream-state-text state)))
+    (nreverse (copy-list (stream-state-content-blocks state)))))
 
 (defun parse-sse-line (line)
   "Parse a single SSE line. Returns (values field value) or nil.
@@ -2813,6 +2855,8 @@ SSE format: 'field: value' or just 'data: {...}'."
 
 (defun process-openai-sse-event (data state)
   "Process a single OpenAI SSE DATA payload into STATE."
+  (when (stream-state-cancel-requested-p-safe state)
+    (return-from process-openai-sse-event nil))
   (cond
     ((string= data "[DONE]")
      (bt:with-lock-held ((stream-state-lock state))
@@ -2853,7 +2897,7 @@ SSE format: 'field: value' or just 'data: {...}'."
   (handler-case
       (loop :with data-buffer := nil
             :for line := (read-line stream nil nil)
-            :while line
+            :while (and line (not (stream-state-cancel-requested-p-safe state)))
             :do (let ((trimmed (string-trim '(#\Return) line)))
                   (cond
                     ((zerop (length trimmed))
@@ -2868,8 +2912,9 @@ SSE format: 'field: value' or just 'data: {...}'."
                          (push value data-buffer)))))))
     (error (e)
       (bt:with-lock-held ((stream-state-lock state))
-        (setf (stream-state-error-p state) (format nil "~A" e)
-              (stream-state-done-p state) t))))
+        (unless (stream-state-cancel-requested-p state)
+          (setf (stream-state-error-p state) (format nil "~A" e)))
+        (setf (stream-state-done-p state) t))))
   (bt:with-lock-held ((stream-state-lock state))
     (setf (stream-state-done-p state) t)))
 
@@ -2881,6 +2926,8 @@ SSE format: 'field: value' or just 'data: {...}'."
 
 (defun process-openai-codex-responses-sse-event (data state)
   "Process one Responses API SSE DATA payload into STATE."
+  (when (stream-state-cancel-requested-p-safe state)
+    (return-from process-openai-codex-responses-sse-event nil))
   (let* ((event (api-json-decode data))
          (event-type (cdr (assoc :type event))))
     (unless (string= event-type "response.output_text.delta")
@@ -2977,7 +3024,7 @@ SSE format: 'field: value' or just 'data: {...}'."
   (handler-case
       (loop :with data-buffer := nil
             :for line := (read-line stream nil nil)
-            :while line
+            :while (and line (not (stream-state-cancel-requested-p-safe state)))
             :do (let ((trimmed (string-trim '(#\Return) line)))
                   (cond
                     ((zerop (length trimmed))
@@ -2992,8 +3039,9 @@ SSE format: 'field: value' or just 'data: {...}'."
                          (push value data-buffer)))))))
     (error (e)
       (bt:with-lock-held ((stream-state-lock state))
-        (setf (stream-state-error-p state) (format nil "~A" e)
-              (stream-state-done-p state) t))))
+        (unless (stream-state-cancel-requested-p state)
+          (setf (stream-state-error-p state) (format nil "~A" e)))
+        (setf (stream-state-done-p state) t))))
   (bt:with-lock-held ((stream-state-lock state))
     (setf (stream-state-done-p state) t)))
 
@@ -3026,13 +3074,16 @@ SSE format: 'field: value' or just 'data: {...}'."
                        (format nil "~A" body-stream))))
           (error "API error (~A): ~A" status-code err)))
       (let ((sse-stream (utf8-character-input-stream body-stream)))
-      (bt:make-thread
-       (lambda ()
-         (unwind-protect
-              (read-openai-codex-responses-sse-stream sse-stream state)
-           (close sse-stream)))
-       :name "clawmacs-openai-codex-responses")
-      state))))
+        (register-stream-state-reader state sse-stream)
+        (let ((thread
+                (bt:make-thread
+                 (lambda ()
+                   (unwind-protect
+                        (read-openai-codex-responses-sse-stream sse-stream state)
+                     (ignore-errors (close sse-stream))))
+                 :name "clawmacs-openai-codex-responses")))
+          (register-stream-state-reader state sse-stream thread)
+          state)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; OpenRouter API — OpenAI-compatible
@@ -3130,13 +3181,16 @@ Uses the same OpenAI-compatible streaming protocol."
                          (get-output-stream-string s))
                        (format nil "~A" body-stream))))
           (error "OpenRouter API error (~A): ~A" status-code err)))
-      (bt:make-thread
-       (lambda ()
-         (unwind-protect
-              (read-openai-sse-stream body-stream state)
-           (close body-stream)))
-       :name "clawmacs-openrouter-sse-reader")
-      state)))
+      (register-stream-state-reader state body-stream)
+      (let ((thread
+              (bt:make-thread
+               (lambda ()
+                 (unwind-protect
+                      (read-openai-sse-stream body-stream state)
+                   (ignore-errors (close body-stream))))
+               :name "clawmacs-openrouter-sse-reader")))
+        (register-stream-state-reader state body-stream thread)
+        state))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Z.AI (Zhipu AI) API — OpenAI-compatible
@@ -3230,13 +3284,16 @@ Uses the same OpenAI-compatible streaming protocol."
                          (get-output-stream-string s))
                        (format nil "~A" body-stream))))
           (error "Z.AI API error (~A): ~A" status-code err)))
-      (bt:make-thread
-       (lambda ()
-         (unwind-protect
-              (read-openai-sse-stream body-stream state)
-           (close body-stream)))
-       :name "clawmacs-zai-sse-reader")
-      state)))
+      (register-stream-state-reader state body-stream)
+      (let ((thread
+              (bt:make-thread
+               (lambda ()
+                 (unwind-protect
+                      (read-openai-sse-stream body-stream state)
+                   (ignore-errors (close body-stream))))
+               :name "clawmacs-zai-sse-reader")))
+        (register-stream-state-reader state body-stream thread)
+        state))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Response Parsing Helpers

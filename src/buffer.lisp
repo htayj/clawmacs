@@ -453,6 +453,11 @@ Enforces the invariant that it is not read-only."
       (scratch-buffer-p buf)
       (file-buffer-p buf)))
 
+(declaim (ftype (function (buffer) boolean) buffer-llm-running-p))
+(defun buffer-llm-running-p (buf)
+  "Return true when BUF has an active provider stream."
+  (not (null (and buf (buffer-pending-stream buf)))))
+
 (defvar *suppress-session-transcript-recording* nil
   "When non-nil, buffer message helpers do not append transcript events.")
 

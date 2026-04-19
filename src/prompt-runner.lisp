@@ -280,6 +280,65 @@ OpenAI-compatible providers also mirror it into CONTENT-BLOCKS on every delta."
         (t
          (concatenate 'string content-text accumulator))))))
 
+(defun cancelled-stream-content-blocks (state)
+  "Return cancellable response content, excluding unfinished tool calls."
+  (remove-if (lambda (block)
+               (string= "tool_use" (content-block-type block)))
+             (stream-state-final-content-blocks state)))
+
+(defun finalize-cancelled-streaming-response (buf state msg)
+  "Finalize MSG after STATE is stopped by the user."
+  (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
+         (content-blocks (cancelled-stream-content-blocks state))
+         (canonical-content
+           (canonicalize-message-content "assistant" content-blocks))
+         (final-text
+           (string-trim '(#\Space #\Tab #\Newline #\Return)
+                        (content-text-blocks canonical-content)))
+         (usage
+           (bt:with-lock-held ((stream-state-lock state))
+             (copy-list (stream-state-usage state)))))
+    (put-message-metadata
+     msg
+     :agent (buffer-agent-name buf)
+     :stop-reason "cancelled"
+     :content-block-count (length content-blocks)
+     :tool-call-count 0
+     :reasoning-block-count (length (content-reasoning-blocks
+                                      canonical-content)))
+    (when usage
+      (apply #'put-message-metadata
+             msg
+             (token-usage-metadata-pairs usage)))
+    (if (blank-string-p final-text)
+        (progn
+          (setf (message-sender msg) :system
+                (message-raw-content msg) nil
+                (message-face-set msg) (gethash :system
+                                                (buffer-face-registry buf)))
+          (set-message-text msg "[Response stopped by user]"))
+        (progn
+          (setf (message-face-set msg)
+                (gethash agent-kw (buffer-face-registry buf))
+                (message-raw-content msg) canonical-content)
+          (set-message-text msg
+                            (format nil "~A~%[Stopped by user]"
+                                    final-text))))
+    (record-buffer-message buf msg)
+    (setf (buffer-pending-stream buf) nil
+          (buffer-streaming-message buf) nil
+          (buffer-status buf) :idle)
+    (notify-buffer-display-change buf :stream-cancelled)
+    nil))
+
+(defun stop-streaming-response (buf)
+  "Stop BUF's active LLM stream, preserving any partial response text."
+  (let ((state (and buf (buffer-pending-stream buf))))
+    (when state
+      (cancel-stream-state state)
+      (update-streaming-response buf)
+      t)))
+
 (defun update-streaming-response (buf)
   "Poll the active streaming response and update the display.
 Returns T if still streaming, NIL if done."
@@ -291,7 +350,9 @@ Returns T if still streaming, NIL if done."
     (let ((done (bt:with-lock-held ((stream-state-lock state))
                   (stream-state-done-p state)))
           (err (bt:with-lock-held ((stream-state-lock state))
-                 (stream-state-error-p state))))
+                 (stream-state-error-p state)))
+          (cancelled (bt:with-lock-held ((stream-state-lock state))
+                       (stream-state-cancelled-p state))))
       ;; While streaming: update display with in-progress text
       ;; (stream-state-text accumulates the CURRENT block's text;
       ;; completed blocks have their text finalized in content-blocks)
@@ -306,6 +367,9 @@ Returns T if still streaming, NIL if done."
                 (set-message-text msg text)
                 (notify-buffer-display-change buf :streaming))))))
       (cond
+        ;; User-cancelled streams are normal stops, not provider errors.
+        (cancelled
+         (finalize-cancelled-streaming-response buf state msg))
         ;; Error during streaming
         (err
          (set-message-text msg (format nil "[Streaming error: ~A]" err))

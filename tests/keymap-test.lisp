@@ -54,6 +54,12 @@
   (is (eq 'clawmacs::redraw-screen-command
           (keymap-lookup *default-keymap* (code-char 12)))))
 
+(test default-keymap-escape-stop-llm-binding
+  "Default keymap binds Escape to stopping the active LLM response."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::stop-llm-command
+          (keymap-lookup *default-keymap* #\Esc))))
+
 (test default-keymap-backspace-bindings
   "Default keymap binds backspace variants to backward char delete."
   (clawmacs::init-default-keymap)
@@ -122,6 +128,31 @@
            (clawmacs::mcclim-normalize-key
             (mcclim-test-key-event :space #\Space clim:+control-key+)))))
 
+(test mcclim-normalize-escape-is-meta-prefix-when-not-streaming
+  "Escape remains the Meta prefix when no provider stream is active."
+  (let ((clawmacs::*meta-pending* nil)
+        (clawmacs::*alt-pending* nil)
+        (clawmacs::*skill-completion-active* nil))
+    (is (null (clawmacs::mcclim-normalize-key
+               (mcclim-test-key-event :escape #\Esc))))
+    (is-true clawmacs::*meta-pending*)
+    (is (null clawmacs::*alt-pending*))))
+
+(test mcclim-normalize-escape-passes-through-when-streaming
+  "Escape reaches the keymap as Esc while the visible buffer has an LLM run."
+  (let* ((buf (make-buffer "streaming-escape"))
+         (state (clawmacs::make-stream-state))
+         (clawmacs::*meta-pending* nil)
+         (clawmacs::*alt-pending* nil)
+         (clawmacs::*skill-completion-active* nil))
+    (setf (buffer-pending-stream buf) state)
+    (is (eql #\Esc
+             (clawmacs::mcclim-normalize-key
+              (mcclim-test-key-event :escape #\Esc)
+              buf)))
+    (is (null clawmacs::*meta-pending*))
+    (is (null clawmacs::*alt-pending*))))
+
 (test mcclim-ui-state-dynamically-binds-interaction-specials
   "McCLIM frame-local UI state shadows and persists modal interaction specials."
   (let ((clawmacs::*minibuffer-active* nil)
@@ -188,6 +219,20 @@ and C-x b to the old overlay buffer selector."
           (keymap-lookup *default-keymap* '(:ctrl-x #\p))))
   (is (eq 'clawmacs::load-session-command
           (keymap-lookup *default-keymap* (list :ctrl-x (code-char 18))))))
+
+(test default-keymap-window-bindings
+  "Default keymap binds Emacs-style logical window commands."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::split-window-below-command
+          (keymap-lookup *default-keymap* '(:ctrl-x #\2))))
+  (is (eq 'clawmacs::split-window-right-command
+          (keymap-lookup *default-keymap* '(:ctrl-x #\3))))
+  (is (eq 'clawmacs::delete-window-command
+          (keymap-lookup *default-keymap* '(:ctrl-x #\0))))
+  (is (eq 'clawmacs::delete-other-windows-command
+          (keymap-lookup *default-keymap* '(:ctrl-x #\1))))
+  (is (eq 'clawmacs::other-window-command
+          (keymap-lookup *default-keymap* '(:ctrl-x #\o)))))
 
 (test file-keymap-emacs-editor-bindings
   "File buffers have Emacs-style editor bindings over the global keymap."

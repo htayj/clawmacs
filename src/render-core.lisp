@@ -443,6 +443,9 @@ Mode dispatch priority matches handle-key-event in main.lisp."
                 (tool-name (or (cdr (assoc :tool-name approval)) "")))
            (setf row1 " a: approve  d: deny  m: deny with message"
                  row2 (format nil " ~A" tool-name))))
+        ((and buf (buffer-llm-running-p buf))
+         (setf row1 " Agent response in progress"
+               row2 " Esc: stop response  C-l: redraw"))
         ((and buf (scratch-buffer-p buf))
          (setf row1 " Scratch buffer: edit freely  RET: newline"
                row2 " C-x b/C-x C-b: switch  C-l: redraw"))

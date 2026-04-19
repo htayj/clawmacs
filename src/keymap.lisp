@@ -101,6 +101,8 @@
     ;; (LF, ASCII 10), since CLIM ports can report Enter either way.
     (keymap-bind km #\Return 'send-message)
     (keymap-bind km #\Newline 'send-message)
+    ;; Stop an active LLM response.
+    (keymap-bind km #\Esc 'stop-llm-command)
     ;; Insert newline: C-o (open-line, ASCII 15) since C-j (#\Newline)
     ;; is indistinguishable from Enter in this key abstraction.
     (keymap-bind km (code-char 15) 'insert-newline-command) ; C-o = ASCII 15
@@ -197,6 +199,11 @@
     (keymap-bind km '(:ctrl-x #\p) 'minibuffer-select-project-command) ; C-x p
     (keymap-bind km '(:ctrl-x #\n) 'new-buffer-command)       ; C-x n = new buffer
     (keymap-bind km '(:ctrl-x #\k) 'kill-buffer-command)      ; C-x k = kill buffer
+    (keymap-bind km '(:ctrl-x #\2) 'split-window-below-command) ; C-x 2
+    (keymap-bind km '(:ctrl-x #\3) 'split-window-right-command) ; C-x 3
+    (keymap-bind km '(:ctrl-x #\0) 'delete-window-command) ; C-x 0
+    (keymap-bind km '(:ctrl-x #\1) 'delete-other-windows-command) ; C-x 1
+    (keymap-bind km '(:ctrl-x #\o) 'other-window-command) ; C-x o
     (keymap-bind km (list :ctrl-x (code-char 19)) 'save-session-command) ; C-x C-s
     (keymap-bind km (list :ctrl-x (code-char 18)) 'load-session-command) ; C-x C-r
     (keymap-bind km '(:ctrl-x #\t) 'session-tree-command) ; C-x t

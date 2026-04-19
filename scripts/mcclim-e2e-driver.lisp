@@ -16,6 +16,19 @@
 (defun control-pathname (directory)
   (uiop:ensure-directory-pathname directory))
 
+(defun control-command-pathname (directory)
+  (merge-pathnames "command.sexp" (control-pathname directory)))
+
+(defun read-control-command (&optional (directory (control-dir)))
+  "Read and remove one pending e2e control command, if present."
+  (let ((path (control-command-pathname directory)))
+    (when (probe-file path)
+      (unwind-protect
+           (with-open-file (stream path :direction :input)
+             (read stream nil nil))
+        (ignore-errors
+          (delete-file path))))))
+
 (defun truncate-string (string max-chars)
   (if (and string (> (length string) max-chars))
       (concatenate 'string (subseq string 0 max-chars) "...")
@@ -52,6 +65,25 @@
   "Return the primary McCLIM frame when the GUI is running."
   (and (boundp 'clawmacs::*clawmacs-frame*)
        clawmacs::*clawmacs-frame*))
+
+(defun apply-control-command (command)
+  "Apply COMMAND to the McCLIM frame for deterministic e2e control."
+  (let ((frame (current-mcclim-frame)))
+    (when frame
+      (clawmacs::with-mcclim-frame-ui-state (frame)
+        (ecase command
+          (:split-below
+           (clawmacs::mcclim-split-selected-window frame :vertical))
+          (:split-right
+           (clawmacs::mcclim-split-selected-window frame :horizontal))
+          (:other-window
+           (clawmacs::mcclim-select-other-window frame))
+          (:delete-window
+           (clawmacs::mcclim-delete-selected-window frame))
+          (:delete-other-windows
+           (clawmacs::mcclim-delete-other-windows frame)))
+        (clawmacs::mcclim-redisplay-frame frame :force-p t))
+      t)))
 
 (defmacro with-current-mcclim-ui-state (&body body)
   "Bind frame-local McCLIM UI state while observing the running application."
@@ -179,6 +211,34 @@
              (clawmacs::frame-last-render-snapshot frame))
         '((:ready . nil)))))
 
+(defun window-state ()
+  "Return the running McCLIM frame's logical window state."
+  (let ((frame (current-mcclim-frame)))
+    (if (and frame (typep frame 'clawmacs::clawmacs-gui))
+        (let* ((tree (clawmacs::mcclim-ensure-window-tree frame))
+               (selected-id (clawmacs::frame-selected-window-id frame))
+               (windows (clawmacs:clawmacs-window-tree-windows tree)))
+          `((:selected-id . ,(or selected-id -1))
+            (:count . ,(length windows))
+            (:windows
+             . ,(coerce
+                 (mapcar (lambda (window)
+                           (let ((buffer
+                                   (clawmacs:clawmacs-window-buffer window)))
+                             `((:id . ,(clawmacs:clawmacs-window-id window))
+                               (:buffer-name . ,(if buffer
+                                                    (buffer-name buffer)
+                                                    ""))
+                               (:selected
+                                . ,(eql selected-id
+                                        (clawmacs:clawmacs-window-id
+                                         window))))))
+                         windows)
+                 'vector))))
+        '((:selected-id . -1)
+          (:count . 0)
+          (:windows . #())))))
+
 (defun snapshot ()
   "Return a JSON-ready semantic snapshot of the running McCLIM session."
   (handler-case
@@ -188,6 +248,7 @@
             (:timestamp . ,(get-universal-time))
             (:buffer . ,(when buffer (buffer-state buffer)))
             (:buffers . ,(buffer-ring-state))
+            (:windows . ,(window-state))
             (:render . ,(render-state))
             (:minibuffer . ,(minibuffer-state))
             (:skill-completion . ,(skill-completion-state))
@@ -215,6 +276,9 @@
 
 (defun control-loop (directory interval)
   (loop
+    (let ((command (read-control-command directory)))
+      (when command
+        (apply-control-command command)))
     (ignore-errors
       (write-snapshot directory))
     (sleep interval)))

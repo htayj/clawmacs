@@ -18,6 +18,10 @@
   :description "Buffer tests"
   :in clawmacs-suite)
 
+(def-suite windows-suite
+  :description "Logical window tree tests"
+  :in clawmacs-suite)
+
 (def-suite commands-suite
   :description "Command system tests"
   :in clawmacs-suite)

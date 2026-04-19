@@ -188,6 +188,9 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
 (clim:define-presentation-type buffer-ref ()
   :description "a buffer reference")
 
+(clim:define-presentation-type clawmacs-window-ref ()
+  :description "a Clawmacs logical window")
+
 (clim:define-presentation-type selector-entry-ref ()
   :description "a selector entry")
 
@@ -226,9 +229,19 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
   (let ((current (current-buffer)))
     (when (and target-buffer (member target-buffer *buffer-ring*))
       (switch-to-buffer target-buffer)
+      (when (boundp 'clim:*application-frame*)
+        (mcclim-set-selected-window-buffer clim:*application-frame*
+                                           target-buffer))
       (setf *buffer-selector-active* nil)
       (unless (eq target-buffer current)
         (setf (buffer-scroll-offset target-buffer) 0)))))
+
+(clim:define-command (com-select-window
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((target-window 'clawmacs-window-ref))
+  (when target-window
+    (mcclim-select-window clim:*application-frame* target-window)))
 
 (clim:define-command (com-select-model-entry
                       :command-table clawmacs-mcclim-command-table
@@ -388,6 +401,15 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
                 :priority 10
                 :documentation "Switch to this buffer"
                 :pointer-documentation "Switch to this buffer")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-clawmacs-window
+    (clawmacs-window-ref com-select-window clawmacs-mcclim-command-table
+                         :gesture :select
+                         :priority 5
+                         :documentation "Select this window"
+                         :pointer-documentation "Select this window")
     (object)
   (list object))
 
@@ -705,6 +727,12 @@ recursive repainting display function."
    (follow-current-buffer-p :initarg :follow-current-buffer-p
                             :initform t
                             :accessor frame-follow-current-buffer-p)
+   (window-tree :initarg :window-tree
+                :initform nil
+                :accessor frame-window-tree)
+   (selected-window-id :initarg :selected-window-id
+                       :initform nil
+                       :accessor frame-selected-window-id)
    (char-width :accessor frame-char-width :initform 0)
    (char-height :accessor frame-char-height :initform 0)
    (pane-space-char-height :accessor frame-pane-space-char-height :initform 0)
@@ -793,7 +821,8 @@ recursive repainting display function."
   (when (and new-buffer (member new-buffer *buffer-ring*))
     (setf (frame-display-buffer frame) new-buffer
           (frame-follow-current-buffer-p frame) nil)
-    (switch-to-buffer new-buffer))
+    (switch-to-buffer new-buffer)
+    (mcclim-set-selected-window-buffer frame new-buffer))
   new-buffer)
 
 (defun mcclim-install-frame-command-table (frame)
@@ -821,6 +850,7 @@ to the existing Clawmacs command/keymap system."
     (let ((main-pane (clim:find-pane-named frame 'main-pane)))
       (when main-pane
         (setf (esa:windows frame) (list main-pane))))
+    (mcclim-ensure-window-tree frame)
     (mcclim-install-frame-command-table frame)
     (mcclim-sync-drei-from-buffer frame :force-p t)
     (mcclim-ensure-polling frame)))
@@ -834,6 +864,12 @@ to the existing Clawmacs command/keymap system."
 (defvar *mcclim-live-frames-lock*
   (bt:make-lock "mcclim-live-frames"))
 
+(defvar *mcclim-suppress-render-snapshot* nil
+  "When non-nil, nested buffer renderers do not overwrite frame snapshots.")
+
+(defvar *mcclim-render-window-id* nil
+  "Logical window id currently being rendered, used for output-record keys.")
+
 ;;; --------------------------------------------------------------------------
 ;;; Render Snapshots
 ;;; --------------------------------------------------------------------------
@@ -846,25 +882,27 @@ to the existing Clawmacs command/keymap system."
 
 (defun mcclim-record-render-snapshot
     (frame pane buf mode rows cols &key input-start-row history-height
-                                  visible-messages)
+                                  visible-messages windows)
   "Record the latest actual McCLIM display pass for e2e observation."
-  (multiple-value-bind (pixel-width pixel-height)
-      (pane-pixel-size pane)
-    (setf (frame-last-render-snapshot frame)
-          `((:ready . t)
-            (:sequence . ,(incf (frame-render-sequence frame)))
-            (:mode . ,(string-downcase (symbol-name mode)))
-            (:buffer-name . ,(if buf (buffer-name buf) ""))
-            (:rows . ,rows)
-            (:cols . ,cols)
-            (:pixel-width . ,pixel-width)
-            (:pixel-height . ,pixel-height)
-            (:input-start-row . ,(or input-start-row -1))
-            (:history-height . ,(or history-height -1))
-            (:visible-messages
-             . ,(coerce (mapcar #'mcclim-render-snapshot-message
-                                 (or visible-messages nil))
-                        'vector)))))
+  (unless *mcclim-suppress-render-snapshot*
+    (multiple-value-bind (pixel-width pixel-height)
+        (pane-pixel-size pane)
+      (setf (frame-last-render-snapshot frame)
+            `((:ready . t)
+              (:sequence . ,(incf (frame-render-sequence frame)))
+              (:mode . ,(string-downcase (symbol-name mode)))
+              (:buffer-name . ,(if buf (buffer-name buf) ""))
+              (:rows . ,rows)
+              (:cols . ,cols)
+              (:pixel-width . ,pixel-width)
+              (:pixel-height . ,pixel-height)
+              (:input-start-row . ,(or input-start-row -1))
+              (:history-height . ,(or history-height -1))
+              (:visible-messages
+               . ,(coerce (mapcar #'mcclim-render-snapshot-message
+                                   (or visible-messages nil))
+                          'vector))
+              (:windows . ,(coerce (or windows nil) 'vector))))))
   frame)
 
 ;;; --------------------------------------------------------------------------
@@ -931,6 +969,15 @@ Fills a background rectangle first, then draws the text on top."
                         0 (* row char-h)
                         (* cols char-w) (* (1+ row) char-h)
                         :ink bg-ink))
+
+(defun fill-grid-rect (pane row col rows cols ink char-w char-h)
+  "Fill a grid rectangle in PANE."
+  (clim:draw-rectangle* pane
+                        (* col char-w)
+                        (* row char-h)
+                        (* (+ col cols) char-w)
+                        (* (+ row rows) char-h)
+                        :ink ink))
 
 (defun draw-faced-spans (pane row start-col spans char-w char-h)
   "Draw SPANS starting at (ROW, START-COL) using global face definitions."
@@ -1157,12 +1204,163 @@ history grows a pane's own sheet-region."
   (and (boundp '*clawmacs-frame*)
        (eq frame *clawmacs-frame*)))
 
-(defun frame-visible-buffer (frame)
-  "Return the buffer FRAME should display."
+(defun mcclim-frame-fallback-buffer (frame)
+  "Return the buffer to use when FRAME has no selected live window buffer."
   (or (and (frame-follow-current-buffer-p frame)
            (current-buffer))
       (frame-display-buffer frame)
-      (current-buffer)))
+      (current-buffer)
+      (ensure-scratch-buffer)))
+
+(defun mcclim-sync-esa-windows (frame)
+  "Keep ESA's frame window slot pointed at CLIM panes.
+
+ESA records command state on the current window and uses the first window as
+`*standard-output*' in its top level, so this slot must contain McCLIM panes
+rather than Clawmacs' logical application windows."
+  (let ((main-pane (clim:find-pane-named frame 'main-pane)))
+    (when main-pane
+      (setf (esa:windows frame) (list main-pane)))))
+
+(defun mcclim-ensure-window-tree (frame)
+  "Ensure FRAME has a live logical window tree and selected window id."
+  (let ((fallback (mcclim-frame-fallback-buffer frame)))
+    (unless (frame-window-tree frame)
+      (let* ((tree (make-clawmacs-window-tree fallback))
+             (window (first (clawmacs-window-tree-windows tree))))
+        (setf (frame-window-tree frame) tree
+              (frame-selected-window-id frame) (clawmacs-window-id window))))
+    (let* ((tree (frame-window-tree frame))
+           (windows (clawmacs-window-tree-windows tree)))
+      (clawmacs-window-tree-replace-dead-buffers tree *buffer-ring* fallback)
+      (unless (clawmacs-window-tree-find-window
+               tree (frame-selected-window-id frame))
+        (let ((first-window (first windows)))
+          (when first-window
+            (setf (frame-selected-window-id frame)
+                  (clawmacs-window-id first-window)))))
+      (mcclim-sync-esa-windows frame)
+      tree)))
+
+(defun frame-selected-window (frame)
+  "Return FRAME's selected logical window."
+  (let ((tree (mcclim-ensure-window-tree frame)))
+    (or (clawmacs-window-tree-find-window tree (frame-selected-window-id frame))
+        (first (clawmacs-window-tree-windows tree)))))
+
+(defun frame-window-buffers (frame)
+  "Return the buffers displayed by FRAME's logical windows."
+  (remove-duplicates
+   (remove nil
+           (mapcar #'clawmacs-window-buffer
+                   (clawmacs-window-tree-windows
+                    (mcclim-ensure-window-tree frame))))
+   :test #'eq))
+
+(defun frame-visible-buffer (frame)
+  "Return the buffer FRAME should display."
+  (let ((window (frame-selected-window frame)))
+    (or (and window (clawmacs-window-buffer window))
+        (mcclim-frame-fallback-buffer frame))))
+
+(defun mcclim-set-selected-window-buffer (frame buffer)
+  "Set FRAME's selected logical window to display BUFFER."
+  (when (and frame buffer (member buffer *buffer-ring*))
+    (let ((window (frame-selected-window frame)))
+      (when window
+        (setf (clawmacs-window-buffer window) buffer
+              (frame-display-buffer frame) buffer
+              (frame-follow-current-buffer-p frame) nil)
+        (unless (eq (current-buffer) buffer)
+          (switch-to-buffer buffer))
+        (mcclim-sync-esa-windows frame)
+        buffer))))
+
+(defun mcclim-select-window (frame window)
+  "Select WINDOW in FRAME and make its buffer the current buffer."
+  (let* ((tree (mcclim-ensure-window-tree frame))
+         (window-id (etypecase window
+                      (clawmacs-window (clawmacs-window-id window))
+                      (integer window)))
+         (live-window (clawmacs-window-tree-find-window tree window-id)))
+    (when live-window
+      (setf (frame-selected-window-id frame) window-id)
+      (mcclim-set-selected-window-buffer
+       frame (or (clawmacs-window-buffer live-window)
+                 (mcclim-frame-fallback-buffer frame)))
+      (mcclim-sync-drei-from-buffer frame :force-p t)
+      live-window)))
+
+(defun mcclim-sync-selected-window-from-current-buffer (frame previous-buffer)
+  "Update FRAME's selected logical window after a command changed current buffer."
+  (mcclim-ensure-window-tree frame)
+  (let ((current (current-buffer)))
+    (cond
+      ((and current (not (eq current previous-buffer)))
+       (mcclim-set-selected-window-buffer frame current))
+      ((not (member (frame-visible-buffer frame) *buffer-ring* :test #'eq))
+       (mcclim-set-selected-window-buffer
+        frame (mcclim-frame-fallback-buffer frame))))))
+
+(defun mcclim-split-selected-window (frame orientation)
+  "Split FRAME's selected logical window with ORIENTATION."
+  (let* ((tree (mcclim-ensure-window-tree frame))
+         (selected (frame-selected-window frame))
+         (new-window (and selected
+                          (split-clawmacs-window-tree
+                           tree
+                           (clawmacs-window-id selected)
+                           orientation))))
+    (when new-window
+      (mcclim-sync-esa-windows frame)
+      (notify-buffer-display-change (clawmacs-window-buffer selected)
+                                    :windows))
+    new-window))
+
+(defun mcclim-delete-selected-window (frame)
+  "Delete FRAME's selected logical window."
+  (let* ((tree (mcclim-ensure-window-tree frame))
+         (selected (frame-selected-window frame)))
+    (when selected
+      (multiple-value-bind (new-tree replacement deleted-p)
+          (delete-clawmacs-window-from-tree
+           tree (clawmacs-window-id selected))
+        (setf (frame-window-tree frame) new-tree)
+        (when replacement
+          (setf (frame-selected-window-id frame)
+                (clawmacs-window-id replacement))
+          (mcclim-set-selected-window-buffer
+           frame (clawmacs-window-buffer replacement)))
+        (when deleted-p
+          (mcclim-sync-esa-windows frame)
+          (notify-buffer-display-change (frame-visible-buffer frame)
+                                        :windows))
+        deleted-p))))
+
+(defun mcclim-delete-other-windows (frame)
+  "Delete every logical window in FRAME except the selected window."
+  (let* ((tree (mcclim-ensure-window-tree frame))
+         (selected (frame-selected-window frame)))
+    (when selected
+      (multiple-value-bind (new-tree replacement deleted-p)
+          (delete-other-clawmacs-windows tree (clawmacs-window-id selected))
+        (declare (ignore replacement))
+        (setf (frame-window-tree frame) new-tree
+              (frame-selected-window-id frame)
+              (clawmacs-window-id selected))
+        (mcclim-sync-esa-windows frame)
+        (when deleted-p
+          (notify-buffer-display-change (frame-visible-buffer frame)
+                                        :windows))
+        deleted-p))))
+
+(defun mcclim-select-other-window (frame)
+  "Select the next logical window in FRAME."
+  (let* ((tree (mcclim-ensure-window-tree frame))
+         (next (clawmacs-window-tree-next-window
+                tree (frame-selected-window-id frame))))
+    (when next
+      (mcclim-select-window frame next))))
 
 (defun frame-drei-input-pane (frame)
   "Return FRAME's Drei-backed input pane, if it exists."
@@ -1415,6 +1613,68 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
         show-reasoning-p
         show-metadata-p))
 
+(defun mcclim-window-layout-entries (frame rows cols)
+  "Return logical window layout entries and separators for FRAME."
+  (clawmacs-window-tree-layout
+   (mcclim-ensure-window-tree frame)
+   rows
+   cols))
+
+(defun mcclim-render-window-separator (pane separator char-w char-h)
+  "Render one logical window separator."
+  (multiple-value-bind (fg bg ts opts)
+      (resolve-global-face-inks :modeline)
+    (declare (ignore fg ts opts))
+    (fill-grid-rect pane
+                    (clawmacs-window-separator-row separator)
+                    (clawmacs-window-separator-col separator)
+                    (clawmacs-window-separator-rows separator)
+                    (clawmacs-window-separator-cols separator)
+                    bg
+                    char-w
+                    char-h)))
+
+(defun mcclim-render-logical-window-entry
+    (frame pane entry char-w char-h selected-window-id)
+  "Render one logical window ENTRY into PANE using CLIM clipping/translation."
+  (declare (ignore frame))
+  (let* ((window (clawmacs-window-layout-entry-window entry))
+         (buf (and window (clawmacs-window-buffer window)))
+         (row (clawmacs-window-layout-entry-row entry))
+         (col (clawmacs-window-layout-entry-col entry))
+         (rows (clawmacs-window-layout-entry-rows entry))
+         (cols (clawmacs-window-layout-entry-cols entry))
+         (x (* col char-w))
+         (y (* row char-h))
+         (x2 (* (+ col cols) char-w))
+         (y2 (* (+ row rows) char-h))
+         (selected-p (and window
+                          (eql selected-window-id
+                               (clawmacs-window-id window)))))
+    (when (and window buf (plusp rows) (plusp cols))
+      (clim:with-output-as-presentation (pane window 'clawmacs-window-ref)
+        (clim:with-drawing-options
+            (pane :clipping-region (clim:make-rectangle* x y x2 y2))
+          (clim:with-translation (pane x y)
+            (let ((*mcclim-render-window-id* (clawmacs-window-id window))
+                  (*mcclim-suppress-render-snapshot* (not selected-p)))
+              (declare (special *mcclim-render-window-id*
+                                *mcclim-suppress-render-snapshot*))
+              (mcclim-render-buffer pane buf rows cols char-w char-h))))))))
+
+(defun mcclim-render-logical-window-tree
+    (frame pane rows cols char-w char-h)
+  "Render FRAME's Emacs-style logical windows into the transcript pane."
+  (clear-pane-with-ink pane *mcclim-bg-ink*)
+  (multiple-value-bind (entries separators)
+      (mcclim-window-layout-entries frame rows cols)
+    (let ((selected-window-id (frame-selected-window-id frame)))
+      (dolist (entry entries)
+        (mcclim-render-logical-window-entry
+         frame pane entry char-w char-h selected-window-id))
+      (dolist (separator separators)
+        (mcclim-render-window-separator pane separator char-w char-h)))))
+
 (defun display-main-pane (frame pane)
   "Display function for the main pane. Dispatches to buffer/selector rendering.
 When the minibuffer is active, draws a centered popup overlay on top."
@@ -1443,7 +1703,11 @@ When the minibuffer is active, draws a centered popup overlay on top."
            (mcclim-record-render-snapshot frame pane buf :think-selector
                                           rows cols))
           (t
-           (mcclim-render-buffer pane buf rows cols char-w char-h)))
+           (mcclim-ensure-window-tree frame)
+           (if (> (clawmacs-window-tree-count (frame-window-tree frame)) 1)
+               (mcclim-render-logical-window-tree frame pane rows cols
+                                                  char-w char-h)
+               (mcclim-render-buffer pane buf rows cols char-w char-h))))
         ;; Popup overlay for minibuffer and automatic skill completion.
         (when (or *minibuffer-active* *skill-completion-active*)
           (mcclim-render-completion-popup pane cols rows char-w char-h))))))
@@ -1795,7 +2059,7 @@ ordinary input text."
                         (push msg visible-messages)
                         (clim:updating-output
                             (pane
-                             :unique-id msg
+                             :unique-id (list *mcclim-render-window-id* msg)
                              :cache-value
                              (mcclim-message-cache-value
                               msg screen-row width
@@ -2717,11 +2981,12 @@ characters used by Clawmacs keymaps."
           (list :ctrl prefix key)
           (list prefix key)))))
 
-(defun mcclim-normalize-key (key-event)
+(defun mcclim-normalize-key (key-event &optional buffer)
   "Normalize a McCLIM key-press-event to Clawmacs' abstract key format.
 Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), etc."
   (let* ((char (clim:keyboard-event-character key-event))
          (key-name (clim:keyboard-event-key-name key-event))
+         (effective-buffer (or buffer (current-buffer)))
          (modifiers (clim:event-modifier-state key-event))
          (ctrl-p (plusp (logand modifiers clim:+control-key+)))
          (meta-p (plusp (logand modifiers clim:+meta-key+)))
@@ -2817,7 +3082,9 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
        (list :meta key))
       ;; ESC prefix
       ((and (characterp key) (char= key #\Esc))
-       (if *skill-completion-active*
+       (if (or *skill-completion-active*
+               (and effective-buffer
+                    (buffer-llm-running-p effective-buffer)))
            key
            (progn
              (setf *meta-pending* t
@@ -2983,6 +3250,44 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
     ((<= 20 col) :message)
     (t nil)))
 
+(defun mcclim-window-entry-at-grid-position (frame row col rows cols)
+  "Return the logical window layout entry containing ROW/COL, or NIL."
+  (multiple-value-bind (entries separators)
+      (mcclim-window-layout-entries frame rows cols)
+    (declare (ignore separators))
+    (find-if (lambda (entry)
+               (let ((entry-row (clawmacs-window-layout-entry-row entry))
+                     (entry-col (clawmacs-window-layout-entry-col entry))
+                     (entry-rows (clawmacs-window-layout-entry-rows entry))
+                     (entry-cols (clawmacs-window-layout-entry-cols entry)))
+                 (and (<= entry-row row)
+                      (< row (+ entry-row entry-rows))
+                      (<= entry-col col)
+                      (< col (+ entry-col entry-cols)))))
+             entries)))
+
+(defun mcclim-localize-main-pane-grid-position (frame row col rows cols)
+  "Return window-local row/col/cols for a main-pane grid position.
+
+Values are LOCAL-ROW, LOCAL-COL, LOCAL-COLS, and SELECTED-CHANGED-P.  When ROW
+and COL fall outside any logical window, they are returned unchanged."
+  (if (<= (clawmacs-window-tree-count (mcclim-ensure-window-tree frame)) 1)
+      (values row col cols nil)
+      (let* ((entry (mcclim-window-entry-at-grid-position
+                     frame row col rows cols))
+             (window (and entry
+                          (clawmacs-window-layout-entry-window entry))))
+        (if (null entry)
+            (values row col cols nil)
+            (let ((changed-p (not (eql (frame-selected-window-id frame)
+                                       (clawmacs-window-id window)))))
+              (when changed-p
+                (mcclim-select-window frame window))
+              (values (- row (clawmacs-window-layout-entry-row entry))
+                      (- col (clawmacs-window-layout-entry-col entry))
+                      (clawmacs-window-layout-entry-cols entry)
+                      changed-p))))))
+
 (defun mcclim-handle-approval-click (frame row col)
   "Handle a select click on an approval action label."
   (let* ((buf (frame-visible-buffer frame))
@@ -3021,11 +3326,18 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
       (multiple-value-bind (cols _rows)
           (pane-grid-dimensions pane (frame-char-width frame)
                                 (frame-char-height frame))
-        (declare (ignore _rows))
         (or (mcclim-handle-completion-popup-click frame pane row col)
             (mcclim-handle-selector-click frame row)
-            (mcclim-handle-approval-click frame row col)
-            (mcclim-handle-document-click frame row col cols))))))
+            (multiple-value-bind (local-row local-col local-cols changed-p)
+                (mcclim-localize-main-pane-grid-position
+                 frame row col _rows cols)
+              (if changed-p
+                  (progn
+                    (mcclim-redisplay-frame frame :force-p t)
+                    t)
+                  (or (mcclim-handle-approval-click frame local-row local-col)
+                      (mcclim-handle-document-click
+                       frame local-row local-col local-cols)))))))))
 
 (defun mcclim-handle-input-pane-click (frame pane event)
   "Handle mouse select actions in the editable Drei input pane."
@@ -3144,11 +3456,11 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
                                           :min-height (* 2 char-h)
                                           :max-height (* 2 char-h)))))))
 
-(defun mcclim-normalize-gesture (gesture)
+(defun mcclim-normalize-gesture (gesture &optional buffer)
   "Normalize an ESA/CLIM GESTURE to Clawmacs' abstract key format."
   (cond
     ((typep gesture 'clim:key-press-event)
-     (mcclim-normalize-key gesture))
+     (mcclim-normalize-key gesture buffer))
     ((characterp gesture)
      (case gesture
        (#\Return #\Newline)
@@ -3165,17 +3477,21 @@ Returns (values need-redisplay-p force-redisplay-p)."
         ;; Popup viewers are read-only; do not let keyboard input mutate shared
         ;; prefix state or fall through to CLIM's input editor.
         (values nil nil)
-        (let ((key (mcclim-normalize-gesture gesture))
-              (force-redisplay-p nil))
+        (let* ((buf (frame-visible-buffer frame))
+               (previous-buffer (current-buffer))
+               (key (mcclim-normalize-gesture gesture buf))
+               (force-redisplay-p nil))
           (file-debug-log "mcclim-input" "gesture ~S normalized to ~S"
                           gesture key)
           (when key
-            (let ((result (handle-key-event (frame-visible-buffer frame) key)))
+            (let ((result (handle-key-event buf key)))
               (when (eq result :quit)
                 (setf (frame-quit-flag frame) t)
                 (clim:frame-exit frame))
               (when (eq result :redraw)
                 (setf force-redisplay-p t))))
+          (mcclim-sync-selected-window-from-current-buffer
+           frame previous-buffer)
           ;; Even prefix-only keys return NIL from normalization but may change
           ;; who-line state, so the interactive frame should still redisplay.
           (values t force-redisplay-p)))))
@@ -3184,11 +3500,11 @@ Returns (values need-redisplay-p force-redisplay-p)."
   "Poll streaming/OAuth state for FRAME.
 Returns true when application state may have changed."
   (when (mcclim-primary-frame-p frame)
-    (let ((changed-p nil)
-          (buf (frame-visible-buffer frame)))
-      (when (buffer-pending-stream buf)
-        (update-streaming-response buf)
-        (setf changed-p t))
+    (let ((changed-p nil))
+      (dolist (buf (frame-window-buffers frame))
+        (when (buffer-pending-stream buf)
+          (update-streaming-response buf)
+          (setf changed-p t)))
       (when *openai-oauth-pending*
         (update-openai-oauth-login)
         (setf changed-p t))
@@ -3235,7 +3551,7 @@ Returns true when application state may have changed."
 
 (defun mcclim-poll-needed-p (frame)
   "Return true when FRAME needs timer-driven provider/OAuth polling."
-  (or (buffer-pending-stream (frame-visible-buffer frame))
+  (or (some #'buffer-pending-stream (frame-window-buffers frame))
       *openai-oauth-pending*))
 
 (defun mcclim-input-event-sources (frame)

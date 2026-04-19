@@ -2651,6 +2651,94 @@ same
       (is (search "Streaming error"
                   (event-value event :text))))))
 
+(test stop-streaming-response-records-partial-message
+  "Stopping a stream preserves arrived text but does not feed the stop marker to providers."
+  (let* ((*sessions-dir* (temp-session-test-directory "stream-stop"))
+         (session (load-or-create-session "stream-stop"))
+         (buf (make-buffer "stream-stop"
+                           :agent-name "agent"
+                           :session session))
+         (msg (buffer-insert-agent-message buf "" :record-p nil))
+         (state (clawmacs::make-stream-state)))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (setf (clawmacs::stream-state-text state) "partial answer"
+            (clawmacs::stream-state-content-blocks state)
+            (list (clawmacs::canonical-text-block "partial answer"))))
+    (setf (buffer-pending-stream buf) state
+          (buffer-streaming-message buf) msg
+          (buffer-status buf) :thinking)
+    (is-true (clawmacs::stop-streaming-response buf))
+    (is (null (buffer-pending-stream buf)))
+    (is (null (buffer-streaming-message buf)))
+    (is (eq :idle (buffer-status buf)))
+    (is (search "[Stopped by user]" (message-text msg)))
+    (is (string= "partial answer"
+                 (clawmacs::content-text-blocks (message-raw-content msg))))
+    (is (not (search "[Stopped by user]"
+                     (clawmacs::content-text-blocks
+                      (message-raw-content msg)))))
+    (is (string= "cancelled"
+                 (clawmacs::message-metadata-value
+                  (message-metadata msg)
+                  :stop-reason)))
+    (is-true (bt:with-lock-held ((clawmacs::stream-state-lock state))
+               (clawmacs::stream-state-cancelled-p state)))
+    (let* ((message-events
+             (remove-if-not (lambda (event)
+                              (string= "message"
+                                       (event-value event :event)))
+                            (session-current-events session)))
+           (event (first message-events)))
+      (is (= 1 (length message-events)))
+      (is (string= "AGENT" (event-value event :sender)))
+      (is (search "[Stopped by user]" (event-value event :text)))
+      (is (vectorp (event-value event :raw-content))))))
+
+(test stop-streaming-response-records-system-message-when-empty
+  "Stopping before any assistant text creates a display-only system message."
+  (let* ((*sessions-dir* (temp-session-test-directory "stream-stop-empty"))
+         (session (load-or-create-session "stream-stop-empty"))
+         (buf (make-buffer "stream-stop-empty"
+                           :agent-name "agent"
+                           :session session))
+         (msg (buffer-insert-agent-message buf "" :record-p nil))
+         (state (clawmacs::make-stream-state)))
+    (setf (buffer-pending-stream buf) state
+          (buffer-streaming-message buf) msg
+          (buffer-status buf) :thinking)
+    (is-true (clawmacs::stop-streaming-response buf))
+    (is (eq :system (message-sender msg)))
+    (is (null (message-raw-content msg)))
+    (is (string= "[Response stopped by user]" (message-text msg)))
+    (is (null (clawmacs::build-conversation-messages buf)))
+    (let* ((message-events
+             (remove-if-not (lambda (event)
+                              (string= "message"
+                                       (event-value event :event)))
+                            (session-current-events session)))
+           (event (first message-events)))
+      (is (= 1 (length message-events)))
+      (is (string= "SYSTEM" (event-value event :sender)))
+      (is (string= "[Response stopped by user]"
+                   (event-value event :text))))))
+
+(test handle-key-event-escape-stops-active-stream
+  "Esc dispatches to the stop command while a stream is active."
+  (let* ((buf (make-buffer "stream-stop-key" :agent-name "agent"))
+         (msg (buffer-insert-agent-message buf "" :record-p nil))
+         (state (clawmacs::make-stream-state)))
+    (clawmacs::init-default-keymap)
+    (setf (buffer-keymap buf) *default-keymap*)
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (setf (clawmacs::stream-state-text state) "partial"))
+    (setf (buffer-pending-stream buf) state
+          (buffer-streaming-message buf) msg
+          (buffer-status buf) :thinking)
+    (is (eq :redraw
+            (clawmacs::handle-key-event buf #\Esc)))
+    (is (null (buffer-pending-stream buf)))
+    (is (search "[Stopped by user]" (message-text msg)))))
+
 (test insert-tool-results-message-records-raw-content
   "Tool result transcript events preserve canonical raw content."
   (let* ((*sessions-dir* (temp-session-test-directory "tool-result"))

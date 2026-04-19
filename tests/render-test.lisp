@@ -86,6 +86,24 @@
         (declare (ignore row1))
         (is (search "C-l: redraw" row2))))))
 
+(test format-who-line-streaming-advertises-escape-stop
+  "Chat buffers advertise Escape cancellation while an LLM stream is active."
+  (let ((*minibuffer-active* nil)
+        (*buffer-selector-active* nil)
+        (*model-selector-active* nil)
+        (*think-selector-active* nil)
+        (*customize-face-state* nil)
+        (*openai-oauth-pending* nil)
+        (*deny-message-mode* nil)
+        (clawmacs::*buffer-ring* nil))
+    (let ((buf (make-buffer "s1" :agent-name "agent"
+                            :working-directory #P"/tmp/")))
+      (setf (buffer-pending-stream buf) (clawmacs::make-stream-state))
+      (multiple-value-bind (row1 row2)
+          (clawmacs::format-who-line buf 120)
+        (is (search "response in progress" row1))
+        (is (search "Esc: stop response" row2))))))
+
 (test format-who-line-scratch-describes-editing
   "Scratch buffers advertise editing rather than chat send semantics."
   (let ((*minibuffer-active* nil)

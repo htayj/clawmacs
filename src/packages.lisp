@@ -316,6 +316,7 @@
    #:scratch-buffer-p
    #:file-buffer-p
    #:document-buffer-p
+   #:buffer-llm-running-p
    #:make-chat-buffer
    #:scratch-buffer
    #:ensure-scratch-buffer
@@ -338,6 +339,45 @@
    #:replace-buffer-history-with-serialized-messages
    #:load-session
    #:list-saved-sessions
+
+   ;; Windows
+   #:clawmacs-window
+   #:make-clawmacs-window
+   #:clawmacs-window-id
+   #:clawmacs-window-buffer
+   #:clawmacs-window-node
+   #:clawmacs-window-node-kind
+   #:clawmacs-window-node-window
+   #:clawmacs-window-node-orientation
+   #:clawmacs-window-node-first
+   #:clawmacs-window-node-second
+   #:make-clawmacs-window-tree
+   #:make-clawmacs-window-leaf
+   #:make-clawmacs-window-split
+   #:clawmacs-window-node-leaf-p
+   #:clawmacs-window-node-split-p
+   #:clawmacs-window-tree-windows
+   #:clawmacs-window-tree-count
+   #:clawmacs-window-tree-find-window
+   #:clawmacs-window-tree-find-node
+   #:split-clawmacs-window-tree
+   #:clawmacs-window-tree-next-window
+   #:delete-clawmacs-window-from-tree
+   #:delete-other-clawmacs-windows
+   #:clawmacs-window-tree-replace-dead-buffers
+   #:clawmacs-window-layout-entry
+   #:clawmacs-window-layout-entry-window
+   #:clawmacs-window-layout-entry-row
+   #:clawmacs-window-layout-entry-col
+   #:clawmacs-window-layout-entry-rows
+   #:clawmacs-window-layout-entry-cols
+   #:clawmacs-window-separator
+   #:clawmacs-window-separator-orientation
+   #:clawmacs-window-separator-row
+   #:clawmacs-window-separator-col
+   #:clawmacs-window-separator-rows
+   #:clawmacs-window-separator-cols
+   #:clawmacs-window-tree-layout
 
    ;; Commands
    #:*current-caller*
@@ -796,6 +836,11 @@
    #:session-tree-command
    #:fork-session-command
    #:list-buffers-command
+   #:split-window-below-command
+   #:split-window-right-command
+   #:delete-window-command
+   #:delete-other-windows-command
+   #:other-window-command
    #:minibuffer-select-project-command
    #:open-project-file-command
    #:create-project-file-command
@@ -1079,6 +1124,7 @@
    #:chat-message
    #:tool-call
    #:buffer-ref
+   #:clawmacs-window-ref
    #:model-ref
 
    ;; Main
@@ -1199,6 +1245,8 @@
    #:prompt-run-tool-count
    #:prompt-run-used-tool-p
    #:send-to-agent-with-context
+   #:stop-streaming-response
+   #:stop-llm-command
    #:switch-buffer-to-agent
     #:scroll-up-command
     #:scroll-down-command

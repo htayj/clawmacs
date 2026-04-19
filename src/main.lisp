@@ -119,6 +119,12 @@
             result)))))
 (defcommand send-message :keys (#\Return))
 
+(defun stop-llm-command (buffer)
+  "Stop the active LLM response in BUFFER."
+  (when (stop-streaming-response buffer)
+    :redraw))
+(defcommand stop-llm-command :keys (#\Esc))
+
 (defun insert-newline-command (buffer)
   "Insert a newline in the input message."
   (message-insert-newline (buffer-input-message buffer))
@@ -1458,6 +1464,47 @@ to navigate. Shows buffer name, agent, status, and message count."
   (when (cdr *buffer-ring*)  ; Don't kill the last buffer
     (kill-buffer-from-ring (current-buffer))))
 (defcommand kill-buffer-command)
+
+(declaim (special *clawmacs-frame*))
+
+(defun call-mcclim-window-command (buffer function-name &rest args)
+  "Invoke a McCLIM frame window operation, or report that no frame is active."
+  (cond
+    ((and (boundp '*clawmacs-frame*)
+          *clawmacs-frame*
+          (fboundp function-name))
+     (apply (symbol-function function-name) *clawmacs-frame* args))
+    (buffer
+     (buffer-insert-system-message
+      buffer
+      "[Window commands are available in the McCLIM interface.]")
+     nil)
+    (t nil)))
+
+(defun split-window-below-command (buffer)
+  "Split the selected window into top and bottom windows."
+  (call-mcclim-window-command buffer 'mcclim-split-selected-window :vertical))
+(defcommand split-window-below-command)
+
+(defun split-window-right-command (buffer)
+  "Split the selected window into left and right windows."
+  (call-mcclim-window-command buffer 'mcclim-split-selected-window :horizontal))
+(defcommand split-window-right-command)
+
+(defun delete-window-command (buffer)
+  "Delete the selected logical window."
+  (call-mcclim-window-command buffer 'mcclim-delete-selected-window))
+(defcommand delete-window-command)
+
+(defun delete-other-windows-command (buffer)
+  "Delete every logical window except the selected one."
+  (call-mcclim-window-command buffer 'mcclim-delete-other-windows))
+(defcommand delete-other-windows-command)
+
+(defun other-window-command (buffer)
+  "Select the next logical window."
+  (call-mcclim-window-command buffer 'mcclim-select-other-window))
+(defcommand other-window-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Session Commands
@@ -3030,6 +3077,12 @@ KEY is already normalized by the interface before calling this."
       ;; C-l requests a full redraw in every mode.
       ((redraw-key-p key)
        (redraw-screen-command buf))
+
+      ;; Esc stops an active provider stream before any modal UI consumes it.
+      ((and (characterp key)
+            (char= key #\Esc)
+            (buffer-llm-running-p buf))
+       (stop-llm-command buf))
 
       ;; === MINIBUFFER MODE ===
       ;; When the minibuffer is active, it captures all input
