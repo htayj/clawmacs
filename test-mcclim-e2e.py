@@ -39,58 +39,97 @@ OFFLINE_AGENT_EVAL = r"""
 (setf (symbol-function 'clawmacs::send-to-agent-with-context)
       (lambda (buf)
         (let ((text (or (clawmacs::buffer-previous-user-command-text buf) "")))
-          (cond
-            ((search "async-render-probe" text :test #'char-equal)
-             (setf (clawmacs::buffer-status buf) :thinking)
-             (clawmacs:notify-buffer-display-change buf :async-render-test)
-             (bt:make-thread
-              (lambda ()
-                (sleep 0.6)
-                (clawmacs::buffer-insert-agent-message
-                 buf
-                 "MCCLIM-ASYNC-RENDER-VISIBLE")
-                (setf (clawmacs::buffer-status buf) :idle)
-                (clawmacs:notify-buffer-display-change buf :async-render-test))
-              :name "mcclim-e2e-async-render"))
-            ((search "stream-poll-probe" text :test #'char-equal)
-             (let ((state (clawmacs::make-stream-state))
-                   (agent-msg (clawmacs::buffer-insert-agent-message
-                               buf "" :record-p nil :run-hook-p nil)))
-               (setf (clawmacs::buffer-pending-stream buf) state
-                     (clawmacs::buffer-streaming-message buf) agent-msg
-                     (clawmacs::buffer-status buf) :thinking)
-               (clawmacs:notify-buffer-display-change buf :stream-started)
+          (labels ((finish (message)
+                     (clawmacs::buffer-insert-agent-message buf message)
+                     (setf (clawmacs::buffer-status buf) :idle)
+                     (clawmacs:notify-buffer-display-change buf :offline-agent))
+                   (ensure-speculum ()
+                     (pushnew "speculum"
+                              (clawmacs:buffer-enabled-packages buf)
+                              :test #'string=)
+                     (clawmacs:load-active-packages :buffer buf))
+                   (speculum-tool-data (tool-name args)
+                     (handler-case
+                         (progn
+                           (ensure-speculum)
+                           (let ((clawmacs::*current-tool-buffer* buf)
+                                 (clawmacs::*current-caller* :agent))
+                             (nth-value 0
+                               (clawmacs::lisp-data-read
+                                (clawmacs:execute-tool tool-name args)))))
+                       (error (condition)
+                         (list :ok nil :error (format nil "~A" condition))))))
+            (cond
+              ((search "async-render-probe" text :test #'char-equal)
+               (setf (clawmacs::buffer-status buf) :thinking)
+               (clawmacs:notify-buffer-display-change buf :async-render-test)
                (bt:make-thread
                 (lambda ()
                   (sleep 0.6)
-                  (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                    (setf (clawmacs::stream-state-content-blocks state)
-                          (list (clawmacs::canonical-text-block
-                                 "MCCLIM-PULSE-STREAM-VISIBLE"))
-                          (clawmacs::stream-state-stop-reason state) "end_turn"
-                          (clawmacs::stream-state-done-p state) t)))
-                :name "mcclim-e2e-pulse-stream")))
-            (t
-             (clawmacs::buffer-insert-agent-message
-              buf
-              (cond
-                ((search "(+ 40 2)" text :test #'char-equal)
-                 "42")
-                ((search "describe-common-lisp-symbol-to-string" text
-                         :test #'char-equal)
-                 "format~%Reference: CL Community Spec")
-                ((search "file_write" text :test #'char-equal)
-                 "first second")
-                ((search "alpha" text :test #'char-equal)
-                 "alpha")
-                ((search "beta" text :test #'char-equal)
-                 "beta")
-                ((search "tiling-resize-probe" text :test #'char-equal)
-                 "MCCLIM-TILING-RESIZE-VISIBLE")
-                (t
-                 (format nil "offline echo: ~A" text))))
-             (setf (clawmacs::buffer-status buf) :idle)
-             (clawmacs:notify-buffer-display-change buf :offline-agent)))
+                  (clawmacs::buffer-insert-agent-message
+                   buf
+                   "MCCLIM-ASYNC-RENDER-VISIBLE")
+                  (setf (clawmacs::buffer-status buf) :idle)
+                  (clawmacs:notify-buffer-display-change buf :async-render-test))
+                :name "mcclim-e2e-async-render"))
+              ((search "stream-poll-probe" text :test #'char-equal)
+               (let ((state (clawmacs::make-stream-state))
+                     (agent-msg (clawmacs::buffer-insert-agent-message
+                                 buf "" :record-p nil :run-hook-p nil)))
+                 (setf (clawmacs::buffer-pending-stream buf) state
+                       (clawmacs::buffer-streaming-message buf) agent-msg
+                       (clawmacs::buffer-status buf) :thinking)
+                 (clawmacs:notify-buffer-display-change buf :stream-started)
+                 (bt:make-thread
+                  (lambda ()
+                    (sleep 0.6)
+                    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                      (setf (clawmacs::stream-state-content-blocks state)
+                            (list (clawmacs::canonical-text-block
+                                   "MCCLIM-PULSE-STREAM-VISIBLE"))
+                            (clawmacs::stream-state-stop-reason state) "end_turn"
+                            (clawmacs::stream-state-done-p state) t)))
+                  :name "mcclim-e2e-pulse-stream")))
+              ((search "speculum-window-state-probe" text :test #'char-equal)
+               (let ((state (speculum-tool-data
+                             "speculum_window_state"
+                             '(:scope "all" :message-limit 3))))
+                 (finish
+                  (if (and (getf state :ok)
+                           (getf state :available)
+                           (getf state :frame)
+                           (getf state :panes)
+                           (getf state :render))
+                      "SPECULUM-WINDOW-STATE-OK"
+                      (format nil "SPECULUM-WINDOW-STATE-FAIL ~S" state)))))
+              ((search "speculum-screenshot-probe" text :test #'char-equal)
+               (let* ((result (speculum-tool-data
+                               "speculum_screenshot"
+                               '(:refresh t)))
+                      (status (if (getf result :ok) "OK" "FAIL")))
+                 (finish
+                  (format nil "SPECULUM-SCREENSHOT-~A path=~A bytes=~A"
+                          status
+                          (or (getf result :path) "")
+                          (or (getf result :file-bytes) 0)))))
+              (t
+               (finish
+                (cond
+                  ((search "(+ 40 2)" text :test #'char-equal)
+                   "42")
+                  ((search "describe-common-lisp-symbol-to-string" text
+                           :test #'char-equal)
+                   "format~%Reference: CL Community Spec")
+                  ((search "file_write" text :test #'char-equal)
+                   "first second")
+                  ((search "alpha" text :test #'char-equal)
+                   "alpha")
+                  ((search "beta" text :test #'char-equal)
+                   "beta")
+                  ((search "tiling-resize-probe" text :test #'char-equal)
+                   "MCCLIM-TILING-RESIZE-VISIBLE")
+                  (t
+                   (format nil "offline echo: ~A" text)))))))
           buf)))
 """
 
@@ -260,6 +299,25 @@ def wait_for_non_user_message_text(session, text, timeout=120):
         interval=0.25,
         description=f"non-user message containing {text}",
     )
+
+
+def non_user_message_text_containing(session, marker):
+    snapshot = session.snapshot()
+    messages = (snapshot.get("buffer") or {}).get("messages") or []
+    for message in reversed(messages):
+        sender = str(message.get("sender", "")).lower()
+        text = str(message.get("text", ""))
+        if sender != "user" and marker in text:
+            return text
+    return ""
+
+
+def message_field(text, name):
+    prefix = f"{name}="
+    for token in text.split():
+        if token.startswith(prefix):
+            return token[len(prefix) :]
+    return ""
 
 
 def render_visible_messages(snapshot):
@@ -922,6 +980,25 @@ def test_58_page_and_wheel_scroll_history(session):
     session.screenshot("58-page-and-wheel-scroll")
 
 
+def test_59_speculum_self_visibility_tools(session):
+    E2E.set_input(session, "speculum-window-state-probe")
+    session.press("Enter")
+    wait_for_non_user_message_text(session, "SPECULUM-WINDOW-STATE-OK", timeout=15)
+
+    E2E.set_input(session, "speculum-screenshot-probe")
+    session.press("Enter")
+    wait_for_non_user_message_text(session, "SPECULUM-SCREENSHOT-OK", timeout=20)
+    text = non_user_message_text_containing(session, "SPECULUM-SCREENSHOT-OK")
+    path = message_field(text, "path")
+    if not path:
+        fail(f"speculum screenshot response did not include a path: {text}")
+    if not os.path.exists(path):
+        fail(f"speculum screenshot path does not exist: {path}")
+    if os.path.getsize(path) <= 0:
+        fail(f"speculum screenshot path is empty: {path}")
+    session.screenshot("59-speculum-self-visibility")
+
+
 def test_registry(group):
     offline_tests = [
         ("53-async-agent-reply-renders", test_53_async_agent_reply_renders_without_next_input),
@@ -930,6 +1007,7 @@ def test_registry(group):
         ("56-meta-x-command-picker", test_56_meta_x_opens_extended_command),
         ("57-skill-completion-escape", test_57_skill_completion_escape_dismisses),
         ("58-page-and-wheel-scroll", test_58_page_and_wheel_scroll_history),
+        ("59-speculum-self-visibility", test_59_speculum_self_visibility_tools),
         ("38-shell-prefix", E2E.test_38_shell_prefix),
         ("39-debug-mode", E2E.test_39_debug_mode_toggle),
         ("40-save-session", E2E.test_40_save_session),

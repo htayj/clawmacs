@@ -230,6 +230,9 @@
            (pipelines (find "pipelines" definitions
                             :key #'clawmacs:package-definition-name
                             :test #'string=))
+           (speculum (find "speculum" definitions
+                           :key #'clawmacs:package-definition-name
+                           :test #'string=))
            (sexed (find "sexed" definitions
                         :key #'clawmacs:package-definition-name
                         :test #'string=))
@@ -240,7 +243,7 @@
                            :key #'clawmacs:package-definition-name
                            :test #'string=)))
       (is (equal '("git" "lispi" "netcons" "pipelines" "sexed" "slop"
-                   "subagent")
+                   "speculum" "subagent")
                  names))
       (is (not (null git)))
       (is (eq :builtin (clawmacs:package-definition-source-tier git)))
@@ -257,6 +260,10 @@
       (is (eq :builtin (clawmacs:package-definition-source-tier pipelines)))
       (is (clawmacs:package-definition-autoload pipelines))
       (is (probe-file (clawmacs:package-definition-entrypoint pipelines)))
+      (is (not (null speculum)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier speculum)))
+      (is (clawmacs:package-definition-autoload speculum))
+      (is (probe-file (clawmacs:package-definition-entrypoint speculum)))
       (is (not (null sexed)))
       (is (eq :builtin (clawmacs:package-definition-source-tier sexed)))
       (is (clawmacs:package-definition-autoload sexed))
@@ -279,6 +286,7 @@
       (is (not (null (clawmacs:find-available-package "slop"))))
       (is (not (null (clawmacs:find-available-package "netcons"))))
       (is (not (null (clawmacs:find-available-package "pipelines"))))
+      (is (not (null (clawmacs:find-available-package "speculum"))))
       (is (not (null (clawmacs:find-available-package "subagent"))))
       (is (null (clawmacs:render-package-prompt-sections))))))
 
