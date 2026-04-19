@@ -140,6 +140,44 @@
       (is-false (buffer-dirty-p buffer))
       (is (string= "(note new)" (project-read-file "edit" "notes.lisp"))))))
 
+(test project-file-buffer-uses-editor-keymap-and-emacs-editing
+  "Project file buffers use the file keymap and can be edited with normal keys."
+  (with-project-test-state (root definitions)
+    (clawmacs::init-default-keymap)
+    (define-project "keys" :root root)
+    (project-create-file "keys" "notes.txt" :content "alpha")
+    (let ((buffer (project-open-file "keys" "notes.txt")))
+      (is (eq clawmacs::*file-keymap* (buffer-keymap buffer)))
+      (clawmacs::handle-key-event buffer '(:meta #\>))
+      (clawmacs::handle-key-event buffer #\Return)
+      (dolist (char '(#\b #\e #\t #\a))
+        (clawmacs::handle-key-event buffer char))
+      (is (string= "alpha
+beta" (file-buffer-text buffer)))
+      (is (buffer-dirty-p buffer))
+      (clawmacs::save-session-command buffer)
+      (is (string= "alpha
+beta" (project-read-file "keys" "notes.txt"))))))
+
+(test project-file-buffer-region-editing
+  "File buffers support mark, region kill, and write-file-as."
+  (with-project-test-state (root definitions)
+    (clawmacs::init-default-keymap)
+    (define-project "region" :root root)
+    (project-create-file "region" "notes.txt" :content "abcdef")
+    (let ((buffer (project-open-file "region" "notes.txt"))
+          (msg nil))
+      (setf msg (buffer-input-message buffer))
+      (clawmacs::set-message-point-from-absolute-offset msg 1)
+      (clawmacs::handle-key-event buffer (code-char 0))
+      (clawmacs::set-message-point-from-absolute-offset msg 4)
+      (clawmacs::handle-key-event buffer (code-char 23))
+      (is (string= "aef" (file-buffer-text buffer)))
+      (is (string= "bcd" (kill-ring-top)))
+      (clawmacs::write-project-file-as-command buffer "renamed.txt")
+      (is (string= "renamed.txt" (buffer-resource-path buffer)))
+      (is (string= "aef" (project-read-file "region" "renamed.txt"))))))
+
 (test direct-project-writes-refresh-open-file-buffer
   "Direct project writes keep already-open file buffers coherent."
   (with-project-test-state (root definitions)

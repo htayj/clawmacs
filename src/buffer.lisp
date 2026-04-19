@@ -744,24 +744,6 @@ and create a new empty input message at the tail."
          (words (and command (split-command-words command))))
     (car (last words))))
 
-(defun set-message-text (msg text)
-  "Replace MSG's lines with lines split from TEXT on newlines."
-  (let* ((parts (loop :for start := 0 :then (1+ pos)
-                      :for pos := (position #\Newline text :start start)
-                      :collect (subseq text start (or pos (length text)))
-                      :while pos))
-         (lines (mapcar #'make-line (or parts (list "")))))
-    ;; Link lines into a DLL
-    (loop :for (a b) :on lines
-          :when b
-          :do (setf (line-next a) b
-                    (line-prev b) a))
-    (setf (message-first-line msg) (first lines)
-          (message-last-line msg) (car (last lines))
-          (message-point-line msg) (first lines)
-          (message-point-offset msg) 0))
-  msg)
-
 (defun insert-message-before-input (buf msg)
   "Insert MSG before BUF's editable input message."
   (let* ((input (buffer-input-message buf))
@@ -851,6 +833,17 @@ Context messages are sent to providers as user-context messages."
     (funcall (symbol-function 'init-scratch-keymap)))
   (or (and (boundp '*scratch-keymap*)
            (symbol-value '*scratch-keymap*))
+      (ensure-default-keymap-initialized)))
+
+(defun ensure-file-keymap-initialized ()
+  "Ensure the file buffer keymap exists when keymap code is loaded."
+  (ensure-default-keymap-initialized)
+  (when (and (boundp '*file-keymap*)
+             (null (symbol-value '*file-keymap*))
+             (fboundp 'init-file-keymap))
+    (funcall (symbol-function 'init-file-keymap)))
+  (or (and (boundp '*file-keymap*)
+           (symbol-value '*file-keymap*))
       (ensure-default-keymap-initialized)))
 
 (defun initialize-buffer-display-defaults (buf &key keymap)

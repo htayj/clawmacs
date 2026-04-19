@@ -175,3 +175,49 @@
     (message-yank m)
     (is (string= "hello" (line-content (message-first-line m))))
     (is (= 5 (message-point-offset m)))))
+
+(test message-point-mark-and-region-operations
+  "Point and mark support Emacs-style region copy, kill, and exchange."
+  (let ((m (make-message :user)))
+    (clawmacs::set-message-text m "alpha beta gamma")
+    (clawmacs::set-message-point-from-absolute-offset m 6)
+    (message-set-mark-at-point m)
+    (clawmacs::set-message-point-from-absolute-offset m 10)
+    (is (string= "beta" (message-region-text m)))
+    (message-copy-region m)
+    (is (string= "beta" (kill-ring-top)))
+    (message-exchange-point-and-mark m)
+    (is (= 6 (clawmacs::message-point-absolute-offset m)))
+    (is (= 10 (message-mark-absolute-offset m)))
+    (message-kill-region m)
+    (is (string= "alpha  gamma" (message-text m)))
+    (is-false (message-mark-active-p m))
+    (is (= 6 (clawmacs::message-point-absolute-offset m)))))
+
+(test message-mark-whole-buffer-and-replacement-insert
+  "Self insertion replaces an active region."
+  (let ((m (make-message :user)))
+    (clawmacs::set-message-text m "old text")
+    (message-mark-whole-buffer m)
+    (message-insert-char m #\x)
+    (is (string= "x" (message-text m)))
+    (is-false (message-mark-active-p m))
+    (is (= 1 (clawmacs::message-point-absolute-offset m)))))
+
+(test message-line-motion-and-search-cross-lines
+  "Editor movement and search operate across multi-line message text."
+  (let ((m (make-message :user)))
+    (clawmacs::set-message-text m "one
+two words
+three")
+    (message-forward-line m)
+    (is (= 2 (message-current-line-number m)))
+    (is (= 0 (message-current-column-number m)))
+    (setf (message-point-offset m) 4)
+    (message-forward-line m)
+    (is (= 3 (message-current-line-number m)))
+    (is (= 4 (message-current-column-number m)))
+    (is (= 4 (message-search-backward m "two")))
+    (is (= 14 (message-search-forward m "three")))
+    (message-backward-word m)
+    (is (= 8 (clawmacs::message-point-absolute-offset m)))))

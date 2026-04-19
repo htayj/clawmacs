@@ -367,6 +367,13 @@ PROVIDER-MODEL is the provider/model string (e.g. \"zai/glm-5\");
 when nil it is resolved from the buffer's agent defaults."
   (let* ((pm (or provider-model (resolve-modeline-provider-model buf)))
          (dirty-marker (if (and buf (buffer-dirty-p buf)) "*" ""))
+         (input (and buf (buffer-input-message buf)))
+         (position (and input
+                        (document-buffer-p buf)
+                        (format nil "L~D:C~D~@[ Mark~]"
+                                (message-current-line-number input)
+                                (message-current-column-number input)
+                                (message-mark-active-p input))))
          (left (format nil " [~A~A] ~A | ~A | ~A | ~A"
                        major-mode
                        dirty-marker
@@ -374,7 +381,11 @@ when nil it is resolved from the buffer's agent defaults."
                        (buffer-agent-name buf)
                        pm
                        (namestring (buffer-working-directory buf))))
-         (right (format nil "~A/~A | ~A "
+         (position-prefix (if position
+                              (format nil "~A | " position)
+                              ""))
+         (right (format nil "~A~A/~A | ~A "
+                        position-prefix
                         (buffer-token-count buf)
                         (buffer-context-limit buf)
                         (buffer-status buf)))
@@ -433,8 +444,8 @@ Mode dispatch priority matches handle-key-event in main.lisp."
          (setf row1 " Scratch buffer: edit freely  RET: newline"
                row2 " C-x b/C-x C-b: switch  C-l: redraw"))
         ((and buf (file-buffer-p buf))
-         (setf row1 " File buffer: edit freely  RET: newline  C-x C-s: save"
-               row2 " C-x C-f: open project file  C-x b/C-x C-b: switch"))
+         (setf row1 " File buffer: RET newline  C-s search  C-SPC mark  C-w kill  M-w copy"
+               row2 " C-x C-s save  C-x C-w write  C-x C-v revert  C-x C-f open  C-g cancel"))
         (t
          (setf row1 " RET: send  C-o: newline  C-k: kill  C-y: yank  PgUp/Dn: scroll"
                row2 " C-x C-b: buffers  C-c A: agent  C-c C-m: model  C-c C-r: think  C-l: redraw  C-x C-c: quit")))

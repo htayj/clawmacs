@@ -51,6 +51,9 @@
 (defvar *scratch-keymap* nil
   "Keymap for scratch buffers. Inherits global bindings from *default-keymap*.")
 
+(defvar *file-keymap* nil
+  "Keymap for project-backed file buffers. Inherits global bindings.")
+
 (defun init-scratch-keymap ()
   "Build and install the scratch buffer keymap."
   (let ((km (make-keymap :scratch :parent *default-keymap*)))
@@ -58,6 +61,38 @@
     (keymap-bind km #\Return 'insert-newline-command)
     (keymap-bind km #\Newline 'insert-newline-command)
     (setf *scratch-keymap* km)))
+
+(defun init-file-keymap ()
+  "Build and install the project file editing keymap."
+  (let ((km (make-keymap :file :parent *default-keymap*)))
+    ;; In file buffers, ordinary editor keys edit the document.
+    (keymap-bind km #\Return 'insert-newline-command)
+    (keymap-bind km #\Newline 'insert-newline-command)
+    (keymap-bind km #\Tab 'insert-tab-command)
+    (keymap-bind km :tab 'insert-tab-command)
+    (keymap-bind km :left 'backward-char-command)
+    (keymap-bind km :right 'forward-char-command)
+    (keymap-bind km :up 'previous-line-command)
+    (keymap-bind km :down 'next-line-command)
+    (keymap-bind km (code-char 16) 'previous-line-command) ; C-p
+    (keymap-bind km (code-char 14) 'next-line-command)     ; C-n
+    (keymap-bind km '(:meta #\<) 'beginning-of-buffer-command)
+    (keymap-bind km '(:meta #\>) 'end-of-buffer-command)
+    (keymap-bind km (code-char 19) 'search-forward-command) ; C-s
+    (keymap-bind km (code-char 18) 'search-backward-command) ; C-r
+    (keymap-bind km (code-char 0) 'set-mark-command)         ; C-SPC
+    (keymap-bind km '(:ctrl #\Space) 'set-mark-command)
+    (keymap-bind km (code-char 7) 'keyboard-quit-command)    ; C-g
+    (keymap-bind km (code-char 23) 'kill-region-command)     ; C-w
+    (keymap-bind km '(:meta #\w) 'copy-region-command)       ; M-w
+    (keymap-bind km '(:ctrl-x #\x) 'exchange-point-and-mark-command)
+    (keymap-bind km '(:ctrl-x #\h) 'mark-whole-buffer-command)
+    (keymap-bind km (list :ctrl-x (code-char 22)) 'revert-file-buffer-command) ; C-x C-v
+    (keymap-bind km '(:ctrl-x #\i) 'insert-file-command) ; C-x i
+    (keymap-bind km (list :ctrl-x (code-char 23)) 'write-project-file-as-command) ; C-x C-w
+    (keymap-bind km '(:ctrl-x #\w) 'write-project-file-as-command) ; C-x w
+    (keymap-bind km (list :ctrl-x (code-char 14)) 'create-project-file-command) ; C-x C-n
+    (setf *file-keymap* km)))
 
 (defun init-default-keymap ()
   "Build and install the default keymap with standard chat buffer bindings."
@@ -171,4 +206,5 @@
     ;; C-x C-b = minibuffer buffer selector (helm/ivy/vertico style)
     (keymap-bind km (list :ctrl-x (code-char 2)) 'minibuffer-select-buffer-command)
     (setf *default-keymap* km)
-    (init-scratch-keymap)))
+    (init-scratch-keymap)
+    (init-file-keymap)))

@@ -620,7 +620,7 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
    :name "Clawmacs Input"
    :use-editor-commands t))
 
-(defclass clawmacs-drei-input-pane (drei:drei-pane)
+(defclass clawmacs-drei-input-pane (drei:drei-pane esa:esa-pane-mixin)
   ()
   (:metaclass esa-utils:modual-class)
   (:default-initargs
@@ -1161,33 +1161,11 @@ history grows a pane's own sheet-region."
 
 (defun mcclim-message-point-absolute-offset (message)
   "Return MESSAGE point as a character offset in `message-text' coordinates."
-  (let ((offset 0)
-        (target-line (message-point-line message)))
-    (loop :for line := (message-first-line message) :then (line-next line)
-          :while line
-          :do (if (eq line target-line)
-                  (return (+ offset
-                             (max 0
-                                  (min (message-point-offset message)
-                                       (length (line-content line))))))
-                  (incf offset (1+ (length (line-content line)))))
-          :finally (return offset))))
+  (message-point-absolute-offset message))
 
 (defun mcclim-set-message-point-from-absolute-offset (message offset)
   "Move MESSAGE point to absolute text OFFSET and return MESSAGE."
-  (let ((remaining (max 0 offset)))
-    (loop :for line := (message-first-line message) :then (line-next line)
-          :while line
-          :for len := (length (line-content line))
-          :do (cond
-                ((or (<= remaining len) (null (line-next line)))
-                 (setf (message-point-line message) line
-                       (message-point-offset message)
-                       (max 0 (min remaining len)))
-                 (return message))
-                (t
-                 (decf remaining (1+ len))))
-          :finally (return message))))
+  (set-message-point-from-absolute-offset message offset))
 
 (defun mcclim-sync-drei-point-from-buffer (frame)
   "Copy the visible buffer's message point into FRAME's Drei input pane."
@@ -2502,6 +2480,9 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
                 ((:escape) #\Esc)
                 (otherwise
                  (cond
+                   ;; C-SPC is set-mark in Emacs-style file buffers.
+                   ((and ctrl-p char (char= char #\Space))
+                    (code-char 0))
                    ;; Control + letter: produce the control character
                    ((and ctrl-p char (alpha-char-p char))
                     (code-char (- (char-code (char-upcase char)) 64)))
@@ -2767,6 +2748,7 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
        (- row start-row)
        col
        cols)
+      (mcclim-sync-drei-point-from-buffer frame)
       t)))
 
 (defun mcclim-handle-main-pane-click (frame pane event)

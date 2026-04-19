@@ -116,6 +116,12 @@
                (clawmacs::mcclim-normalize-key
                 (mcclim-test-key-event :|x| #\x clim:+meta-key+))))))
 
+(test mcclim-normalize-ctrl-space
+  "Control-space normalizes to the file editor set-mark key."
+  (is (eql (code-char 0)
+           (clawmacs::mcclim-normalize-key
+            (mcclim-test-key-event :space #\Space clim:+control-key+)))))
+
 (test mcclim-ui-state-dynamically-binds-interaction-specials
   "McCLIM frame-local UI state shadows and persists modal interaction specials."
   (let ((clawmacs::*minibuffer-active* nil)
@@ -182,6 +188,35 @@ and C-x b to the old overlay buffer selector."
           (keymap-lookup *default-keymap* '(:ctrl-x #\p))))
   (is (eq 'clawmacs::load-session-command
           (keymap-lookup *default-keymap* (list :ctrl-x (code-char 18))))))
+
+(test file-keymap-emacs-editor-bindings
+  "File buffers have Emacs-style editor bindings over the global keymap."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::insert-newline-command
+          (keymap-lookup clawmacs::*file-keymap* #\Return)))
+  (is (eq 'clawmacs::insert-tab-command
+          (keymap-lookup clawmacs::*file-keymap* #\Tab)))
+  (is (eq 'clawmacs::previous-line-command
+          (keymap-lookup clawmacs::*file-keymap* (code-char 16))))
+  (is (eq 'clawmacs::next-line-command
+          (keymap-lookup clawmacs::*file-keymap* (code-char 14))))
+  (is (eq 'clawmacs::search-forward-command
+          (keymap-lookup clawmacs::*file-keymap* (code-char 19))))
+  (is (eq 'clawmacs::set-mark-command
+          (keymap-lookup clawmacs::*file-keymap* (code-char 0))))
+  (is (eq 'clawmacs::kill-region-command
+          (keymap-lookup clawmacs::*file-keymap* (code-char 23))))
+  (is (eq 'clawmacs::copy-region-command
+          (keymap-lookup clawmacs::*file-keymap* '(:meta #\w))))
+  (is (eq 'clawmacs::save-session-command
+          (keymap-lookup clawmacs::*file-keymap*
+                         (list :ctrl-x (code-char 19)))))
+  (is (eq 'clawmacs::write-project-file-as-command
+          (keymap-lookup clawmacs::*file-keymap*
+                         (list :ctrl-x (code-char 23)))))
+  (is (eq 'clawmacs::revert-file-buffer-command
+          (keymap-lookup clawmacs::*file-keymap*
+                         (list :ctrl-x (code-char 22))))))
 
 (test default-keymap-toggle-tool-results-uses-c-c-prefix
   "Toggle tool results stays under C-c; C-x t is session-tree navigation."

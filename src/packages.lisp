@@ -201,12 +201,34 @@
    ;; Message editing
    #:message-insert-char
    #:message-insert-newline
+   #:set-message-text
    #:message-delete-char-backward
    #:message-delete-char-forward
    #:message-forward-char
    #:message-backward-char
    #:message-forward-word
    #:message-backward-word
+   #:message-forward-line
+   #:message-backward-line
+   #:message-beginning-of-buffer
+   #:message-end-of-buffer
+   #:message-point-absolute-offset
+   #:set-message-point-from-absolute-offset
+   #:message-mark-active-p
+   #:message-mark-absolute-offset
+   #:message-set-mark-at-point
+   #:message-clear-mark
+   #:message-region-bounds
+   #:message-region-text
+   #:message-delete-region
+   #:message-kill-region
+   #:message-copy-region
+   #:message-exchange-point-and-mark
+   #:message-mark-whole-buffer
+   #:message-current-line-number
+   #:message-current-column-number
+   #:message-search-forward
+   #:message-search-backward
    #:message-move-beginning-of-line
    #:message-move-end-of-line
    #:message-kill-line
@@ -299,6 +321,7 @@
    #:ensure-scratch-buffer
    #:scratch-buffer-text
    #:file-buffer-text
+   #:ensure-file-keymap-initialized
    #:file-buffer-dirty-p
    #:mark-buffer-dirty
    #:next-buffer-name
@@ -365,6 +388,7 @@
    #:keymap-bind
    #:keymap-lookup
    #:*default-keymap*
+   #:*file-keymap*
    #:*alt-emulates-meta*
 
    ;; Projects
@@ -776,6 +800,22 @@
    #:open-project-file-command
    #:create-project-file-command
    #:search-project-command
+   #:insert-tab-command
+   #:next-line-command
+   #:previous-line-command
+   #:beginning-of-buffer-command
+   #:end-of-buffer-command
+   #:set-mark-command
+   #:keyboard-quit-command
+   #:kill-region-command
+   #:copy-region-command
+   #:exchange-point-and-mark-command
+   #:mark-whole-buffer-command
+   #:search-forward-command
+   #:search-backward-command
+   #:revert-file-buffer-command
+   #:write-project-file-as-command
+   #:insert-file-command
    #:minibuffer-insert-skill-command
    #:minibuffer-toggle-skill-command
    #:list-skills-command

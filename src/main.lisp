@@ -211,6 +211,179 @@
                 (message-insert-char msg char)))
   msg)
 
+(defun insert-tab-command (buffer)
+  "Insert a tab character at point."
+  (message-insert-char (buffer-input-message buffer) #\Tab)
+  (mark-buffer-dirty buffer))
+(defcommand insert-tab-command)
+
+(defun next-line-command (buffer)
+  "Move point to the next line."
+  (message-forward-line (buffer-input-message buffer)))
+(defcommand next-line-command)
+
+(defun previous-line-command (buffer)
+  "Move point to the previous line."
+  (message-backward-line (buffer-input-message buffer)))
+(defcommand previous-line-command)
+
+(defun beginning-of-buffer-command (buffer)
+  "Move point to the beginning of the editable buffer."
+  (message-beginning-of-buffer (buffer-input-message buffer)))
+(defcommand beginning-of-buffer-command)
+
+(defun end-of-buffer-command (buffer)
+  "Move point to the end of the editable buffer."
+  (message-end-of-buffer (buffer-input-message buffer)))
+(defcommand end-of-buffer-command)
+
+(defun set-mark-command (buffer)
+  "Set the mark at point in the editable buffer."
+  (message-set-mark-at-point (buffer-input-message buffer))
+  (notify-buffer-display-change buffer :mark))
+(defcommand set-mark-command)
+
+(defun keyboard-quit-command (buffer)
+  "Cancel the current editor mark/prefix state."
+  (message-clear-mark (buffer-input-message buffer))
+  (setf *meta-pending* nil
+        *alt-pending* nil
+        *cx-pending* nil
+        *cc-pending* nil
+        *ch-pending* nil)
+  (deactivate-skill-completion)
+  (notify-buffer-display-change buffer :keyboard-quit))
+(defcommand keyboard-quit-command)
+
+(defun kill-region-command (buffer)
+  "Kill the active region into the kill ring."
+  (handler-case
+      (progn
+        (message-kill-region (buffer-input-message buffer))
+        (mark-buffer-dirty buffer))
+    (error (e)
+      (buffer-insert-system-message
+       buffer
+       (format nil "[Kill region failed: ~A]" e)))))
+(defcommand kill-region-command)
+
+(defun copy-region-command (buffer)
+  "Copy the active region into the kill ring."
+  (handler-case
+      (progn
+        (message-copy-region (buffer-input-message buffer))
+        (notify-buffer-display-change buffer :copy-region))
+    (error (e)
+      (buffer-insert-system-message
+       buffer
+       (format nil "[Copy region failed: ~A]" e)))))
+(defcommand copy-region-command)
+
+(defun exchange-point-and-mark-command (buffer)
+  "Exchange point and mark in the editable buffer."
+  (handler-case
+      (progn
+        (message-exchange-point-and-mark (buffer-input-message buffer))
+        (notify-buffer-display-change buffer :mark))
+    (error (e)
+      (buffer-insert-system-message
+       buffer
+       (format nil "[Exchange point and mark failed: ~A]" e)))))
+(defcommand exchange-point-and-mark-command)
+
+(defun mark-whole-buffer-command (buffer)
+  "Mark the entire editable buffer."
+  (message-mark-whole-buffer (buffer-input-message buffer))
+  (notify-buffer-display-change buffer :mark))
+(defcommand mark-whole-buffer-command)
+
+(defun search-forward-command (buffer query)
+  "Search forward for QUERY in the editable buffer."
+  (unless (message-search-forward (buffer-input-message buffer) query)
+    (buffer-insert-system-message
+     buffer
+     (format nil "[Search failed: ~A]" query))))
+(defcommand search-forward-command
+  :prompts ((query :prompt "Search forward")))
+
+(defun search-backward-command (buffer query)
+  "Search backward for QUERY in the editable buffer."
+  (unless (message-search-backward (buffer-input-message buffer) query)
+    (buffer-insert-system-message
+     buffer
+     (format nil "[Search backward failed: ~A]" query))))
+(defcommand search-backward-command
+  :prompts ((query :prompt "Search backward")))
+
+(defun revert-file-buffer-command (buffer)
+  "Reload the current file buffer from disk."
+  (if (file-buffer-p buffer)
+      (handler-case
+          (let* ((text (project-read-file (buffer-project-name buffer)
+                                          (buffer-resource-path buffer)))
+                 (input (buffer-input-message buffer)))
+            (set-message-text input text)
+            (setf (buffer-original-text buffer) text
+                  (buffer-dirty-p buffer) nil)
+            (buffer-insert-system-message
+             buffer
+             (format nil "[Reverted ~A:~A]"
+                     (buffer-project-name buffer)
+                     (buffer-resource-path buffer))))
+        (error (e)
+          (buffer-insert-system-message
+           buffer
+           (format nil "[Revert failed: ~A]" e))))
+      (buffer-insert-system-message buffer "[Current buffer is not a file.]")))
+(defcommand revert-file-buffer-command)
+
+(defun write-project-file-as-command (buffer path)
+  "Write the current file buffer to PATH in its project and retarget it."
+  (if (file-buffer-p buffer)
+      (handler-case
+          (let* ((project-name (buffer-project-name buffer))
+                 (resource-path (project-resource-name path))
+                 (text (file-buffer-text buffer))
+                 (summary (project-save-file project-name resource-path text)))
+            (setf (buffer-resource-path buffer) resource-path
+                  (buffer-name buffer) (file-buffer-name
+                                        (ensure-project project-name)
+                                        resource-path)
+                  (buffer-original-text buffer) text
+                  (buffer-dirty-p buffer) nil
+                  (buffer-major-mode buffer)
+                  (file-major-mode-for-path resource-path))
+            (buffer-insert-system-message
+             buffer
+             (format nil "[Wrote ~A:~A]"
+                     (getf summary :project)
+                     (getf summary :path))))
+        (error (e)
+          (buffer-insert-system-message
+           buffer
+           (format nil "[Write file failed: ~A]" e))))
+      (buffer-insert-system-message buffer "[Current buffer is not a file.]")))
+(defcommand write-project-file-as-command
+  :prompts ((path :prompt "Write file")))
+
+(defun insert-file-command (buffer path)
+  "Insert a project file's contents at point."
+  (let ((project (current-buffer-project buffer)))
+    (if project
+        (handler-case
+            (let ((text (project-read-file project path)))
+              (message-insert-string (buffer-input-message buffer) text)
+              (mark-buffer-dirty buffer))
+          (error (e)
+            (buffer-insert-system-message
+             buffer
+             (format nil "[Insert file failed: ~A]" e))))
+        (buffer-insert-system-message
+         buffer
+         "[No project is selected for this buffer.]"))))
+(defcommand insert-file-command
+  :prompts ((path :prompt "Insert file")))
+
 (defun yank-previous-command-first-arg-command (buffer)
   "Insert the first argument of the previous user command."
   (let ((arg (buffer-previous-command-first-argument buffer)))
@@ -2683,11 +2856,14 @@ Used to group keybindings in the describe-bindings listing."
       ((or (search "scroll" name) (search "forward-char" name)
            (search "backward-char" name) (search "forward-word" name)
            (search "backward-word" name) (search "beginning-of-line" name)
-           (search "end-of-line" name))
+           (search "end-of-line" name) (search "next-line" name)
+           (search "previous-line" name) (search "beginning-of-buffer" name)
+           (search "end-of-buffer" name) (search "search" name))
        "Movement")
       ((or (search "kill" name) (search "delete" name)
            (search "yank" name) (search "insert-newline" name)
-           (search "self-insert" name))
+           (search "insert-tab" name) (search "self-insert" name)
+           (search "mark" name) (search "copy-region" name))
        "Editing")
       ((or (search "buffer" name)
            (search "save-session" name)

@@ -103,6 +103,38 @@
         (is (search "RET: newline" row1))
         (is (search "switch" row2))))))
 
+(test format-who-line-file-describes-editor-keys
+  "File buffers advertise editor commands."
+  (let ((*minibuffer-active* nil)
+        (*buffer-selector-active* nil)
+        (*model-selector-active* nil)
+        (*think-selector-active* nil)
+        (*customize-face-state* nil)
+        (*openai-oauth-pending* nil)
+        (*deny-message-mode* nil)
+        (clawmacs::*buffer-ring* nil))
+    (let ((buf (make-buffer "p:file.txt" :kind :file)))
+      (multiple-value-bind (row1 row2)
+          (clawmacs::format-who-line buf 120)
+        (is (search "C-s search" row1))
+        (is (search "C-SPC mark" row1))
+        (is (search "C-x C-s save" row2))
+        (is (search "C-x C-v revert" row2))))))
+
+(test format-modeline-file-shows-position-and-mark
+  "Document buffers show point and mark status in the modeline."
+  (let ((buf (make-buffer "p:file.txt" :kind :file
+                          :agent-name "file"
+                          :working-directory #P"/tmp/")))
+    (clawmacs::set-message-text (buffer-input-message buf) "one
+two")
+    (message-forward-line (buffer-input-message buf))
+    (message-set-mark-at-point (buffer-input-message buf))
+    (let ((ml (clawmacs::format-modeline buf 100
+                :major-mode "text"
+                :provider-model "file/local")))
+      (is (search "L2:C0 Mark" ml)))))
+
 (test format-modeline-truncates-to-width
   "format-modeline truncates when content exceeds width."
   (let* ((buf (make-buffer "very-long-session-name" :agent-name "long-agent-name"

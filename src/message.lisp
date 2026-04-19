@@ -165,6 +165,182 @@ identity, and links to adjacent messages in the buffer."))
         :while current
         :count t))
 
+(defun set-message-text (msg text)
+  "Replace MSG's lines with lines split from TEXT on newlines."
+  (let* ((parts (loop :for start := 0 :then (1+ pos)
+                      :for pos := (position #\Newline text :start start)
+                      :collect (subseq text start (or pos (length text)))
+                      :while pos))
+         (lines (mapcar #'make-line (or parts (list "")))))
+    ;; Link lines into a DLL
+    (loop :for (a b) :on lines
+          :when b
+            :do (setf (line-next a) b
+                      (line-prev b) a))
+    (setf (message-first-line msg) (first lines)
+          (message-last-line msg) (car (last lines))
+          (message-point-line msg) (first lines)
+          (message-point-offset msg) 0
+          (message-mark-line msg) nil
+          (message-mark-offset msg) nil))
+  msg)
+
+(declaim (ftype (function (message) fixnum) message-point-absolute-offset))
+(defun message-point-absolute-offset (msg)
+  "Return MSG point as a character offset in MESSAGE-TEXT coordinates."
+  (let ((offset 0)
+        (target-line (message-point-line msg)))
+    (loop :for line := (message-first-line msg) :then (line-next line)
+          :while line
+          :do (if (eq line target-line)
+                  (return (+ offset
+                             (max 0
+                                  (min (message-point-offset msg)
+                                       (length (line-content line))))))
+                  (incf offset (1+ (length (line-content line)))))
+          :finally (return offset))))
+
+(declaim (ftype (function (message integer) message)
+                set-message-point-from-absolute-offset))
+(defun set-message-point-from-absolute-offset (msg offset)
+  "Move MSG point to absolute text OFFSET and return MSG."
+  (let ((remaining (max 0 offset)))
+    (loop :for line := (message-first-line msg) :then (line-next line)
+          :while line
+          :for len := (length (line-content line))
+          :do (cond
+                ((or (<= remaining len) (null (line-next line)))
+                 (setf (message-point-line msg) line
+                       (message-point-offset msg)
+                       (max 0 (min remaining len)))
+                 (return msg))
+                (t
+                 (decf remaining (1+ len))))
+          :finally (return msg))))
+
+(declaim (ftype (function (message) boolean) message-mark-active-p))
+(defun message-mark-active-p (msg)
+  "Return true when MSG has an active mark."
+  (and (message-mark-line msg)
+       (integerp (message-mark-offset msg))
+       t))
+
+(declaim (ftype (function (message) (or null fixnum))
+                message-mark-absolute-offset))
+(defun message-mark-absolute-offset (msg)
+  "Return MSG mark as an absolute text offset, or NIL when no mark is set."
+  (when (message-mark-active-p msg)
+    (let ((offset 0)
+          (target-line (message-mark-line msg)))
+      (loop :for line := (message-first-line msg) :then (line-next line)
+            :while line
+            :do (if (eq line target-line)
+                    (return (+ offset
+                               (max 0
+                                    (min (or (message-mark-offset msg) 0)
+                                         (length (line-content line))))))
+                    (incf offset (1+ (length (line-content line)))))
+            :finally (return nil)))))
+
+(declaim (ftype (function (message) message) message-set-mark-at-point))
+(defun message-set-mark-at-point (msg)
+  "Set MSG mark to the current point."
+  (setf (message-mark-line msg) (message-point-line msg)
+        (message-mark-offset msg) (message-point-offset msg))
+  msg)
+
+(declaim (ftype (function (message) message) message-clear-mark))
+(defun message-clear-mark (msg)
+  "Clear MSG mark."
+  (setf (message-mark-line msg) nil
+        (message-mark-offset msg) nil)
+  msg)
+
+(defun message-region-bounds (msg)
+  "Return MSG region bounds as START and END absolute offsets.
+Signals an error when no mark is active."
+  (let ((mark (message-mark-absolute-offset msg)))
+    (unless mark
+      (error "No active region."))
+    (let ((point (message-point-absolute-offset msg)))
+      (if (<= mark point)
+          (values mark point)
+          (values point mark)))))
+
+(declaim (ftype (function (message) string) message-region-text))
+(defun message-region-text (msg)
+  "Return the text inside MSG's active region."
+  (multiple-value-bind (start end)
+      (message-region-bounds msg)
+    (subseq (message-text msg) start end)))
+
+(declaim (ftype (function (message) message) message-delete-region))
+(defun message-delete-region (msg)
+  "Delete MSG's active region and leave point at the region start."
+  (multiple-value-bind (start end)
+      (message-region-bounds msg)
+    (let ((text (message-text msg)))
+      (set-message-text
+       msg
+       (concatenate 'string (subseq text 0 start) (subseq text end)))
+      (set-message-point-from-absolute-offset msg start)
+      (message-clear-mark msg)))
+  msg)
+
+(declaim (ftype (function (string) string) kill-ring-push))
+(declaim (ftype (function (message) message) message-kill-region))
+(defun message-kill-region (msg)
+  "Kill MSG's active region into the kill ring."
+  (kill-ring-push (message-region-text msg))
+  (message-delete-region msg))
+
+(declaim (ftype (function (message) message) message-copy-region))
+(defun message-copy-region (msg)
+  "Copy MSG's active region into the kill ring without deleting it."
+  (kill-ring-push (message-region-text msg))
+  msg)
+
+(declaim (ftype (function (message) message) message-exchange-point-and-mark))
+(defun message-exchange-point-and-mark (msg)
+  "Swap MSG point and mark."
+  (let ((mark (message-mark-absolute-offset msg)))
+    (unless mark
+      (error "No active region."))
+    (let ((point (message-point-absolute-offset msg)))
+      (set-message-point-from-absolute-offset msg mark)
+      (let ((mark-line (message-point-line msg))
+            (mark-offset (message-point-offset msg)))
+        (set-message-point-from-absolute-offset msg point)
+        (setf (message-mark-line msg) (message-point-line msg)
+              (message-mark-offset msg) (message-point-offset msg)
+              (message-point-line msg) mark-line
+              (message-point-offset msg) mark-offset))))
+  msg)
+
+(declaim (ftype (function (message) message) message-mark-whole-buffer))
+(defun message-mark-whole-buffer (msg)
+  "Mark the whole MSG text, leaving point at the beginning."
+  (let ((end (length (message-text msg))))
+    (set-message-point-from-absolute-offset msg end)
+    (message-set-mark-at-point msg)
+    (set-message-point-from-absolute-offset msg 0))
+  msg)
+
+(declaim (ftype (function (message) fixnum) message-current-line-number))
+(defun message-current-line-number (msg)
+  "Return MSG point line number, one-based."
+  (loop :for line := (message-first-line msg) :then (line-next line)
+        :for number :from 1
+        :while line
+        :when (eq line (message-point-line msg))
+          :return number
+        :finally (return 1)))
+
+(declaim (ftype (function (message) fixnum) message-current-column-number))
+(defun message-current-column-number (msg)
+  "Return MSG point column number, zero-based."
+  (max 0 (message-point-offset msg)))
+
 ;;; --------------------------------------------------------------------------
 ;;; Kill Ring
 ;;; --------------------------------------------------------------------------
@@ -195,6 +371,8 @@ identity, and links to adjacent messages in the buffer."))
 (declaim (ftype (function (message character) message) message-insert-char))
 (defun message-insert-char (msg char)
   "Insert CHAR at point in MSG. Advances point by 1."
+  (when (message-mark-active-p msg)
+    (message-delete-region msg))
   (let* ((pl (message-point-line msg))
          (po (message-point-offset msg))
          (content (line-content pl))
@@ -209,6 +387,8 @@ identity, and links to adjacent messages in the buffer."))
 (declaim (ftype (function (message) message) message-insert-newline))
 (defun message-insert-newline (msg)
   "Insert a newline at point, splitting the current line into two."
+  (when (message-mark-active-p msg)
+    (message-delete-region msg))
   (let* ((pl (message-point-line msg))
          (po (message-point-offset msg))
          (content (line-content pl))
@@ -230,6 +410,8 @@ identity, and links to adjacent messages in the buffer."))
 (declaim (ftype (function (message) message) message-delete-char-backward))
 (defun message-delete-char-backward (msg)
   "Delete the character before point. If at start of line, join with previous line."
+  (when (message-mark-active-p msg)
+    (return-from message-delete-char-backward (message-delete-region msg)))
   (let ((pl (message-point-line msg))
         (po (message-point-offset msg)))
     (cond
@@ -258,6 +440,8 @@ identity, and links to adjacent messages in the buffer."))
 (declaim (ftype (function (message) message) message-delete-char-forward))
 (defun message-delete-char-forward (msg)
   "Delete the character after point. If at end of line, join with next line."
+  (when (message-mark-active-p msg)
+    (return-from message-delete-char-forward (message-delete-region msg)))
   (let ((pl (message-point-line msg))
         (po (message-point-offset msg)))
     (cond
@@ -327,33 +511,94 @@ identity, and links to adjacent messages in the buffer."))
 (declaim (ftype (function (message) message) message-forward-word))
 (defun message-forward-word (msg)
   "Move point forward to end of next word."
-  (let* ((pl (message-point-line msg))
-         (po (message-point-offset msg))
-         (content (line-content pl))
-         (len (length content)))
+  (let* ((text (message-text msg))
+         (pos (message-point-absolute-offset msg))
+         (len (length text)))
     ;; Skip non-word characters
-    (loop :while (and (< po len) (not (word-char-p (char content po))))
-          :do (incf po))
+    (loop :while (and (< pos len) (not (word-char-p (char text pos))))
+          :do (incf pos))
     ;; Skip word characters
-    (loop :while (and (< po len) (word-char-p (char content po)))
-          :do (incf po))
-    (setf (message-point-offset msg) po))
+    (loop :while (and (< pos len) (word-char-p (char text pos)))
+          :do (incf pos))
+    (set-message-point-from-absolute-offset msg pos))
   msg)
 
 (declaim (ftype (function (message) message) message-backward-word))
 (defun message-backward-word (msg)
   "Move point backward to beginning of previous word."
-  (let* ((pl (message-point-line msg))
-         (po (message-point-offset msg))
-         (content (line-content pl)))
+  (let* ((text (message-text msg))
+         (pos (message-point-absolute-offset msg)))
     ;; Skip non-word characters backward
-    (loop :while (and (> po 0) (not (word-char-p (char content (1- po)))))
-          :do (decf po))
+    (loop :while (and (> pos 0) (not (word-char-p (char text (1- pos)))))
+          :do (decf pos))
     ;; Skip word characters backward
-    (loop :while (and (> po 0) (word-char-p (char content (1- po))))
-          :do (decf po))
-    (setf (message-point-offset msg) po))
+    (loop :while (and (> pos 0) (word-char-p (char text (1- pos))))
+          :do (decf pos))
+    (set-message-point-from-absolute-offset msg pos))
   msg)
+
+(declaim (ftype (function (message) message) message-forward-line))
+(defun message-forward-line (msg)
+  "Move point to the next line, preserving the current column when possible."
+  (let* ((line (message-point-line msg))
+         (column (message-point-offset msg))
+         (next (and line (line-next line))))
+    (when next
+      (setf (message-point-line msg) next
+            (message-point-offset msg)
+            (min column (length (line-content next))))))
+  msg)
+
+(declaim (ftype (function (message) message) message-backward-line))
+(defun message-backward-line (msg)
+  "Move point to the previous line, preserving the current column when possible."
+  (let* ((line (message-point-line msg))
+         (column (message-point-offset msg))
+         (prev (and line (line-prev line))))
+    (when prev
+      (setf (message-point-line msg) prev
+            (message-point-offset msg)
+            (min column (length (line-content prev))))))
+  msg)
+
+(declaim (ftype (function (message) message) message-beginning-of-buffer))
+(defun message-beginning-of-buffer (msg)
+  "Move point to the beginning of MSG."
+  (setf (message-point-line msg) (message-first-line msg)
+        (message-point-offset msg) 0)
+  msg)
+
+(declaim (ftype (function (message) message) message-end-of-buffer))
+(defun message-end-of-buffer (msg)
+  "Move point to the end of MSG."
+  (setf (message-point-line msg) (message-last-line msg)
+        (message-point-offset msg)
+        (length (line-content (message-last-line msg))))
+  msg)
+
+(declaim (ftype (function (message string) (or null fixnum))
+                message-search-forward))
+(defun message-search-forward (msg query)
+  "Search forward for QUERY from point and move point to the match start."
+  (let* ((text (message-text msg))
+         (start (message-point-absolute-offset msg))
+         (pos (and (plusp (length query))
+                   (search query text :start2 start))))
+    (when pos
+      (set-message-point-from-absolute-offset msg pos))
+    pos))
+
+(declaim (ftype (function (message string) (or null fixnum))
+                message-search-backward))
+(defun message-search-backward (msg query)
+  "Search backward for QUERY before point and move point to the match start."
+  (let* ((text (message-text msg))
+         (end (message-point-absolute-offset msg))
+         (pos (and (plusp (length query))
+                   (search query text :end2 end :from-end t))))
+    (when pos
+      (set-message-point-from-absolute-offset msg pos))
+    pos))
 
 ;;; --------------------------------------------------------------------------
 ;;; Kill/Cut Operations
@@ -400,43 +645,42 @@ Killed text is pushed to the kill ring."
 (declaim (ftype (function (message) message) message-kill-word))
 (defun message-kill-word (msg)
   "Kill from point to end of current word (M-d). Pushes to kill ring."
-  (let* ((pl (message-point-line msg))
-         (po (message-point-offset msg))
-         (content (line-content pl))
-         (len (length content))
-         (end po))
+  (let* ((text (message-text msg))
+         (start (message-point-absolute-offset msg))
+         (len (length text))
+         (end start))
     ;; Skip non-word characters
-    (loop :while (and (< end len) (not (word-char-p (char content end))))
+    (loop :while (and (< end len) (not (word-char-p (char text end))))
           :do (incf end))
     ;; Skip word characters
-    (loop :while (and (< end len) (word-char-p (char content end)))
+    (loop :while (and (< end len) (word-char-p (char text end)))
           :do (incf end))
-    (when (> end po)
-      (let ((killed (subseq content po end)))
-        (setf (line-content pl)
-              (concatenate 'string (subseq content 0 po) (subseq content end)))
-        (kill-ring-push killed))))
+    (when (> end start)
+      (kill-ring-push (subseq text start end))
+      (set-message-text
+       msg
+       (concatenate 'string (subseq text 0 start) (subseq text end)))
+      (set-message-point-from-absolute-offset msg start)))
   msg)
 
 (declaim (ftype (function (message) message) message-backward-kill-word))
 (defun message-backward-kill-word (msg)
   "Kill from beginning of current word to point (C-w). Pushes to kill ring."
-  (let* ((pl (message-point-line msg))
-         (po (message-point-offset msg))
-         (content (line-content pl))
-         (start po))
+  (let* ((text (message-text msg))
+         (end (message-point-absolute-offset msg))
+         (start end))
     ;; Skip non-word characters backward
-    (loop :while (and (> start 0) (not (word-char-p (char content (1- start)))))
+    (loop :while (and (> start 0) (not (word-char-p (char text (1- start)))))
           :do (decf start))
     ;; Skip word characters backward
-    (loop :while (and (> start 0) (word-char-p (char content (1- start))))
+    (loop :while (and (> start 0) (word-char-p (char text (1- start))))
           :do (decf start))
-    (when (< start po)
-      (let ((killed (subseq content start po)))
-        (setf (line-content pl)
-              (concatenate 'string (subseq content 0 start) (subseq content po))
-              (message-point-offset msg) start)
-        (kill-ring-push killed))))
+    (when (< start end)
+      (kill-ring-push (subseq text start end))
+      (set-message-text
+       msg
+       (concatenate 'string (subseq text 0 start) (subseq text end)))
+      (set-message-point-from-absolute-offset msg start)))
   msg)
 
 (declaim (ftype (function (message) message) message-yank))

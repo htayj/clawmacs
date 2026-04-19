@@ -1004,9 +1004,7 @@ Returns plists containing :PATH, :LINE, and :TEXT."
                                     :dirty-p nil)))
           (set-message-text (buffer-input-message buffer) text)
           (setf (buffer-major-mode buffer) (file-major-mode-for-path resource-path))
-          (unless *default-keymap*
-            (init-default-keymap))
-          (setf (buffer-keymap buffer) (or *scratch-keymap* *default-keymap*))
+          (setf (buffer-keymap buffer) (ensure-file-keymap-initialized))
           (add-buffer-to-ring buffer)
           (switch-to-buffer buffer)))))
 
