@@ -316,6 +316,7 @@
    #:keymap-bind
    #:keymap-lookup
    #:*default-keymap*
+   #:*alt-emulates-meta*
 
    ;; Projects
    #:project

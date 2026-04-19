@@ -477,6 +477,11 @@ class McclimSession:
     def press_keys(self, keys):
         self.key(*keys)
 
+    def click_button(self, button):
+        self.focus()
+        run_checked(["xdotool", "click", str(button)], timeout=5)
+        time.sleep(0.3)
+
     def resize(self, width, height):
         run_checked(
             [
@@ -829,7 +834,7 @@ def test_55_stream_poll_renders_without_next_input(session):
 
 
 def test_56_meta_x_opens_extended_command(session):
-    """Direct Alt+x should open Clawmacs' M-x command selector."""
+    """Direct Alt+x should open M-x while Alt emulates Meta by default."""
     session.press("Alt+x")
 
     def observe():
@@ -843,12 +848,88 @@ def test_56_meta_x_opens_extended_command(session):
     session.press("Ctrl+g")
 
 
+def test_57_skill_completion_escape_dismisses(session):
+    """Escape should dismiss skill completion instead of becoming Meta prefix."""
+    E2E.set_input(session, "$dem")
+
+    def completion_open():
+        snapshot = session.snapshot()
+        skill = snapshot.get("skillCompletion") or {}
+        candidates = " ".join(str(item) for item in skill.get("candidates") or [])
+        if skill.get("active") and "demo-skill" in candidates:
+            return snapshot
+        return None
+
+    wait_until(completion_open, timeout=10, interval=0.1,
+               description="skill completion popup")
+    session.press("Escape")
+    wait_until(
+        lambda: not ((session.snapshot().get("skillCompletion") or {}).get("active")),
+        timeout=10,
+        interval=0.1,
+        description="dismissed skill completion popup",
+    )
+    screen = session.text()
+    E2E.assert_not_contains(
+        screen,
+        "Skill:",
+        "skill completion should be absent after Escape",
+    )
+    E2E.assert_contains(screen, "$dem", "skill mention input preserved")
+    session.screenshot("57-skill-completion-escape")
+
+
+def test_58_page_and_wheel_scroll_history(session):
+    """Page keys and wheel events should scroll chat history."""
+    E2E.clear_input(session)
+    for index in range(8):
+        text = f"scroll parity turn {index:02d}"
+        session.type_text(text)
+        session.press("Enter")
+        wait_for_non_user_message_text(session, text, timeout=20)
+
+    session.press("PageUp")
+    page_up = session.wait_snapshot(
+        lambda snap: ((snap.get("buffer") or {}).get("scrollOffset") or 0) > 0,
+        timeout=10,
+        description="PageUp scroll offset",
+    )
+    page_offset = (page_up.get("buffer") or {}).get("scrollOffset") or 0
+
+    session.press("PageDown")
+    session.wait_snapshot(
+        lambda snap: ((snap.get("buffer") or {}).get("scrollOffset") or 0) == 0,
+        timeout=10,
+        description="PageDown returned to bottom",
+    )
+
+    session.click_button(4)
+    wheel_up = session.wait_snapshot(
+        lambda snap: ((snap.get("buffer") or {}).get("scrollOffset") or 0) > 0,
+        timeout=10,
+        description="wheel-up scroll offset",
+    )
+    wheel_offset = (wheel_up.get("buffer") or {}).get("scrollOffset") or 0
+    if wheel_offset <= 0 or page_offset <= 0:
+        fail("scroll offset did not increase for page or wheel input")
+
+    session.click_button(5)
+    session.wait_snapshot(
+        lambda snap: ((snap.get("buffer") or {}).get("scrollOffset") or 0) == 0,
+        timeout=10,
+        description="wheel-down returned to bottom",
+    )
+    session.screenshot("58-page-and-wheel-scroll")
+
+
 def test_registry(group):
     offline_tests = [
         ("53-async-agent-reply-renders", test_53_async_agent_reply_renders_without_next_input),
         ("54-tiling-resize-latest-visible", test_54_tiling_resize_keeps_latest_message_visible),
         ("55-stream-poll-renders", test_55_stream_poll_renders_without_next_input),
         ("56-meta-x-command-picker", test_56_meta_x_opens_extended_command),
+        ("57-skill-completion-escape", test_57_skill_completion_escape_dismisses),
+        ("58-page-and-wheel-scroll", test_58_page_and_wheel_scroll_history),
         ("38-shell-prefix", E2E.test_38_shell_prefix),
         ("39-debug-mode", E2E.test_39_debug_mode_toggle),
         ("40-save-session", E2E.test_40_save_session),

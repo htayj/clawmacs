@@ -725,7 +725,7 @@ starts with $ and contains only skill mention characters after it."
 (defun skill-completion-base-key (key)
   "Return KEY without simple prefix wrappers used by completion handlers."
   (if (and (listp key) (= (length key) 2)
-           (member (first key) '(:alt :ctrl-x :ctrl-c)))
+           (member (first key) '(:meta :alt :ctrl-x :ctrl-c)))
       (second key)
       key))
 
@@ -1583,7 +1583,7 @@ to navigate. Shows buffer name, agent, status, and message count."
          items
          (lambda (item)
            (invoke-command buffer (getf item :command)))))))
-(defcommand execute-extended-command :keys ((:alt #\x)))
+(defcommand execute-extended-command :keys ((:meta #\x)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Display Toggle Commands
@@ -2001,7 +2001,7 @@ through global command bindings like C-x and M-x."
     ((and (characterp key) (char= key #\r))
      (customize-face-revert-to-original))
     ;; Pass through global bindings like C-x commands and M-x.
-    ((and (listp key) (member (first key) '(:ctrl-x :alt)))
+    ((and (listp key) (member (first key) '(:ctrl-x :meta :alt)))
      (let ((command (keymap-lookup *default-keymap* key)))
        (when command
          (invoke-command (current-buffer) command))))
@@ -2090,8 +2090,10 @@ Converts raw characters, keywords, and prefix lists to standard Emacs notation."
      (format nil "C-c ~A" (format-key-binding (second key))))
     ((and (listp key) (eq (first key) :ctrl-h))
      (format nil "C-h ~A" (format-key-binding (second key))))
-    ((and (listp key) (eq (first key) :alt))
+    ((and (listp key) (eq (first key) :meta))
      (format nil "M-~A" (format-key-binding (second key))))
+    ((and (listp key) (eq (first key) :alt))
+     (format nil "A-~A" (format-key-binding (second key))))
     ((and (listp key) (eq (first key) :ctrl))
      (format nil "C-~A" (format-key-binding (second key))))
     (t (format nil "~S" key))))
@@ -2664,6 +2666,14 @@ Bound to C-h b."
 (defvar *meta-pending* nil
   "When non-nil, the next key event is combined with Meta (ESC prefix).")
 
+(defvar *alt-pending* nil
+  "When non-nil, the next key event is combined with physical Alt.")
+
+(defvar *alt-emulates-meta* t
+  "When non-nil, physical Alt key events are treated as Meta in McCLIM.
+Set this to NIL in user init to keep Alt and Meta separate when the backend
+reports standalone Alt/Meta key events.")
+
 (defvar *cx-pending* nil
   "When non-nil, the next key event is combined with C-x prefix.")
 
@@ -2927,7 +2937,11 @@ Environment variables:
         *minibuffer-callback* nil)
   (deactivate-skill-completion)
   (setf *openai-oauth-pending* nil)
-  (setf *meta-pending* nil *cx-pending* nil *cc-pending* nil *ch-pending* nil))
+  (setf *meta-pending* nil
+        *alt-pending* nil
+        *cx-pending* nil
+        *cc-pending* nil
+        *ch-pending* nil))
 
 (defun make-initial-chat-buffer (session-name agent-name)
   "Create and register the initial interactive chat buffer."

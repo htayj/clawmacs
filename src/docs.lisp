@@ -1213,6 +1213,13 @@ documentation in *extended-docs*."
   :category "keymap"
   :see-also (keymap make-keymap keymap-bind keymap-lookup))
 
+(defdoc *alt-emulates-meta*
+  :category "keymap"
+  :usage "(setf *alt-emulates-meta* nil)"
+  :returns "boolean — Whether McCLIM treats physical Alt as Meta."
+  :side-effects "Controls McCLIM key normalization for standalone Alt key events."
+  :see-also (*default-keymap* keymap-lookup))
+
 ;;; ==========================================================================
 ;;; Category: project — Persistent project resources
 ;;; ==========================================================================

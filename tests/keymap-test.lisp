@@ -36,11 +36,11 @@
   "Default keymap includes readline-style argument yank keybindings."
   (clawmacs::init-default-keymap)
   (is (eq 'clawmacs::yank-previous-command-first-arg-command
-          (keymap-lookup *default-keymap* '(:alt #\Em))))
+          (keymap-lookup *default-keymap* '(:meta #\Em))))
   (is (eq 'clawmacs::yank-previous-command-last-arg-command
-          (keymap-lookup *default-keymap* '(:alt #\.))))
+          (keymap-lookup *default-keymap* '(:meta #\.))))
   (is (eq 'clawmacs::yank-previous-command-last-arg-command
-          (keymap-lookup *default-keymap* '(:alt #\_)))))
+          (keymap-lookup *default-keymap* '(:meta #\_)))))
 
 (test default-keymap-ctrl-d-binding
   "Default keymap binds Ctrl+d to forward delete."
@@ -68,17 +68,53 @@
   "Default keymap binds C-Backspace and M-Backspace to backward-kill-word."
   (clawmacs::init-default-keymap)
   (is (eq 'clawmacs::backward-kill-word-command
-          (keymap-lookup *default-keymap* '(:alt #\Backspace))))
+          (keymap-lookup *default-keymap* '(:meta #\Backspace))))
   (is (eq 'clawmacs::backward-kill-word-command
-          (keymap-lookup *default-keymap* '(:alt #\Rubout))))
+          (keymap-lookup *default-keymap* '(:meta #\Rubout))))
   (is (eq 'clawmacs::backward-kill-word-command
-          (keymap-lookup *default-keymap* '(:alt :backspace))))
+          (keymap-lookup *default-keymap* '(:meta :backspace))))
+  (is (null (keymap-lookup *default-keymap* '(:alt :backspace))))
   (is (eq 'clawmacs::backward-kill-word-command
           (keymap-lookup *default-keymap* '(:ctrl #\Backspace))))
   (is (eq 'clawmacs::backward-kill-word-command
           (keymap-lookup *default-keymap* '(:ctrl #\Rubout))))
   (is (eq 'clawmacs::backward-kill-word-command
           (keymap-lookup *default-keymap* '(:ctrl :backspace)))))
+
+(defun mcclim-test-key-event (key-name key-character &optional (modifier-state 0))
+  "Build a McCLIM key event for key normalization tests."
+  (make-instance 'clim:key-press-event
+                 :key-name key-name
+                 :key-character key-character
+                 :modifier-state modifier-state
+                 :sheet nil))
+
+(test mcclim-normalize-alt-emulates-meta-by-default
+  "By default, physical Alt is normalized as Meta for Emacs-style bindings."
+  (let ((*alt-emulates-meta* t)
+        (clawmacs::*meta-pending* nil)
+        (clawmacs::*alt-pending* nil))
+    (is (null (clawmacs::mcclim-normalize-key
+               (mcclim-test-key-event :alt-left nil))))
+    (is (equal '(:meta #\x)
+               (clawmacs::mcclim-normalize-key
+                (mcclim-test-key-event :|x| #\x clim:+meta-key+))))))
+
+(test mcclim-normalize-alt-can-be-separate-from-meta
+  "When disabled, Alt and Meta produce distinct Clawmacs key prefixes."
+  (let ((*alt-emulates-meta* nil)
+        (clawmacs::*meta-pending* nil)
+        (clawmacs::*alt-pending* nil))
+    (is (null (clawmacs::mcclim-normalize-key
+               (mcclim-test-key-event :alt-left nil))))
+    (is (equal '(:alt #\x)
+               (clawmacs::mcclim-normalize-key
+                (mcclim-test-key-event :|x| #\x clim:+meta-key+))))
+    (is (null (clawmacs::mcclim-normalize-key
+               (mcclim-test-key-event :meta-left nil))))
+    (is (equal '(:meta #\x)
+               (clawmacs::mcclim-normalize-key
+                (mcclim-test-key-event :|x| #\x clim:+meta-key+))))))
 
 (test default-keymap-buffer-selector-binding
   "Default keymap binds C-x C-b to the minibuffer buffer selector,

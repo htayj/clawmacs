@@ -1674,29 +1674,58 @@ characters used by Clawmacs keymaps."
           (search "SUPER" name)
           (search "HYPER" name)))))
 
-(defun mcclim-meta-modifier-key-name-p (key-name)
-  "Return true when KEY-NAME names a standalone Meta/Alt key."
+(defun mcclim-alt-modifier-key-name-p (key-name)
+  "Return true when KEY-NAME names a physical Alt key."
   (when (keywordp key-name)
-    (let ((name (symbol-name key-name)))
-      (or (search "META" name)
-          (search "ALT" name)))))
+    (search "ALT" (symbol-name key-name))))
+
+(defun mcclim-meta-modifier-key-name-p (key-name)
+  "Return true when KEY-NAME names a physical Meta key."
+  (when (keywordp key-name)
+    (search "META" (symbol-name key-name))))
+
+(defun mcclim-meta-or-alt-prefix-for-key-name (key-name)
+  "Return the Clawmacs prefix implied by standalone Meta/Alt KEY-NAME."
+  (cond
+    ((mcclim-meta-modifier-key-name-p key-name) :meta)
+    ((mcclim-alt-modifier-key-name-p key-name)
+     (if *alt-emulates-meta* :meta :alt))
+    (t nil)))
+
+(defun mcclim-ctrl-meta-modifiers-p (modifiers)
+  "Return true when CLIM reports both Control and Meta modifiers."
+  (and (plusp (logand modifiers clim:+control-key+))
+       (plusp (logand modifiers clim:+meta-key+))))
+
+(defun mcclim-consume-meta-alt-prefix (key ctrl-p)
+  "Return KEY wrapped with a pending Meta/Alt prefix, if one is active."
+  (let ((prefix (cond
+                  (*alt-pending* :alt)
+                  (*meta-pending* :meta))))
+    (when prefix
+      (setf *alt-pending* nil
+            *meta-pending* nil)
+      (if (and ctrl-p (not (characterp key)))
+          (list :ctrl prefix key)
+          (list prefix key)))))
 
 (defun mcclim-normalize-key (key-event)
   "Normalize a McCLIM key-press-event to Clawmacs' abstract key format.
-Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
+Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), etc."
   (let* ((char (clim:keyboard-event-character key-event))
          (key-name (clim:keyboard-event-key-name key-event))
          (modifiers (clim:event-modifier-state key-event))
          (ctrl-p (plusp (logand modifiers clim:+control-key+)))
          (meta-p (plusp (logand modifiers clim:+meta-key+)))
+         (ctrl-meta-p (mcclim-ctrl-meta-modifiers-p modifiers))
          ;; Map CLIM key names to our abstract keywords
          (key (case key-name
                 ((:up) :up)
                 ((:down) :down)
                 ((:left) :left)
                 ((:right) :right)
-                ((:prior :page-up) :page_up)
-                ((:next :page-down) :page_down)
+                ((:prior :page-up) :page-up)
+                ((:next :page-down) :page-down)
                 ((:home) :home)
                 ((:end) :end)
                 ((:return :newline) #\Newline)
@@ -1723,10 +1752,16 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
       ;; X11 sends standalone modifier key-presses before modified keys. They
       ;; should not self-insert or consume a pending C-x/C-c/C-h/ESC prefix.
       ;; Some X server/window-manager combinations do not preserve the Meta
-      ;; modifier on the following key event, so standalone Alt/Meta acts like
-      ;; an ESC prefix for the next gesture.
-      ((and (null char) (mcclim-meta-modifier-key-name-p key-name))
-       (setf *meta-pending* t)
+      ;; modifier on the following key event, so standalone Alt/Meta records
+      ;; the physical prefix for the next gesture.
+      ((and (null char) (mcclim-meta-or-alt-prefix-for-key-name key-name))
+       (ecase (mcclim-meta-or-alt-prefix-for-key-name key-name)
+         (:meta
+          (setf *meta-pending* t
+                *alt-pending* nil))
+         (:alt
+          (setf *alt-pending* t
+                *meta-pending* nil)))
        nil)
       ((and (null char) (mcclim-modifier-key-name-p key-name))
        nil)
@@ -1734,19 +1769,27 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
       ;; (ASCII 8 = BS), so we must check the modifier+character explicitly
       ;; before the generic backspace handling below.
       ((and ctrl-p (characterp char) (char-equal char #\h)
-            (not *meta-pending*) (not *cx-pending*) (not *cc-pending*) (not *ch-pending*))
+            (not *meta-pending*) (not *alt-pending*)
+            (not *cx-pending*) (not *cc-pending*) (not *ch-pending*))
        (setf *ch-pending* t)
        nil)
+      ;; Pending Meta/Alt prefix resolution must happen before direct modifier
+      ;; handling so McCLIM's collapsed Alt/Meta bit can still be separated
+      ;; when a standalone physical modifier event preceded this key.
+      ((mcclim-consume-meta-alt-prefix key ctrl-p))
+      ;; Ctrl+Meta on named keys mirrors the old Croatoan key struct path.
+      ((and ctrl-meta-p (not (characterp key)))
+       (list :ctrl :meta key))
       ;; Ctrl+Backspace
       ((and ctrl-p (eq key :backspace))
        (list :ctrl :backspace))
-      ;; Alt+Backspace
+      ;; Control on other named keys.
+      ((and ctrl-p (not (characterp key)))
+       (list :ctrl key))
+      ;; Meta+Backspace
       ((and meta-p (eq key :backspace))
-       (list :alt :backspace))
+       (list :meta :backspace))
       ;; Pending prefix resolution (must come before raw prefix detection)
-      (*meta-pending*
-       (setf *meta-pending* nil)
-       (list :alt key))
       (*cx-pending*
        (setf *cx-pending* nil)
        (list :ctrl-x key))
@@ -1756,13 +1799,19 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
       (*ch-pending*
        (setf *ch-pending* nil)
        (list :ctrl-h key))
-      ;; Meta delivered directly by CLIM (Alt+key)
+      ;; Meta delivered directly by CLIM. McCLIM's CLX backend currently
+      ;; collapses Alt and Meta into this same bit; standalone modifier events
+      ;; above distinguish them when possible.
       (meta-p
-       (list :alt key))
+       (list :meta key))
       ;; ESC prefix
       ((and (characterp key) (char= key #\Esc))
-       (setf *meta-pending* t)
-       nil)
+       (if *skill-completion-active*
+           key
+           (progn
+             (setf *meta-pending* t
+                   *alt-pending* nil)
+             nil)))
       ;; C-x prefix (ASCII 24)
       ((and (characterp key) (char= key (code-char 24)))
        (setf *cx-pending* t)
@@ -1773,6 +1822,22 @@ Returns a character, a keyword, a list (:alt key), (:ctrl-x key), etc."
        nil)
       ;; Normal key
       (t key))))
+
+(defun mcclim-pointer-scroll-key (event)
+  "Return the Clawmacs scroll key represented by CLIM pointer EVENT."
+  (cond
+    ((typep event 'clime:pointer-scroll-event)
+     (let ((delta-y (clime:pointer-event-delta-y event)))
+       (cond
+         ((minusp delta-y) :page-up)
+         ((plusp delta-y) :page-down)
+         (t nil))))
+    ((typep event 'clim:pointer-button-press-event)
+     (case (clim:pointer-event-button event)
+       (#.clim:+pointer-wheel-up+ :page-up)
+       (#.clim:+pointer-wheel-down+ :page-down)
+       (otherwise nil)))
+    (t nil)))
 
 
 ;;; --------------------------------------------------------------------------
@@ -2045,6 +2110,11 @@ standard CLIM event path."
                (clim:execute-frame-command
                 frame
                 (list 'com-clawmacs-dispatch-gestures (list event)))
+               (mcclim-redisplay-frame frame))
+              ((let ((key (mcclim-pointer-scroll-key event)))
+                 (when key
+                   (handle-key-event (frame-visible-buffer frame) key)
+                   t))
                (mcclim-redisplay-frame frame))
               ((or (typep event 'clim:window-repaint-event)
                    (typep event 'clim:window-configuration-event))

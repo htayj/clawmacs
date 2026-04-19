@@ -586,12 +586,13 @@
   "The default keymap exposes M-x as execute-extended-command."
   (clawmacs::init-default-keymap)
   (is (eq 'execute-extended-command
-          (keymap-lookup *default-keymap* '(:alt #\x)))))
+          (keymap-lookup *default-keymap* '(:meta #\x))))
+  (is (null (keymap-lookup *default-keymap* '(:alt #\x)))))
 
 (test execute-extended-command-opens-the-command-picker
   "M-x opens the minibuffer with commands."
   (with-interactive-command-test-buffer (buf)
-    (clawmacs::handle-key-event buf '(:alt #\x))
+    (clawmacs::handle-key-event buf '(:meta #\x))
     (is (eq t *minibuffer-active*))
     (is (eq :completion *minibuffer-mode*))
     (is (string= "M-x" *minibuffer-prompt*))
@@ -605,7 +606,7 @@
 (test execute-extended-command-runs-noarg-commands-immediately
   "Selecting a no-arg command from M-x invokes it without another prompt."
   (with-interactive-command-test-buffer (buf)
-    (clawmacs::handle-key-event buf '(:alt #\x))
+    (clawmacs::handle-key-event buf '(:meta #\x))
     (select-minibuffer-command 'mx-test-noarg-command)
     (is (null *minibuffer-active*))
     (is (equal '(:noarg) *mx-test-command-log*))))
@@ -613,7 +614,7 @@
 (test execute-extended-command-prompts-for-each-argument
   "Selecting a parameterized command prompts for each command argument."
   (with-interactive-command-test-buffer (buf)
-    (clawmacs::handle-key-event buf '(:alt #\x))
+    (clawmacs::handle-key-event buf '(:meta #\x))
     (select-minibuffer-command 'mx-test-arg-command)
     (is (eq t *minibuffer-active*))
     (is (eq :prompt *minibuffer-mode*))
@@ -633,7 +634,7 @@
 (test execute-extended-command-reprompts-on-invalid-argument
   "Reader errors keep the command pending and preserve the user's input."
   (with-interactive-command-test-buffer (buf)
-    (clawmacs::handle-key-event buf '(:alt #\x))
+    (clawmacs::handle-key-event buf '(:meta #\x))
     (select-minibuffer-command 'mx-test-arg-command)
     (setf *minibuffer-input* "oops"
           *minibuffer-point* 4)
@@ -651,7 +652,7 @@
 (test execute-extended-command-cancels-parameter-prompts-with-c-g
   "Cancelling a prompted command abandons the invocation cleanly."
   (with-interactive-command-test-buffer (buf)
-    (clawmacs::handle-key-event buf '(:alt #\x))
+    (clawmacs::handle-key-event buf '(:meta #\x))
     (select-minibuffer-command 'mx-test-arg-command)
     (handle-minibuffer-key (code-char 7))
     (is (null *minibuffer-active*))

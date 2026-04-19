@@ -670,7 +670,7 @@ are sorted with the current buffer first, then alphabetically."
 (defun handle-session-tree-selector-key (key)
   "Handle a key event while the session tree selector is active."
   (let ((base-key (if (and (listp key) (= (length key) 2)
-                           (member (first key) '(:alt :ctrl-x :ctrl-c)))
+                           (member (first key) '(:meta :alt :ctrl-x :ctrl-c)))
                       (second key)
                       key))
         (count (length *session-tree-selector-filtered-items*)))
@@ -752,7 +752,7 @@ are sorted with the current buffer first, then alphabetically."
 Supports: C-g (cancel), Return (confirm), C-n/Down and C-p/Up (navigate),
 Backspace (delete), C-a/C-e (move), C-u (kill all), and self-insert."
   (let ((base-key (if (and (listp key) (= (length key) 2)
-                           (member (first key) '(:alt :ctrl-x :ctrl-c)))
+                           (member (first key) '(:meta :alt :ctrl-x :ctrl-c)))
                       (second key)
                       key)))
     (cond
@@ -798,7 +798,7 @@ Backspace (delete), C-a/C-e (move), C-u (kill all), and self-insert."
   "Handle a key event while the buffer selector is active.
 Strips any meta/ctrl-x prefix so the selector has simple key bindings."
   (let ((base-key (if (and (listp key) (= (length key) 2)
-                           (member (first key) '(:alt :ctrl-x :ctrl-c)))
+                           (member (first key) '(:meta :alt :ctrl-x :ctrl-c)))
                       (second key)
                       key))
         (num-buffers (length *buffer-ring*)))
@@ -852,7 +852,7 @@ Strips any meta/ctrl-x prefix so the selector has simple key bindings."
 Strips any meta/ctrl-x/ctrl-c prefix so the selector has simple key bindings.
 On Enter, sets the buffer's provider and model overrides to the selected entry."
   (let ((base-key (if (and (listp key) (= (length key) 2)
-                           (member (first key) '(:alt :ctrl-x :ctrl-c)))
+                           (member (first key) '(:meta :alt :ctrl-x :ctrl-c)))
                       (second key)
                       key))
         (num-entries (length *model-selector-entries*)))
@@ -896,7 +896,7 @@ On Enter, sets the buffer's provider and model overrides to the selected entry."
 (defun handle-think-selector-key (key buf)
   "Handle a key event while the think-level selector is active."
   (let ((base-key (if (and (listp key) (= (length key) 2)
-                           (member (first key) '(:alt :ctrl-x :ctrl-c)))
+                           (member (first key) '(:meta :alt :ctrl-x :ctrl-c)))
                       (second key)
                       key))
         (num-entries (length *think-selector-entries*)))

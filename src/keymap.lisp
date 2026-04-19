@@ -74,25 +74,25 @@
     (keymap-bind km #\Enq 'end-of-line-command)             ; C-e = ASCII 5
     (keymap-bind km (code-char 6) 'forward-char-command)    ; C-f = ASCII 6
     (keymap-bind km (code-char 2) 'backward-char-command)   ; C-b = ASCII 2
-    (keymap-bind km '(:alt #\f) 'forward-word-command)      ; M-f
-    (keymap-bind km '(:alt #\b) 'backward-word-command)     ; M-b
+    (keymap-bind km '(:meta #\f) 'forward-word-command)     ; M-f
+    (keymap-bind km '(:meta #\b) 'backward-word-command)    ; M-b
     ;; Kill/cut
     (keymap-bind km #\Vt 'kill-line-command)                ; C-k = ASCII 11
     (keymap-bind km (code-char 21) 'kill-backward-line-command) ; C-u = ASCII 21
-    (keymap-bind km '(:alt #\d) 'kill-word-command)         ; M-d
+    (keymap-bind km '(:meta #\d) 'kill-word-command)        ; M-d
     (keymap-bind km (code-char 23) 'backward-kill-word-command) ; C-w = ASCII 23
-    (keymap-bind km '(:alt #\Backspace) 'backward-kill-word-command)
-    (keymap-bind km '(:alt #\Rubout) 'backward-kill-word-command)
-    (keymap-bind km '(:alt :backspace) 'backward-kill-word-command)
+    (keymap-bind km '(:meta #\Backspace) 'backward-kill-word-command)
+    (keymap-bind km '(:meta #\Rubout) 'backward-kill-word-command)
+    (keymap-bind km '(:meta :backspace) 'backward-kill-word-command)
     (keymap-bind km '(:ctrl #\Backspace) 'backward-kill-word-command)
     (keymap-bind km '(:ctrl #\Rubout) 'backward-kill-word-command)
     (keymap-bind km '(:ctrl :backspace) 'backward-kill-word-command)
     ;; Yank/paste
     (keymap-bind km #\Em 'yank-command)                     ; C-y = ASCII 25
-    (keymap-bind km '(:alt #\y) 'yank-pop-command)          ; M-y
-    (keymap-bind km '(:alt #\Em) 'yank-previous-command-first-arg-command) ; M-C-y
-    (keymap-bind km '(:alt #\.) 'yank-previous-command-last-arg-command)    ; M-.
-    (keymap-bind km '(:alt #\_) 'yank-previous-command-last-arg-command)    ; M-_
+    (keymap-bind km '(:meta #\y) 'yank-pop-command)         ; M-y
+    (keymap-bind km '(:meta #\Em) 'yank-previous-command-first-arg-command) ; M-C-y
+    (keymap-bind km '(:meta #\.) 'yank-previous-command-last-arg-command)   ; M-.
+    (keymap-bind km '(:meta #\_) 'yank-previous-command-last-arg-command)   ; M-_
     ;; Delete
     ;; Bind direct Backspace variants for normalized events that distinguish them.
     (keymap-bind km #\Backspace 'delete-char-backward-command)
@@ -107,11 +107,11 @@
     (keymap-bind km :page-up 'scroll-up-command)
     (keymap-bind km :page-down 'scroll-down-command)
     ;; Emacs-style scroll: M-v (scroll up/back), C-v (scroll down/forward)
-    ;; M-v arrives as ESC then v, normalized to (:alt #\v) by handle-key-event.
-    (keymap-bind km '(:alt #\v) 'scroll-up-command)
+    ;; M-v arrives as ESC then v, normalized to (:meta #\v).
+    (keymap-bind km '(:meta #\v) 'scroll-up-command)
     (keymap-bind km (code-char 22) 'scroll-down-command)  ; C-v = ASCII 22
     ;; Execute command
-    (keymap-bind km '(:alt #\x) 'execute-extended-command) ; M-x
+    (keymap-bind km '(:meta #\x) 'execute-extended-command) ; M-x
     ;; Redraw
     (keymap-bind km (code-char 12) 'redraw-screen-command) ; C-l = ASCII 12
     ;; ----- C-c prefix: buffer-mode-specific commands -----
