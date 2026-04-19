@@ -581,6 +581,45 @@ class McclimSession:
         run_checked(["xdotool", "click", str(button)], timeout=5)
         time.sleep(0.3)
 
+    def click_relative(self, x, y, button=1):
+        self.focus()
+        run_checked(
+            [
+                "xdotool",
+                "mousemove",
+                "--window",
+                self.window_id,
+                str(int(x)),
+                str(int(y)),
+            ],
+            timeout=5,
+        )
+        run_checked(["xdotool", "click", str(button)], timeout=5)
+        time.sleep(0.3)
+
+    def render_cell_size(self):
+        render = self.snapshot().get("render") or {}
+        cols = max(1, render.get("cols") or 1)
+        rows = max(1, render.get("rows") or 1)
+        return (
+            (render.get("pixelWidth") or 1) / cols,
+            (render.get("pixelHeight") or 1) / rows,
+        )
+
+    def click_main_cell(self, row, col, button=1):
+        char_w, char_h = self.render_cell_size()
+        self.click_relative((col + 0.5) * char_w, (row + 0.5) * char_h, button)
+
+    def click_input_cell(self, row, col, button=1):
+        render = self.snapshot().get("render") or {}
+        char_w, char_h = self.render_cell_size()
+        main_height = render.get("pixelHeight") or 0
+        self.click_relative(
+            (col + 0.5) * char_w,
+            main_height + ((row + 0.5) * char_h),
+            button,
+        )
+
     def resize(self, width, height):
         run_checked(
             [
@@ -1056,6 +1095,102 @@ def test_60_inline_image_markdown_renders(session):
         fail("inline image message was not tracked in render snapshot")
 
 
+def popup_candidate_cell(session):
+    snapshot = session.snapshot()
+    render = snapshot.get("render") or {}
+    rows = max(1, render.get("rows") or 1)
+    cols = max(1, render.get("cols") or 1)
+    skill = snapshot.get("skillCompletion") or {}
+    minibuffer = snapshot.get("minibuffer") or {}
+    skill_popup = bool(skill.get("active") and not minibuffer.get("active"))
+    total = (skill if skill_popup else minibuffer).get("filteredCount") or 0
+    popup_w = min(cols - 4, max(40, (cols * 3) // 5))
+    max_height = 12
+    max_item_rows = max(0, min(max_height, rows - 4))
+    display_total = max(1, total) if skill_popup else total
+    item_rows = min(display_total, max_item_rows)
+    popup_h = 1 + item_rows
+    popup_left = (cols - popup_w) // 2
+    popup_top = (rows - popup_h) // 2
+    return popup_top + 1, popup_left + 3
+
+
+def test_61_mouse_click_input_moves_point(session):
+    """Left-click in the input pane should place point before typed text."""
+    E2E.set_input(session, "ac")
+    session.wait_snapshot(
+        lambda snap: (snap.get("buffer") or {}).get("input") == "ac",
+        timeout=10,
+        description="input seeded for mouse click",
+    )
+    session.click_input_cell(0, 1)
+    session.wait_snapshot(
+        lambda snap: (snap.get("buffer") or {}).get("inputPoint") == 1,
+        timeout=10,
+        description="mouse click moved input point",
+    )
+    session.type_text("b")
+    session.wait_snapshot(
+        lambda snap: (snap.get("buffer") or {}).get("input") == "abc",
+        timeout=10,
+        description="typed text inserted at clicked point",
+    )
+    session.screenshot("61-mouse-click-input-point")
+    E2E.clear_input(session)
+
+
+def test_62_mouse_click_buffer_selector_row(session):
+    """Clicking a buffer selector row should choose it and close the selector."""
+    session.press("Ctrl+x")
+    session.press("b")
+    session.wait_snapshot(
+        lambda snap: (snap.get("selectors") or {}).get("bufferSelectorActive"),
+        timeout=10,
+        description="buffer selector active for mouse click",
+    )
+    session.click_main_cell(5, 3)
+    session.wait_snapshot(
+        lambda snap: not (snap.get("selectors") or {}).get("bufferSelectorActive"),
+        timeout=10,
+        description="buffer selector closed after mouse click",
+    )
+    session.screenshot("62-mouse-click-buffer-selector")
+
+
+def test_63_mouse_click_completion_candidates(session):
+    """Clicking minibuffer and skill completion candidates should select them."""
+    session.press("Ctrl+x")
+    session.press("Ctrl+b")
+    session.wait_snapshot(
+        lambda snap: (snap.get("minibuffer") or {}).get("active"),
+        timeout=10,
+        description="minibuffer active for candidate click",
+    )
+    row, col = popup_candidate_cell(session)
+    session.click_main_cell(row, col)
+    session.wait_snapshot(
+        lambda snap: not (snap.get("minibuffer") or {}).get("active"),
+        timeout=10,
+        description="minibuffer closed after candidate click",
+    )
+
+    E2E.set_input(session, "$dem")
+    session.wait_snapshot(
+        lambda snap: (snap.get("skillCompletion") or {}).get("active"),
+        timeout=10,
+        description="skill popup active for candidate click",
+    )
+    row, col = popup_candidate_cell(session)
+    session.click_main_cell(row, col)
+    session.wait_snapshot(
+        lambda snap: "[$demo-skill]" in ((snap.get("buffer") or {}).get("input") or ""),
+        timeout=10,
+        description="skill candidate inserted after mouse click",
+    )
+    session.screenshot("63-mouse-click-completion-candidates")
+    E2E.clear_input(session)
+
+
 def test_registry(group):
     offline_tests = [
         ("53-async-agent-reply-renders", test_53_async_agent_reply_renders_without_next_input),
@@ -1066,6 +1201,9 @@ def test_registry(group):
         ("58-page-and-wheel-scroll", test_58_page_and_wheel_scroll_history),
         ("59-speculum-self-visibility", test_59_speculum_self_visibility_tools),
         ("60-inline-image-render", test_60_inline_image_markdown_renders),
+        ("61-mouse-click-input-point", test_61_mouse_click_input_moves_point),
+        ("62-mouse-click-buffer-selector", test_62_mouse_click_buffer_selector_row),
+        ("63-mouse-click-completion-candidates", test_63_mouse_click_completion_candidates),
         ("38-shell-prefix", E2E.test_38_shell_prefix),
         ("39-debug-mode", E2E.test_39_debug_mode_toggle),
         ("40-save-session", E2E.test_40_save_session),

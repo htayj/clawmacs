@@ -144,6 +144,24 @@
         (is (eq t clawmacs::*meta-pending*))
         (is (= 17 clawmacs::*scroll-page-size*))))))
 
+(test mcclim-message-grid-click-moves-point-through-wrapped-lines
+  "The McCLIM input-pane click mapper moves message point by visual grid row."
+  (let ((message (make-message :user)))
+    (clawmacs::set-message-text message "abcdef")
+    (clawmacs::mcclim-set-message-point-from-grid message 1 1 4)
+    (is (= 5 (message-point-offset message)))
+    (is (eq (message-first-line message)
+            (message-point-line message)))))
+
+(test mcclim-message-grid-click-clamps-after-last-line
+  "Clicking below the input text moves point to the end of the message."
+  (let ((message (make-message :user)))
+    (clawmacs::set-message-text message "ab
+cde")
+    (clawmacs::mcclim-set-message-point-from-grid message 20 10 80)
+    (is (string= "cde" (line-content (message-point-line message))))
+    (is (= 3 (message-point-offset message)))))
+
 (test default-keymap-buffer-selector-binding
   "Default keymap binds C-x C-b to the minibuffer buffer selector,
 and C-x b to the old overlay buffer selector."

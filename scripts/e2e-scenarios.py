@@ -943,8 +943,9 @@ def test_52_skill_completion(s):
     """Test: Typing $ opens automatic skill completion and inserts a mention."""
     clear_input(s)
     s.type_text("$dem")
-    screen = wait_for_text(s, "demo-skill", timeout=5)
+    screen = wait_for_text(s, "Skill: $dem", timeout=5)
     assert_contains(screen, "Skill: $dem", "skill completion prompt")
+    screen = wait_for_text(s, "demo-skill", timeout=5)
     assert_contains(screen, "demo-skill", "skill candidate visible")
     s.screenshot("52-skill-completion-popup")
 

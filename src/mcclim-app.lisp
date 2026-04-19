@@ -158,14 +158,32 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
 ;;; what actions are available when the user interacts with them.
 ;;; --------------------------------------------------------------------------
 
+(clim:define-presentation-type rendered-message-ref ()
+  :description "a rendered chat transcript message")
+
 (clim:define-presentation-type chat-message ()
+  :inherit-from 'rendered-message-ref
   :description "a chat message")
 
 (clim:define-presentation-type tool-call ()
+  :inherit-from 'rendered-message-ref
   :description "a tool call")
 
 (clim:define-presentation-type tool-result ()
+  :inherit-from 'rendered-message-ref
   :description "a tool result")
+
+(clim:define-presentation-type image-reference ()
+  :description "an inline image reference")
+
+(clim:define-presentation-type approval-action ()
+  :description "an approval prompt action")
+
+(clim:define-presentation-type minibuffer-candidate-ref ()
+  :description "a minibuffer completion candidate")
+
+(clim:define-presentation-type skill-candidate-ref ()
+  :description "a skill completion candidate")
 
 (clim:define-presentation-type buffer-ref ()
   :description "a buffer reference")
@@ -244,11 +262,110 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
     ((entry 'session-tree-entry-ref))
   (mcclim-select-session-tree-item entry))
 
+(defun mcclim-message-description (message)
+  "Return a help-buffer description for rendered MESSAGE."
+  (with-output-to-string (out)
+    (format out "Message~%=======~%~%")
+    (format out "Sender: ~(~A~)~%" (message-sender message))
+    (when (message-entry-id message)
+      (format out "Entry ID: ~A~%" (message-entry-id message)))
+    (when (message-parent-entry-id message)
+      (format out "Parent Entry ID: ~A~%" (message-parent-entry-id message)))
+    (when (message-timestamp message)
+      (format out "Timestamp: ~A~%" (message-timestamp message)))
+    (when (message-metadata message)
+      (format out "~%Metadata:~%~S~%" (message-metadata message)))
+    (when (message-raw-content message)
+      (format out "~%Raw Content:~%~S~%" (message-raw-content message)))
+    (format out "~%Text:~%~A~%" (message-text message))))
+
+(clim:define-command (com-describe-rendered-message
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((message 'rendered-message-ref))
+  (when message
+    (let ((help (make-help-buffer "*help:message*"
+                                  (mcclim-message-description message))))
+      (switch-to-buffer help))))
+
+(defun mcclim-image-description (reference)
+  "Return a help-buffer description for inline image REFERENCE."
+  (with-output-to-string (out)
+    (format out "Image~%=====~%~%")
+    (format out "Path: ~A~%" (display-image-reference-path reference))
+    (let ((alt (display-image-reference-alt reference)))
+      (when (plusp (length alt))
+        (format out "Alt: ~A~%" alt)))
+    (let ((raw (display-image-reference-raw-text reference)))
+      (when (plusp (length raw))
+        (format out "~%Markdown:~%~A~%" raw)))))
+
+(clim:define-command (com-describe-image-reference
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((reference 'image-reference))
+  (when reference
+    (let ((help (make-help-buffer "*help:image*"
+                                  (mcclim-image-description reference))))
+      (switch-to-buffer help))))
+
+(defun mcclim-apply-approval-action (action)
+  "Apply approval prompt ACTION in the visible buffer."
+  (let ((buf (and (boundp 'clim:*application-frame*)
+                  (frame-visible-buffer clim:*application-frame*))))
+    (when (and buf (buffer-approval-pending buf))
+      (ecase action
+        (:approve
+         (handle-approval-response buf :approve))
+        (:deny
+         (handle-approval-response buf :deny))
+        (:message
+         (set-message-text (buffer-input-message buf) "")
+         (setf *deny-message-mode* t))))))
+
+(clim:define-command (com-apply-approval-action
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((action 'approval-action))
+  (mcclim-apply-approval-action action))
+
+(defun mcclim-select-minibuffer-candidate (candidate)
+  "Select CANDIDATE from the active custom minibuffer popup."
+  (when (and *minibuffer-active* candidate)
+    (let ((index (getf candidate :index)))
+      (when (and index (<= 0 index)
+                 (< index (length *minibuffer-filtered-items*)))
+        (setf *minibuffer-selected-index* index)
+        (minibuffer-confirm)))))
+
+(clim:define-command (com-select-minibuffer-candidate
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((candidate 'minibuffer-candidate-ref))
+  (mcclim-select-minibuffer-candidate candidate))
+
+(defun mcclim-select-skill-candidate (candidate)
+  "Select CANDIDATE from the active automatic skill completion popup."
+  (when (and *skill-completion-active* candidate)
+    (let ((index (getf candidate :index))
+          (buf *skill-completion-buffer*))
+      (when (and index buf (<= 0 index)
+                 (< index (length *skill-completion-filtered-items*)))
+        (setf *skill-completion-selected-index* index)
+        (insert-selected-skill-completion buf)))))
+
+(clim:define-command (com-select-skill-candidate
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((candidate 'skill-candidate-ref))
+  (mcclim-select-skill-candidate candidate))
+
 (clim:define-presentation-to-command-translator click-buffer-ref
     (buffer-ref com-select-buffer clawmacs-mcclim-command-table
                 :gesture :select
                 :priority 10
-                :documentation "Switch to this buffer")
+                :documentation "Switch to this buffer"
+                :pointer-documentation "Switch to this buffer")
     (object)
   (list object))
 
@@ -256,7 +373,8 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
     (model-ref com-select-model-entry clawmacs-mcclim-command-table
                :gesture :select
                :priority 10
-               :documentation "Apply selection")
+               :documentation "Apply selection"
+               :pointer-documentation "Apply this model")
     (object)
   (list object))
 
@@ -265,7 +383,8 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
                      clawmacs-mcclim-command-table
                      :gesture :select
                      :priority 10
-                     :documentation "Apply think-level selection")
+                     :documentation "Apply think-level selection"
+                     :pointer-documentation "Apply this think level")
     (object)
   (list object))
 
@@ -274,7 +393,68 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
                             clawmacs-mcclim-command-table
                             :gesture :select
                             :priority 10
-                            :documentation "Navigate to this session entry")
+                            :documentation "Navigate to this session entry"
+                            :pointer-documentation "Navigate to this session entry")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator describe-rendered-message
+    (rendered-message-ref com-describe-rendered-message
+                          clawmacs-mcclim-command-table
+                          :gesture :describe
+                          :priority 10
+                          :documentation "Describe this message"
+                          :pointer-documentation "Describe this message")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-image-reference
+    (image-reference com-describe-image-reference
+                     clawmacs-mcclim-command-table
+                     :gesture :select
+                     :priority 20
+                     :documentation "Describe this image"
+                     :pointer-documentation "Describe this image")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator describe-image-reference
+    (image-reference com-describe-image-reference
+                     clawmacs-mcclim-command-table
+                     :gesture :describe
+                     :priority 10
+                     :documentation "Describe this image"
+                     :pointer-documentation "Describe this image")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-approval-action
+    (approval-action com-apply-approval-action
+                     clawmacs-mcclim-command-table
+                     :gesture :select
+                     :priority 30
+                     :documentation "Choose approval action"
+                     :pointer-documentation "Choose approval action")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-minibuffer-candidate
+    (minibuffer-candidate-ref com-select-minibuffer-candidate
+                              clawmacs-mcclim-command-table
+                              :gesture :select
+                              :priority 30
+                              :documentation "Choose this completion candidate"
+                              :pointer-documentation "Choose this candidate")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-skill-candidate
+    (skill-candidate-ref com-select-skill-candidate
+                         clawmacs-mcclim-command-table
+                         :gesture :select
+                         :priority 30
+                         :documentation "Insert this skill mention"
+                         :pointer-documentation "Insert this skill mention")
     (object)
   (list object))
 
@@ -969,6 +1149,102 @@ history grows a pane's own sheet-region."
     (error ()
       "")))
 
+(defun mcclim-drei-pane-point-offset (pane)
+  "Return PANE's Drei point offset, or zero when unavailable."
+  (handler-case
+      (let ((view (drei:current-view pane)))
+        (if view
+            (drei-buffer:offset (drei:point view))
+            0))
+    (error ()
+      0)))
+
+(defun mcclim-message-point-absolute-offset (message)
+  "Return MESSAGE point as a character offset in `message-text' coordinates."
+  (let ((offset 0)
+        (target-line (message-point-line message)))
+    (loop :for line := (message-first-line message) :then (line-next line)
+          :while line
+          :do (if (eq line target-line)
+                  (return (+ offset
+                             (max 0
+                                  (min (message-point-offset message)
+                                       (length (line-content line))))))
+                  (incf offset (1+ (length (line-content line)))))
+          :finally (return offset))))
+
+(defun mcclim-set-message-point-from-absolute-offset (message offset)
+  "Move MESSAGE point to absolute text OFFSET and return MESSAGE."
+  (let ((remaining (max 0 offset)))
+    (loop :for line := (message-first-line message) :then (line-next line)
+          :while line
+          :for len := (length (line-content line))
+          :do (cond
+                ((or (<= remaining len) (null (line-next line)))
+                 (setf (message-point-line message) line
+                       (message-point-offset message)
+                       (max 0 (min remaining len)))
+                 (return message))
+                (t
+                 (decf remaining (1+ len))))
+          :finally (return message))))
+
+(defun mcclim-sync-drei-point-from-buffer (frame)
+  "Copy the visible buffer's message point into FRAME's Drei input pane."
+  (when frame
+    (let ((pane (frame-drei-input-pane frame))
+          (buf (frame-visible-buffer frame)))
+      (when (and pane buf)
+        (handler-case
+            (let* ((view (drei:current-view pane))
+                   (point (and view (drei:point view)))
+                   (offset (mcclim-message-point-absolute-offset
+                            (buffer-input-message buf))))
+              (when point
+                (setf (drei-buffer:offset point)
+                      (max 0 (min offset
+                                  (length (mcclim-drei-pane-text pane)))))))
+          (error ()
+            nil))))))
+
+(defun mcclim-set-message-point-from-grid
+    (message grid-row grid-col width &key (prefix-len 0))
+  "Move MESSAGE point to the source location displayed at GRID-ROW/GRID-COL.
+WIDTH and PREFIX-LEN use the same wrapped grid geometry as
+`mcclim-render-message-lines'."
+  (let* ((target-row (max 0 grid-row))
+         (target-col (max 0 (- grid-col prefix-len)))
+         (display-width (max 1 (- width prefix-len)))
+         (visual-row 0)
+         (last-line nil))
+    (labels ((move-point (line offset)
+               (setf (message-point-line message) line
+                     (message-point-offset message) offset)
+               message))
+      (loop :for line := (message-first-line message) :then (line-next line)
+            :while line
+            :do (let* ((content (line-content line))
+                       (content-len (length content))
+                       (wraps (wrapped-line-count content display-width)))
+                  (setf last-line line)
+                  (dotimes (wrap-index wraps)
+                    (let* ((chunk-start (* wrap-index display-width))
+                           (chunk-end (min (* (1+ wrap-index) display-width)
+                                           content-len))
+                           (chunk-width (- chunk-end chunk-start)))
+                      (when (= visual-row target-row)
+                        (return-from mcclim-set-message-point-from-grid
+                          (move-point
+                           line
+                           (max 0
+                                (min content-len
+                                     (+ chunk-start
+                                        (min target-col chunk-width)))))))
+                      (incf visual-row)))))
+      (when last-line
+        (move-point last-line (length (line-content last-line))))
+      message)))
+
 (defun (setf mcclim-drei-pane-text) (text pane)
   "Replace PANE's Drei buffer with TEXT."
   (let* ((view (drei:current-view pane))
@@ -988,7 +1264,10 @@ history grows a pane's own sheet-region."
         (let ((text (mcclim-drei-pane-text pane))
               (input (buffer-input-message buf)))
           (unless (string= text (message-text input))
-            (set-message-text input text)))))))
+            (let ((point-offset (mcclim-drei-pane-point-offset pane)))
+              (set-message-text input text)
+              (mcclim-set-message-point-from-absolute-offset
+               input point-offset))))))))
 
 (defun mcclim-sync-drei-from-buffer (frame &key force-p)
   "Copy the visible Clawmacs buffer input into FRAME's Drei input pane."
@@ -1006,7 +1285,8 @@ history grows a pane's own sheet-region."
                    (setf (frame-syncing-drei-p frame) t
                          (mcclim-drei-pane-text pane) text
                          (frame-last-drei-buffer frame) buf))
-              (setf (frame-syncing-drei-p frame) nil))))))))
+              (setf (frame-syncing-drei-p frame) nil)))
+          (mcclim-sync-drei-point-from-buffer frame))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Modeline Display
@@ -1446,13 +1726,17 @@ Returns the number of visual rows consumed."
                           fg bg ts opts char-w char-h underline-p show-cursor
                           max-rows first-output-p cursor-y cursor-x)))
                       (:image
-                       (let ((consumed
-                               (mcclim-render-image-block
-                                pane
-                                (getf block :reference)
-                                row width prefix prefix-len
-                                fg bg ts opts char-w char-h
-                                max-rows first-output-p)))
+                       (let ((reference (getf block :reference))
+                             (consumed 0))
+                         (clim:with-output-as-presentation
+                             (pane reference 'image-reference)
+                           (setf consumed
+                                 (mcclim-render-image-block
+                                  pane
+                                  reference
+                                  row width prefix prefix-len
+                                  fg bg ts opts char-w char-h
+                                  max-rows first-output-p)))
                          (setf first-output-p nil)
                          (incf row consumed))))))
         ;; Render cursor as reverse-video block
@@ -1546,10 +1830,19 @@ Returns the number of visual rows consumed."
       (multiple-value-bind (fg bg ts opts)
           (resolve-global-face-inks :approval-options)
         (fill-row pane row width bg char-w char-h)
-        (draw-text-at pane row 0
-                      "[a]pprove  [d]eny  [m]essage (deny with note to agent)"
-                      fg bg ts char-w char-h
-                      :drawing-options opts)))))
+        (let ((segments `((:approve 0 "[a]pprove")
+                          (:deny 11 "[d]eny")
+                          (:message 20 "[m]essage (deny with note to agent)"))))
+          (dolist (segment segments)
+            (destructuring-bind (action col text) segment
+              (when (< col width)
+                (clim:with-output-as-presentation
+                    (pane action 'approval-action)
+                  (draw-text-at pane row col
+                                (subseq text 0
+                                        (min (length text) (- width col)))
+                                fg bg ts char-w char-h
+                                :drawing-options opts))))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Selector Rendering
@@ -2053,6 +2346,10 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
               :while (< item-idx total)
               :for item := (nth item-idx items)
               :for row := (+ popup-top 1 row-idx)
+              :for candidate-object := (list :index item-idx :item item)
+              :for candidate-ptype := (if skill-popup-p
+                                           'skill-candidate-ref
+                                           'minibuffer-candidate-ref)
               :for display := (minibuffer-item-display item)
               :for display-trimmed := (subseq display 0 (min (length display) (- popup-w 4)))
               :for match-pos := (nth item-idx positions)
@@ -2071,18 +2368,27 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
                                            (+ px-left char-w) (* row char-h)
                                            (- px-right char-w) (* (1+ row) char-h)
                                            :ink base-bg)
-                     ;; Indent
-                     (draw-text-at pane row (+ popup-left 1) "  "
-                                   base-fg base-bg base-ts char-w char-h
-                                   :drawing-options base-opts)
-                     ;; Draw text with span-batched fuzzy match highlighting
-                     (multiple-value-bind (match-fg match-bg match-ts match-opts)
-                         (resolve-global-face-inks match-face-name)
-                       (draw-fuzzy-match-spans pane row (+ popup-left 3)
-                                               display-trimmed match-set
-                                               base-fg base-bg base-ts base-opts
-                                               match-fg match-bg match-ts match-opts
-                                               char-w char-h))))))))
+                     (clim:with-output-as-presentation
+                         (pane candidate-object candidate-ptype)
+                       ;; A padded blank record makes the whole candidate row
+                       ;; an easy CLIM presentation target.
+                       (draw-text-at pane row (+ popup-left 1)
+                                     (make-string (max 1 (- popup-w 2))
+                                                  :initial-element #\Space)
+                                     base-fg base-bg base-ts char-w char-h
+                                     :drawing-options base-opts)
+                       ;; Indent
+                       (draw-text-at pane row (+ popup-left 1) "  "
+                                     base-fg base-bg base-ts char-w char-h
+                                     :drawing-options base-opts)
+                       ;; Draw text with span-batched fuzzy match highlighting
+                       (multiple-value-bind (match-fg match-bg match-ts match-opts)
+                           (resolve-global-face-inks match-face-name)
+                         (draw-fuzzy-match-spans pane row (+ popup-left 3)
+                                                 display-trimmed match-set
+                                                 base-fg base-bg base-ts base-opts
+                                                 match-fg match-bg match-ts match-opts
+                                                 char-w char-h)))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Key Normalization (McCLIM-specific)
@@ -2293,6 +2599,232 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
        (otherwise nil)))
     (t nil)))
 
+(defun mcclim-select-pointer-event-p (event)
+  "Return true when EVENT is the standard CLIM select button gesture."
+  (and (typep event 'clim:pointer-button-press-event)
+       (or (clim:event-matches-gesture-name-p event :select)
+           (eql (clim:pointer-event-button event)
+                clim:+pointer-left-button+))))
+
+(defun mcclim-event-grid-position (frame pane event)
+  "Return pointer EVENT coordinates as character-grid row and column in PANE."
+  (ensure-char-metrics frame pane)
+  (let ((char-w (frame-char-width frame))
+        (char-h (frame-char-height frame)))
+    (values (max 0 (floor (clim:pointer-event-y event) char-h))
+            (max 0 (floor (clim:pointer-event-x event) char-w)))))
+
+(defun mcclim-completion-popup-geometry (cols rows)
+  "Return popup geometry matching `mcclim-render-completion-popup'."
+  (let* ((skill-popup-p (and (not *minibuffer-active*)
+                             *skill-completion-active*))
+         (items (if skill-popup-p
+                    *skill-completion-filtered-items*
+                    *minibuffer-filtered-items*))
+         (total (length items))
+         (popup-w (min (- cols 4) (max 40 (floor (* cols 3) 5))))
+         (max-height (if skill-popup-p
+                         *skill-completion-max-height*
+                         *minibuffer-max-height*))
+         (max-item-rows (max 0 (min (or max-height 12) (- rows 4))))
+         (display-total (if skill-popup-p (max 1 total) total))
+         (item-rows (min display-total max-item-rows))
+         (popup-h (+ 1 item-rows))
+         (popup-left (floor (- cols popup-w) 2))
+         (popup-top (floor (- rows popup-h) 2)))
+    (values popup-left popup-top popup-w item-rows skill-popup-p total)))
+
+(defun mcclim-handle-completion-popup-click (frame pane row col)
+  "Handle a select click in the custom minibuffer/skill completion popup."
+  (declare (ignore frame))
+  (when (or *minibuffer-active* *skill-completion-active*)
+    (multiple-value-bind (cols rows)
+        (pane-grid-dimensions pane (frame-char-width (clim:pane-frame pane))
+                              (frame-char-height (clim:pane-frame pane)))
+      (multiple-value-bind (popup-left popup-top popup-w item-rows skill-popup-p total)
+          (mcclim-completion-popup-geometry cols rows)
+        (when (and (<= popup-left col)
+                   (< col (+ popup-left popup-w))
+                   (<= popup-top row)
+                   (< row (+ popup-top 1 item-rows)))
+          (cond
+            ((and *minibuffer-active* (= row popup-top))
+             (let* ((prompt-len (length (format nil "~A: " *minibuffer-prompt*)))
+                    (input-col (- col (1+ popup-left) prompt-len)))
+               (setf *minibuffer-point*
+                     (max 0 (min input-col (length *minibuffer-input*)))))
+             t)
+            ((> row popup-top)
+             (let ((index (+ (if skill-popup-p
+                                 *skill-completion-scroll-offset*
+                                 *minibuffer-scroll-offset*)
+                             (- row popup-top 1))))
+               (when (and (<= 0 index) (< index total))
+                 (if skill-popup-p
+                     (mcclim-select-skill-candidate
+                      (list :index index
+                            :item (nth index *skill-completion-filtered-items*)))
+                     (mcclim-select-minibuffer-candidate
+                      (list :index index
+                            :item (nth index *minibuffer-filtered-items*))))
+                 t)))))))))
+
+(defun mcclim-handle-selector-click (frame row)
+  "Handle a select click on the active selector row."
+  (let ((buf (frame-visible-buffer frame))
+        (entry-row (- row 5)))
+    (when (>= entry-row 0)
+      (cond
+        (*buffer-selector-active*
+         (let ((index (+ *buffer-selector-scroll* entry-row)))
+           (when (< index (length *buffer-ring*))
+             (setf *buffer-selector-index* index)
+             (handle-buffer-selector-key #\Newline)
+             t)))
+        (*model-selector-active*
+         (let ((index (+ *model-selector-scroll* entry-row)))
+           (when (< index (length *model-selector-entries*))
+             (setf *model-selector-index* index)
+             (handle-model-selector-key #\Newline buf)
+             t)))
+        (*think-selector-active*
+         (let ((index (+ *think-selector-scroll* entry-row)))
+           (when (< index (length *think-selector-entries*))
+             (setf *think-selector-index* index)
+             (handle-think-selector-key #\Newline buf)
+             t)))
+        (*session-tree-selector-active*
+         (let ((index (+ *session-tree-selector-scroll* entry-row)))
+           (when (< index (length *session-tree-selector-filtered-items*))
+             (setf *session-tree-selector-index* index)
+             (mcclim-select-session-tree-item
+              (nth index *session-tree-selector-filtered-items*))
+             t)))))))
+
+(defun mcclim-approval-options-row (approval start-row max-rows)
+  "Return the row containing approval action presentations, or NIL."
+  (let ((row start-row))
+    (when (< row max-rows)
+      (incf row))
+    (dolist (line (split-string-by-newline
+                   (or (cdr (assoc :display-raw approval)) "")))
+      (declare (ignore line))
+      (when (< row max-rows)
+        (incf row)))
+    (dolist (line (split-string-by-newline
+                   (or (cdr (assoc :display-expanded approval)) "")))
+      (declare (ignore line))
+      (when (< row max-rows)
+        (incf row)))
+    (dolist (line (split-string-by-newline
+                   (or (cdr (assoc :display-extra approval)) "")))
+      (declare (ignore line))
+      (when (< row max-rows)
+        (incf row)))
+    (when (< (1+ row) max-rows)
+      (1+ row))))
+
+(defun mcclim-approval-action-at-column (col)
+  "Return the approval action displayed at COL, or NIL."
+  (cond
+    ((<= 0 col 8) :approve)
+    ((<= 11 col 17) :deny)
+    ((<= 20 col) :message)
+    (t nil)))
+
+(defun mcclim-handle-approval-click (frame row col)
+  "Handle a select click on an approval action label."
+  (let* ((buf (frame-visible-buffer frame))
+         (approval (and buf (buffer-approval-pending buf)))
+         (snapshot (frame-last-render-snapshot frame))
+         (start-row (or (cdr (assoc :input-start-row snapshot)) -1))
+         (rows (or (cdr (assoc :rows snapshot)) 0)))
+    (when (and approval (>= start-row 0))
+      (let ((options-row (mcclim-approval-options-row approval start-row rows)))
+        (when (and options-row (= row options-row))
+          (let ((action (mcclim-approval-action-at-column col)))
+            (when action
+              (mcclim-apply-approval-action action)
+              t)))))))
+
+(defun mcclim-handle-document-click (frame row col cols)
+  "Move point in a document buffer when the main document pane is clicked."
+  (let* ((buf (frame-visible-buffer frame))
+         (snapshot (frame-last-render-snapshot frame))
+         (start-row (or (cdr (assoc :input-start-row snapshot)) -1)))
+    (when (and buf (document-buffer-p buf) (>= start-row 0)
+               (>= row start-row))
+      (mcclim-set-message-point-from-grid
+       (buffer-input-message buf)
+       (- row start-row)
+       col
+       cols)
+      t)))
+
+(defun mcclim-handle-main-pane-click (frame pane event)
+  "Handle mouse select actions that need Clawmacs' custom top-level bridge."
+  (when (mcclim-select-pointer-event-p event)
+    (multiple-value-bind (row col)
+        (mcclim-event-grid-position frame pane event)
+      (multiple-value-bind (cols _rows)
+          (pane-grid-dimensions pane (frame-char-width frame)
+                                (frame-char-height frame))
+        (declare (ignore _rows))
+        (or (mcclim-handle-completion-popup-click frame pane row col)
+            (mcclim-handle-selector-click frame row)
+            (mcclim-handle-approval-click frame row col)
+            (mcclim-handle-document-click frame row col cols))))))
+
+(defun mcclim-handle-input-pane-click (frame pane event)
+  "Handle mouse select actions in the editable Drei input pane."
+  (when (mcclim-select-pointer-event-p event)
+    (let ((buf (frame-visible-buffer frame)))
+      (when (and buf (not (document-buffer-p buf)))
+        (mcclim-sync-buffer-from-drei frame)
+        (multiple-value-bind (row col)
+            (mcclim-event-grid-position frame pane event)
+          (multiple-value-bind (cols _rows)
+              (pane-grid-dimensions pane (frame-char-width frame)
+                                    (frame-char-height frame))
+            (declare (ignore _rows))
+            (mcclim-set-message-point-from-grid
+             (buffer-input-message buf) row col cols)
+            (mcclim-sync-drei-point-from-buffer frame)
+            (sync-skill-completion buf)
+            t))))))
+
+(defun mcclim-handle-pointer-scroll (frame event)
+  "Handle pointer scroll EVENT according to active Clawmacs UI mode."
+  (let ((key (mcclim-pointer-scroll-key event)))
+    (when key
+      (cond
+        (*skill-completion-active*
+         (if (eq key :page-up)
+             (skill-completion-prev-item)
+             (skill-completion-next-item))
+         t)
+        (*minibuffer-active*
+         (if (eq key :page-up)
+             (minibuffer-prev-item)
+             (minibuffer-next-item))
+         t)
+        (*buffer-selector-active*
+         (handle-buffer-selector-key (if (eq key :page-up) :up :down))
+         t)
+        (*model-selector-active*
+         (handle-model-selector-key (if (eq key :page-up) :up :down)
+                                    (frame-visible-buffer frame))
+         t)
+        (*think-selector-active*
+         (handle-think-selector-key (if (eq key :page-up) :up :down)
+                                    (frame-visible-buffer frame))
+         t)
+        (*session-tree-selector-active*
+         (handle-session-tree-selector-key (if (eq key :page-up) :up :down))
+         t)
+        (t
+         (handle-key-event (frame-visible-buffer frame) key)
+         t)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Redisplay Helper
@@ -2479,6 +3011,20 @@ when no key or window event arrives."
   frame)
 
 (defmethod clim:handle-event ((pane clawmacs-transcript-pane)
+                              (event clim:pointer-button-press-event))
+  (let ((frame (clim:pane-frame pane)))
+    (with-mcclim-frame-ui-state (frame)
+      (unless (mcclim-handle-main-pane-click frame pane event)
+        (call-next-method)))))
+
+(defmethod clim:handle-event ((pane clawmacs-drei-input-pane)
+                              (event clim:pointer-button-press-event))
+  (let ((frame (clim:pane-frame pane)))
+    (with-mcclim-frame-ui-state (frame)
+      (unless (mcclim-handle-input-pane-click frame pane event)
+        (call-next-method)))))
+
+(defmethod clim:handle-event ((pane clawmacs-transcript-pane)
                               (event clawmacs-display-change-event))
   (let ((frame (clim:pane-frame pane)))
     (with-mcclim-frame-ui-state (frame)
@@ -2576,10 +3122,7 @@ presentation and window events stay on the standard CLIM event path."
                   frame
                   (list 'com-clawmacs-dispatch-gestures (list event)))
                  (mcclim-redisplay-frame frame))
-                ((let ((key (mcclim-pointer-scroll-key event)))
-                   (when key
-                     (handle-key-event (frame-visible-buffer frame) key)
-                     t))
+                ((mcclim-handle-pointer-scroll frame event)
                  (mcclim-redisplay-frame frame))
                 ((or (typep event 'clim:window-repaint-event)
                      (typep event 'clim:window-configuration-event))

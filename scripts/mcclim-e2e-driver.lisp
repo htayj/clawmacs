@@ -160,6 +160,8 @@
     (:status . ,(string-downcase (symbol-name (buffer-status buffer))))
     (:message-count . ,(max 0 (1- (buffer-message-count buffer))))
     (:input . ,(message-text (buffer-input-message buffer)))
+    (:input-point . ,(clawmacs::mcclim-message-point-absolute-offset
+                      (buffer-input-message buffer)))
     (:scroll-offset . ,(buffer-scroll-offset buffer))
     (:show-tool-results . ,(buffer-show-tool-results-p buffer))
     (:show-reasoning . ,(buffer-show-reasoning-p buffer))
