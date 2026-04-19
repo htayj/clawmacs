@@ -234,6 +234,9 @@
            (netcons (find "netcons" definitions
                           :key #'clawmacs:package-definition-name
                           :test #'string=))
+           (organa (find "organa" definitions
+                         :key #'clawmacs:package-definition-name
+                         :test #'string=))
            (pipelines (find "pipelines" definitions
                             :key #'clawmacs:package-definition-name
                             :test #'string=))
@@ -249,8 +252,8 @@
            (subagent (find "subagent" definitions
                            :key #'clawmacs:package-definition-name
                            :test #'string=)))
-      (is (equal '("git" "lispi" "netcons" "pipelines" "sexed" "slop"
-                   "speculum" "subagent")
+      (is (equal '("git" "lispi" "netcons" "organa" "pipelines" "sexed"
+                   "slop" "speculum" "subagent")
                  names))
       (is (not (null git)))
       (is (eq :builtin (clawmacs:package-definition-source-tier git)))
@@ -263,6 +266,10 @@
       (is (eq :builtin (clawmacs:package-definition-source-tier netcons)))
       (is (clawmacs:package-definition-autoload netcons))
       (is (probe-file (clawmacs:package-definition-entrypoint netcons)))
+      (is (not (null organa)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier organa)))
+      (is (clawmacs:package-definition-autoload organa))
+      (is (probe-file (clawmacs:package-definition-entrypoint organa)))
       (is (not (null pipelines)))
       (is (eq :builtin (clawmacs:package-definition-source-tier pipelines)))
       (is (clawmacs:package-definition-autoload pipelines))
@@ -292,6 +299,7 @@
       (is (not (null (clawmacs:find-available-package "sexed"))))
       (is (not (null (clawmacs:find-available-package "slop"))))
       (is (not (null (clawmacs:find-available-package "netcons"))))
+      (is (not (null (clawmacs:find-available-package "organa"))))
       (is (not (null (clawmacs:find-available-package "pipelines"))))
       (is (not (null (clawmacs:find-available-package "speculum"))))
       (is (not (null (clawmacs:find-available-package "subagent"))))

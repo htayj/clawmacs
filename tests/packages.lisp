@@ -46,6 +46,10 @@
   :description "Agent-oriented git package tests"
   :in clawmacs-suite)
 
+(def-suite organa-package-suite
+  :description "Org-mode TODO project management package tests"
+  :in clawmacs-suite)
+
 (def-suite netcons-suite
   :description "Agent-oriented web lookup package tests"
   :in clawmacs-suite)
