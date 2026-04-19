@@ -424,8 +424,8 @@ Mode dispatch priority matches handle-key-event in main.lisp."
         (*deny-message-mode*
          (setf row1 " Type denial reason, then RET to send"
                row2 " Normal editing keys available"))
-        ((and (current-buffer) (buffer-approval-pending (current-buffer)))
-         (let* ((approval (buffer-approval-pending (current-buffer)))
+        ((and buf (buffer-approval-pending buf))
+         (let* ((approval (buffer-approval-pending buf))
                 (tool-name (or (cdr (assoc :tool-name approval)) "")))
            (setf row1 " a: approve  d: deny  m: deny with message"
                  row2 (format nil " ~A" tool-name))))

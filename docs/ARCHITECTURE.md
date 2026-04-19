@@ -176,10 +176,13 @@ redisplay. `src/render-core.lisp` owns pure rendering geometry and string
 formatting that the frame draws into CLIM panes.
 
 Keyboard editing remains owned by Clawmacs keymaps. McCLIM key-press events are
-routed through a Clawmacs CLIM command and then into the core command/keymap
+routed through a small CLIM command and then into the core command/keymap
 dispatcher so keys like `C-u` keep their editor meaning instead of becoming ESA
-numeric arguments. Presentation and pointer interactions stay CLIM-native via
-presentation translators.
+numeric arguments. ESA still owns the application-frame/minibuffer shape and the
+active command table for CLIM presentation interactions. Semantic objects drawn
+in panes should be wrapped as CLIM presentations, and dynamic transcript output
+should use stable output records or `updating-output` cache keys when the object
+identity is known.
 
 McCLIM code should not own prompt execution, package enablement, or provider
 transport. It should ask the core to perform operations and then render the

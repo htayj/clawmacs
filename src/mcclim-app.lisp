@@ -181,6 +181,10 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
   :inherit-from 'selector-entry-ref
   :description "a think-level reference")
 
+(clim:define-presentation-type session-tree-entry-ref ()
+  :inherit-from 'selector-entry-ref
+  :description "a session tree entry")
+
 ;;; --------------------------------------------------------------------------
 ;;; CLIM Command Tables + Presentation Translators
 ;;;
@@ -205,19 +209,40 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
 (clim:define-command (com-select-model-entry
                       :command-table clawmacs-mcclim-command-table
                       :name t)
-    ((entry 'selector-entry-ref))
+    ((entry 'model-ref))
   (let ((buf (frame-visible-buffer clim:*application-frame*)))
-    (when (and entry (listp entry))
-      (cond
-        (*model-selector-active*
-         (let ((provider (getf entry :provider))
-               (model (getf entry :model)))
-           (when (and provider model)
-             (apply-buffer-model-selection buf provider model)
-             (setf *model-selector-active* nil))))
-        (*think-selector-active*
-         (apply-buffer-think-level-selection buf entry)
-         (setf *think-selector-active* nil))))))
+    (when (and *model-selector-active* entry (listp entry))
+      (let ((provider (getf entry :provider))
+            (model (getf entry :model)))
+        (when (and provider model)
+          (apply-buffer-model-selection buf provider model)
+          (setf *model-selector-active* nil))))))
+
+(clim:define-command (com-select-think-level-entry
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((entry 'think-level-ref))
+  (let ((buf (frame-visible-buffer clim:*application-frame*)))
+    (when (and *think-selector-active* entry (listp entry))
+      (apply-buffer-think-level-selection buf entry)
+      (setf *think-selector-active* nil))))
+
+(defun mcclim-select-session-tree-item (item)
+  "Select ITEM from the active session tree selector."
+  (when (and item *session-tree-selector-active*)
+    (let ((index (position item *session-tree-selector-filtered-items*
+                           :test #'eq)))
+      (when index
+        (setf *session-tree-selector-index* index))
+      (setf *session-tree-selector-active* nil)
+      (when *session-tree-selector-callback*
+        (funcall *session-tree-selector-callback* item)))))
+
+(clim:define-command (com-select-session-tree-entry
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((entry 'session-tree-entry-ref))
+  (mcclim-select-session-tree-item entry))
 
 (clim:define-presentation-to-command-translator click-buffer-ref
     (buffer-ref com-select-buffer clawmacs-mcclim-command-table
@@ -236,10 +261,20 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
   (list object))
 
 (clim:define-presentation-to-command-translator click-think-level-ref
-    (think-level-ref com-select-model-entry clawmacs-mcclim-command-table
+    (think-level-ref com-select-think-level-entry
+                     clawmacs-mcclim-command-table
                      :gesture :select
                      :priority 10
                      :documentation "Apply think-level selection")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-session-tree-entry
+    (session-tree-entry-ref com-select-session-tree-entry
+                            clawmacs-mcclim-command-table
+                            :gesture :select
+                            :priority 10
+                            :documentation "Navigate to this session entry")
     (object)
   (list object))
 
@@ -414,6 +449,31 @@ recursive repainting display function."
   (declare (ignore frame))
   'clawmacs-mcclim-command-table)
 
+(defmethod esa:buffers ((frame clawmacs-gui))
+  (declare (ignore frame))
+  *buffer-ring*)
+
+(defmethod esa:esa-current-buffer ((frame clawmacs-gui))
+  (frame-visible-buffer frame))
+
+(defmethod (setf esa:esa-current-buffer) (new-buffer (frame clawmacs-gui))
+  (when (and new-buffer (member new-buffer *buffer-ring*))
+    (setf (frame-display-buffer frame) new-buffer
+          (frame-follow-current-buffer-p frame) nil)
+    (switch-to-buffer new-buffer))
+  new-buffer)
+
+(defun mcclim-install-frame-command-table (frame)
+  "Install the active CLIM command table on FRAME.
+
+Presentation translators consult the frame command table, so keep it aligned
+with ESA's current command-table selection even though Clawmacs handles most
+keyboard commands through its own defcommand/keymap layer."
+  (let ((table-name (esa:find-applicable-command-table frame)))
+    (setf (clim:frame-command-table frame)
+          (clim:find-command-table table-name)))
+  frame)
+
 (defmethod esa:command-for-unbound-gestures ((frame clawmacs-gui) gestures)
   "Treat ordinary ESA gestures as Clawmacs keymap input.
 Presentation translators still use CLIM commands; keyboard input falls through
@@ -427,6 +487,7 @@ to the existing Clawmacs command/keymap system."
   (let ((main-pane (clim:find-pane-named frame 'main-pane)))
     (when main-pane
       (setf (esa:windows frame) (list main-pane))))
+  (mcclim-install-frame-command-table frame)
   (mcclim-sync-drei-from-buffer frame :force-p t)
   (mcclim-ensure-polling frame))
 
@@ -755,10 +816,12 @@ history grows a pane's own sheet-region."
     (values (max 1 (floor width char-w))
             (max 1 (floor height char-h)))))
 
+(declaim (special *clawmacs-frame*))
+
 (defun mcclim-primary-frame-p (frame)
-  "Return true when FRAME is the interactive Clawmacs frame."
-  (declare (ignore frame))
-  t)
+  "Return true when FRAME is the primary interactive Clawmacs frame."
+  (and (boundp '*clawmacs-frame*)
+       (eq frame *clawmacs-frame*)))
 
 (defun frame-visible-buffer (frame)
   "Return the buffer FRAME should display."
@@ -925,6 +988,19 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
 ;;; Main Pane Display
 ;;; --------------------------------------------------------------------------
 
+(defun mcclim-message-cache-value
+    (msg screen-row width show-reasoning-p show-metadata-p)
+  "Return a stable cache value for MSG's CLIM output record."
+  (list (message-entry-id msg)
+        (message-sender msg)
+        (message-text msg)
+        (message-metadata msg)
+        (message-raw-content msg)
+        screen-row
+        width
+        show-reasoning-p
+        show-metadata-p))
+
 (defun display-main-pane (frame pane)
   "Display function for the main pane. Dispatches to buffer/selector rendering.
 When the minibuffer is active, draws a centered popup overlay on top."
@@ -1063,12 +1139,21 @@ ordinary input text."
                                        'tool-result
                                        'chat-message)))
                         (push msg visible-messages)
-                        (clim:with-output-as-presentation (pane msg ptype)
-                          (mcclim-render-message-lines pane msg screen-row width
-                                                       char-w char-h
-                                                       :max-rows history-end-row
-                                                       :show-reasoning-p show-reasoning-p
-                                                       :show-metadata-p show-metadata-p))))))))
+                        (clim:updating-output
+                            (pane
+                             :unique-id msg
+                             :cache-value
+                             (mcclim-message-cache-value
+                              msg screen-row width
+                              show-reasoning-p show-metadata-p)
+                             :cache-test #'equal)
+                          (clim:with-output-as-presentation (pane msg ptype)
+                            (mcclim-render-message-lines
+                             pane msg screen-row width
+                             char-w char-h
+                             :max-rows history-end-row
+                             :show-reasoning-p show-reasoning-p
+                             :show-metadata-p show-metadata-p)))))))))
     (when approval-p
       (mcclim-render-approval-prompt pane buf input-start-row
                                      cols char-w char-h rows))
@@ -1497,7 +1582,7 @@ Returns the number of visual rows consumed."
                                (active-p " *")
                                (t "  "))
           :for line := (format-model-selector-line marker provider model width)
-          :do (clim:with-output-as-presentation (pane entry 'think-level-ref)
+          :do (clim:with-output-as-presentation (pane entry 'model-ref)
                 (multiple-value-bind (fg bg ts opts)
                     (resolve-global-face-inks (if selected-p
                                                   :selector-selected
@@ -1586,7 +1671,7 @@ Returns the number of visual rows consumed."
                                (active-p " *")
                                (t "  "))
           :for line := (format-think-selector-line marker label width)
-          :do (clim:with-output-as-presentation (pane entry 'model-ref)
+          :do (clim:with-output-as-presentation (pane entry 'think-level-ref)
                 (multiple-value-bind (fg bg ts opts)
                     (resolve-global-face-inks (if selected-p
                                                   :selector-selected
@@ -1676,15 +1761,17 @@ Returns the number of visual rows consumed."
           :for selected-p := (= absolute-idx *session-tree-selector-index*)
           :for marker := (if selected-p "> " "  ")
           :for line := (format-session-tree-selector-line marker item width)
-          :do (multiple-value-bind (fg bg ts opts)
-                  (resolve-global-face-inks (if selected-p
-                                                :selector-selected
-                                                :selector-entry))
-                (fill-row pane row width bg char-w char-h)
-                (draw-text-at pane row 0
-                              (subseq line 0 (min (length line) width))
-                              fg bg ts char-w char-h
-                              :drawing-options opts)))
+          :do (clim:with-output-as-presentation
+                  (pane item 'session-tree-entry-ref)
+                (multiple-value-bind (fg bg ts opts)
+                    (resolve-global-face-inks (if selected-p
+                                                  :selector-selected
+                                                  :selector-entry))
+                  (fill-row pane row width bg char-w char-h)
+                  (draw-text-at pane row 0
+                                (subseq line 0 (min (length line) width))
+                                fg bg ts char-w char-h
+                                :drawing-options opts))))
     (when (> num-items max-visible)
       (let ((indicator (format nil "[~D-~D of ~D]"
                                (1+ scroll)
@@ -2325,10 +2412,11 @@ when no key or window event arrives."
   "Run Clawmacs' McCLIM top level using ESA command processing.
 The loop reads from the top-level sheet, which matches McCLIM/CLX focus
 behavior for Clawmacs under window managers. Keyboard gestures are dispatched
-through Clawmacs' keymap, while presentation and window events stay on the
-standard CLIM event path."
+through Clawmacs' keymap so keys like C-u keep their editor meaning; CLIM
+presentation and window events stay on the standard CLIM event path."
   (unless (eq (clim:frame-state frame) :enabled)
     (clim:enable-frame frame))
+  (mcclim-install-frame-command-table frame)
   (mcclim-sync-drei-from-buffer frame :force-p t)
   (mcclim-redisplay-frame frame :force-p t)
   (loop :until (frame-quit-flag frame)
