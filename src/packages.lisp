@@ -58,13 +58,39 @@
    ;; General utilities
    #:count-occurrences
 
-   ;; Color specs
+   ;; Legacy color specs
    #:color-spec
    #:make-color-spec
    #:color-spec-type
    #:color-spec-value
 
-   ;; Faces
+   ;; CLIM drawing styles
+   #:make-cga-ink
+   #:make-256-color-ink
+   #:make-hex-ink
+   #:make-clim-ink
+   #:make-clim-text-style
+   #:default-clawmacs-text-style
+   #:bold-clawmacs-text-style
+   #:drawing-style
+   #:make-drawing-style
+   #:drawing-style-name
+   #:drawing-style-ink
+   #:drawing-style-background-ink
+   #:drawing-style-text-style
+   #:drawing-style-drawing-options
+   #:drawing-style-underline-p
+   #:drawing-style-parent
+   #:drawing-style-transform
+   #:resolved-drawing-style
+   #:resolved-drawing-style-ink
+   #:resolved-drawing-style-background-ink
+   #:resolved-drawing-style-text-style
+   #:resolved-drawing-style-drawing-options
+   #:resolved-drawing-style-underline-p
+   #:resolve-drawing-style
+
+   ;; Legacy faces
    #:face
    #:face-name
    #:face-foreground
@@ -80,9 +106,16 @@
    #:resolved-face-bold-p
    #:resolved-face-underline-p
    #:resolved-face-reverse-p
+   #:resolved-face-text-style
+   #:resolved-face-drawing-options
    #:resolve-face
 
-   ;; Face sets
+   ;; Drawing style sets / legacy face sets
+   #:drawing-style-set
+   #:drawing-style-set-owner
+   #:drawing-style-set-styles
+   #:make-drawing-style-set
+   #:get-drawing-style
    #:face-set
    #:face-set-owner
    #:face-set-faces
@@ -819,6 +852,9 @@
    #:*customize-face-fields*
    #:cga-color-name
    #:format-color-spec-display
+   #:format-clim-ink-display
+   #:format-clim-text-style-display
+   #:format-drawing-options-display
    #:format-boolean-display
    #:format-face-parent-display
    #:customize-face-field-value
@@ -834,6 +870,8 @@
    #:customize-face-toggle-field
    #:collect-all-faces
    #:make-color-selection-items
+   #:make-text-style-selection-items
+   #:make-drawing-options-selection-items
    #:make-boolean-selection-items
    #:make-parent-selection-items
    #:customize-face-edit-field
@@ -842,6 +880,7 @@
    #:customize-face-revert-to-original
    #:make-customize-face-buffer
    #:handle-customize-key
+   #:customize-drawing-style-command
    #:customize-face-command
 
    ;; Type introspection

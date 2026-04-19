@@ -25,204 +25,204 @@ Call once at startup. These faces are customizable via customize-face."
     (clrhash r)
     ;; Modeline
     (setf (gethash :modeline r)
-          (make-instance 'face :name :modeline
-            :background (make-color-spec :cga 7)
-            :foreground (make-color-spec :cga 0)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :modeline
+            :background-ink (make-clim-ink :cga 7)
+            :ink (make-clim-ink :cga 0)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     ;; System messages (e.g. shell prefix output, notifications)
     (setf (gethash :system r)
-          (make-instance 'face :name :system
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 6)
+          (make-instance 'drawing-style :name :system
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 6)
             :bold-p nil :underline-p nil :reverse-p nil))
     ;; Compaction summaries are model-visible handoff context.
     (setf (gethash :compaction-summary r)
-          (make-instance 'face :name :compaction-summary
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 3)
+          (make-instance 'drawing-style :name :compaction-summary
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 3)
             :bold-p nil :underline-p nil :reverse-p nil))
     ;; Debug messages — API request/response log when *debug-mode* is t.
     ;; Bright magenta distinguishes debug output from regular system messages.
     (setf (gethash :debug r)
-          (make-instance 'face :name :debug
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 13)   ; bright magenta
+          (make-instance 'drawing-style :name :debug
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 13)   ; bright magenta
             :bold-p nil :underline-p nil :reverse-p nil))
     ;; Minibuffer faces
     (setf (gethash :minibuffer-prompt r)
-          (make-instance 'face :name :minibuffer-prompt
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 15)
+          (make-instance 'drawing-style :name :minibuffer-prompt
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 15)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :minibuffer-cursor r)
-          (make-instance 'face :name :minibuffer-cursor
-            :background (make-color-spec :cga 15)
-            :foreground (make-color-spec :cga 0)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :minibuffer-cursor
+            :background-ink (make-clim-ink :cga 15)
+            :ink (make-clim-ink :cga 0)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     (setf (gethash :minibuffer-candidate r)
-          (make-instance 'face :name :minibuffer-candidate
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 7)
+          (make-instance 'drawing-style :name :minibuffer-candidate
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 7)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :minibuffer-selected r)
-          (make-instance 'face :name :minibuffer-selected
-            :background (make-color-spec :cga 15)
-            :foreground (make-color-spec :cga 0)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :minibuffer-selected
+            :background-ink (make-clim-ink :cga 15)
+            :ink (make-clim-ink :cga 0)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     ;; Fuzzy-match highlight faces — matched characters are rendered in bright
     ;; yellow so they stand out against both dark and light backgrounds.
     (setf (gethash :minibuffer-match r)
-          (make-instance 'face :name :minibuffer-match
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 11)   ; bright yellow on black
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :minibuffer-match
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 11)   ; bright yellow on black
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     (setf (gethash :minibuffer-selected-match r)
-          (make-instance 'face :name :minibuffer-selected-match
-            :background (make-color-spec :cga 15)
-            :foreground (make-color-spec :cga 3)    ; dark yellow on white
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :minibuffer-selected-match
+            :background-ink (make-clim-ink :cga 15)
+            :ink (make-clim-ink :cga 3)    ; dark yellow on white
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     ;; Selector overlay faces (buffer selector, model selector)
     (setf (gethash :selector-title r)
-          (make-instance 'face :name :selector-title
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 14)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :selector-title
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 14)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     (setf (gethash :selector-separator r)
-          (make-instance 'face :name :selector-separator
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 7)
+          (make-instance 'drawing-style :name :selector-separator
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 7)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :selector-header r)
-          (make-instance 'face :name :selector-header
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 11)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :selector-header
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 11)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     (setf (gethash :selector-entry r)
-          (make-instance 'face :name :selector-entry
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 7)
+          (make-instance 'drawing-style :name :selector-entry
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 7)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :selector-selected r)
-          (make-instance 'face :name :selector-selected
-            :background (make-color-spec :cga 6)
-            :foreground (make-color-spec :cga 0)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :selector-selected
+            :background-ink (make-clim-ink :cga 6)
+            :ink (make-clim-ink :cga 0)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     (setf (gethash :selector-footer r)
-          (make-instance 'face :name :selector-footer
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 2)
+          (make-instance 'drawing-style :name :selector-footer
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 2)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :selector-scroll r)
-          (make-instance 'face :name :selector-scroll
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 11)
+          (make-instance 'drawing-style :name :selector-scroll
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 11)
             :bold-p nil :underline-p nil :reverse-p nil))
     ;; Approval prompt faces
     (setf (gethash :approval-header r)
-          (make-instance 'face :name :approval-header
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 11)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :approval-header
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 11)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     (setf (gethash :approval-code r)
-          (make-instance 'face :name :approval-code
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 14)
+          (make-instance 'drawing-style :name :approval-code
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 14)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :approval-text r)
-          (make-instance 'face :name :approval-text
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 15)
+          (make-instance 'drawing-style :name :approval-text
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 15)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :approval-diff-add r)
-          (make-instance 'face :name :approval-diff-add
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 2)
+          (make-instance 'drawing-style :name :approval-diff-add
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 2)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :approval-diff-remove r)
-          (make-instance 'face :name :approval-diff-remove
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 1)
+          (make-instance 'drawing-style :name :approval-diff-remove
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 1)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :approval-options r)
-          (make-instance 'face :name :approval-options
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 2)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :approval-options
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 2)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     ;; Tool call faces
     (setf (gethash :tool-call r)
-          (make-instance 'face :name :tool-call
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 14)
+          (make-instance 'drawing-style :name :tool-call
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 14)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :tool-call-paren r)
-          (make-instance 'face :name :tool-call-paren
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 12)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :tool-call-paren
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 12)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     (setf (gethash :tool-call-keyword r)
-          (make-instance 'face :name :tool-call-keyword
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 11)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :tool-call-keyword
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 11)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     (setf (gethash :tool-call-string r)
-          (make-instance 'face :name :tool-call-string
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 10)
+          (make-instance 'drawing-style :name :tool-call-string
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 10)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :tool-call-comment r)
-          (make-instance 'face :name :tool-call-comment
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 6)
+          (make-instance 'drawing-style :name :tool-call-comment
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 6)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :tool-call-number r)
-          (make-instance 'face :name :tool-call-number
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 13)
+          (make-instance 'drawing-style :name :tool-call-number
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 13)
             :bold-p nil :underline-p nil :reverse-p nil))
     ;; Tool result faces
     (setf (gethash :tool-result r)
-          (make-instance 'face :name :tool-result
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 10)
+          (make-instance 'drawing-style :name :tool-result
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 10)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :tool-result-paren r)
-          (make-instance 'face :name :tool-result-paren
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 12)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :tool-result-paren
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 12)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     (setf (gethash :tool-result-keyword r)
-          (make-instance 'face :name :tool-result-keyword
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 11)
-            :bold-p t :underline-p nil :reverse-p nil))
+          (make-instance 'drawing-style :name :tool-result-keyword
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 11)
+            :text-style (bold-clawmacs-text-style) :underline-p nil :reverse-p nil))
     (setf (gethash :tool-result-string r)
-          (make-instance 'face :name :tool-result-string
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 14)
+          (make-instance 'drawing-style :name :tool-result-string
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 14)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :tool-result-comment r)
-          (make-instance 'face :name :tool-result-comment
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 6)
+          (make-instance 'drawing-style :name :tool-result-comment
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 6)
             :bold-p nil :underline-p nil :reverse-p nil))
     (setf (gethash :tool-result-number r)
-          (make-instance 'face :name :tool-result-number
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 13)
+          (make-instance 'drawing-style :name :tool-result-number
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 13)
             :bold-p nil :underline-p nil :reverse-p nil))
     ;; Default text face — fallback for messages without a face set.
     ;; This should NEVER be the modeline face; it should be a sensible
     ;; text-on-dark-background face for generic content.
     (setf (gethash :default-text r)
-          (make-instance 'face :name :default-text
-            :background (make-color-spec :cga 0)
-            :foreground (make-color-spec :cga 7)
+          (make-instance 'drawing-style :name :default-text
+            :background-ink (make-clim-ink :cga 0)
+            :ink (make-clim-ink :cga 7)
             :bold-p nil :underline-p nil :reverse-p nil))
     ;; Who-line face — light gray bg, black fg (McCLIM only, Genera-style)
     (setf (gethash :who-line r)
-          (make-instance 'face :name :who-line
-            :background (make-color-spec :hex "#EDEDED")
-            :foreground (make-color-spec :cga 0)
+          (make-instance 'drawing-style :name :who-line
+            :background-ink (make-clim-ink :hex "#EDEDED")
+            :ink (make-clim-ink :cga 0)
             :bold-p nil :underline-p nil :reverse-p nil))
     r))
 
@@ -245,62 +245,59 @@ Returns a list of plists with :face, :owner, :name, and :label keys."
 
 (defun make-default-user-face-set ()
   "Create the default face set for user messages.
-Background: CGA blue (#4), foreground: white.
-Spec calls for dark-gray (#8) but 8-color terminals map that to black,
-making user and agent messages indistinguishable. Blue provides clear
-visual distinction until 256-color detection is added."
+Background: light blue, ink: black."
   (make-face-set
    :user
-   (list (make-instance 'face
+   (list (make-instance 'drawing-style
            :name :default
-           :background (make-color-spec :cga 4)
-           :foreground (make-color-spec :cga 7)
+           :background-ink (make-hex-ink "#D0D8E8")
+           :ink (make-cga-ink 0)
            :bold-p nil
            :underline-p nil
            :reverse-p nil))))
 
 (defun make-default-agent-face-set (agent-keyword)
   "Create the default face set for an agent.
-Background: black (#0), foreground: white."
+Background: white, ink: black."
   (make-face-set
    agent-keyword
-   (list (make-instance 'face
+   (list (make-instance 'drawing-style
            :name :default
-           :background (make-color-spec :cga 0)
-           :foreground (make-color-spec :cga 15)
+           :background-ink (make-cga-ink 15)
+           :ink (make-cga-ink 0)
            :bold-p nil
            :underline-p nil
            :reverse-p nil))))
 
 (defun make-default-system-face-set ()
   "Create the default face set for system messages.
-Uses the global :system face if available, otherwise cyan on black."
+Uses the global :system drawing style if available."
   (let ((sys-face (or (global-face :system)
-                      (make-instance 'face :name :default
-                        :background (make-color-spec :cga 0)
-                        :foreground (make-color-spec :cga 6)
+                      (make-instance 'drawing-style :name :default
+                        :background-ink (make-cga-ink 15)
+                        :ink (make-cga-ink 6)
                         :bold-p nil :underline-p nil :reverse-p nil))))
     (make-face-set
      :system
-     (list (make-instance 'face
+     (list (make-instance 'drawing-style
              :name :default
              :parent sys-face
-             :background nil :foreground nil
+             :background-ink nil :ink nil
              :bold-p nil :underline-p nil :reverse-p nil)))))
 
 (defun make-default-compaction-summary-face-set ()
   "Create the default face set for compaction summary messages."
   (let ((summary-face (or (global-face :compaction-summary)
-                          (make-instance 'face :name :default
-                            :background (make-color-spec :cga 0)
-                            :foreground (make-color-spec :cga 3)
+                          (make-instance 'drawing-style :name :default
+                            :background-ink (make-cga-ink 15)
+                            :ink (make-cga-ink 3)
                             :bold-p nil :underline-p nil :reverse-p nil))))
     (make-face-set
      :compaction-summary
-     (list (make-instance 'face
+     (list (make-instance 'drawing-style
              :name :default
              :parent summary-face
-             :background nil :foreground nil
+             :background-ink nil :ink nil
              :bold-p nil :underline-p nil :reverse-p nil)))))
 
 (defun ensure-buffer-agent-face-set
@@ -329,11 +326,11 @@ Uses the global :system face if available, otherwise cyan on black."
   "Return the modeline face from the global registry, or create a default.
 Prefers the stored global face for customizability."
   (or (global-face :modeline)
-      (make-instance 'face
+      (make-instance 'drawing-style
         :name :modeline
-        :background (make-color-spec :cga 7)
-        :foreground (make-color-spec :cga 0)
-        :bold-p t
+        :background-ink (make-clim-ink :cga 7)
+        :ink (make-clim-ink :cga 0)
+        :text-style (bold-clawmacs-text-style)
         :underline-p nil
         :reverse-p nil)))
 
@@ -342,10 +339,10 @@ Prefers the stored global face for customizability."
 This is the fallback face for messages that lack a face set — white text on
 black background. This must NOT be the modeline face."
   (or (global-face :default-text)
-      (make-instance 'face
+      (make-instance 'drawing-style
         :name :default-text
-        :background (make-color-spec :cga 0)
-        :foreground (make-color-spec :cga 7)
+        :background-ink (make-cga-ink 15)
+        :ink (make-cga-ink 0)
         :bold-p nil
         :underline-p nil
         :reverse-p nil)))

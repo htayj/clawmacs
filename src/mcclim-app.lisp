@@ -17,200 +17,138 @@
 (defvar *mcclim-bg-ink* (clim:make-rgb-color 1.0 1.0 1.0)
   "Default background ink for the McCLIM app. White for Genera theme.")
 
+(defun set-drawing-style-values
+    (style &key ink background-ink text-style drawing-options underline-p)
+  "Update STYLE with CLIM drawing values, leaving omitted slots unchanged."
+  (when ink
+    (setf (drawing-style-ink style) ink))
+  (when background-ink
+    (setf (drawing-style-background-ink style) background-ink))
+  (when text-style
+    (setf (drawing-style-text-style style) text-style))
+  (when drawing-options
+    (setf (drawing-style-drawing-options style) drawing-options))
+  (when (not (null underline-p))
+    (setf (drawing-style-underline-p style) underline-p))
+  style)
+
+(defun set-global-drawing-style-values
+    (name &key ink background-ink text-style drawing-options underline-p)
+  "Update global drawing style NAME with CLIM drawing values."
+  (let ((style (global-face name)))
+    (when style
+      (set-drawing-style-values style
+                                :ink ink
+                                :background-ink background-ink
+                                :text-style text-style
+                                :drawing-options drawing-options
+                                :underline-p underline-p))))
+
 (defun mcclim-apply-genera-theme ()
-  "Patch *global-face-registry* for Genera-style white background.
+  "Patch global drawing styles for Genera-style white background.
 Called once before the McCLIM application frame is created."
-  (let ((white-bg (make-color-spec :cga 15))
-        (black-fg (make-color-spec :cga 0))
-        (light-blue-bg (make-color-spec :hex "#D0E0F0"))
-        (dark-blue-fg (make-color-spec :cga 4))
-        (dark-green-fg (make-color-spec :cga 2))
-        (dark-red-fg (make-color-spec :cga 1))
-        (dark-yellow-fg (make-color-spec :cga 3))
-        (dark-magenta-fg (make-color-spec :cga 5))
-        (dark-cyan-fg (make-color-spec :cga 6))
-        (gray-fg (make-color-spec :cga 8)))
-    ;; Walk all faces: black bg → white bg, white/gray fg → black fg
-    (maphash (lambda (name face)
-               (let ((bg-val (when (face-background face)
-                               (color-spec-value (face-background face))))
-                     (fg-val (when (face-foreground face)
-                               (color-spec-value (face-foreground face)))))
-                 ;; Skip faces with special overrides below
-                 (unless (member name '(:modeline :selector-selected
-                                        :minibuffer-selected :minibuffer-match
-                                        :minibuffer-selected-match
-                                        :approval-diff-add :approval-diff-remove
-                                        :tool-call :tool-call-paren
-                                        :tool-call-keyword :tool-call-string
-                                        :tool-call-comment :tool-call-number
-                                        :tool-result :tool-result-paren
-                                        :tool-result-keyword :tool-result-string
-                                        :tool-result-comment :tool-result-number))
-                   ;; Black bg → white bg
-                   (when (and (face-background face)
-                              (eq :cga (color-spec-type (face-background face)))
-                              (eql bg-val 0))
-                     (setf (face-background face) white-bg))
-                   ;; White/gray fg → black fg
-                   (when (and (face-foreground face)
-                              (eq :cga (color-spec-type (face-foreground face)))
-                              (member fg-val '(7 15)))
-                     (setf (face-foreground face) black-fg)))))
+  (let ((white-bg (make-cga-ink 15))
+        (black-fg (make-cga-ink 0))
+        (light-blue-bg (make-hex-ink "#D0E0F0"))
+        (user-bg (make-hex-ink "#D0D8E8"))
+        (dark-blue-fg (make-cga-ink 4))
+        (dark-green-fg (make-cga-ink 2))
+        (dark-red-fg (make-cga-ink 1))
+        (dark-yellow-fg (make-cga-ink 3))
+        (dark-magenta-fg (make-cga-ink 5))
+        (dark-cyan-fg (make-cga-ink 6))
+        (gray-fg (make-cga-ink 8))
+        (bold (bold-clawmacs-text-style))
+        (roman (default-clawmacs-text-style)))
+    (maphash (lambda (_name style)
+               (declare (ignore _name))
+               (set-drawing-style-values style
+                                         :background-ink white-bg
+                                         :ink black-fg
+                                         :text-style roman))
              *global-face-registry*)
-    ;; Special overrides
-    ;; :modeline — keep gray bg, black fg, bold (already correct)
-    ;; :selector-selected — light blue bg, black fg
-    (let ((f (global-face :selector-selected)))
-      (when f
-        (setf (face-background f) light-blue-bg
-              (face-foreground f) black-fg)))
-    ;; :minibuffer-selected — light blue bg, black fg
-    (let ((f (global-face :minibuffer-selected)))
-      (when f
-        (setf (face-background f) light-blue-bg
-              (face-foreground f) black-fg)))
-    ;; :minibuffer-match — dark blue fg on white bg, bold
-    (let ((f (global-face :minibuffer-match)))
-      (when f
-        (setf (face-background f) white-bg
-              (face-foreground f) dark-blue-fg
-              (face-bold-p f) t)))
-    ;; :minibuffer-selected-match — dark blue fg on light blue bg, bold
-    (let ((f (global-face :minibuffer-selected-match)))
-      (when f
-        (setf (face-background f) light-blue-bg
-              (face-foreground f) dark-blue-fg
-              (face-bold-p f) t)))
-    ;; :approval-diff-add — green fg on white bg
-    (let ((f (global-face :approval-diff-add)))
-      (when f
-        (setf (face-background f) white-bg)))
-    ;; :approval-diff-remove — red fg on white bg
-    (let ((f (global-face :approval-diff-remove)))
-      (when f
-        (setf (face-background f) white-bg)))
-    ;; Tool call/result faces — use darker inks for contrast on white.
-    (dolist (spec `((:tool-call ,white-bg ,dark-blue-fg t)
-                    (:tool-call-paren ,white-bg ,dark-blue-fg t)
-                    (:tool-call-keyword ,white-bg ,dark-red-fg t)
-                    (:tool-call-string ,white-bg ,dark-green-fg nil)
-                    (:tool-call-comment ,white-bg ,dark-cyan-fg nil)
-                    (:tool-call-number ,white-bg ,dark-magenta-fg nil)
-                    (:tool-result ,white-bg ,dark-green-fg t)
-                    (:tool-result-paren ,white-bg ,dark-blue-fg t)
-                    (:tool-result-keyword ,white-bg ,dark-yellow-fg t)
-                    (:tool-result-string ,white-bg ,dark-cyan-fg nil)
-                    (:tool-result-comment ,white-bg ,gray-fg nil)
-                    (:tool-result-number ,white-bg ,dark-magenta-fg nil)))
-      (let ((f (global-face (first spec))))
-        (when f
-          (setf (face-background f) (second spec)
-                (face-foreground f) (third spec)
-                (face-bold-p f) (fourth spec)))))
-    ;; Patch per-buffer face-sets on existing buffers
-    (let ((user-bg (make-color-spec :hex "#D0D8E8"))
-          (agent-bg white-bg))
+    (set-global-drawing-style-values :modeline
+                                     :background-ink (make-cga-ink 7)
+                                     :ink black-fg
+                                     :text-style bold)
+    (set-global-drawing-style-values :selector-selected
+                                     :background-ink light-blue-bg
+                                     :ink black-fg
+                                     :text-style bold)
+    (set-global-drawing-style-values :minibuffer-selected
+                                     :background-ink light-blue-bg
+                                     :ink black-fg
+                                     :text-style bold)
+    (set-global-drawing-style-values :minibuffer-match
+                                     :background-ink white-bg
+                                     :ink dark-blue-fg
+                                     :text-style bold)
+    (set-global-drawing-style-values :minibuffer-selected-match
+                                     :background-ink light-blue-bg
+                                     :ink dark-blue-fg
+                                     :text-style bold)
+    (set-global-drawing-style-values :approval-diff-add
+                                     :background-ink white-bg
+                                     :ink dark-green-fg)
+    (set-global-drawing-style-values :approval-diff-remove
+                                     :background-ink white-bg
+                                     :ink dark-red-fg)
+    (dolist (spec `((:tool-call ,white-bg ,dark-blue-fg ,bold)
+                    (:tool-call-paren ,white-bg ,dark-blue-fg ,bold)
+                    (:tool-call-keyword ,white-bg ,dark-red-fg ,bold)
+                    (:tool-call-string ,white-bg ,dark-green-fg ,roman)
+                    (:tool-call-comment ,white-bg ,dark-cyan-fg ,roman)
+                    (:tool-call-number ,white-bg ,dark-magenta-fg ,roman)
+                    (:tool-result ,white-bg ,dark-green-fg ,bold)
+                    (:tool-result-paren ,white-bg ,dark-blue-fg ,bold)
+                    (:tool-result-keyword ,white-bg ,dark-yellow-fg ,bold)
+                    (:tool-result-string ,white-bg ,dark-cyan-fg ,roman)
+                    (:tool-result-comment ,white-bg ,gray-fg ,roman)
+                    (:tool-result-number ,white-bg ,dark-magenta-fg ,roman)))
+      (set-global-drawing-style-values (first spec)
+                                       :background-ink (second spec)
+                                       :ink (third spec)
+                                       :text-style (fourth spec)))
+    ;; Patch per-buffer style sets on existing buffers.
+    (let ((agent-bg white-bg))
       (dolist (buf *buffer-ring*)
         (maphash (lambda (sender-kw fs)
-                   (let ((default-face (get-face fs :default)))
-                     (when default-face
+                   (let ((default-style (get-face fs :default)))
+                     (when default-style
                        (if (eq sender-kw :user)
-                           (setf (face-background default-face) user-bg
-                                 (face-foreground default-face) black-fg)
-                           (progn
-                             (setf (face-background default-face) agent-bg)
-                             (when (and (face-foreground default-face)
-                                        (eq :cga (color-spec-type
-                                                  (face-foreground default-face)))
-                                        (member (color-spec-value
-                                                 (face-foreground default-face))
-                                                '(7 15)))
-                               (setf (face-foreground default-face) black-fg)))))))
+                           (set-drawing-style-values default-style
+                                                     :background-ink user-bg
+                                                     :ink black-fg
+                                                     :text-style roman)
+                           (set-drawing-style-values default-style
+                                                     :background-ink agent-bg
+                                                     :ink black-fg
+                                                     :text-style roman)))))
                  (buffer-face-registry buf))))))
 
 ;;; --------------------------------------------------------------------------
-;;; Color Mapping — color-spec → CLIM ink
-;;; --------------------------------------------------------------------------
-
-(defun color-spec-to-clim-ink (cs)
-  "Convert a color-spec to a CLIM ink (color object).
-Handles :CGA (0-15), :256 (xterm-256 palette), and :HEX (#RRGGBB) types."
-  (ecase (color-spec-type cs)
-    (:cga
-     (let ((val (color-spec-value cs)))
-       (case val
-         (0  (clim:make-rgb-color 0.0 0.0 0.0))         ; black
-         (1  (clim:make-rgb-color 0.67 0.0 0.0))        ; red
-         (2  (clim:make-rgb-color 0.0 0.67 0.0))        ; green
-         (3  (clim:make-rgb-color 0.67 0.33 0.0))       ; brown
-         (4  (clim:make-rgb-color 0.0 0.0 0.67))        ; blue
-         (5  (clim:make-rgb-color 0.67 0.0 0.67))       ; magenta
-         (6  (clim:make-rgb-color 0.0 0.67 0.67))       ; cyan
-         (7  (clim:make-rgb-color 0.67 0.67 0.67))      ; gray
-         (8  (clim:make-rgb-color 0.33 0.33 0.33))      ; dark gray
-         (9  (clim:make-rgb-color 1.0 0.33 0.33))       ; bright red
-         (10 (clim:make-rgb-color 0.33 1.0 0.33))       ; bright green
-         (11 (clim:make-rgb-color 1.0 1.0 0.33))        ; bright yellow
-         (12 (clim:make-rgb-color 0.33 0.33 1.0))       ; bright blue
-         (13 (clim:make-rgb-color 1.0 0.33 1.0))        ; bright magenta
-         (14 (clim:make-rgb-color 0.33 1.0 1.0))        ; bright cyan
-         (15 (clim:make-rgb-color 1.0 1.0 1.0))         ; bright white
-         (otherwise (clim:make-rgb-color 0.67 0.67 0.67)))))
-    (:256
-     (let ((val (color-spec-value cs)))
-       (cond
-         ;; Standard colors 0-15: recurse with CGA mapping
-         ((< val 16)
-          (color-spec-to-clim-ink (make-color-spec :cga val)))
-         ;; 6x6x6 color cube: indices 16-231
-         ((< val 232)
-          (let* ((idx (- val 16))
-                 (r-idx (floor idx 36))
-                 (g-idx (floor (mod idx 36) 6))
-                 (b-idx (mod idx 6))
-                 (r (if (zerop r-idx) 0.0 (/ (+ 55 (* 40 r-idx)) 255.0)))
-                 (g (if (zerop g-idx) 0.0 (/ (+ 55 (* 40 g-idx)) 255.0)))
-                 (b (if (zerop b-idx) 0.0 (/ (+ 55 (* 40 b-idx)) 255.0))))
-            (clim:make-rgb-color r g b)))
-         ;; Grayscale ramp: indices 232-255
-         (t
-          (let ((level (/ (+ 8 (* 10 (- val 232))) 255.0)))
-            (clim:make-rgb-color level level level))))))
-    (:hex
-     (let ((hex (color-spec-value cs)))
-       (if (and (stringp hex) (= (length hex) 7) (char= (char hex 0) #\#))
-           (let ((r (/ (parse-integer hex :start 1 :end 3 :radix 16) 255.0))
-                 (g (/ (parse-integer hex :start 3 :end 5 :radix 16) 255.0))
-                 (b (/ (parse-integer hex :start 5 :end 7 :radix 16) 255.0)))
-             (clim:make-rgb-color r g b))
-           (clim:make-rgb-color 1.0 1.0 1.0))))))
-
-;;; --------------------------------------------------------------------------
-;;; Face → Ink Resolution
+;;; Drawing Style Resolution
 ;;; --------------------------------------------------------------------------
 
 (defun resolve-face-inks (resolved-face)
-  "Convert a resolved-face to CLIM drawing parameters.
-Returns (values fg-ink bg-ink text-style) where text-style encodes bold."
-  (let* ((fg (color-spec-to-clim-ink (resolved-face-foreground resolved-face)))
-         (bg (color-spec-to-clim-ink (resolved-face-background resolved-face)))
-         (bold-p (resolved-face-bold-p resolved-face))
-         (ts (clim:make-text-style :fix (if bold-p :bold :roman) :normal)))
-    ;; Handle reverse: swap fg/bg
-    (when (resolved-face-reverse-p resolved-face)
-      (rotatef fg bg))
-    (values fg bg ts)))
+  "Return CLIM drawing parameters from RESOLVED-FACE.
+Values are ink, background-ink, text-style, drawing-options, and underline-p."
+  (values (resolved-face-foreground resolved-face)
+          (resolved-face-background resolved-face)
+          (resolved-face-text-style resolved-face)
+          (resolved-face-drawing-options resolved-face)
+          (resolved-face-underline-p resolved-face)))
 
 (defun resolve-global-face-inks (face-name)
-  "Resolve a global face by keyword NAME to CLIM inks.
-Returns (values fg-ink bg-ink text-style), or nil values if face not found."
-  (let ((face (global-face face-name)))
-    (if face
-        (resolve-face-inks (resolve-face face))
-        (values (clim:make-rgb-color 0.0 0.0 0.0)
-                *mcclim-bg-ink*
-                (clim:make-text-style :fix :roman :normal)))))
+  "Resolve a global drawing style by keyword NAME to CLIM drawing parameters."
+  (let ((style (global-face face-name)))
+    (if style
+        (resolve-face-inks (resolve-face style))
+        (let* ((ink (make-cga-ink 0))
+               (background-ink *mcclim-bg-ink*)
+               (text-style (default-clawmacs-text-style))
+               (drawing-options (list :ink ink :text-style text-style)))
+          (values ink background-ink text-style drawing-options nil)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Presentation Types — semantic mouse interaction
@@ -555,20 +493,30 @@ Called from inside display functions where the pane's medium is ready."
         (setf (frame-char-width frame) 7
               (frame-char-height frame) 14)))))
 
-(defun draw-text-at (pane row col text fg-ink bg-ink text-style char-w char-h)
+(defun clim-drawing-options-for-text (fg-ink text-style drawing-options)
+  "Return a CLIM drawing-options plist for text rendering."
+  (let ((options (copy-list drawing-options)))
+    (setf (getf options :ink) fg-ink
+          (getf options :text-style) text-style)
+    options))
+
+(defun draw-text-at
+    (pane row col text fg-ink bg-ink text-style char-w char-h
+     &key drawing-options)
   "Draw TEXT at character grid position (ROW, COL) in PANE.
 Fills a background rectangle first, then draws the text on top."
   (let* ((x (* col char-w))
          (y (* row char-h))
-         (text-width (* (length text) char-w)))
+         (text-width (* (length text) char-w))
+         (options (clim-drawing-options-for-text
+                   fg-ink text-style drawing-options)))
     ;; Background rectangle
     (clim:draw-rectangle* pane x y (+ x text-width) (+ y char-h)
                           :ink bg-ink)
-    ;; Text — baseline is at y + ascent
-    (clim:draw-text* pane text x y
-                     :text-style text-style
-                     :ink fg-ink
-                     :align-y :top)))
+    (apply #'clim:draw-text*
+           pane text x y
+           :align-y :top
+           options)))
 
 (defun draw-underline-at (pane row col length fg-ink char-w char-h)
   "Draw an underline under LENGTH characters starting at (ROW, COL)."
@@ -593,9 +541,10 @@ Fills a background rectangle first, then draws the text on top."
   "Draw SPANS starting at (ROW, START-COL) using global face definitions."
   (let ((col start-col))
     (dolist (span spans)
-      (multiple-value-bind (fg bg ts)
+      (multiple-value-bind (fg bg ts opts)
           (resolve-global-face-inks (car span))
-        (draw-text-at pane row col (cdr span) fg bg ts char-w char-h))
+        (draw-text-at pane row col (cdr span) fg bg ts char-w char-h
+                      :drawing-options opts))
       (incf col (length (cdr span))))))
 
 ;;; --------------------------------------------------------------------------
@@ -728,8 +677,8 @@ Values are DISPLAY-WIDTH, DISPLAY-HEIGHT, ROWS, and SCALE."
                    width prefix-len char-w char-h))))))
 
 (defun mcclim-render-image-block
-    (pane reference row width prefix prefix-len fg bg ts char-w char-h
-     max-rows first-row-p)
+    (pane reference row width prefix prefix-len fg bg ts drawing-options
+     char-w char-h max-rows first-row-p)
   "Render image REFERENCE at ROW and return rows consumed."
   (multiple-value-bind (entry error-text)
       (mcclim-load-display-image-reference reference)
@@ -745,7 +694,8 @@ Values are DISPLAY-WIDTH, DISPLAY-HEIGHT, ROWS, and SCALE."
       (when (and (>= row 0) (< row max-rows))
         (fill-row pane row width bg char-w char-h)
         (draw-text-at pane row caption-col visible-caption
-                      fg bg ts char-w char-h))
+                      fg bg ts char-w char-h
+                      :drawing-options drawing-options))
       (if (or error-text (null entry))
           1
           (multiple-value-bind (display-width display-height image-rows scale)
@@ -935,9 +885,10 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
     (clim:updating-output (pane :unique-id 'modeline-content
                                 :cache-value text
                                 :cache-test #'string=)
-      (multiple-value-bind (fg bg ts) (resolve-face-inks resolved)
+      (multiple-value-bind (fg bg ts opts) (resolve-face-inks resolved)
         (fill-row pane 0 cols bg char-w char-h)
-        (draw-text-at pane 0 0 text fg bg ts char-w char-h)))))
+        (draw-text-at pane 0 0 text fg bg ts char-w char-h
+                      :drawing-options opts)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Who-Line Display
@@ -957,15 +908,18 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
           (clim:updating-output (pane :unique-id 'who-line-content
                                       :cache-value cache-key
                                       :cache-test #'string=)
-            (multiple-value-bind (wl-fg wl-bg wl-ts) (resolve-global-face-inks :who-line)
+            (multiple-value-bind (wl-fg wl-bg wl-ts wl-opts)
+                (resolve-global-face-inks :who-line)
               (fill-row pane 0 cols wl-bg char-w char-h)
               (fill-row pane 1 cols wl-bg char-w char-h)
               (draw-text-at pane 0 0
                             (subseq row1 0 (min (length row1) cols))
-                            wl-fg wl-bg wl-ts char-w char-h)
+                            wl-fg wl-bg wl-ts char-w char-h
+                            :drawing-options wl-opts)
               (draw-text-at pane 1 0
                             (subseq row2 0 (min (length row2) cols))
-                            wl-fg wl-bg wl-ts char-w char-h))))))))
+                            wl-fg wl-bg wl-ts char-w char-h
+                            :drawing-options wl-opts))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Main Pane Display
@@ -1170,7 +1124,7 @@ ordinary input text."
 
 (defun mcclim-render-text-block
     (pane msg content line row width display-width prefix prefix-len
-     fg bg ts char-w char-h underline-p show-cursor max-rows
+     fg bg ts drawing-options char-w char-h underline-p show-cursor max-rows
      first-output-p cursor-y cursor-x)
   "Render one text display block and return updated row/cursor state."
   (let* ((tool-face-name (tool-line-base-face-name msg content))
@@ -1202,7 +1156,8 @@ ordinary input text."
                   (when first-row-p
                     (draw-text-at pane row 0
                                   (concatenate 'string prefix chunk)
-                                  fg bg ts char-w char-h)
+                                  fg bg ts char-w char-h
+                                  :drawing-options drawing-options)
                     (when underline-p
                       (draw-underline-at pane row 0
                                          (+ prefix-len (length chunk))
@@ -1210,7 +1165,8 @@ ordinary input text."
                     (setf chunk nil))
                   (when chunk
                     (draw-text-at pane row prefix-len chunk
-                                  fg bg ts char-w char-h)
+                                  fg bg ts char-w char-h
+                                  :drawing-options drawing-options)
                     (when underline-p
                       (draw-underline-at pane row prefix-len (length chunk)
                                          fg char-w char-h))))))
@@ -1248,8 +1204,9 @@ Returns the number of visual rows consumed."
          (row start-row)
          (cursor-y nil)
          (cursor-x nil))
-    (multiple-value-bind (fg bg ts) (resolve-face-inks resolved)
-      (let ((underline-p (resolved-face-underline-p resolved)))
+    (multiple-value-bind (fg bg ts opts underline-p)
+        (resolve-face-inks resolved)
+      (let ()
         (let ((first-output-p t)
               (blocks (if render-images-p
                           (message-display-blocks
@@ -1275,7 +1232,7 @@ Returns the number of visual rows consumed."
                           (getf block :text)
                           (getf block :source-line)
                           row width display-width prefix prefix-len
-                          fg bg ts char-w char-h underline-p show-cursor
+                          fg bg ts opts char-w char-h underline-p show-cursor
                           max-rows first-output-p cursor-y cursor-x)))
                       (:image
                        (let ((consumed
@@ -1283,7 +1240,7 @@ Returns the number of visual rows consumed."
                                 pane
                                 (getf block :reference)
                                 row width prefix prefix-len
-                                fg bg ts char-w char-h
+                                fg bg ts opts char-w char-h
                                 max-rows first-output-p)))
                          (setf first-output-p nil)
                          (incf row consumed))))))
@@ -1315,43 +1272,50 @@ Returns the number of visual rows consumed."
          (expanded (cdr (assoc :display-expanded approval)))
          (row start-row))
     ;; Header
-    (multiple-value-bind (fg bg ts) (resolve-global-face-inks :approval-header)
+    (multiple-value-bind (fg bg ts opts)
+        (resolve-global-face-inks :approval-header)
       (when (< row max-rows)
         (fill-row pane row width bg char-w char-h)
         (let ((header-text (format nil "-- PERMISSION REQUIRED: ~A " tool-name)))
           ;; Draw separator dashes
           (draw-text-at pane row 0
                         (make-string width :initial-element #\-)
-                        fg bg ts char-w char-h)
+                        fg bg ts char-w char-h
+                        :drawing-options opts)
           ;; Draw header text over it
           (draw-text-at pane row 0
                         (subseq header-text 0 (min (length header-text) width))
-                        fg bg ts char-w char-h))
+                        fg bg ts char-w char-h
+                        :drawing-options opts))
         (incf row)))
     ;; Raw sexpr
-    (multiple-value-bind (fg bg ts) (resolve-global-face-inks :approval-code)
+    (multiple-value-bind (fg bg ts opts)
+        (resolve-global-face-inks :approval-code)
       (dolist (line (split-string-by-newline raw-sexpr))
         (when (< row max-rows)
           (fill-row pane row width bg char-w char-h)
           (draw-text-at pane row 0
                         (subseq line 0 (min (length line) width))
-                        fg bg ts char-w char-h)
+                        fg bg ts char-w char-h
+                        :drawing-options opts)
           (incf row))))
     ;; Expanded form
-    (multiple-value-bind (fg bg ts) (resolve-global-face-inks :approval-text)
+    (multiple-value-bind (fg bg ts opts)
+        (resolve-global-face-inks :approval-text)
       (dolist (line (split-string-by-newline expanded))
         (when (< row max-rows)
           (fill-row pane row width bg char-w char-h)
           (draw-text-at pane row 0
                         (subseq line 0 (min (length line) width))
-                        fg bg ts char-w char-h)
+                        fg bg ts char-w char-h
+                        :drawing-options opts)
           (incf row))))
     ;; Extra display (diff)
     (let ((extra (cdr (assoc :display-extra approval))))
       (when extra
         (dolist (line (split-string-by-newline extra))
           (when (< row max-rows)
-            (multiple-value-bind (fg bg ts)
+            (multiple-value-bind (fg bg ts opts)
                 (cond
                   ((and (plusp (length line)) (char= (char line 0) #\+))
                    (resolve-global-face-inks :approval-diff-add))
@@ -1362,16 +1326,19 @@ Returns the number of visual rows consumed."
               (fill-row pane row width bg char-w char-h)
               (draw-text-at pane row 0
                             (subseq line 0 (min (length line) width))
-                            fg bg ts char-w char-h))
+                            fg bg ts char-w char-h
+                            :drawing-options opts))
             (incf row)))))
     ;; Options
     (when (< (1+ row) max-rows)
       (incf row) ; blank line
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :approval-options)
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :approval-options)
         (fill-row pane row width bg char-w char-h)
         (draw-text-at pane row 0
                       "[a]pprove  [d]eny  [m]essage (deny with note to agent)"
-                      fg bg ts char-w char-h)))))
+                      fg bg ts char-w char-h
+                      :drawing-options opts)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Selector Rendering
@@ -1396,22 +1363,28 @@ Returns the number of visual rows consumed."
     (clear-pane-with-ink pane *mcclim-bg-ink*)
     ;; Title
     (when (< 1 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-title)
-        (draw-text-at pane 1 2 "Agent Sessions" fg bg ts char-w char-h)))
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-title)
+        (draw-text-at pane 1 2 "Agent Sessions" fg bg ts char-w char-h
+                      :drawing-options opts)))
     ;; Separator
     (when (< 2 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-separator)
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-separator)
         (draw-text-at pane 2 2
                       (make-string (min (- width 4) 50) :initial-element #\─)
-                      fg bg ts char-w char-h)))
+                      fg bg ts char-w char-h
+                      :drawing-options opts)))
     ;; Column headers
     (when (< 3 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-header)
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-header)
         (let ((header (format-selector-line "  " "NAME" "AGENT" "STATUS" "MSGS" width)))
           (fill-row pane 3 width bg char-w char-h)
           (draw-text-at pane 3 0
                         (subseq header 0 (min (length header) width))
-                        fg bg ts char-w char-h))))
+                        fg bg ts char-w char-h
+                        :drawing-options opts))))
     ;; Buffer entries — wrapped as buffer-name presentations for clickability
     (loop :for absolute-idx :from scroll
           :below (min (+ scroll max-entries) num-buffers)
@@ -1431,14 +1404,15 @@ Returns the number of visual rows consumed."
           :for count-str := (format nil "~D" msg-count)
           :for line := (format-selector-line marker name agent status count-str width)
           :do (clim:with-output-as-presentation (pane buf 'buffer-ref)
-                (multiple-value-bind (fg bg ts)
+                (multiple-value-bind (fg bg ts opts)
                     (resolve-global-face-inks (if selected-p
                                                   :selector-selected
                                                   :selector-entry))
                   (fill-row pane row width bg char-w char-h)
                   (draw-text-at pane row 0
                                 (subseq line 0 (min (length line) width))
-                                fg bg ts char-w char-h))))
+                                fg bg ts char-w char-h
+                                :drawing-options opts))))
     ;; Scroll indicator
     (when (> num-buffers max-entries)
       (let ((indicator (format nil "[~D-~D of ~D]"
@@ -1447,17 +1421,21 @@ Returns the number of visual rows consumed."
                                num-buffers))
             (ind-row (+ 5 (min max-entries (- num-buffers scroll)))))
         (when (< ind-row (- height 1))
-          (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-scroll)
+          (multiple-value-bind (fg bg ts opts)
+              (resolve-global-face-inks :selector-scroll)
             (draw-text-at pane ind-row 2
                           (subseq indicator 0 (min (length indicator) (- width 4)))
-                          fg bg ts char-w char-h)))))
+                          fg bg ts char-w char-h
+                          :drawing-options opts)))))
     ;; Footer
     (let ((footer-row (1- height)))
       (when (plusp footer-row)
-        (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-footer)
+        (multiple-value-bind (fg bg ts opts)
+            (resolve-global-face-inks :selector-footer)
           (draw-text-at pane footer-row 2
                         "[RET] select  [C-g/q] cancel  [n] new  [k] kill"
-                        fg bg ts char-w char-h))))))
+                        fg bg ts char-w char-h
+                        :drawing-options opts))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Model Selector Rendering
@@ -1482,22 +1460,28 @@ Returns the number of visual rows consumed."
     (clear-pane-with-ink pane *mcclim-bg-ink*)
     ;; Title
     (when (< 1 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-title)
-        (draw-text-at pane 1 2 "Select Model" fg bg ts char-w char-h)))
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-title)
+        (draw-text-at pane 1 2 "Select Model" fg bg ts char-w char-h
+                      :drawing-options opts)))
     ;; Separator
     (when (< 2 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-separator)
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-separator)
         (draw-text-at pane 2 2
                       (make-string (min (- width 4) 50) :initial-element #\─)
-                      fg bg ts char-w char-h)))
+                      fg bg ts char-w char-h
+                      :drawing-options opts)))
     ;; Column headers
     (when (< 3 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-header)
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-header)
         (let ((header (format-model-selector-line "  " "PROVIDER" "MODEL" width)))
           (fill-row pane 3 width bg char-w char-h)
           (draw-text-at pane 3 0
                         (subseq header 0 (min (length header) width))
-                        fg bg ts char-w char-h))))
+                        fg bg ts char-w char-h
+                        :drawing-options opts))))
     ;; Model entries — wrapped as model-name presentations for clickability
     (loop :for absolute-idx :from scroll
           :below (min (+ scroll max-visible) num-entries)
@@ -1514,14 +1498,15 @@ Returns the number of visual rows consumed."
                                (t "  "))
           :for line := (format-model-selector-line marker provider model width)
           :do (clim:with-output-as-presentation (pane entry 'think-level-ref)
-                (multiple-value-bind (fg bg ts)
+                (multiple-value-bind (fg bg ts opts)
                     (resolve-global-face-inks (if selected-p
                                                   :selector-selected
                                                   :selector-entry))
                   (fill-row pane row width bg char-w char-h)
                   (draw-text-at pane row 0
                                 (subseq line 0 (min (length line) width))
-                                fg bg ts char-w char-h))))
+                                fg bg ts char-w char-h
+                                :drawing-options opts))))
     ;; Scroll indicator
     (when (> num-entries max-visible)
       (let ((indicator (format nil "[~D-~D of ~D]"
@@ -1530,17 +1515,21 @@ Returns the number of visual rows consumed."
                                num-entries))
             (ind-row (+ 5 (min max-visible (- num-entries scroll)))))
         (when (< ind-row (- height 1))
-          (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-scroll)
+          (multiple-value-bind (fg bg ts opts)
+              (resolve-global-face-inks :selector-scroll)
             (draw-text-at pane ind-row 2
                           (subseq indicator 0 (min (length indicator) (- width 4)))
-                          fg bg ts char-w char-h)))))
+                          fg bg ts char-w char-h
+                          :drawing-options opts)))))
     ;; Footer
     (let ((footer-row (1- height)))
       (when (plusp footer-row)
-        (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-footer)
+        (multiple-value-bind (fg bg ts opts)
+            (resolve-global-face-inks :selector-footer)
           (draw-text-at pane footer-row 2
                         "[RET] select  [C-g/q] cancel  * = active"
-                        fg bg ts char-w char-h))))))
+                        fg bg ts char-w char-h
+                        :drawing-options opts))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Think Selector Rendering
@@ -1564,20 +1553,26 @@ Returns the number of visual rows consumed."
     (setf *think-selector-scroll* scroll)
     (clear-pane-with-ink pane *mcclim-bg-ink*)
     (when (< 1 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-title)
-        (draw-text-at pane 1 2 "Select Think Level" fg bg ts char-w char-h)))
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-title)
+        (draw-text-at pane 1 2 "Select Think Level" fg bg ts char-w char-h
+                      :drawing-options opts)))
     (when (< 2 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-separator)
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-separator)
         (draw-text-at pane 2 2
                       (make-string (min (- width 4) 50) :initial-element #\─)
-                      fg bg ts char-w char-h)))
+                      fg bg ts char-w char-h
+                      :drawing-options opts)))
     (when (< 3 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-header)
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-header)
         (let ((header (format-think-selector-line "  " "THINK LEVEL" width)))
           (fill-row pane 3 width bg char-w char-h)
           (draw-text-at pane 3 0
                         (subseq header 0 (min (length header) width))
-                        fg bg ts char-w char-h))))
+                        fg bg ts char-w char-h
+                        :drawing-options opts))))
     (loop :for absolute-idx :from scroll
           :below (min (+ scroll max-visible) num-entries)
           :for entry := (nth absolute-idx entries)
@@ -1592,14 +1587,15 @@ Returns the number of visual rows consumed."
                                (t "  "))
           :for line := (format-think-selector-line marker label width)
           :do (clim:with-output-as-presentation (pane entry 'model-ref)
-                (multiple-value-bind (fg bg ts)
+                (multiple-value-bind (fg bg ts opts)
                     (resolve-global-face-inks (if selected-p
                                                   :selector-selected
                                                   :selector-entry))
                   (fill-row pane row width bg char-w char-h)
                   (draw-text-at pane row 0
                                 (subseq line 0 (min (length line) width))
-                                fg bg ts char-w char-h))))
+                                fg bg ts char-w char-h
+                                :drawing-options opts))))
     (when (> num-entries max-visible)
       (let ((indicator (format nil "[~D-~D of ~D]"
                                (1+ scroll)
@@ -1607,16 +1603,20 @@ Returns the number of visual rows consumed."
                                num-entries))
             (ind-row (+ 5 (min max-visible (- num-entries scroll)))))
         (when (< ind-row (- height 1))
-          (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-scroll)
+          (multiple-value-bind (fg bg ts opts)
+              (resolve-global-face-inks :selector-scroll)
             (draw-text-at pane ind-row 2
                           (subseq indicator 0 (min (length indicator) (- width 4)))
-                          fg bg ts char-w char-h)))))
+                          fg bg ts char-w char-h
+                          :drawing-options opts)))))
     (let ((footer-row (1- height)))
       (when (plusp footer-row)
-        (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-footer)
+        (multiple-value-bind (fg bg ts opts)
+            (resolve-global-face-inks :selector-footer)
           (draw-text-at pane footer-row 2
                         "[RET] select  [C-g/q] cancel  default = clear  * = active"
-                        fg bg ts char-w char-h))))))
+                        fg bg ts char-w char-h
+                        :drawing-options opts))))))
 
 (defun mcclim-render-session-tree-selector (pane rows cols char-w char-h frame)
   "Render the session tree selector overlay."
@@ -1640,28 +1640,34 @@ Returns the number of visual rows consumed."
     (setf *session-tree-selector-scroll* scroll)
     (clear-pane-with-ink pane *mcclim-bg-ink*)
     (when (< 1 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-title)
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-title)
         (draw-text-at pane 1 2
                       (format nil "Session Tree: ~A"
                               (if *session-tree-selector-buffer*
                                   (buffer-name *session-tree-selector-buffer*)
                                   ""))
-                      fg bg ts char-w char-h)))
+                      fg bg ts char-w char-h
+                      :drawing-options opts)))
     (when (< 2 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-separator)
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-separator)
         (draw-text-at pane 2 2
                       (make-string (min (- width 4) 50)
                                    :initial-element #\─)
-                      fg bg ts char-w char-h)))
+                      fg bg ts char-w char-h
+                      :drawing-options opts)))
     (when (< 3 height)
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-header)
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :selector-header)
         (let ((header (format nil "  filter:~(~A~)  search:~A"
                               *session-tree-selector-filter-mode*
                               *session-tree-selector-search*)))
           (fill-row pane 3 width bg char-w char-h)
           (draw-text-at pane 3 0
                         (subseq header 0 (min (length header) width))
-                        fg bg ts char-w char-h))))
+                        fg bg ts char-w char-h
+                        :drawing-options opts))))
     (loop :for absolute-idx :from scroll
           :below (min (+ scroll max-visible) num-items)
           :for item := (nth absolute-idx items)
@@ -1670,14 +1676,15 @@ Returns the number of visual rows consumed."
           :for selected-p := (= absolute-idx *session-tree-selector-index*)
           :for marker := (if selected-p "> " "  ")
           :for line := (format-session-tree-selector-line marker item width)
-          :do (multiple-value-bind (fg bg ts)
+          :do (multiple-value-bind (fg bg ts opts)
                   (resolve-global-face-inks (if selected-p
                                                 :selector-selected
                                                 :selector-entry))
                 (fill-row pane row width bg char-w char-h)
                 (draw-text-at pane row 0
                               (subseq line 0 (min (length line) width))
-                              fg bg ts char-w char-h)))
+                              fg bg ts char-w char-h
+                              :drawing-options opts)))
     (when (> num-items max-visible)
       (let ((indicator (format nil "[~D-~D of ~D]"
                                (1+ scroll)
@@ -1685,25 +1692,29 @@ Returns the number of visual rows consumed."
                                num-items))
             (ind-row (+ 5 (min max-visible (- num-items scroll)))))
         (when (< ind-row (- height 1))
-          (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-scroll)
+          (multiple-value-bind (fg bg ts opts)
+              (resolve-global-face-inks :selector-scroll)
             (draw-text-at pane ind-row 2
                           (subseq indicator 0
                                   (min (length indicator) (- width 4)))
-                          fg bg ts char-w char-h)))))
+                          fg bg ts char-w char-h
+                          :drawing-options opts)))))
     (let ((footer-row (1- height)))
       (when (plusp footer-row)
-        (multiple-value-bind (fg bg ts) (resolve-global-face-inks :selector-footer)
+        (multiple-value-bind (fg bg ts opts)
+            (resolve-global-face-inks :selector-footer)
           (draw-text-at pane footer-row 2
                         "[RET] select  [C-g/q] cancel  L label  <- fold  -> unfold  C-o filter"
-                        fg bg ts char-w char-h))))))
+                        fg bg ts char-w char-h
+                        :drawing-options opts))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Popup Completion Overlay
 ;;; --------------------------------------------------------------------------
 
 (defun draw-fuzzy-match-spans (pane row start-col text match-set
-                               base-fg base-bg base-ts
-                               match-fg match-bg match-ts
+                               base-fg base-bg base-ts base-options
+                               match-fg match-bg match-ts match-options
                                char-w char-h)
   "Draw TEXT at (ROW, START-COL) with match-highlighted characters in spans.
 Instead of drawing per-character, collects consecutive same-style characters
@@ -1717,9 +1728,11 @@ into spans and draws each span as a single draw-text-at call."
                        (col (+ start-col span-start)))
                    (if span-matched
                        (draw-text-at pane row col span-text
-                                     match-fg match-bg match-ts char-w char-h)
+                                     match-fg match-bg match-ts char-w char-h
+                                     :drawing-options match-options)
                        (draw-text-at pane row col span-text
-                                     base-fg base-bg base-ts char-w char-h))))))
+                                     base-fg base-bg base-ts char-w char-h
+                                     :drawing-options base-options))))))
       (loop :for i :from 0 :below len
             :for cur-matched := (and match-set (gethash i match-set))
             :do (when (and (plusp i) (not (eq (not cur-matched) (not span-matched))))
@@ -1789,26 +1802,30 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
            (visible (subseq prompt-line 0 (min (length prompt-line) display-width)))
            (row popup-top)
            (col (1+ popup-left)))
-      (multiple-value-bind (fg bg ts) (resolve-global-face-inks :minibuffer-prompt)
+      (multiple-value-bind (fg bg ts opts)
+          (resolve-global-face-inks :minibuffer-prompt)
         (declare (ignore bg))
         ;; Fill prompt row background
         (clim:draw-rectangle* pane
                               (+ px-left char-w) (* row char-h)
                               (- px-right char-w) (* (1+ row) char-h)
                               :ink popup-bg)
-        (draw-text-at pane row col visible fg popup-bg ts char-w char-h))
+        (draw-text-at pane row col visible fg popup-bg ts char-w char-h
+                      :drawing-options opts))
       ;; Block cursor
       (let ((cursor-col (+ col (length prompt-str) point)))
         (when (< cursor-col (+ popup-left popup-w -1))
           (let ((char-at-cursor (if (< point (length input))
                                     (char input point)
                                     #\Space)))
-            (multiple-value-bind (fg bg ts) (resolve-global-face-inks :minibuffer-cursor)
+            (multiple-value-bind (fg bg ts opts)
+                (resolve-global-face-inks :minibuffer-cursor)
               (draw-text-at pane row cursor-col (string char-at-cursor)
-                            fg bg ts char-w char-h))))))
+                            fg bg ts char-w char-h
+                            :drawing-options opts))))))
     ;; Candidate rows — batched span drawing instead of per-character
     (if (and skill-popup-p (zerop total) (plusp item-rows))
-        (multiple-value-bind (base-fg base-bg base-ts)
+        (multiple-value-bind (base-fg base-bg base-ts base-opts)
             (resolve-global-face-inks :minibuffer-candidate)
           (let ((row (+ popup-top 1)))
             (clim:draw-rectangle* pane
@@ -1816,7 +1833,8 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
                                   (- px-right char-w) (* (1+ row) char-h)
                                   :ink base-bg)
             (draw-text-at pane row (+ popup-left 3) "No matching skills"
-                          base-fg base-bg base-ts char-w char-h)))
+                          base-fg base-bg base-ts char-w char-h
+                          :drawing-options base-opts)))
         (loop :for row-idx :from 0 :below item-rows
               :for item-idx := (+ scroll row-idx)
               :while (< item-idx total)
@@ -1833,7 +1851,7 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
                                      (let ((ht (make-hash-table :test #'eql)))
                                        (dolist (p match-pos ht)
                                          (setf (gethash p ht) t))))))
-                   (multiple-value-bind (base-fg base-bg base-ts)
+                   (multiple-value-bind (base-fg base-bg base-ts base-opts)
                        (resolve-global-face-inks base-face-name)
                      ;; Fill row within popup
                      (clim:draw-rectangle* pane
@@ -1842,14 +1860,15 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
                                            :ink base-bg)
                      ;; Indent
                      (draw-text-at pane row (+ popup-left 1) "  "
-                                   base-fg base-bg base-ts char-w char-h)
+                                   base-fg base-bg base-ts char-w char-h
+                                   :drawing-options base-opts)
                      ;; Draw text with span-batched fuzzy match highlighting
-                     (multiple-value-bind (match-fg match-bg match-ts)
+                     (multiple-value-bind (match-fg match-bg match-ts match-opts)
                          (resolve-global-face-inks match-face-name)
                        (draw-fuzzy-match-spans pane row (+ popup-left 3)
                                                display-trimmed match-set
-                                               base-fg base-bg base-ts
-                                               match-fg match-bg match-ts
+                                               base-fg base-bg base-ts base-opts
+                                               match-fg match-bg match-ts match-opts
                                                char-w char-h))))))))
 
 ;;; --------------------------------------------------------------------------
@@ -2355,7 +2374,6 @@ standard CLIM event path."
 
 (defun run-clawmacs-mcclim (initial-buffer)
   "Run the Clawmacs McCLIM application for INITIAL-BUFFER."
-  (mcclim-apply-genera-theme)
   (let ((frame (clim:make-application-frame 'clawmacs-gui
                  :pretty-name "Clawmacs"
                  :display-buffer initial-buffer

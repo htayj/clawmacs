@@ -295,7 +295,7 @@
                    :tool-result :tool-result-paren :tool-result-keyword
                    :tool-result-string :tool-result-comment :tool-result-number
                    :compaction-summary))
-    (is (typep (clawmacs::global-face name) 'face))))
+    (is (typep (clawmacs::global-face name) 'drawing-style))))
 
 (test tool-displays-use-lisp-shaped-text
   "Tool call/result display strings are formatted for Lisp-oriented rendering."

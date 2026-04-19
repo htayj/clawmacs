@@ -23,16 +23,16 @@ or nil if debug mode is off."
   (when *debug-mode*
     (let* ((msg (buffer-insert-system-message buf text))
            (debug-face (or (global-face :debug)
-                           (make-instance 'face :name :debug
-                             :background (make-color-spec :cga 0)
-                             :foreground (make-color-spec :cga 13)
+                           (make-instance 'drawing-style :name :debug
+                             :background-ink (make-cga-ink 15)
+                             :ink (make-cga-ink 5)
                              :bold-p nil :underline-p nil :reverse-p nil)))
            (debug-fs (make-face-set
                       :debug
-                      (list (make-instance 'face
+                      (list (make-instance 'drawing-style
                               :name :default
                               :parent debug-face
-                              :background nil :foreground nil
+                              :background-ink nil :ink nil
                               :bold-p nil :underline-p nil :reverse-p nil)))))
       (setf (message-face-set msg) debug-fs)
       msg)))

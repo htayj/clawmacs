@@ -71,8 +71,8 @@
    (face-set      :initarg :face-set
                   :accessor message-face-set
                   :initform nil
-                  :type (or null face-set)
-                  :documentation "Face set used to render this message, or nil for default.")
+                  :type (or null drawing-style-set)
+                  :documentation "Drawing style set used to render this message, or nil for default.")
    (read-only-p   :initarg :read-only-p
                   :accessor message-read-only-p
                   :initform nil
@@ -117,7 +117,7 @@ This is not sent to providers.")
 a point and optional mark for intra-message cursor/selection, sender
 identity, and links to adjacent messages in the buffer."))
 
-(declaim (ftype (function (keyword &key (:face-set (or null face-set))
+(declaim (ftype (function (keyword &key (:face-set (or null drawing-style-set))
                                        (:read-only-p boolean))
                           message)
                 make-message))

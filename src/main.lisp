@@ -1631,20 +1631,20 @@ Bound to C-c C-d."
 (defcommand redraw-screen-command)
 
 ;;; --------------------------------------------------------------------------
-;;; Customize Face
+;;; Customize Drawing Style
 ;;; --------------------------------------------------------------------------
 
 (defvar *customize-face-state* nil
-  "When non-nil, a plist describing the face customization session:
-  :face — the face object being customized
+  "When non-nil, a plist describing the drawing-style customization session:
+  :face — the drawing-style object being customized
   :label — display label (e.g. \"user:default\")
   :field-index — 0-5 (which field is selected)
   :original-values — alist of original attribute values for revert
   :buffer — the customize buffer")
 
 (defvar *customize-face-fields*
-  '(:foreground :background :bold-p :underline-p :reverse-p :parent)
-  "List of face attribute field keywords in display order for customize-face.")
+  '(:ink :background-ink :text-style :drawing-options :underline-p :parent)
+  "List of drawing-style field keywords in display order.")
 
 (defun cga-color-name (value)
   "Return a human-readable name for a CGA color value (0-15)."
@@ -1656,65 +1656,128 @@ Bound to C-c C-d."
     (t (format nil "~D" value))))
 
 (defun format-color-spec-display (cs)
-  "Format a color-spec for human-readable display."
-  (if (null cs)
-      "(inherit)"
+  "Compatibility formatter for old color-spec values."
+  (if (typep cs 'color-spec)
       (ecase (color-spec-type cs)
         (:cga (format nil "~A (CGA ~D)" (cga-color-name (color-spec-value cs))
-                       (color-spec-value cs)))
+                      (color-spec-value cs)))
         (:256 (format nil "color-~D (256)" (color-spec-value cs)))
-        (:hex (format nil "~A (hex)" (color-spec-value cs))))))
+        (:hex (format nil "~A (hex)" (color-spec-value cs))))
+      (format-clim-ink-display cs)))
+
+(defun format-clim-ink-display (ink)
+  "Format a CLIM ink for human-readable display."
+  (cond
+    ((null ink) "(inherit)")
+    ((typep ink 'color-spec) (format-color-spec-display ink))
+    (t
+     (handler-case
+         (multiple-value-bind (r g b) (clim:color-rgb ink)
+           (format nil "#~2,'0X~2,'0X~2,'0X"
+                   (round (* 255 r))
+                   (round (* 255 g))
+                   (round (* 255 b))))
+       (error ()
+         (let ((*print-readably* nil)
+               (*print-pretty* nil)
+               (*print-length* 5)
+               (*print-level* 3))
+           (truncate-value-string (prin1-to-string ink) 48)))))))
+
+(defun format-clim-text-style-display (text-style)
+  "Format a CLIM text-style for human-readable display."
+  (if (null text-style)
+      "(inherit)"
+      (handler-case
+          (format nil "(~S ~S ~S)"
+                  (clim:text-style-family text-style)
+                  (clim:text-style-face text-style)
+                  (clim:text-style-size text-style))
+        (error ()
+          (let ((*print-readably* nil)
+                (*print-pretty* nil)
+                (*print-length* 5)
+                (*print-level* 3))
+            (truncate-value-string (prin1-to-string text-style) 48))))))
+
+(defun format-drawing-options-display (options)
+  "Format a CLIM drawing-options plist for display."
+  (if (null options)
+      "(inherit)"
+      (let ((*print-readably* nil)
+            (*print-pretty* nil)
+            (*print-length* 12)
+            (*print-level* 4))
+        (truncate-value-string (prin1-to-string options) 72))))
 
 (defun format-boolean-display (val)
   "Format a boolean face attribute for display.
 NIL means inherit from parent, T means yes."
   (if val "yes" "(inherit)"))
 
-(defun format-face-parent-display (parent-face)
-  "Format a face's parent for display."
-  (if (null parent-face)
+(defun format-face-parent-display (parent-style)
+  "Format a drawing style's parent for display."
+  (if (null parent-style)
       "(none)"
-      (format nil "~(~A~)" (face-name parent-face))))
+      (format nil "~(~A~)" (drawing-style-name parent-style))))
 
-(defun customize-face-field-value (face field)
-  "Get the current value of FIELD on FACE."
+(defun customize-face-field-value (style field)
+  "Get the current value of FIELD on STYLE."
   (ecase field
-    (:foreground (face-foreground face))
-    (:background (face-background face))
-    (:bold-p (slot-value face 'bold-p))
-    (:underline-p (slot-value face 'underline-p))
-    (:reverse-p (slot-value face 'reverse-p))
-    (:parent (face-parent face))))
+    (:ink (drawing-style-ink style))
+    (:background-ink (drawing-style-background-ink style))
+    (:text-style (drawing-style-text-style style))
+    (:drawing-options (drawing-style-drawing-options style))
+    ;; Compatibility for callers that still use old field names.
+    (:foreground (drawing-style-ink style))
+    (:background (drawing-style-background-ink style))
+    (:bold-p (slot-value style 'bold-p))
+    (:underline-p (slot-value style 'underline-p))
+    (:reverse-p (slot-value style 'reverse-p))
+    (:parent (drawing-style-parent style))))
 
-(defun customize-face-set-field-value (face field value)
-  "Set the value of FIELD on FACE to VALUE."
+(defun customize-face-set-field-value (style field value)
+  "Set the value of FIELD on STYLE to VALUE."
   (ecase field
-    (:foreground (setf (face-foreground face) value))
-    (:background (setf (face-background face) value))
-    (:bold-p (setf (face-bold-p face) value))
-    (:underline-p (setf (face-underline-p face) value))
-    (:reverse-p (setf (face-reverse-p face) value))
-    (:parent (setf (face-parent face) value))))
+    (:ink (setf (drawing-style-ink style) value))
+    (:background-ink (setf (drawing-style-background-ink style) value))
+    (:text-style (setf (drawing-style-text-style style) value))
+    (:drawing-options (setf (drawing-style-drawing-options style) value))
+    ;; Compatibility for callers that still use old field names.
+    (:foreground (setf (drawing-style-ink style) value))
+    (:background (setf (drawing-style-background-ink style) value))
+    (:bold-p (setf (face-bold-p style) value))
+    (:underline-p (setf (drawing-style-underline-p style) value))
+    (:reverse-p (setf (face-reverse-p style) value))
+    (:parent (setf (drawing-style-parent style) value))))
 
 (defun customize-face-field-label (field)
-  "Return the human-readable label for a face attribute field keyword."
+  "Return the human-readable label for a drawing-style field keyword."
   (ecase field
-    (:foreground "Foreground")
-    (:background "Background")
+    (:ink "Ink")
+    (:background-ink "Background Ink")
+    (:text-style "Text Style")
+    (:drawing-options "Drawing Options")
+    (:foreground "Ink")
+    (:background "Background Ink")
     (:bold-p "Bold")
     (:underline-p "Underline")
     (:reverse-p "Reverse")
     (:parent "Parent")))
 
-(defun customize-face-field-display (face field)
-  "Return the display string for FIELD's current value on FACE."
+(defun customize-face-field-display (style field)
+  "Return the display string for FIELD's current value on STYLE."
   (ecase field
-    ((:foreground :background)
-     (format-color-spec-display (customize-face-field-value face field)))
+    ((:ink :foreground :background-ink :background)
+     (format-clim-ink-display (customize-face-field-value style field)))
+    (:text-style
+     (format-clim-text-style-display (customize-face-field-value style field)))
+    (:drawing-options
+     (format-drawing-options-display (customize-face-field-value style field)))
     ((:bold-p :underline-p :reverse-p)
-     (format-boolean-display (customize-face-field-value face field)))
+     (format-boolean-display (customize-face-field-value style field)))
     (:parent
-     (format-face-parent-display (customize-face-field-value face field)))))
+     (format-face-parent-display (customize-face-field-value style field)))))
 
 (defun customize-face-snapshot (face)
   "Take a snapshot of FACE's current attribute values for revert.
@@ -1729,11 +1792,11 @@ Returns an alist of (field . value) pairs."
     (customize-face-set-field-value face (car entry) (cdr entry))))
 
 (defun build-customize-face-content (face label field-index)
-  "Build the text content for a customize-face buffer.
-FACE is the face being customized, LABEL is its display name,
+  "Build the text content for a customize buffer.
+FACE is the drawing style being customized, LABEL is its display name,
 FIELD-INDEX is the currently selected field (0-5)."
   (with-output-to-string (s)
-    (format s "Customize Face: ~A~%" label)
+    (format s "Customize Drawing Style: ~A~%" label)
     (format s "~A~%~%"
             (make-string (min 50 (+ 16 (length label)))
                          :initial-element #\═))
@@ -1751,18 +1814,24 @@ FIELD-INDEX is the currently selected field (0-5)."
                                    :initial-element #\Space)
                       value-str))
     ;; Resolved preview
-    (format s "~%Resolved attributes:~%")
+    (format s "~%Resolved CLIM drawing values:~%")
     (handler-case
-        (let ((resolved (resolve-face face)))
+        (let ((resolved (resolve-drawing-style face)))
           (when resolved
-            (format s "  FG: ~A  BG: ~A~%"
-                    (format-color-spec-display (resolved-face-foreground resolved))
-                    (format-color-spec-display (resolved-face-background resolved)))
-            (format s "  Bold: ~:[no~;yes~]  Underline: ~:[no~;yes~]  Reverse: ~:[no~;yes~]~%"
-                    (resolved-face-bold-p resolved)
-                    (resolved-face-underline-p resolved)
-                    (resolved-face-reverse-p resolved))))
-      (error () (format s "  (cannot resolve — missing foreground or background)~%")))
+            (format s "  Ink: ~A  Background: ~A~%"
+                    (format-clim-ink-display
+                     (resolved-drawing-style-ink resolved))
+                    (format-clim-ink-display
+                     (resolved-drawing-style-background-ink resolved)))
+            (format s "  Text Style: ~A~%"
+                    (format-clim-text-style-display
+                     (resolved-drawing-style-text-style resolved)))
+            (format s "  Drawing Options: ~A~%"
+                    (format-drawing-options-display
+                     (resolved-drawing-style-drawing-options resolved)))
+            (format s "  Underline: ~:[no~;yes~]~%"
+                    (resolved-drawing-style-underline-p resolved))))
+      (error () (format s "  (cannot resolve drawing style)~%")))
     ;; Keybinding help
     (format s "~%~A~%" (make-string 40 :initial-element #\─))
     (format s "[RET] Edit  [SPC] Toggle  [C-n/C-p] Navigate~%")
@@ -1799,13 +1868,12 @@ Updates the form display message in-place."
         (rebuild-customize-face-display)))))
 
 (defun customize-face-toggle-field ()
-  "Toggle a boolean field between yes (t) and inherit (nil).
-Does nothing for non-boolean fields (foreground, background, parent)."
+  "Toggle the underline field between yes (t) and inherit (nil)."
   (when *customize-face-state*
     (let* ((face (getf *customize-face-state* :face))
            (field-index (getf *customize-face-state* :field-index))
            (field (nth field-index *customize-face-fields*)))
-      (when (member field '(:bold-p :underline-p :reverse-p))
+      (when (eq field :underline-p)
         (let ((current (customize-face-field-value face field)))
           (customize-face-set-field-value face field (not current))
           (rebuild-customize-face-display))))))
@@ -1843,15 +1911,40 @@ all buffer face registries. Returns a sorted list of plists with
     (sort (nreverse result) #'string< :key (lambda (p) (getf p :label)))))
 
 (defun make-color-selection-items ()
-  "Build the list of items for color selection in the minibuffer.
+  "Build the list of CLIM ink items for the minibuffer.
 Includes CGA colors 0-15 with names, plus an inherit option."
   (let ((items nil))
-    (push (list :color-spec nil :display "(inherit / nil)") items)
+    (push (list :ink nil :color-spec nil :display "(inherit / nil)") items)
     (loop :for i :from 0 :to 15
-          :do (push (list :color-spec (make-color-spec :cga i)
+          :do (push (list :ink (make-cga-ink i)
+                          :color-spec (make-color-spec :cga i)
                           :display (format nil "CGA ~2D: ~A" i (cga-color-name i)))
                     items))
     (nreverse items)))
+
+(defun make-text-style-selection-items ()
+  "Build the list of common CLIM text-style items for the minibuffer."
+  (list (list :text-style nil :display "(inherit / nil)")
+        (list :text-style (make-clim-text-style :fix :roman :normal)
+              :display "fixed roman normal")
+        (list :text-style (make-clim-text-style :fix :bold :normal)
+              :display "fixed bold normal")
+        (list :text-style (make-clim-text-style :fix :italic :normal)
+              :display "fixed italic normal")
+        (list :text-style (make-clim-text-style :fix :roman :large)
+              :display "fixed roman large")))
+
+(defun make-drawing-options-selection-items ()
+  "Build common CLIM drawing-options choices.
+Arbitrary drawing option plists can still be set programmatically from init."
+  (list (list :drawing-options nil :display "(inherit / nil)")
+        (list :drawing-options (list :ink (make-cga-ink 1))
+              :display "ink red")
+        (list :drawing-options (list :ink (make-cga-ink 4))
+              :display "ink blue")
+        (list :drawing-options
+              (list :text-style (make-clim-text-style :fix :bold :normal))
+              :display "text-style fixed bold")))
 
 (defun make-boolean-selection-items ()
   "Build the list of items for boolean field selection in the minibuffer."
@@ -1872,31 +1965,43 @@ Excludes CURRENT-FACE to prevent inheritance cycles."
 
 (defun customize-face-edit-field ()
   "Edit the currently selected field using the minibuffer.
-Opens a field-appropriate minibuffer: color picker for foreground/background,
-boolean selector for bold/underline/reverse, face selector for parent."
+Opens a field-appropriate minibuffer for CLIM ink/text-style/drawing-options."
   (when *customize-face-state*
     (let* ((face (getf *customize-face-state* :face))
            (field-index (getf *customize-face-state* :field-index))
            (field (nth field-index *customize-face-fields*)))
       (ecase field
-        ;; Color fields — pick from CGA palette
-        ((:foreground :background)
+        ;; Ink fields — pick from CGA palette
+        ((:ink :background-ink)
          (let ((field-label (customize-face-field-label field)))
            (minibuffer-activate
             (format nil "Set ~A" field-label)
             (make-color-selection-items)
             (lambda (item)
-              (customize-face-set-field-value face field (getf item :color-spec))
+              (customize-face-set-field-value face field (getf item :ink))
               (rebuild-customize-face-display)))))
-        ;; Boolean fields — yes / inherit
-        ((:bold-p :underline-p :reverse-p)
-         (let ((field-label (customize-face-field-label field)))
-           (minibuffer-activate
-            (format nil "Set ~A" field-label)
-            (make-boolean-selection-items)
-            (lambda (item)
-              (customize-face-set-field-value face field (getf item :value))
-              (rebuild-customize-face-display)))))
+        (:text-style
+         (minibuffer-activate
+          "Set Text Style"
+          (make-text-style-selection-items)
+          (lambda (item)
+            (customize-face-set-field-value face field (getf item :text-style))
+            (rebuild-customize-face-display))))
+        (:drawing-options
+         (minibuffer-activate
+          "Set Drawing Options"
+          (make-drawing-options-selection-items)
+          (lambda (item)
+            (customize-face-set-field-value face field
+                                            (getf item :drawing-options))
+            (rebuild-customize-face-display))))
+        (:underline-p
+         (minibuffer-activate
+          "Set Underline"
+          (make-boolean-selection-items)
+          (lambda (item)
+            (customize-face-set-field-value face field (getf item :value))
+            (rebuild-customize-face-display))))
         ;; Parent field — pick from available faces
         (:parent
          (minibuffer-activate
@@ -1918,7 +2023,7 @@ so this just closes the buffer and confirms."
       ;; Show confirmation in the new current buffer
       (buffer-insert-system-message
        (current-buffer)
-       (format nil "[Face ~A customized successfully]" label)))))
+       (format nil "[Drawing style ~A customized successfully]" label)))))
 
 (defun customize-face-cancel ()
   "Cancel face customization, reverting all changes to original values.
@@ -2013,25 +2118,27 @@ through global command bindings like C-x and M-x."
     ;; Everything else: ignore
     (t nil)))
 
-(defun customize-face-command (buffer)
-  "Open a face selector in the minibuffer, then customize the selected face.
-Lists all faces from all buffer face registries. When a face is selected,
-opens a customize buffer where face attributes can be edited interactively.
-Bound to C-h F."
+(defun customize-drawing-style-command (buffer)
+  "Open a drawing-style selector, then customize the selected style.
+Lists global and buffer drawing styles. The stored values are CLIM inks,
+CLIM text styles, and CLIM drawing option plists."
   (declare (ignore buffer))
   (let ((faces (collect-all-faces)))
     (if (null faces)
         (buffer-insert-system-message
          (current-buffer)
-         "[No faces found to customize]")
+         "[No drawing styles found to customize]")
         (minibuffer-activate
-         "Customize Face"
+         "Customize Drawing Style"
          (mapcar (lambda (entry)
                    (let* ((face (getf entry :face))
                           (label (getf entry :label))
-                          (fg (format-color-spec-display (face-foreground face)))
-                          (bg (format-color-spec-display (face-background face)))
-                          (display (format nil "~A  fg:~A  bg:~A" label fg bg)))
+                          (ink (format-clim-ink-display
+                                (drawing-style-ink face)))
+                          (bg (format-clim-ink-display
+                               (drawing-style-background-ink face)))
+                          (display (format nil "~A  ink:~A  bg:~A"
+                                           label ink bg)))
                      (list :face face
                            :label label
                            :display display)))
@@ -2041,6 +2148,11 @@ Bound to C-h F."
                   (label (getf item :label))
                   (buf (make-customize-face-buffer face label)))
              (switch-to-buffer buf)))))))
+(defcommand customize-drawing-style-command)
+
+(defun customize-face-command (buffer)
+  "Compatibility command. Use CUSTOMIZE-DRAWING-STYLE-COMMAND."
+  (customize-drawing-style-command buffer))
 (defcommand customize-face-command)
 
 ;;; --------------------------------------------------------------------------
@@ -2900,6 +3012,11 @@ Environment variables:
   (init-default-keymap)
   (init-tools)
   (init-global-faces)
+  ;; Apply McCLIM defaults before user init so init.lisp can override any
+  ;; drawing-style ink/text-style/drawing-options without being clobbered when
+  ;; the frame starts.
+  (when (fboundp 'mcclim-apply-genera-theme)
+    (funcall (symbol-function 'mcclim-apply-genera-theme)))
   ;; Load the configured personality prompt file before init.lisp so user init
   ;; may still override it directly or reload after changing the path.
   (load-personality-prompt-file)

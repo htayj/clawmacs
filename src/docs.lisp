@@ -35,38 +35,62 @@ documentation in *extended-docs*."
     (sort undocumented #'string< :key #'symbol-name)))
 
 ;;; ==========================================================================
-;;; Category: face — Colors, faces, resolved faces, face sets
+;;; Category: drawing-style — CLIM inks, text styles, drawing styles
 ;;; ==========================================================================
 
 (defdoc color-spec
-  :category "face"
-  :usage "(make-color-spec :cga 7) to create a CGA white color spec."
-  :returns "Structure — A color-spec with color-type and value slots."
-  :see-also (make-color-spec color-spec-type color-spec-value face))
+  :category "drawing-style"
+  :usage "(make-color-spec :cga 7) — legacy compatibility only."
+  :returns "Structure — A legacy color-spec. Drawing styles store CLIM inks instead."
+  :see-also (make-clim-ink make-cga-ink drawing-style))
 
 (defdoc make-color-spec
-  :category "face"
+  :category "drawing-style"
   :usage "(make-color-spec COLOR-TYPE:keyword VALUE) — (make-color-spec :cga 7), (make-color-spec :256 128), (make-color-spec :hex \"#FF00FF\")"
-  :returns "color-spec — #S(COLOR-SPEC :COLOR-TYPE :CGA :VALUE 7)"
-  :see-also (color-spec color-spec-type color-spec-value))
+  :returns "color-spec — legacy value accepted by old face accessors and converted to CLIM ink."
+  :see-also (make-clim-ink make-cga-ink make-hex-ink))
+
+(defdoc make-clim-ink
+  :category "drawing-style"
+  :usage "(make-clim-ink :cga 0), (make-clim-ink :256 196), or (make-clim-ink :hex \"#FF00FF\")"
+  :returns "CLIM ink — suitable for drawing-style-ink or drawing-style-background-ink."
+  :see-also (make-cga-ink make-256-color-ink make-hex-ink drawing-style-ink))
+
+(defdoc make-clim-text-style
+  :category "drawing-style"
+  :usage "(make-clim-text-style :fix :bold :normal)"
+  :returns "CLIM text-style — McCLIM also accepts backend font family/face strings."
+  :see-also (drawing-style-text-style drawing-style-drawing-options))
 
 (defdoc color-spec-type
-  :category "face"
+  :category "drawing-style"
   :usage "(color-spec-type CS:color-spec) — (color-spec-type (make-color-spec :cga 7))"
   :returns "keyword — :CGA, :256, or :HEX"
   :see-also (color-spec make-color-spec color-spec-value))
 
 (defdoc color-spec-value
-  :category "face"
+  :category "drawing-style"
   :usage "(color-spec-value CS:color-spec) — (color-spec-value (make-color-spec :cga 7))"
   :returns "integer or string — 7 for CGA, 128 for 256-color, \"#FF00FF\" for hex"
   :see-also (color-spec make-color-spec color-spec-type))
 
+(defdoc drawing-style
+  :category "drawing-style"
+  :usage "(make-instance 'drawing-style :name :default :ink (make-cga-ink 0) :background-ink (make-cga-ink 15) :text-style (make-clim-text-style :fix :roman :normal) :drawing-options '(:line-thickness 1))"
+  :returns "Class — A named CLIM drawing configuration with optional parent inheritance."
+  :see-also (drawing-style-ink drawing-style-text-style drawing-style-drawing-options resolve-drawing-style))
+
+(defdoc resolve-drawing-style
+  :category "drawing-style"
+  :usage "(resolve-drawing-style STYLE:drawing-style)"
+  :returns "resolved-drawing-style — CLIM ink, background ink, text-style, drawing-options, and underline flag."
+  :see-also (resolved-drawing-style drawing-style))
+
 (defdoc face
-  :category "face"
-  :usage "(make-instance 'face :name :default :foreground (make-color-spec :cga 7) :bold-p t)"
-  :returns "Class — A face object with visual attributes and optional parent chain."
-  :see-also (face-name face-foreground face-background face-bold-p face-parent resolve-face))
+  :category "drawing-style"
+  :usage "(make-instance 'face ...)"
+  :returns "Compatibility class name for drawing-style."
+  :see-also (drawing-style face-foreground resolve-face))
 
 (defdoc face-name
   :category "face"
@@ -75,16 +99,16 @@ documentation in *extended-docs*."
   :see-also (face face-foreground face-background))
 
 (defdoc face-foreground
-  :category "face"
+  :category "drawing-style"
   :usage "(face-foreground FACE:face) — (face-foreground my-face)"
-  :returns "color-spec or nil — nil means inherit from parent."
-  :see-also (face face-background face-bold-p resolve-face))
+  :returns "CLIM ink or nil — compatibility accessor for drawing-style-ink."
+  :see-also (drawing-style-ink face-background resolve-face))
 
 (defdoc face-background
-  :category "face"
+  :category "drawing-style"
   :usage "(face-background FACE:face) — (face-background my-face)"
-  :returns "color-spec or nil — nil means inherit from parent."
-  :see-also (face face-foreground face-bold-p resolve-face))
+  :returns "CLIM ink or nil — compatibility accessor for drawing-style-background-ink."
+  :see-also (drawing-style-background-ink face-foreground resolve-face))
 
 (defdoc face-bold-p
   :category "face"
@@ -123,15 +147,15 @@ documentation in *extended-docs*."
   :see-also (resolve-face resolved-face-foreground resolved-face-background))
 
 (defdoc resolved-face-foreground
-  :category "face"
+  :category "drawing-style"
   :usage "(resolved-face-foreground RF:resolved-face)"
-  :returns "color-spec — Always non-nil."
+  :returns "CLIM ink — Always non-nil."
   :see-also (resolved-face resolved-face-background resolve-face))
 
 (defdoc resolved-face-background
-  :category "face"
+  :category "drawing-style"
   :usage "(resolved-face-background RF:resolved-face)"
-  :returns "color-spec — Always non-nil."
+  :returns "CLIM ink — Always non-nil."
   :see-also (resolved-face resolved-face-foreground resolve-face))
 
 (defdoc resolved-face-bold-p
@@ -3049,23 +3073,28 @@ documentation in *extended-docs*."
 
 (defdoc color-spec
   :category "type"
-  :usage "(make-color-spec :color-type :cga :value 15)"
-  :see-also (make-color-spec color-spec-type color-spec-value face))
+  :usage "(make-color-spec :cga 15) — legacy compatibility value."
+  :see-also (make-clim-ink color-spec-type color-spec-value drawing-style))
+
+(defdoc drawing-style
+  :category "type"
+  :usage "(make-instance 'drawing-style :name :default :ink (make-cga-ink 0) :background-ink (make-cga-ink 15))"
+  :see-also (resolve-drawing-style drawing-style-ink drawing-style-text-style drawing-style-drawing-options))
 
 (defdoc face
   :category "type"
-  :usage "(make-instance 'face :name :default :foreground (make-color-spec ...) :bold-p t)"
-  :see-also (resolve-face face-name face-foreground face-background face-bold-p face-parent resolved-face face-set))
+  :usage "(make-instance 'face ...) — compatibility class for drawing-style."
+  :see-also (drawing-style resolve-face face-name face-foreground face-background face-set))
 
 (defdoc resolved-face
   :category "type"
-  :usage "(resolve-face some-face fallback-face) => resolved-face"
-  :see-also (resolve-face resolved-face-foreground resolved-face-background resolved-face-bold-p face))
+  :usage "(resolve-face style) => resolved-face"
+  :see-also (resolve-face resolved-face-foreground resolved-face-background resolved-face-text-style drawing-style))
 
 (defdoc face-set
   :category "type"
-  :usage "(make-face-set :user user-faces-ht)"
-  :see-also (make-face-set face-set-owner face-set-faces get-face face))
+  :usage "(make-face-set :user (list style)) — compatibility style-set constructor."
+  :see-also (make-drawing-style-set drawing-style-set get-drawing-style drawing-style))
 
 (defdoc line
   :category "type"
@@ -3892,18 +3921,18 @@ documentation in *extended-docs*."
   :see-also (current-buffer *default-keymap* init-tools *startup-hook* *initial-buffer-hook* run-clawmacs-mcclim))
 
 ;;; ==========================================================================
-;;; Category: customize — Interactive face customization
+;;; Category: customize — Interactive drawing-style customization
 ;;; ==========================================================================
 
 (defdoc *customize-face-state*
   :category "customize"
   :usage "Plist or nil. When non-nil: (:face FACE :label STRING :field-index INT :original-values ALIST :buffer BUFFER)"
-  :see-also (customize-face-command make-customize-face-buffer handle-customize-key)
-  :side-effects "Set by customize-face-command, cleared by customize-face-apply or customize-face-cancel.")
+  :see-also (customize-drawing-style-command make-customize-face-buffer handle-customize-key)
+  :side-effects "Set by customize-drawing-style-command, cleared by customize-face-apply or customize-face-cancel.")
 
 (defdoc *customize-face-fields*
   :category "customize"
-  :usage "Constant list: (:foreground :background :bold-p :underline-p :reverse-p :parent)"
+  :usage "Constant list: (:ink :background-ink :text-style :drawing-options :underline-p :parent)"
   :see-also (customize-face-field-value customize-face-field-label))
 
 (defdoc cga-color-name
@@ -3914,9 +3943,27 @@ documentation in *extended-docs*."
 
 (defdoc format-color-spec-display
   :category "customize"
-  :usage "(format-color-spec-display CS:(or null color-spec)) — (format-color-spec-display (make-color-spec :cga 4))"
-  :returns "string — \"blue (CGA 4)\" or \"(inherit)\" for nil"
-  :see-also (cga-color-name color-spec))
+  :usage "(format-color-spec-display VALUE) — compatibility formatter"
+  :returns "string — Legacy color-spec display, or CLIM ink display for non-color-spec values."
+  :see-also (format-clim-ink-display cga-color-name))
+
+(defdoc format-clim-ink-display
+  :category "customize"
+  :usage "(format-clim-ink-display INK)"
+  :returns "string — Human-readable display for a CLIM ink."
+  :see-also (make-clim-ink drawing-style-ink))
+
+(defdoc format-clim-text-style-display
+  :category "customize"
+  :usage "(format-clim-text-style-display TEXT-STYLE)"
+  :returns "string — Human-readable display for a CLIM text-style."
+  :see-also (make-clim-text-style drawing-style-text-style))
+
+(defdoc format-drawing-options-display
+  :category "customize"
+  :usage "(format-drawing-options-display OPTIONS)"
+  :returns "string — Human-readable display for a CLIM drawing option plist."
+  :see-also (drawing-style-drawing-options))
 
 (defdoc format-boolean-display
   :category "customize"
@@ -3932,33 +3979,33 @@ documentation in *extended-docs*."
 
 (defdoc customize-face-field-value
   :category "customize"
-  :usage "(customize-face-field-value FACE:face FIELD:keyword) — (customize-face-field-value my-face :foreground)"
-  :returns "t — The slot value (color-spec, boolean, face, or nil)"
+  :usage "(customize-face-field-value STYLE:drawing-style FIELD:keyword) — (customize-face-field-value style :ink)"
+  :returns "t — The slot value (CLIM ink, CLIM text-style, drawing option plist, boolean, parent style, or nil)"
   :see-also (customize-face-set-field-value customize-face-field-display))
 
 (defdoc customize-face-set-field-value
   :category "customize"
-  :usage "(customize-face-set-field-value FACE:face FIELD:keyword VALUE:t) — (customize-face-set-field-value my-face :bold-p t)"
+  :usage "(customize-face-set-field-value STYLE:drawing-style FIELD:keyword VALUE:t) — (customize-face-set-field-value style :text-style (make-clim-text-style :fix :bold :normal))"
   :returns "t — The new value"
-  :side-effects "Modifies the face object in-place. Changes take effect immediately."
+  :side-effects "Modifies the drawing-style object in-place. Changes take effect immediately."
   :see-also (customize-face-field-value rebuild-customize-face-display))
 
 (defdoc customize-face-field-label
   :category "customize"
-  :usage "(customize-face-field-label FIELD:keyword) — (customize-face-field-label :bold-p)"
-  :returns "string — \"Bold\""
+  :usage "(customize-face-field-label FIELD:keyword) — (customize-face-field-label :text-style)"
+  :returns "string — \"Text Style\""
   :see-also (*customize-face-fields* customize-face-field-display))
 
 (defdoc customize-face-field-display
   :category "customize"
-  :usage "(customize-face-field-display FACE:face FIELD:keyword) — (customize-face-field-display my-face :foreground)"
+  :usage "(customize-face-field-display STYLE:drawing-style FIELD:keyword) — (customize-face-field-display style :ink)"
   :returns "string — Human-readable display of the field's current value"
-  :see-also (format-color-spec-display format-boolean-display format-face-parent-display))
+  :see-also (format-clim-ink-display format-clim-text-style-display format-drawing-options-display))
 
 (defdoc customize-face-snapshot
   :category "customize"
-  :usage "(customize-face-snapshot FACE:face)"
-  :returns "alist — ((:foreground . #<COLOR-SPEC>) (:background . nil) ...)"
+  :usage "(customize-face-snapshot STYLE:drawing-style)"
+  :returns "alist — ((:ink . #<CLIM color>) (:background-ink . nil) ...)"
   :see-also (customize-face-restore-snapshot *customize-face-state*))
 
 (defdoc customize-face-restore-snapshot
@@ -3999,20 +4046,32 @@ documentation in *extended-docs*."
   :category "customize"
   :usage "(customize-face-toggle-field)"
   :returns "nil"
-  :side-effects "Toggles boolean fields between t and nil. No-op for non-boolean fields."
+  :side-effects "Toggles the underline field between t and nil. No-op for other fields."
   :see-also (customize-face-edit-field handle-customize-key))
 
 (defdoc collect-all-faces
   :category "customize"
   :usage "(collect-all-faces)"
-  :returns "list — Sorted list of plists with :face, :owner, :name, :label keys"
-  :see-also (customize-face-command make-parent-selection-items))
+  :returns "list — Sorted list of plists with :face, :owner, :name, :label keys. :face is a drawing-style."
+  :see-also (customize-drawing-style-command make-parent-selection-items))
 
 (defdoc make-color-selection-items
   :category "customize"
   :usage "(make-color-selection-items)"
-  :returns "list — Minibuffer items for CGA color palette selection"
+  :returns "list — Minibuffer items for CLIM ink palette selection"
   :see-also (customize-face-edit-field cga-color-name))
+
+(defdoc make-text-style-selection-items
+  :category "customize"
+  :usage "(make-text-style-selection-items)"
+  :returns "list — Common CLIM text-style choices for minibuffer selection"
+  :see-also (customize-face-edit-field make-clim-text-style))
+
+(defdoc make-drawing-options-selection-items
+  :category "customize"
+  :usage "(make-drawing-options-selection-items)"
+  :returns "list — Common CLIM drawing-options choices. Arbitrary plists can be set programmatically."
+  :see-also (customize-face-edit-field drawing-style-drawing-options))
 
 (defdoc make-boolean-selection-items
   :category "customize"
@@ -4022,8 +4081,8 @@ documentation in *extended-docs*."
 
 (defdoc make-parent-selection-items
   :category "customize"
-  :usage "(make-parent-selection-items CURRENT-FACE:face)"
-  :returns "list — Minibuffer items for parent face selection, excluding CURRENT-FACE"
+  :usage "(make-parent-selection-items CURRENT-STYLE:drawing-style)"
+  :returns "list — Minibuffer items for parent style selection, excluding CURRENT-STYLE"
   :see-also (customize-face-edit-field collect-all-faces))
 
 (defdoc customize-face-edit-field
@@ -4056,24 +4115,31 @@ documentation in *extended-docs*."
 
 (defdoc make-customize-face-buffer
   :category "customize"
-  :usage "(make-customize-face-buffer FACE:face LABEL:string) — (make-customize-face-buffer my-face \"user:default\")"
+  :usage "(make-customize-face-buffer STYLE:drawing-style LABEL:string)"
   :returns "buffer — A new customize buffer added to the buffer ring"
-  :side-effects "Sets *customize-face-state*. Kills existing customize buffer for this face."
-  :see-also (customize-face-command *customize-face-state*))
+  :side-effects "Sets *customize-face-state*. Kills existing customize buffer for this drawing style."
+  :see-also (customize-drawing-style-command *customize-face-state*))
 
 (defdoc handle-customize-key
   :category "customize"
   :usage "(handle-customize-key KEY) — Called from handle-key-event when in customize mode."
   :returns "nil"
   :side-effects "Dispatches to field navigation, editing, apply, cancel, or revert."
-  :see-also (*customize-face-state* customize-face-command))
+  :see-also (*customize-face-state* customize-drawing-style-command))
+
+(defdoc customize-drawing-style-command
+  :category "customize"
+  :usage "M-x customize-drawing-style-command. Bound through customize-face-command compatibility keybindings."
+  :returns "nil"
+  :side-effects "Activates minibuffer with drawing-style candidates. On selection, creates customize buffer."
+  :see-also (collect-all-faces make-customize-face-buffer handle-customize-key))
 
 (defdoc customize-face-command
   :category "customize"
-  :usage "Bound to C-h F. Opens minibuffer face selector → customize buffer."
+  :usage "Compatibility command for customize-drawing-style-command."
   :returns "nil"
-  :side-effects "Activates minibuffer with face candidates. On selection, creates customize buffer."
-  :see-also (collect-all-faces make-customize-face-buffer handle-customize-key))
+  :side-effects "Delegates to customize-drawing-style-command."
+  :see-also (customize-drawing-style-command))
 
 ;;; ==========================================================================
 ;;; Category: skills — Codex-style local skill bundles
