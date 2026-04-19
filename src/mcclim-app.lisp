@@ -1450,13 +1450,17 @@ uses the same face/cursor behavior as the transcript pane."
       (when (zerop char-w) (return-from display-drei-input-pane))
       (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
         (clear-pane-with-ink pane *mcclim-bg-ink*)
-        (when (and buf (not (document-buffer-p buf)))
-          (mcclim-render-message-lines pane (buffer-input-message buf)
-                                       0 cols char-w char-h
-                                       :show-cursor t
-                                       :max-rows rows
-                                       :prefix ""
-                                       :render-images-p nil))))))
+        (cond
+          ((and buf (buffer-input-presentation-function buf))
+           (funcall (buffer-input-presentation-function buf)
+                    pane buf rows cols char-w char-h))
+          ((and buf (not (document-buffer-p buf)))
+           (mcclim-render-message-lines pane (buffer-input-message buf)
+                                        0 cols char-w char-h
+                                        :show-cursor t
+                                        :max-rows rows
+                                        :prefix ""
+                                        :render-images-p nil)))))))
 
 (defmethod drei:display-drei-view-contents
     ((pane clawmacs-drei-input-pane) view)
@@ -1491,6 +1495,10 @@ display through the same renderer as the transcript keeps repaint stable."
 The editable input lives in the separate Drei input pane. Approval prompts
 still render in the transcript because they are modal interaction state, not
 ordinary input text."
+  (let ((presentation-function (buffer-presentation-function buf)))
+    (when presentation-function
+      (return-from mcclim-render-buffer
+        (funcall presentation-function pane buf rows cols char-w char-h))))
   (when (document-buffer-p buf)
     (return-from mcclim-render-buffer
       (mcclim-render-document-buffer pane buf rows cols char-w char-h)))

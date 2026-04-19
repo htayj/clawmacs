@@ -232,6 +232,22 @@
    #:*scratch-buffer-initial-text*
    #:buffer
    #:make-buffer
+   #:buffer-type
+   #:make-buffer-type
+   #:buffer-type-name
+   #:buffer-type-description
+   #:buffer-type-major-mode
+   #:buffer-type-document-p
+   #:buffer-type-presentation-function
+   #:buffer-type-input-presentation-function
+   #:buffer-type-package
+   #:register-buffer-type
+   #:define-buffer-type
+   #:find-buffer-type
+   #:list-buffer-types
+   #:buffer-type-for-buffer
+   #:buffer-presentation-function
+   #:buffer-input-presentation-function
    #:buffer-name
    #:buffer-first-message
    #:buffer-last-message
@@ -962,6 +978,7 @@
    #:package-owned-command-metadata
    #:package-owned-tool-metadata
    #:package-owned-prompt-sections
+   #:package-owned-buffer-types
    #:package-system-prompt-context-text
    #:maybe-insert-enabled-package-context
    #:describe-installed-package-to-string

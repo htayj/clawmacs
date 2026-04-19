@@ -535,10 +535,54 @@ documentation in *extended-docs*."
 
 (defdoc make-buffer
   :category "buffer"
-  :usage "(make-buffer NAME:string &key AGENT-NAME:string KIND:keyword WORKING-DIRECTORY:pathname CONTEXT-LIMIT:integer SESSION:session) — (make-buffer \"session-01\" :agent-name \"agent\")"
+  :usage "(make-buffer NAME:string &key AGENT-NAME:string KIND:keyword WORKING-DIRECTORY:pathname CONTEXT-LIMIT:integer SESSION:session MAJOR-MODE:string) — (make-buffer \"session-01\" :agent-name \"agent\")"
   :returns "buffer — A new buffer with a single empty input message."
   :side-effects "Allocates a buffer with an empty face registry."
-  :see-also (buffer buffer-name buffer-kind buffer-session add-buffer-to-ring current-buffer))
+  :see-also (buffer buffer-name buffer-kind register-buffer-type buffer-session add-buffer-to-ring current-buffer))
+
+(defdoc buffer-type
+  :category "buffer"
+  :usage "Struct — metadata for a registered buffer kind."
+  :returns "buffer-type — Includes kind name, description, default major-mode, document flag, optional presentation functions, and package owner."
+  :see-also (register-buffer-type define-buffer-type list-buffer-types))
+
+(defdoc register-buffer-type
+  :category "buffer"
+  :usage "(register-buffer-type :dashboard :description \"...\" :major-mode \"dashboard\" :presentation-function 'render-dashboard-buffer)"
+  :returns "buffer-type — The registered metadata."
+  :side-effects "Adds or replaces a buffer type in *buffer-type-registry*. Presentation functions are called by the McCLIM UI as (fn pane buffer rows cols char-w char-h)."
+  :see-also (define-buffer-type find-buffer-type buffer-presentation-function))
+
+(defdoc define-buffer-type
+  :category "buffer"
+  :usage "(define-buffer-type :dashboard :major-mode \"dashboard\" :presentation-function 'render-dashboard-buffer)"
+  :returns "buffer-type — The registered metadata."
+  :side-effects "Package-facing macro wrapper around register-buffer-type; package ownership defaults to the currently loading Clawmacs package."
+  :see-also (register-buffer-type package-owned-buffer-types))
+
+(defdoc find-buffer-type
+  :category "buffer"
+  :usage "(find-buffer-type :chat)"
+  :returns "buffer-type or NIL."
+  :see-also (list-buffer-types register-buffer-type))
+
+(defdoc list-buffer-types
+  :category "buffer"
+  :usage "(list-buffer-types)"
+  :returns "list — Registered buffer-type structures sorted by name."
+  :see-also (find-buffer-type package-owned-buffer-types))
+
+(defdoc buffer-presentation-function
+  :category "buffer"
+  :usage "(buffer-presentation-function BUF)"
+  :returns "function designator or NIL — The McCLIM main-pane presenter for BUF's type."
+  :see-also (buffer-input-presentation-function register-buffer-type mcclim-render-buffer))
+
+(defdoc buffer-input-presentation-function
+  :category "buffer"
+  :usage "(buffer-input-presentation-function BUF)"
+  :returns "function designator or NIL — The McCLIM input-pane presenter for BUF's type."
+  :see-also (buffer-presentation-function register-buffer-type))
 
 (defdoc buffer-name
   :category "buffer"
@@ -3460,6 +3504,11 @@ documentation in *extended-docs*."
   :usage "Pathname — defaults to ~/.clawmacs.d/packages/"
   :see-also (clawmacs-use-package *user-init-file* register-package-channel))
 
+(defdoc *current-clawmacs-package*
+  :category "packages"
+  :usage "Dynamically bound package name while a Clawmacs package entrypoint is loading."
+  :see-also (load-clawmacs-package define-buffer-type register-package-prompt-section))
+
 (defdoc register-package-channel
   :category "packages"
   :usage "(register-package-channel \"NAME\" #P\"/path/to/channel/\" :description \"...\")"
@@ -3529,6 +3578,12 @@ documentation in *extended-docs*."
   :usage "(active-package-names :buffer BUF)"
   :returns "list — package names enabled by global, agent, or buffer scope."
   :see-also (load-active-packages package-enablement-scope))
+
+(defdoc package-owned-buffer-types
+  :category "packages"
+  :usage "(package-owned-buffer-types \"dashboard-package\")"
+  :returns "list — buffer-type structures registered by the package."
+  :see-also (define-buffer-type describe-installed-package-to-string))
 
 (defdoc load-clawmacs-package
   :category "packages"

@@ -39,12 +39,18 @@ message editing primitives.
 A buffer is the visible working state for a chat, file, document, help page,
 selector, or scratch area. It owns the message list, input message, scroll
 state, routing overrides, display toggles, enabled package overrides, keymap,
-session handle, and transient provider state.
+session handle, buffer kind, and transient provider state.
 
 Buffer state lives in `src/buffer.lisp`. The McCLIM interface renders buffers; providers
 and packages should update buffers through buffer operations such as
 `buffer-insert-system-message`, `buffer-insert-agent-message`,
 `record-buffer-message`, and `buffer-finalize-input`.
+
+Buffer kinds are registered buffer types, not a closed enum. Packages may
+register new buffer types with default major-mode labels and McCLIM
+presentation functions. The core owns the registry and persistence shape;
+McCLIM owns the display call that turns a registered presentation function into
+output records and CLIM presentations.
 
 ### Rings
 
@@ -102,7 +108,8 @@ belong in their package entrypoint files.
 A package is an installed optional capability. Installed packages can be enabled
 globally, for an agent, or for a buffer. Enablement is inherited from broad to
 narrow scopes unless a narrower scope overrides it. Enabled packages may add
-prompt text, commands, tools, docs, agents, hooks, and keybindings.
+prompt text, commands, tools, docs, agents, hooks, keybindings, and buffer
+types with their own UI presentation functions.
 
 Package discovery, enablement, package-owned metadata queries, context
 injection, and package help rendering belong in `src/package-manager.lisp`.

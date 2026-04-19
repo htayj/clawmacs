@@ -28,6 +28,9 @@
 (defvar *scratch-buffer-initial-text* ""
   "Initial text inserted into the scratch buffer when it is created.")
 
+(defvar *current-clawmacs-package* nil
+  "Package name dynamically bound while loading a package entrypoint.")
+
 (defun maybe-run-hook-with-args (hook-var &rest args)
   "Run HOOK-VAR with ARGS when the hooks system has been loaded."
   (when (and (boundp hook-var)
@@ -39,6 +42,159 @@
   (when buf
     (maybe-run-hook-with-args '*after-buffer-display-change-hook* buf reason))
   buf)
+
+(defstruct buffer-type
+  "A registered buffer kind and its optional UI presentation hooks."
+  name
+  description
+  major-mode
+  document-p
+  presentation-function
+  input-presentation-function
+  package)
+
+(defun normalize-buffer-kind (kind)
+  "Normalize KIND into the keyword stored in BUFFER-KIND."
+  (cond
+    ((keywordp kind) kind)
+    ((symbolp kind) (intern (string-upcase (symbol-name kind)) :keyword))
+    ((stringp kind)
+     (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) kind)))
+       (unless (plusp (length trimmed))
+         (error "Buffer kind must not be blank."))
+       (intern (string-upcase trimmed) :keyword)))
+    (t
+     (error "Buffer kind must be a keyword, symbol, or string: ~S" kind))))
+
+(defun buffer-kind-default-major-mode (kind)
+  "Return the default major-mode string for normalized KIND."
+  (string-downcase (symbol-name (normalize-buffer-kind kind))))
+
+(defun normalize-buffer-major-mode (major-mode kind)
+  "Return a non-empty major-mode string for KIND."
+  (cond
+    ((null major-mode)
+     (buffer-kind-default-major-mode kind))
+    ((and (stringp major-mode)
+          (plusp (length (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                      major-mode))))
+     major-mode)
+    ((symbolp major-mode)
+     (string-downcase (symbol-name major-mode)))
+    (t
+     (error "Major mode must be a string, symbol, or NIL: ~S" major-mode))))
+
+(defun normalize-buffer-type-package-name (package)
+  "Normalize PACKAGE ownership metadata for a buffer type."
+  (cond
+    ((null package) nil)
+    ((stringp package)
+     (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) package)))
+       (and (plusp (length trimmed))
+            (string-downcase trimmed))))
+    ((symbolp package)
+     (string-downcase (symbol-name package)))
+    (t
+     (error "Buffer type package must be a string, symbol, or NIL: ~S" package))))
+
+(defun normalize-buffer-type-function (function role)
+  "Validate FUNCTION as an optional function designator for ROLE."
+  (cond
+    ((null function) nil)
+    ((functionp function) function)
+    ((and (symbolp function) (fboundp function)) function)
+    (t
+     (error "Buffer type ~A must be an existing function designator: ~S"
+            role
+            function))))
+
+(defun make-buffer-type-registry ()
+  "Return a fresh buffer type registry seeded with built-in buffer kinds."
+  (let ((registry (make-hash-table :test #'eq)))
+    (flet ((install (name description major-mode document-p)
+             (setf (gethash name registry)
+                   (make-buffer-type
+                    :name name
+                    :description description
+                    :major-mode major-mode
+                    :document-p document-p
+                    :package nil))))
+      (install :chat "Default agent conversation buffer." "chat" nil)
+      (install :help "Read-only help buffer rendered as conversation output." "help" nil)
+      (install :scratch "Editable scratch buffer." "scratch" t)
+      (install :file "Project-backed editable file buffer." "file" t))
+    registry))
+
+(defvar *buffer-type-registry* (make-buffer-type-registry)
+  "Registry of known buffer kinds.
+
+Packages may add entries with REGISTER-BUFFER-TYPE or DEFINE-BUFFER-TYPE.
+The McCLIM interface uses the registered presentation functions to render
+custom buffer kinds.")
+
+(defun register-buffer-type
+    (name &key description major-mode document-p
+               presentation-function input-presentation-function package)
+  "Register NAME as a buffer type and return its BUFFER-TYPE metadata.
+
+PRESENTATION-FUNCTION, when supplied, is called by the McCLIM transcript pane as
+(FUNCTION PANE BUFFER ROWS COLS CHAR-W CHAR-H). INPUT-PRESENTATION-FUNCTION is
+called with the same arguments for the separate Drei input pane. Package
+entrypoints normally leave PACKAGE unset; it defaults to the package currently
+being loaded by the Clawmacs package manager."
+  (let* ((kind (normalize-buffer-kind name))
+         (owner (normalize-buffer-type-package-name
+                 (or package *current-clawmacs-package*)))
+         (type (make-buffer-type
+                :name kind
+                :description (or description "")
+                :major-mode (normalize-buffer-major-mode major-mode kind)
+                :document-p (not (null document-p))
+                :presentation-function
+                (normalize-buffer-type-function presentation-function
+                                                :presentation-function)
+                :input-presentation-function
+                (normalize-buffer-type-function input-presentation-function
+                                                :input-presentation-function)
+                :package owner)))
+    (setf (gethash kind *buffer-type-registry*) type)
+    type))
+
+(defmacro define-buffer-type (name &rest options)
+  "Define a Clawmacs buffer type.
+
+This is the package-facing form for registering a buffer kind, its default
+major-mode label, and optional McCLIM presentation functions."
+  `(register-buffer-type ',name ,@options))
+
+(defun find-buffer-type (name)
+  "Return the registered BUFFER-TYPE for NAME, or NIL."
+  (gethash (normalize-buffer-kind name) *buffer-type-registry*))
+
+(defun list-buffer-types ()
+  "Return registered buffer types sorted by kind name."
+  (let ((types nil))
+    (maphash (lambda (_name type)
+               (declare (ignore _name))
+               (push type types))
+             *buffer-type-registry*)
+    (sort types #'string<
+          :key (lambda (type)
+                 (symbol-name (buffer-type-name type))))))
+
+(defun buffer-type-for-buffer (buf)
+  "Return the registered BUFFER-TYPE for BUF, or NIL."
+  (find-buffer-type (buffer-kind buf)))
+
+(defun buffer-presentation-function (buf)
+  "Return BUF's registered main-pane presentation function, if any."
+  (let ((type (buffer-type-for-buffer buf)))
+    (and type (buffer-type-presentation-function type))))
+
+(defun buffer-input-presentation-function (buf)
+  "Return BUF's registered input-pane presentation function, if any."
+  (let ((type (buffer-type-for-buffer buf)))
+    (and type (buffer-type-input-presentation-function type))))
 
 (defclass buffer ()
   ((name              :initarg :name
@@ -213,7 +369,7 @@ Enforces the invariant that it is not read-only."
     msg))
 
 (declaim (ftype (function (string &key (:agent-name string)
-                                       (:kind keyword)
+                                       (:kind (or keyword symbol string))
                                        (:working-directory pathname)
                                        (:project-name (or null string))
                                        (:resource-path (or null string))
@@ -222,7 +378,8 @@ Enforces the invariant that it is not read-only."
                                        (:context-limit integer)
                                        (:pipeline-name (or null string))
                                        (:enabled-packages list)
-                                       (:session (or null session)))
+                                       (:session (or null session))
+                                       (:major-mode (or null string symbol)))
                           buffer)
                 make-buffer))
 (defun make-buffer (name &key (agent-name *default-agent-name*)
@@ -235,16 +392,24 @@ Enforces the invariant that it is not read-only."
                               (context-limit *default-context-limit*)
                               (pipeline-name *default-pipeline-name*)
                               (enabled-packages nil)
-                              (session nil))
+                              (session nil)
+                              major-mode)
   "Create a new buffer with a single empty input message."
-  (let* ((input-msg (make-message :user))
+  (let* ((normalized-kind (normalize-buffer-kind kind))
+         (type (find-buffer-type normalized-kind))
+         (resolved-major-mode
+           (or (and major-mode
+                    (normalize-buffer-major-mode major-mode normalized-kind))
+               (and type (buffer-type-major-mode type))
+               (buffer-kind-default-major-mode normalized-kind)))
+         (input-msg (make-message :user))
          (registry (make-hash-table :test #'eq))
          (buf (make-instance 'buffer
                 :name name
                 :first-message input-msg
                 :last-message input-msg
                 :agent-name agent-name
-                :kind kind
+                :kind normalized-kind
                 :working-directory working-directory
                 :project-name project-name
                 :resource-path resource-path
@@ -254,7 +419,8 @@ Enforces the invariant that it is not read-only."
                 :pipeline-name pipeline-name
                 :enabled-packages (copy-list enabled-packages)
                 :session session
-                :face-registry registry)))
+                :face-registry registry
+                :major-mode resolved-major-mode)))
     (maybe-run-hook-with-args '*after-buffer-create-hook* buf)
     buf))
 
@@ -271,7 +437,9 @@ Enforces the invariant that it is not read-only."
 (declaim (ftype (function (buffer) boolean) document-buffer-p))
 (defun document-buffer-p (buf)
   "Return true when BUF is an editable document buffer rather than a chat buffer."
-  (or (scratch-buffer-p buf)
+  (or (let ((type (buffer-type-for-buffer buf)))
+        (and type (buffer-type-document-p type)))
+      (scratch-buffer-p buf)
       (file-buffer-p buf)))
 
 (defvar *suppress-session-transcript-recording* nil
@@ -772,6 +940,8 @@ The current buffer remains current when a current buffer already exists."
           :do (push (serialize-message msg) messages))
     `((:name . ,(buffer-name buf))
       (:agent-name . ,(buffer-agent-name buf))
+      (:kind . ,(symbol-name (buffer-kind buf)))
+      (:major-mode . ,(buffer-major-mode buf))
       (:provider-override . ,(buffer-provider-override buf))
       (:model-override . ,(buffer-model-override buf))
       (:think-level-override . ,(buffer-think-level-override buf))
@@ -863,6 +1033,8 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
            (data (cl-json:decode-json-from-string json-str))
            (name (or (cdr (assoc :name data)) session-name))
            (agent (or (cdr (assoc :agent-name data)) agent-name))
+           (kind (cdr (assoc :kind data)))
+           (major-mode (cdr (assoc :major-mode data)))
            (provider-override (cdr (assoc :provider-override data)))
            (model-override (cdr (assoc :model-override data)))
            (think-level-override (cdr (assoc :think-level-override data)))
@@ -870,7 +1042,9 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
            (enabled-packages (cdr (assoc :enabled-packages data)))
            (messages (cdr (assoc :messages data)))
            (buf (make-buffer name :agent-name agent
+                                  :kind (or kind :chat)
                                   :working-directory (truename ".")
+                                  :major-mode major-mode
                                   :session (load-or-create-session name))))
       (setf (buffer-provider-override buf)
             (and provider-override

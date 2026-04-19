@@ -30,9 +30,6 @@
   package
   body)
 
-(defvar *current-clawmacs-package* nil
-  "Package name dynamically bound while loading a package entrypoint.")
-
 (defun clawmacs-system-source-directory ()
   "Return the source directory for the clawmacs ASDF system."
   (or (ignore-errors (asdf:system-source-directory :clawmacs))
@@ -669,6 +666,15 @@ removes the package from the other scopes in the same context."
                             (or (package-prompt-section-package section) "")))
                  (list-package-prompt-sections)))
 
+(defun package-owned-buffer-types (package-name)
+  "Return buffer types registered by PACKAGE-NAME."
+  (let ((name (normalize-buffer-type-package-name package-name)))
+    (and name
+         (remove-if-not (lambda (type)
+                          (string= name
+                                   (or (buffer-type-package type) "")))
+                        (list-buffer-types)))))
+
 (defun package-context-message-marker (package-name)
   "Return the stable marker used for PACKAGE-NAME context messages."
   (format nil "<package_context package=~S>" package-name))
@@ -773,6 +779,14 @@ removes the package from the other scopes in the same context."
             (format s "  - ~(~A~): ~A~%"
                     (command-metadata-name command)
                     (command-metadata-docstring command)))
+          (format s "~%")))
+      (let ((buffer-types (package-owned-buffer-types name)))
+        (when buffer-types
+          (format s "Buffer Types:~%")
+          (dolist (type buffer-types)
+            (format s "  - ~(~A~): ~A~%"
+                    (buffer-type-name type)
+                    (or (buffer-type-description type) "")))
           (format s "~%")))
       (let ((docs (package-owned-extended-docs name)))
         (when docs

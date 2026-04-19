@@ -129,6 +129,35 @@
     (is (= 1 (buffer-message-count buf)))
     (is (eq :idle (buffer-status buf)))))
 
+(test package-buffer-type-registration-controls-buffer-defaults
+  "Registered buffer types provide package-extensible kind metadata."
+  (let ((clawmacs::*buffer-type-registry*
+          (clawmacs::make-buffer-type-registry)))
+    (let ((type (register-buffer-type
+                 :ledger
+                 :description "Ledger view"
+                 :major-mode "ledger"
+                 :document-p t
+                 :presentation-function 'identity
+                 :input-presentation-function 'identity
+                 :package "accounts")))
+      (is (eq :ledger (buffer-type-name type)))
+      (is (string= "accounts" (buffer-type-package type)))
+      (let ((buf (make-buffer "ledger" :kind :ledger)))
+        (is (eq :ledger (buffer-kind buf)))
+        (is (string= "ledger" (buffer-major-mode buf)))
+        (is (document-buffer-p buf))
+        (is (eq 'identity (buffer-presentation-function buf)))
+        (is (eq 'identity (buffer-input-presentation-function buf)))))))
+
+(test package-buffer-type-defaults-major-mode-from-kind
+  "Custom buffer types without an explicit major-mode use their kind label."
+  (let ((clawmacs::*buffer-type-registry*
+          (clawmacs::make-buffer-type-registry)))
+    (register-buffer-type :dashboard)
+    (let ((buf (make-buffer "dashboard" :kind :dashboard)))
+      (is (string= "dashboard" (buffer-major-mode buf))))))
+
 (test toggle-reasoning-output-command-flips-buffer-flag
   "The reasoning output toggle controls per-buffer reasoning display."
   (let ((buf (make-buffer "reasoning-toggle")))

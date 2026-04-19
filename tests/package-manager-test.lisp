@@ -5,6 +5,9 @@
 (defvar *package-entrypoint-load-count* 0
   "Tracks how many times the test package entrypoint was loaded.")
 
+(defvar *package-buffer-rendered* nil
+  "Tracks custom package buffer presentation dispatch in tests.")
+
 (defvar *package-init-continued* nil
   "Tracks whether load-user-init-file continued after a package warning.")
 
@@ -43,7 +46,9 @@
          (clawmacs::*package-channels* nil)
          (clawmacs::*available-packages* nil)
          (clawmacs::*package-registry-loaded-p* nil)
-         (clawmacs::*package-prompt-sections* nil))
+         (clawmacs::*package-prompt-sections* nil)
+         (clawmacs::*buffer-type-registry*
+          (clawmacs::make-buffer-type-registry)))
      ,@body))
 
 (defun default-package-test-channels ()
@@ -66,6 +71,8 @@
           (clawmacs::*package-registry-loaded-p* nil)
           (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
           (clawmacs::*package-prompt-sections* nil)
+          (clawmacs::*buffer-type-registry*
+           (clawmacs::make-buffer-type-registry))
           (clawmacs::*enabled-builtin-packages* nil))
      ,@body))
 
@@ -418,6 +425,47 @@
         (clawmacs:set-package-enablement-scope "custom-package" :global)
         (is (search "CUSTOM PACKAGE PROMPT"
                     (clawmacs:render-package-prompt-sections)))))))
+
+(test package-channel-loads-package-buffer-type-presentation
+  "Package entrypoints can register buffer types with McCLIM presentation hooks."
+  (let* ((*package-buffer-rendered* nil)
+         (channel-root
+           (make-package-channel-root
+            :label "buffer-channel"
+            :package-name "dashboard-package"
+            :manifest "(:name \"dashboard-package\"
+ :description \"Dashboard package\"
+ :entrypoint \"entry.lisp\")"
+            :entrypoint-content
+            "(defun package-dashboard-presenter (pane buffer rows cols char-w char-h)
+  (declare (ignore pane rows cols char-w char-h))
+  (setf clawmacs/tests::*package-buffer-rendered*
+        (list :rendered (buffer-name buffer))))
+
+(define-buffer-type :package-dashboard
+  :description \"Package dashboard buffer\"
+  :major-mode \"dashboard\"
+  :presentation-function 'package-dashboard-presenter)")))
+    (with-package-state-override (nil)
+      (clawmacs:register-package-channel "custom" channel-root
+                                         :description "Custom channel")
+      (is (clawmacs:load-clawmacs-package "dashboard-package"))
+      (let ((type (clawmacs:find-buffer-type :package-dashboard)))
+        (is (not (null type)))
+        (is (string= "dashboard-package"
+                     (clawmacs:buffer-type-package type)))
+        (is (string= "dashboard"
+                     (clawmacs:buffer-type-major-mode type))))
+      (is (= 1 (length (clawmacs:package-owned-buffer-types
+                        "dashboard-package"))))
+      (let ((help (clawmacs:describe-installed-package-to-string
+                   (clawmacs:find-installed-package "dashboard-package")
+                   nil)))
+        (is (search "Buffer Types:" help))
+        (is (search "package-dashboard" help :test #'char-equal)))
+      (let ((buf (make-buffer "dashboard" :kind :package-dashboard)))
+        (clawmacs::mcclim-render-buffer nil buf 10 80 8 16)
+        (is (equal '(:rendered "dashboard") *package-buffer-rendered*))))))
 
 (test clawmacs-use-package-honors-packages-directory-override
   "The install root follows *packages-directory*."
