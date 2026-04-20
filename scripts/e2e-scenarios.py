@@ -55,6 +55,19 @@ def set_input(s, text):
     s.type_text(text)
 
 
+def open_extended_command(s, command_name):
+    """Run M-x COMMAND-NAME through the extended-command minibuffer."""
+    run_extended_command(s, command_name)
+
+
+def confirm_minibuffer_candidate(s, candidate_text):
+    """Type CANDIDATE-TEXT into the active minibuffer and confirm it."""
+    s.type_text(candidate_text)
+    wait_for_minibuffer_input(s, candidate_text, timeout=5)
+    s.press("Enter")
+    time.sleep(0.35)
+
+
 def seed_previous_command(s, command):
     """Send COMMAND so argument-yank binds have previous-command context."""
     set_input(s, command)
@@ -701,14 +714,201 @@ def wait_for_text(s, text, timeout=5):
     )
 
 
+def wait_for_minibuffer_prompt(s, prompt, timeout=5):
+    """Poll until a McCLIM minibuffer prompt is active."""
+    deadline = time.time() + timeout
+    last_screen = ""
+    while time.time() < deadline:
+        screen = s.text()
+        last_screen = screen
+        if hasattr(s, "snapshot"):
+            snapshot = s.snapshot()
+            minibuffer = snapshot.get("minibuffer") or {}
+            if minibuffer.get("active") and prompt in str(minibuffer.get("prompt", "")):
+                return screen
+        elif prompt in screen:
+            return screen
+        time.sleep(0.25)
+    raise AssertionError(
+        f"Timed out waiting for minibuffer prompt '{prompt}'; "
+        f"last screen:\n{last_screen[:500]}"
+    )
+
+
+def wait_for_minibuffer_input(s, text, timeout=5):
+    """Poll until the active minibuffer input ends with TEXT."""
+    deadline = time.time() + timeout
+    last_input = ""
+    while time.time() < deadline:
+        if hasattr(s, "snapshot"):
+            snapshot = s.snapshot()
+            minibuffer = snapshot.get("minibuffer") or {}
+            last_input = str(minibuffer.get("input", ""))
+            if minibuffer.get("active") and last_input.endswith(text):
+                return last_input
+        time.sleep(0.1)
+    raise AssertionError(
+        f"Timed out waiting for minibuffer input suffix '{text}'; "
+        f"last input: {last_input}"
+    )
+
+
+def minibuffer_active(s):
+    """Return true when the structured snapshot reports an active minibuffer."""
+    if hasattr(s, "snapshot"):
+        snapshot = s.snapshot()
+        return bool((snapshot.get("minibuffer") or {}).get("active"))
+    return False
+
+
+def wait_for_minibuffer_inactive(s, timeout=5):
+    """Poll until the structured snapshot reports no active minibuffer."""
+    if not hasattr(s, "snapshot"):
+        time.sleep(0.3)
+        return
+    deadline = time.time() + timeout
+    last_prompt = ""
+    last_input = ""
+    while time.time() < deadline:
+        snapshot = s.snapshot()
+        minibuffer = snapshot.get("minibuffer") or {}
+        last_prompt = str(minibuffer.get("prompt", ""))
+        last_input = str(minibuffer.get("input", ""))
+        if not minibuffer.get("active"):
+            return
+        time.sleep(0.1)
+    raise AssertionError(
+        "Timed out waiting for minibuffer to close; "
+        f"last prompt: {last_prompt}; last input: {last_input}"
+    )
+
+
+def wait_for_minibuffer_prompt_change(s, old_prompt, timeout=5):
+    """Poll until the minibuffer is inactive or no longer has OLD-PROMPT."""
+    if not hasattr(s, "snapshot"):
+        time.sleep(0.3)
+        return
+    deadline = time.time() + timeout
+    last_prompt = ""
+    last_input = ""
+    while time.time() < deadline:
+        snapshot = s.snapshot()
+        minibuffer = snapshot.get("minibuffer") or {}
+        last_prompt = str(minibuffer.get("prompt", ""))
+        last_input = str(minibuffer.get("input", ""))
+        if not minibuffer.get("active") or old_prompt not in last_prompt:
+            return
+        time.sleep(0.1)
+    raise AssertionError(
+        f"Timed out waiting for minibuffer prompt to leave '{old_prompt}'; "
+        f"last prompt: {last_prompt}; last input: {last_input}"
+    )
+
+
+def wait_for_package_buffer_scope(s, package_name, timeout=10):
+    """Poll until PACKAGE-NAME is enabled for the current buffer."""
+    expected = f"[Package {package_name} enabled for this buffer]"
+    row = f"[buffer] {package_name} -"
+    deadline = time.time() + timeout
+    last_screen = ""
+    while time.time() < deadline:
+        screen = s.text()
+        last_screen = screen
+        if expected in screen or row in screen:
+            return screen
+        if hasattr(s, "snapshot"):
+            snapshot = s.snapshot()
+            messages = (snapshot.get("buffer") or {}).get("messages") or []
+            if any(expected in str(message.get("text", "")) for message in messages):
+                return screen
+            minibuffer = snapshot.get("minibuffer") or {}
+            candidates = minibuffer.get("candidates") or []
+            if any(row in str(candidate) for candidate in candidates):
+                return screen
+        time.sleep(0.25)
+    raise AssertionError(
+        f"Timed out waiting for '{expected}'; last screen:\n{last_screen[:500]}"
+    )
+
+
+def package_buffer_scope_present(s, package_name):
+    """Return true when the active selector/messages show buffer scope."""
+    expected = f"[Package {package_name} enabled for this buffer]"
+    row = f"[buffer] {package_name} -"
+    screen = s.text()
+    if expected in screen or row in screen:
+        return True
+    if hasattr(s, "snapshot"):
+        snapshot = s.snapshot()
+        messages = (snapshot.get("buffer") or {}).get("messages") or []
+        if any(expected in str(message.get("text", "")) for message in messages):
+            return True
+        minibuffer = snapshot.get("minibuffer") or {}
+        candidates = minibuffer.get("candidates") or []
+        return any(row in str(candidate) for candidate in candidates)
+    return False
+
+
 def cancel_minibuffer(s):
     """Press C-g to close active minibuffer."""
     s.press("Ctrl+g")
-    time.sleep(0.3)
+    wait_for_minibuffer_inactive(s, timeout=5)
+
+
+def run_extended_command(s, command_name):
+    """Run COMMAND-NAME through M-x."""
+    if hasattr(s, "focus"):
+        s.focus(force=True)
+    if minibuffer_active(s):
+        cancel_minibuffer(s)
+    s.press("Alt+x")
+    wait_for_minibuffer_prompt(s, "M-x", timeout=10)
+    s.type_text(command_name)
+    wait_for_minibuffer_input(s, command_name, timeout=5)
+    for attempt in range(3):
+        s.press("Enter")
+        try:
+            wait_for_minibuffer_prompt_change(s, "M-x", timeout=2)
+            break
+        except AssertionError:
+            if attempt == 2:
+                raise
+    time.sleep(0.5)
+
+
+def enable_installed_package(s, package_name):
+    """Open the package selector and cycle PACKAGE-NAME once."""
+    run_extended_command(s, "minibuffer-toggle-package-command")
+    wait_for_text(s, "Enable Package", timeout=10)
+    s.type_text(package_name)
+    wait_for_minibuffer_input(s, package_name, timeout=5)
+    wait_for_minibuffer_prompt(s, "Enable Package", timeout=10)
+    if package_buffer_scope_present(s, package_name):
+        cancel_minibuffer(s)
+        return
+    s.press("Enter")
+    wait_for_package_buffer_scope(s, package_name, timeout=10)
+    cancel_minibuffer(s)
+
+
+def describe_installed_package(s, package_name):
+    """Open the installed package help buffer for PACKAGE-NAME."""
+    run_extended_command(s, "describe-installed-package-command")
+    wait_for_text(s, "Describe Package", timeout=10)
+    s.type_text(package_name)
+    wait_for_minibuffer_input(s, package_name, timeout=5)
+    s.press("Enter")
+    try:
+        wait_for_minibuffer_inactive(s, timeout=3)
+    except AssertionError:
+        cancel_minibuffer(s)
+    time.sleep(0.5)
 
 
 def kill_current_buffer(s):
     """Press C-x k to kill the current buffer and return to previous."""
+    if minibuffer_active(s):
+        cancel_minibuffer(s)
     s.press("Ctrl+x")
     s.press("k")
     time.sleep(0.3)
@@ -716,6 +916,8 @@ def kill_current_buffer(s):
 
 def switch_to_buffer(s, query, expected_name=None):
     """Open the minibuffer buffer selector and switch to QUERY."""
+    if hasattr(s, "focus"):
+        s.focus(force=True)
     s.press("Ctrl+x")
     s.press("Ctrl+b")
     time.sleep(0.5)
@@ -723,7 +925,10 @@ def switch_to_buffer(s, query, expected_name=None):
     assert_contains(screen, "Switch Buffer", "buffer selector prompt")
     if query:
         s.type_text(query)
-        time.sleep(0.3)
+        if hasattr(s, "snapshot"):
+            wait_for_minibuffer_input(s, query, timeout=5)
+        else:
+            time.sleep(0.3)
         screen = s.text()
     if expected_name:
         assert_contains(screen, expected_name, "buffer candidate visible")

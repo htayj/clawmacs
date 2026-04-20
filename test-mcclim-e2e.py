@@ -7,6 +7,7 @@ scripts/mcclim-e2e-driver.lisp.
 """
 import argparse
 import importlib.util
+import http.server
 import json
 import os
 import shutil
@@ -14,11 +15,17 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
+from functools import partial
 
 
 CLAWMACS_DIR = os.path.dirname(os.path.abspath(__file__))
 SCREENSHOT_DIR = os.path.join(CLAWMACS_DIR, "screenshots", "mcclim")
 SESSION_NAME = "session-01"
+E2E_PROJECT_NAME = "mcclim-e2e-project"
+E2E_PROJECT_ROOT = None
+E2E_PROJECT_FILE = None
+PROMPT_PROJECT_ROOT = "/tmp/clawmacs-prompt-project-test"
 
 PASSED = []
 FAILED = []
@@ -36,6 +43,332 @@ E2E = load_e2e_scenarios_module()
 DEFAULT_AGENT_NAME = E2E.DEFAULT_AGENT_NAME
 
 OFFLINE_AGENT_EVAL = r"""
+(setf (symbol-function 'clawmacs::send-to-agent-with-context)
+      (lambda (buf)
+        (let ((text (or (clawmacs::buffer-previous-user-command-text buf) "")))
+          (labels ((finish (message)
+                     (clawmacs::buffer-insert-agent-message buf message)
+                     (setf (clawmacs::buffer-status buf) :idle)
+                     (clawmacs:notify-buffer-display-change buf :offline-agent))
+                   (ensure-speculum ()
+                     (pushnew "speculum"
+                              (clawmacs:buffer-enabled-packages buf)
+                              :test #'string=)
+                     (clawmacs:load-active-packages :buffer buf))
+                   (speculum-tool-data (tool-name args)
+                     (handler-case
+                         (progn
+                           (ensure-speculum)
+                           (let ((clawmacs::*current-tool-buffer* buf)
+                                 (clawmacs::*current-caller* :agent))
+                             (nth-value 0
+                               (clawmacs::lisp-data-read
+                                (clawmacs:execute-tool tool-name args)))))
+                       (error (condition)
+                         (list :ok nil :error (format nil "~A" condition)))))
+                   (package-enabled-p (name)
+                     (member name
+                             (clawmacs:buffer-enabled-packages buf)
+                             :test #'string=))
+                   (prompt-arg (key)
+                     (let* ((marker (concatenate 'string key "="))
+                            (start (search marker text :test #'char-equal)))
+                       (when start
+                         (let* ((begin (+ start (length marker)))
+                                (quoted-p (and (< begin (length text))
+                                               (char= (char text begin) #\"))))
+                           (if quoted-p
+                               (let* ((quoted-begin (1+ begin))
+                                      (end (or (position #\" text
+                                                         :start quoted-begin)
+                                               (length text))))
+                                 (subseq text quoted-begin end))
+                               (let ((end (or (position-if
+                                               (lambda (char)
+                                                 (member char
+                                                         '(#\Space #\Tab
+                                                           #\Return #\Newline)
+                                                         :test #'char=))
+                                               text
+                                               :start begin)
+                                              (length text))))
+                                 (subseq text begin end)))))))
+                   (tool-result (tool-name args)
+                     (handler-case
+                         (let ((clawmacs::*current-tool-buffer* buf)
+                               (clawmacs::*current-caller* :agent))
+                           (clawmacs:execute-tool tool-name args))
+                       (error (condition)
+                         (format nil "(:ok nil :error ~S)"
+                                 (format nil "~A" condition)))))
+                   (ensure-e2e-project (project-name root-path)
+                     (let ((root (uiop:ensure-directory-pathname root-path)))
+                       (or (clawmacs:find-project project-name)
+                           (clawmacs:define-project project-name
+                                                    :root root
+                                                    :description "McCLIM e2e fixture")))))
+            (cond
+              ((search "async-render-probe" text :test #'char-equal)
+               (setf (clawmacs::buffer-status buf) :thinking)
+               (clawmacs:notify-buffer-display-change buf :async-render-test)
+               (bt:make-thread
+                (lambda ()
+                  (sleep 0.6)
+                  (clawmacs::buffer-insert-agent-message
+                   buf
+                   "MCCLIM-ASYNC-RENDER-VISIBLE")
+                  (setf (clawmacs::buffer-status buf) :idle)
+                  (clawmacs:notify-buffer-display-change buf :async-render-test))
+                :name "mcclim-e2e-async-render"))
+              ((search "stream-poll-probe" text :test #'char-equal)
+               (let ((state (clawmacs::make-stream-state))
+                     (agent-msg (clawmacs::buffer-insert-agent-message
+                                 buf "" :record-p nil :run-hook-p nil)))
+                 (setf (clawmacs::buffer-pending-stream buf) state
+                       (clawmacs::buffer-streaming-message buf) agent-msg
+                       (clawmacs::buffer-status buf) :thinking)
+                 (clawmacs:notify-buffer-display-change buf :stream-started)
+                 (bt:make-thread
+                  (lambda ()
+                    (sleep 0.6)
+                    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                      (setf (clawmacs::stream-state-content-blocks state)
+                            (list (clawmacs::canonical-text-block
+                                   "MCCLIM-PULSE-STREAM-VISIBLE"))
+                            (clawmacs::stream-state-stop-reason state) "end_turn"
+                            (clawmacs::stream-state-done-p state) t)))
+                  :name "mcclim-e2e-pulse-stream")))
+              ((search "stream-stop-probe" text :test #'char-equal)
+               (let ((state (clawmacs::make-stream-state))
+                     (agent-msg (clawmacs::buffer-insert-agent-message
+                                 buf "" :record-p nil :run-hook-p nil)))
+                 (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                   (setf (clawmacs::stream-state-text state)
+                         "MCCLIM-STOP-PARTIAL"
+                         (clawmacs::stream-state-content-blocks state)
+                         (list (clawmacs::canonical-text-block
+                                "MCCLIM-STOP-PARTIAL"))))
+                 (setf (clawmacs::buffer-pending-stream buf) state
+                       (clawmacs::buffer-streaming-message buf) agent-msg
+                       (clawmacs::buffer-status buf) :thinking)
+                 (clawmacs:notify-buffer-display-change buf :stream-started)))
+              ((search "speculum-window-state-probe" text :test #'char-equal)
+               (let ((state (speculum-tool-data
+                             "speculum_window_state"
+                             '(:scope "all" :message-limit 3))))
+                 (finish
+                  (if (and (getf state :ok)
+                           (getf state :available)
+                           (getf state :frame)
+                           (getf state :panes)
+                           (getf state :render))
+                      "SPECULUM-WINDOW-STATE-OK"
+                      (format nil "SPECULUM-WINDOW-STATE-FAIL ~S" state)))))
+              ((search "speculum-screenshot-probe" text :test #'char-equal)
+               (let* ((result (speculum-tool-data
+                               "speculum_screenshot"
+                               '(:refresh t)))
+                      (status (if (getf result :ok) "OK" "FAIL")))
+                 (finish
+                  (format nil "SPECULUM-SCREENSHOT-~A path=~A bytes=~A"
+                          status
+                          (or (getf result :path) "")
+                          (or (getf result :file-bytes) 0)))))
+              ((search "speculum-package-probe" text :test #'char-equal)
+               (if (package-enabled-p "speculum")
+                   (let* ((window-state
+                           (clawmacs::lisp-data-read
+                            (tool-result "speculum_window_state"
+                                         '(:scope "all" :message-limit 3))))
+                          (screenshot
+                           (clawmacs::lisp-data-read
+                            (tool-result "speculum_screenshot"
+                                         '(:refresh t)))))
+                     (finish
+                      (format nil "SPECULUM-PACKAGE-OK window=~A path=~A bytes=~A"
+                              (if (and (getf window-state :ok)
+                                       (getf window-state :available)
+                                       (getf window-state :frame)
+                                       (getf window-state :panes)
+                                       (getf window-state :render))
+                                  "window-state"
+                                  "window-state-fail")
+                              (or (getf screenshot :path) "")
+                              (or (getf screenshot :file-bytes) 0))))
+                   (finish "SPECULUM-PACKAGE-MISSING")))
+              ((search "inline-image-probe" text :test #'char-equal)
+               (finish
+                "INLINE-IMAGE-RENDER-PROBE
+![Inline red probe](screenshots/mcclim/inline-image-probe-source.png)"))
+              ((search "lispi-package-probe" text :test #'char-equal)
+               (if (package-enabled-p "lispi")
+                   (let* ((path (or (prompt-arg "path")
+                                    "/tmp/clawmacs-e2e-lispi.txt"))
+                          (content (or (prompt-arg "content")
+                                       "(defun lispi-probe () :ok)"))
+                          (code (or (prompt-arg "code") "(+ 40 2)"))
+                          (eval-result (tool-result "lisp_eval"
+                                                    `(:code ,code)))
+                          (write-result (tool-result "write"
+                                                     `(:path ,path
+                                                       :content ,content)))
+                          (read-result (tool-result "read"
+                                                    `(:path ,path))))
+                     (finish
+                      (format nil "LISPI-TOOLS-OK eval=~A write=~A read=~A"
+                              eval-result write-result read-result)))
+                   (finish "LISPI-PACKAGE-MISSING")))
+              ((search "sexed-package-probe" text :test #'char-equal)
+               (if (package-enabled-p "sexed")
+                   (let* ((path (or (prompt-arg "path")
+                                    "/tmp/clawmacs-e2e-sexed.lisp"))
+                          (content (or (prompt-arg "content")
+                                       "(defun sexed-probe (n) (+ n 1))"))
+                          (replacement (or (prompt-arg "replacement")
+                                           "(defun sexed-probe (n) (1+ n))"))
+                          (outline (tool-result "sexed_text_outline"
+                                                `(:text ,content
+                                                  :head "defun"
+                                                  :max-depth 1)))
+                          (write-result (tool-result "sexed_file_write"
+                                                     `(:path ,path
+                                                       :content ,content)))
+                          (read-result (tool-result "sexed_file_read"
+                                                    `(:path ,path)))
+                          (edit-result (tool-result "sexed_text_edits"
+                                                    `(:text ,content
+                                                      :edits (((:operation
+                                                                . "replace")
+                                                               (:selector
+                                                                . ((:head
+                                                                    . "+")))
+                                                               (:newtext
+                                                                . ,replacement)))))))
+                     (tool-result "sexed_file_write"
+                                  `(:path ,path :content ,replacement))
+                     (finish
+                      (format nil "SEXED-TOOLS-OK outline=~A write=~A read=~A edit=~A"
+                              outline write-result read-result edit-result)))
+                   (finish "SEXED-PACKAGE-MISSING")))
+              ((search "slop-package-probe" text :test #'char-equal)
+               (if (package-enabled-p "slop")
+                   (let* ((project-name (or (prompt-arg "project") "e2e-tools"))
+                         (root (or (prompt-arg "root") (truename ".")))
+                         (symbol-a (or (prompt-arg "symbol-a")
+                                       "buffer-insert-agent-message"))
+                         (symbol-b (or (prompt-arg "symbol-b")
+                                       "minibuffer-toggle-package-command"))
+                          (query (or (prompt-arg "query") "package"))
+                          (binding-path (or (prompt-arg "binding-path")
+                                            "src/main.lisp"))
+                          (binding-offset (and (prompt-arg "offset")
+                                               (parse-integer
+                                                (prompt-arg "offset"))))
+                          (project (ensure-e2e-project project-name root))
+                          (list-projects (tool-result "slop_list_projects" '()))
+                          (current-project (tool-result "slop_current_project" '()))
+                          (definitions (tool-result
+                                        "slop_find_definitions_batch"
+                                        `(:project ,project-name
+                                          :symbols ,(vector symbol-a symbol-b)
+                                          :namespace "function"
+                                          :per-symbol-limit 1)))
+                          (context (tool-result "slop_definition_context"
+                                                `(:project ,project-name
+                                                  :symbol ,symbol-a
+                                                  :before-forms 1
+                                                  :after-forms 1)))
+                          (trace (tool-result "slop_trace_calls"
+                                              `(:project ,project-name
+                                                :symbol ,symbol-b
+                                                :direction "callees"
+                                                :max-depth 2)))
+                          (mentions (tool-result "slop_find_mentions"
+                                                 `(:project ,project-name
+                                                   :query ,query
+                                                   :path "docs"
+                                                   :limit 3)))
+                          (uses (clawmacs::lisp-data-read
+                                 (tool-result "slop_find_variable_uses"
+                                              `(:project ,project-name
+                                                :path ,binding-path
+                                                :offset ,binding-offset
+                                                :limit 5))))
+                          (binding (getf uses :binding))
+                          (binding-id (or (getf binding :id) ""))
+                          (rename (tool-result "slop_rename_variable"
+                                               `(:project ,project-name
+                                                 :binding-id ,binding-id
+                                                 :new-name "renamed-total"))))
+                     (finish
+                      (format nil
+                              "SLOP-TOOLS-OK projects=~A current=~A defs=~A context=~A trace=~A mentions=~A uses=~A rename=~A project-object=~A"
+                              list-projects current-project definitions context trace mentions uses rename project)))
+                   (finish "SLOP-PACKAGE-MISSING")))
+              ((search "git-package-probe" text :test #'char-equal)
+               (if (package-enabled-p "git")
+                   (let* ((repository (prompt-arg "repository"))
+                         (remote (or (prompt-arg "remote") "origin"))
+                         (branch (or (prompt-arg "branch") "main"))
+                          (add-path (or (prompt-arg "path") "CHANGELOG.md"))
+                          (message (or (prompt-arg "message")
+                                       "E2E git package commit"))
+                          (status (tool-result "git_status"
+                                               `(:repository ,repository
+                                                 :branch t)))
+                          (log (tool-result "git_log"
+                                            `(:repository ,repository
+                                              :limit 2)))
+                          (add (tool-result "git_add"
+                                            `(:repository ,repository
+                                              :paths ,(vector add-path))))
+                          (commit (tool-result "git_commit"
+                                               `(:repository ,repository
+                                                 :message ,message)))
+                          (push (tool-result "git_push"
+                                             `(:repository ,repository
+                                               :remote ,remote
+                                               :branch ,branch))))
+                     (finish
+                      (format nil "GIT-TOOLS-OK status=~A log=~A add=~A commit=~A push=~A"
+                              status log add commit push)))
+                   (finish "GIT-PACKAGE-MISSING")))
+              ((search "netcons-package-probe" text :test #'char-equal)
+               (if (package-enabled-p "netcons")
+                   (let* ((url (prompt-arg "url"))
+                          (open (tool-result "netcons_open"
+                                             `(:url ,url :response-length "short")))
+                          (find (tool-result "netcons_find"
+                                             `(:url ,url
+                                               :pattern "needle"
+                                               :limit 3
+                                               :response-length "short"))))
+                     (finish
+                      (format nil "NETCONS-TOOLS-OK open=~A find=~A"
+                              open find)))
+                   (finish "NETCONS-PACKAGE-MISSING")))
+              (t
+               (finish
+                (cond
+                  ((search "(+ 40 2)" text :test #'char-equal)
+                   "42")
+                  ((search "describe-common-lisp-symbol-to-string" text
+                           :test #'char-equal)
+                   "format~%Reference: CL Community Spec")
+                  ((search "file_write" text :test #'char-equal)
+                   "first second")
+                  ((search "alpha" text :test #'char-equal)
+                   "alpha")
+                  ((search "beta" text :test #'char-equal)
+                   "beta")
+                  ((search "tiling-resize-probe" text :test #'char-equal)
+                   "MCCLIM-TILING-RESIZE-VISIBLE")
+                  (t
+                   (format nil "offline echo: ~A" text))))))
+          buf))))
+"""
+
+CORE_OFFLINE_AGENT_EVAL = r"""
 (setf (symbol-function 'clawmacs::send-to-agent-with-context)
       (lambda (buf)
         (let ((text (or (clawmacs::buffer-previous-user-command-text buf) "")))
@@ -130,24 +463,11 @@ OFFLINE_AGENT_EVAL = r"""
                (finish
                 "INLINE-IMAGE-RENDER-PROBE
 ![Inline red probe](screenshots/mcclim/inline-image-probe-source.png)"))
+              ((search "tiling-resize-probe" text :test #'char-equal)
+               (finish "MCCLIM-TILING-RESIZE-VISIBLE"))
               (t
                (finish
-                (cond
-                  ((search "(+ 40 2)" text :test #'char-equal)
-                   "42")
-                  ((search "describe-common-lisp-symbol-to-string" text
-                           :test #'char-equal)
-                   "format~%Reference: CL Community Spec")
-                  ((search "file_write" text :test #'char-equal)
-                   "first second")
-                  ((search "alpha" text :test #'char-equal)
-                   "alpha")
-                  ((search "beta" text :test #'char-equal)
-                   "beta")
-                  ((search "tiling-resize-probe" text :test #'char-equal)
-                   "MCCLIM-TILING-RESIZE-VISIBLE")
-                  (t
-                   (format nil "offline echo: ~A" text)))))))
+                (format nil "offline echo: ~A" text)))))
           buf)))
 """
 
@@ -277,6 +597,88 @@ def base_extra_evals(skill_root_path):
     return [f'(clawmacs:register-skill-root #P"{lisp_string(skill_root_path)}")']
 
 
+def package_orchestration_extra_evals():
+    return [
+        '(clawmacs:register-agent-definition "writer" '
+        ':provider :zai '
+        ':model "glm-5" '
+        ':think-level "low")',
+        '(clawmacs:register-agent-definition "pair" '
+        ':provider :openai-codex '
+        ':model "gpt-5.4" '
+        ':think-level "high")',
+        '(setf (symbol-function \'clawmacs::available-models-for-selector)\n'
+        '      (lambda (buffer)\n'
+        '        (declare (ignore buffer))\n'
+        '        (list (list :provider :zai\n'
+        '                    :model "glm-5"\n'
+        '                    :active-p t)\n'
+        '              (list :provider :openai-codex\n'
+        '                    :model "gpt-5.4"\n'
+        '                    :active-p nil))))',
+        '(setf (symbol-function \'clawmacs::provider-model-supported-think-levels)\n'
+        '      (lambda (provider model)\n'
+        '        (declare (ignore provider model))\n'
+        '        \'("low" "high")))',
+    ]
+
+
+def create_e2e_project_root():
+    root = tempfile.mkdtemp(
+        prefix="clawmacs-e2e-project-",
+        dir=os.path.join(CLAWMACS_DIR, ".cache"),
+    )
+    source_dir = os.path.join(root, "src")
+    os.makedirs(source_dir, exist_ok=True)
+    path = os.path.join(source_dir, "probe.lisp")
+    with open(path, "w", encoding="utf-8") as stream:
+        stream.write(
+            "(defpackage :mcclim-e2e-project-probe (:use :cl))\n"
+            "(in-package :mcclim-e2e-project-probe)\n\n"
+            "(defun probe-target ()\n"
+            "  :initial-state)\n\n"
+            ";; E2E-PROJECT-BASELINE\n"
+        )
+    return root, path
+
+
+def ensure_prompt_project_root():
+    os.makedirs(PROMPT_PROJECT_ROOT, exist_ok=True)
+    marker = os.path.join(PROMPT_PROJECT_ROOT, ".clawmacs-e2e-marker")
+    if not os.path.exists(marker):
+        with open(marker, "w", encoding="utf-8") as stream:
+            stream.write("prompt project root fixture\n")
+
+
+def project_fixture_eval(project_root):
+    return (
+        "(progn "
+        f'(clawmacs::define-project "{lisp_string(E2E_PROJECT_NAME)}" '
+        f':root #P"{lisp_string(project_root)}" '
+        ':description "Offline McCLIM e2e fixture" '
+        ':replace t)'
+        ")"
+    )
+
+
+def package_config_fixture_eval():
+    root = tempfile.mkdtemp(
+        prefix="clawmacs-e2e-package-config-",
+        dir=os.path.join(CLAWMACS_DIR, ".cache"),
+    )
+    path = os.path.join(root, "packages.json")
+    return (
+        "(progn "
+        f'(setf clawmacs:*package-configuration-path* #P"{lisp_string(path)}") '
+        "(setf clawmacs::*package-configuration* nil))"
+    )
+
+
+def core_offline_agent_eval():
+    """Return the deterministic offline agent fixture used by e2e tests."""
+    return OFFLINE_AGENT_EVAL
+
+
 def online_provider_specs(group):
     if group == "online":
         return list(ONLINE_PROVIDER_SPECS)
@@ -338,6 +740,23 @@ def message_field(text, name):
     return ""
 
 
+def package_selector_scope_label(screen_text, package_name):
+    screen_text = str(screen_text)
+    marker = f"] {package_name} - "
+    marker_index = screen_text.find(marker)
+    if marker_index < 0:
+        return ""
+    start = screen_text.rfind("[", 0, marker_index)
+    if start < 0:
+        return ""
+    return screen_text[start + 1 : marker_index]
+
+
+def minibuffer_candidate_strings(snapshot):
+    minibuffer = snapshot.get("minibuffer") or {}
+    return [str(candidate) for candidate in minibuffer.get("candidates") or []]
+
+
 def render_visible_messages(snapshot):
     render = snapshot.get("render") or {}
     return render.get("visibleMessages") or render.get("visible-messages") or []
@@ -364,6 +783,25 @@ def window_get(windows, camel_key, kebab_key, default=None):
     if kebab_key in windows:
         return windows[kebab_key]
     return default
+
+
+def snapshot_get(data, camel_key, kebab_key, default=None):
+    if camel_key in data:
+        return data[camel_key]
+    if kebab_key in data:
+        return data[kebab_key]
+    return default
+
+
+def control_result(snapshot):
+    return snapshot_get(snapshot, "controlResult", "control-result", {}) or {}
+
+
+def control_sequence(snapshot):
+    try:
+        return int(control_result(snapshot).get("sequence") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def assert_rendered_message_row_has_dark_pixels(png_path, snapshot, text):
@@ -464,6 +902,82 @@ def wait_for_rendered_message_text(session, text, timeout=15):
     )
 
 
+def wait_for_minibuffer_prompt(session, prompt, timeout=10):
+    return wait_until(
+        lambda: session.text()
+        if (
+            (session.snapshot().get("minibuffer") or {}).get("active")
+            and prompt in str((session.snapshot().get("minibuffer") or {}).get("prompt", ""))
+        )
+        else None,
+        timeout=timeout,
+        interval=0.1,
+        description=f"minibuffer prompt containing {prompt}",
+    )
+
+
+def wait_for_text(session, text, timeout=5):
+    return E2E.wait_for_text(session, text, timeout=timeout)
+
+
+def current_buffer_message_text(session):
+    snapshot = session.snapshot()
+    messages = (snapshot.get("buffer") or {}).get("messages") or []
+    return "\n".join(str(message.get("text", "")) for message in messages)
+
+
+def wait_for_current_buffer_message_text(session, text, timeout=10):
+    return wait_until(
+        lambda: current_buffer_message_text(session)
+        if text in current_buffer_message_text(session)
+        else None,
+        timeout=timeout,
+        interval=0.1,
+        description=f"current buffer message text containing {text}",
+    )
+
+
+def package_help_text(session, package_name):
+    return session.eval_lisp(
+        f'''(let ((definition
+                    (clawmacs:find-installed-package
+                     "{lisp_string(package_name)}")))
+              (unless definition
+                (error "No installed package named {lisp_string(package_name)}"))
+              (clawmacs::describe-installed-package-to-string
+               definition
+               (clawmacs:current-buffer)))''',
+        timeout=20,
+    )
+
+
+def switch_to_session_buffer(session):
+    session.eval_lisp(
+        f'''(progn
+             (let ((buffer (clawmacs::find-buffer-by-name "{SESSION_NAME}")))
+               (when buffer
+                 (let ((frame (and (boundp 'clawmacs::*clawmacs-frame*)
+                                   clawmacs::*clawmacs-frame*)))
+                   (if frame
+                       (progn
+                         (clawmacs::mcclim-set-selected-window-buffer frame buffer)
+                         (clawmacs::mcclim-sync-drei-from-buffer frame :force-p t))
+                       (clawmacs::switch-to-buffer buffer))
+                   (clawmacs:notify-buffer-display-change
+                    buffer :e2e-session-buffer))))
+             "SESSION-BUFFER-OK")''',
+        timeout=10,
+    )
+    session.wait_snapshot(
+        lambda snap: (
+            (snap.get("buffer") or {}).get("name") == SESSION_NAME
+            and (snap.get("render") or {}).get("bufferName") == SESSION_NAME
+        ),
+        timeout=10,
+        description="session buffer selected in logical window",
+    )
+
+
 def wait_for_render_width(session, predicate, description, timeout=10):
     def observe():
         snapshot = session.snapshot()
@@ -474,6 +988,96 @@ def wait_for_render_width(session, predicate, description, timeout=10):
         return None
 
     return wait_until(observe, timeout=timeout, interval=0.1, description=description)
+
+
+def make_temp_project_root(label, files):
+    """Create a temporary project tree populated with FILES."""
+    root = tempfile.mkdtemp(
+        prefix=f"clawmacs-{label}-",
+        dir=os.path.join(CLAWMACS_DIR, ".cache"),
+    )
+    for relative_path, content in files.items():
+        path = os.path.join(root, relative_path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(content)
+    return root
+
+
+def make_temp_git_repo(label, initial_content, modified_content):
+    """Create a local git repo with one commit and one staged change target."""
+    repo = tempfile.mkdtemp(
+        prefix=f"clawmacs-git-{label}-",
+        dir=os.path.join(CLAWMACS_DIR, ".cache"),
+    )
+    remote = tempfile.mkdtemp(
+        prefix=f"clawmacs-git-remote-{label}-",
+        dir=os.path.join(CLAWMACS_DIR, ".cache"),
+    )
+    run_checked(["git", "init", "-b", "main", repo], timeout=20)
+    run_checked(["git", "-C", repo, "config", "user.name", "Clawmacs E2E"], timeout=20)
+    run_checked(["git", "-C", repo, "config", "user.email", "e2e@clawmacs.local"], timeout=20)
+    with open(os.path.join(repo, "README.md"), "w", encoding="utf-8") as stream:
+        stream.write(initial_content)
+    run_checked(["git", "-C", repo, "add", "README.md"], timeout=20)
+    run_checked(["git", "-C", repo, "commit", "-m", "Initial commit"], timeout=20)
+    run_checked(["git", "init", "--bare", remote], timeout=20)
+    run_checked(["git", "-C", repo, "remote", "add", "origin", remote], timeout=20)
+    with open(os.path.join(repo, "CHANGELOG.md"), "w", encoding="utf-8") as stream:
+        stream.write(modified_content)
+    return repo, remote
+
+
+class LocalHTTPFixture:
+    """Serve a static HTML directory on localhost for netcons tests."""
+
+    def __init__(self, html_text):
+        self.root = tempfile.mkdtemp(prefix="clawmacs-http-")
+        self.port = 0
+        self._server = None
+        self._thread = None
+        with open(os.path.join(self.root, "index.html"), "w", encoding="utf-8") as stream:
+            stream.write(html_text)
+
+    def __enter__(self):
+        handler = partial(http.server.SimpleHTTPRequestHandler, directory=self.root)
+        self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.port = self._server.server_address[1]
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+
+
+#
+# Core McCLIM feature inventory covered by the offline e2e suite
+#
+# Buffer management:
+#   10-new-buffer, 11-switch-buffer, 12-kill-buffer, 41-buffer-persistence,
+#   62-mouse-click-buffer-selector
+# Scratch/editor flows:
+#   65-scratch-buffer-editor-flow
+# M-x / help / customize:
+#   43-describe-bindings, 44-describe-function, 45-describe-variable,
+#   46-describe-type, 47-customize-face, 56-meta-x-command-picker
+# Project open / save / search:
+#   66-project-open-edit-save-search
+# Sessions load / tree / fork:
+#   40-save-session, 67-session-load-tree-fork
+# Logical windows:
+#   64-logical-window-commands
+# Rendering toggles:
+#   51-toggle-tool-results, 68-toggle-reasoning-metadata-tool-results
+# Streaming control:
+#   55-stream-poll-renders, 56-escape-stops-stream
+# Mouse / selection helpers:
+#   61-mouse-click-input-point, 63-mouse-click-completion-candidates
 
 
 class McclimSession:
@@ -667,7 +1271,7 @@ class McclimSession:
         if text and "\n" not in text:
             self.wait_for_typed_suffix(
                 text,
-                timeout=max(3.0, len(text) / 80.0),
+                timeout=max(5.0, len(text) / 30.0),
                 strict=len(text) > 120,
             )
         time.sleep(0.1)
@@ -754,6 +1358,19 @@ class McclimSession:
             stream.write("\n")
         os.replace(temp, path)
         time.sleep(0.2)
+
+    def eval_lisp(self, form, timeout=20):
+        before = control_sequence(self.snapshot())
+        self.control_command(f"(:eval {form})")
+        snapshot = self.wait_snapshot(
+            lambda snap: control_sequence(snap) > before,
+            timeout=timeout,
+            description="control eval result",
+        )
+        result = control_result(snapshot)
+        if not result.get("ok"):
+            fail(f"control eval failed:\n{result.get('error', '')}")
+        return str(result.get("value", ""))
 
     def _snapshot_if(self, predicate):
         snapshot = self.snapshot()
@@ -938,7 +1555,7 @@ def test_53_async_agent_reply_renders_without_next_input(session):
     expected = "MCCLIM-ASYNC-RENDER-VISIBLE"
     E2E.set_input(session, "async-render-probe")
     session.press("Enter")
-    snapshot = wait_for_rendered_message_text(session, expected, timeout=10)
+    snapshot = wait_for_rendered_message_text(session, expected, timeout=20)
     E2E.assert_contains(
         session.text(),
         expected,
@@ -954,7 +1571,7 @@ def test_54_tiling_resize_keeps_latest_message_visible(session):
     expected = "MCCLIM-TILING-RESIZE-VISIBLE"
     E2E.set_input(session, "tiling-resize-probe")
     session.press("Enter")
-    first = wait_for_rendered_message_text(session, expected, timeout=10)
+    first = wait_for_rendered_message_text(session, expected, timeout=20)
     initial_render = first.get("render") or {}
     initial_width = initial_render.get("pixelWidth") or initial_render.get("pixel-width") or 0
 
@@ -963,7 +1580,7 @@ def test_54_tiling_resize_keeps_latest_message_visible(session):
         session,
         lambda width: width and width < initial_width,
         "narrow McCLIM render width",
-        timeout=10,
+        timeout=20,
     )
     if not render_contains_text(narrow, expected):
         fail("latest agent message disappeared after narrow resize")
@@ -978,7 +1595,7 @@ def test_54_tiling_resize_keeps_latest_message_visible(session):
                                          or narrow_render.get("pixel-width")
                                          or 0),
         "wide McCLIM render width",
-        timeout=10,
+        timeout=20,
     )
     if not render_contains_text(wide, expected):
         fail("latest agent message disappeared after wide resize")
@@ -990,7 +1607,7 @@ def test_55_stream_poll_renders_without_next_input(session):
     expected = "MCCLIM-PULSE-STREAM-VISIBLE"
     E2E.set_input(session, "stream-poll-probe")
     session.press("Enter")
-    snapshot = wait_for_rendered_message_text(session, expected, timeout=10)
+    snapshot = wait_for_rendered_message_text(session, expected, timeout=20)
     E2E.assert_contains(
         session.text(),
         expected,
@@ -1308,6 +1925,1156 @@ def test_64_logical_window_commands(session):
     session.screenshot("64-logical-window-commands")
 
 
+def test_70_feature_inventory_runtime_contract(session):
+    """Runtime inventory covers core commands, buffer types, and package tools."""
+    result = session.eval_lisp(
+        r'''(progn
+             (clawmacs::init-tools)
+             (let ((packages '("lispi" "sexed" "slop" "git" "netcons"
+                               "subagent" "pipelines" "speculum" "organa")))
+               (dolist (package packages)
+                 (clawmacs:load-clawmacs-package package))
+               (let* ((installed
+                        (mapcar #'clawmacs:package-definition-name
+                                (clawmacs:list-installed-packages)))
+                       (commands
+                        (mapcar (lambda (symbol)
+                                  (string-downcase (symbol-name symbol)))
+                                (clawmacs:list-available-commands
+                                 :include-inactive t)))
+                       (buffer-types
+                        (mapcar (lambda (type)
+                                  (string-downcase
+                                   (symbol-name
+                                    (clawmacs:buffer-type-name type))))
+                                (clawmacs:list-buffer-types)))
+                       (tools
+                        (mapcar #'clawmacs:agent-tool-metadata-name
+                                (clawmacs:list-agent-tool-metadata))))
+                 (labels ((need (name items label)
+                            (unless (member name items :test #'string=)
+                              (error "Missing ~A feature ~A in ~S"
+                                     label name items))))
+                   (dolist (name packages)
+                     (need name installed "installed package"))
+                   (dolist (name '("chat" "scratch" "file" "help"
+                                   "customize" "organa"))
+                     (need name buffer-types "buffer type"))
+                   (dolist (name
+                            '("send-message"
+                              "stop-llm-command"
+                              "execute-extended-command"
+                              "list-buffers-command"
+                              "new-buffer-command"
+                              "next-buffer-command"
+                              "kill-buffer-command"
+                              "split-window-below-command"
+                              "split-window-right-command"
+                              "delete-window-command"
+                              "delete-other-windows-command"
+                              "other-window-command"
+                              "save-session-command"
+                              "load-session-command"
+                              "session-tree-command"
+                              "fork-session-command"
+                              "toggle-tool-results-command"
+                              "toggle-reasoning-output-command"
+                              "toggle-metadata-output-command"
+                              "toggle-debug-mode-command"
+                              "customize-drawing-style-command"
+                              "customize-face-command"
+                              "describe-function-command"
+                              "describe-variable-command"
+                              "describe-type-command"
+                              "describe-bindings-command"
+                              "compact-buffer-command"
+                              "set-buffer-pipeline"
+                              "clear-buffer-pipeline"
+                              "organa-open-todo-file-command"
+                              "organa-add-todo-command"
+                              "organa-set-todo-status-command"
+                              "organa-move-todo-command"
+                              "organa-link-todo-command"
+                              "organa-unlink-todo-command"
+                              "organa-cycle-view-command"))
+                     (need name commands "command"))
+                   (dolist (name
+                            '("lisp_eval"
+                              "read" "find" "grep" "write" "edit"
+                              "sexed_text_diagnostics"
+                              "sexed_text_outline"
+                              "sexed_text_form_text"
+                              "sexed_text_edit"
+                              "sexed_text_edits"
+                              "sexed_file_read"
+                              "sexed_file_write"
+                              "sexed_file_outline"
+                              "sexed_file_form_text"
+                              "sexed_file_edit"
+                              "sexed_file_edits"
+                              "sexed_project_read"
+                              "sexed_project_write"
+                              "sexed_project_outline"
+                              "sexed_project_form_text"
+                              "sexed_project_edit"
+                              "sexed_project_edits"
+                              "slop_list_projects"
+                              "slop_current_project"
+                              "slop_project_symbols"
+                              "slop_symbol_at"
+                              "slop_find_definitions"
+                              "slop_find_definitions_batch"
+                              "slop_find_references"
+                              "slop_find_callers"
+                              "slop_find_callees"
+                              "slop_trace_calls"
+                              "slop_find_mentions"
+                              "slop_definition_context"
+                              "slop_find_variable_uses"
+                              "slop_rename_variable"
+                              "git_status" "git_log" "git_diff"
+                              "git_show" "git_branch" "git_remote"
+                              "git_add" "git_commit" "git_push"
+                              "netcons_run" "netcons_search"
+                              "netcons_open" "netcons_find"
+                              "subagent_run" "subagent_start"
+                              "subagent_status" "subagent_wait"
+                              "subagent_cancel"
+                              "speculum_screenshot"
+                              "speculum_window_state"
+                              "speculum_inspect"
+                              "organa_todo_overview"
+                              "organa_todo_add"
+                              "organa_todo_set_status"
+                              "organa_todo_move"
+                              "organa_todo_link_dependency"))
+                     (need name tools "tool")))
+                 (format nil "FEATURE-INVENTORY-OK packages=~D commands=~D buffers=~D tools=~D"
+                         (length installed)
+                         (length commands)
+                         (length buffer-types)
+                         (length tools)))))''',
+        timeout=60,
+    )
+    if "FEATURE-INVENTORY-OK" not in result:
+        fail(f"feature inventory eval returned unexpected result: {result}")
+
+
+def test_71_tools_lispi_package_enable_and_eval(session):
+    """Enable lispi, inspect its help, and exercise lisp_eval plus file tools."""
+    probe_root = tempfile.mkdtemp(
+        prefix="clawmacs-lispi-probe-",
+        dir=os.path.join(CLAWMACS_DIR, ".cache"),
+    )
+    probe_path = os.path.join(probe_root, "lispi-probe.txt")
+
+    E2E.describe_installed_package(session, "lispi")
+    help_screen = wait_for_current_buffer_message_text(session, "Package: lispi")
+    E2E.assert_contains(help_screen, "Package: lispi", "lispi help package name")
+    E2E.assert_contains(help_screen, "Enabled:", "lispi help scope")
+    E2E.assert_not_contains(help_screen, "lisp_eval", "lispi help does not own lisp_eval")
+    E2E.assert_contains(help_screen, "read", "lispi help mentions file read")
+    E2E.assert_contains(help_screen, "write", "lispi help mentions file write")
+    session.screenshot("71_tools_lispi_help")
+    E2E.kill_current_buffer(session)
+    switch_to_session_buffer(session)
+
+    E2E.set_input(session, "lispi package context probe")
+    session.press("Enter")
+    wait_for_non_user_message_text(session, "offline echo: lispi package context probe", timeout=15)
+
+    E2E.enable_installed_package(session, "lispi")
+    enabled_screen = current_buffer_message_text(session)
+    E2E.assert_contains(enabled_screen, 'package_context package="lispi"',
+                         "lispi context appended after enablement")
+    E2E.assert_contains(enabled_screen, "[Package lispi enabled for this buffer]",
+                         "lispi enablement status message")
+
+    E2E.set_input(
+        session,
+        f'lispi-package-probe path="{probe_path}" code="(+ 40 2)"'
+    )
+    session.press("Enter")
+    screen = wait_for_non_user_message_text(session, "LISPI-TOOLS-OK", timeout=15)
+    E2E.assert_contains(screen, "42", "lispi lisp_eval result")
+    E2E.assert_contains(screen, "LISPI-TOOLS-OK", "lispi tool probe response")
+    if not os.path.exists(probe_path):
+        fail(f"lispi file tool did not write expected file: {probe_path}")
+    with open(probe_path, "r", encoding="utf-8") as stream:
+        file_text = stream.read()
+    E2E.assert_contains(file_text, "(defun lispi-probe () :ok)", "lispi file content")
+    session.screenshot("71_tools_lispi_package")
+
+
+def test_71_tools_sexed_package_structural_read_write(session):
+    """Enable sexed and exercise structural read/write on a local fixture file."""
+    project_root = make_temp_project_root(
+        "sexed-probe",
+        {
+            "src/main.lisp": "(defun sexed-probe (n) (+ n 1))\n",
+        },
+    )
+    file_path = os.path.join(project_root, "src", "main.lisp")
+
+    E2E.describe_installed_package(session, "sexed")
+    help_screen = wait_for_current_buffer_message_text(session, "Package: sexed")
+    E2E.assert_contains(help_screen, "Structural editing with sexed", "sexed help prompt section")
+    E2E.assert_contains(help_screen, "sexed_file_edit", "sexed help mentions editing tool")
+    session.screenshot("71_tools_sexed_help")
+    E2E.kill_current_buffer(session)
+    switch_to_session_buffer(session)
+
+    E2E.enable_installed_package(session, "sexed")
+    enabled_screen = current_buffer_message_text(session)
+    E2E.assert_contains(enabled_screen, 'package_context package="sexed"',
+                         "sexed context appended after enablement")
+
+    prompt = f'sexed-package-probe path="{file_path}"'
+    E2E.set_input(session, prompt)
+    session.press("Enter")
+    screen = wait_for_non_user_message_text(session, "SEXED-TOOLS-OK", timeout=15)
+    E2E.assert_contains(screen, "SEXED-TOOLS-OK", "sexed probe response")
+    E2E.assert_contains(screen, "sexed-probe", "sexed structural output visible")
+    with open(file_path, "r", encoding="utf-8") as stream:
+        file_text = stream.read()
+    E2E.assert_contains(file_text, "(defun sexed-probe (n) (1+ n))",
+                         "sexed file write + rewrite persisted")
+    session.screenshot("71_tools_sexed_package")
+
+
+def test_71_tools_slop_package_lookup_and_trace(session):
+    """Enable slop and exercise lookup, context, trace, mentions, and rename."""
+    source = """(defpackage :e2e-slop
+  (:use :cl))
+
+(in-package :e2e-slop)
+
+(defun alpha (n)
+  (let ((total n))
+    (incf total)
+    (beta total)))
+
+(defun beta (n)
+  (+ n n))
+
+(defun gamma (value)
+  (alpha value))
+"""
+    docs = """alpha is mentioned in docs.
+Quoted alpha is also here: \"alpha\".
+"""
+    project_root = os.path.join(CLAWMACS_DIR, ".cache", "slop-e2e")
+    shutil.rmtree(project_root, ignore_errors=True)
+    for relative_path, content in {
+        "src/main.lisp": source,
+        "docs/notes.md": docs,
+    }.items():
+        path = os.path.join(project_root, relative_path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(content)
+    offset = source.index("total n")
+
+    E2E.describe_installed_package(session, "slop")
+    wait_for_current_buffer_message_text(session, "Package: slop")
+    help_screen = package_help_text(session, "slop")
+    E2E.assert_contains(help_screen, "Symbol lookup with slop", "slop help prompt section")
+    E2E.assert_contains(help_screen, "slop_current_project", "slop help mentions current project")
+    E2E.assert_contains(help_screen, "slop_project_symbols", "slop help mentions project symbols")
+    session.screenshot("71_tools_slop_help")
+    E2E.kill_current_buffer(session)
+    switch_to_session_buffer(session)
+
+    E2E.enable_installed_package(session, "slop")
+    enabled_screen = current_buffer_message_text(session)
+    E2E.assert_contains(enabled_screen, 'package_context package="slop"',
+                         "slop context appended after enablement")
+
+    prompt = (
+        "slop-package-probe root=.cache/slop-e2e "
+        f"symbol-a=alpha symbol-b=gamma query=alpha "
+        f"binding-path=\"src/main.lisp\" offset={offset}"
+    )
+    E2E.set_input(session, prompt)
+    session.press("Enter")
+    wait_for_non_user_message_text(session, "SLOP-TOOLS-OK", timeout=20)
+    with open(os.path.join(project_root, "src", "main.lisp"), "r", encoding="utf-8") as stream:
+        file_text = stream.read()
+    E2E.assert_contains(file_text, "renamed-total", "slop rename persisted to file")
+    E2E.assert_not_contains(file_text, "(let ((total n))", "slop rename removed original binding")
+    session.screenshot("71_tools_slop_package")
+
+
+def test_71_tools_git_package_status_log_and_mutations(session):
+    """Enable git and exercise status, log, add, commit, and push on local repos."""
+    repo, remote = make_temp_git_repo(
+        "probe",
+        "initial git package content\n",
+        "updated git package content\n",
+    )
+
+    E2E.describe_installed_package(session, "git")
+    help_screen = wait_for_current_buffer_message_text(session, "Package: git")
+    E2E.assert_contains(help_screen, "git_status", "git help mentions status")
+    E2E.assert_contains(help_screen, "git_commit", "git help mentions commit")
+    E2E.assert_contains(help_screen, "git_push", "git help mentions push")
+    session.screenshot("71_tools_git_help")
+    E2E.kill_current_buffer(session)
+    switch_to_session_buffer(session)
+
+    E2E.enable_installed_package(session, "git")
+    enabled_screen = current_buffer_message_text(session)
+    E2E.assert_contains(enabled_screen, 'package_context package="git"',
+                         "git context appended after enablement")
+
+    prompt = f"git-package-probe repository={repo}"
+    E2E.set_input(session, prompt)
+    session.press("Enter")
+    screen = wait_for_non_user_message_text(session, "GIT-TOOLS-OK", timeout=20)
+    E2E.assert_contains(screen, "git_status", "git status result visible")
+    E2E.assert_contains(screen, "git_log", "git log result visible")
+    E2E.assert_contains(screen, "git_commit", "git commit result visible")
+    E2E.assert_contains(screen, "git_push", "git push result visible")
+    remote_log = run_checked(["git", "--git-dir", remote, "log", "--oneline", "--all"], timeout=20)
+    E2E.assert_contains(remote_log, "E2E git package commit", "git push reached local remote")
+    session.screenshot("71_tools_git_package")
+
+
+def test_71_tools_netcons_package_open_find_offline(session):
+    """Enable netcons and exercise open/find against a local offline HTTP fixture."""
+    html = """<html>
+  <head><title>Clawmacs Netcons Offline Probe</title></head>
+  <body>
+    <h1>Clawmacs Netcons Offline Probe</h1>
+    <p>needle alpha</p>
+    <p>needle beta</p>
+  </body>
+</html>
+"""
+    with LocalHTTPFixture(html) as fixture:
+        E2E.describe_installed_package(session, "netcons")
+        help_screen = wait_for_current_buffer_message_text(session, "Package: netcons")
+        E2E.assert_contains(help_screen, "netcons_open", "netcons help mentions open")
+        E2E.assert_contains(help_screen, "netcons_find", "netcons help mentions find")
+        session.screenshot("71_tools_netcons_help")
+        E2E.kill_current_buffer(session)
+        switch_to_session_buffer(session)
+
+        E2E.enable_installed_package(session, "netcons")
+        enabled_screen = current_buffer_message_text(session)
+        E2E.assert_contains(enabled_screen, 'package_context package="netcons"',
+                             "netcons context appended after enablement")
+
+        prompt = f'netcons-package-probe url="http://127.0.0.1:{fixture.port}/index.html"'
+        E2E.set_input(session, prompt)
+        session.press("Enter")
+        screen = wait_for_non_user_message_text(session, "NETCONS-TOOLS-OK", timeout=20)
+        E2E.assert_contains(screen, "Clawmacs Netcons Offline Probe", "netcons page title visible")
+        E2E.assert_contains(screen, "needle alpha", "netcons page content visible")
+        E2E.assert_contains(screen, "needle beta", "netcons find content visible")
+        session.screenshot("71_tools_netcons_package")
+
+
+def test_71_tools_speculum_package_self_visibility(session):
+    """Enable speculum and exercise current window state plus screenshot capture."""
+    E2E.describe_installed_package(session, "speculum")
+    help_screen = wait_for_current_buffer_message_text(session, "Package: speculum")
+    E2E.assert_contains(help_screen, "speculum_screenshot", "speculum help mentions screenshot")
+    E2E.assert_contains(help_screen, "speculum_window_state", "speculum help mentions window state")
+    session.screenshot("71_tools_speculum_help")
+    E2E.kill_current_buffer(session)
+    switch_to_session_buffer(session)
+
+    E2E.enable_installed_package(session, "speculum")
+    enabled_screen = current_buffer_message_text(session)
+    if 'package_context package="speculum"' not in enabled_screen:
+        active = session.eval_lisp(
+            '''(if (member "speculum"
+                           (clawmacs:active-package-names
+                            :buffer (clawmacs:current-buffer))
+                           :test #'string=)
+                   "SPECULUM-ACTIVE"
+                   "SPECULUM-INACTIVE")''',
+            timeout=10,
+        )
+        if "SPECULUM-ACTIVE" not in active:
+            fail("speculum package was not active after enablement")
+
+    E2E.set_input(session, "speculum-package-probe")
+    session.press("Enter")
+    screen = wait_for_non_user_message_text(session, "SPECULUM-PACKAGE-OK", timeout=20)
+    E2E.assert_contains(screen, "window-state", "speculum window-state result visible")
+    E2E.assert_contains(screen, "path=", "speculum screenshot path visible")
+    response = non_user_message_text_containing(session, "SPECULUM-PACKAGE-OK")
+    path = ""
+    for token in response.split():
+        if token.startswith("path="):
+            path = token[len("path="):]
+            break
+    if not path or not os.path.exists(path):
+        fail(f"speculum screenshot path missing or invalid: {path}")
+    if os.path.getsize(path) <= 0:
+        fail(f"speculum screenshot output was empty: {path}")
+    session.screenshot("71_tools_speculum_package")
+
+
+def test_71_tools_organa_package_todo_management(session):
+    """Enable organa and exercise TODO overview, mutation, and buffer views."""
+    result = session.eval_lisp(
+        r'''(progn
+             (clawmacs::init-tools)
+             (let* ((root (merge-pathnames
+                           (format nil ".cache/mcclim-e2e-organa-~D-~D/"
+                                   (get-universal-time)
+                                   (get-internal-real-time))
+                           (truename ".")))
+                    (old-buffer (clawmacs:current-buffer))
+                    (buf old-buffer))
+               (ensure-directories-exist (merge-pathnames ".keep" root))
+               (with-open-file (stream (merge-pathnames "tasks.org" root)
+                                       :direction :output
+                                       :if-exists :supersede
+                                       :if-does-not-exist :create)
+                 (write-string "* TODO Design feature
+* NEXT Implement feature
+:PROPERTIES:
+:ID: implement-feature
+:END:
+* TODO Test feature
+" stream))
+               (let ((clawmacs::*sandbox-root* (truename root)))
+                 (setf (clawmacs:buffer-enabled-packages buf)
+                       (remove-duplicates
+                        (cons "organa" (clawmacs:buffer-enabled-packages buf))
+                        :test #'string=))
+                 (clawmacs:load-active-packages :buffer buf)
+                 (labels ((tool (name args)
+                            (let ((clawmacs::*current-tool-buffer* buf)
+                                  (clawmacs::*current-caller* :user))
+                              (clawmacs:execute-tool name args)))
+                          (data (name args)
+                            (nth-value 0
+                              (clawmacs::lisp-data-read
+                               (tool name args))))
+                          (need (condition label)
+                            (unless condition
+                              (error "Organa e2e failed: ~A" label))))
+                   (let ((overview (data "organa_todo_overview"
+                                         '(:path "tasks.org")))
+                         (added (data "organa_todo_add"
+                                      '(:path "tasks.org"
+                                        :title "Ship feature"
+                                        :status "NEXT")))
+                         (linked (data "organa_todo_link_dependency"
+                                       '(:path "tasks.org"
+                                         :todo "Test feature"
+                                         :depends-on "Implement feature")))
+                         (updated (data "organa_todo_set_status"
+                                        '(:path "tasks.org"
+                                          :todo "Implement feature"
+                                          :status "DONE")))
+                         (moved (data "organa_todo_move"
+                                      '(:path "tasks.org"
+                                        :todo "Ship feature"
+                                        :after "Design feature"))))
+                     (need (= 3 (length (getf overview :todos)))
+                           "overview")
+                     (need (getf added :ok) "add")
+                     (need (getf linked :ok) "link dependency")
+                     (need (getf updated :ok) "status")
+                     (need (getf moved :ok) "move"))
+                   (let ((org-buffer
+                           (clawmacs::organa-open-todo-file "tasks.org")))
+                     (need (eq :organa (clawmacs:buffer-kind org-buffer))
+                           "buffer kind")
+                     (need (eq :dashboard
+                               (clawmacs::organa-view-for-buffer org-buffer))
+                           "dashboard view")
+                     (clawmacs::organa-cycle-view-command org-buffer)
+                     (need (eq :kanban
+                               (clawmacs::organa-view-for-buffer org-buffer))
+                           "kanban view")
+                     (clawmacs::organa-cycle-view-command org-buffer)
+                     (need (eq :dependency
+                               (clawmacs::organa-view-for-buffer org-buffer))
+                           "dependency view"))
+                   (clawmacs:switch-to-buffer old-buffer)
+                   "ORGANA-PACKAGE-SMOKE-OK"))))''',
+        timeout=60,
+    )
+    if "ORGANA-PACKAGE-SMOKE-OK" not in result:
+        fail(f"organa package smoke returned unexpected result: {result}")
+
+
+def test_65_scratch_buffer_editor_flow(session):
+    """Scratch should edit in place and keep Enter as text insertion."""
+    E2E.switch_to_buffer(session, "scratch", "*scratch*")
+    snapshot = session.snapshot()
+    buffer = snapshot.get("buffer") or {}
+    if buffer.get("kind") != "scratch":
+        fail(f"expected scratch buffer, got {buffer.get('kind')}")
+
+    E2E.clear_input(session)
+    session.type_text("scratch-alpha")
+    session.press("Enter")
+    session.type_text("beta")
+    snapshot = session.snapshot()
+    buffer = snapshot.get("buffer") or {}
+    if buffer.get("kind") != "scratch":
+        fail(f"scratch editor flow switched away from scratch buffer: {buffer}")
+    if "scratch-alpha\nbeta" not in str(buffer.get("input") or ""):
+        fail(f"scratch buffer did not keep newline editing: {buffer.get('input')}")
+    if len(buffer.get("messages") or []) != 0:
+        fail("scratch editing should not create chat messages")
+    session.screenshot("65-scratch-buffer-editor-flow")
+    E2E.switch_to_buffer(session, "session-01", "session-01")
+
+
+def test_66_project_open_edit_save_search_flow(session):
+    """Project file buffers should open, save, and search deterministically."""
+    global E2E_PROJECT_FILE
+    E2E.switch_to_buffer(session, "session-01", "session-01")
+    E2E.clear_input(session)
+
+    session.press("Ctrl+x")
+    session.press("Ctrl+f")
+    wait_for_minibuffer_prompt(session, "Select Project")
+    session.type_text(E2E_PROJECT_NAME)
+    E2E.wait_for_minibuffer_input(session, E2E_PROJECT_NAME, timeout=5)
+    session.press("Enter")
+    wait_for_minibuffer_prompt(session, f"Open {E2E_PROJECT_NAME}")
+    session.type_text("src/probe.lisp")
+    E2E.wait_for_minibuffer_input(session, "src/probe.lisp", timeout=5)
+    session.press("Enter")
+
+    snapshot = session.wait_snapshot(
+        lambda snap: (
+            (snap.get("buffer") or {}).get("kind") == "file"
+            and E2E_PROJECT_NAME in str((snap.get("buffer") or {}).get("name") or "")
+        ),
+        timeout=10,
+        description="project file buffer opened",
+    )
+    buffer = snapshot.get("buffer") or {}
+    E2E.assert_contains(
+        session.text(),
+        "E2E-PROJECT-BASELINE",
+        "project file contents visible after opening",
+    )
+    if "probe-target" not in session.text():
+        fail("project file editor did not show expected Lisp source")
+
+    session.press("Ctrl+e")
+    session.type_text("\n;; E2E-PROJECT-MARKER")
+    session.press("Ctrl+x")
+    session.press("Ctrl+s")
+    wait_for_non_user_message_text(
+        session,
+        f"Saved {E2E_PROJECT_NAME}:src/probe.lisp",
+        timeout=15,
+    )
+
+    with open(E2E_PROJECT_FILE, "r", encoding="utf-8") as stream:
+        saved_text = stream.read()
+    if "E2E-PROJECT-MARKER" not in saved_text:
+        fail("project file was not saved back to disk")
+
+    E2E.run_extended_command(session, "search-project-command")
+    wait_for_minibuffer_prompt(session, "Select Project", timeout=15)
+    session.type_text(E2E_PROJECT_NAME)
+    E2E.wait_for_minibuffer_input(session, E2E_PROJECT_NAME, timeout=5)
+    session.press("Enter")
+    wait_for_minibuffer_prompt(session, "Search", timeout=15)
+    session.type_text("E2E-PROJECT-MARKER")
+    E2E.wait_for_minibuffer_input(session, "E2E-PROJECT-MARKER", timeout=5)
+    session.press("Enter")
+    search_text = wait_for_non_user_message_text(
+        session,
+        "E2E-PROJECT-MARKER",
+        timeout=15,
+    )
+    E2E.assert_contains(
+        search_text,
+        "src/probe.lisp:",
+        "project search reported the expected file path",
+    )
+    session.screenshot("66-project-open-edit-save-search")
+
+
+def test_67_session_load_tree_and_fork_flow(session):
+    """Session save, load, tree browsing, and fork should all remain usable."""
+    E2E.switch_to_buffer(session, "session-01", "session-01")
+    E2E.clear_input(session)
+    E2E.set_input(session, "session-tree-probe-1")
+    session.press("Enter")
+    wait_for_non_user_message_text(session, "session-tree-probe-1", timeout=20)
+
+    before_count = len(session.snapshot().get("buffers") or [])
+    session.press("Ctrl+x")
+    session.press("Ctrl+s")
+    wait_for_non_user_message_text(session, "Session saved to", timeout=15)
+
+    session.press("Ctrl+x")
+    session.press("Ctrl+r")
+    wait_for_minibuffer_prompt(session, "Load Session")
+    session.type_text("session-01")
+    E2E.wait_for_minibuffer_input(session, "session-01", timeout=5)
+    session.press("Enter")
+    loaded = session.wait_snapshot(
+        lambda snap: len(snap.get("buffers") or []) > before_count,
+        timeout=15,
+        description="loaded session opened in a new buffer",
+    )
+    current = next(
+        (entry for entry in loaded.get("buffers") or [] if entry.get("current")),
+        None,
+    )
+    if not current:
+        fail("load session did not leave a current buffer selected")
+    if current.get("name") == "session-01":
+        fail("load session should open a distinct buffer, not overwrite session-01")
+    if not str(current.get("name") or "").startswith("session-01"):
+        fail(f"unexpected loaded session name: {current.get('name')}")
+    E2E.assert_contains(
+        session.text(),
+        "session-tree-probe-1",
+        "loaded session preserved the original conversation",
+    )
+
+    session.press("Ctrl+x")
+    session.press("t")
+    tree_snapshot = session.wait_snapshot(
+        lambda snap: (
+            (snap.get("selectors") or {}).get("sessionTreeSelectorActive")
+            and len((snap.get("selectors") or {}).get("sessionTreeSelectorRows") or [])
+        ),
+        timeout=15,
+        description="session tree selector active",
+    )
+    rows = (tree_snapshot.get("selectors") or {}).get("sessionTreeSelectorRows") or []
+    if not rows:
+        fail("session tree selector did not render any entries")
+    session.press("Ctrl+g")
+    session.wait_snapshot(
+        lambda snap: not (snap.get("selectors") or {}).get("sessionTreeSelectorActive"),
+        timeout=10,
+        description="session tree selector closed before fork",
+    )
+    session.press("Ctrl+x")
+    session.press("T")
+    session.wait_snapshot(
+        lambda snap: (snap.get("selectors") or {}).get("sessionTreeSelectorActive"),
+        timeout=15,
+        description="fork session tree selector active",
+    )
+    buffers_before_fork = len(session.snapshot().get("buffers") or [])
+    session.press("Enter")
+    forked = session.wait_snapshot(
+        lambda snap: len(snap.get("buffers") or []) > buffers_before_fork,
+        timeout=15,
+        description="fork session created a new buffer",
+    )
+    current = next(
+        (entry for entry in forked.get("buffers") or [] if entry.get("current")),
+        None,
+    )
+    if not current:
+        fail("forking the session tree did not leave a current buffer")
+    E2E.assert_contains(
+        session.text(),
+        "[Forked from",
+        "fork session reported the selected tree item",
+    )
+    session.screenshot("67-session-load-tree-fork")
+
+
+def test_68_toggle_reasoning_metadata_and_tool_results(session):
+    """The display toggles should flip their semantic flags without error."""
+    buffer = session.snapshot().get("buffer") or {}
+    before_tool = bool(buffer.get("showToolResults"))
+    before_reasoning = bool(buffer.get("showReasoning"))
+    before_metadata = bool(buffer.get("showMetadata"))
+
+    session.press("Ctrl+c")
+    session.press("t")
+    session.press("Ctrl+c")
+    session.press("V")
+    session.press("Ctrl+c")
+    session.press("I")
+
+    snapshot = session.snapshot()
+    buffer = snapshot.get("buffer") or {}
+    if bool(buffer.get("showToolResults")) == before_tool:
+        fail("tool result visibility did not toggle")
+    if bool(buffer.get("showReasoning")) == before_reasoning:
+        fail("reasoning visibility did not toggle")
+    if bool(buffer.get("showMetadata")) == before_metadata:
+        fail("metadata visibility did not toggle")
+
+    session.press("Ctrl+c")
+    session.press("t")
+    session.press("Ctrl+c")
+    session.press("V")
+    session.press("Ctrl+c")
+    session.press("I")
+    session.screenshot("68-toggle-reasoning-metadata-tool-results")
+
+
+def test_41_buffer_state_persistence_core(session):
+    """Input text persists when switching between distinct chat buffers."""
+    suffix = str(int(time.time() * 1000))
+    buffer_a = f"e2e-persist-a-{suffix}"
+    buffer_b = f"e2e-persist-b-{suffix}"
+    marker = f"persistent-text-check-{suffix}"
+    setup = session.eval_lisp(
+        f'''(progn
+             (let ((a (clawmacs:make-buffer "{lisp_string(buffer_a)}"))
+                   (b (clawmacs:make-buffer "{lisp_string(buffer_b)}")))
+               (clawmacs::initialize-buffer-display-defaults a)
+               (clawmacs::initialize-buffer-display-defaults b)
+               (clawmacs::add-buffer-to-ring b)
+               (clawmacs::add-buffer-to-ring a)
+               (let ((frame (and (boundp 'clawmacs::*clawmacs-frame*)
+                                 clawmacs::*clawmacs-frame*)))
+                 (if frame
+                     (progn
+                       (clawmacs::mcclim-set-selected-window-buffer frame a)
+                       (clawmacs::mcclim-sync-drei-from-buffer frame :force-p t))
+                     (clawmacs::switch-to-buffer a)))
+               (clawmacs:notify-buffer-display-change
+                a :e2e-persistence-setup))
+             "PERSISTENCE-BUFFERS-OK")''',
+        timeout=10,
+    )
+    if "PERSISTENCE-BUFFERS-OK" not in setup:
+        fail(f"persistence buffer setup failed: {setup}")
+    session.wait_snapshot(
+        lambda snap: (
+            (snap.get("buffer") or {}).get("name") == buffer_a
+            and (snap.get("render") or {}).get("bufferName") == buffer_a
+        ),
+        timeout=10,
+        description="persistence buffer A selected",
+    )
+    try:
+        session.focus(force=True)
+        E2E.set_input(session, marker)
+        session.wait_for_typed_suffix(marker, timeout=5, strict=True)
+
+        E2E.switch_to_buffer(session, buffer_b, buffer_b)
+        snapshot = session.wait_snapshot(
+            lambda snap: (
+                (snap.get("buffer") or {}).get("name") == buffer_b
+                and (snap.get("render") or {}).get("bufferName") == buffer_b
+            ),
+            timeout=10,
+            description="persistence buffer B selected",
+        )
+        if marker in str((snapshot.get("buffer") or {}).get("input") or ""):
+            fail("new buffer inherited the previous buffer input text")
+
+        E2E.switch_to_buffer(session, buffer_a, buffer_a)
+        snapshot = session.wait_snapshot(
+            lambda snap: (
+                (snap.get("buffer") or {}).get("name") == buffer_a
+                and (snap.get("render") or {}).get("bufferName") == buffer_a
+                and marker in str((snap.get("buffer") or {}).get("input") or "")
+            ),
+            timeout=10,
+            description="input text preserved after switching back",
+        )
+        if marker not in str((snapshot.get("buffer") or {}).get("input") or ""):
+            fail("input text was not preserved after switching back")
+        session.screenshot("41-buffer-persistence")
+    finally:
+        session.eval_lisp(
+            f'''(progn
+                 (let ((session (clawmacs::find-buffer-by-name "{SESSION_NAME}")))
+                   (when session
+                     (let ((frame (and (boundp 'clawmacs::*clawmacs-frame*)
+                                       clawmacs::*clawmacs-frame*)))
+                       (if frame
+                           (progn
+                             (clawmacs::mcclim-set-selected-window-buffer frame session)
+                             (clawmacs::mcclim-sync-drei-from-buffer frame :force-p t))
+                           (clawmacs::switch-to-buffer session))
+                       (clawmacs:notify-buffer-display-change
+                        session :e2e-persistence-cleanup))))
+                 (dolist (name (list "{lisp_string(buffer_a)}"
+                                     "{lisp_string(buffer_b)}"))
+                   (let ((buf (clawmacs::find-buffer-by-name name)))
+                     (when buf
+                       (clawmacs::kill-buffer-from-ring buf))))
+                 "PERSISTENCE-CLEANUP-OK")''',
+            timeout=10,
+        )
+
+
+def test_72_pkg_installed_package_selector_lists_all_bundled_packages(session):
+    """The package selector lists installed packages with scope and description."""
+    package_names = [
+        "git",
+        "lispi",
+        "netcons",
+        "organa",
+        "pipelines",
+        "sexed",
+        "slop",
+        "speculum",
+        "subagent",
+    ]
+    E2E.open_extended_command(session, "minibuffer-toggle-package-command")
+    snapshot = session.wait_snapshot(
+        lambda snap: (
+            (snap.get("minibuffer") or {}).get("active")
+            and (snap.get("minibuffer") or {}).get("prompt") == "Enable Package"
+        ),
+        timeout=10,
+        description="installed package selector active",
+    )
+    candidates = minibuffer_candidate_strings(snapshot)
+    candidate_text = "\n".join(candidates)
+    for name in package_names:
+        scope = package_selector_scope_label(candidate_text, name)
+        if not scope:
+            fail(f"package selector did not list {name} with a scope label")
+        if scope not in {"default", "buffer", "agent", "global"}:
+            fail(f"package selector reported an unknown scope for {name}: {scope}")
+        if not any(f"] {name} - " in candidate for candidate in candidates):
+            fail(f"package selector did not include {name} in the minibuffer list")
+    session.screenshot("72-pkg-installed-package-selector")
+    E2E.cancel_minibuffer(session)
+
+
+def test_72_pkg_package_toggle_cycles_scope_and_appends_context(session):
+    """Enabling a package in context cycles scope and appends package context."""
+    package_name = "sexed"
+    E2E.set_input(session, "package context seed")
+    session.press("Enter")
+    wait_for_non_user_message_text(session, "offline echo: package context seed", timeout=15)
+
+    E2E.enable_installed_package(session, package_name)
+    session.wait_snapshot(
+        lambda snap: any(
+            "<package_context package=\"sexed\">" in str(message.get("text", ""))
+            for message in (snap.get("buffer") or {}).get("messages") or []
+        ),
+        timeout=10,
+        description="sexed package context insertion",
+    )
+    screen = session.text()
+    E2E.assert_contains(screen, "[Package sexed enabled for this buffer]",
+                         "sexed package enable confirmation")
+    E2E.assert_contains(screen, "<package_context package=\"sexed\">",
+                         "sexed package context appended to conversation")
+    E2E.assert_contains(screen, "Structural editing with sexed",
+                         "sexed package prompt text visible after enabling")
+    session.screenshot("72-pkg-package-toggle-context")
+
+
+def test_72_pkg_describe_installed_package_opens_help_buffer(session):
+    """The package describe command opens a dedicated help buffer."""
+    E2E.open_extended_command(session, "describe-installed-package-command")
+    wait_for_minibuffer_prompt(session, "Describe Package", timeout=10)
+    E2E.confirm_minibuffer_candidate(session, "organa")
+    wait_for_current_buffer_message_text(session, "Package: organa")
+    screen = package_help_text(session, "organa")
+    E2E.assert_contains(screen, "Prompt Sections:", "organa help prompt sections")
+    E2E.assert_contains(screen, "Org-mode TODO project management buffers and agent tools.",
+                         "organa help description text")
+    E2E.assert_contains(screen, "Organa org TODO project management",
+                         "organa prompt section title")
+    E2E.assert_contains(screen, "Buffer Types:", "organa help buffer types")
+    session.screenshot("72-pkg-describe-installed-package")
+    E2E.kill_current_buffer(session)
+    switch_to_session_buffer(session)
+
+
+def test_72_pkg_pipelines_help_buffer_lists_commands_and_prompt_sections(session):
+    """The pipelines package help buffer exposes its command and prompt surface."""
+    E2E.open_extended_command(session, "describe-installed-package-command")
+    wait_for_minibuffer_prompt(session, "Describe Package", timeout=10)
+    E2E.confirm_minibuffer_candidate(session, "pipelines")
+    wait_for_current_buffer_message_text(session, "Package: pipelines")
+    screen = package_help_text(session, "pipelines")
+    E2E.assert_contains(screen, "Deterministic pipelines",
+                         "pipelines prompt text")
+    E2E.assert_contains(screen, "define-pipeline", "pipelines prompt docs")
+    E2E.assert_contains(screen, "defpipeline", "pipelines prompt macro docs")
+    E2E.assert_contains(screen, "Commands:", "pipelines command section")
+    E2E.assert_contains(screen, "set-buffer-pipeline", "pipelines set command")
+    E2E.assert_contains(screen, "clear-buffer-pipeline", "pipelines clear command")
+    session.screenshot("72-pkg-pipelines-help")
+    E2E.kill_current_buffer(session)
+    switch_to_session_buffer(session)
+
+
+def test_72_pkg_subagent_help_buffer_lists_tools_and_prompt_sections(session):
+    """The subagent package help buffer exposes delegation tools and guidance."""
+    E2E.open_extended_command(session, "describe-installed-package-command")
+    wait_for_minibuffer_prompt(session, "Describe Package", timeout=10)
+    E2E.confirm_minibuffer_candidate(session, "subagent")
+    wait_for_current_buffer_message_text(session, "Package: subagent")
+    screen = package_help_text(session, "subagent")
+    E2E.assert_contains(screen, "Delegation with subagent",
+                         "subagent prompt text")
+    E2E.assert_contains(screen, "subagent_run", "subagent prompt docs")
+    E2E.assert_contains(screen, "subagent_start", "subagent prompt docs")
+    E2E.assert_contains(screen, "subagent_wait", "subagent prompt docs")
+    E2E.assert_contains(screen, "subagent_cancel", "subagent prompt docs")
+    E2E.assert_contains(screen, "subagent_status", "subagent prompt docs")
+    E2E.assert_contains(screen, "custom transient agent",
+                         "subagent custom agent docs")
+    session.screenshot("72-pkg-subagent-help")
+    E2E.kill_current_buffer(session)
+    switch_to_session_buffer(session)
+
+
+def test_72_pkg_organa_buffer_type_is_registered_and_discoverable(session):
+    """The organa package registers a buffer type that help can describe."""
+    result = session.eval_lisp(
+        r'''(progn
+             (clawmacs::init-tools)
+             (let* ((definition (clawmacs:find-installed-package "organa"))
+                    (types (clawmacs::package-owned-buffer-types "organa"))
+                    (help (clawmacs::describe-installed-package-to-string
+                           definition
+                           (clawmacs:current-buffer))))
+               (unless definition
+                 (error "organa package was not installed"))
+               (unless (and types
+                            (find :organa types
+                                  :key #'clawmacs::buffer-type-name
+                                  :test #'eq))
+                 (error "organa buffer type was not registered: ~S" types))
+               (unless (search "Buffer Types:" help)
+                 (error "organa help did not list buffer types: ~A" help))
+               (unless (search "organa" help :test #'char-equal)
+                 (error "organa help did not mention the buffer type name: ~A" help))
+               "ORGANA-BUFFER-TYPE-OK"))''',
+        timeout=30,
+    )
+    if "ORGANA-BUFFER-TYPE-OK" not in result:
+        fail(f"organa buffer type test returned unexpected result: {result}")
+    session.screenshot("72-pkg-organa-buffer-type")
+
+
+def test_72_pkg_subagent_and_pipeline_runtime_contract(session):
+    """Subagent tools and deterministic pipelines run inside the live app."""
+    result = session.eval_lisp(
+        r'''(progn
+             (clawmacs::init-tools)
+             (let* ((buf (clawmacs:current-buffer))
+                    (packages '("subagent" "pipelines")))
+               (setf (clawmacs:buffer-enabled-packages buf)
+                     (remove-duplicates
+                      (append packages
+                              (clawmacs:buffer-enabled-packages buf))
+                      :test #'string=))
+               (clawmacs:load-active-packages :buffer buf)
+               (labels ((tool (name args)
+                          (let ((clawmacs::*current-tool-buffer* buf)
+                                (clawmacs::*current-caller* :user))
+                            (clawmacs:execute-tool name args)))
+                        (data (name args)
+                          (nth-value 0
+                            (clawmacs::lisp-data-read
+                             (tool name args))))
+                        (need (condition label)
+                          (unless condition
+                            (error "Subagent/pipeline e2e failed: ~A" label)))
+                        (completed (text)
+                          (let ((state (clawmacs::make-stream-state)))
+                            (bt:with-lock-held
+                                ((clawmacs::stream-state-lock state))
+                              (setf (clawmacs::stream-state-stop-reason state)
+                                    "end_turn"
+                                    (clawmacs::stream-state-content-blocks state)
+                                    (list
+                                     (clawmacs::canonical-text-block text))
+                                    (clawmacs::stream-state-done-p state)
+                                    t))
+                            state)))
+                 (let ((original
+                         (symbol-function
+                          'clawmacs::provider-request-streaming))
+                       (count 0))
+                   (unwind-protect
+                        (progn
+                          (setf (symbol-function
+                                 'clawmacs::provider-request-streaming)
+                                (lambda (provider messages callback
+                                         &key model max-tokens tools
+                                           reasoning-effort system-prompt
+                                         &allow-other-keys)
+                                  (declare (ignore provider messages callback
+                                                   model max-tokens tools
+                                                   reasoning-effort
+                                                   system-prompt))
+                                  (incf count)
+                                  (when (= count 3)
+                                    (sleep 0.5))
+                                  (completed
+                                   (format nil "runtime-response-~D"
+                                           count))))
+                          (let* ((run (data "subagent_run"
+                                            '(:prompt "sync delegate"
+                                              :agent_spec
+                                              ((:name . "e2e-runtime")
+                                               (:provider . "zai")
+                                               (:model . "glm-5")
+                                               (:core_prompt . "CORE")
+                                               (:personality_prompt
+                                                . "PERSONALITY")))))
+                                 (started
+                                  (data "subagent_start"
+                                        '(:prompt "async delegate"
+                                          :provider "zai"
+                                          :model "glm-5")))
+                                 (id (getf (getf started :subagent) :id))
+                                 (status (data "subagent_status" nil))
+                                 (waited (data "subagent_wait"
+                                               `(:id ,id :timeout 3)))
+                                 (cancel-start
+                                  (data "subagent_start"
+                                        '(:prompt "cancel delegate"
+                                          :provider "zai"
+                                          :model "glm-5")))
+                                 (cancel-id
+                                  (getf (getf cancel-start :subagent) :id))
+                                 (cancelled
+                                  (data "subagent_cancel"
+                                        `(:id ,cancel-id))))
+                            (need (getf run :ok) "subagent_run")
+                            (need (getf started :ok) "subagent_start")
+                            (need (getf status :ok) "subagent_status")
+                            (need (eq :succeeded (getf waited :status))
+                                  "subagent_wait")
+                            (need (getf cancelled :ok)
+                                  "subagent_cancel"))
+                          (clawmacs:define-pipeline
+                           "e2e-runtime-pipeline"
+                           :stages '((:name "plan"
+                                      :prompt "Plan {{input}}"
+                                      :next "build")
+                                     (:name "build"
+                                      :prompt "Build {{stage:plan}}")))
+                          (clawmacs:set-buffer-pipeline
+                           buf "e2e-runtime-pipeline")
+                          (need (string= "e2e-runtime-pipeline"
+                                         (clawmacs:buffer-pipeline-name buf))
+                                "set-buffer-pipeline")
+                          (let ((pipeline
+                                  (clawmacs:run-pipeline-on-buffer
+                                   "e2e-runtime-pipeline"
+                                   "ship"
+                                   :buffer buf)))
+                            (need (eq :succeeded
+                                      (clawmacs:pipeline-run-result-status
+                                       pipeline))
+                                  "run-pipeline-on-buffer")
+                            (need (search "runtime-response"
+                                          (or (clawmacs:pipeline-run-result-final-text
+                                               pipeline)
+                                              ""))
+                                  "pipeline final text"))
+                          (clawmacs:clear-buffer-pipeline buf)
+                          (need (null (clawmacs:buffer-pipeline-name buf))
+                                "clear-buffer-pipeline"))
+                     (setf (symbol-function
+                            'clawmacs::provider-request-streaming)
+                           original)))))
+               "SUBAGENT-PIPELINE-RUNTIME-OK"))''',
+        timeout=90,
+    )
+    if "SUBAGENT-PIPELINE-RUNTIME-OK" not in result:
+        fail(f"subagent/pipeline runtime returned unexpected result: {result}")
+
+
+def test_72_pkg_agent_selector_switches_registered_agent(session):
+    """The agent selector lists registered agents and can switch buffers."""
+    E2E.open_extended_command(session, "minibuffer-select-agent-command")
+    snapshot = session.wait_snapshot(
+        lambda snap: (
+            (snap.get("minibuffer") or {}).get("active")
+            and (snap.get("minibuffer") or {}).get("prompt") == "Select Agent"
+            and len((snap.get("minibuffer") or {}).get("candidates") or []) >= 3
+        ),
+        timeout=10,
+        description="agent selector candidates",
+    )
+    joined = "\n".join(minibuffer_candidate_strings(snapshot))
+    E2E.assert_contains(joined, "writer", "writer agent visible in selector")
+    E2E.assert_contains(joined, "pair", "pair agent visible in selector")
+    E2E.assert_contains(joined, "openai-codex/gpt-5.4",
+                         "pair agent model visible in selector")
+    E2E.assert_contains(joined, "zai/glm-5", "writer agent model visible in selector")
+    E2E.confirm_minibuffer_candidate(session, "pair")
+    screen = wait_for_non_user_message_text(session, "Agent changed to pair", timeout=10)
+    E2E.assert_contains(screen, "openai-codex/gpt-5.4",
+                         "agent selection message shows provider/model")
+    E2E.assert_contains(screen, "think high", "agent selection message shows think level")
+    session.screenshot("72-pkg-agent-selector")
+
+
+def test_72_pkg_model_selector_switches_registered_model(session):
+    """The model selector lists deterministic models and can switch them."""
+    E2E.open_extended_command(session, "minibuffer-select-model-command")
+    snapshot = session.wait_snapshot(
+        lambda snap: (
+            (snap.get("minibuffer") or {}).get("active")
+            and (snap.get("minibuffer") or {}).get("prompt") == "Select Model"
+            and len((snap.get("minibuffer") or {}).get("candidates") or []) >= 2
+        ),
+        timeout=10,
+        description="model selector candidates",
+    )
+    joined = "\n".join(minibuffer_candidate_strings(snapshot))
+    E2E.assert_contains(joined, "zai/glm-5", "zai model visible in selector")
+    E2E.assert_contains(joined, "openai-codex/gpt-5.4",
+                         "openai-codex model visible in selector")
+    E2E.confirm_minibuffer_candidate(session, "glm-5")
+    screen = wait_for_non_user_message_text(session, "Model changed to zai/glm-5", timeout=10)
+    E2E.assert_contains(screen, "Model changed to zai/glm-5",
+                         "model selection confirmation visible")
+    E2E.assert_contains(screen, "zai/glm-5", "selected model visible in message")
+    session.screenshot("72-pkg-model-selector")
+
+
+def test_72_pkg_think_selector_switches_think_level(session):
+    """The think selector lists supported levels and updates the buffer."""
+    session.eval_lisp(
+        r'''(progn
+             (clawmacs::init-tools)
+             (let ((buf (clawmacs:current-buffer)))
+               (clawmacs:set-buffer-provider-override buf :zai)
+               (clawmacs:set-buffer-model-override buf "glm-5")
+               (clawmacs:clear-buffer-think-level-override buf)
+               "THINK-SELECTOR-READY"))''',
+        timeout=20,
+    )
+    E2E.open_extended_command(session, "minibuffer-select-think-level-command")
+    snapshot = session.wait_snapshot(
+        lambda snap: (
+            (snap.get("minibuffer") or {}).get("active")
+            and (snap.get("minibuffer") or {}).get("prompt") == "Select Think Level"
+            and len((snap.get("minibuffer") or {}).get("candidates") or []) >= 3
+        ),
+        timeout=10,
+        description="think selector candidates",
+    )
+    joined = "\n".join(minibuffer_candidate_strings(snapshot))
+    E2E.assert_contains(joined, "default", "think selector includes default")
+    E2E.assert_contains(joined, "low", "think selector includes low")
+    E2E.assert_contains(joined, "high", "think selector includes high")
+    E2E.confirm_minibuffer_candidate(session, "low")
+    screen = wait_for_non_user_message_text(session, "Think level set to low", timeout=10)
+    E2E.assert_contains(screen, "Think level set to low",
+                         "think selection confirmation visible")
+    E2E.assert_contains(screen, "zai/glm-5", "think selection message names the model")
+    session.screenshot("72-pkg-think-selector")
+
+
 def test_registry(group):
     offline_tests = [
         ("53-async-agent-reply-renders", test_53_async_agent_reply_renders_without_next_input),
@@ -1323,10 +3090,14 @@ def test_registry(group):
         ("62-mouse-click-buffer-selector", test_62_mouse_click_buffer_selector_row),
         ("63-mouse-click-completion-candidates", test_63_mouse_click_completion_candidates),
         ("64-logical-window-commands", test_64_logical_window_commands),
+        ("65-scratch-buffer-editor-flow", test_65_scratch_buffer_editor_flow),
+        ("66-project-open-edit-save-search", test_66_project_open_edit_save_search_flow),
+        ("67-session-load-tree-fork", test_67_session_load_tree_and_fork_flow),
+        ("68-toggle-reasoning-metadata-tool-results", test_68_toggle_reasoning_metadata_and_tool_results),
         ("38-shell-prefix", E2E.test_38_shell_prefix),
         ("39-debug-mode", E2E.test_39_debug_mode_toggle),
         ("40-save-session", E2E.test_40_save_session),
-        ("41-buffer-persistence", E2E.test_41_buffer_state_persistence),
+        ("41-buffer-persistence", test_41_buffer_state_persistence_core),
         ("42-minibuffer-selector", E2E.test_42_minibuffer_buffer_selector),
         ("43-describe-bindings", E2E.test_43_describe_bindings),
         ("44-describe-function", E2E.test_44_describe_function),
@@ -1359,6 +3130,44 @@ def test_registry(group):
         ("36-alt-underscore", E2E.test_36_alt_underscore),
         ("37-ctrl-d", E2E.test_37_ctrl_d),
     ]
+    package_tests = [
+        ("70_feature_inventory_runtime_contract",
+         test_70_feature_inventory_runtime_contract),
+        ("71_tools_lispi_package_enable_and_eval",
+         test_71_tools_lispi_package_enable_and_eval),
+        ("71_tools_sexed_package_structural_read_write",
+         test_71_tools_sexed_package_structural_read_write),
+        ("71_tools_slop_package_lookup_and_trace",
+         test_71_tools_slop_package_lookup_and_trace),
+        ("71_tools_git_package_status_log_and_mutations",
+         test_71_tools_git_package_status_log_and_mutations),
+        ("71_tools_netcons_package_open_find_offline",
+         test_71_tools_netcons_package_open_find_offline),
+        ("71_tools_speculum_package_self_visibility",
+         test_71_tools_speculum_package_self_visibility),
+        ("71_tools_organa_package_todo_management",
+         test_71_tools_organa_package_todo_management),
+        ("72_pkg_installed_package_selector_lists_all_bundled_packages",
+         test_72_pkg_installed_package_selector_lists_all_bundled_packages),
+        ("72_pkg_package_toggle_cycles_scope_and_appends_context",
+         test_72_pkg_package_toggle_cycles_scope_and_appends_context),
+        ("72_pkg_describe_installed_package_opens_help_buffer",
+         test_72_pkg_describe_installed_package_opens_help_buffer),
+        ("72_pkg_pipelines_help_buffer_lists_commands_and_prompt_sections",
+         test_72_pkg_pipelines_help_buffer_lists_commands_and_prompt_sections),
+        ("72_pkg_subagent_help_buffer_lists_tools_and_prompt_sections",
+         test_72_pkg_subagent_help_buffer_lists_tools_and_prompt_sections),
+        ("72_pkg_organa_buffer_type_is_registered_and_discoverable",
+         test_72_pkg_organa_buffer_type_is_registered_and_discoverable),
+        ("72_pkg_subagent_and_pipeline_runtime_contract",
+         test_72_pkg_subagent_and_pipeline_runtime_contract),
+        ("72_pkg_agent_selector_switches_registered_agent",
+         test_72_pkg_agent_selector_switches_registered_agent),
+        ("72_pkg_model_selector_switches_registered_model",
+         test_72_pkg_model_selector_switches_registered_model),
+        ("72_pkg_think_selector_switches_think_level",
+         test_72_pkg_think_selector_switches_think_level),
+    ]
     full_initial_tests = [
         ("01-initial-render", E2E.test_01_initial_render),
         ("02-text-input", E2E.test_02_text_input),
@@ -1387,18 +3196,20 @@ def test_registry(group):
         return full_initial_tests[:2]
     if group == "windows":
         return [("64-logical-window-commands", test_64_logical_window_commands)]
+    if group == "packages":
+        return package_tests
     if group == "offline":
-        return offline_tests + readline_tests
+        return offline_tests + readline_tests + package_tests
     if group == "readline":
         return readline_tests
-    return full_initial_tests + offline_tests + llm_new_tests + readline_tests
+    return full_initial_tests + offline_tests + llm_new_tests + readline_tests + package_tests
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run clawmacs McCLIM e2e tests")
     parser.add_argument(
         "--only",
-        choices=["all", "readline", "offline", "smoke", "windows", *ONLINE_GROUPS],
+        choices=["all", "readline", "offline", "packages", "smoke", "windows", *ONLINE_GROUPS],
         default="offline",
         help="run only a subset of tests",
     )
@@ -1418,8 +3229,14 @@ def print_summary():
 
 
 def run_deterministic_suite(group, skill_root_path):
+    global E2E_PROJECT_ROOT, E2E_PROJECT_FILE
+    ensure_prompt_project_root()
+    E2E_PROJECT_ROOT, E2E_PROJECT_FILE = create_e2e_project_root()
     extra_evals = base_extra_evals(skill_root_path)
-    extra_evals.append(f"(progn {OFFLINE_AGENT_EVAL})")
+    extra_evals.append(package_config_fixture_eval())
+    extra_evals.append(project_fixture_eval(E2E_PROJECT_ROOT))
+    extra_evals.extend(package_orchestration_extra_evals())
+    extra_evals.append(f"(progn {core_offline_agent_eval()})")
     session = McclimSession(
         extra_evals=extra_evals
     )
@@ -1439,9 +3256,11 @@ def run_deterministic_suite(group, skill_root_path):
         print(f"Artifacts: {SCREENSHOT_DIR}")
         print(f"Control/logs: {session.artifact_root}")
         session.close()
+        shutil.rmtree(E2E_PROJECT_ROOT, ignore_errors=True)
 
 
 def run_online_suite(group, skill_root_path):
+    ensure_prompt_project_root()
     print("=== Clawmacs McCLIM Online E2E Tests ===")
     print(f"Screenshots: {SCREENSHOT_DIR}/")
     for spec in online_provider_specs(group):

@@ -8,6 +8,13 @@
 
 (defvar *control-thread* nil)
 (defvar *control-thread-lock* (bt:make-lock "mcclim-e2e-control-thread"))
+(defvar *control-result-sequence* 0)
+(defvar *last-control-result*
+  '((:sequence . 0)
+    (:ok . t)
+    (:value . "")
+    (:error . ""))
+  "Last deterministic e2e control command result.")
 
 (defun control-dir ()
   (or (uiop:getenv "CLAWMACS_MCCLIM_E2E_CONTROL_DIR")
@@ -66,24 +73,66 @@
   (and (boundp 'clawmacs::*clawmacs-frame*)
        clawmacs::*clawmacs-frame*))
 
+(defun safe-control-result-string (value)
+  "Return a bounded readable string for a control command VALUE."
+  (let ((*print-length* 80)
+        (*print-level* 10)
+        (*print-circle* t)
+        (*print-pretty* nil))
+    (truncate-string (prin1-to-string value) 8000)))
+
+(defun record-control-result (ok value error-text)
+  "Record a JSON-ready result for the latest deterministic control command."
+  (setf *last-control-result*
+        `((:sequence . ,(incf *control-result-sequence*))
+          (:ok . ,ok)
+          (:value . ,(or value ""))
+          (:error . ,(or error-text "")))))
+
+(defun apply-control-eval-command (form)
+  "Evaluate FORM for deterministic e2e assertions and record its result."
+  (handler-case
+      (record-control-result t (safe-control-result-string (eval form)) "")
+    (serious-condition (condition)
+      (record-control-result nil "" (safe-control-result-string condition)))))
+
+(defun apply-control-window-command (command frame)
+  "Apply symbolic window COMMAND to FRAME."
+  (clawmacs::with-mcclim-frame-ui-state (frame)
+    (ecase command
+      (:split-below
+       (clawmacs::mcclim-split-selected-window frame :vertical))
+      (:split-right
+       (clawmacs::mcclim-split-selected-window frame :horizontal))
+      (:other-window
+       (clawmacs::mcclim-select-other-window frame))
+      (:delete-window
+       (clawmacs::mcclim-delete-selected-window frame))
+      (:delete-other-windows
+       (clawmacs::mcclim-delete-other-windows frame)))
+    (clawmacs::mcclim-redisplay-frame frame :force-p t))
+  (record-control-result t (safe-control-result-string command) ""))
+
 (defun apply-control-command (command)
   "Apply COMMAND to the McCLIM frame for deterministic e2e control."
   (let ((frame (current-mcclim-frame)))
-    (when frame
-      (clawmacs::with-mcclim-frame-ui-state (frame)
-        (ecase command
-          (:split-below
-           (clawmacs::mcclim-split-selected-window frame :vertical))
-          (:split-right
-           (clawmacs::mcclim-split-selected-window frame :horizontal))
-          (:other-window
-           (clawmacs::mcclim-select-other-window frame))
-          (:delete-window
-           (clawmacs::mcclim-delete-selected-window frame))
-          (:delete-other-windows
-           (clawmacs::mcclim-delete-other-windows frame)))
-        (clawmacs::mcclim-redisplay-frame frame :force-p t))
-      t)))
+    (cond
+      ((and (consp command) (eq (first command) :eval))
+       (if frame
+           (clawmacs::with-mcclim-frame-ui-state (frame)
+             (apply-control-eval-command (second command)))
+           (apply-control-eval-command (second command)))
+       t)
+      ((and frame (symbolp command))
+       (apply-control-window-command command frame)
+       t)
+      ((null frame)
+       (record-control-result nil "" "No McCLIM frame is running.")
+       t)
+      (t
+       (record-control-result
+        nil "" (format nil "Unknown e2e control command: ~S" command))
+       t))))
 
 (defmacro with-current-mcclim-ui-state (&body body)
   "Bind frame-local McCLIM UI state while observing the running application."
@@ -250,6 +299,7 @@
             (:buffers . ,(buffer-ring-state))
             (:windows . ,(window-state))
             (:render . ,(render-state))
+            (:control-result . ,*last-control-result*)
             (:minibuffer . ,(minibuffer-state))
             (:skill-completion . ,(skill-completion-state))
             (:selectors . ,(selector-state)))))

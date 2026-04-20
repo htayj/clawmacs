@@ -408,6 +408,12 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
     (clawmacs-window-ref com-select-window clawmacs-mcclim-command-table
                          :gesture :select
                          :priority 5
+                         :tester
+                         ((object)
+                          (not (eql (ignore-errors
+                                      (frame-selected-window-id
+                                       clim:*application-frame*))
+                                    (clawmacs-window-id object))))
                          :documentation "Select this window"
                          :pointer-documentation "Select this window")
     (object)
@@ -662,6 +668,7 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
   (:default-initargs
    :display-function 'display-main-pane
    :display-time :command-loop
+   :incremental-redisplay t
    :text-style (clim:make-text-style :fix :roman :normal)
    :background (clim:make-rgb-color 1.0 1.0 1.0)
    :foreground (clim:make-rgb-color 0.0 0.0 0.0)
@@ -757,6 +764,7 @@ recursive repainting display function."
    (modeline-pane :application
                   :display-function 'display-modeline-pane
                   :display-time :command-loop
+                  :incremental-redisplay t
                   :height 14
                   :min-height 14
                   :max-height 14
@@ -767,6 +775,7 @@ recursive repainting display function."
    (who-line-pane :application
                   :display-function 'display-who-line-pane
                   :display-time :command-loop
+                  :incremental-redisplay t
                   :height 28
                   :min-height 28
                   :max-height 28
@@ -2060,6 +2069,7 @@ ordinary input text."
                         (clim:updating-output
                             (pane
                              :unique-id (list *mcclim-render-window-id* msg)
+                             :id-test #'equal
                              :cache-value
                              (mcclim-message-cache-value
                               msg screen-row width
@@ -3318,6 +3328,35 @@ and COL fall outside any logical window, they are returned unchanged."
       (mcclim-sync-drei-point-from-buffer frame)
       t)))
 
+(defun mcclim-handle-presentation-click (frame pane event)
+  "Dispatch EVENT through CLIM presentation translators, when applicable.
+
+Clawmacs keeps coordinate fallbacks for editor point placement and blank-area
+behaviors, but semantic objects rendered with WITH-OUTPUT-AS-PRESENTATION
+should use the standard CLIM presentation-to-command path first."
+  (when (mcclim-select-pointer-event-p event)
+    (let ((command-table (clim:frame-command-table frame)))
+      (handler-case
+          (clim:with-input-context
+              (`(clim:command :command-table ,command-table) :override t)
+              (command _presentation-type _event _options)
+              (progn
+                (clim:frame-input-context-button-press-handler
+                 frame pane event)
+                nil)
+            (clim:command
+             (let ((_ignored (list _presentation-type _event _options)))
+               (declare (ignore _ignored))
+               (when (and (consp command)
+                          (symbolp (first command)))
+                 (clim:execute-frame-command frame command)
+                 t))))
+        (serious-condition (condition)
+          (file-debug-log "mcclim-input"
+                          "presentation click dispatch failed: ~A"
+                          condition)
+          nil)))))
+
 (defun mcclim-handle-main-pane-click (frame pane event)
   "Handle mouse select actions that need Clawmacs' custom top-level bridge."
   (when (mcclim-select-pointer-event-p event)
@@ -3326,7 +3365,8 @@ and COL fall outside any logical window, they are returned unchanged."
       (multiple-value-bind (cols _rows)
           (pane-grid-dimensions pane (frame-char-width frame)
                                 (frame-char-height frame))
-        (or (mcclim-handle-completion-popup-click frame pane row col)
+        (or (mcclim-handle-presentation-click frame pane event)
+            (mcclim-handle-completion-popup-click frame pane row col)
             (mcclim-handle-selector-click frame row)
             (multiple-value-bind (local-row local-col local-cols changed-p)
                 (mcclim-localize-main-pane-grid-position
@@ -3700,30 +3740,6 @@ provider streams moving even when no key or window event arrives."
     (prog1 (call-next-method)
       (mcclim-sync-drei-from-buffer frame :force-p t)
       (mcclim-ensure-polling frame))))
-
-(defun mcclim-process-esa-gesture (frame gesture)
-  "Feed GESTURE into ESA command processing for FRAME."
-  (with-mcclim-frame-ui-state (frame)
-    (let ((*standard-output* (clim:frame-standard-output frame))
-          (*standard-input* (clim:frame-standard-input frame))
-          (esa:*minibuffer* (esa:minibuffer frame))
-          (esa:*command-processor* frame)
-          (clim:*abort-gestures* esa:*esa-abort-gestures*)
-          (clim:*command-parser* 'esa:esa-command-parser)
-          (clim:*command-unparser* 'clim:command-line-command-unparser)
-          (clim:*partial-command-parser* 'esa:esa-partial-command-parser)
-          (esa:*extended-command-prompt* "Extended Command: ")
-          (clim:*pointer-documentation-output*
-           (clim:frame-pointer-documentation-output frame))
-          (esa:*esa-instance* frame))
-      (handler-case
-          (esa:process-gesture frame gesture)
-        (esa:unbound-gesture-sequence (condition)
-          (file-debug-log "mcclim-input" "unbound ESA gesture sequence: ~S"
-                          (esa:gestures condition))
-          (setf (esa::accumulated-gestures frame) nil))
-        (clim:abort-gesture ()
-          (setf (esa::accumulated-gestures frame) nil))))))
 
 (defmethod clawmacs-esa-top-level ((frame clawmacs-gui)
                                    &key &allow-other-keys)
