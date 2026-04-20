@@ -2000,6 +2000,96 @@ Bound to C-c C-d."
   (mcclim-debug-run-and-report buffer #'mcclim-refresh-inspectors))
 (defcommand mcclim-refresh-inspectors-command)
 
+(defun clouseau-status-command (buffer)
+  "Show Clouseau integration status, usage notes, and commands."
+  (declare (ignore buffer))
+  (show-mcclim-debug-buffer "*Clouseau*"
+                             (clouseau-status-to-string)))
+(defcommand clouseau-status-command)
+
+(defun clouseau-install-extensions-command (buffer)
+  "Load Clouseau and install Clawmacs-specific inspection methods."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (ensure-clouseau-support :force t))))
+(defcommand clouseau-install-extensions-command)
+
+(defun clouseau-list-inspectors-command (buffer)
+  "Show Clouseau inspectors opened through Clawmacs."
+  (declare (ignore buffer))
+  (show-mcclim-debug-buffer "*Clouseau Inspectors*"
+                             (clouseau-inspectors-to-string)))
+(defcommand clouseau-list-inspectors-command)
+
+(defun clouseau-refresh-inspectors-command (buffer)
+  "Refresh Clouseau inspector roots opened through Clawmacs."
+  (mcclim-debug-run-and-report buffer #'mcclim-refresh-inspectors))
+(defcommand clouseau-refresh-inspectors-command)
+
+(defun clouseau-inspect-application-state-command (buffer)
+  "Inspect a live Clawmacs application-state plist with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :application-state buffer))))
+(defcommand clouseau-inspect-application-state-command)
+
+(defun clouseau-inspect-buffer-ring-command (buffer)
+  "Inspect the global buffer ring with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :buffer-ring buffer))))
+(defcommand clouseau-inspect-buffer-ring-command)
+
+(defun clouseau-inspect-current-session-command (buffer)
+  "Inspect the current buffer's saved session with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :current-session buffer))))
+(defcommand clouseau-inspect-current-session-command)
+
+(defun clouseau-inspect-input-message-command (buffer)
+  "Inspect the current editable input message with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :input-message buffer))))
+(defcommand clouseau-inspect-input-message-command)
+
+(defun clouseau-inspect-package-registry-command (buffer)
+  "Inspect package channels and discovered package definitions with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :package-registry buffer))))
+(defcommand clouseau-inspect-package-registry-command)
+
+(defun clouseau-inspect-tool-registry-command (buffer)
+  "Inspect registered provider-callable agent tools with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :tool-registry buffer))))
+(defcommand clouseau-inspect-tool-registry-command)
+
+(defun clouseau-inspect-pipeline-registry-command (buffer)
+  "Inspect deterministic pipeline definitions with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :pipeline-registry buffer))))
+(defcommand clouseau-inspect-pipeline-registry-command)
+
+(defun clouseau-set-inspector-root-command (buffer inspector-id form)
+  "Evaluate FORM and make it the remembered root for Clouseau inspector ID."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda ()
+     (let* ((id (parse-integer
+                 (string-trim '(#\Space #\Tab #\Newline #\Return)
+                              inspector-id)))
+            (object (mcclim-debug-read-eval-form form)))
+       (clouseau-update-inspector-root
+        id object :label (format nil "result of ~A" form))))))
+(defcommand clouseau-set-inspector-root-command
+  :prompts ((inspector-id :prompt "Inspector id")
+            (form :prompt "New root Lisp form")))
+
 (defun redraw-screen-command (buffer)
   "Request a full screen redraw. Bound to C-l."
   (declare (ignore buffer))

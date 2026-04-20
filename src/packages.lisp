@@ -1017,9 +1017,17 @@
    #:*mcclim-debugger-enabled*
    #:*mcclim-listener-debugger-enabled*
    #:*mcclim-debug-inspector-frames*
+   #:*clouseau-extensions-installed-p*
+   #:*clouseau-extension-classes*
    #:mcclim-debug-feature-status
    #:mcclim-debug-status-to-string
    #:mcclim-debug-snapshot-to-string
+   #:ensure-clouseau-support
+   #:clouseau-status-to-string
+   #:clouseau-inspector-entries
+   #:clouseau-inspectors-to-string
+   #:clouseau-update-inspector-root
+   #:clouseau-application-state
    #:mcclim-install-debugger
    #:mcclim-disable-debugger
    #:mcclim-launch-listener
@@ -1044,6 +1052,18 @@
    #:mcclim-inspect-debug-status-command
    #:mcclim-inspect-lisp-form-command
    #:mcclim-refresh-inspectors-command
+   #:clouseau-status-command
+   #:clouseau-install-extensions-command
+   #:clouseau-list-inspectors-command
+   #:clouseau-refresh-inspectors-command
+   #:clouseau-inspect-application-state-command
+   #:clouseau-inspect-buffer-ring-command
+   #:clouseau-inspect-current-session-command
+   #:clouseau-inspect-input-message-command
+   #:clouseau-inspect-package-registry-command
+   #:clouseau-inspect-tool-registry-command
+   #:clouseau-inspect-pipeline-registry-command
+   #:clouseau-set-inspector-root-command
    #:toggle-reasoning-output-command
    #:toggle-metadata-output-command
    #:redraw-screen-command

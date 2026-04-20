@@ -481,3 +481,51 @@
       (is (not (null help)))
       (is (search "McCLIM Debugging" (help-buffer-text help)
                   :test #'char-equal)))))
+
+(test clouseau-status-report-describes-manual-protocols
+  "Clouseau status documents the inspector protocol used by Clawmacs."
+  (let ((text (clouseau-status-to-string)))
+    (is (search "inspect-object-using-state" text :test #'char-equal))
+    (is (search "format-place-row" text :test #'char-equal))
+    (is (search "CL:*" text :test #'char-equal))
+    (is (search "clouseau-inspect-application-state-command"
+                text :test #'char-equal))))
+
+(test clouseau-debug-targets-work-without-live-frame
+  "Clouseau targets return useful objects in headless unit tests."
+  (let* ((buf (make-buffer "clouseau-target-buffer"))
+         (clawmacs::*buffer-ring* (list buf))
+         (clawmacs::*clawmacs-frame* nil))
+    (multiple-value-bind (object label)
+        (clawmacs::mcclim-debug-target-object :buffer-ring buf)
+      (is (equal (list buf) object))
+      (is (string= "buffer ring" label)))
+    (multiple-value-bind (object label)
+        (clawmacs::mcclim-debug-target-object :input-message buf)
+      (is (eq (buffer-input-message buf) object))
+      (is (string= "current input message" label)))
+    (multiple-value-bind (object label)
+        (clawmacs::mcclim-debug-target-object :application-state buf)
+      (is (getf object :buffer-ring))
+      (is (string= "Clawmacs application state" label)))))
+
+(test clouseau-inspector-list-report-handles-empty-state
+  "The inspector list report is useful before any inspector has opened."
+  (let ((clawmacs::*mcclim-debug-inspector-frames* nil))
+    (let ((text (clouseau-inspectors-to-string)))
+      (is (search "Clouseau Inspectors" text :test #'char-equal))
+      (is (search "No inspectors" text :test #'char-equal)))))
+
+(test ensure-clouseau-support-installs-clawmacs-methods
+  "Clouseau extension installation registers Clawmacs inspection classes."
+  (if (clawmacs::mcclim-debug-system-available-p "clouseau")
+      (let ((clawmacs::*clouseau-extensions-installed-p* nil)
+            (clawmacs::*clouseau-extension-classes* nil))
+        (let ((message (ensure-clouseau-support :force t)))
+          (is (search "Clouseau support installed" message
+                      :test #'char-equal))
+          (is (not (null clawmacs::*clouseau-extensions-installed-p*)))
+          (is (member 'buffer clawmacs::*clouseau-extension-classes*))
+          (is (member 'message clawmacs::*clouseau-extension-classes*))
+          (is (member 'session clawmacs::*clouseau-extension-classes*))))
+      (pass "Clouseau ASDF system is not available in this test image.")))

@@ -2000,6 +2000,18 @@ def test_70_feature_inventory_runtime_contract(session):
                               "mcclim-inspect-debug-status-command"
                               "mcclim-inspect-lisp-form-command"
                               "mcclim-refresh-inspectors-command"
+                              "clouseau-status-command"
+                              "clouseau-install-extensions-command"
+                              "clouseau-list-inspectors-command"
+                              "clouseau-refresh-inspectors-command"
+                              "clouseau-inspect-application-state-command"
+                              "clouseau-inspect-buffer-ring-command"
+                              "clouseau-inspect-current-session-command"
+                              "clouseau-inspect-input-message-command"
+                              "clouseau-inspect-package-registry-command"
+                              "clouseau-inspect-tool-registry-command"
+                              "clouseau-inspect-pipeline-registry-command"
+                              "clouseau-set-inspector-root-command"
                               "customize-drawing-style-command"
                               "customize-face-command"
                               "describe-function-command"
@@ -2669,6 +2681,43 @@ def test_69_mcclim_debug_status_and_snapshot(session):
     E2E.assert_contains(snapshot, "Logical windows:",
                          "snapshot logical window section visible")
     session.screenshot("69-mcclim-debug-snapshot")
+
+    session.eval_lisp(
+        r'''(progn
+             (clawmacs:clouseau-status-command
+              (clawmacs:current-buffer))
+             "CLOUSEAU-STATUS-OK")''',
+        timeout=20,
+    )
+    clouseau_status = wait_for_current_buffer_message_text(
+        session,
+        "Clouseau Support",
+    )
+    E2E.assert_contains(clouseau_status, "inspect-object-using-state",
+                         "Clouseau protocol documentation visible")
+    E2E.assert_contains(clouseau_status, "format-place-row",
+                         "Clouseau place-row support visible")
+    E2E.assert_contains(clouseau_status, "clouseau-inspect-application-state-command",
+                         "Clouseau command list visible")
+    session.screenshot("69-clouseau-status")
+
+    session.eval_lisp(
+        r'''(progn
+             (clawmacs:clouseau-list-inspectors-command
+              (clawmacs:current-buffer))
+             "CLOUSEAU-INSPECTORS-OK")''',
+        timeout=20,
+    )
+    inspectors = wait_for_current_buffer_message_text(
+        session,
+        "Clouseau Inspectors",
+    )
+    E2E.assert_contains(inspectors, "No inspectors",
+                         "empty inspector list visible")
+    session.screenshot("69-clouseau-inspectors")
+
+    E2E.kill_current_buffer(session)
+    E2E.kill_current_buffer(session)
     E2E.kill_current_buffer(session)
     E2E.kill_current_buffer(session)
     switch_to_session_buffer(session)

@@ -3877,6 +3877,38 @@ documentation in *extended-docs*."
   :side-effects "Lazily loads Clouseau and opens an inspector for a known Clawmacs/McCLIM object."
   :see-also (mcclim-inspect-current-frame-command mcclim-refresh-inspectors-command))
 
+(defdoc ensure-clouseau-support
+  :category "mcclim"
+  :usage "(ensure-clouseau-support &key FORCE)"
+  :returns "string - Status message."
+  :side-effects "Lazily loads Clouseau and installs Clawmacs-specific inspect-object-using-state methods."
+  :see-also (clouseau-status-to-string clouseau-install-extensions-command))
+
+(defdoc clouseau-status-to-string
+  :category "mcclim"
+  :usage "(clouseau-status-to-string)"
+  :returns "string - Status, manual interaction notes, and Clouseau command list."
+  :see-also (ensure-clouseau-support clouseau-status-command))
+
+(defdoc clouseau-inspectors-to-string
+  :category "mcclim"
+  :usage "(clouseau-inspectors-to-string)"
+  :returns "string - A report of inspectors opened through Clawmacs."
+  :see-also (clouseau-list-inspectors-command clouseau-update-inspector-root))
+
+(defdoc clouseau-update-inspector-root
+  :category "mcclim"
+  :usage "(clouseau-update-inspector-root ID OBJECT &key LABEL)"
+  :returns "string - Status message."
+  :side-effects "Uses Clouseau's root-object setter to replace and refresh a remembered inspector root."
+  :see-also (clouseau-set-inspector-root-command mcclim-refresh-inspectors))
+
+(defdoc clouseau-application-state
+  :category "mcclim"
+  :usage "(clouseau-application-state)"
+  :returns "plist - Live frame, selected window, buffers, packages, tools, pipelines, and debug status."
+  :see-also (clouseau-inspect-application-state-command mcclim-debug-feature-status))
+
 (defdoc mcclim-debug-status-command
   :category "mcclim"
   :usage "M-x mcclim-debug-status-command or C-h D"
@@ -3904,6 +3936,41 @@ documentation in *extended-docs*."
   :returns "nil — Reports status in the current buffer."
   :side-effects "Starts CLIM Listener in a new process."
   :see-also (mcclim-toggle-listener-debugger-command mcclim-install-debugger-command))
+
+(defdoc clouseau-status-command
+  :category "mcclim"
+  :usage "M-x clouseau-status-command"
+  :returns "nil - Displays *Clouseau*."
+  :side-effects "Creates or refreshes a help buffer with Clouseau support status."
+  :see-also (clouseau-status-to-string clouseau-install-extensions-command))
+
+(defdoc clouseau-install-extensions-command
+  :category "mcclim"
+  :usage "M-x clouseau-install-extensions-command"
+  :returns "nil - Reports status in the current buffer."
+  :side-effects "Loads Clouseau and installs Clawmacs-specific inspector methods."
+  :see-also (ensure-clouseau-support clouseau-status-command))
+
+(defdoc clouseau-list-inspectors-command
+  :category "mcclim"
+  :usage "M-x clouseau-list-inspectors-command"
+  :returns "nil - Displays *Clouseau Inspectors*."
+  :side-effects "Creates or refreshes a help buffer with remembered inspector roots."
+  :see-also (clouseau-inspectors-to-string clouseau-set-inspector-root-command))
+
+(defdoc clouseau-inspect-application-state-command
+  :category "mcclim"
+  :usage "M-x clouseau-inspect-application-state-command"
+  :returns "nil - Reports status in the current buffer."
+  :side-effects "Opens a Clouseau inspector for a live Clawmacs state plist."
+  :see-also (clouseau-application-state clouseau-inspect-buffer-ring-command))
+
+(defdoc clouseau-set-inspector-root-command
+  :category "mcclim"
+  :usage "M-x clouseau-set-inspector-root-command"
+  :returns "nil - Reports status in the current buffer."
+  :side-effects "Evaluates a Lisp form and updates a remembered Clouseau inspector root."
+  :see-also (clouseau-update-inspector-root clouseau-list-inspectors-command))
 
 ;;; ==========================================================================
 ;;; Category: main — Application entry point
