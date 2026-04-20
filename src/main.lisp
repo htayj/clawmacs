@@ -1863,6 +1863,143 @@ Bound to C-c C-d."
        "[Debug mode OFF]")))
 (defcommand toggle-debug-mode-command)
 
+(defun show-mcclim-debug-buffer (name content)
+  "Display CONTENT in a reusable McCLIM debug help buffer named NAME."
+  (let ((existing (find-buffer-by-name name)))
+    (if existing
+        (progn
+          (let ((message (message-prev (buffer-input-message existing))))
+            (if message
+                (set-message-text message content)
+                (buffer-insert-agent-message existing content)))
+          (setf (buffer-scroll-offset existing) most-positive-fixnum)
+          (notify-buffer-display-change existing :mcclim-debug-help)
+          (switch-to-buffer existing))
+        (switch-to-buffer (make-help-buffer name content)))))
+
+(defun mcclim-debug-status-command (buffer)
+  "Show McCLIM debugger, Clouseau, and CLIM Listener integration status."
+  (declare (ignore buffer))
+  (show-mcclim-debug-buffer "*McCLIM Debug*"
+                             (mcclim-debug-status-to-string)))
+(defcommand mcclim-debug-status-command)
+
+(defun mcclim-debug-snapshot-command (buffer)
+  "Show a textual snapshot of the active McCLIM frame, panes, and buffers."
+  (show-mcclim-debug-buffer "*McCLIM Runtime Snapshot*"
+                             (mcclim-debug-snapshot-to-string buffer)))
+(defcommand mcclim-debug-snapshot-command)
+
+(defun mcclim-debug-run-and-report (buffer thunk)
+  "Run THUNK and report its status or error in BUFFER."
+  (handler-case
+      (buffer-insert-system-message buffer (funcall thunk))
+    (error (condition)
+      (buffer-insert-system-message
+       buffer
+       (format nil "[McCLIM debug command failed: ~A]" condition)))))
+
+(defun mcclim-install-debugger-command (buffer)
+  "Install McCLIM's clim-debugger as the process debugger hook."
+  (mcclim-debug-run-and-report buffer #'mcclim-install-debugger))
+(defcommand mcclim-install-debugger-command)
+
+(defun mcclim-disable-debugger-command (buffer)
+  "Restore the debugger hook that was active before installing clim-debugger."
+  (mcclim-debug-run-and-report buffer #'mcclim-disable-debugger))
+(defcommand mcclim-disable-debugger-command)
+
+(defun mcclim-launch-listener-command (buffer)
+  "Launch a CLIM Listener process for interactive McCLIM debugging."
+  (mcclim-debug-run-and-report buffer #'mcclim-launch-listener))
+(defcommand mcclim-launch-listener-command)
+
+(defun mcclim-toggle-listener-debugger-command (buffer)
+  "Toggle whether CLIM Listener launches with McCLIM debugger integration."
+  (setf *mcclim-listener-debugger-enabled*
+        (not *mcclim-listener-debugger-enabled*))
+  (buffer-insert-system-message
+   buffer
+   (format nil "[CLIM Listener debugger integration ~A]"
+           (if *mcclim-listener-debugger-enabled* "ON" "OFF"))))
+(defcommand mcclim-toggle-listener-debugger-command)
+
+(defun mcclim-inspect-current-frame-command (buffer)
+  "Inspect the current Clawmacs McCLIM application frame with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :frame buffer))))
+(defcommand mcclim-inspect-current-frame-command)
+
+(defun mcclim-inspect-visible-buffer-command (buffer)
+  "Inspect the buffer visible in the selected McCLIM window with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :visible-buffer buffer))))
+(defcommand mcclim-inspect-visible-buffer-command)
+
+(defun mcclim-inspect-current-buffer-command (buffer)
+  "Inspect the current buffer with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :current-buffer buffer))))
+(defcommand mcclim-inspect-current-buffer-command)
+
+(defun mcclim-inspect-window-tree-command (buffer)
+  "Inspect the active logical window tree with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :window-tree buffer))))
+(defcommand mcclim-inspect-window-tree-command)
+
+(defun mcclim-inspect-selected-window-command (buffer)
+  "Inspect the selected logical window with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :selected-window buffer))))
+(defcommand mcclim-inspect-selected-window-command)
+
+(defun mcclim-inspect-main-pane-command (buffer)
+  "Inspect the main transcript pane with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :main-pane buffer))))
+(defcommand mcclim-inspect-main-pane-command)
+
+(defun mcclim-inspect-input-pane-command (buffer)
+  "Inspect the Drei input pane with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :input-pane buffer))))
+(defcommand mcclim-inspect-input-pane-command)
+
+(defun mcclim-inspect-render-snapshot-command (buffer)
+  "Inspect the last McCLIM render snapshot with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :render-snapshot buffer))))
+(defcommand mcclim-inspect-render-snapshot-command)
+
+(defun mcclim-inspect-debug-status-command (buffer)
+  "Inspect the McCLIM debug status plist with Clouseau."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-target :debug-status buffer))))
+(defcommand mcclim-inspect-debug-status-command)
+
+(defun mcclim-inspect-lisp-form-command (buffer form)
+  "Evaluate FORM in the Clawmacs package and inspect its first value."
+  (mcclim-debug-run-and-report
+   buffer
+   (lambda () (mcclim-debug-inspect-lisp-form form))))
+(defcommand mcclim-inspect-lisp-form-command
+  :prompts ((form :prompt "Inspect Lisp form")))
+
+(defun mcclim-refresh-inspectors-command (buffer)
+  "Refresh Clouseau inspector roots opened by Clawmacs debug commands."
+  (mcclim-debug-run-and-report buffer #'mcclim-refresh-inspectors))
+(defcommand mcclim-refresh-inspectors-command)
+
 (defun redraw-screen-command (buffer)
   "Request a full screen redraw. Bound to C-l."
   (declare (ignore buffer))

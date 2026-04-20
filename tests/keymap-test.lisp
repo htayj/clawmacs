@@ -54,6 +54,14 @@
   (is (eq 'clawmacs::redraw-screen-command
           (keymap-lookup *default-keymap* (code-char 12)))))
 
+(test default-keymap-mcclim-debug-status-binding
+  "Default keymap binds C-h D and C-c D to McCLIM debug status."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::mcclim-debug-status-command
+          (keymap-lookup *default-keymap* '(:ctrl-h #\D))))
+  (is (eq 'clawmacs::mcclim-debug-status-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\D)))))
+
 (test default-keymap-escape-stop-llm-binding
   "Default keymap binds Escape to stopping the active LLM response."
   (clawmacs::init-default-keymap)

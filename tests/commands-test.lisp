@@ -442,3 +442,42 @@
   (signals error
     (eval '(clawmacs:defcommand mismatched-cmd
              :prompts ((count :prompt "Count" :reader parse-integer))))))
+
+(test mcclim-debug-status-report-describes-manual-integrations
+  "McCLIM debug status documents debugger, Clouseau, and Listener support."
+  (let ((text (mcclim-debug-status-to-string)))
+    (is (search "clim-debugger" text :test #'char-equal))
+    (is (search "Clouseau" text :test #'char-equal))
+    (is (search "CLIM Listener" text :test #'char-equal))
+    (is (search "mcclim-inspect-current-frame-command"
+                text :test #'char-equal))))
+
+(test mcclim-debug-feature-status-has-debug-systems
+  "McCLIM debug feature status exposes the three lazy-loaded integrations."
+  (let ((status (mcclim-debug-feature-status)))
+    (dolist (key '(:debugger :inspector :listener))
+      (let ((entry (getf status key)))
+        (is (stringp (getf entry :system)))
+        (is (stringp (getf entry :package)))
+        (is (member (getf entry :available-p) '(nil t)))
+        (is (member (getf entry :loaded-p) '(nil t)))))))
+
+(test mcclim-debug-snapshot-works-without-live-frame
+  "Runtime snapshots are useful in tests and headless runs too."
+  (let* ((buf (make-buffer "debug-snapshot-buffer"))
+         (clawmacs::*buffer-ring* (list buf))
+         (clawmacs::*clawmacs-frame* nil)
+         (text (mcclim-debug-snapshot-to-string buf)))
+    (is (search "McCLIM Runtime Snapshot" text :test #'char-equal))
+    (is (search "no live Clawmacs frame" text :test #'char-equal))
+    (is (search "debug-snapshot-buffer" text :test #'char-equal))))
+
+(test mcclim-debug-status-command-opens-help-buffer
+  "The status command is available as a normal Clawmacs command."
+  (let* ((buf (make-buffer "debug-command-buffer"))
+         (clawmacs::*buffer-ring* (list buf)))
+    (mcclim-debug-status-command buf)
+    (let ((help (find-buffer-by-name "*McCLIM Debug*")))
+      (is (not (null help)))
+      (is (search "McCLIM Debugging" (help-buffer-text help)
+                  :test #'char-equal)))))

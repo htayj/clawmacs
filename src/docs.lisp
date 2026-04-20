@@ -3838,6 +3838,73 @@ documentation in *extended-docs*."
   :side-effects "Creates the Clawmacs McCLIM application frame, registers it for display-change events, and runs the frame top level."
   :see-also (clawmacs-gui clawmacs-main mcclim-redisplay-frame))
 
+(defdoc mcclim-debug-feature-status
+  :category "mcclim"
+  :usage "(mcclim-debug-feature-status)"
+  :returns "plist — Availability and runtime status for clim-debugger, Clouseau, CLIM Listener, live frames, and inspector frames."
+  :see-also (mcclim-debug-status-to-string mcclim-debug-status-command))
+
+(defdoc mcclim-debug-status-to-string
+  :category "mcclim"
+  :usage "(mcclim-debug-status-to-string)"
+  :returns "string — User-facing help and status text for McCLIM debugging support."
+  :see-also (mcclim-debug-feature-status mcclim-debug-status-command))
+
+(defdoc mcclim-debug-snapshot-to-string
+  :category "mcclim"
+  :usage "(mcclim-debug-snapshot-to-string &optional BUFFER)"
+  :returns "string — Textual report of the current McCLIM frame, panes, logical windows, and buffer state."
+  :see-also (mcclim-debug-snapshot-command mcclim-inspect-current-frame-command))
+
+(defdoc mcclim-install-debugger
+  :category "mcclim"
+  :usage "(mcclim-install-debugger)"
+  :returns "string — Status message."
+  :side-effects "Lazily loads clim-debugger and installs it as *debugger-hook*, preserving the previous hook for mcclim-disable-debugger."
+  :see-also (mcclim-disable-debugger mcclim-install-debugger-command))
+
+(defdoc mcclim-launch-listener
+  :category "mcclim"
+  :usage "(mcclim-launch-listener)"
+  :returns "string — Status message."
+  :side-effects "Lazily loads clim-listener and starts a listener process with debugger integration controlled by *mcclim-listener-debugger-enabled*."
+  :see-also (mcclim-launch-listener-command *mcclim-listener-debugger-enabled*))
+
+(defdoc mcclim-debug-inspect-target
+  :category "mcclim"
+  :usage "(mcclim-debug-inspect-target :frame BUFFER)"
+  :returns "string — Status message."
+  :side-effects "Lazily loads Clouseau and opens an inspector for a known Clawmacs/McCLIM object."
+  :see-also (mcclim-inspect-current-frame-command mcclim-refresh-inspectors-command))
+
+(defdoc mcclim-debug-status-command
+  :category "mcclim"
+  :usage "M-x mcclim-debug-status-command or C-h D"
+  :returns "nil — Displays a help buffer."
+  :side-effects "Creates or refreshes *McCLIM Debug*."
+  :see-also (mcclim-debug-feature-status mcclim-debug-snapshot-command))
+
+(defdoc mcclim-debug-snapshot-command
+  :category "mcclim"
+  :usage "M-x mcclim-debug-snapshot-command"
+  :returns "nil — Displays a help buffer."
+  :side-effects "Creates or refreshes *McCLIM Runtime Snapshot*."
+  :see-also (mcclim-debug-snapshot-to-string mcclim-debug-status-command))
+
+(defdoc mcclim-inspect-current-frame-command
+  :category "mcclim"
+  :usage "M-x mcclim-inspect-current-frame-command"
+  :returns "nil — Reports status in the current buffer."
+  :side-effects "Opens the current Clawmacs application frame in Clouseau."
+  :see-also (mcclim-inspect-visible-buffer-command mcclim-inspect-lisp-form-command))
+
+(defdoc mcclim-launch-listener-command
+  :category "mcclim"
+  :usage "M-x mcclim-launch-listener-command"
+  :returns "nil — Reports status in the current buffer."
+  :side-effects "Starts CLIM Listener in a new process."
+  :see-also (mcclim-toggle-listener-debugger-command mcclim-install-debugger-command))
+
 ;;; ==========================================================================
 ;;; Category: main — Application entry point
 ;;; ==========================================================================

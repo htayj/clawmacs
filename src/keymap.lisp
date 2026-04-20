@@ -187,11 +187,13 @@
     (keymap-bind km '(:ctrl-h #\v) 'describe-variable-command)  ; C-h v = describe variable
     (keymap-bind km '(:ctrl-h #\T) 'describe-type-command)      ; C-h T = describe type
     (keymap-bind km '(:ctrl-h #\F) 'customize-face-command)     ; C-h F = customize face
+    (keymap-bind km '(:ctrl-h #\D) 'mcclim-debug-status-command) ; C-h D = McCLIM debug status
     (keymap-bind km '(:ctrl-c #\b) 'describe-bindings-command)  ; compatibility alias
     (keymap-bind km '(:ctrl-c #\f) 'describe-function-command)  ; compatibility alias
     (keymap-bind km '(:ctrl-c #\v) 'describe-variable-command)  ; compatibility alias
     (keymap-bind km '(:ctrl-c #\T) 'describe-type-command)      ; compatibility alias
     (keymap-bind km '(:ctrl-c #\F) 'customize-face-command)     ; compatibility alias
+    (keymap-bind km '(:ctrl-c #\D) 'mcclim-debug-status-command) ; compatibility alias
     ;; ----- C-x prefix: global / cross-buffer commands -----
     ;; C-x is reserved for global commands that operate across buffers
     ;; or affect the application as a whole (buffer management, I/O, etc.).

@@ -1074,6 +1074,8 @@ class LocalHTTPFixture:
 #   64-logical-window-commands
 # Rendering toggles:
 #   51-toggle-tool-results, 68-toggle-reasoning-metadata-tool-results
+# McCLIM debugging:
+#   69-mcclim-debug-status-and-snapshot
 # Streaming control:
 #   55-stream-poll-renders, 56-escape-stops-stream
 # Mouse / selection helpers:
@@ -1981,6 +1983,23 @@ def test_70_feature_inventory_runtime_contract(session):
                               "toggle-reasoning-output-command"
                               "toggle-metadata-output-command"
                               "toggle-debug-mode-command"
+                              "mcclim-debug-status-command"
+                              "mcclim-debug-snapshot-command"
+                              "mcclim-install-debugger-command"
+                              "mcclim-disable-debugger-command"
+                              "mcclim-launch-listener-command"
+                              "mcclim-toggle-listener-debugger-command"
+                              "mcclim-inspect-current-frame-command"
+                              "mcclim-inspect-visible-buffer-command"
+                              "mcclim-inspect-current-buffer-command"
+                              "mcclim-inspect-window-tree-command"
+                              "mcclim-inspect-selected-window-command"
+                              "mcclim-inspect-main-pane-command"
+                              "mcclim-inspect-input-pane-command"
+                              "mcclim-inspect-render-snapshot-command"
+                              "mcclim-inspect-debug-status-command"
+                              "mcclim-inspect-lisp-form-command"
+                              "mcclim-refresh-inspectors-command"
                               "customize-drawing-style-command"
                               "customize-face-command"
                               "describe-function-command"
@@ -2620,6 +2639,41 @@ def test_68_toggle_reasoning_metadata_and_tool_results(session):
     session.screenshot("68-toggle-reasoning-metadata-tool-results")
 
 
+def test_69_mcclim_debug_status_and_snapshot(session):
+    """McCLIM debug status and runtime snapshots render as help buffers."""
+    session.eval_lisp(
+        r'''(progn
+             (clawmacs:mcclim-debug-status-command
+              (clawmacs:current-buffer))
+             "MCCLIM-DEBUG-STATUS-OK")''',
+        timeout=20,
+    )
+    status = wait_for_current_buffer_message_text(session, "McCLIM Debugging")
+    E2E.assert_contains(status, "clim-debugger", "debugger status visible")
+    E2E.assert_contains(status, "Clouseau", "Clouseau status visible")
+    E2E.assert_contains(status, "CLIM Listener", "Listener status visible")
+    session.screenshot("69-mcclim-debug-status")
+
+    session.eval_lisp(
+        r'''(progn
+             (clawmacs:mcclim-debug-snapshot-command
+              (clawmacs:current-buffer))
+             "MCCLIM-DEBUG-SNAPSHOT-OK")''',
+        timeout=20,
+    )
+    snapshot = wait_for_current_buffer_message_text(
+        session,
+        "McCLIM Runtime Snapshot",
+    )
+    E2E.assert_contains(snapshot, "Panes:", "snapshot pane section visible")
+    E2E.assert_contains(snapshot, "Logical windows:",
+                         "snapshot logical window section visible")
+    session.screenshot("69-mcclim-debug-snapshot")
+    E2E.kill_current_buffer(session)
+    E2E.kill_current_buffer(session)
+    switch_to_session_buffer(session)
+
+
 def test_41_buffer_state_persistence_core(session):
     """Input text persists when switching between distinct chat buffers."""
     suffix = str(int(time.time() * 1000))
@@ -3094,6 +3148,7 @@ def test_registry(group):
         ("66-project-open-edit-save-search", test_66_project_open_edit_save_search_flow),
         ("67-session-load-tree-fork", test_67_session_load_tree_and_fork_flow),
         ("68-toggle-reasoning-metadata-tool-results", test_68_toggle_reasoning_metadata_and_tool_results),
+        ("69-mcclim-debug-status-and-snapshot", test_69_mcclim_debug_status_and_snapshot),
         ("38-shell-prefix", E2E.test_38_shell_prefix),
         ("39-debug-mode", E2E.test_39_debug_mode_toggle),
         ("40-save-session", E2E.test_40_save_session),

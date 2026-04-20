@@ -25,6 +25,8 @@ coverage in `test-mcclim-e2e.py` and shared scenarios in
 - Commands/minibuffer: M-x, prompt readers, command completion, abort.
 - Help/customize: describe bindings, function, variable, type, installed
   package; customize drawing styles/faces.
+- McCLIM debugging: clim-debugger hook status, Clouseau/Listener availability,
+  runtime frame/pane/window snapshots.
 - Models/agents: select agent, select model, select think level, provider/model
   modeline display.
 - Display toggles: tool results, reasoning output, metadata output, debug mode.
@@ -80,6 +82,7 @@ coverage in `test-mcclim-e2e.py` and shared scenarios in
 - `71_tools_netcons_package_open_find_offline`
 - `71_tools_speculum_package_self_visibility`
 - `71_tools_organa_package_todo_management`
+- `69-mcclim-debug-status-and-snapshot`
 
 ## Known Gaps
 
@@ -96,6 +99,7 @@ coverage in `test-mcclim-e2e.py` and shared scenarios in
 - Core UI/rendering/windowing: `53` through `64`, plus `01` through `21`.
 - Editor/project/session/toggles: `65` through `68`, `38` through `47`,
   `51`, `52`.
+- McCLIM debugging: `69-mcclim-debug-status-and-snapshot`.
 - Readline/input editing: `22` through `37`.
 - Package tools: `71_tools_lispi_*`, `71_tools_sexed_*`,
   `71_tools_slop_*`, `71_tools_git_*`, `71_tools_netcons_*`,

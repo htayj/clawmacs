@@ -1014,7 +1014,36 @@
    #:*debug-log-file*
    #:debug-log
    #:file-debug-log
+   #:*mcclim-debugger-enabled*
+   #:*mcclim-listener-debugger-enabled*
+   #:*mcclim-debug-inspector-frames*
+   #:mcclim-debug-feature-status
+   #:mcclim-debug-status-to-string
+   #:mcclim-debug-snapshot-to-string
+   #:mcclim-install-debugger
+   #:mcclim-disable-debugger
+   #:mcclim-launch-listener
+   #:mcclim-debug-inspect-target
+   #:mcclim-debug-inspect-lisp-form
+   #:mcclim-refresh-inspectors
    #:toggle-debug-mode-command
+   #:mcclim-debug-status-command
+   #:mcclim-debug-snapshot-command
+   #:mcclim-install-debugger-command
+   #:mcclim-disable-debugger-command
+   #:mcclim-launch-listener-command
+   #:mcclim-toggle-listener-debugger-command
+   #:mcclim-inspect-current-frame-command
+   #:mcclim-inspect-visible-buffer-command
+   #:mcclim-inspect-current-buffer-command
+   #:mcclim-inspect-window-tree-command
+   #:mcclim-inspect-selected-window-command
+   #:mcclim-inspect-main-pane-command
+   #:mcclim-inspect-input-pane-command
+   #:mcclim-inspect-render-snapshot-command
+   #:mcclim-inspect-debug-status-command
+   #:mcclim-inspect-lisp-form-command
+   #:mcclim-refresh-inspectors-command
    #:toggle-reasoning-output-command
    #:toggle-metadata-output-command
    #:redraw-screen-command
