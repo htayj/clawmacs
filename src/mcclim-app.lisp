@@ -212,6 +212,9 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
 (clim:define-presentation-type customize-field-ref ()
   :description "a customize buffer field")
 
+(clim:define-presentation-type listener-entry-ref ()
+  :description "a Common Lisp listener transcript entry")
+
 ;;; --------------------------------------------------------------------------
 ;;; CLIM Command Tables + Presentation Translators
 ;;;
@@ -1981,6 +1984,108 @@ display through the same renderer as the transcript keeps repaint stable."
                               (mcclim-customize-display-entries buf cols)
                               :customize-buffer))
 
+(defun mcclim-listener-message-prefix (buf msg)
+  "Return the prompt prefix used to render MSG in listener BUF."
+  (cond
+    ((eq (message-sender msg) :user)
+     (or (message-metadata-value (message-metadata msg) :listener-prompt)
+         (listener-prompt-text buf)))
+    ((eq (message-sender msg) :listener)
+     "")
+    (t
+     (message-sender-prefix msg))))
+
+(defun mcclim-listener-message-face (msg)
+  "Return the global face used for listener MSG."
+  (case (message-sender msg)
+    (:user :selector-header)
+    (:listener :default-text)
+    (:system :system)
+    (otherwise :default-text)))
+
+(defun mcclim-listener-display-entries (buf cols)
+  "Return styled entries for BUF's listener transcript."
+  (let ((entries nil))
+    (loop :for msg := (buffer-first-message buf) :then (message-next msg)
+          :while (and msg (not (eq msg (buffer-input-message buf))))
+          :do (let* ((prefix (mcclim-listener-message-prefix buf msg))
+                     (prefix-len (length prefix))
+                     (prefix-spaces (make-string prefix-len
+                                                 :initial-element #\Space))
+                     (display-width (max 1 (- cols prefix-len)))
+                     (face (mcclim-listener-message-face msg))
+                     (first-row-p t))
+                (dolist (line (message-display-line-strings msg))
+                  (dolist (chunk (mcclim-wrap-display-line line display-width))
+                    (let ((line-prefix (if first-row-p prefix prefix-spaces)))
+                      (push (list :text (concatenate 'string line-prefix chunk)
+                                  :face face
+                                  :object (list :buffer buf
+                                                :message msg
+                                                :text line)
+                                  :presentation-type 'listener-entry-ref)
+                            entries))
+                    (setf first-row-p nil)))))
+    (nreverse entries)))
+
+(defun mcclim-render-listener-footer (pane buf row cols char-w char-h)
+  "Render a listener wholine-style footer at ROW."
+  (multiple-value-bind (fg bg ts opts)
+      (resolve-global-face-inks :who-line)
+    (fill-row pane row cols bg char-w char-h)
+    (draw-text-at pane row 0
+                  (mcclim-fit-line (listener-wholine-text buf) cols)
+                  fg bg ts char-w char-h
+                  :drawing-options opts)))
+
+(defun mcclim-render-listener-buffer (pane buf rows cols char-w char-h)
+  "Render BUF as a McCLIM Listener-style buffer."
+  (clear-pane-with-ink pane *mcclim-bg-ink*)
+  (when (plusp rows)
+    (mcclim-render-buffer-title pane buf cols char-w char-h))
+  (let* ((footer-row (and (> rows 1) (1- rows)))
+         (content-rows (max 0 (if footer-row (- rows 2) (1- rows))))
+         (entries (mcclim-listener-display-entries buf cols))
+         (total-rows (length entries))
+         (visible-messages nil))
+    (multiple-value-bind (visible-top visible-bottom)
+        (mcclim-entry-scroll-window buf total-rows content-rows)
+      (loop :for index :from visible-top :below visible-bottom
+            :for screen-row :from 1
+            :for entry := (nth index entries)
+            :while (and entry (< screen-row (or footer-row rows)))
+            :do (let ((object (getf entry :object)))
+                  (push (getf object :message) visible-messages)
+                  (clim:with-output-as-presentation
+                      (pane object 'listener-entry-ref)
+                    (mcclim-draw-styled-entry pane screen-row cols
+                                              entry char-w char-h)))))
+    (when footer-row
+      (mcclim-render-listener-footer pane buf footer-row cols char-w char-h))
+    (mcclim-record-render-snapshot (clim:pane-frame pane)
+                                   pane
+                                   buf
+                                   :listener-buffer
+                                   rows
+                                   cols
+                                   :input-start-row -1
+                                   :history-height content-rows
+                                   :visible-messages
+                                   (remove-duplicates
+                                    (nreverse visible-messages)
+                                    :test #'eq))))
+
+(defun mcclim-render-listener-input-pane (pane buf rows cols char-w char-h)
+  "Render BUF's listener input with a package-sensitive prompt."
+  (clear-pane-with-ink pane *mcclim-bg-ink*)
+  (when (plusp rows)
+    (mcclim-render-message-lines pane (buffer-input-message buf)
+                                 0 cols char-w char-h
+                                 :show-cursor t
+                                 :max-rows rows
+                                 :prefix (listener-prompt-text buf)
+                                 :render-images-p nil)))
+
 (defun mcclim-render-empty-input-pane (pane buf rows cols char-w char-h)
   "Render no editable input for read-only/special-purpose buffers."
   (declare (ignore buf rows cols char-w char-h))
@@ -1999,7 +2104,13 @@ display through the same renderer as the transcript keeps repaint stable."
    :description "Interactive customization buffer."
    :major-mode "customize"
    :presentation-function 'mcclim-render-customize-buffer
-   :input-presentation-function 'mcclim-render-empty-input-pane))
+   :input-presentation-function 'mcclim-render-empty-input-pane)
+  (register-buffer-type
+   :listener
+   :description "Interactive Common Lisp listener buffer."
+   :major-mode "listener"
+   :presentation-function 'mcclim-render-listener-buffer
+   :input-presentation-function 'mcclim-render-listener-input-pane))
 
 (register-mcclim-core-buffer-presentations)
 

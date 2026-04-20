@@ -1960,7 +1960,7 @@ def test_70_feature_inventory_runtime_contract(session):
                    (dolist (name packages)
                      (need name installed "installed package"))
                    (dolist (name '("chat" "scratch" "file" "help"
-                                   "customize" "organa"))
+                                   "customize" "listener" "organa"))
                      (need name buffer-types "buffer type"))
                    (dolist (name
                             '("send-message"
@@ -1968,6 +1968,7 @@ def test_70_feature_inventory_runtime_contract(session):
                               "execute-extended-command"
                               "list-buffers-command"
                               "new-buffer-command"
+                              "new-listener-buffer-command"
                               "next-buffer-command"
                               "kill-buffer-command"
                               "split-window-below-command"
@@ -2089,6 +2090,49 @@ def test_70_feature_inventory_runtime_contract(session):
     )
     if "FEATURE-INVENTORY-OK" not in result:
         fail(f"feature inventory eval returned unexpected result: {result}")
+
+
+def test_70_listener_buffer_eval_and_commands(session):
+    """Listener buffers evaluate Lisp and support McCLIM-style commands."""
+    result = session.eval_lisp(
+        r'''(progn
+             (let* ((buf (clawmacs:ensure-listener-buffer
+                          :working-directory #P"/tmp/"))
+                    (frame (and (boundp 'clawmacs::*clawmacs-frame*)
+                                clawmacs::*clawmacs-frame*)))
+               (if frame
+                   (progn
+                     (clawmacs::mcclim-set-selected-window-buffer frame buf)
+                     (clawmacs::mcclim-sync-drei-from-buffer frame :force-p t))
+                   (clawmacs:switch-to-buffer buf))
+               (labels ((latest-text ()
+                          (let ((msg (clawmacs::message-prev
+                                      (clawmacs:buffer-input-message buf))))
+                            (if msg (clawmacs:message-text msg) "")))
+                        (submit (text expected)
+                          (clawmacs:set-message-text
+                           (clawmacs:buffer-input-message buf) text)
+                          (clawmacs:submit-listener-input buf)
+                          (unless (search expected (latest-text)
+                                          :test #'char-equal)
+                            (error "Expected ~S after ~S, got ~S"
+                                   expected text (latest-text)))))
+                 (submit "(+ 2 5)" "=> 7")
+                 (submit ",Help Commands" "McCLIM Listener commands")
+                 (submit "#! printf LISTENER-SHELL" "LISTENER-SHELL")
+                 (submit ",Package cl-user" "Package set to"))
+               (clawmacs:notify-buffer-display-change buf :e2e-listener)
+               "LISTENER-E2E-OK"))''',
+        timeout=20,
+    )
+    if "LISTENER-E2E-OK" not in result:
+        fail(f"listener buffer smoke returned unexpected result: {result}")
+    wait_for_current_buffer_message_text(session, "=> 7", timeout=10)
+    wait_for_current_buffer_message_text(session, "McCLIM Listener commands", timeout=10)
+    wait_for_current_buffer_message_text(session, "LISTENER-SHELL", timeout=10)
+    wait_for_current_buffer_message_text(session, "Package set to", timeout=10)
+    session.screenshot("70-listener-buffer-eval-commands")
+    switch_to_session_buffer(session)
 
 
 def test_71_tools_lispi_package_enable_and_eval(session):
@@ -3198,6 +3242,7 @@ def test_registry(group):
         ("67-session-load-tree-fork", test_67_session_load_tree_and_fork_flow),
         ("68-toggle-reasoning-metadata-tool-results", test_68_toggle_reasoning_metadata_and_tool_results),
         ("69-mcclim-debug-status-and-snapshot", test_69_mcclim_debug_status_and_snapshot),
+        ("70-listener-buffer-eval-commands", test_70_listener_buffer_eval_and_commands),
         ("38-shell-prefix", E2E.test_38_shell_prefix),
         ("39-debug-mode", E2E.test_39_debug_mode_toggle),
         ("40-save-session", E2E.test_40_save_session),

@@ -173,6 +173,22 @@
         (is (search "click edit" row1))
         (is (search "r revert" row2))))))
 
+(test format-who-line-listener-describes-eval-and-commands
+  "Listener buffers advertise Lisp evaluation and comma commands."
+  (let ((*minibuffer-active* nil)
+        (*buffer-selector-active* nil)
+        (*model-selector-active* nil)
+        (*think-selector-active* nil)
+        (*customize-face-state* nil)
+        (*openai-oauth-pending* nil)
+        (*deny-message-mode* nil)
+        (clawmacs::*buffer-ring* nil))
+    (let ((buf (make-buffer "*listener*" :kind :listener)))
+      (multiple-value-bind (row1 row2)
+          (clawmacs::format-who-line buf 120)
+        (is (search "RET evals Lisp" row1))
+        (is (search ",Help Commands" row2))))))
+
 (test format-modeline-file-shows-position-and-mark
   "Document buffers show point and mark status in the modeline."
   (let ((buf (make-buffer "p:file.txt" :kind :file

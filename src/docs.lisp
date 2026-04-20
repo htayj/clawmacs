@@ -527,6 +527,10 @@ documentation in *extended-docs*."
   :category "buffer"
   :see-also (ensure-scratch-buffer scratch-buffer-text))
 
+(defdoc *listener-buffer-name*
+  :category "buffer"
+  :see-also (make-listener-buffer ensure-listener-buffer listener-buffer-p))
+
 (defdoc buffer
   :category "buffer"
   :usage "(make-buffer \"session-01\" :agent-name \"agent\") to create a buffer."
@@ -583,6 +587,64 @@ documentation in *extended-docs*."
   :usage "(buffer-input-presentation-function BUF)"
   :returns "function designator or NIL — The McCLIM input-pane presenter for BUF's type."
   :see-also (buffer-presentation-function register-buffer-type))
+
+(defdoc listener-state
+  :category "buffer"
+  :usage "Struct — process-local state for a listener buffer."
+  :returns "listener-state — Tracks package, directory stack, last values, and command history."
+  :see-also (listener-buffer-state make-listener-buffer listener-wholine-text))
+
+(defdoc listener-buffer-p
+  :category "buffer"
+  :usage "(listener-buffer-p BUF)"
+  :returns "boolean — true when BUF has kind :LISTENER."
+  :see-also (make-listener-buffer ensure-listener-buffer submit-listener-input))
+
+(defdoc listener-buffer-state
+  :category "buffer"
+  :usage "(listener-buffer-state BUF)"
+  :returns "listener-state — BUF's process-local listener state."
+  :side-effects "Creates the listener state when missing."
+  :see-also (listener-state listener-prompt-text listener-wholine-text))
+
+(defdoc listener-prompt-text
+  :category "buffer"
+  :usage "(listener-prompt-text BUF)"
+  :returns "string — The package-sensitive prompt, e.g. \"CL-USER> \"."
+  :see-also (listener-buffer-state submit-listener-input))
+
+(defdoc listener-wholine-text
+  :category "buffer"
+  :usage "(listener-wholine-text BUF)"
+  :returns "string — Listener status text with user, host, package, directory, stack, and memory summary."
+  :see-also (listener-prompt-text listener-state))
+
+(defdoc listener-command-help-text
+  :category "buffer"
+  :usage "(listener-command-help-text)"
+  :returns "string — Help text for supported listener comma commands."
+  :see-also (submit-listener-input make-listener-buffer))
+
+(defdoc make-listener-buffer
+  :category "buffer"
+  :usage "(make-listener-buffer :working-directory #P\"/tmp/\" :add-to-ring-p t)"
+  :returns "buffer — A :LISTENER buffer with McCLIM Listener-style Lisp evaluation and comma commands."
+  :side-effects "Initializes buffer faces/keymap, creates listener state, and optionally adds the buffer to *buffer-ring*."
+  :see-also (ensure-listener-buffer listener-buffer-p submit-listener-input))
+
+(defdoc ensure-listener-buffer
+  :category "buffer"
+  :usage "(ensure-listener-buffer)"
+  :returns "buffer — Existing listener buffer, or a newly created default listener."
+  :side-effects "May create and add a listener buffer to *buffer-ring*."
+  :see-also (make-listener-buffer new-listener-buffer-command))
+
+(defdoc submit-listener-input
+  :category "buffer"
+  :usage "(submit-listener-input BUF)"
+  :returns ":redraw or NIL."
+  :side-effects "Finalizes BUF's input, evaluates Lisp forms, dispatches comma commands, inserts output, and updates listener state."
+  :see-also (send-message listener-command-help-text listener-prompt-text))
 
 (defdoc buffer-name
   :category "buffer"
@@ -3209,10 +3271,10 @@ documentation in *extended-docs*."
 
 (defdoc send-message
   :category "editing"
-  :usage "Bound to Return. Sends the current input to the agent."
+  :usage "Bound to Return. Sends chat input, evaluates listener input, or inserts a document newline depending on buffer type."
   :returns "nil"
-  :side-effects "Finalizes input, checks for prefix commands, starts streaming if no prefix."
-  :see-also (buffer-finalize-input send-to-agent-with-context process-prefix-command))
+  :side-effects "Finalizes input, checks for prefix commands, starts streaming if no prefix, or dispatches listener/document behavior."
+  :see-also (buffer-finalize-input submit-listener-input send-to-agent-with-context process-prefix-command))
 
 (defdoc insert-newline-command
   :category "editing"
@@ -3368,6 +3430,13 @@ documentation in *extended-docs*."
   :returns "nil"
   :side-effects "Creates a new buffer, initializes face registry and keymap, adds to ring."
   :see-also (make-buffer add-buffer-to-ring kill-buffer-command))
+
+(defdoc new-listener-buffer-command
+  :category "buffer-command"
+  :usage "Bound to C-x l. Creates or switches to the Common Lisp listener buffer."
+  :returns "buffer — The selected listener buffer."
+  :side-effects "May create a listener buffer and switches the current buffer."
+  :see-also (ensure-listener-buffer make-listener-buffer submit-listener-input))
 
 (defdoc kill-buffer-command
   :category "buffer-command"

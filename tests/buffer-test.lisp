@@ -159,17 +159,21 @@
       (is (string= "dashboard" (buffer-major-mode buf))))))
 
 (test built-in-special-buffer-types-are-registered
-  "Help and customize buffers are first-class non-document buffer kinds."
+  "Help, customize, and listener buffers are first-class non-document kinds."
   (let ((clawmacs::*buffer-type-registry*
           (clawmacs::make-buffer-type-registry)))
     (let ((help (find-buffer-type :help))
-          (customize (find-buffer-type :customize)))
+          (customize (find-buffer-type :customize))
+          (listener (find-buffer-type :listener)))
       (is (not (null help)))
       (is (not (null customize)))
+      (is (not (null listener)))
       (is (string= "help" (buffer-type-major-mode help)))
       (is (string= "customize" (buffer-type-major-mode customize)))
+      (is (string= "listener" (buffer-type-major-mode listener)))
       (is (not (buffer-type-document-p help)))
-      (is (not (buffer-type-document-p customize))))))
+      (is (not (buffer-type-document-p customize)))
+      (is (not (buffer-type-document-p listener))))))
 
 (test mcclim-registers-built-in-special-presentations
   "The McCLIM UI installs presentation renderers for special built-in buffers."
@@ -177,7 +181,8 @@
           (clawmacs::make-buffer-type-registry)))
     (clawmacs::register-mcclim-core-buffer-presentations)
     (let ((help (make-buffer "help" :kind :help))
-          (customize (make-buffer "customize" :kind :customize)))
+          (customize (make-buffer "customize" :kind :customize))
+          (listener (make-buffer "listener" :kind :listener)))
       (is (eq 'clawmacs::mcclim-render-help-buffer
               (buffer-presentation-function help)))
       (is (eq 'clawmacs::mcclim-render-empty-input-pane
@@ -185,7 +190,48 @@
       (is (eq 'clawmacs::mcclim-render-customize-buffer
               (buffer-presentation-function customize)))
       (is (eq 'clawmacs::mcclim-render-empty-input-pane
-              (buffer-input-presentation-function customize))))))
+              (buffer-input-presentation-function customize)))
+      (is (eq 'clawmacs::mcclim-render-listener-buffer
+              (buffer-presentation-function listener)))
+      (is (eq 'clawmacs::mcclim-render-listener-input-pane
+              (buffer-input-presentation-function listener))))))
+
+(test make-listener-buffer-evaluates-lisp-and-comma-commands
+  "Listener buffers evaluate Lisp forms and dispatch McCLIM-style comma commands."
+  (let ((*buffer-ring* nil)
+        (clawmacs::*listener-buffer-states* (make-hash-table :test #'eq)))
+    (clawmacs::init-default-keymap)
+    (let ((buf (make-listener-buffer :working-directory #P"/tmp/"
+                                     :add-to-ring-p t)))
+      (is (listener-buffer-p buf))
+      (is (string= "listener" (buffer-major-mode buf)))
+      (is (not (document-buffer-p buf)))
+      (is (search "McCLIM-style Common Lisp Listener"
+                  (message-text (latest-buffer-message buf))))
+
+      (set-message-text (buffer-input-message buf) "(+ 1 2)")
+      (submit-listener-input buf)
+      (is (search "=> 3" (message-text (latest-buffer-message buf))))
+      (is (search ">" (clawmacs::message-metadata-value
+                       (message-metadata
+                        (message-prev (message-prev (buffer-input-message buf))))
+                       :listener-prompt)))
+
+      (set-message-text (buffer-input-message buf) ",Help Commands")
+      (submit-listener-input buf)
+      (is (search "McCLIM Listener commands"
+                  (message-text (latest-buffer-message buf))))
+
+      (set-message-text (buffer-input-message buf) ",Package cl-user")
+      (submit-listener-input buf)
+      (is (search "Package set to"
+                  (message-text (latest-buffer-message buf))))
+
+      (set-message-text (buffer-input-message buf) ",Clear Output History")
+      (submit-listener-input buf)
+      (is (search "Listener history cleared"
+                  (message-text (latest-buffer-message buf))))
+      (is (= 1 (length (buffer-test-history-messages buf)))))))
 
 (test make-help-buffer-stores-read-only-help-content
   "Help buffers expose their text through help-buffer-text."

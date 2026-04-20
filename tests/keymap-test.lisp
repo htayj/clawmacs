@@ -228,6 +228,12 @@ and C-x b to the old overlay buffer selector."
   (is (eq 'clawmacs::load-session-command
           (keymap-lookup *default-keymap* (list :ctrl-x (code-char 18))))))
 
+(test default-keymap-listener-binding
+  "Default keymap binds C-x l to the in-buffer Lisp listener."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::new-listener-buffer-command
+          (keymap-lookup *default-keymap* '(:ctrl-x #\l)))))
+
 (test default-keymap-window-bindings
   "Default keymap binds Emacs-style logical window commands."
   (clawmacs::init-default-keymap)

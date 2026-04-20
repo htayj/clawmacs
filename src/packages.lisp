@@ -252,6 +252,7 @@
    #:*default-pipeline-name*
    #:*scratch-buffer-name*
    #:*scratch-buffer-initial-text*
+   #:*listener-buffer-name*
    #:buffer
    #:make-buffer
    #:buffer-type
@@ -315,6 +316,7 @@
    #:find-buffer-by-name
    #:scratch-buffer-p
    #:file-buffer-p
+   #:listener-buffer-p
    #:document-buffer-p
    #:buffer-llm-running-p
    #:make-chat-buffer
@@ -328,6 +330,21 @@
    #:next-buffer-name
    #:buffer-names
    #:buffer-finalize-input
+
+   ;; Listener buffers
+   #:listener-state
+   #:make-listener-state
+   #:listener-state-package-name
+   #:listener-state-directory-stack
+   #:listener-state-last-values
+   #:listener-state-command-history
+   #:listener-buffer-state
+   #:listener-prompt-text
+   #:listener-wholine-text
+   #:listener-command-help-text
+   #:make-listener-buffer
+   #:ensure-listener-buffer
+   #:submit-listener-input
    #:buffer-clear-history-before-input
    #:buffer-insert-read-only-message
    #:buffer-insert-agent-message
@@ -926,6 +943,7 @@
    #:minibuffer-select-think-level-command
    #:minibuffer-select-buffer-command
    #:load-session-command
+   #:new-listener-buffer-command
    #:help-buffer-p
    #:customize-buffer-p
    #:help-buffer-text

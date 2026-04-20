@@ -43,6 +43,7 @@
                              (:file "render-core")
                              (:file "minibuffer")
                              (:file "prefix")
+                             (:file "listener")
                              (:file "main")
                              (:file "mcclim-app")
                              (:file "speculum")

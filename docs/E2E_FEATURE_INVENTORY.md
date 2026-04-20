@@ -14,7 +14,7 @@ coverage in `test-mcclim-e2e.py` and shared scenarios in
   copy region, mark, exchange point and mark, multiline input, tab insertion.
 - Scrolling: PageUp/PageDown, Meta/C-v scroll, mouse wheel history scrolling.
 - Buffers: chat buffers, scratch buffers, file buffers, help buffers,
-  customize buffers, package-provided organa buffers.
+  customize buffers, listener buffers, package-provided organa buffers.
 - Buffer operations: create, switch, kill, persist, list, buffer selector.
 - Projects/files: select project, open project file, edit file buffer, save,
   create file, search project.
@@ -23,6 +23,8 @@ coverage in `test-mcclim-e2e.py` and shared scenarios in
 - Windows: split below, split right, other-window, delete-window,
   delete-other-windows, pointer selection.
 - Commands/minibuffer: M-x, prompt readers, command completion, abort.
+- Listener: Common Lisp form evaluation, comma commands, `#!` shell macro,
+  package/directory status.
 - Help/customize: describe bindings, function, variable, type, installed
   package; customize drawing styles/faces.
 - McCLIM debugging: clim-debugger hook status, Clouseau/Listener availability,
@@ -85,6 +87,8 @@ coverage in `test-mcclim-e2e.py` and shared scenarios in
 - `69-mcclim-debug-status-and-snapshot` covers McCLIM debug status,
   runtime snapshots, Clouseau status documentation, and remembered inspector
   lists.
+- `70-listener-buffer-eval-commands` covers the in-buffer McCLIM-style
+  listener.
 
 ## Known Gaps
 

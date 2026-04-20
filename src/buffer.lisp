@@ -122,6 +122,7 @@
       (install :chat "Default agent conversation buffer." "chat" nil)
       (install :help "Read-only help buffer." "help" nil)
       (install :customize "Interactive customization buffer." "customize" nil)
+      (install :listener "Interactive Common Lisp listener buffer." "listener" nil)
       (install :scratch "Editable scratch buffer." "scratch" t)
       (install :file "Project-backed editable file buffer." "file" t))
     registry))
@@ -219,7 +220,7 @@ major-mode label, and optional McCLIM presentation functions."
                       :accessor buffer-kind
                       :initform :chat
                       :type keyword
-                      :documentation "Buffer kind. Built-ins include :chat, :help, :customize, :scratch, and :file.")
+                      :documentation "Buffer kind. Built-ins include :chat, :help, :customize, :listener, :scratch, and :file.")
    (working-directory :initarg :working-directory
                       :accessor buffer-working-directory
                       :initform (truename ".")

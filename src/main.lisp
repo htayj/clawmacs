@@ -96,27 +96,31 @@
 
 (defun send-message (buffer)
   "Send the current input message to the agent."
-  (if (document-buffer-p buffer)
-      (insert-newline-command buffer)
-      (let ((input-text (message-text (buffer-input-message buffer))))
-        (when (plusp (length (string-trim '(#\Space #\Tab #\Newline) input-text)))
-          (run-hook-with-args '*before-send-message-hook* buffer input-text)
-          (unless (find-prefix-handler input-text)
-            (maybe-compact-buffer buffer
-                                  :reason :pre-user-message
-                                  :include-current-input-p t))
-          (buffer-finalize-input buffer)
-          (setf (message-face-set (buffer-input-message buffer))
-                (gethash :user (buffer-face-registry buffer)))
-          (let ((result
-                  ;; Check for prefix commands before sending to the LLM
-                  (or (process-prefix-command buffer input-text)
-                      (if (buffer-pipeline-name buffer)
-                          (run-pipeline-for-buffer buffer input-text)
-                          (send-to-agent-with-context buffer)))))
-            (run-hook-with-args '*after-send-message-hook*
-                                buffer input-text result)
-            result)))))
+  (cond
+    ((document-buffer-p buffer)
+     (insert-newline-command buffer))
+    ((listener-buffer-p buffer)
+     (submit-listener-input buffer))
+    (t
+     (let ((input-text (message-text (buffer-input-message buffer))))
+       (when (plusp (length (string-trim '(#\Space #\Tab #\Newline) input-text)))
+         (run-hook-with-args '*before-send-message-hook* buffer input-text)
+         (unless (find-prefix-handler input-text)
+           (maybe-compact-buffer buffer
+                                 :reason :pre-user-message
+                                 :include-current-input-p t))
+         (buffer-finalize-input buffer)
+         (setf (message-face-set (buffer-input-message buffer))
+               (gethash :user (buffer-face-registry buffer)))
+         (let ((result
+                 ;; Check for prefix commands before sending to the LLM
+                 (or (process-prefix-command buffer input-text)
+                     (if (buffer-pipeline-name buffer)
+                         (run-pipeline-for-buffer buffer input-text)
+                         (send-to-agent-with-context buffer)))))
+           (run-hook-with-args '*after-send-message-hook*
+                               buffer input-text result)
+           result))))))
 (defcommand send-message :keys (#\Return))
 
 (defun stop-llm-command (buffer)
@@ -1448,6 +1452,12 @@ to navigate. Shows buffer name, agent, status, and message count."
     (autosave-session-snapshot new-buf)
     (switch-to-buffer new-buf)))
 (defcommand new-buffer-command)
+
+(defun new-listener-buffer-command (buffer)
+  "Create or switch to the Common Lisp listener buffer."
+  (declare (ignore buffer))
+  (switch-to-buffer (ensure-listener-buffer)))
+(defcommand new-listener-buffer-command)
 
 (defun next-buffer-command (buffer)
   "Switch to the next buffer in the ring."

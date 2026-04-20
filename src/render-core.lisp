@@ -432,6 +432,9 @@ Mode dispatch priority matches handle-key-event in main.lisp."
         ((and buf (customize-buffer-p buf) *customize-face-state*)
          (setf row1 " Customize: C-n/C-p move  RET/click edit  SPC toggle"
                row2 " C-c C-c apply  C-c C-k/C-g cancel  r revert"))
+        ((and buf (eq (buffer-kind buf) :listener))
+         (setf row1 " Listener: RET evals Lisp  comma starts commands  #! runs shell"
+               row2 " ,Help Commands lists commands  C-x k kills listener  M-x runs Clawmacs commands"))
         (*openai-oauth-pending*
          (setf row1 " Browser login in progress"
                row2 " C-g: cancel"))
