@@ -240,6 +240,9 @@
            (pipelines (find "pipelines" definitions
                             :key #'clawmacs:package-definition-name
                             :test #'string=))
+           (prove (find "prove" definitions
+                        :key #'clawmacs:package-definition-name
+                        :test #'string=))
            (speculum (find "speculum" definitions
                            :key #'clawmacs:package-definition-name
                            :test #'string=))
@@ -252,8 +255,8 @@
            (subagent (find "subagent" definitions
                            :key #'clawmacs:package-definition-name
                            :test #'string=)))
-      (is (equal '("git" "lispi" "netcons" "organa" "pipelines" "sexed"
-                   "slop" "speculum" "subagent")
+      (is (equal '("git" "lispi" "netcons" "organa" "pipelines" "prove"
+                   "sexed" "slop" "speculum" "subagent")
                  names))
       (is (not (null git)))
       (is (eq :builtin (clawmacs:package-definition-source-tier git)))
@@ -274,6 +277,10 @@
       (is (eq :builtin (clawmacs:package-definition-source-tier pipelines)))
       (is (clawmacs:package-definition-autoload pipelines))
       (is (probe-file (clawmacs:package-definition-entrypoint pipelines)))
+      (is (not (null prove)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier prove)))
+      (is (clawmacs:package-definition-autoload prove))
+      (is (probe-file (clawmacs:package-definition-entrypoint prove)))
       (is (not (null speculum)))
       (is (eq :builtin (clawmacs:package-definition-source-tier speculum)))
       (is (clawmacs:package-definition-autoload speculum))
@@ -301,6 +308,7 @@
       (is (not (null (clawmacs:find-available-package "netcons"))))
       (is (not (null (clawmacs:find-available-package "organa"))))
       (is (not (null (clawmacs:find-available-package "pipelines"))))
+      (is (not (null (clawmacs:find-available-package "prove"))))
       (is (not (null (clawmacs:find-available-package "speculum"))))
       (is (not (null (clawmacs:find-available-package "subagent"))))
       (is (null (clawmacs:render-package-prompt-sections))))))

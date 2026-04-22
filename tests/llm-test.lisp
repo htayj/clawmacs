@@ -869,101 +869,144 @@ same
        :contents "---\nname: demo-skill\ndescription: Demo self-modify skill\n---\nUse the DEMO-SKILL marker when this skill is injected.\n")
       (with-agent-defaults-path-override (path)
         (with-pipeline-definition-registry-override ()
-          (with-package-state-override ((default-package-test-channels))
-            (setf responses
-                  (list
-                   "{\"plan\":\"Round 1 plan\",\"implementation\":\"Implement round 1\",\"packages\":[\"sexed\"],\"skills\":[\"demo-skill\"],\"tests\":[\"unit\"],\"docs\":\"Update docs\",\"update_init\":false,\"init\":\"\"}"
-                   "IMPLEMENT ROUND 1"
-                   "{\"plan\":\"Round 2 plan\",\"implementation\":\"Implement round 2\",\"packages\":[\"sexed\"],\"skills\":[\"demo-skill\"],\"tests\":[\"unit\"],\"docs\":\"Refresh docs\",\"update_init\":true,\"init\":\"Enable the new workflow in init.\"}"
-                   "IMPLEMENT ROUND 2"
-                   "DOCS DONE"
-                   "INIT DONE")
-                  test-reports
-                  (list
-                   (list :passed-p nil
-                         :profiles '("unit")
-                         :results (list (list :name "unit"
-                                              :command "unit"
-                                              :directory "/tmp"
-                                              :exit-code 1
-                                              :stdout "failing output"
-                                              :stderr "failing stderr"
-                                              :passed-p nil))
-                         :summary "unit: FAIL (exit 1)\n\nOverall: FAILED")
-                   (list :passed-p t
-                         :profiles '("unit")
-                         :results (list (list :name "unit"
-                                              :command "unit"
-                                              :directory "/tmp"
-                                              :exit-code 0
-                                              :stdout "passing output"
-                                              :stderr ""
-                                              :passed-p t))
-                         :summary "unit: PASS (exit 0)\n\nOverall: PASSED")))
-            (clawmacs:set-package-enablement-scope "pipelines" :global)
-            (clawmacs:load-autoload-packages)
-            (with-function-override
-                (clawmacs:run-pipeline-test-profiles
-                 (profile-names &key directory)
-                 (declare (ignore directory))
-                 (is (equal '("unit") profile-names))
-                 (or (pop test-reports)
-                     (error "no more deterministic test reports")))
+          (let ((clawmacs::*agent-definition-registry*
+                  (make-hash-table :test #'equal)))
+            (with-package-state-override ((default-package-test-channels))
+              (setf responses
+                    (list
+                     (list :kind :text
+                           :text "{\"plan\":\"Round 1 plan\",\"implementation\":\"Implement round 1\",\"packages\":[\"sexed\"],\"skills\":[\"demo-skill\"],\"tests\":[\"unit\"],\"docs\":\"Update docs\",\"update_init\":false,\"init\":\"\"}")
+                     (list :kind :text
+                           :text "IMPLEMENT ROUND 1")
+                     (list :kind :tool
+                           :id "toolu_test_1"
+                           :name "prove_run"
+                           :input '((:methods . #("unit"))))
+                     (list :kind :text
+                           :text "{\"passed\":false,\"summary\":\"unit failed\",\"feedback\":\"unit failed on first run\",\"tests\":[\"unit\"]}")
+                     (list :kind :text
+                           :text "{\"plan\":\"Round 2 plan\",\"implementation\":\"Implement round 2\",\"packages\":[\"sexed\"],\"skills\":[\"demo-skill\"],\"tests\":[\"unit\"],\"docs\":\"Refresh docs\",\"update_init\":true,\"init\":\"Enable the new workflow in init.\"}")
+                     (list :kind :text
+                           :text "IMPLEMENT ROUND 2")
+                     (list :kind :tool
+                           :id "toolu_test_2"
+                           :name "prove_run"
+                           :input '((:methods . #("unit"))))
+                     (list :kind :text
+                           :text "{\"passed\":true,\"summary\":\"unit passed\",\"feedback\":\"unit passed on second run\",\"tests\":[\"unit\"]}")
+                     (list :kind :text :text "DOCS DONE")
+                     (list :kind :text :text "INIT DONE"))
+                    test-reports
+                    (list
+                     (list :passed-p nil
+                           :profiles '("unit")
+                           :results (list (list :name "unit"
+                                                :command "unit"
+                                                :directory "/tmp"
+                                                :exit-code 1
+                                                :stdout "failing output"
+                                                :stderr "failing stderr"
+                                                :passed-p nil))
+                           :summary "unit: FAIL (exit 1)\n\nOverall: FAILED")
+                     (list :passed-p t
+                           :profiles '("unit")
+                           :results (list (list :name "unit"
+                                                :command "unit"
+                                                :directory "/tmp"
+                                                :exit-code 0
+                                                :stdout "passing output"
+                                                :stderr ""
+                                                :passed-p t))
+                           :summary "unit: PASS (exit 0)\n\nOverall: PASSED")))
+              (clawmacs:set-package-enablement-scope "pipelines" :global)
+              (clawmacs:load-autoload-packages)
               (with-function-override
-                  (clawmacs::provider-request-streaming
-                   (provider messages callback
-                             &key model max-tokens tools
-                               reasoning-effort system-prompt)
-                   (declare (ignore provider callback model
-                                    max-tokens tools
-                                    reasoning-effort))
-                   (push (list :messages messages
-                               :messages-json (clawmacs::api-json-encode messages)
-                               :system-prompt system-prompt)
-                         captured-calls)
-                   (make-completed-stream-state-response
-                    "end_turn"
-                    (list (clawmacs::canonical-text-block
-                           (or (pop responses)
-                               (error "no more provider responses"))))))
-                (clawmacs::init-default-keymap)
-                (clawmacs::init-global-faces)
-                (initialize-test-tools)
-                (let* ((buf (clawmacs::make-prompt-buffer
-                             "build a self-modifying workflow"
-                             "agent"))
-                       (result (clawmacs:run-pipeline-on-buffer
-                                "self-modify"
-                                "build a self-modifying workflow"
-                                :buffer buf))
-                       (stage-order
-                         (mapcar #'clawmacs:pipeline-stage-result-stage-name
-                                 (clawmacs:pipeline-run-result-stage-results
+                  (clawmacs:run-pipeline-test-profiles
+                   (profile-names &key directory)
+                   (declare (ignore directory))
+                   (is (equal '("unit") profile-names))
+                   (or (pop test-reports)
+                       (error "no more deterministic test reports")))
+                (with-function-override
+                    (clawmacs::provider-request-streaming
+                     (provider messages callback
+                               &key model max-tokens tools
+                                 reasoning-effort system-prompt)
+                     (declare (ignore provider callback model
+                                      max-tokens
+                                      reasoning-effort))
+                     (let ((response (or (pop responses)
+                                         (error "no more provider responses"))))
+                       (push (list :messages messages
+                                   :messages-json (clawmacs::api-json-encode messages)
+                                   :tool-names (mapcar (lambda (tool)
+                                                         (cdr (assoc :name tool)))
+                                                       (if (vectorp tools)
+                                                           (coerce tools 'list)
+                                                           tools))
+                                   :system-prompt system-prompt)
+                             captured-calls)
+                       (ecase (getf response :kind)
+                         (:text
+                          (make-completed-stream-state-response
+                           "end_turn"
+                           (list (clawmacs::canonical-text-block
+                                  (getf response :text)))))
+                         (:tool
+                          (make-completed-stream-state-response
+                           "tool_use"
+                           (list (clawmacs::canonical-tool-use-block
+                                  (getf response :id)
+                                  (getf response :name)
+                                  (getf response :input))))))))
+                  (clawmacs::init-default-keymap)
+                  (clawmacs::init-global-faces)
+                  (initialize-test-tools)
+                  (let* ((buf (clawmacs::make-prompt-buffer
+                               "build a self-modifying workflow"
+                               "agent"))
+                         (result (clawmacs:run-pipeline-on-buffer
+                                  "self-modify"
+                                  "build a self-modifying workflow"
+                                  :buffer buf))
+                         (stage-order
+                           (mapcar #'clawmacs:pipeline-stage-result-stage-name
+                                   (clawmacs:pipeline-run-result-stage-results
+                                    result)))
+                         (calls (nreverse captured-calls))
+                         (first-implement (second calls))
+                         (first-test (third calls))
+                         (second-plan (fifth calls))
+                         (init-call (tenth calls)))
+                    (is (equal '("plan" "implement" "test"
+                                 "plan" "implement" "test"
+                                 "docs" "init")
+                               stage-order))
+                    (is (eq :succeeded
+                            (clawmacs:pipeline-run-result-status result)))
+                    (is (string= "INIT DONE"
+                                 (clawmacs:pipeline-run-result-final-text
                                   result)))
-                       (calls (nreverse captured-calls))
-                       (first-implement (second calls))
-                       (init-call (sixth calls)))
-                  (is (equal '("plan" "implement" "test"
-                               "plan" "implement" "test"
-                               "docs" "init")
-                             stage-order))
-                  (is (eq :succeeded
-                          (clawmacs:pipeline-run-result-status result)))
-                  (is (string= "INIT DONE"
-                               (clawmacs:pipeline-run-result-final-text
-                                result)))
-                  (is (search "Structural editing with sexed"
-                              (getf first-implement :system-prompt)
-                              :test #'char-equal))
-                  (is (search "<skill>"
-                              (getf first-implement :messages-json)
-                              :test #'char-equal))
-                  (is (search "DEMO-SKILL marker"
-                              (getf first-implement :messages-json)
-                              :test #'char-equal))
-                  (is (search (namestring clawmacs::*user-init-file*)
-                              (princ-to-string (getf init-call :messages))
-                              :test #'char-equal)))))))))))
+                    (is (search "Structural editing with sexed"
+                                (getf first-implement :system-prompt)
+                                :test #'char-equal))
+                    (is (search "<skill>"
+                                (getf first-implement :messages-json)
+                                :test #'char-equal))
+                    (is (search "DEMO-SKILL marker"
+                                (getf first-implement :messages-json)
+                                :test #'char-equal))
+                    (is (search "Self-testing with prove"
+                                (getf first-test :system-prompt)
+                                :test #'char-equal))
+                    (is (equal '("prove_list_methods" "prove_run")
+                               (getf first-test :tool-names)))
+                    (is (search "unit failed on first run"
+                                (getf second-plan :messages-json)
+                                :test #'char-equal))
+                    (is (search (namestring clawmacs::*user-init-file*)
+                                (princ-to-string (getf init-call :messages))
+                                :test #'char-equal))))))))))))
 
 (test run-pipeline-on-buffer-reports-invalid-route
   "Pipeline route errors are returned as failed pipeline results."

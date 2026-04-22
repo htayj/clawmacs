@@ -64,6 +64,7 @@
                               (:file "git-package-test")
                               (:file "organa-package-test")
                               (:file "netcons-package-test")
+                              (:file "prove-package-test")
                               (:file "speculum-package-test")
                               (:file "subagent-package-test")
                               (:file "reference-test")

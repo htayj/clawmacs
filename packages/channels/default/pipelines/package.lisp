@@ -18,29 +18,18 @@
   stage output, and may use a deterministic `:runner` for non-LLM work such as
   test execution.
 - The bundled `self-modify` pipeline plans a code change, injects needed
-  packages and skills for implementation, enforces selected tests, loops back
+  packages and skills for implementation, uses the `prove` self-testing
+  package plus the `tester` agent to enforce selected tests, loops back
   through planning on test failure, then updates docs and `init.lisp` when the
   plan says that is needed."
  :title "Deterministic pipelines"
  :package "pipelines")
-
-(defparameter *self-modify-test-output-tail-chars* 4000
-  "Maximum stdout/stderr characters included per deterministic self-modify test step.")
 
 (defun self-modify-blank-string-p (value)
   "Return true when VALUE is NIL or only ASCII whitespace."
   (or (null value)
       (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return)
                                   value)))))
-
-(defun self-modify-truncate-string (text max-chars)
-  "Return TEXT truncated to MAX-CHARS, preserving the trailing portion."
-  (let ((value (or text "")))
-    (if (<= (length value) max-chars)
-        value
-        (format nil "[truncated to last ~D chars]~%~A"
-                max-chars
-                (subseq value (- (length value) max-chars))))))
 
 (defun self-modify-json-key-name (value)
   "Normalize VALUE into the underscore-preserving JSON lookup key shape."
@@ -146,6 +135,21 @@
   (or (pipeline-stage-parsed-output context "plan")
       (error "self-modify requires parsed output from the plan stage.")))
 
+(defun self-modify-test-data (context)
+  "Return the parsed test-stage output for CONTEXT, or NIL."
+  (pipeline-stage-parsed-output context "test"))
+
+(defun self-modify-test-feedback (context)
+  "Return the best available human-readable test feedback for CONTEXT."
+  (let ((test-data (self-modify-test-data context)))
+    (or (and test-data
+             (not (self-modify-blank-string-p (getf test-data :feedback)))
+             (getf test-data :feedback))
+        (and test-data
+             (not (self-modify-blank-string-p (getf test-data :summary)))
+             (getf test-data :summary))
+        (pipeline-stage-output context "test"))))
+
 (defun self-modify-format-package-options ()
   "Return installed package choices for the self-modify planner."
   (with-output-to-string (out)
@@ -179,7 +183,7 @@
 (defun self-modify-plan-stage-prompt (context)
   "Return the planning-stage prompt for the bundled self-modify pipeline."
   (let ((previous-plan (pipeline-stage-parsed-output context "plan"))
-        (previous-test (pipeline-stage-output context "test")))
+        (previous-test (self-modify-test-feedback context)))
     (format nil
             "You are planning a Clawmacs self-modification workflow. Do not implement yet.~%~%
 Return JSON only with these keys:~%
@@ -187,13 +191,13 @@ Return JSON only with these keys:~%
 - \"implementation\": implementation-stage instructions~%
 - \"packages\": array of installed Clawmacs package names to enable~%
 - \"skills\": array of enabled skill names to inject~%
-- \"tests\": array of deterministic test profile names to run after implementation~%
+- \"tests\": array of deterministic self-test method names to run after implementation~%
 - \"docs\": documentation update instructions to apply only after tests pass~%
 - \"update_init\": boolean~%
 - \"init\": init.lisp update instructions used only when update_init is true~%~%
 Choose only from these installed packages:~%~A~%
 Choose only from these enabled skills:~%~A~%
-Choose only from these deterministic test profiles:~%~A~%
+Choose only from these deterministic self-test methods:~%~A~%
 User request:~%~A~%~%
 ~@[Previous plan:~%~A~%~%~]~@[Latest test feedback:~%~A~%~%~]JSON only."
             (self-modify-format-package-options)
@@ -212,7 +216,7 @@ User request:~%~A~%~%
 User request:~%~A~%~%
 Plan summary:~%~A~%~%
 Implementation instructions:~%~A~%~%
-Selected test profiles that will run after this stage: ~{~A~^, ~}.~%~%
+Selected test methods that will run after this stage: ~{~A~^, ~}.~%~%
 Do the code changes now. Do not update docs or init.lisp yet unless doing so is
 strictly necessary to make the code build or test."
             (pipeline-context-original-prompt context)
@@ -220,55 +224,63 @@ strictly necessary to make the code build or test."
             (getf plan :implementation)
             (getf plan :tests))))
 
-(defun self-modify-format-test-report (report)
-  "Return REPORT as a detailed text block for follow-up planning."
-  (with-output-to-string (out)
-    (format out "~A~%" (getf report :summary))
-    (dolist (result (getf report :results))
-      (format out "~%=== ~A ===~%command: ~A~%directory: ~A~%exit: ~D~%"
-              (getf result :name)
-              (getf result :command)
-              (getf result :directory)
-              (getf result :exit-code))
-      (unless (self-modify-blank-string-p (getf result :stdout))
-        (format out "~%stdout:~%~A~%"
-                (self-modify-truncate-string
-                 (getf result :stdout)
-                 *self-modify-test-output-tail-chars*)))
-      (unless (self-modify-blank-string-p (getf result :stderr))
-        (format out "~%stderr:~%~A~%"
-                (self-modify-truncate-string
-                 (getf result :stderr)
-                 *self-modify-test-output-tail-chars*))))))
+(defun self-modify-test-stage-prompt (context)
+  "Return the self-testing stage prompt for the bundled self-modify pipeline."
+  (let ((plan (self-modify-plan-data context)))
+    (format nil
+            "You are verifying a completed Clawmacs code change. Do not modify code in this stage.~%~%
+User request:~%~A~%~%
+Plan summary:~%~A~%~%
+Selected deterministic test methods: ~{~A~^, ~}.~%~%
+Use `prove_run` to run those exact test methods in the current project. Use
+`prove_list_methods` first only if you need to confirm the available method
+names. After running the tests, return JSON only with these keys:~%
+- \"passed\": boolean~%
+- \"summary\": short summary sentence~%
+- \"feedback\": concise high-signal feedback for a repair planner; include the
+  failing method names and the most relevant stdout/stderr excerpts when tests
+  fail~%
+- \"tests\": array of the method names you actually ran~%~%
+Do not claim success unless `prove_run` reports :passed-p true. JSON only."
+            (pipeline-context-original-prompt context)
+            (getf plan :plan)
+            (getf plan :tests))))
 
-(defun self-modify-test-stage-runner (context stage prompt)
-  "Run the deterministic self-modify test stage for CONTEXT."
-  (declare (ignore stage))
-  (let* ((plan (self-modify-plan-data context))
-         (report (run-pipeline-test-profiles
-                  (getf plan :tests)
-                  :directory (pipeline-stage-working-directory context)))
-         (text (self-modify-format-test-report report)))
-    (make-pipeline-stage-result
-     :stage-name "test"
-     :prompt prompt
-     :result (make-prompt-run-result
-              :prompt prompt
-              :final-text text
-              :tool-events nil
-              :reasoning-blocks nil
-              :agent-name "self-modify:test"
-              :iterations 1
-              :stop-reason (if (getf report :passed-p)
-                               "tests_passed"
-                               "tests_failed"))
-     :parsed-output report
-     :status (if (getf report :passed-p) :succeeded :failed))))
+(defun self-modify-parse-test-output (text context stage stage-result)
+  "Parse TEXT from the self-testing stage into a normalized property list."
+  (declare (ignore context stage stage-result))
+  (handler-case
+      (let* ((json-text (self-modify-extract-json-string text))
+             (data (api-json-decode json-text))
+             (passed (not (null (or (self-modify-json-value data "passed")
+                                    (self-modify-json-value data "ok")))))
+             (summary (or (self-modify-json-value data "summary")
+                          (self-modify-json-value data "feedback")
+                          ""))
+             (feedback (or (self-modify-json-value data "feedback")
+                           summary))
+             (tests (ignore-errors
+                      (normalize-pipeline-test-profile-list
+                       (self-modify-json-list
+                        (or (self-modify-json-value data "tests")
+                            (self-modify-json-value data "methods")))))))
+        (list :passed passed
+              :summary (princ-to-string summary)
+              :feedback (princ-to-string feedback)
+              :tests tests))
+    (error ()
+      (let* ((body (princ-to-string (or text "")))
+             (passed (and (search "pass" body :test #'char-equal)
+                          (not (search "fail" body :test #'char-equal)))))
+        (list :passed (not (null passed))
+              :summary body
+              :feedback body
+              :tests nil)))))
 
 (defun self-modify-docs-stage-prompt (context)
   "Return the documentation-stage prompt for the bundled self-modify pipeline."
   (let ((plan (self-modify-plan-data context))
-        (test-report (pipeline-stage-output context "test")))
+        (test-report (self-modify-test-feedback context)))
     (format nil
             "Update the documentation affected by the completed change.~%~%
 User request:~%~A~%~%
@@ -354,7 +366,7 @@ if you must modify that file from the running process."
   (define-pipeline
    "self-modify"
    :description
-   "Plan a code change, inject needed packages and skills, implement, run deterministic tests until they pass, then update docs and init when required."
+   "Plan a code change, inject needed packages and skills, implement, verify with the prove self-testing package until tests pass, then update docs and init when required."
    :max-steps 12
    :stages
    `((:name "plan"
@@ -367,11 +379,15 @@ if you must modify that file from the running process."
       :skill-names ,#'self-modify-selected-skills
       :next "test")
      (:name "test"
-      :prompt "Run the deterministic test profiles selected by the plan."
-      :runner ,#'self-modify-test-stage-runner
+      :agent "tester"
+      :prompt ,#'self-modify-test-stage-prompt
+      :package-names ("prove")
+      :tool-names ("prove_list_methods" "prove_run")
+      :output-parser ,#'self-modify-parse-test-output
       :next ,(lambda (_context stage-result)
                (declare (ignore _context))
-               (if (pipeline-stage-result-succeeded-p stage-result)
+               (if (getf (pipeline-stage-result-parsed-output stage-result)
+                         :passed)
                    "docs"
                    "plan")))
      (:name "docs"

@@ -58,6 +58,10 @@
   :description "Agent-oriented web lookup package tests"
   :in clawmacs-suite)
 
+(def-suite prove-package-suite
+  :description "Agent-oriented self-testing package tests"
+  :in clawmacs-suite)
+
 (def-suite speculum-package-suite
   :description "Agent-oriented McCLIM self-visibility package tests"
   :in clawmacs-suite)
