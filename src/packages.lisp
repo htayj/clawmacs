@@ -1213,8 +1213,11 @@
    #:pipeline-stage-tool-names
    #:pipeline-stage-tool-names-supplied-p
    #:pipeline-stage-package-names
+   #:pipeline-stage-skill-names
    #:pipeline-stage-max-tool-iterations
    #:pipeline-stage-auto-approve-tools-p
+   #:pipeline-stage-output-parser
+   #:pipeline-stage-runner
    #:pipeline-definition
    #:make-pipeline-definition
    #:pipeline-definition-name
@@ -1233,6 +1236,7 @@
    #:pipeline-stage-result-stage-name
    #:pipeline-stage-result-prompt
    #:pipeline-stage-result-result
+   #:pipeline-stage-result-parsed-output
    #:pipeline-stage-result-status
    #:pipeline-stage-result-error
    #:pipeline-stage-result-started-at
@@ -1252,8 +1256,19 @@
    #:register-pipeline-definition
    #:find-pipeline-definition
    #:list-pipeline-definitions
+   #:pipeline-test-profile
+   #:pipeline-test-profile-name
+   #:pipeline-test-profile-description
+   #:pipeline-test-profile-command
+   #:normalize-pipeline-test-profile-name
+   #:define-pipeline-test-profile
+   #:register-pipeline-test-profile
+   #:find-pipeline-test-profile
+   #:list-pipeline-test-profiles
    #:pipeline-last-stage-result
    #:pipeline-stage-output
+   #:pipeline-stage-parsed-output
+   #:run-pipeline-test-profiles
    #:run-pipeline-on-buffer
    #:run-pipeline-prompt
    #:run-pipeline-for-buffer

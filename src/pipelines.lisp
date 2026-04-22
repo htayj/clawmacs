@@ -16,8 +16,11 @@
   tool-names
   tool-names-supplied-p
   package-names
+  skill-names
   max-tool-iterations
-  auto-approve-tools-p)
+  auto-approve-tools-p
+  output-parser
+  runner)
 
 (defstruct pipeline-definition
   "Deterministic graph of agent prompt stages."
@@ -41,6 +44,7 @@
   stage-name
   prompt
   result
+  parsed-output
   status
   error
   started-at
@@ -57,6 +61,15 @@
 
 (defvar *pipeline-definition-registry* (make-hash-table :test #'equal)
   "Programmatic deterministic pipeline definitions keyed by normalized name.")
+
+(defstruct pipeline-test-profile
+  "A named deterministic test profile runnable from a pipeline stage."
+  name
+  description
+  command)
+
+(defvar *pipeline-test-profile-registry* (make-hash-table :test #'equal)
+  "Deterministic pipeline test profiles keyed by normalized name.")
 
 ;;; --------------------------------------------------------------------------
 ;;; Deterministic Pipelines
@@ -79,11 +92,39 @@
     ((member name '(:stop :done :end) :test #'eq) nil)
     (t (normalize-pipeline-name name "pipeline route target"))))
 
+(defun normalize-pipeline-test-profile-name (name)
+  "Normalize NAME into a stable pipeline test profile key."
+  (normalize-pipeline-name name "pipeline test profile name"))
+
 (defun pipeline-plist-value (plist &rest keys)
   "Return values VALUE and SUPPLIED-P for the first present key in PLIST."
   (dolist (key keys (values nil nil))
     (when (member key plist :test #'eq)
       (return (values (getf plist key) t)))))
+
+(defun normalize-pipeline-skill-name-list (skill-names)
+  "Normalize SKILL-NAMES into a duplicate-free list.
+NIL means no explicit skill injection list."
+  (when skill-names
+    (let ((names (cond
+                   ((or (stringp skill-names)
+                        (symbolp skill-names))
+                    (list skill-names))
+                   ((vectorp skill-names)
+                    (coerce skill-names 'list))
+                   ((listp skill-names)
+                    skill-names)
+                   (t
+                    (error "Skill names must be a string, symbol, list, vector, or NIL")))))
+      (remove-duplicates
+       (mapcar #'normalize-skill-name names)
+       :test #'string=))))
+
+(defun pipeline-stage-list-spec-value (value normalizer)
+  "Normalize VALUE with NORMALIZER unless VALUE is a function."
+  (if (functionp value)
+      value
+      (funcall normalizer value)))
 
 (defun normalize-pipeline-stage-spec (spec)
   "Normalize SPEC into a PIPELINE-STAGE."
@@ -109,14 +150,29 @@
           :think-level (or (getf plist :think-level)
                            (getf plist :reasoning-effort))
           :tool-names (and tool-names-supplied-p
-                           (normalize-tool-name-list tool-names))
+                           (pipeline-stage-list-spec-value
+                            tool-names
+                            #'normalize-tool-name-list))
           :tool-names-supplied-p tool-names-supplied-p
-          :package-names (normalize-package-name-list
-                          (or (getf plist :package-names)
-                              (getf plist :packages)))
+          :package-names
+          (pipeline-stage-list-spec-value
+           (or (getf plist :package-names)
+               (getf plist :packages))
+           #'normalize-package-name-list)
+          :skill-names
+          (pipeline-stage-list-spec-value
+           (or (getf plist :skill-names)
+               (getf plist :skills))
+           #'normalize-pipeline-skill-name-list)
           :max-tool-iterations (getf plist :max-tool-iterations)
           :auto-approve-tools-p
-          (not (null (getf plist :auto-approve-tools-p)))))))
+          (not (null (getf plist :auto-approve-tools-p)))
+          :output-parser (or (getf plist :output-parser)
+                             (getf plist :parse-output)
+                             (getf plist :parser))
+          :runner (or (getf plist :runner)
+                      (getf plist :run)
+                      (getf plist :execute))))))
     (t
      (error "Pipeline stage must be a PIPELINE-STAGE or plist, got ~S" spec))))
 
@@ -198,6 +254,36 @@ deterministic behavior."
              *pipeline-definition-registry*)
     (sort definitions #'string< :key #'pipeline-definition-name)))
 
+(defun register-pipeline-test-profile (name &key description command)
+  "Register a deterministic test profile runnable from a pipeline stage."
+  (let ((normalized-name (normalize-pipeline-test-profile-name name)))
+    (unless command
+      (error "Pipeline test profile ~A requires :command." normalized-name))
+    (setf (gethash normalized-name *pipeline-test-profile-registry*)
+          (make-pipeline-test-profile
+           :name normalized-name
+           :description (or description "")
+           :command command))))
+
+(defun define-pipeline-test-profile (name &rest options)
+  "Register a deterministic test profile from Lisp configuration."
+  (apply #'register-pipeline-test-profile name options))
+
+(defun find-pipeline-test-profile (name)
+  "Return the deterministic test profile named NAME, or NIL."
+  (when name
+    (gethash (normalize-pipeline-test-profile-name name)
+             *pipeline-test-profile-registry*)))
+
+(defun list-pipeline-test-profiles ()
+  "Return registered deterministic test profiles sorted by name."
+  (let ((profiles nil))
+    (maphash (lambda (_name profile)
+               (declare (ignore _name))
+               (push profile profiles))
+             *pipeline-test-profile-registry*)
+    (sort profiles #'string< :key #'pipeline-test-profile-name)))
+
 (defun ensure-pipeline-definition (pipeline)
   "Return PIPELINE as a definition or signal a clear error."
   (cond
@@ -237,6 +323,13 @@ deterministic behavior."
     (loop :for result :in (reverse (pipeline-context-stage-results context))
           :when (string= target (pipeline-stage-result-stage-name result))
             :return (pipeline-stage-result-final-text result))))
+
+(defun pipeline-stage-parsed-output (context stage-name)
+  "Return the most recent parsed output for STAGE-NAME in CONTEXT."
+  (let ((target (normalize-pipeline-name stage-name "pipeline stage name")))
+    (loop :for result :in (reverse (pipeline-context-stage-results context))
+          :when (string= target (pipeline-stage-result-stage-name result))
+            :return (pipeline-stage-result-parsed-output result))))
 
 (defun replace-all-substrings (string needle replacement)
   "Return STRING with every NEEDLE replaced by REPLACEMENT."
@@ -317,18 +410,110 @@ deterministic behavior."
       caller-auto-approve-tools-p
       (pipeline-definition-auto-approve-tools-p definition)))
 
-(defun effective-pipeline-stage-package-names (stage original-package-names)
+(defun resolve-pipeline-stage-value (value context stage)
+  "Resolve VALUE for STAGE in CONTEXT, calling functions when needed."
+  (if (functionp value)
+      (funcall value context stage)
+      value))
+
+(defun effective-pipeline-stage-tool-names (stage context)
+  "Return the effective tool allowlist for STAGE."
+  (let ((value (resolve-pipeline-stage-value
+                (pipeline-stage-tool-names stage)
+                context
+                stage)))
+    (if (pipeline-stage-tool-names-supplied-p stage)
+        (normalize-tool-name-list value)
+        nil)))
+
+(defun effective-pipeline-stage-package-names
+    (stage context original-package-names)
   "Return package names active for STAGE."
   (remove-duplicates
-   (append (pipeline-stage-package-names stage)
+   (append (normalize-package-name-list
+            (resolve-pipeline-stage-value
+             (pipeline-stage-package-names stage)
+             context
+             stage))
            original-package-names)
    :test #'string=))
+
+(defun effective-pipeline-stage-skill-names (stage context)
+  "Return enabled skill names explicitly injected for STAGE."
+  (let ((value (resolve-pipeline-stage-value
+                (pipeline-stage-skill-names stage)
+                context
+                stage)))
+    (remove-if-not
+     (lambda (name)
+       (ignore-errors (find-skill name)))
+     (normalize-pipeline-skill-name-list value))))
 
 (defun insert-pipeline-stage-context-message (buffer stage-name prompt)
   "Insert PROMPT as a provider-visible context message for STAGE-NAME."
   (buffer-insert-context-message
    buffer
    (format nil "[pipeline stage: ~A]~%~A" stage-name prompt)))
+
+(defun insert-pipeline-stage-skill-context-messages (buffer skill-names)
+  "Insert explicit contextual skill instructions for SKILL-NAMES."
+  (dolist (name skill-names)
+    (let ((skill (ignore-errors (find-skill name))))
+      (when skill
+        (buffer-insert-context-message
+         buffer
+         (render-skill-instructions-block skill))))))
+
+(defun apply-pipeline-stage-output-parser (stage context stage-result)
+  "Parse STAGE-RESULT using STAGE's output parser when one is configured."
+  (let ((parser (pipeline-stage-output-parser stage)))
+    (if (null parser)
+        stage-result
+        (let ((text (or (pipeline-stage-result-final-text stage-result) "")))
+          (setf (pipeline-stage-result-parsed-output stage-result)
+                (funcall parser text context stage stage-result))
+          stage-result))))
+
+(defun normalize-pipeline-stage-runner-result
+    (runner-result stage-name prompt started-at finished-at)
+  "Normalize RUNNER-RESULT into a PIPELINE-STAGE-RESULT."
+  (cond
+    ((pipeline-stage-result-p runner-result)
+     (unless (pipeline-stage-result-stage-name runner-result)
+       (setf (pipeline-stage-result-stage-name runner-result) stage-name))
+     (unless (pipeline-stage-result-prompt runner-result)
+       (setf (pipeline-stage-result-prompt runner-result) prompt))
+     (unless (pipeline-stage-result-started-at runner-result)
+       (setf (pipeline-stage-result-started-at runner-result) started-at))
+     (unless (pipeline-stage-result-finished-at runner-result)
+       (setf (pipeline-stage-result-finished-at runner-result) finished-at))
+     runner-result)
+    ((prompt-run-result-p runner-result)
+     (make-pipeline-stage-result
+      :stage-name stage-name
+      :prompt prompt
+      :result runner-result
+      :status :succeeded
+      :started-at started-at
+      :finished-at finished-at))
+    ((stringp runner-result)
+     (make-pipeline-stage-result
+      :stage-name stage-name
+      :prompt prompt
+      :result (make-prompt-run-result
+               :prompt prompt
+               :final-text runner-result
+               :tool-events nil
+               :reasoning-blocks nil
+               :agent-name stage-name
+               :iterations 1
+               :stop-reason "pipeline_stage_complete")
+      :status :succeeded
+      :started-at started-at
+      :finished-at finished-at))
+    (t
+     (error "Pipeline stage runner for ~A returned unsupported value ~S."
+            stage-name runner-result))))
 
 (defun run-pipeline-stage-on-buffer
     (context stage &key max-tool-iterations auto-approve-tools-p)
@@ -342,7 +527,9 @@ deterministic behavior."
          (old-provider (buffer-provider-override buffer))
          (old-model (buffer-model-override buffer))
          (old-think-level (buffer-think-level-override buffer))
-         (old-packages (copy-list (buffer-enabled-packages buffer))))
+         (old-packages (copy-list (buffer-enabled-packages buffer)))
+         (skill-names (effective-pipeline-stage-skill-names stage context)))
+    (insert-pipeline-stage-skill-context-messages buffer skill-names)
     (insert-pipeline-stage-context-message buffer stage-name prompt)
     (unwind-protect
          (handler-case
@@ -364,25 +551,37 @@ deterministic behavior."
                          old-think-level)
                      (buffer-enabled-packages buffer)
                      (effective-pipeline-stage-package-names
-                      stage old-packages))
-               (let ((result
-                       (run-prompt-with-buffer
-                        buffer
-                        prompt
-                        nil
-                        (effective-pipeline-stage-max-tool-iterations
-                         stage definition max-tool-iterations)
-                        (effective-pipeline-stage-auto-approve-tools-p
-                         stage definition auto-approve-tools-p)
-                        (pipeline-stage-tool-names stage)
-                        (pipeline-stage-tool-names-supplied-p stage))))
-                 (make-pipeline-stage-result
-                  :stage-name stage-name
-                  :prompt prompt
-                  :result result
-                  :status :succeeded
-                  :started-at started-at
-                  :finished-at (get-universal-time))))
+                      stage context old-packages))
+               (let* ((runner (pipeline-stage-runner stage))
+                      (result (if runner
+                                  (normalize-pipeline-stage-runner-result
+                                   (funcall runner
+                                            context
+                                            stage
+                                            prompt)
+                                   stage-name
+                                   prompt
+                                   started-at
+                                   (get-universal-time))
+                                  (make-pipeline-stage-result
+                                   :stage-name stage-name
+                                   :prompt prompt
+                                   :result
+                                   (run-prompt-with-buffer
+                                    buffer
+                                    prompt
+                                    nil
+                                    (effective-pipeline-stage-max-tool-iterations
+                                     stage definition max-tool-iterations)
+                                    (effective-pipeline-stage-auto-approve-tools-p
+                                     stage definition auto-approve-tools-p)
+                                    (effective-pipeline-stage-tool-names
+                                     stage context)
+                                    (pipeline-stage-tool-names-supplied-p stage))
+                                   :status :succeeded
+                                   :started-at started-at
+                                   :finished-at (get-universal-time)))))
+                 (apply-pipeline-stage-output-parser stage context result)))
            (error (condition)
              (make-pipeline-stage-result
               :stage-name stage-name
@@ -396,6 +595,108 @@ deterministic behavior."
             (buffer-model-override buffer) old-model
             (buffer-think-level-override buffer) old-think-level
             (buffer-enabled-packages buffer) old-packages))))
+
+(defun pipeline-stage-working-directory (context)
+  "Return the working directory used for deterministic pipeline commands."
+  (let ((buffer (pipeline-context-buffer context)))
+    (or (and buffer
+             (buffer-working-directory buffer)
+             (uiop:directory-exists-p
+              (uiop:ensure-directory-pathname
+               (buffer-working-directory buffer))))
+        (uiop:ensure-directory-pathname (truename ".")))))
+
+(defun pipeline-command-display-string (command)
+  "Return COMMAND as a readable shell-ish string."
+  (cond
+    ((stringp command) command)
+    ((listp command)
+     (format nil "~{~A~^ ~}" command))
+    (t
+     (princ-to-string command))))
+
+(defun run-pipeline-command (command &key directory)
+  "Run COMMAND in DIRECTORY and return a plist result."
+  (let ((working-directory
+          (uiop:ensure-directory-pathname
+           (or directory (truename ".")))))
+    (multiple-value-bind (stdout stderr exit-code)
+        (if (stringp command)
+            (uiop:run-program (list "sh" "-lc" command)
+                              :directory working-directory
+                              :output :string
+                              :error-output :string
+                              :ignore-error-status t)
+            (uiop:run-program command
+                              :directory working-directory
+                              :output :string
+                              :error-output :string
+                              :ignore-error-status t))
+      (list :command (pipeline-command-display-string command)
+            :directory (namestring working-directory)
+            :exit-code exit-code
+            :stdout stdout
+            :stderr stderr
+            :passed-p (zerop exit-code)))))
+
+(defun pipeline-test-profile-command-value (profile directory)
+  "Return PROFILE's command in DIRECTORY."
+  (let ((command (pipeline-test-profile-command profile)))
+    (if (functionp command)
+        (funcall command directory)
+        command)))
+
+(defun normalize-pipeline-test-profile-list (profile-names)
+  "Normalize PROFILE-NAMES into a duplicate-free list."
+  (when profile-names
+    (let ((names (cond
+                   ((or (stringp profile-names)
+                        (symbolp profile-names))
+                    (list profile-names))
+                   ((vectorp profile-names)
+                    (coerce profile-names 'list))
+                   ((listp profile-names)
+                    profile-names)
+                   (t
+                    (error "Pipeline test profiles must be a string, symbol, list, vector, or NIL")))))
+      (remove-duplicates
+       (mapcar #'normalize-pipeline-test-profile-name names)
+       :test #'string=))))
+
+(defun run-pipeline-test-profiles (profile-names &key directory)
+  "Run PROFILE-NAMES sequentially and return a structured summary plist."
+  (let* ((names (normalize-pipeline-test-profile-list profile-names))
+         (working-directory
+           (uiop:ensure-directory-pathname
+            (or directory (truename "."))))
+         (results nil))
+    (dolist (name names)
+      (let ((profile (find-pipeline-test-profile name)))
+        (unless profile
+          (error "Unknown pipeline test profile: ~A" name))
+        (push (append (list :name (pipeline-test-profile-name profile))
+                      (run-pipeline-command
+                       (pipeline-test-profile-command-value
+                        profile working-directory)
+                       :directory working-directory))
+              results)))
+    (let* ((ordered-results (nreverse results))
+           (passed-p (every (lambda (result) (getf result :passed-p))
+                            ordered-results))
+           (summary
+             (with-output-to-string (out)
+               (dolist (result ordered-results)
+                 (format out "~A: ~:[FAIL~;PASS~] (exit ~D)~%"
+                         (getf result :name)
+                         (getf result :passed-p)
+                         (getf result :exit-code)))
+               (format out "~%Overall: ~:[FAILED~;PASSED~]"
+                       passed-p))))
+      (list :passed-p passed-p
+            :directory (namestring working-directory)
+            :profiles (copy-list names)
+            :results ordered-results
+            :summary summary))))
 
 (defun pipeline-run-result-final-text (run-result)
   "Return RUN-RESULT's final stage text or error text."

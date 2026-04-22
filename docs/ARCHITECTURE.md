@@ -155,12 +155,16 @@ provider requests directly.
 
 A pipeline is a deterministic graph of prompt stages. Each stage can route to a
 next stage by static name or by a Lisp function that inspects stage output.
-Pipelines let users define flows such as plan -> implement -> test -> plan on
-failure.
+Stages may also compute later-stage package, skill, or tool injection from
+earlier parsed outputs, and may run deterministic non-LLM action stages such as
+test profiles. Pipelines let users define flows such as plan -> implement ->
+test -> plan on failure.
 
 Pipeline data structures, registry state, normalization, template rendering,
-stage routing, and execution live in `src/pipelines.lisp`. Pipeline execution
-remains provider-agnostic by calling the prompt-runner interface for each stage.
+stage routing, test profile execution, and stage execution live in
+`src/pipelines.lisp`. Prompt stages remain provider-agnostic by calling the
+prompt-runner interface, while deterministic runner stages handle shell-based
+verification work without asking the model to simulate it.
 
 ### Subagents
 

@@ -316,7 +316,9 @@
       (let ((prompt-section (clawmacs:render-package-prompt-sections)))
         (is (search "Deterministic pipelines" prompt-section))
         (is (search "define-pipeline" prompt-section))
-        (is (search "defpipeline" prompt-section)))
+        (is (search "defpipeline" prompt-section))
+        (is (search "self-modify" prompt-section))
+        (is (search "packages and skills" prompt-section)))
       (is (member 'clawmacs:set-buffer-pipeline
                   (clawmacs:list-available-commands)
                   :test #'eq))
