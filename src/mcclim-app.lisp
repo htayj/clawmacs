@@ -965,6 +965,31 @@ Fills a background rectangle first, then draws the text on top."
            :align-y :top
            options)))
 
+(defun text-pixel-width (pane text text-style)
+  "Return TEXT's pixel width in PANE for TEXT-STYLE."
+  (if (or (null text) (string= text ""))
+      0
+      (nth-value 0
+                 (clim:text-size pane text
+                                 :text-style text-style))))
+
+(defun draw-text-at-pixels
+    (pane x y text fg-ink bg-ink text-style char-h
+     &key drawing-options background-width)
+  "Draw TEXT at pixel position (X, Y) in PANE.
+Uses TEXT-STYLE for both measurement and drawing so cursor overlays line up
+with the rendered glyph advance."
+  (let* ((text-width (max 1 (or background-width
+                                (text-pixel-width pane text text-style))))
+         (options (clim-drawing-options-for-text
+                   fg-ink text-style drawing-options)))
+    (clim:draw-rectangle* pane x y (+ x text-width) (+ y char-h)
+                          :ink bg-ink)
+    (apply #'clim:draw-text*
+           pane text x y
+           :align-y :top
+           options)))
+
 (defun draw-underline-at (pane row col length fg-ink char-w char-h)
   "Draw an underline under LENGTH characters starting at (ROW, COL)."
   (let* ((x (* col char-w))
@@ -2261,7 +2286,8 @@ ordinary input text."
         (let* ((chunk-start (* wrap-idx display-width))
                (chunk-end (min (* (1+ wrap-idx) display-width)
                                content-len))
-               (chunk (subseq content chunk-start chunk-end))
+               (chunk-text (subseq content chunk-start chunk-end))
+               (chunk chunk-text)
                (first-row-p first-output-p))
           (when (>= row 0)
             (if tool-face-name
@@ -2305,9 +2331,29 @@ ordinary input text."
                          (or (< point-off chunk-end)
                              (and (= wrap-idx (1- num-wraps))
                                   (= point-off chunk-end))))
-                (setf cursor-y row
-                      cursor-x (+ prefix-len
-                                  (- point-off chunk-start)))))))
+                (let* ((cursor-offset (- point-off chunk-start))
+                       (base-col (if first-row-p 0 prefix-len))
+                       (base-x (* base-col char-w))
+                       (leading-text
+                         (concatenate
+                          'string
+                          (if first-row-p prefix "")
+                          (subseq chunk-text 0 cursor-offset)))
+                       (cursor-text
+                         (if (< point-off content-len)
+                             (string (char content point-off))
+                             " "))
+                       (cursor-x-pixels
+                         (+ base-x
+                            (text-pixel-width pane leading-text ts)))
+                       (cursor-width
+                         (max 1 (text-pixel-width pane cursor-text ts))))
+                  (setf cursor-y row
+                        cursor-x (+ prefix-len cursor-offset))
+                  (draw-text-at-pixels pane cursor-x-pixels (* row char-h)
+                                       cursor-text bg fg ts char-h
+                                       :drawing-options drawing-options
+                                       :background-width cursor-width))))))
           (setf first-output-p nil)
           (incf row))))
   (values row first-output-p cursor-y cursor-x))
@@ -2374,20 +2420,7 @@ Returns the number of visual rows consumed."
                                   max-rows first-output-p)))
                          (setf first-output-p nil)
                          (incf row consumed))))))
-        ;; Render cursor as reverse-video block
-        (when (and show-cursor cursor-y cursor-x)
-          (let* ((cx (min cursor-x (1- width)))
-                 (point-line (message-point-line msg))
-                 (point-off (message-point-offset msg))
-                 (content (when point-line (line-content point-line)))
-                 (char-at-point (if (and content (< point-off (length content)))
-                                    (char content point-off)
-                                    #\Space)))
-            ;; Draw with swapped colors (reverse video)
-            (draw-text-at pane cursor-y cx (string char-at-point)
-                          bg fg
-                          (clim:make-text-style :fix :bold :normal)
-                          char-w char-h)))))
+        nil))
     (- row start-row)))
 
 ;;; --------------------------------------------------------------------------
@@ -2943,27 +2976,43 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
            (visible (subseq prompt-line 0 (min (length prompt-line) display-width)))
            (row popup-top)
            (col (1+ popup-left)))
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :minibuffer-prompt)
-        (declare (ignore bg))
-        ;; Fill prompt row background
-        (clim:draw-rectangle* pane
-                              (+ px-left char-w) (* row char-h)
-                              (- px-right char-w) (* (1+ row) char-h)
-                              :ink popup-bg)
-        (draw-text-at pane row col visible fg popup-bg ts char-w char-h
-                      :drawing-options opts))
-      ;; Block cursor
-      (let ((cursor-col (+ col (length prompt-str) point)))
-        (when (< cursor-col (+ popup-left popup-w -1))
-          (let ((char-at-cursor (if (< point (length input))
-                                    (char input point)
-                                    #\Space)))
-            (multiple-value-bind (fg bg ts opts)
-                (resolve-global-face-inks :minibuffer-cursor)
-              (draw-text-at pane row cursor-col (string char-at-cursor)
-                            fg bg ts char-w char-h
-                            :drawing-options opts))))))
+      (let (prompt-ts)
+        (multiple-value-bind (fg bg ts opts)
+            (resolve-global-face-inks :minibuffer-prompt)
+          (declare (ignore bg))
+          (setf prompt-ts ts)
+          ;; Fill prompt row background
+          (clim:draw-rectangle* pane
+                                (+ px-left char-w) (* row char-h)
+                                (- px-right char-w) (* (1+ row) char-h)
+                                :ink popup-bg)
+          (draw-text-at pane row col visible fg popup-bg ts char-w char-h
+                        :drawing-options opts))
+        ;; Block cursor
+        (let ((cursor-col (+ col (length prompt-str) point)))
+          (when (< cursor-col (+ popup-left popup-w -1))
+            (let ((char-at-cursor (if (< point (length input))
+                                      (char input point)
+                                      #\Space)))
+              (multiple-value-bind (fg bg cursor-ts opts)
+                  (resolve-global-face-inks :minibuffer-cursor)
+                (declare (ignore cursor-ts))
+                (let* ((cursor-prefix-end (+ (length prompt-str) point))
+                       (cursor-prefix (subseq prompt-line
+                                              0
+                                              (min cursor-prefix-end
+                                                   (length visible))))
+                       (cursor-x (+ (* col char-w)
+                                    (text-pixel-width pane cursor-prefix
+                                                      prompt-ts)))
+                       (cursor-text (string char-at-cursor))
+                       (cursor-width (max 1
+                                          (text-pixel-width pane cursor-text
+                                                            prompt-ts))))
+                  (draw-text-at-pixels pane cursor-x (* row char-h)
+                                       cursor-text fg bg prompt-ts char-h
+                                       :drawing-options opts
+                                       :background-width cursor-width))))))))
     ;; Candidate rows — batched span drawing instead of per-character
     (if (and skill-popup-p (zerop total) (plusp item-rows))
         (multiple-value-bind (base-fg base-bg base-ts base-opts)
