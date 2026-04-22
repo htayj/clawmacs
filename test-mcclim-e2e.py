@@ -1604,6 +1604,60 @@ def test_54_tiling_resize_keeps_latest_message_visible(session):
     session.screenshot("54-tiling-resize-latest-visible")
 
 
+def test_54_input_wrap_expands_input_pane(session):
+    """Long unsent input should grow the input pane so wrapped text stays visible."""
+    long_text = "wrap-input-pane-probe " * 20
+
+    def input_pane_grid():
+        result = session.eval_lisp(
+            r'''(let* ((frame (and (boundp 'clawmacs::*clawmacs-frame*)
+                                  clawmacs::*clawmacs-frame*))
+                       (pane (and frame (clawmacs::frame-drei-input-pane frame)))
+                       (char-w (and frame (clawmacs::frame-char-width frame)))
+                       (char-h (and frame (clawmacs::frame-char-height frame))))
+                  (unless (and frame pane char-w char-h
+                               (plusp char-w) (plusp char-h))
+                    (error "input pane metrics unavailable"))
+                  (multiple-value-bind (cols rows)
+                      (clawmacs::pane-grid-dimensions pane char-w char-h)
+                    (format nil "~D ~D" cols rows)))''',
+            timeout=10,
+        )
+        cols_text, rows_text = result.replace('"', "").split()
+        return int(cols_text), int(rows_text)
+
+    E2E.set_input(session, long_text)
+    session.wait_snapshot(
+        lambda snap: (snap.get("buffer") or {}).get("input") == long_text,
+        timeout=10,
+        description="long input present in buffer snapshot",
+    )
+    initial_cols, initial_rows = input_pane_grid()
+
+    session.resize(640, 420)
+    wait_for_render_width(
+        session,
+        lambda width: width and width < 900,
+        "narrow render width for wrapped input",
+        timeout=20,
+    )
+    narrow_cols, narrow_rows = input_pane_grid()
+
+    if narrow_rows <= 3:
+        fail(
+            f"wrapped input did not grow the pane: cols={narrow_cols} "
+            f"rows={narrow_rows}"
+        )
+    if narrow_rows < initial_rows:
+        fail(
+            f"input pane shrank after narrow resize: initial={initial_rows} "
+            f"narrow={narrow_rows}"
+        )
+    E2E.assert_contains(session.text(), "wrap-input-pane-probe",
+                        "long input remains present")
+    session.screenshot("54-input-wrap-expands-input-pane")
+
+
 def test_55_stream_poll_renders_without_next_input(session):
     """Provider-style streaming must repaint from pulse polling alone."""
     expected = "MCCLIM-PULSE-STREAM-VISIBLE"
@@ -3226,6 +3280,7 @@ def test_registry(group):
     offline_tests = [
         ("53-async-agent-reply-renders", test_53_async_agent_reply_renders_without_next_input),
         ("54-tiling-resize-latest-visible", test_54_tiling_resize_keeps_latest_message_visible),
+        ("54-input-wrap-expands-input-pane", test_54_input_wrap_expands_input_pane),
         ("55-stream-poll-renders", test_55_stream_poll_renders_without_next_input),
         ("56-escape-stops-stream", test_56_escape_stops_active_stream),
         ("56-meta-x-command-picker", test_56_meta_x_opens_extended_command),

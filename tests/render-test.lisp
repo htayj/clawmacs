@@ -227,6 +227,20 @@ two")
     ;; 21 lines, terminal height 30, max = 10
     (is (= 10 (clawmacs::calculate-input-height buf 30 80)))))
 
+(test mcclim-desired-input-pane-rows-expands-for-wrapped-chat-input
+  "Wrapped chat input expands the dedicated McCLIM input pane."
+  (let ((buf (make-buffer "chat-wrap")))
+    (set-message-text (buffer-input-message buf)
+                      (make-string 120 :initial-element #\x))
+    (is (> (clawmacs::mcclim-desired-input-pane-rows buf 24 20) 3))))
+
+(test mcclim-desired-input-pane-rows-keeps-document-buffers-fixed
+  "Document buffers keep the legacy fixed-height input strip."
+  (let ((buf (make-buffer "scratch" :kind :scratch)))
+    (set-message-text (buffer-input-message buf)
+                      (make-string 120 :initial-element #\x))
+    (is (= 3 (clawmacs::mcclim-desired-input-pane-rows buf 24 20)))))
+
 (test scratch-buffer-scroll-geometry-bottom-aligns-long-text
   "Scratch render geometry uses full-window rows and bottom-aligned scrolling."
   (let ((buf (make-buffer "*scratch*" :kind :scratch)))

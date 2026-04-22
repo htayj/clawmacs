@@ -852,12 +852,16 @@ When PREFIX is provided, prepend it using the base face for BASE-FACE-NAME."
 ;;; Buffer Geometry (pure functions)
 ;;; --------------------------------------------------------------------------
 
-(defun calculate-input-height (buf terminal-height width)
+(defun calculate-input-height (buf terminal-height width
+                               &key
+                                 (prefix
+                                   (message-sender-prefix
+                                    (buffer-input-message buf))))
   "Calculate the visual height of the input area in rows.
 Minimum 3, maximum (floor terminal-height 3). Accounts for line wrapping.
 During approval prompts, allows up to 2/3 of terminal height."
   (let* ((input (buffer-input-message buf))
-         (visual-height (message-visual-height input width))
+         (visual-height (message-visual-height input width :prefix prefix))
          (min-height 3)
          (approval-active (buffer-approval-pending buf))
          (max-height (if approval-active

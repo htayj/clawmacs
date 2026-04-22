@@ -746,6 +746,8 @@ recursive repainting display function."
    (char-width :accessor frame-char-width :initform 0)
    (char-height :accessor frame-char-height :initform 0)
    (pane-space-char-height :accessor frame-pane-space-char-height :initform 0)
+   (input-pane-space-height :accessor frame-input-pane-space-height
+                            :initform 0)
    (last-render-snapshot :accessor frame-last-render-snapshot :initform nil)
    (render-sequence :accessor frame-render-sequence :initform 0)
    (quit-flag :accessor frame-quit-flag :initform nil)
@@ -3589,23 +3591,66 @@ should use the standard CLIM presentation-to-command path first."
   nil)
 
 (defun update-pane-sizes (frame)
-  "Resize modeline (1 row) and who-line (2 rows) panes based on char metrics."
-  (let ((char-h (frame-char-height frame)))
-    (when (and (plusp char-h)
-               (/= char-h (frame-pane-space-char-height frame)))
-      (setf (frame-pane-space-char-height frame) char-h)
-      (let ((ml-pane (clim:find-pane-named frame 'modeline-pane)))
-        (when ml-pane
-          (clim:change-space-requirements ml-pane
-                                          :height char-h
-                                          :min-height char-h
-                                          :max-height char-h)))
-      (let ((wl-pane (clim:find-pane-named frame 'who-line-pane)))
-        (when wl-pane
-          (clim:change-space-requirements wl-pane
-                                          :height (* 2 char-h)
-                                          :min-height (* 2 char-h)
-                                          :max-height (* 2 char-h)))))))
+  "Resize fixed panes and the input pane based on current wrapped input."
+  (let ((char-h (frame-char-height frame))
+        (char-w (frame-char-width frame)))
+    (when (plusp char-h)
+      (unless (= char-h (frame-pane-space-char-height frame))
+        (setf (frame-pane-space-char-height frame) char-h)
+        (let ((ml-pane (clim:find-pane-named frame 'modeline-pane)))
+          (when ml-pane
+            (clim:change-space-requirements ml-pane
+                                            :height char-h
+                                            :min-height char-h
+                                            :max-height char-h)))
+        (let ((wl-pane (clim:find-pane-named frame 'who-line-pane)))
+          (when wl-pane
+            (clim:change-space-requirements wl-pane
+                                            :height (* 2 char-h)
+                                            :min-height (* 2 char-h)
+                                            :max-height (* 2 char-h)))))
+      (when (plusp char-w)
+        (let ((input-pane (frame-drei-input-pane frame))
+              (main-pane (clim:find-pane-named frame 'main-pane))
+              (buf (frame-visible-buffer frame)))
+          (when (and input-pane main-pane buf)
+            (multiple-value-bind (input-cols input-rows)
+                (pane-grid-dimensions input-pane char-w char-h)
+              (multiple-value-bind (_main-cols main-rows)
+                  (pane-grid-dimensions main-pane char-w char-h)
+                (declare (ignore _main-cols))
+                (let* ((body-rows (max 3 (+ input-rows main-rows)))
+                       (desired-rows
+                         (mcclim-desired-input-pane-rows
+                          buf body-rows input-cols))
+                       (desired-height (* desired-rows char-h)))
+                  (unless (= desired-height
+                             (frame-input-pane-space-height frame))
+                    (setf (frame-input-pane-space-height frame)
+                          desired-height)
+                    (clim:change-space-requirements input-pane
+                                                    :height desired-height
+                                                    :min-height desired-height
+                                                    :max-height
+                                                    desired-height)))))))))))
+
+(defun mcclim-input-pane-prefix (buf)
+  "Return the visual prefix rendered in BUF's input pane."
+  (cond
+    ((null buf) "")
+    ((listener-buffer-p buf) (listener-prompt-text buf))
+    (t "")))
+
+(defun mcclim-desired-input-pane-rows (buf body-rows width)
+  "Return the desired input-pane row count for BUF.
+
+Document buffers keep the legacy fixed input strip because editing happens in
+the main pane. Chat-like buffers grow and shrink with wrapped input so text
+stays visible while composing."
+  (if (or (null buf) (document-buffer-p buf))
+      3
+      (calculate-input-height buf body-rows width
+                              :prefix (mcclim-input-pane-prefix buf))))
 
 (defun mcclim-normalize-gesture (gesture &optional buffer)
   "Normalize an ESA/CLIM GESTURE to Clawmacs' abstract key format."
