@@ -351,6 +351,9 @@ Temporary tools override same-named global tools for the dynamic extent.")
 (defvar *shell-exec-default-timeout* 30
   "Default timeout in seconds for shell_exec.")
 
+(defvar *shell-exec-poll-interval* 0.05
+  "Polling interval in seconds while waiting for shell_exec to finish.")
+
 (defparameter *built-in-tool-names*
   '("lisp_eval")
   "Names reserved for core Clawmacs provider tools.
@@ -943,18 +946,63 @@ Returns a string or nil. Calls the tool's approval-display-fn if set."
          (sandbox (or *sandbox-root* (truename "."))))
     (unless command
       (error "command parameter is required"))
-    (multiple-value-bind (stdout stderr exit-code)
-        (uiop:run-program (list "sh" "-c" command)
-                          :directory sandbox
-                          :output :string
-                          :error-output :string
-                          :ignore-error-status t)
-      (declare (ignore timeout)) ; TODO: implement actual timeout
-      (cl-json:encode-json-to-string
-       `((:command . ,command)
-         (:exit--code . ,exit-code)
-         (:stdout . ,stdout)
-         (:stderr . ,stderr))))))
+    (let* ((stdout-path
+             (merge-pathnames
+              (format nil "clawmacs-shell-exec-~A.stdout" (gensym))
+              #P"/tmp/"))
+           (stderr-path
+             (merge-pathnames
+              (format nil "clawmacs-shell-exec-~A.stderr" (gensym))
+              #P"/tmp/"))
+           (deadline
+             (when timeout
+               (+ (get-internal-real-time)
+                  (round (* timeout internal-time-units-per-second))))))
+      (unwind-protect
+           (let ((process
+                   (sb-ext:run-program "/bin/sh"
+                                       (list "-c" command)
+                                       :wait nil
+                                       :directory sandbox
+                                       :output stdout-path
+                                       :error stderr-path
+                                       :if-output-exists :supersede
+                                       :if-error-exists :supersede))
+                 (timed-out-p nil))
+            (labels ((process-finished-p ()
+                        (not (eql (sb-ext:process-status process) :running)))
+                      (read-temp-file (pathname)
+                        (if (probe-file pathname)
+                            (uiop:read-file-string pathname)
+                            "")))
+               (loop while (not (process-finished-p)) do
+                 (when (and deadline
+                            (>= (get-internal-real-time) deadline))
+                   (setf timed-out-p t)
+                   (ignore-errors (sb-ext:process-kill process 15))
+                   (loop repeat 10
+                         while (not (process-finished-p))
+                         do (sleep *shell-exec-poll-interval*))
+                   (when (not (process-finished-p))
+                     (ignore-errors (sb-ext:process-kill process 9))
+                     (loop repeat 10
+                           while (not (process-finished-p))
+                           do (sleep *shell-exec-poll-interval*))))
+                 (unless (process-finished-p)
+                   (sleep *shell-exec-poll-interval*)))
+               (let ((stdout (read-temp-file stdout-path))
+                     (stderr (read-temp-file stderr-path))
+                     (exit-code (and (not timed-out-p)
+                                     (ignore-errors
+                                      (sb-ext:process-exit-code process)))))
+                 (cl-json:encode-json-to-string
+                  `((:command . ,command)
+                    (:exit--code . ,exit-code)
+                    (:timed--out . ,timed-out-p)
+                    (:stdout . ,stdout)
+                    (:stderr . ,stderr))))))
+        (ignore-errors (delete-file stdout-path))
+        (ignore-errors (delete-file stderr-path))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Tool Registration

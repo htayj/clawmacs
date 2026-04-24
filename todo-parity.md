@@ -235,7 +235,7 @@ problems observed while reviewing the current Clawmacs tree.
 
 ### P1
 
-- [ ] Either implement `shell_exec` timeouts or remove `:timeout` from the
+- [x] Either implement `shell_exec` timeouts or remove `:timeout` from the
   contract. The tool parses `:timeout` and then explicitly ignores it
   (`src/tools.lisp:771-789`).
 - [ ] Make package enable/disable update prompt context symmetrically. Enabling

@@ -660,6 +660,40 @@ same
              :old-text ""
              :new-text "replacement")))))))
 
+(test shell-exec-honors-timeout-and-returns-output
+  "shell_exec records stdout/stderr and exit status on a fast command."
+  (let* ((root (uiop:ensure-directory-pathname
+                (temp-package-test-directory "shell-exec-fast"))))
+    (ensure-directories-exist (merge-pathnames #P".keep" root))
+    (let ((clawmacs::*sandbox-root* root))
+      (let* ((result-json
+               (clawmacs::execute-shell-exec
+                '((:command . "printf 'hello'")
+                  (:timeout . 5))))
+             (result (clawmacs::api-json-decode result-json)))
+        (is (string= "printf 'hello'" (cdr (assoc :command result))))
+        (is (equal 0 (cdr (assoc :exit--code result))))
+        (is-false (cdr (assoc :timed--out result)))
+        (is (string= "hello" (cdr (assoc :stdout result))))
+        (is (string= "" (cdr (assoc :stderr result))))))))
+
+(test shell-exec-times-out-and-kills-the-process
+  "shell_exec reports timeout when the command outlives its deadline."
+  (let* ((root (uiop:ensure-directory-pathname
+                (temp-package-test-directory "shell-exec-timeout"))))
+    (ensure-directories-exist (merge-pathnames #P".keep" root))
+    (let ((clawmacs::*sandbox-root* root))
+      (let* ((result-json
+               (clawmacs::execute-shell-exec
+                '((:command . "sleep 2")
+                  (:timeout . 0.2))))
+             (result (clawmacs::api-json-decode result-json)))
+        (is (string= "sleep 2" (cdr (assoc :command result))))
+        (is (cdr (assoc :timed--out result)))
+        (is-false (cdr (assoc :exit--code result)))
+        (is (string= "" (cdr (assoc :stdout result))))
+        (is (string= "" (cdr (assoc :stderr result))))))))
+
 (test build-system-prompt-is-compact-and-pi-style
   "The default system prompt lists the active provider tool surface."
   (with-tool-table-restored
