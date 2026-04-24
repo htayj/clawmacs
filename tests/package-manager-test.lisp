@@ -254,9 +254,12 @@
                        :test #'string=))
            (subagent (find "subagent" definitions
                            :key #'clawmacs:package-definition-name
+                           :test #'string=))
+           (templata (find "templata" definitions
+                           :key #'clawmacs:package-definition-name
                            :test #'string=)))
       (is (equal '("git" "lispi" "netcons" "organa" "pipelines" "prove"
-                   "sexed" "slop" "speculum" "subagent")
+                   "sexed" "slop" "speculum" "subagent" "templata")
                  names))
       (is (not (null git)))
       (is (eq :builtin (clawmacs:package-definition-source-tier git)))
@@ -296,7 +299,11 @@
       (is (not (null subagent)))
       (is (eq :builtin (clawmacs:package-definition-source-tier subagent)))
       (is (clawmacs:package-definition-autoload subagent))
-      (is (probe-file (clawmacs:package-definition-entrypoint subagent))))))
+      (is (probe-file (clawmacs:package-definition-entrypoint subagent)))
+      (is (not (null templata)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier templata)))
+      (is (clawmacs:package-definition-autoload templata))
+      (is (probe-file (clawmacs:package-definition-entrypoint templata))))))
 
 (test load-autoload-packages-skips-disabled-builtin-sexed
   "Bundled sexed stays discoverable but does not autoload by default."
@@ -311,6 +318,7 @@
       (is (not (null (clawmacs:find-available-package "prove"))))
       (is (not (null (clawmacs:find-available-package "speculum"))))
       (is (not (null (clawmacs:find-available-package "subagent"))))
+      (is (not (null (clawmacs:find-available-package "templata"))))
       (is (null (clawmacs:render-package-prompt-sections))))))
 
 (test load-autoload-packages-registers-enabled-pipelines-surface
@@ -428,7 +436,9 @@
  :description \"Custom package\"
  :entrypoint \"entry.lisp\"
  :autoload t
- :system-prompt-section \"CUSTOM PACKAGE PROMPT\")"
+ :system-prompt-section \"## Custom package prompt
+
+CUSTOM PACKAGE PROMPT\")"
             :entrypoint-content
             "(incf clawmacs/tests::*package-entrypoint-load-count*)")))
     (with-package-state-override (nil)
@@ -442,7 +452,11 @@
         (is (null (clawmacs:render-package-prompt-sections)))
         (clawmacs:set-package-enablement-scope "custom-package" :global)
         (is (search "CUSTOM PACKAGE PROMPT"
-                    (clawmacs:render-package-prompt-sections)))))))
+                    (clawmacs:render-package-prompt-sections)))
+        (is (equal '("Custom package prompt")
+                   (mapcar #'clawmacs:package-prompt-section-title
+                           (clawmacs:package-owned-prompt-sections
+                            "custom-package"))))))))
 
 (test package-channel-loads-package-buffer-type-presentation
   "Package entrypoints can register buffer types with McCLIM presentation hooks."

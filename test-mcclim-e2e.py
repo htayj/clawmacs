@@ -2447,6 +2447,52 @@ def test_71_tools_speculum_package_self_visibility(session):
     session.screenshot("71_tools_speculum_package")
 
 
+def test_71_tools_templata_package_slash_completion(session):
+    """Enable templata and exercise slash completion plus /reload dispatch."""
+    E2E.describe_installed_package(session, "templata")
+    help_screen = wait_for_current_buffer_message_text(session, "Package: templata")
+    E2E.assert_contains(help_screen, "Slash commands and prompt templates",
+                        "templata help prompt section")
+    E2E.assert_contains(help_screen, "Slash Commands:", "templata help slash command section")
+    E2E.assert_contains(help_screen, "/reload", "templata help lists /reload")
+    session.screenshot("71_tools_templata_help")
+    E2E.kill_current_buffer(session)
+    switch_to_session_buffer(session)
+
+    E2E.enable_installed_package(session, "templata")
+    enabled_screen = current_buffer_message_text(session)
+    E2E.assert_contains(enabled_screen, 'package_context package="templata"',
+                         "templata context appended after enablement")
+
+    E2E.set_input(session, "/re")
+
+    def slash_popup_open():
+        snapshot = session.snapshot()
+        slash = snapshot.get("slashCompletion") or {}
+        selected = str(slash.get("selected") or "")
+        if slash.get("active") and "/reload" in selected:
+            return snapshot
+        return None
+
+    wait_until(slash_popup_open, timeout=10, interval=0.1,
+               description="templata slash completion popup")
+    session.press("Tab")
+    session.wait_snapshot(
+        lambda snap: (snap.get("buffer") or {}).get("input") == "/reload ",
+        timeout=10,
+        description="slash completion inserted /reload",
+    )
+    session.press("Enter")
+    screen = wait_for_current_buffer_message_text(
+        session,
+        "Reloaded skills, package manifests, and on-disk prompt templates.",
+        timeout=15,
+    )
+    E2E.assert_contains(screen, "Reloaded skills, package manifests, and on-disk prompt templates.",
+                        "templata /reload message visible")
+    session.screenshot("71_tools_templata_package")
+
+
 def test_71_tools_organa_package_todo_management(session):
     """Enable organa and exercise TODO overview, mutation, and buffer views."""
     result = session.eval_lisp(
@@ -3349,6 +3395,8 @@ def test_registry(group):
          test_71_tools_netcons_package_open_find_offline),
         ("71_tools_speculum_package_self_visibility",
          test_71_tools_speculum_package_self_visibility),
+        ("71_tools_templata_package_slash_completion",
+         test_71_tools_templata_package_slash_completion),
         ("71_tools_organa_package_todo_management",
          test_71_tools_organa_package_todo_management),
         ("72_pkg_installed_package_selector_lists_all_bundled_packages",

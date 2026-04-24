@@ -4,12 +4,20 @@
 (defvar *command-tool-test-log* nil
   "Records command tool invocations during command tests.")
 
+(defvar *slash-command-test-log* nil
+  "Records slash command dispatch during command tests.")
+
 (defmacro with-agent-tool-state (() &body body)
   `(let ((clawmacs::*agent-tool-metadata-table*
            (make-hash-table :test #'eq))
          (clawmacs::*agent-tool-name-table*
            (make-hash-table :test #'equal))
          (clawmacs::*tool-table*
+           (make-hash-table :test #'equal)))
+     ,@body))
+
+(defmacro with-slash-command-state (() &body body)
+  `(let ((clawmacs::*slash-command-table*
            (make-hash-table :test #'equal)))
      ,@body))
 
@@ -215,6 +223,86 @@
                    (:handler ,buffer "payload")
                    (:after ,buffer "?payload" t))
                  (reverse log))))))
+
+(defun slash-command-test-handler (buffer args full-text)
+  "Record slash dispatch for command tests."
+  (push (list :slash buffer args full-text) *slash-command-test-log*)
+  :slash-dispatched)
+
+(test send-message-dispatches-slash-command-before-normal-send
+  "Known slash commands are handled in the composer instead of becoming chat history."
+  (with-slash-command-state ()
+    (let ((*slash-command-test-log* nil)
+          (clawmacs::*before-send-message-hook* nil)
+          (clawmacs::*after-send-message-hook* nil)
+          (buffer (make-buffer "slash-dispatch-test")))
+      (clawmacs:register-slash-command
+       "demo"
+       #'slash-command-test-handler
+       :description "Demo slash command.")
+      (clawmacs::set-message-text (buffer-input-message buffer) "/demo alpha beta")
+      (is (eq :slash-dispatched (clawmacs::send-message buffer)))
+      (is (equal `((:slash ,buffer ("alpha" "beta") "/demo alpha beta"))
+                 *slash-command-test-log*))
+      (is (string= "" (message-text (buffer-input-message buffer))))
+      (is (eq (buffer-first-message buffer)
+              (buffer-input-message buffer))))))
+
+(test send-message-leaves-unknown-slash-text-on-normal-send-path
+  "Unknown slash text still falls through to the normal agent send path."
+  (with-slash-command-state ()
+    (let ((clawmacs::*before-send-message-hook* nil)
+          (clawmacs::*after-send-message-hook* nil)
+          (buffer (make-buffer "unknown-slash-test"))
+          (original-send (symbol-function 'clawmacs::send-to-agent-with-context)))
+      (unwind-protect
+           (progn
+             (setf (symbol-function 'clawmacs::send-to-agent-with-context)
+                   (lambda (buf)
+                     (declare (ignore buf))
+                     :agent-sent))
+             (clawmacs::set-message-text (buffer-input-message buffer)
+                                         "/unknown still-send")
+             (is (eq :agent-sent (clawmacs::send-message buffer))))
+        (setf (symbol-function 'clawmacs::send-to-agent-with-context)
+              original-send)))))
+
+(test send-message-expands-prompt-template-before-normal-send
+  "Known slash templates expand into normal chat input before the agent send."
+  (let* ((root (temp-package-test-directory "templata-send"))
+         (project-root (merge-pathnames "project/" root))
+         (prompt-root (merge-pathnames ".clawmacs/prompts/" project-root))
+         (clawmacs::*before-send-message-hook* nil)
+         (clawmacs::*after-send-message-hook* nil)
+         (buffer (make-buffer "templata-send"
+                              :working-directory project-root))
+         (sent-text nil)
+         (original-send (symbol-function 'clawmacs::send-to-agent-with-context)))
+    (ensure-directories-exist (merge-pathnames ".keep" prompt-root))
+    (with-open-file (stream (merge-pathnames "review.md" prompt-root)
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string "---
+description: Review prompt
+---
+Review target: $1
+All args: $@" stream))
+    (unwind-protect
+         (progn
+           (setf (symbol-function 'clawmacs::send-to-agent-with-context)
+                 (lambda (buf)
+                   (setf sent-text
+                         (message-text
+                          (message-prev (buffer-input-message buf))))
+                   :agent-sent))
+           (clawmacs::set-message-text (buffer-input-message buffer)
+                                       "/review parser")
+           (is (eq :agent-sent (clawmacs::send-message buffer)))
+           (is (search "Review target: parser" sent-text))
+           (is (search "All args: parser" sent-text)))
+      (setf (symbol-function 'clawmacs::send-to-agent-with-context)
+            original-send))))
 
 (test command-metadata-registration
   "defcommand registers metadata in the command table."

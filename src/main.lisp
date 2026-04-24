@@ -105,6 +105,19 @@
      (let ((input-text (message-text (buffer-input-message buffer))))
        (when (plusp (length (string-trim '(#\Space #\Tab #\Newline) input-text)))
          (run-hook-with-args '*before-send-message-hook* buffer input-text)
+         (multiple-value-bind (slash-handled-p slash-result)
+             (process-slash-command buffer input-text)
+           (when slash-handled-p
+             (set-message-text (buffer-input-message buffer) "")
+             (mark-buffer-dirty buffer)
+             (run-hook-with-args '*after-send-message-hook*
+                                 buffer input-text slash-result)
+             (return-from send-message slash-result)))
+         (let ((template-expansion
+                 (expand-slash-template-input buffer input-text)))
+           (when template-expansion
+             (setf input-text template-expansion)
+             (set-message-text (buffer-input-message buffer) input-text)))
          (unless (find-prefix-handler input-text)
            (maybe-compact-buffer buffer
                                  :reason :pre-user-message
@@ -676,6 +689,279 @@
              skill
              :include-enabled-marker include-enabled-marker))
           (list-skills :include-disabled include-disabled)))
+
+;;; --------------------------------------------------------------------------
+;;; Automatic Slash Completion
+;;; --------------------------------------------------------------------------
+
+(defvar *automatic-slash-completion-enabled* t
+  "When non-nil, typing /NAME in supported buffers opens slash completion.")
+
+(defvar *slash-completion-enabled-buffer-kinds* '(:chat)
+  "Buffer kinds where automatic slash completion is enabled.")
+
+(defvar *slash-completion-max-height* 12
+  "Maximum rows used by automatic slash completion, including the prompt row.")
+
+(defvar *slash-completion-active* nil
+  "When non-nil, slash completion candidates are visible.")
+
+(defvar *slash-completion-buffer* nil
+  "Buffer whose input currently owns slash completion state.")
+
+(defvar *slash-completion-query* ""
+  "Current query text after the / prefix.")
+
+(defvar *slash-completion-token-start* 0
+  "Start offset of the active /command token on the current input line.")
+
+(defvar *slash-completion-token-end* 0
+  "End offset of the active /command token on the current input line.")
+
+(defvar *slash-completion-token-text* nil
+  "Exact active /command token text, including the leading slash.")
+
+(defvar *slash-completion-dismissed-token* nil
+  "Exact slash token dismissed by the user. Reopens after the token changes.")
+
+(defvar *slash-completion-items* nil
+  "All slash completion candidate items.")
+
+(defvar *slash-completion-filtered-items* nil
+  "Slash completion candidates matching *SLASH-COMPLETION-QUERY*.")
+
+(defvar *slash-completion-match-positions* nil
+  "Fuzzy match positions parallel to *SLASH-COMPLETION-FILTERED-ITEMS*.")
+
+(defvar *slash-completion-selected-index* 0
+  "Index of the selected slash completion candidate.")
+
+(defvar *slash-completion-scroll-offset* 0
+  "First visible slash completion candidate index.")
+
+(defun slash-completion-buffer-kind-enabled-p (kind)
+  "Return true when KIND is configured for automatic slash completion."
+  (or (eq *slash-completion-enabled-buffer-kinds* t)
+      (member kind *slash-completion-enabled-buffer-kinds* :test #'eq)))
+
+(defun slash-completion-enabled-for-buffer-p (buffer)
+  "Return true when automatic slash completion should scan BUFFER."
+  (and *automatic-slash-completion-enabled*
+       buffer
+       (slash-completion-buffer-kind-enabled-p (buffer-kind buffer))
+       (not *minibuffer-active*)
+       (not *buffer-selector-active*)
+       (not *model-selector-active*)
+       (not *think-selector-active*)
+       (not *customize-face-state*)
+       (not *openai-oauth-pending*)
+       (not *deny-message-mode*)
+       (not (buffer-approval-pending buffer))))
+
+(defun slash-completion-token-char-p (char)
+  "Return true when CHAR can occur after / in an automatic slash token."
+  (mention-name-char-p char))
+
+(defun current-slash-command-token (message)
+  "Return values QUERY START END TOKEN for the active /command token.
+Slash completion only activates for the first non-whitespace token on the
+first input line."
+  (let* ((line (message-point-line message))
+         (content (and line (line-content line)))
+         (point (and content
+                     (max 0 (min (message-point-offset message)
+                                 (length content))))))
+    (when (and content (eq line (message-first-line message)))
+      (let* ((start (or (position-if-not #'slash-command-whitespace-char-p
+                                         content)
+                        0))
+             (end (or (position-if #'slash-command-whitespace-char-p
+                                   content
+                                   :start start)
+                      (length content))))
+        (when (and (< start end)
+                   (<= start point end)
+                   (char= (char content start) #\/)
+                   (loop :for idx :from (1+ start) :below end
+                         :always (slash-completion-token-char-p
+                                  (char content idx))))
+          (let ((token (subseq content start end)))
+            (values (subseq token 1) start end token)))))))
+
+(defun slash-completion-update-filter ()
+  "Recompute automatic slash completion candidates for the active query."
+  (let ((query *slash-completion-query*))
+    (cond
+      ((zerop (length query))
+       (setf *slash-completion-filtered-items*
+             (copy-list *slash-completion-items*)
+             *slash-completion-match-positions*
+             (make-list (length *slash-completion-items*)
+                        :initial-element nil)))
+      (t
+       (let* ((matched (remove-if-not
+                        (lambda (item)
+                          (fuzzy-match-p query
+                                         (minibuffer-item-match-text item)))
+                        *slash-completion-items*))
+              (scored (mapcar (lambda (item)
+                                (cons (or (fuzzy-score
+                                           query
+                                           (minibuffer-item-match-text item))
+                                          0)
+                                      item))
+                              matched))
+              (sorted (stable-sort scored #'> :key #'car))
+              (sorted-items (mapcar #'cdr sorted)))
+         (setf *slash-completion-filtered-items* sorted-items
+               *slash-completion-match-positions*
+               (mapcar (lambda (item)
+                         (fuzzy-match-positions
+                          query
+                          (minibuffer-item-match-text item)))
+                       sorted-items))))))
+  (setf *slash-completion-selected-index*
+        (max 0 (min *slash-completion-selected-index*
+                    (1- (max 1 (length *slash-completion-filtered-items*))))))
+  (setf *slash-completion-scroll-offset* 0)
+  (slash-completion-ensure-visible))
+
+(defun slash-completion-visible-item-count ()
+  "Return candidate rows visible in the automatic slash completion popup."
+  (max 0
+       (1- (min *slash-completion-max-height*
+                (1+ (max 1 (length *slash-completion-filtered-items*)))))))
+
+(defun slash-completion-ensure-visible ()
+  "Adjust automatic slash completion scroll so the selection is visible."
+  (let ((visible (slash-completion-visible-item-count)))
+    (when (plusp visible)
+      (when (< *slash-completion-selected-index*
+               *slash-completion-scroll-offset*)
+        (setf *slash-completion-scroll-offset*
+              *slash-completion-selected-index*))
+      (when (>= *slash-completion-selected-index*
+                (+ *slash-completion-scroll-offset* visible))
+        (setf *slash-completion-scroll-offset*
+              (1+ (- *slash-completion-selected-index* visible)))))))
+
+(defun slash-completion-next-item ()
+  "Move automatic slash completion selection down one candidate."
+  (when (< *slash-completion-selected-index*
+           (1- (length *slash-completion-filtered-items*)))
+    (incf *slash-completion-selected-index*)
+    (slash-completion-ensure-visible)))
+
+(defun slash-completion-prev-item ()
+  "Move automatic slash completion selection up one candidate."
+  (when (plusp *slash-completion-selected-index*)
+    (decf *slash-completion-selected-index*)
+    (slash-completion-ensure-visible)))
+
+(defun deactivate-slash-completion (&key dismissed-token)
+  "Hide automatic slash completion and optionally remember DISMISSED-TOKEN."
+  (setf *slash-completion-active* nil
+        *slash-completion-buffer* nil
+        *slash-completion-query* ""
+        *slash-completion-token-start* 0
+        *slash-completion-token-end* 0
+        *slash-completion-token-text* nil
+        *slash-completion-items* nil
+        *slash-completion-filtered-items* nil
+        *slash-completion-match-positions* nil
+        *slash-completion-selected-index* 0
+        *slash-completion-scroll-offset* 0
+        *slash-completion-dismissed-token* dismissed-token))
+
+(defun sync-slash-completion (buffer)
+  "Synchronize automatic slash completion state with BUFFER's current input."
+  (unless (slash-completion-enabled-for-buffer-p buffer)
+    (deactivate-slash-completion)
+    (return-from sync-slash-completion nil))
+  (multiple-value-bind (query start end token)
+      (current-slash-command-token (buffer-input-message buffer))
+    (cond
+      ((null token)
+       (deactivate-slash-completion))
+      ((and *slash-completion-dismissed-token*
+            (string= token *slash-completion-dismissed-token*))
+       (deactivate-slash-completion :dismissed-token token))
+      (t
+       (setf *slash-completion-dismissed-token* nil)
+       (let ((items (slash-command-selector-items
+                     :buffer buffer
+                     :agent-name (buffer-agent-name buffer))))
+         (if items
+             (progn
+               (setf *slash-completion-active* t
+                     *slash-completion-buffer* buffer
+                     *slash-completion-query* query
+                     *slash-completion-token-start* start
+                     *slash-completion-token-end* end
+                     *slash-completion-token-text* token
+                     *slash-completion-items* items)
+               (slash-completion-update-filter))
+             (deactivate-slash-completion)))))))
+
+(defun insert-selected-slash-completion (buffer)
+  "Replace the active /token in BUFFER with the selected slash command."
+  (let ((item (when (plusp (length *slash-completion-filtered-items*))
+                (nth *slash-completion-selected-index*
+                     *slash-completion-filtered-items*))))
+    (unless item
+      (deactivate-slash-completion)
+      (return-from insert-selected-slash-completion nil))
+    (multiple-value-bind (query start end token)
+        (current-slash-command-token (buffer-input-message buffer))
+      (declare (ignore query token))
+      (if (null start)
+          (deactivate-slash-completion)
+          (let* ((message (buffer-input-message buffer))
+                 (line (message-point-line message))
+                 (content (line-content line))
+                 (inserted (format nil "/~A " (getf item :name)))
+                 (replacement (concatenate 'string
+                                           (subseq content 0 start)
+                                           inserted
+                                           (subseq content end))))
+            (setf (line-content line) replacement
+                  (message-point-offset message) (+ start (length inserted)))
+            (mark-buffer-dirty buffer)
+            (deactivate-slash-completion)
+            t)))))
+
+(defun handle-slash-completion-key (buffer key)
+  "Handle KEY for the automatic slash completion popup."
+  (unless (eq buffer *slash-completion-buffer*)
+    (deactivate-slash-completion)
+    (return-from handle-slash-completion-key nil))
+  (let ((base-key (skill-completion-base-key key)))
+    (cond
+      ((or (eq base-key :escape)
+           (and (characterp base-key)
+                (or (char= base-key #\Esc)
+                    (char= base-key (code-char 7)))))
+       (deactivate-slash-completion
+        :dismissed-token *slash-completion-token-text*)
+       t)
+      ((and (characterp base-key)
+            (or (char= base-key #\Return)
+                (char= base-key #\Newline)
+                (char= base-key #\Tab)))
+       (insert-selected-slash-completion buffer)
+       t)
+      ((eq base-key :tab)
+       (insert-selected-slash-completion buffer)
+       t)
+      ((or (eq base-key :down)
+           (and (characterp base-key) (char= base-key (code-char 14))))
+       (slash-completion-next-item)
+       t)
+      ((or (eq base-key :up)
+           (and (characterp base-key) (char= base-key (code-char 16))))
+       (slash-completion-prev-item)
+       t)
+      (t nil))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Automatic Skill Completion
@@ -3298,11 +3584,17 @@ KEY is already normalized by the interface before calling this."
                     (char= candidate (code-char 12)))
                (equal candidate '(:ctrl #\l))
                (equal candidate '(:ctrl #\L))))
-         (sync-current-skill-completion ()
+         (sync-current-composer-completion ()
            (let ((current (current-buffer)))
              (if (and current (not (eq current buf)))
-                 (deactivate-skill-completion)
-                 (sync-skill-completion buf)))))
+                 (progn
+                   (deactivate-slash-completion)
+                   (deactivate-skill-completion))
+                 (progn
+                   (sync-slash-completion buf)
+                   (if *slash-completion-active*
+                       (deactivate-skill-completion)
+                       (sync-skill-completion buf)))))))
   (let ((*current-caller* :user))
     (when (null key)
       (return-from handle-key-event nil))
@@ -3416,6 +3708,11 @@ KEY is already normalized by the interface before calling this."
             (setf *deny-message-mode* t))))
        nil)
 
+      ;; === AUTOMATIC SLASH COMPLETION ===
+      ((and *slash-completion-active*
+            (handle-slash-completion-key buf key))
+       nil)
+
       ;; === AUTOMATIC SKILL COMPLETION ===
       ;; Completion is non-modal for normal typing, but selected navigation and
       ;; confirmation keys are consumed before the chat keymap can send input.
@@ -3433,14 +3730,14 @@ KEY is already normalized by the interface before calling this."
            (when (and (characterp key)
                       (not (member command '(scroll-up-command scroll-down-command))))
              (setf (buffer-scroll-offset buf) 0))
-           (sync-current-skill-completion)
+           (sync-current-composer-completion)
            t)))
       ;; Self-insert
       ((and (characterp key) (graphic-char-p key))
        (let ((*self-insert-char* key))
        (self-insert-command buf))
        (setf (buffer-scroll-offset buf) 0)
-       (sync-current-skill-completion)
+       (sync-current-composer-completion)
        nil)
       (t nil)))))
 

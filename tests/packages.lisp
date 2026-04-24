@@ -70,6 +70,10 @@
   :description "Agent-oriented subagent package tests"
   :in clawmacs-suite)
 
+(def-suite templata-package-suite
+  :description "Slash command and prompt template package tests"
+  :in clawmacs-suite)
+
 (def-suite package-manager-suite
   :description "Package loader tests"
   :in clawmacs-suite)

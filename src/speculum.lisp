@@ -27,6 +27,7 @@
     "pane-sizes"
     "minibuffer"
     "selectors"
+    "slash-completion"
     "skill-completion"
     "approval"
     "key-prefixes")
@@ -306,6 +307,22 @@
     (when (and items (<= 0 index) (< index (length items)))
       (minibuffer-item-display (nth index items)))))
 
+(defun speculum-selected-slash-display ()
+  "Return the selected slash-completion candidate display string, or NIL."
+  (let ((items *slash-completion-filtered-items*)
+        (index *slash-completion-selected-index*))
+    (when (and items (<= 0 index) (< index (length items)))
+      (minibuffer-item-display (nth index items)))))
+
+(defun speculum-slash-completion-state ()
+  "Return current slash completion popup state."
+  (list :active (not (null *slash-completion-active*))
+        :query *slash-completion-query*
+        :token (or *slash-completion-token-text* "")
+        :selected-index *slash-completion-selected-index*
+        :selected (or (speculum-selected-slash-display) "")
+        :filtered-count (length *slash-completion-filtered-items*)))
+
 (defun speculum-skill-completion-state ()
   "Return current skill completion popup state."
   (list :active (not (null *skill-completion-active*))
@@ -329,6 +346,7 @@
   (flet ((collect ()
            (list :minibuffer (speculum-minibuffer-state)
                  :selectors (speculum-selectors-state)
+                 :slash-completion (speculum-slash-completion-state)
                  :skill-completion (speculum-skill-completion-state)
                  :approval (speculum-approval-state buffer)
                  :key-prefixes (speculum-key-prefix-state))))
@@ -577,11 +595,13 @@
                      ((string= normalized "render-snapshot")
                       (speculum-render-state frame))
                      ((string= normalized "pane-sizes")
-                      (speculum-panes-summary frame))
+                     (speculum-panes-summary frame))
                      ((string= normalized "minibuffer")
                       (speculum-minibuffer-state))
                      ((string= normalized "selectors")
                       (speculum-selectors-state))
+                     ((string= normalized "slash-completion")
+                      (speculum-slash-completion-state))
                      ((string= normalized "skill-completion")
                       (speculum-skill-completion-state))
                      ((string= normalized "approval")

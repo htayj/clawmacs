@@ -21,7 +21,16 @@
   source-tier
   autoload
   dependencies
-  system-prompt-section)
+  system-prompt-section
+  prompt-template-directory
+  slash-commands)
+
+(defstruct package-slash-command-spec
+  "A slash command resource declared by a package manifest."
+  name
+  description
+  argument-hint
+  handler)
 
 (defstruct package-prompt-section
   "A prompt section contributed by a loaded Clawmacs package."
@@ -276,6 +285,60 @@ Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
      (emit-package-warning "Package manifest ~A field ~A must be a list"
                            (namestring manifest-path)
                            field-name)
+     nil)))
+
+(defun manifest-function-name (value)
+  "Normalize a manifest function reference to a lowercase string."
+  (cond
+    ((stringp value)
+     (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) value)))
+       (and (plusp (length trimmed))
+            (string-downcase trimmed))))
+    ((symbolp value)
+     (string-downcase (symbol-name value)))
+    (t nil)))
+
+(defun manifest-package-slash-command-spec (value manifest-path)
+  "Normalize one slash-command VALUE from MANIFEST-PATH."
+  (unless (package-manifest-plist-p value)
+    (emit-package-warning
+     "Ignoring invalid :slash-command entry ~S in ~A"
+     value
+     (namestring manifest-path))
+    (return-from manifest-package-slash-command-spec nil))
+  (let ((name (manifest-package-name (getf value :name)))
+        (description (or (manifest-string (getf value :description)) ""))
+        (argument-hint (manifest-string (getf value :argument-hint)))
+        (handler (manifest-function-name (getf value :handler))))
+    (unless name
+      (emit-package-warning
+       "Ignoring :slash-command entry without a valid :name in ~A"
+       (namestring manifest-path))
+      (return-from manifest-package-slash-command-spec nil))
+    (unless handler
+      (emit-package-warning
+       "Ignoring :slash-command ~A without a valid :handler in ~A"
+       name
+       (namestring manifest-path))
+      (return-from manifest-package-slash-command-spec nil))
+    (make-package-slash-command-spec
+     :name name
+     :description description
+     :argument-hint argument-hint
+     :handler handler)))
+
+(defun manifest-package-slash-command-list (value manifest-path)
+  "Normalize VALUE as a list of package slash-command specs."
+  (cond
+    ((null value) nil)
+    ((listp value)
+     (loop :for item :in value
+           :for spec := (manifest-package-slash-command-spec item manifest-path)
+           :when spec
+             :collect spec))
+    (t
+     (emit-package-warning "Package manifest ~A field :slash-commands must be a list"
+                           (namestring manifest-path))
      nil)))
 
 (defun normalize-package-name-list (value)
@@ -659,6 +722,28 @@ removes the package from the other scopes in the same context."
                             (or (agent-tool-metadata-package metadata) "")))
                  (list-agent-tool-metadata)))
 
+(defun package-owned-slash-commands (package-name)
+  "Return slash commands registered by PACKAGE-NAME."
+  (let ((entries nil))
+    (maphash (lambda (_name command)
+               (declare (ignore _name))
+               (when (string= package-name
+                              (or (slash-command-package command) ""))
+                 (push command entries)))
+             *slash-command-table*)
+    (sort entries #'string< :key #'slash-command-name)))
+
+(defun package-owned-prompt-templates (package-name)
+  "Return prompt templates contributed by PACKAGE-NAME's prompt directory."
+  (let ((definition (find-installed-package package-name)))
+    (when definition
+      (let ((directory (package-prompt-template-directory definition)))
+        (when (and directory (probe-file directory))
+          (discover-prompt-templates-in-directory
+           directory
+           :scope :package
+           :package package-name))))))
+
 (defun package-owned-prompt-sections (package-name)
   "Return prompt sections registered by PACKAGE-NAME."
   (remove-if-not (lambda (section)
@@ -780,6 +865,27 @@ removes the package from the other scopes in the same context."
                     (command-metadata-name command)
                     (command-metadata-docstring command)))
           (format s "~%")))
+      (let ((slash-commands (package-owned-slash-commands name)))
+        (when slash-commands
+          (format s "Slash Commands:~%")
+          (dolist (command slash-commands)
+            (format s "  - /~A~@[ ~A~]: ~A~%"
+                    (slash-command-name command)
+                    (and (slash-command-argument-hint command)
+                         (plusp (length (slash-command-argument-hint command)))
+                         (slash-command-argument-hint command))
+                    (or (slash-command-description command) "")))
+          (format s "~%")))
+      (let ((templates (package-owned-prompt-templates name)))
+        (when templates
+          (format s "Prompt Templates:~%")
+          (dolist (template templates)
+            (format s "  - /~A~@[ ~A~]: ~A~%"
+                    (prompt-template-name template)
+                    (let ((hint (template-argument-summary template)))
+                      (and (plusp (length hint)) hint))
+                    (or (prompt-template-description template) "")))
+          (format s "~%")))
       (let ((buffer-types (package-owned-buffer-types name)))
         (when buffer-types
           (format s "Buffer Types:~%")
@@ -867,7 +973,14 @@ Returns a normalized plist or NIL on failure."
                             manifest-path
                             :dependencies))
              (system-prompt-section
-               (manifest-string (getf manifest :system-prompt-section))))
+               (manifest-string (getf manifest :system-prompt-section)))
+             (prompt-template-directory
+               (manifest-directory-pathname
+                (getf manifest :prompt-template-directory)))
+             (slash-commands
+               (manifest-package-slash-command-list
+                (getf manifest :slash-commands)
+                manifest-path)))
         (unless name
           (return-from read-package-manifest
             (emit-package-warning
@@ -892,7 +1005,11 @@ Returns a normalized plist or NIL on failure."
                 :source-tier source-tier
                 :autoload (not (null (getf manifest :autoload)))
                 :dependencies dependencies
-                :system-prompt-section system-prompt-section))))))
+                :system-prompt-section system-prompt-section
+                :prompt-template-directory
+                (and prompt-template-directory
+                     (merge-pathnames prompt-template-directory root))
+                :slash-commands slash-commands))))))
 
 (defun package-definition-from-manifest (manifest)
   "Build a PACKAGE-DEFINITION from a normalized manifest plist."
@@ -905,16 +1022,63 @@ Returns a normalized plist or NIL on failure."
    :source-tier (getf manifest :source-tier)
    :autoload (getf manifest :autoload)
    :dependencies (copy-list (getf manifest :dependencies))
-   :system-prompt-section (getf manifest :system-prompt-section)))
+   :system-prompt-section (getf manifest :system-prompt-section)
+   :prompt-template-directory (getf manifest :prompt-template-directory)
+   :slash-commands (copy-list (getf manifest :slash-commands))))
 
 (defun register-package-manifest-prompt-section (definition)
   "Register DEFINITION's manifest-level prompt section when present."
-  (when (package-definition-system-prompt-section definition)
-    (register-package-prompt-section
-     (package-definition-name definition)
-     (package-definition-system-prompt-section definition)
-     :package (package-definition-name definition)
-     :title (format nil "Package ~A" (package-definition-name definition)))))
+  (labels ((inferred-title (body)
+             (loop :for line :in (split-lines body)
+                   :for trimmed := (string-trim '(#\Space #\Tab #\Return #\Newline)
+                                                line)
+                   :for heading := (string-left-trim "#" trimmed)
+                   :when (and (plusp (length trimmed))
+                              (< (length heading) (length trimmed))
+                              (char= (char heading 0) #\Space))
+                     :return (string-trim '(#\Space #\Tab) heading))))
+    (when (package-definition-system-prompt-section definition)
+      (register-package-prompt-section
+       (package-definition-name definition)
+       (package-definition-system-prompt-section definition)
+       :package (package-definition-name definition)
+       :title (or (inferred-title
+                   (package-definition-system-prompt-section definition))
+                  (format nil "Package ~A" (package-definition-name definition)))))))
+
+(defun resolve-package-manifest-handler (definition handler-name)
+  "Return the function named by HANDLER-NAME for DEFINITION, or NIL on warning."
+  (let* ((symbol-name (string-upcase handler-name))
+         (symbol (find-symbol symbol-name :clawmacs)))
+    (cond
+      ((null symbol)
+       (emit-package-warning
+        "Package ~A slash command handler ~A is not interned in the CLAWMACS package"
+        (package-definition-name definition)
+        handler-name)
+       nil)
+      ((not (fboundp symbol))
+       (emit-package-warning
+        "Package ~A slash command handler ~A is not fbound after load"
+        (package-definition-name definition)
+        handler-name)
+       nil)
+      (t
+       symbol))))
+
+(defun register-package-manifest-slash-commands (definition)
+  "Register DEFINITION's manifest-declared slash commands."
+  (dolist (spec (package-definition-slash-commands definition))
+    (let ((handler (resolve-package-manifest-handler
+                    definition
+                    (package-slash-command-spec-handler spec))))
+      (when handler
+        (register-slash-command
+         (package-slash-command-spec-name spec)
+         handler
+         :description (package-slash-command-spec-description spec)
+         :argument-hint (package-slash-command-spec-argument-hint spec)
+         :package (package-definition-name definition))))))
 
 (defun load-package-definition-entrypoint (definition)
   "Load DEFINITION's entrypoint unless its root is already loaded."
@@ -929,6 +1093,7 @@ Returns a normalized plist or NIL on failure."
               (*current-clawmacs-package* package-name))
           (load entrypoint :verbose nil :print nil)
           (register-package-manifest-prompt-section definition)
+          (register-package-manifest-slash-commands definition)
           (setf (gethash install-key *loaded-packages*) package-name)
           (file-debug-log "package"
                           "loaded package ~A from ~A"
@@ -946,6 +1111,59 @@ Returns a normalized plist or NIL on failure."
   (declare (ignore package-root install-dir))
   (load-package-definition-entrypoint
    (package-definition-from-manifest manifest)))
+
+(defun reset-package-runtime-state (package)
+  "Remove package-owned runtime registrations for PACKAGE."
+  (let* ((definition (typecase package
+                       (package-definition package)
+                       (t (find-installed-package package))))
+         (name (and definition (package-definition-name definition))))
+    (unless definition
+      (return-from reset-package-runtime-state nil))
+    (setf *package-prompt-sections*
+          (remove name
+                  *package-prompt-sections*
+                  :key #'package-prompt-section-package
+                  :test #'string=))
+    (dolist (metadata (package-owned-tool-metadata name))
+      (unregister-agent-tool-metadata (agent-tool-metadata-symbol metadata)))
+    (dolist (metadata (package-owned-command-metadata name))
+      (remhash (command-metadata-name metadata) *command-table*))
+    (dolist (command (package-owned-slash-commands name))
+      (remhash (slash-command-name command) *slash-command-table*))
+    (dolist (type (package-owned-buffer-types name))
+      (remhash (buffer-type-name type) *buffer-type-registry*))
+    (dolist (entry (package-owned-extended-docs name))
+      (remhash (car entry) *extended-docs*))
+    (remhash (package-install-key (package-definition-root definition))
+             *loaded-packages*)
+    definition))
+
+(defun reload-clawmacs-package (package)
+  "Reload PACKAGE by removing package-owned runtime state, then loading it."
+  (let ((definition (reset-package-runtime-state package)))
+    (when definition
+      (load-clawmacs-package definition))))
+
+(defun reload-active-packages (&key buffer agent-name)
+  "Reload packages active for BUFFER/AGENT-NAME and return loaded definitions."
+  (let ((loaded nil))
+    (dolist (name (active-package-names :buffer buffer :agent-name agent-name))
+      (let ((definition (find-installed-package name)))
+        (cond
+          ((null definition)
+           (emit-package-warning "Enabled Clawmacs package ~A is not installed"
+                                 name))
+          (t
+           (let ((result (reload-clawmacs-package definition)))
+             (when result
+               (when (fboundp 'register-package-agent-tool-provider-definitions)
+                 (funcall
+                  (symbol-function
+                   'register-package-agent-tool-provider-definitions)
+                  (package-definition-name result)))
+               (push result loaded)))))))
+    (nreverse loaded)))
 
 (defun read-package-channel-manifest (channel)
   "Read CHANNEL's manifest plist, returning NIL on warning."

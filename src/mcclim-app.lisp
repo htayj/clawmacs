@@ -185,6 +185,9 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
 (clim:define-presentation-type skill-candidate-ref ()
   :description "a skill completion candidate")
 
+(clim:define-presentation-type slash-candidate-ref ()
+  :description "a slash completion candidate")
+
 (clim:define-presentation-type buffer-ref ()
   :description "a buffer reference")
 
@@ -381,6 +384,22 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
                       :name t)
     ((candidate 'skill-candidate-ref))
   (mcclim-select-skill-candidate candidate))
+
+(defun mcclim-select-slash-candidate (candidate)
+  "Select CANDIDATE from the active automatic slash completion popup."
+  (when (and *slash-completion-active* candidate)
+    (let ((index (getf candidate :index))
+          (buf *slash-completion-buffer*))
+      (when (and index buf (<= 0 index)
+                 (< index (length *slash-completion-filtered-items*)))
+        (setf *slash-completion-selected-index* index)
+        (insert-selected-slash-completion buf)))))
+
+(clim:define-command (com-select-slash-candidate
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((candidate 'slash-candidate-ref))
+  (mcclim-select-slash-candidate candidate))
 
 (defun mcclim-select-customize-field (field-ref)
   "Select and edit FIELD-REF from a customize buffer presentation."
@@ -586,6 +605,18 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
     *minibuffer-selected-index*
     *minibuffer-scroll-offset*
     *minibuffer-callback*
+    *slash-completion-active*
+    *slash-completion-buffer*
+    *slash-completion-query*
+    *slash-completion-token-start*
+    *slash-completion-token-end*
+    *slash-completion-token-text*
+    *slash-completion-dismissed-token*
+    *slash-completion-items*
+    *slash-completion-filtered-items*
+    *slash-completion-match-positions*
+    *slash-completion-selected-index*
+    *slash-completion-scroll-offset*
     *skill-completion-active*
     *skill-completion-buffer*
     *skill-completion-query*
@@ -1747,8 +1778,10 @@ When the minibuffer is active, draws a centered popup overlay on top."
                (mcclim-render-logical-window-tree frame pane rows cols
                                                   char-w char-h)
                (mcclim-render-buffer pane buf rows cols char-w char-h))))
-        ;; Popup overlay for minibuffer and automatic skill completion.
-        (when (or *minibuffer-active* *skill-completion-active*)
+        ;; Popup overlay for minibuffer and automatic composer completion.
+        (when (or *minibuffer-active*
+                  *slash-completion-active*
+                  *skill-completion-active*)
           (mcclim-render-completion-popup pane cols rows char-w char-h))))))
 
 (defun display-drei-input-pane (frame pane)
@@ -2915,44 +2948,66 @@ into spans and draws each span as a single draw-text-at call."
                 (setf span-matched cur-matched))
       (flush-span len))))
 
+(defun mcclim-completion-popup-mode ()
+  "Return the active completion popup mode keyword, or NIL."
+  (cond
+    (*minibuffer-active* :minibuffer)
+    (*slash-completion-active* :slash)
+    (*skill-completion-active* :skill)
+    (t nil)))
+
 (defun mcclim-render-completion-popup (pane cols rows char-w char-h)
-  "Render a centered popup overlay for completion on the main pane.
-Drawn on top of existing buffer content when minibuffer or skill completion is
-active.
-Uses span-batched drawing for fuzzy-match highlighting instead of per-character."
-  (let* ((skill-popup-p (and (not *minibuffer-active*) *skill-completion-active*))
-         (items (if skill-popup-p
-                    *skill-completion-filtered-items*
-                    *minibuffer-filtered-items*))
-         (positions (if skill-popup-p
-                        *skill-completion-match-positions*
-                        *minibuffer-match-positions*))
-         (selected (if skill-popup-p
-                       *skill-completion-selected-index*
-                       *minibuffer-selected-index*))
-         (scroll (if skill-popup-p
-                     *skill-completion-scroll-offset*
-                     *minibuffer-scroll-offset*))
+  "Render the active centered completion popup on the main pane."
+  (let* ((mode (mcclim-completion-popup-mode))
+         (items (ecase mode
+                  (:minibuffer *minibuffer-filtered-items*)
+                  (:slash *slash-completion-filtered-items*)
+                  (:skill *skill-completion-filtered-items*)))
+         (positions (ecase mode
+                      (:minibuffer *minibuffer-match-positions*)
+                      (:slash *slash-completion-match-positions*)
+                      (:skill *skill-completion-match-positions*)))
+         (selected (ecase mode
+                     (:minibuffer *minibuffer-selected-index*)
+                     (:slash *slash-completion-selected-index*)
+                     (:skill *skill-completion-selected-index*)))
+         (scroll (ecase mode
+                   (:minibuffer *minibuffer-scroll-offset*)
+                   (:slash *slash-completion-scroll-offset*)
+                   (:skill *skill-completion-scroll-offset*)))
+         (prompt-str (ecase mode
+                       (:minibuffer (format nil "~A: " *minibuffer-prompt*))
+                       (:slash "Slash: ")
+                       (:skill "Skill: ")))
+         (input (ecase mode
+                  (:minibuffer *minibuffer-input*)
+                  (:slash (format nil "/~A" *slash-completion-query*))
+                  (:skill (format nil "$~A" *skill-completion-query*))))
+         (point (ecase mode
+                  (:minibuffer *minibuffer-point*)
+                  (:slash (length input))
+                  (:skill (length input))))
+         (no-match-text (ecase mode
+                          (:minibuffer "")
+                          (:slash "No matching slash commands")
+                          (:skill "No matching skills")))
          (total (length items))
-         ;; Popup dimensions
          (popup-w (min (- cols 4) (max 40 (floor (* cols 3) 5))))
-         (max-height (if skill-popup-p
-                         *skill-completion-max-height*
-                         *minibuffer-max-height*))
+         (max-height (ecase mode
+                       (:minibuffer *minibuffer-max-height*)
+                       (:slash *slash-completion-max-height*)
+                       (:skill *skill-completion-max-height*)))
          (max-item-rows (max 0 (min (or max-height 12) (- rows 4))))
-         (display-total (if skill-popup-p (max 1 total) total))
+         (display-total (if (eq mode :minibuffer) total (max 1 total)))
          (item-rows (min display-total max-item-rows))
-         (popup-h (+ 1 item-rows))  ; 1 prompt row + items
-         ;; Center position
+         (popup-h (+ 1 item-rows))
          (popup-left (floor (- cols popup-w) 2))
          (popup-top (floor (- rows popup-h) 2))
-         ;; Popup background from face system (candidate face bg or light gray)
          (popup-bg (multiple-value-bind (fg bg ts)
                        (resolve-global-face-inks :minibuffer-candidate)
                      (declare (ignore fg ts))
                      bg))
          (border-ink (clim:make-rgb-color 0.4 0.4 0.4))
-         ;; Pixel coordinates for border
          (px-left (* popup-left char-w))
          (px-top (* popup-top char-h))
          (px-right (* (+ popup-left popup-w) char-w))
@@ -2964,14 +3019,7 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
     (clim:draw-rectangle* pane px-left px-top px-right px-bottom
                           :ink border-ink :filled nil)
     ;; Prompt row: "prompt: input" with block cursor
-    (let* ((prompt-str (if skill-popup-p "Skill: " (format nil "~A: " *minibuffer-prompt*)))
-           (input (if skill-popup-p
-                      (format nil "$~A" *skill-completion-query*)
-                      *minibuffer-input*))
-           (point (if skill-popup-p
-                      (length input)
-                      *minibuffer-point*))
-           (prompt-line (concatenate 'string prompt-str input))
+    (let* ((prompt-line (concatenate 'string prompt-str input))
            (display-width (- popup-w 2))
            (visible (subseq prompt-line 0 (min (length prompt-line) display-width)))
            (row popup-top)
@@ -3014,7 +3062,7 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
                                        :drawing-options opts
                                        :background-width cursor-width))))))))
     ;; Candidate rows — batched span drawing instead of per-character
-    (if (and skill-popup-p (zerop total) (plusp item-rows))
+    (if (and (not (eq mode :minibuffer)) (zerop total) (plusp item-rows))
         (multiple-value-bind (base-fg base-bg base-ts base-opts)
             (resolve-global-face-inks :minibuffer-candidate)
           (let ((row (+ popup-top 1)))
@@ -3022,7 +3070,7 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
                                   (+ px-left char-w) (* row char-h)
                                   (- px-right char-w) (* (1+ row) char-h)
                                   :ink base-bg)
-            (draw-text-at pane row (+ popup-left 3) "No matching skills"
+            (draw-text-at pane row (+ popup-left 3) no-match-text
                           base-fg base-bg base-ts char-w char-h
                           :drawing-options base-opts)))
         (loop :for row-idx :from 0 :below item-rows
@@ -3031,9 +3079,10 @@ Uses span-batched drawing for fuzzy-match highlighting instead of per-character.
               :for item := (nth item-idx items)
               :for row := (+ popup-top 1 row-idx)
               :for candidate-object := (list :index item-idx :item item)
-              :for candidate-ptype := (if skill-popup-p
-                                           'skill-candidate-ref
-                                           'minibuffer-candidate-ref)
+              :for candidate-ptype := (ecase mode
+                                       (:minibuffer 'minibuffer-candidate-ref)
+                                       (:slash 'slash-candidate-ref)
+                                       (:skill 'skill-candidate-ref))
               :for display := (minibuffer-item-display item)
               :for display-trimmed := (subseq display 0 (min (length display) (- popup-w 4)))
               :for match-pos := (nth item-idx positions)
@@ -3254,7 +3303,8 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
        (list :meta key))
       ;; ESC prefix
       ((and (characterp key) (char= key #\Esc))
-       (if (or *skill-completion-active*
+       (if (or *slash-completion-active*
+               *skill-completion-active*
                (and effective-buffer
                     (buffer-llm-running-p effective-buffer)))
            key
@@ -3306,57 +3356,65 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
 
 (defun mcclim-completion-popup-geometry (cols rows)
   "Return popup geometry matching `mcclim-render-completion-popup'."
-  (let* ((skill-popup-p (and (not *minibuffer-active*)
-                             *skill-completion-active*))
-         (items (if skill-popup-p
-                    *skill-completion-filtered-items*
-                    *minibuffer-filtered-items*))
+  (let* ((mode (mcclim-completion-popup-mode))
+         (items (ecase mode
+                  (:minibuffer *minibuffer-filtered-items*)
+                  (:slash *slash-completion-filtered-items*)
+                  (:skill *skill-completion-filtered-items*)))
          (total (length items))
          (popup-w (min (- cols 4) (max 40 (floor (* cols 3) 5))))
-         (max-height (if skill-popup-p
-                         *skill-completion-max-height*
-                         *minibuffer-max-height*))
+         (max-height (ecase mode
+                       (:minibuffer *minibuffer-max-height*)
+                       (:slash *slash-completion-max-height*)
+                       (:skill *skill-completion-max-height*)))
          (max-item-rows (max 0 (min (or max-height 12) (- rows 4))))
-         (display-total (if skill-popup-p (max 1 total) total))
+         (display-total (if (eq mode :minibuffer) total (max 1 total)))
          (item-rows (min display-total max-item-rows))
          (popup-h (+ 1 item-rows))
          (popup-left (floor (- cols popup-w) 2))
          (popup-top (floor (- rows popup-h) 2)))
-    (values popup-left popup-top popup-w item-rows skill-popup-p total)))
+    (values popup-left popup-top popup-w item-rows mode total)))
 
 (defun mcclim-handle-completion-popup-click (frame pane row col)
-  "Handle a select click in the custom minibuffer/skill completion popup."
+  "Handle a select click in the active completion popup."
   (declare (ignore frame))
-  (when (or *minibuffer-active* *skill-completion-active*)
+  (when (mcclim-completion-popup-mode)
     (multiple-value-bind (cols rows)
         (pane-grid-dimensions pane (frame-char-width (clim:pane-frame pane))
                               (frame-char-height (clim:pane-frame pane)))
-      (multiple-value-bind (popup-left popup-top popup-w item-rows skill-popup-p total)
+      (multiple-value-bind (popup-left popup-top popup-w item-rows mode total)
           (mcclim-completion-popup-geometry cols rows)
         (when (and (<= popup-left col)
                    (< col (+ popup-left popup-w))
                    (<= popup-top row)
                    (< row (+ popup-top 1 item-rows)))
           (cond
-            ((and *minibuffer-active* (= row popup-top))
+            ((and (eq mode :minibuffer) (= row popup-top))
              (let* ((prompt-len (length (format nil "~A: " *minibuffer-prompt*)))
                     (input-col (- col (1+ popup-left) prompt-len)))
                (setf *minibuffer-point*
                      (max 0 (min input-col (length *minibuffer-input*)))))
              t)
             ((> row popup-top)
-             (let ((index (+ (if skill-popup-p
-                                 *skill-completion-scroll-offset*
-                                 *minibuffer-scroll-offset*)
+             (let ((index (+ (ecase mode
+                               (:minibuffer *minibuffer-scroll-offset*)
+                               (:slash *slash-completion-scroll-offset*)
+                               (:skill *skill-completion-scroll-offset*))
                              (- row popup-top 1))))
                (when (and (<= 0 index) (< index total))
-                 (if skill-popup-p
-                     (mcclim-select-skill-candidate
-                      (list :index index
-                            :item (nth index *skill-completion-filtered-items*)))
-                     (mcclim-select-minibuffer-candidate
-                      (list :index index
-                            :item (nth index *minibuffer-filtered-items*))))
+                 (ecase mode
+                   (:minibuffer
+                    (mcclim-select-minibuffer-candidate
+                     (list :index index
+                           :item (nth index *minibuffer-filtered-items*))))
+                   (:slash
+                    (mcclim-select-slash-candidate
+                     (list :index index
+                           :item (nth index *slash-completion-filtered-items*))))
+                   (:skill
+                    (mcclim-select-skill-candidate
+                     (list :index index
+                           :item (nth index *skill-completion-filtered-items*)))))
                  t)))))))))
 
 (defun mcclim-handle-selector-click (frame row)
@@ -3556,7 +3614,10 @@ should use the standard CLIM presentation-to-command path first."
             (mcclim-set-message-point-from-grid
              (buffer-input-message buf) row col cols)
             (mcclim-sync-drei-point-from-buffer frame)
-            (sync-skill-completion buf)
+            (sync-slash-completion buf)
+            (if *slash-completion-active*
+                (deactivate-skill-completion)
+                (sync-skill-completion buf))
             t))))))
 
 (defun mcclim-handle-pointer-scroll (frame event)
@@ -3564,6 +3625,11 @@ should use the standard CLIM presentation-to-command path first."
   (let ((key (mcclim-pointer-scroll-key event)))
     (when key
       (cond
+        (*slash-completion-active*
+         (if (eq key :page-up)
+             (slash-completion-prev-item)
+             (slash-completion-next-item))
+         t)
         (*skill-completion-active*
          (if (eq key :page-up)
              (skill-completion-prev-item)

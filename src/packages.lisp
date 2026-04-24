@@ -591,6 +591,32 @@
    #:skill-injection-messages
    #:render-skills-section
 
+   ;; Prompt templates and slash commands
+   #:prompt-template
+   #:make-prompt-template
+   #:prompt-template-name
+   #:prompt-template-description
+   #:prompt-template-body
+   #:prompt-template-path
+   #:prompt-template-scope
+   #:prompt-template-package
+   #:slash-command
+   #:make-slash-command
+   #:slash-command-name
+   #:slash-command-description
+   #:slash-command-argument-hint
+   #:slash-command-handler
+   #:slash-command-package
+   #:*slash-command-table*
+   #:register-slash-command
+   #:list-slash-commands
+   #:find-slash-command
+   #:parse-slash-command-line
+   #:parse-prompt-template-markdown
+   #:discover-prompt-templates-in-directory
+   #:expand-prompt-template-body
+   #:process-slash-command
+
     ;; LLM
     #:*zai-env-var*
     #:read-env-token
@@ -1104,6 +1130,14 @@
    #:package-definition-autoload
    #:package-definition-dependencies
    #:package-definition-system-prompt-section
+   #:package-definition-prompt-template-directory
+   #:package-definition-slash-commands
+   #:package-slash-command-spec
+   #:make-package-slash-command-spec
+   #:package-slash-command-spec-name
+   #:package-slash-command-spec-description
+   #:package-slash-command-spec-argument-hint
+   #:package-slash-command-spec-handler
    #:package-prompt-section
    #:make-package-prompt-section
    #:package-prompt-section-name
@@ -1139,6 +1173,7 @@
    #:describe-installed-package-to-string
    #:load-clawmacs-package
    #:load-active-packages
+   #:reload-active-packages
    #:load-autoload-packages
    #:register-package-prompt-section
    #:list-package-prompt-sections
