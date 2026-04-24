@@ -56,6 +56,20 @@
          (clawmacs::*agent-defaults-registry* nil))
      ,@body))
 
+(defun temp-approval-policy-path ()
+  (let ((base (make-pathname :directory (list :absolute "tmp"
+                                              (format nil "clawmacs-guard-policy-~A"
+                                                      (list (get-universal-time)
+                                                            (get-internal-real-time)
+                                                            (gensym)))))))
+    (ensure-directories-exist (merge-pathnames #P".keep" base))
+    (merge-pathnames "guard.json" base)))
+
+(defmacro with-approval-policy-path-override ((path) &body body)
+  `(let ((clawmacs::*approval-policy-path* ,path)
+         (clawmacs::*approval-policy-registry* nil))
+     ,@body))
+
 (defmacro with-agent-definition-registry-override (() &body body)
   `(let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal)))
      ,@body))
@@ -256,6 +270,84 @@
                                tools)))
       (is (equal '("edit" "find" "grep" "lisp_eval" "read" "write")
                  tool-names)))))
+
+(test approval-policy-round-trips-default-and-tool-overrides
+  "Guard policy JSON persists default and per-tool permission overrides."
+  (let ((path (temp-approval-policy-path)))
+    (with-approval-policy-path-override (path)
+      (clawmacs::set-approval-policy-default-permission
+       :agent-with-permission)
+      (clawmacs::set-approval-policy-tool-permission "write" :user-only)
+      (clawmacs::save-approval-policy)
+      (setf clawmacs::*approval-policy-registry* nil)
+      (clawmacs::load-approval-policy)
+      (is (eq :agent-with-permission
+              (clawmacs:approval-policy-default-permission)))
+      (is (eq :user-only
+              (clawmacs:approval-policy-tool-permission "write")))
+      (is (null (clawmacs:approval-policy-tool-permission "read"))))))
+
+(test approval-policy-precedence-is-tool-override-then-default-then-static
+  "Guard policy overlay precedence is tool override, then default, then static metadata."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (initialize-test-tools)
+    (let ((path (temp-approval-policy-path)))
+      (with-approval-policy-path-override (path)
+        (is (eq :agent-allowed
+                (clawmacs:effective-tool-permission "lisp_eval")))
+        (clawmacs::set-approval-policy-default-permission :user-only)
+        (clawmacs::set-approval-policy-tool-permission "read" :agent-allowed)
+        (is (eq :agent-allowed
+                (clawmacs:effective-tool-permission "read")))
+        (is (eq :user-only
+                (clawmacs:effective-tool-permission "lisp_eval")))))))
+
+(test approval-policy-user-only-overrides-hide-tools-from-agent-discovery
+  "User-only overrides remove tools from agent-visible provider discovery."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (initialize-test-tools)
+    (let ((path (temp-approval-policy-path)))
+      (with-approval-policy-path-override (path)
+        (clawmacs::set-approval-policy-tool-permission "write" :user-only)
+        (let* ((*current-caller* :agent)
+               (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+               (tool-names (mapcar (lambda (tool)
+                                     (cdr (assoc :name tool)))
+                                   tools)))
+          (is-false (member "write" tool-names :test #'string=)))
+        (let* ((*current-caller* :user)
+               (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+               (tool-names (mapcar (lambda (tool)
+                                     (cdr (assoc :name tool)))
+                                   tools)))
+          (is (member "write" tool-names :test #'string=)))))))
+
+(test approval-policy-overrides-prompt-and-interactive-tool-permission-flow
+  "Guard policy overrides feed both prompt-mode denial and interactive approval."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (initialize-test-tools)
+    (let ((path (temp-approval-policy-path)))
+      (with-approval-policy-path-override (path)
+        (clawmacs::set-approval-policy-tool-permission "write"
+                                                       :agent-with-permission)
+        (let ((tool-use (clawmacs::canonical-tool-use-block
+                         "call-1"
+                         "write"
+                         '((:path . "/tmp/guard-policy.txt")
+                           (:content . "guarded"))))
+              (buf (make-buffer "guard-policy" :agent-name "agent")))
+          (multiple-value-bind (result event)
+              (clawmacs::execute-prompt-tool-call buf tool-use :agent nil)
+            (is (search "DENIED" (cdr (assoc :display result))))
+            (is (clawmacs:prompt-tool-event-denied-p event)))
+          (clawmacs::begin-tool-approval buf (list tool-use))
+          (is (eq :approval (buffer-status buf)))
+          (is (string= "write"
+                       (cdr (assoc :tool-name
+                                   (buffer-approval-pending buf))))))))))
 
 (test init-tools-hides-lispi-tools-until-package-enabled
   "init-tools exposes built-in lisp_eval without lispi package tools."

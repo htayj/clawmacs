@@ -30,6 +30,41 @@
       (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return)
                                   value)))))
 
+(defun normalize-tool-permission (value &key allow-inherit-p (context "Tool permission"))
+  "Normalize VALUE into a supported tool permission keyword.
+When ALLOW-INHERIT-P is true, NIL and \"inherit\" map to NIL."
+  (let ((normalized
+          (cond
+            ((null value) (and allow-inherit-p nil))
+            ((keywordp value) value)
+            ((symbolp value)
+             (intern (string-upcase (symbol-name value)) :keyword))
+            ((stringp value)
+             (let* ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                          value))
+                    (token (substitute #\- #\_ trimmed)))
+               (when (agent-tool-blank-string-p token)
+                 (error "~A must not be blank." context))
+               (intern (string-upcase token) :keyword)))
+            (t
+             (error "~A must be a keyword, symbol, string, or NIL: ~S"
+                    context
+                    value)))))
+    (cond
+      ((and allow-inherit-p (or (null normalized) (eq normalized :inherit)))
+       nil)
+      ((member normalized '(:agent-allowed :agent-with-permission :user-only)
+               :test #'eq)
+       normalized)
+      (t
+       (error "~A has unsupported value ~S." context value)))))
+
+(defun tool-permission-json-value (permission)
+  "Return PERMISSION as the persisted JSON string."
+  (if permission
+      (string-downcase (symbol-name permission))
+      "inherit"))
+
 (defun normalize-agent-tool-name (tool-name)
   "Normalize TOOL-NAME into the provider-facing tool name string."
   (let* ((raw (etypecase tool-name
@@ -132,7 +167,9 @@
          (args (mapcar (lambda (arg)
                          (normalize-agent-tool-arg-spec symbol arg))
                        raw-args))
-         (permission (or (getf tool-spec :permission) :agent-allowed))
+         (permission (normalize-tool-permission
+                      (or (getf tool-spec :permission) :agent-allowed)
+                      :context (format nil "Tool ~A permission" symbol)))
          (description (or (getf tool-spec :description)
                           docstring
                           (documentation symbol 'function)
@@ -140,9 +177,6 @@
          (call-style
            (normalize-agent-tool-call-style
             symbol (getf tool-spec :call-style) command-p)))
-    (unless (member permission '(:agent-allowed :agent-with-permission :user-only)
-                    :test #'eq)
-      (error "Tool ~A has unsupported permission ~S." symbol permission))
     (when (and command-p lambda-list
                (/= (length args) (length (rest lambda-list))))
       (error "Command tool ~A argument count ~D does not match command parameters ~D."
@@ -298,6 +332,13 @@ Temporary tools override same-named global tools for the dynamic extent.")
 (defvar *current-tool-buffer* nil
   "Dynamic buffer passed to command-style provider tools during execution.")
 
+(defvar *approval-policy-path*
+  (merge-pathnames #P".config/clawmacs/guard.json" (user-homedir-pathname))
+  "Path to the persisted user-scoped tool approval policy.")
+
+(defvar *approval-policy-registry* nil
+  "Memoized user approval policy registry.")
+
 (defvar *http-fetch-max-chars* 50000
   "Default maximum characters returned by http_fetch.")
 
@@ -315,6 +356,124 @@ Temporary tools override same-named global tools for the dynamic extent.")
   "Names reserved for core Clawmacs provider tools.
 INIT-TOOLS removes these entries before re-registering tagged tools, so
 user-added tools stored in *tool-table* are left intact.")
+
+(defun make-approval-policy-registry ()
+  "Create an empty in-memory approval policy registry."
+  (list :default nil
+        :tools (make-hash-table :test #'equal)))
+
+(defun approval-policy-tools (registry)
+  "Return the per-tool permission table stored in REGISTRY."
+  (getf registry :tools))
+
+(defun approval-policy-default-permission ()
+  "Return the current default approval override permission, or NIL."
+  (ensure-approval-policy-loaded)
+  (getf *approval-policy-registry* :default))
+
+(defun approval-policy-tool-permission (name)
+  "Return the approval override permission for tool NAME, or NIL."
+  (ensure-approval-policy-loaded)
+  (gethash (normalize-tool-name name)
+           (approval-policy-tools *approval-policy-registry*)))
+
+(defun set-approval-policy-default-permission (permission)
+  "Set the default approval override PERMISSION in memory."
+  (ensure-approval-policy-loaded)
+  (setf (getf *approval-policy-registry* :default)
+        (normalize-tool-permission permission
+                                   :allow-inherit-p t
+                                   :context "Guard policy default"))
+  (approval-policy-default-permission))
+
+(defun set-approval-policy-tool-permission (name permission)
+  "Set or clear the approval override PERMISSION for tool NAME in memory."
+  (ensure-approval-policy-loaded)
+  (let* ((tools (approval-policy-tools *approval-policy-registry*))
+         (normalized-name (normalize-tool-name name))
+         (normalized-permission
+           (normalize-tool-permission permission
+                                      :allow-inherit-p t
+                                      :context
+                                      (format nil "Guard policy override for ~A"
+                                              normalized-name))))
+    (if normalized-permission
+        (setf (gethash normalized-name tools) normalized-permission)
+        (remhash normalized-name tools))
+    normalized-permission))
+
+(defun load-approval-policy ()
+  "Load and memoize the persisted user approval policy."
+  (let ((registry (make-approval-policy-registry)))
+    (when (probe-file *approval-policy-path*)
+      (handler-case
+          (let* ((json (uiop:read-file-string *approval-policy-path*))
+                 (data (cl-json:decode-json-from-string json))
+                 (default (lookup-json-value data "default"))
+                 (tool-overrides (lookup-json-value data "tools"))
+                 (tools (approval-policy-tools registry)))
+            (setf (getf registry :default)
+                  (normalize-tool-permission default
+                                             :allow-inherit-p t
+                                             :context "Guard policy default"))
+            (dolist (entry tool-overrides)
+              (let* ((name (json-key-string (car entry)))
+                     (permission (normalize-tool-permission
+                                  (cdr entry)
+                                  :allow-inherit-p t
+                                  :context
+                                  (format nil "Guard policy override for ~A"
+                                          name))))
+                (when permission
+                  (setf (gethash (normalize-tool-name name) tools)
+                        permission)))))
+        (error (condition)
+          (warn "Failed to load guard policy from ~A: ~A"
+                *approval-policy-path*
+                condition))))
+    (setf *approval-policy-registry* registry)))
+
+(defun ensure-approval-policy-loaded ()
+  "Load the approval policy when it has not been memoized yet."
+  (unless *approval-policy-registry*
+    (load-approval-policy))
+  *approval-policy-registry*)
+
+(defun save-approval-policy ()
+  "Persist the current approval policy registry to disk."
+  (ensure-approval-policy-loaded)
+  (let ((payload
+          `((:version . 1)
+            (:default . ,(tool-permission-json-value
+                          (approval-policy-default-permission)))
+            (:tools
+             . ,(let ((entries nil))
+                  (maphash
+                   (lambda (name permission)
+                     (push `(,name . ,(tool-permission-json-value permission))
+                           entries))
+                   (approval-policy-tools *approval-policy-registry*))
+                  (nreverse entries))))))
+    (ensure-directories-exist *approval-policy-path*)
+    (with-open-file (stream *approval-policy-path*
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string (api-json-encode payload) stream))
+    *approval-policy-path*))
+
+(defun effective-tool-permission (definition-or-name)
+  "Return the approval-effective permission for DEFINITION-OR-NAME."
+  (let* ((definition (if (tool-definition-p definition-or-name)
+                         definition-or-name
+                         (effective-tool-definition definition-or-name)))
+         (static-permission (and definition
+                                 (tool-definition-permission definition))))
+    (if definition
+        (or (approval-policy-tool-permission (tool-definition-name definition))
+            (approval-policy-default-permission)
+            static-permission)
+        nil)))
 
 (defun make-subagent-tool (&key name description input-schema
                              ((:schema schema-arg) nil)
@@ -338,7 +497,11 @@ be a function accepting one argument: the decoded tool input alist."
     (%make-subagent-tool :name (normalize-tool-name name)
                          :description description
                          :input-schema effective-schema
-                         :permission permission
+                         :permission (normalize-tool-permission
+                                      permission
+                                      :context
+                                      (format nil "Temporary tool ~A permission"
+                                              name))
                          :execute-fn fn
                          :approval-display-fn approval-display-fn)))
 
@@ -430,7 +593,11 @@ the owning Clawmacs package for package-scoped tools."
           (make-tool-definition :name normalized-name
                                 :description description
                                 :input-schema schema
-                                :permission permission
+                                :permission (normalize-tool-permission
+                                             permission
+                                             :context
+                                             (format nil "Tool ~A permission"
+                                                     normalized-name))
                                 :execute-fn execute-fn
                                 :approval-display-fn approval-display-fn
                                 :package package))))
@@ -597,7 +764,7 @@ Package-owned tools are registered when their package entrypoint is loaded."
 
 (defun tool-visible-to-caller-p (definition)
   "Return true when DEFINITION is visible to *CURRENT-CALLER*."
-  (let ((perm (tool-definition-permission definition)))
+  (let ((perm (effective-tool-permission definition)))
     (or (eq *current-caller* :user)
         (eq perm :agent-allowed)
         (eq perm :agent-with-permission))))
@@ -649,10 +816,11 @@ Only includes tools visible to the current *current-caller*."
             (format s "- ~A: ~A~%" name description)))
         (format s "</tools>")))))
 
-(defun tool-requires-permission-p (name)
+(defun tool-requires-permission-p (name &key buffer)
   "Return T if tool NAME requires user permission."
+  (declare (ignore buffer))
   (let ((def (effective-tool-definition name)))
-    (and def (eq :agent-with-permission (tool-definition-permission def)))))
+    (and def (eq :agent-with-permission (effective-tool-permission def)))))
 
 (defun execute-tool (name args)
   "Execute tool NAME with ARGS (an alist of parameter values).
@@ -668,7 +836,7 @@ Returns a string result or signals an error."
              :buffer *current-tool-buffer*
              :agent-name (caller-agent-name))
       (error "Tool ~A belongs to an inactive package" normalized-name))
-    (let ((perm (tool-definition-permission def)))
+    (let ((perm (effective-tool-permission def)))
       (ecase perm
         (:agent-allowed t)
         (:agent-with-permission t)  ; caller is responsible for approval check

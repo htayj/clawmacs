@@ -134,7 +134,7 @@ Parity sources:
 - `reference/external_src/codex/sdk/python/docs/api-reference.md`
 - `reference/external_src/pi-mono/packages/coding-agent/docs/extensions.md`
 
-- [ ] Formalize approval policies as user-configurable data, not only per-tool
+- [x] Formalize approval policies as user-configurable data, not only per-tool
   ad hoc permissions.
 - [ ] Add sandbox presets such as read-only, workspace-write, and full-access,
   with optional network toggles.

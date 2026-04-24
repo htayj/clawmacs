@@ -55,7 +55,7 @@ When all tools are done, finalizes the results."
           :for tool-id := (cdr (assoc :id tu))
           :do (cond
                 ;; Tool needs permission: show approval prompt and return
-                ((tool-requires-permission-p tool-name)
+                ((tool-requires-permission-p tool-name :buffer buf)
                  (let* ((raw-sexpr (format-tool-call-sexpr tool-name tool-input))
                         (expanded (format-tool-call-expanded tool-name tool-input))
                         (extra (tool-approval-extra-display tool-name tool-input)))
@@ -613,7 +613,8 @@ PROMPT-TOOL-EVENT for terminal/debug output."
   (let* ((tool-name (cdr (assoc :name tool-use-block)))
          (tool-input (cdr (assoc :input tool-use-block)))
          (tool-id (cdr (assoc :id tool-use-block)))
-         (requires-approval-p (tool-requires-permission-p tool-name))
+         (requires-approval-p (tool-requires-permission-p tool-name
+                                                          :buffer buf))
          (denied-p (and requires-approval-p
                         (not auto-approve-tools-p)))
          (result-text

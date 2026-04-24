@@ -731,10 +731,18 @@
    #:*lisp-eval-history*
    #:*lisp-eval-history-limit*
    #:*lisp-eval-max-output-chars*
+   #:*approval-policy-path*
    #:*tool-table*
    #:*active-tool-names*
    #:*temporary-tool-table*
    #:*current-tool-buffer*
+   #:approval-policy-default-permission
+   #:approval-policy-tool-permission
+   #:set-approval-policy-default-permission
+   #:set-approval-policy-tool-permission
+   #:load-approval-policy
+   #:save-approval-policy
+   #:effective-tool-permission
    #:lisp-eval-record
    #:lisp-eval-record-code
    #:lisp-eval-record-package

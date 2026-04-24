@@ -4105,6 +4105,9 @@ Example:
           (merge-pathnames #P"projects.d/" root)
           *sessions-dir*
           (merge-pathnames #P"sessions/" root)
+          *approval-policy-path*
+          (merge-pathnames #P"guard.json" config-dir)
+          *approval-policy-registry* nil
           *agent-defaults-path*
           (merge-pathnames #P"agent-defaults.json" root)
           *packages-directory*
