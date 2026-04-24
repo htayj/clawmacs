@@ -194,7 +194,13 @@
       (is (eq 'clawmacs::mcclim-render-listener-buffer
               (buffer-presentation-function listener)))
       (is (eq 'clawmacs::mcclim-render-listener-input-pane
-              (buffer-input-presentation-function listener))))))
+              (buffer-input-presentation-function listener)))
+      (is (eq 'clawmacs::listener-serialize-buffer-state
+              (clawmacs::buffer-type-serialize-state-function
+               (find-buffer-type :listener))))
+      (is (eq 'clawmacs::listener-restore-buffer-state
+              (clawmacs::buffer-type-restore-state-function
+               (find-buffer-type :listener)))))))
 
 (test make-listener-buffer-evaluates-lisp-and-comma-commands
   "Listener buffers evaluate Lisp forms and dispatch McCLIM-style comma commands."
@@ -358,6 +364,25 @@
       (let ((loaded-msg (buffer-first-message loaded)))
         (is (eq :user (message-sender loaded-msg)))
         (is (string= "from transcript" (message-text loaded-msg)))))))
+
+(test sidecar-only-session-round-trips-working-directory
+  "Sidecar-backed session loads preserve the original working directory."
+  (let* ((session-name "sidecar-working-directory")
+         (working-directory #P"/tmp/clawmacs-sidecar-session/")
+         (*sessions-dir* (temp-session-test-directory "sidecar-working-directory"))
+         (session (load-or-create-session session-name
+                                          :working-directory working-directory))
+         (msg (make-message :user :read-only-p t)))
+    (clawmacs::set-message-text msg "from transcript")
+    (setf (message-timestamp msg) 42)
+    (record-session-message session msg)
+    (let ((loaded (load-session session-name)))
+      (is (not (null loaded)))
+      (is (equal (uiop:ensure-directory-pathname working-directory)
+                 (buffer-working-directory loaded)))
+      (is (equal (uiop:ensure-directory-pathname working-directory)
+                 (clawmacs::session-working-directory
+                  (buffer-session loaded)))))))
 
 (test session-transcripts-are-tree-shaped
   "Recorded transcript messages get ids, parent ids, and advance the leaf."
@@ -631,6 +656,61 @@
       (is (string= "plan-build" (buffer-pipeline-name loaded)))
       (is (equal '("sexed" "lispi")
                  (buffer-enabled-packages loaded))))))
+
+(test save-and-load-session-round-trips-working-directory
+  "Saved sessions preserve the buffer working directory and session root."
+  (let* ((session-name "working-directory-round-trip")
+         (working-directory #P"/tmp/clawmacs-working-directory-session/")
+         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
+         (session (load-or-create-session session-name
+                                          :working-directory working-directory))
+         (buf (make-buffer session-name
+                           :agent-name "echo"
+                           :session session
+                           :working-directory working-directory)))
+    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (buffer-finalize-input buf)
+    (save-session buf)
+    (let ((loaded (load-session session-name)))
+      (is (not (null loaded)))
+      (is (equal (uiop:ensure-directory-pathname working-directory)
+                 (buffer-working-directory loaded)))
+      (is (equal (uiop:ensure-directory-pathname working-directory)
+                 (clawmacs::session-working-directory
+                  (buffer-session loaded)))))))
+
+(test listener-buffer-state-round-trips-through-session-save
+  "Listener buffers preserve package, directory stack, history, and values."
+  (let* ((session-name "listener-state-round-trip")
+         (working-directory #P"/tmp/clawmacs-listener-session/")
+         (stack-entry #P"/tmp/clawmacs-listener-stack/")
+         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
+         (clawmacs::*listener-buffer-states* (make-hash-table :test #'eq))
+         (session (load-or-create-session session-name
+                                          :working-directory working-directory))
+         (buf (make-listener-buffer :name session-name
+                                    :working-directory working-directory)))
+    (setf (buffer-session buf) session)
+    (clawmacs::listener-set-package buf "KEYWORD")
+    (setf (listener-state-directory-stack (listener-buffer-state buf))
+          (list stack-entry)
+          (listener-state-last-values (listener-buffer-state buf))
+          '(42 "done")
+          (listener-state-command-history (listener-buffer-state buf))
+          '(",pwd" "(+ 1 2)"))
+    (save-session buf)
+    (let* ((loaded (load-session session-name))
+           (loaded-state (listener-buffer-state loaded)))
+      (is (listener-buffer-p loaded))
+      (is (equal (uiop:ensure-directory-pathname working-directory)
+                 (buffer-working-directory loaded)))
+      (is (string= "KEYWORD" (listener-state-package-name loaded-state)))
+      (is (equal (list (uiop:ensure-directory-pathname stack-entry))
+                 (listener-state-directory-stack loaded-state)))
+      (is (equal '(42 "done")
+                 (listener-state-last-values loaded-state)))
+      (is (equal '(",pwd" "(+ 1 2)")
+                 (listener-state-command-history loaded-state))))))
 
 (test clear-buffer-overrides-clears-think-level
   "Clearing buffer overrides also clears think-level state."

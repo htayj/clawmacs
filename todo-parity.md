@@ -221,12 +221,12 @@ problems observed while reviewing the current Clawmacs tree.
   `test-mcclim-e2e.py:3328`. The likely hot paths are the pointer/input bridge
   in `src/mcclim-app.lisp:3373-3641` and the recent input/theme edits in
   `src/mcclim-app.lisp` and `src/render-core.lisp`.
-- [ ] Persist each buffer's working directory in session snapshots and sidecar
+- [x] Persist each buffer's working directory in session snapshots and sidecar
   transcripts. `serialize-buffer` drops `working-directory`
   (`src/buffer.lisp:954-971`), and both loaders reconstruct buffers with
   `(truename ".")` instead of the original root
   (`src/buffer.lisp:1064-1068`, `src/buffer.lisp:1098-1102`).
-- [ ] Add buffer-type-specific persistence hooks. The buffer type registry only
+- [x] Add buffer-type-specific persistence hooks. The buffer type registry only
   captures presentation metadata (`src/buffer.lisp:137-170`), while session
   serialization only stores generic buffer fields (`src/buffer.lisp:954-971`).
   Listener state is explicitly process-local (`src/listener.lisp:10-26`), so

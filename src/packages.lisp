@@ -174,6 +174,7 @@
    #:session-current-transcript-path
    #:session-current-leaf-id
    #:session-parent-session
+   #:session-working-directory
    #:session-tree-node
    #:session-tree-node-entry
    #:session-tree-node-label
@@ -263,6 +264,8 @@
    #:buffer-type-document-p
    #:buffer-type-presentation-function
    #:buffer-type-input-presentation-function
+   #:buffer-type-serialize-state-function
+   #:buffer-type-restore-state-function
    #:buffer-type-package
    #:register-buffer-type
    #:define-buffer-type

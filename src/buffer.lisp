@@ -51,6 +51,8 @@
   document-p
   presentation-function
   input-presentation-function
+  serialize-state-function
+  restore-state-function
   package)
 
 (defun normalize-buffer-kind (kind)
@@ -108,6 +110,14 @@
             role
             function))))
 
+(defun buffer-type-state-serializer (type)
+  "Return TYPE's optional persistence serializer function."
+  (and type (buffer-type-serialize-state-function type)))
+
+(defun buffer-type-state-restorer (type)
+  "Return TYPE's optional persistence restore function."
+  (and type (buffer-type-restore-state-function type)))
+
 (defun make-buffer-type-registry ()
   "Return a fresh buffer type registry seeded with built-in buffer kinds."
   (let ((registry (make-hash-table :test #'eq)))
@@ -135,8 +145,16 @@ The McCLIM interface uses the registered presentation functions to render
 custom buffer kinds.")
 
 (defun register-buffer-type
-    (name &key description major-mode document-p
-               presentation-function input-presentation-function package)
+    (name
+     &key
+       (description nil description-supplied-p)
+       (major-mode nil major-mode-supplied-p)
+       (document-p nil document-p-supplied-p)
+       (presentation-function nil presentation-function-supplied-p)
+       (input-presentation-function nil input-presentation-function-supplied-p)
+       (serialize-state-function nil serialize-state-function-supplied-p)
+       (restore-state-function nil restore-state-function-supplied-p)
+       (package nil package-supplied-p))
   "Register NAME as a buffer type and return its BUFFER-TYPE metadata.
 
 PRESENTATION-FUNCTION, when supplied, is called by the McCLIM transcript pane as
@@ -145,19 +163,62 @@ called with the same arguments for the separate Drei input pane. Package
 entrypoints normally leave PACKAGE unset; it defaults to the package currently
 being loaded by the Clawmacs package manager."
   (let* ((kind (normalize-buffer-kind name))
+         (existing (gethash kind *buffer-type-registry*))
+         (current-owner
+           (normalize-buffer-type-package-name *current-clawmacs-package*))
          (owner (normalize-buffer-type-package-name
-                 (or package *current-clawmacs-package*)))
+                 (cond
+                   (package-supplied-p package)
+                   (current-owner)
+                   (existing (buffer-type-package existing))
+                   (t nil))))
          (type (make-buffer-type
                 :name kind
-                :description (or description "")
-                :major-mode (normalize-buffer-major-mode major-mode kind)
-                :document-p (not (null document-p))
+                :description
+                (or (and description-supplied-p description)
+                    (and existing (buffer-type-description existing))
+                    "")
+                :major-mode
+                (normalize-buffer-major-mode
+                 (cond
+                   (major-mode-supplied-p major-mode)
+                   (existing (buffer-type-major-mode existing))
+                   (t nil))
+                 kind)
+                :document-p
+                (if document-p-supplied-p
+                    (not (null document-p))
+                    (and existing (buffer-type-document-p existing)))
                 :presentation-function
-                (normalize-buffer-type-function presentation-function
+                (normalize-buffer-type-function
+                 (cond
+                   (presentation-function-supplied-p presentation-function)
+                   (existing (buffer-type-presentation-function existing))
+                   (t nil))
                                                 :presentation-function)
                 :input-presentation-function
-                (normalize-buffer-type-function input-presentation-function
+                (normalize-buffer-type-function
+                 (cond
+                   (input-presentation-function-supplied-p
+                    input-presentation-function)
+                   (existing (buffer-type-input-presentation-function existing))
+                   (t nil))
                                                 :input-presentation-function)
+                :serialize-state-function
+                (normalize-buffer-type-function
+                 (cond
+                   (serialize-state-function-supplied-p
+                    serialize-state-function)
+                   (existing (buffer-type-serialize-state-function existing))
+                   (t nil))
+                 :serialize-state-function)
+                :restore-state-function
+                (normalize-buffer-type-function
+                 (cond
+                   (restore-state-function-supplied-p restore-state-function)
+                   (existing (buffer-type-restore-state-function existing))
+                   (t nil))
+                 :restore-state-function)
                 :package owner)))
     (setf (gethash kind *buffer-type-registry*) type)
     type))
@@ -197,6 +258,38 @@ major-mode label, and optional McCLIM presentation functions."
   "Return BUF's registered input-pane presentation function, if any."
   (let ((type (buffer-type-for-buffer buf)))
     (and type (buffer-type-input-presentation-function type))))
+
+(defun buffer-state-serializer (buf)
+  "Return BUF's optional persistence serializer function."
+  (let ((type (buffer-type-for-buffer buf)))
+    (and type (buffer-type-state-serializer type))))
+
+(defun buffer-state-restorer (buf)
+  "Return BUF's optional persistence restore function."
+  (let ((type (buffer-type-for-buffer buf)))
+    (and type (buffer-type-state-restorer type))))
+
+(defun serialize-buffer-extra-state (buf)
+  "Return BUF's optional buffer-type-specific persistence state."
+  (let ((serializer (buffer-state-serializer buf)))
+    (when serializer
+      (funcall serializer buf))))
+
+(defun restore-buffer-extra-state (buf state)
+  "Restore buffer-type-specific STATE into BUF when supported."
+  (let ((restorer (buffer-state-restorer buf)))
+    (when (and restorer state)
+      (funcall restorer buf state)))
+  buf)
+
+(defun normalize-buffer-working-directory (value)
+  "Return VALUE as a directory pathname suitable for BUFFER-WORKING-DIRECTORY."
+  (let ((path (cond
+                ((pathnamep value) value)
+                ((stringp value) (pathname value))
+                ((null value) (truename "."))
+                (t (error "Invalid buffer working directory: ~S" value)))))
+    (uiop:ensure-directory-pathname path)))
 
 (defclass buffer ()
   ((name              :initarg :name
@@ -476,7 +569,9 @@ Enforces the invariant that it is not read-only."
              (not (document-buffer-p buf))
              (null (buffer-session buf)))
     (attach-buffer-session buf
-                           (load-or-create-session (buffer-name buf))))
+                           (load-or-create-session
+                            (buffer-name buf)
+                            :working-directory (buffer-working-directory buf))))
   (buffer-session buf))
 
 (defun autosave-session-snapshot (buf)
@@ -962,16 +1057,28 @@ The current buffer remains current when a current buffer already exists."
       (:agent-name . ,(buffer-agent-name buf))
       (:kind . ,(symbol-name (buffer-kind buf)))
       (:major-mode . ,(buffer-major-mode buf))
+      (:working-directory
+       . ,(namestring (uiop:ensure-directory-pathname
+                       (buffer-working-directory buf))))
       (:provider-override . ,(buffer-provider-override buf))
       (:model-override . ,(buffer-model-override buf))
       (:think-level-override . ,(buffer-think-level-override buf))
       (:pipeline-name . ,(buffer-pipeline-name buf))
       (:enabled-packages . ,(coerce (copy-list (buffer-enabled-packages buf))
                                     'vector))
+      ,@(let ((buffer-state (serialize-buffer-extra-state buf)))
+          (when buffer-state
+            `((:buffer-state . ,buffer-state))))
       (:messages . ,(coerce (nreverse messages) 'vector)))))
 
 (defun save-session (buf)
   "Save the buffer's conversation to a session file."
+  (let ((session (buffer-session buf)))
+    (when session
+      (setf (session-working-directory session)
+            (normalize-buffer-working-directory
+             (buffer-working-directory buf)))
+      (write-session-manifest session)))
   (let ((path (session-path (buffer-name buf))))
     (ensure-directories-exist path)
     (with-open-file (s path :direction :output
@@ -1055,17 +1162,24 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
            (agent (or (cdr (assoc :agent-name data)) agent-name))
            (kind (cdr (assoc :kind data)))
            (major-mode (cdr (assoc :major-mode data)))
+           (working-directory
+             (normalize-buffer-working-directory
+              (cdr (assoc :working-directory data))))
            (provider-override (cdr (assoc :provider-override data)))
            (model-override (cdr (assoc :model-override data)))
            (think-level-override (cdr (assoc :think-level-override data)))
            (pipeline-name (cdr (assoc :pipeline-name data)))
            (enabled-packages (cdr (assoc :enabled-packages data)))
+           (buffer-state (cdr (assoc :buffer-state data)))
            (messages (cdr (assoc :messages data)))
            (buf (make-buffer name :agent-name agent
                                   :kind (or kind :chat)
-                                  :working-directory (truename ".")
+                                  :working-directory working-directory
                                   :major-mode major-mode
-                                  :session (load-or-create-session name))))
+                                  :session (load-or-create-session
+                                            name
+                                            :working-directory
+                                            working-directory))))
       (setf (buffer-provider-override buf)
             (and provider-override
                  (ignore-errors
@@ -1085,6 +1199,7 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
                   :when (stringp package)
                     :collect package))
       (replay-serialized-messages buf messages)
+      (restore-buffer-extra-state buf buffer-state)
       (ignore-errors
         (reconcile-buffer-think-level-override buf))
       buf)))
@@ -1098,7 +1213,8 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
     (let* ((name (or (cdr (assoc :name manifest)) session-name))
            (session (load-or-create-session name))
            (buf (make-buffer name :agent-name agent-name
-                                  :working-directory (truename ".")
+                                  :working-directory
+                                  (session-working-directory session)
                                   :session session)))
       (replay-serialized-messages
        buf

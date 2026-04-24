@@ -15,7 +15,8 @@
             (:constructor %make-session
                 (name id directory manifest-path transcript-directory
                  current-transcript-index current-transcript-path created-at
-                 &key updated-at current-leaf-id parent-session)))
+                 &key updated-at current-leaf-id parent-session
+                      working-directory)))
   "Persistent chat session metadata and current transcript segment."
   (name "" :type string)
   (id "" :type string)
@@ -26,9 +27,19 @@
   (current-transcript-path #P"" :type pathname)
   (current-leaf-id nil :type (or null string))
   (parent-session nil :type (or null string))
+  (working-directory #P"" :type pathname)
   (created-at 0 :type integer)
   (updated-at 0 :type integer)
   (lock (bt:make-lock "session-transcript")))
+
+(defun normalize-session-working-directory (value)
+  "Return VALUE as a session working directory pathname."
+  (let ((path (cond
+                ((pathnamep value) value)
+                ((stringp value) (pathname value))
+                ((null value) (truename "."))
+                (t (error "Invalid session working directory: ~S" value)))))
+    (uiop:ensure-directory-pathname path)))
 
 (defstruct (session-tree-node
             (:constructor make-session-tree-node
@@ -152,6 +163,8 @@
     (:current-leaf-id . ,(session-current-leaf-id session))
     ,@(when (session-parent-session session)
         `((:parent-session . ,(session-parent-session session))))
+    (:working-directory
+     . ,(session-path-string (session-working-directory session)))
     (:directory . ,(session-path-string (session-directory session)))
     (:transcript-directory
      . ,(session-path-string (session-transcript-directory session)))
@@ -651,7 +664,10 @@ Selecting a user message returns its parent so the message can be edited."
          (new-name (or name (unique-session-branch-name (session-name session))))
          (parent (session-path-string (session-directory session)))
          (new-session (load-or-create-session new-name
-                                              :parent-session parent))
+                                              :parent-session parent
+                                              :working-directory
+                                              (session-working-directory
+                                               session)))
          (labels (session-label-table session))
          (path-ids (mapcar #'session-event-id path)))
     (bt:with-lock-held ((session-lock new-session))
@@ -667,7 +683,8 @@ Selecting a user message returns its parent so the message can be edited."
     new-session))
 
 (defun load-or-create-session
-    (name &key (root *sessions-dir*) parent-session)
+    (name &key (root *sessions-dir*) parent-session
+                    (working-directory (truename ".")))
   "Load or initialize persistent session metadata for NAME."
   (let* ((id (session-safe-component name))
          (directory (session-sidecar-directory name :root root))
@@ -682,6 +699,10 @@ Selecting a user message returns its parent so the message can be edited."
          (current-leaf-id (cdr current-leaf-cell))
          (parent-session (or (cdr (assoc :parent-session manifest))
                              parent-session))
+         (working-directory
+           (normalize-session-working-directory
+            (or (cdr (assoc :working-directory manifest))
+                working-directory)))
          (manifest-path-string (cdr (assoc :current-transcript-path manifest)))
          (current-path (if manifest-path-string
                            (pathname manifest-path-string)
@@ -698,7 +719,8 @@ Selecting a user message returns its parent so the message can be edited."
                                  created-at
                                  :updated-at updated-at
                                  :current-leaf-id current-leaf-id
-                                 :parent-session parent-session)))
+                                 :parent-session parent-session
+                                 :working-directory working-directory)))
     (ensure-session-directories session)
     (unless (probe-file (session-current-transcript-path session))
       (bt:with-lock-held ((session-lock session))

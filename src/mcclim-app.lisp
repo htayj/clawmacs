@@ -2170,7 +2170,9 @@ display through the same renderer as the transcript keeps repaint stable."
    :description "Interactive Common Lisp listener buffer."
    :major-mode "listener"
    :presentation-function 'mcclim-render-listener-buffer
-   :input-presentation-function 'mcclim-render-listener-input-pane))
+   :input-presentation-function 'mcclim-render-listener-input-pane
+   :serialize-state-function 'listener-serialize-buffer-state
+   :restore-state-function 'listener-restore-buffer-state))
 
 (register-mcclim-core-buffer-presentations)
 

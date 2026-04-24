@@ -8,7 +8,7 @@
   "Default name for the in-buffer Common Lisp listener.")
 
 (defvar *listener-buffer-states* (make-hash-table :test #'eq)
-  "Per-buffer listener state.  State is intentionally process-local.")
+  "Per-buffer listener state, with durable fields saved in sessions.")
 
 (defvar *listener-max-output-chars* 20000
   "Maximum characters retained from one listener evaluation or command.")
@@ -132,6 +132,71 @@
         (format nil "~A" condition))
     (error ()
       "#<unprintable condition>")))
+
+(defun listener-normalize-package-name (value)
+  "Return VALUE as a valid listener package name, defaulting safely."
+  (let* ((candidate (and value (string-upcase (string value))))
+         (package (and candidate (find-package candidate))))
+    (package-name (or package (find-package (listener-default-package-name))))))
+
+(defun listener-serialize-last-values (values)
+  "Return VALUES as a vector of printed representations."
+  (coerce (mapcar #'listener-safe-value-string values) 'vector))
+
+(defun listener-restore-last-values (items)
+  "Return ITEMS restored from printed listener values when readable."
+  (loop :for item :in (coerce (or items #()) 'list)
+        :collect (if (stringp item)
+                     (handler-case
+                         (let ((*read-eval* nil)
+                               (*package* (find-package :cl-user)))
+                           (read-from-string item))
+                       (error ()
+                         item))
+                     item)))
+
+(defun listener-serialize-buffer-state (buf)
+  "Return BUF's listener-specific persistence state."
+  (let ((state (listener-buffer-state buf)))
+    `((:package-name . ,(listener-state-package-name state))
+      (:directory-stack
+       . ,(coerce (mapcar #'namestring
+                          (listener-state-directory-stack state))
+                  'vector))
+      (:last-values
+       . ,(listener-serialize-last-values
+           (listener-state-last-values state)))
+      (:command-history
+       . ,(coerce (copy-list (listener-state-command-history state))
+                  'vector)))))
+
+(defun listener-restore-buffer-state (buf persisted-state)
+  "Restore PERSISTED-STATE into BUF's listener state."
+  (let ((state (listener-buffer-state buf)))
+    (setf (listener-state-package-name state)
+          (listener-normalize-package-name
+           (cdr (assoc :package-name persisted-state)))
+          (listener-state-directory-stack state)
+          (loop :for item :in (coerce (or (cdr (assoc :directory-stack
+                                                      persisted-state))
+                                          #())
+                                      'list)
+                :when item
+                  :collect (uiop:ensure-directory-pathname
+                            (if (pathnamep item)
+                                item
+                                (pathname item))))
+          (listener-state-last-values state)
+          (listener-restore-last-values
+           (cdr (assoc :last-values persisted-state)))
+          (listener-state-command-history state)
+          (loop :for item :in (coerce (or (cdr (assoc :command-history
+                                                      persisted-state))
+                                          #())
+                                      'list)
+                :when (stringp item)
+                  :collect item)))
+  buf)
 
 (defun listener-read-forms (text package)
   "Read every Lisp form from TEXT using PACKAGE."
@@ -637,3 +702,10 @@
                             :package-name package-name
                             :working-directory working-directory
                             :add-to-ring-p t)))
+
+(register-buffer-type
+ :listener
+ :description "Interactive Common Lisp listener buffer."
+ :major-mode "listener"
+ :serialize-state-function 'listener-serialize-buffer-state
+ :restore-state-function 'listener-restore-buffer-state)
