@@ -1987,7 +1987,9 @@ def test_70_feature_inventory_runtime_contract(session):
         r'''(progn
              (clawmacs::init-tools)
              (let ((packages '("lispi" "sexed" "slop" "git" "netcons"
-                               "subagent" "pipelines" "speculum" "organa")))
+                               "subagent" "pipelines" "prove" "quaestor"
+                               "modelaria" "artifactum" "speculum" "organa"
+                               "templata" "packrat")))
                (dolist (package packages)
                  (clawmacs:load-clawmacs-package package))
                (let* ((installed
@@ -2014,7 +2016,8 @@ def test_70_feature_inventory_runtime_contract(session):
                    (dolist (name packages)
                      (need name installed "installed package"))
                    (dolist (name '("chat" "scratch" "file" "help"
-                                   "customize" "listener" "organa"))
+                                   "customize" "listener" "artifact"
+                                   "organa"))
                      (need name buffer-types "buffer type"))
                    (dolist (name
                             '("send-message"
@@ -2076,6 +2079,9 @@ def test_70_feature_inventory_runtime_contract(session):
                               "compact-buffer-command"
                               "set-buffer-pipeline"
                               "clear-buffer-pipeline"
+                              "artifactum-list-artifacts-command"
+                              "artifactum-open-artifact-command"
+                              "artifactum-attach-file-command"
                               "organa-open-todo-file-command"
                               "organa-add-todo-command"
                               "organa-set-todo-status-command"
@@ -2129,6 +2135,10 @@ def test_70_feature_inventory_runtime_contract(session):
                               "speculum_screenshot"
                               "speculum_window_state"
                               "speculum_inspect"
+                              "artifactum_list"
+                              "artifactum_read"
+                              "artifactum_create"
+                              "artifactum_update"
                               "organa_todo_overview"
                               "organa_todo_add"
                               "organa_todo_set_status"
@@ -2491,6 +2501,89 @@ def test_71_tools_templata_package_slash_completion(session):
     E2E.assert_contains(screen, "Reloaded skills, package manifests, and on-disk prompt templates.",
                         "templata /reload message visible")
     session.screenshot("71_tools_templata_package")
+
+
+def test_71_tools_artifactum_package_artifact_buffers(session):
+    """Enable artifactum and exercise durable attachments, tools, and artifact buffers."""
+    result = session.eval_lisp(
+        r'''(progn
+             (clawmacs::init-tools)
+             (let* ((root (merge-pathnames
+                           (format nil ".cache/mcclim-e2e-artifactum-~D-~D/"
+                                   (get-universal-time)
+                                   (get-internal-real-time))
+                           (truename ".")))
+                    (buf (clawmacs:current-buffer))
+                    (attachment-path (merge-pathnames "notes.md" root)))
+               (ensure-directories-exist (merge-pathnames ".keep" root))
+               (with-open-file (stream attachment-path
+                                       :direction :output
+                                       :if-exists :supersede
+                                       :if-does-not-exist :create)
+                 (write-string "# Notes
+
+Artifactum e2e preview text." stream))
+               (let ((clawmacs::*sandbox-root* (truename root)))
+                 (setf (clawmacs:buffer-enabled-packages buf)
+                       (remove-duplicates
+                        (cons "artifactum" (clawmacs:buffer-enabled-packages buf))
+                        :test #'string=))
+                 (clawmacs:load-active-packages :buffer buf)
+                 (labels ((tool (name args)
+                            (let ((clawmacs::*current-tool-buffer* buf)
+                                  (clawmacs::*current-caller* :agent))
+                              (clawmacs:execute-tool name args)))
+                          (data (name args)
+                            (nth-value 0
+                              (clawmacs::lisp-data-read
+                               (tool name args))))
+                          (need (condition label)
+                            (unless condition
+                              (error "Artifactum e2e failed: ~A" label))))
+                   (let* ((attachment (clawmacs::artifactum-attach-file-command
+                                       buf
+                                       (namestring attachment-path)))
+                          (created (data "artifactum_create"
+                                         '((:name . "report.json")
+                                           (:content . "{\"ok\":true}")
+                                           (:mime_type . "application/json"))))
+                          (artifact-id (getf created :id))
+                          (record (clawmacs::artifactum-find-record buf artifact-id)))
+                     (need (string= "attachment" (getf attachment :kind))
+                           "attachment kind")
+                     (need (search "Artifactum e2e preview text"
+                                   (or (getf attachment :preview) ""))
+                           "attachment preview")
+                     (need (string= "report.json" (getf created :name))
+                           "created artifact name")
+                     (need (string= "{\"ok\":true}" (getf created :content))
+                           "created artifact content")
+                     (need record "artifact record lookup")
+                     (clawmacs::artifactum-open-record-buffer record)
+                     (need (eq :artifact
+                               (clawmacs:buffer-kind (clawmacs:current-buffer)))
+                           "artifact buffer kind")
+                     (let ((message (clawmacs::message-prev
+                                     (clawmacs:buffer-input-message
+                                      (clawmacs:current-buffer)))))
+                       (need message "artifact message")
+                       (need (search "Artifact: report.json"
+                                     (clawmacs:message-text message))
+                             "artifact header")
+                       (need (search "Content:"
+                                     (clawmacs:message-text message))
+                             "artifact content block"))))
+                 "ARTIFACTUM-PACKAGE-SMOKE-OK")))''',
+        timeout=60,
+    )
+    if "ARTIFACTUM-PACKAGE-SMOKE-OK" not in result:
+        fail(f"artifactum package smoke returned unexpected result: {result}")
+    screen = wait_for_current_buffer_message_text(session, "Artifact: report.json")
+    E2E.assert_contains(screen, "artifact-id:", "artifactum buffer shows artifact id")
+    E2E.assert_contains(screen, "Content:", "artifactum buffer shows textual content")
+    session.screenshot("71_tools_artifactum_package")
+    E2E.kill_current_buffer(session)
+    switch_to_session_buffer(session)
 
 
 def test_71_tools_organa_package_todo_management(session):
@@ -2960,15 +3053,21 @@ def test_41_buffer_state_persistence_core(session):
 def test_72_pkg_installed_package_selector_lists_all_bundled_packages(session):
     """The package selector lists installed packages with scope and description."""
     package_names = [
+        "artifactum",
         "git",
         "lispi",
+        "modelaria",
         "netcons",
         "organa",
+        "packrat",
         "pipelines",
+        "prove",
+        "quaestor",
         "sexed",
         "slop",
         "speculum",
         "subagent",
+        "templata",
     ]
     E2E.open_extended_command(session, "minibuffer-toggle-package-command")
     snapshot = session.wait_snapshot(
@@ -3397,6 +3496,8 @@ def test_registry(group):
          test_71_tools_speculum_package_self_visibility),
         ("71_tools_templata_package_slash_completion",
          test_71_tools_templata_package_slash_completion),
+        ("71_tools_artifactum_package_artifact_buffers",
+         test_71_tools_artifactum_package_artifact_buffers),
         ("71_tools_organa_package_todo_management",
          test_71_tools_organa_package_todo_management),
         ("72_pkg_installed_package_selector_lists_all_bundled_packages",

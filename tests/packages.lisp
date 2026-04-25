@@ -82,6 +82,10 @@
   :description "Scoped model-role and usage package tests"
   :in clawmacs-suite)
 
+(def-suite artifactum-package-suite
+  :description "Attachment and durable artifact package tests"
+  :in clawmacs-suite)
+
 (def-suite package-manager-suite
   :description "Package loader tests"
   :in clawmacs-suite)

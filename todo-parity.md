@@ -154,15 +154,15 @@ Parity sources:
 - `reference/external_src/pi-mono/packages/web-ui/README.md`
 - `reference/external_src/codex/sdk/typescript/README.md`
 
-- [ ] Add user attachment support for images and common document formats
+- [x] Add user attachment support for images and common document formats
   (PDF/DOCX/XLSX/PPTX at minimum).
-- [ ] Add text extraction and preview metadata for non-image attachments.
-- [ ] Add artifact message/buffer types for HTML, SVG, Markdown, JSON, and
+- [x] Add text extraction and preview metadata for non-image attachments.
+- [x] Add artifact message/buffer types for HTML, SVG, Markdown, JSON, and
   similar generated outputs.
-- [ ] Let tools and packages create, update, and reference artifacts as durable
+- [x] Let tools and packages create, update, and reference artifacts as durable
   session objects rather than only raw text.
-- [ ] Include artifact references in session export/share flows.
-- [ ] Add tests for attachment ingestion, artifact persistence, and artifact
+- [x] Include artifact references in session export/share flows.
+- [x] Add tests for attachment ingestion, artifact persistence, and artifact
   rendering in McCLIM.
 
 ## `interop` - App Server, RPC, SDK, Structured Output

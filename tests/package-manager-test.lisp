@@ -367,6 +367,9 @@ Resource prompt body.")
            (modelaria (find "modelaria" definitions
                             :key #'clawmacs:package-definition-name
                             :test #'string=))
+           (artifactum (find "artifactum" definitions
+                             :key #'clawmacs:package-definition-name
+                             :test #'string=))
            (speculum (find "speculum" definitions
                            :key #'clawmacs:package-definition-name
                            :test #'string=))
@@ -382,9 +385,9 @@ Resource prompt body.")
            (templata (find "templata" definitions
                            :key #'clawmacs:package-definition-name
                            :test #'string=)))
-      (is (equal '("git" "lispi" "modelaria" "netcons" "organa" "packrat"
-                   "pipelines" "prove" "quaestor" "sexed" "slop" "speculum"
-                   "subagent" "templata")
+      (is (equal '("artifactum" "git" "lispi" "modelaria" "netcons" "organa"
+                   "packrat" "pipelines" "prove" "quaestor" "sexed" "slop"
+                   "speculum" "subagent" "templata")
                  names))
       (is (not (null git)))
       (is (eq :builtin (clawmacs:package-definition-source-tier git)))
@@ -421,6 +424,10 @@ Resource prompt body.")
       (is (eq :builtin (clawmacs:package-definition-source-tier modelaria)))
       (is (clawmacs:package-definition-autoload modelaria))
       (is (probe-file (clawmacs:package-definition-entrypoint modelaria)))
+      (is (not (null artifactum)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier artifactum)))
+      (is (clawmacs:package-definition-autoload artifactum))
+      (is (probe-file (clawmacs:package-definition-entrypoint artifactum)))
       (is (not (null speculum)))
       (is (eq :builtin (clawmacs:package-definition-source-tier speculum)))
       (is (clawmacs:package-definition-autoload speculum))
@@ -460,6 +467,7 @@ Resource prompt body.")
       (is (not (null (clawmacs:find-available-package "netcons"))))
       (is (not (null (clawmacs:find-available-package "organa"))))
       (is (not (null (clawmacs:find-available-package "modelaria"))))
+      (is (not (null (clawmacs:find-available-package "artifactum"))))
       (is (not (null (clawmacs:find-available-package "pipelines"))))
       (is (not (null (clawmacs:find-available-package "prove"))))
       (is (not (null (clawmacs:find-available-package "quaestor"))))

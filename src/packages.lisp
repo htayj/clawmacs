@@ -680,6 +680,16 @@
      #:provider-model-supported-think-levels
      #:reconcile-buffer-think-level-override
      #:resolve-buffer-service-tier
+     #:artifactum-session-records
+     #:artifactum-find-record
+     #:artifactum-create-from-file
+     #:artifactum-create-from-content
+     #:artifactum-update-record
+     #:artifactum-read-record-data
+     #:artifactum-reference-text
+     #:artifactum-buffer-state-serializer
+     #:artifactum-buffer-state-restorer
+     #:artifactum-artifact-buffer-open-record
      #:*boot-file-names*
      #:load-boot-files
      #:*agent-defaults-path*
