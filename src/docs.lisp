@@ -1409,6 +1409,18 @@ documentation in *extended-docs*."
   :returns "keyword — :PROGRAMMATIC, :MANIFEST, or :BUILTIN."
   :see-also (load-project-definitions reload-projects))
 
+(defdoc project-systems
+  :category "project"
+  :usage "(project-systems PROJECT)"
+  :returns "list — ASDF systems declared by the project."
+  :see-also (define-project create-project))
+
+(defdoc project-packages
+  :category "project"
+  :usage "(project-packages PROJECT)"
+  :returns "list — package install requests declared by the project."
+  :see-also (define-project create-project load-project-declared-packages))
+
 (defdoc *project-definitions-directory*
   :category "project"
   :usage "Pathname — defaults to ~/.clawmacs.projects.d/."
@@ -3752,6 +3764,69 @@ documentation in *extended-docs*."
   :returns "package-definition or NIL."
   :see-also (list-installed-packages load-clawmacs-package))
 
+(defdoc package-install-record-for-definition
+  :category "packages"
+  :usage "(package-install-record-for-definition DEFINITION)"
+  :returns "plist or NIL — Persisted install metadata for DEFINITION when present."
+  :see-also (clawmacs-use-package package-status-to-string package-doctor-to-string))
+
+(defdoc package-install-status-entry
+  :category "packages"
+  :usage "(package-install-status-entry DEFINITION :buffer BUF)"
+  :returns "plist — install, enablement, source, and resource policy information."
+  :see-also (package-status-to-string package-doctor-report))
+
+(defdoc package-doctor-report
+  :category "packages"
+  :usage "(package-doctor-report :buffer BUF)"
+  :returns "list — status plists for installed packages visible in the context."
+  :see-also (package-doctor-to-string package-status-to-string))
+
+(defdoc package-status-to-string
+  :category "packages"
+  :usage "(package-status-to-string :buffer BUF)"
+  :returns "string — human-readable installed package status report."
+  :see-also (package-doctor-report package-doctor-to-string))
+
+(defdoc package-doctor-to-string
+  :category "packages"
+  :usage "(package-doctor-to-string :buffer BUF)"
+  :returns "string — human-readable package health report."
+  :see-also (package-doctor-report package-status-to-string))
+
+(defdoc install-package-status-string
+  :category "packages"
+  :usage "(install-package-status-string \"sexed\")"
+  :returns "string — one-line install summary for a package."
+  :see-also (package-status-to-string package-doctor-to-string))
+
+(defdoc package-resource-policy-string
+  :category "packages"
+  :usage "(package-resource-policy-string DEFINITION)"
+  :returns "string — resource-policy summary for one package."
+  :see-also (package-install-record-for-definition set-installed-package-resource-types))
+
+(defdoc set-installed-package-resource-types
+  :category "packages"
+  :usage "(set-installed-package-resource-types \"sexed\" '(:tool :command))"
+  :returns "list — the normalized allowed resource types."
+  :side-effects "Updates the install record sidecar and reloads the package so filtered resources are reflected in memory."
+  :see-also (package-install-record-for-definition package-status-to-string))
+
+(defdoc remove-installed-package
+  :category "packages"
+  :usage "(remove-installed-package \"sexed\")"
+  :returns "package-definition or NIL."
+  :side-effects "Deletes the installed package directory and removes package-owned runtime registrations."
+  :see-also (update-installed-package clawmacs-use-package))
+
+(defdoc update-installed-package
+  :category "packages"
+  :usage "(update-installed-package \"sexed\")"
+  :returns "package-definition or NIL."
+  :side-effects "Refreshes the installed package from its recorded source and reloads the package entrypoint."
+  :see-also (remove-installed-package clawmacs-use-package))
+
 (defdoc package-enablement-scope
   :category "packages"
   :usage "(package-enablement-scope \"sexed\" :buffer BUF)"
@@ -3830,6 +3905,13 @@ documentation in *extended-docs*."
   :returns "package-definition — non-nil on successful install, NIL on warning or failure."
   :side-effects "Creates the package install directory when needed, runs git clone for missing packages, and validates manifest.lisp without loading or enabling the entrypoint."
   :see-also (*packages-directory* list-installed-packages set-package-enablement-scope *user-init-file* load-user-init-file))
+
+(defdoc load-project-declared-packages
+  :category "packages"
+  :usage "(load-project-declared-packages)"
+  :returns "list — newly installed project-declared package definitions."
+  :side-effects "Auto-installs missing project package declarations into the correct project-local or global scope."
+  :see-also (create-project load-project-definitions clawmacs-use-package))
 
 (defdoc minibuffer-toggle-package-command
   :category "packages"
