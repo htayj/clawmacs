@@ -1210,6 +1210,8 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
          (manifest (read-session-manifest manifest-path)))
     (unless manifest
       (return-from load-session-sidecar nil))
+    (when (typep manifest 'session-manifest-parse-error)
+      (error manifest))
     (let* ((name (or (cdr (assoc :name manifest)) session-name))
            (session (load-or-create-session name))
            (buf (make-buffer name :agent-name agent-name
@@ -1262,7 +1264,12 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
     (loop :for path :in (directory (merge-pathnames #P"*/session.json"
                                                     *sessions-dir*))
           :for manifest := (read-session-manifest path)
-          :for name := (cdr (assoc :name manifest))
+          :for name := (and (listp manifest)
+                            (cdr (assoc :name manifest)))
+          :when (typep manifest 'session-manifest-parse-error)
+            :do (warn "Failed to parse session manifest ~A: ~A"
+                      (session-manifest-parse-error-path manifest)
+                      (session-manifest-parse-error-cause manifest))
           :when (and (stringp name)
                      (plusp (length name)))
             :collect name)))

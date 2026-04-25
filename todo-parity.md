@@ -244,10 +244,11 @@ problems observed while reviewing the current Clawmacs tree.
   tables (`src/package-manager.lisp:484-520`). That leaves stale package
   guidance in the conversation history even though tool execution is correctly
   blocked for inactive packages (`src/tools.lisp:587-670`).
-- [ ] Stop swallowing session manifest decode failures. `read-session-manifest`
-  uses `ignore-errors` and silently returns NIL on parse problems
-  (`src/session.lisp:176-181`), which turns corruption or partial writes into
-  unexplained fallback behavior.
+- [x] Stop swallowing session manifest decode failures. `read-session-manifest`
+  now returns a structured parse error object for malformed manifests, direct
+  load paths signal that error, and saved-session discovery warns instead of
+  silently dropping bad sidecars. That turns corruption and partial writes into
+  explicit, reviewable failures instead of unexplained fallback behavior.
 
 ## Notes From `oh-my-pi`
 

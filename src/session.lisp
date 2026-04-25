@@ -32,6 +32,16 @@
   (updated-at 0 :type integer)
   (lock (bt:make-lock "session-transcript")))
 
+(define-condition session-manifest-parse-error (error)
+  ((path :initarg :path
+         :reader session-manifest-parse-error-path)
+   (cause :initarg :cause
+          :reader session-manifest-parse-error-cause))
+  (:report (lambda (condition stream)
+             (format stream "Failed to parse session manifest ~A: ~A"
+                     (session-manifest-parse-error-path condition)
+                     (session-manifest-parse-error-cause condition)))))
+
 (defun normalize-session-working-directory (value)
   "Return VALUE as a session working directory pathname."
   (let ((path (cond
@@ -187,11 +197,17 @@
   session)
 
 (defun read-session-manifest (path)
-  "Read a session manifest from PATH, returning NIL on absence or failure."
+  "Read a session manifest from PATH.
+Return NIL when PATH does not exist. Return a SESSION-MANIFEST-PARSE-ERROR
+condition object when PATH exists but decoding fails."
   (when (probe-file path)
-    (ignore-errors
-      (let ((cl-json:*json-array-type* 'vector))
-        (cl-json:decode-json-from-string (uiop:read-file-string path))))))
+    (handler-case
+        (let ((cl-json:*json-array-type* 'vector))
+          (cl-json:decode-json-from-string (uiop:read-file-string path)))
+      (error (condition)
+        (make-condition 'session-manifest-parse-error
+                        :path (namestring path)
+                        :cause condition)))))
 
 (defun ensure-session-directories (session)
   "Ensure SESSION sidecar and transcript directories exist."
@@ -692,18 +708,21 @@ Selecting a user message returns its parent so the message can be edited."
          (transcript-directory (merge-pathnames #P"transcripts/" directory))
          (manifest (read-session-manifest manifest-path))
          (now (get-universal-time))
-         (created-at (or (cdr (assoc :created-at manifest)) now))
-         (updated-at (or (cdr (assoc :updated-at manifest)) created-at))
-         (index (or (cdr (assoc :current-transcript-index manifest)) 1))
-         (current-leaf-cell (assoc :current-leaf-id manifest))
-         (current-leaf-id (cdr current-leaf-cell))
-         (parent-session (or (cdr (assoc :parent-session manifest))
-                             parent-session))
-         (working-directory
-           (normalize-session-working-directory
-            (or (cdr (assoc :working-directory manifest))
-                working-directory)))
-         (manifest-path-string (cdr (assoc :current-transcript-path manifest)))
+         (manifest-path-error-p (typep manifest 'session-manifest-parse-error)))
+    (when manifest-path-error-p
+      (error manifest))
+    (let* ((created-at (or (cdr (assoc :created-at manifest)) now))
+           (updated-at (or (cdr (assoc :updated-at manifest)) created-at))
+           (index (or (cdr (assoc :current-transcript-index manifest)) 1))
+           (current-leaf-cell (assoc :current-leaf-id manifest))
+           (current-leaf-id (cdr current-leaf-cell))
+           (parent-session (or (cdr (assoc :parent-session manifest))
+                               parent-session))
+           (working-directory
+             (normalize-session-working-directory
+              (or (cdr (assoc :working-directory manifest))
+                  working-directory)))
+           (manifest-path-string (cdr (assoc :current-transcript-path manifest)))
          (current-path (if manifest-path-string
                            (pathname manifest-path-string)
                            (session-transcript-path-for-index
@@ -721,15 +740,15 @@ Selecting a user message returns its parent so the message can be edited."
                                  :current-leaf-id current-leaf-id
                                  :parent-session parent-session
                                  :working-directory working-directory)))
-    (ensure-session-directories session)
-    (unless (probe-file (session-current-transcript-path session))
-      (bt:with-lock-held ((session-lock session))
-        (%append-session-event-unlocked session (session-start-event session))))
-    (unless current-leaf-cell
-      (setf (session-current-leaf-id session)
-            (session-last-tree-entry-id session)))
-    (write-session-manifest session)
-    session))
+      (ensure-session-directories session)
+      (unless (probe-file (session-current-transcript-path session))
+        (bt:with-lock-held ((session-lock session))
+          (%append-session-event-unlocked session (session-start-event session))))
+      (unless current-leaf-cell
+        (setf (session-current-leaf-id session)
+              (session-last-tree-entry-id session)))
+      (write-session-manifest session)
+      session)))
 
 (defun rotate-session-transcript (session &key (reason :auto))
   "Advance SESSION to a new transcript segment.

@@ -591,9 +591,54 @@
       (let ((buf (load-session session-name)))
        (is (not (null buf)))
        (is (null (buffer-provider-override buf)))
-        (is (null (buffer-model-override buf)))
+       (is (null (buffer-model-override buf)))
        (is (null (buffer-think-level-override buf)))
        (is (null (buffer-enabled-packages buf)))))))
+
+(test read-session-manifest-returns-structured-error-on-malformed-json
+  "Malformed sidecar manifests return a structured parse error object."
+  (let* ((session-name "malformed-manifest")
+         (*sessions-dir* (temp-session-test-directory "malformed-manifest"))
+         (manifest-path (clawmacs::session-sidecar-manifest-path session-name)))
+    (ensure-directories-exist manifest-path)
+    (with-open-file (stream manifest-path :direction :output
+                                         :if-exists :supersede
+                                         :if-does-not-exist :create)
+      (write-string "{not valid json" stream))
+    (let ((result (clawmacs::read-session-manifest manifest-path)))
+      (is (typep result 'clawmacs::session-manifest-parse-error))
+      (is (search "malformed-manifest"
+                  (clawmacs::session-manifest-parse-error-path result)))
+      (is (search "Failed to parse session manifest"
+                  (format nil "~A" result))))
+    (signals clawmacs::session-manifest-parse-error
+      (clawmacs::load-session-sidecar session-name))))
+
+(test list-saved-sessions-skips-malformed-sidecars-with-warning
+  "Malformed sidecars warn and do not hide valid saved sessions."
+  (let* ((good-session "good-sidecar-session")
+         (bad-session "bad-sidecar-session")
+         (*sessions-dir* (temp-session-test-directory "malformed-sidecars"))
+         (good-session-object (load-or-create-session good-session))
+         (bad-manifest-path (clawmacs::session-sidecar-manifest-path bad-session))
+         (good-manifest-path (clawmacs::session-sidecar-manifest-path good-session))
+         (warnings nil))
+    (declare (ignore good-session-object))
+    (ensure-directories-exist bad-manifest-path)
+    (with-open-file (stream bad-manifest-path :direction :output
+                                         :if-exists :supersede
+                                         :if-does-not-exist :create)
+      (write-string "{not valid json" stream))
+    (is (probe-file good-manifest-path))
+    (handler-bind ((warning
+                     (lambda (condition)
+                       (push (princ-to-string condition) warnings)
+                       (muffle-warning condition))))
+      (let ((names (list-saved-sessions)))
+        (is (member good-session names :test #'string=))
+        (is (not (member bad-session names :test #'string=)))))
+    (is (= 1 (length warnings)))
+    (is (search "Failed to parse session manifest" (first warnings)))))
 
 (test load-session-does-not-duplicate-snapshot-into-transcript
   "Loading a snapshot attaches a session but does not replay old messages into JSONL."
