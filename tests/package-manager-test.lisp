@@ -361,6 +361,9 @@ Resource prompt body.")
            (prove (find "prove" definitions
                         :key #'clawmacs:package-definition-name
                         :test #'string=))
+           (quaestor (find "quaestor" definitions
+                           :key #'clawmacs:package-definition-name
+                           :test #'string=))
            (speculum (find "speculum" definitions
                            :key #'clawmacs:package-definition-name
                            :test #'string=))
@@ -377,7 +380,7 @@ Resource prompt body.")
                            :key #'clawmacs:package-definition-name
                            :test #'string=)))
       (is (equal '("git" "lispi" "netcons" "organa" "packrat" "pipelines" "prove"
-                   "sexed" "slop" "speculum" "subagent" "templata")
+                   "quaestor" "sexed" "slop" "speculum" "subagent" "templata")
                  names))
       (is (not (null git)))
       (is (eq :builtin (clawmacs:package-definition-source-tier git)))
@@ -406,6 +409,10 @@ Resource prompt body.")
       (is (eq :builtin (clawmacs:package-definition-source-tier prove)))
       (is (clawmacs:package-definition-autoload prove))
       (is (probe-file (clawmacs:package-definition-entrypoint prove)))
+      (is (not (null quaestor)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier quaestor)))
+      (is (clawmacs:package-definition-autoload quaestor))
+      (is (probe-file (clawmacs:package-definition-entrypoint quaestor)))
       (is (not (null speculum)))
       (is (eq :builtin (clawmacs:package-definition-source-tier speculum)))
       (is (clawmacs:package-definition-autoload speculum))
@@ -446,6 +453,7 @@ Resource prompt body.")
       (is (not (null (clawmacs:find-available-package "organa"))))
       (is (not (null (clawmacs:find-available-package "pipelines"))))
       (is (not (null (clawmacs:find-available-package "prove"))))
+      (is (not (null (clawmacs:find-available-package "quaestor"))))
       (is (not (null (clawmacs:find-available-package "speculum"))))
       (is (not (null (clawmacs:find-available-package "subagent"))))
       (is (not (null (clawmacs:find-available-package "templata"))))

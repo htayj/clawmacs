@@ -69,6 +69,7 @@
                               (:file "speculum-package-test")
                               (:file "subagent-package-test")
                               (:file "templata-package-test")
+                              (:file "quaestor-package-test")
                               (:file "reference-test")
                               (:file "faces-test")
                               (:file "message-test")

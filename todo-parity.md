@@ -48,18 +48,18 @@ Parity sources:
 - `reference/external_src/pi-mono/packages/coding-agent/README.md`
 - `reference/external_src/pi-mono/packages/coding-agent/docs/extensions.md`
 
-- [ ] Add a built-in `request_user_input` tool contract for single-choice,
+- [x] Add a built-in `request_user_input` tool contract for single-choice,
   multi-choice, and freeform prompts.
-- [ ] Add a McCLIM overlay/buffer UI for answering one or more structured
+- [x] Add a McCLIM overlay/buffer UI for answering one or more structured
   questions without dropping back to raw chat text.
-- [ ] Persist answers as structured session entries so pipelines and subagents
+- [x] Persist answers as structured session entries so pipelines and subagents
   can resume cleanly.
-- [ ] Add message queueing semantics while the agent is running:
+- [x] Add message queueing semantics while the agent is running:
   steering-message, follow-up-message, cancel-and-restore.
-- [ ] Add commands/keybindings for queued-message inspection and recall.
-- [ ] Expose a small Lisp API so packages/pipelines can suspend on user input
+- [x] Add commands/keybindings for queued-message inspection and recall.
+- [x] Expose a small Lisp API so packages/pipelines can suspend on user input
   and resume deterministically.
-- [ ] Add tests for question flow, keyboard routing, answer persistence, and
+- [x] Add tests for question flow, keyboard routing, answer persistence, and
   queued delivery behavior.
 
 ## `sessionarium` - Session Metadata, Resume Ergonomics, Export, Share

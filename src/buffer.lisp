@@ -359,7 +359,7 @@ major-mode label, and optional McCLIM presentation functions."
                        :accessor buffer-status
                        :initform :idle
                        :type keyword
-                       :documentation "Current buffer state: :idle, :thinking, :streaming, :error, :approval, or :oauth.")
+                       :documentation "Current buffer state: :idle, :thinking, :streaming, :error, :approval, :question, or :oauth.")
    (provider-override :initarg :provider-override
                       :accessor buffer-provider-override
                       :initform nil
@@ -456,6 +456,20 @@ major-mode label, and optional McCLIM presentation functions."
                          :accessor buffer-tool-call-results
                          :initform nil
                          :documentation "Accumulated results from approved/denied tool calls.")
+   (user-input-pending  :initarg :user-input-pending
+                        :accessor buffer-user-input-pending
+                        :initform nil
+                        :documentation "When non-nil, an alist describing a pending structured user-input request.")
+   (queued-steering-messages :initarg :queued-steering-messages
+                             :accessor buffer-queued-steering-messages
+                             :initform nil
+                             :type list
+                             :documentation "Queued steering messages to inject before the next LLM turn once the current run reaches a safe boundary.")
+   (queued-follow-up-messages :initarg :queued-follow-up-messages
+                              :accessor buffer-queued-follow-up-messages
+                              :initform nil
+                              :type list
+                              :documentation "Queued follow-up messages to inject only after the agent would otherwise stop.")
    (major-mode          :initarg :major-mode
                          :accessor buffer-major-mode
                          :initform "chat"
@@ -587,6 +601,103 @@ Enforces the invariant that it is not read-only."
 (defun buffer-llm-running-p (buf)
   "Return true when BUF has an active provider stream."
   (not (null (and buf (buffer-pending-stream buf)))))
+
+(declaim (ftype (function (buffer) boolean) buffer-interaction-pending-p))
+(defun buffer-interaction-pending-p (buf)
+  "Return true when BUF is waiting on user interaction before continuing."
+  (not (null (and buf
+                  (or (buffer-approval-pending buf)
+                      (buffer-user-input-pending buf))))))
+
+(declaim (ftype (function (buffer) boolean) buffer-agent-busy-p))
+(defun buffer-agent-busy-p (buf)
+  "Return true when BUF cannot immediately accept a new direct user turn."
+  (not (null (and buf
+                  (or (buffer-llm-running-p buf)
+                      (buffer-interaction-pending-p buf)
+                      (buffer-pending-tool-calls buf))))))
+
+(defun normalize-buffer-queued-message-kind (kind)
+  "Normalize KIND to one of the supported queued message kinds."
+  (case kind
+    (:steering :steering)
+    (:follow-up :follow-up)
+    (t (error "Unsupported queued message kind: ~S" kind))))
+
+(defun make-buffer-queued-message (kind text &key timestamp)
+  "Return a queued message plist for KIND and TEXT."
+  (list :kind (normalize-buffer-queued-message-kind kind)
+        :text text
+        :timestamp (or timestamp (get-universal-time))))
+
+(defun buffer-queued-messages (buf)
+  "Return BUF's queued steering and follow-up messages as one list."
+  (append (copy-list (buffer-queued-steering-messages buf))
+          (copy-list (buffer-queued-follow-up-messages buf))))
+
+(defun buffer-queued-message-count (buf)
+  "Return the total number of queued steering and follow-up messages in BUF."
+  (+ (length (buffer-queued-steering-messages buf))
+     (length (buffer-queued-follow-up-messages buf))))
+
+(defun buffer-has-queued-messages-p (buf)
+  "Return true when BUF has any queued steering or follow-up messages."
+  (plusp (buffer-queued-message-count buf)))
+
+(defun queue-buffer-message (buf kind text &key timestamp)
+  "Queue TEXT on BUF as KIND and return the queued entry."
+  (let* ((normalized-kind (normalize-buffer-queued-message-kind kind))
+         (entry (make-buffer-queued-message normalized-kind text
+                                           :timestamp timestamp)))
+    (ecase normalized-kind
+      (:steering
+       (setf (buffer-queued-steering-messages buf)
+             (append (buffer-queued-steering-messages buf) (list entry))))
+      (:follow-up
+       (setf (buffer-queued-follow-up-messages buf)
+             (append (buffer-queued-follow-up-messages buf) (list entry)))))
+    (notify-buffer-display-change buf :queued-message)
+    entry))
+
+(defun dequeue-buffer-steering-message (buf)
+  "Pop and return BUF's next queued steering message, or NIL."
+  (let ((queue (buffer-queued-steering-messages buf)))
+    (when queue
+      (let ((entry (first queue)))
+        (setf (buffer-queued-steering-messages buf) (rest queue))
+        (notify-buffer-display-change buf :queued-message)
+        entry))))
+
+(defun dequeue-buffer-follow-up-message (buf)
+  "Pop and return BUF's next queued follow-up message, or NIL."
+  (let ((queue (buffer-queued-follow-up-messages buf)))
+    (when queue
+      (let ((entry (first queue)))
+        (setf (buffer-queued-follow-up-messages buf) (rest queue))
+        (notify-buffer-display-change buf :queued-message)
+        entry))))
+
+(defun clear-buffer-queued-messages (buf)
+  "Remove and return all queued steering and follow-up messages from BUF."
+  (let ((messages (buffer-queued-messages buf)))
+    (setf (buffer-queued-steering-messages buf) nil
+          (buffer-queued-follow-up-messages buf) nil)
+    (notify-buffer-display-change buf :queued-message)
+    messages))
+
+(defun restore-buffer-queued-messages-to-input (buf)
+  "Restore BUF's queued messages into the current input editor and clear them.
+Returns the restored messages."
+  (let ((messages (clear-buffer-queued-messages buf)))
+    (when messages
+      (set-message-text
+       (buffer-input-message buf)
+       (format nil "~{~A~^~%~%~}"
+               (mapcar (lambda (entry)
+                         (or (getf entry :text) ""))
+                       messages)))
+      (mark-buffer-dirty buf))
+    messages))
 
 (defvar *suppress-session-transcript-recording* nil
   "When non-nil, buffer message helpers do not append transcript events.")
@@ -1155,6 +1266,16 @@ The current buffer remains current when a current buffer already exists."
       (:model-override . ,(buffer-model-override buf))
       (:think-level-override . ,(buffer-think-level-override buf))
       (:pipeline-name . ,(buffer-pipeline-name buf))
+      ,@(when (buffer-user-input-pending buf)
+          `((:user-input-pending . ,(buffer-user-input-pending buf))))
+      ,@(when (buffer-queued-steering-messages buf)
+          `((:queued-steering-messages
+             . ,(coerce (copy-list (buffer-queued-steering-messages buf))
+                        'vector))))
+      ,@(when (buffer-queued-follow-up-messages buf)
+          `((:queued-follow-up-messages
+             . ,(coerce (copy-list (buffer-queued-follow-up-messages buf))
+                        'vector))))
       (:enabled-packages . ,(coerce (copy-list (buffer-enabled-packages buf))
                                     'vector))
       ,@(let ((buffer-state (serialize-buffer-extra-state buf)))
@@ -1263,6 +1384,11 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
            (model-override (cdr (assoc :model-override data)))
            (think-level-override (cdr (assoc :think-level-override data)))
            (pipeline-name (cdr (assoc :pipeline-name data)))
+           (user-input-pending (cdr (assoc :user-input-pending data)))
+           (queued-steering-messages
+             (cdr (assoc :queued-steering-messages data)))
+           (queued-follow-up-messages
+             (cdr (assoc :queued-follow-up-messages data)))
            (session-persistence-mode
              (cdr (assoc :session-persistence-mode data)))
            (enabled-packages (cdr (assoc :enabled-packages data)))
@@ -1295,6 +1421,12 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
                                   '(#\Space #\Tab #\Newline #\Return)
                                   pipeline-name)))
                  (string-downcase pipeline-name))
+            (buffer-user-input-pending buf)
+            user-input-pending
+            (buffer-queued-steering-messages buf)
+            (copy-list (coerce (or queued-steering-messages #()) 'list))
+            (buffer-queued-follow-up-messages buf)
+            (copy-list (coerce (or queued-follow-up-messages #()) 'list))
             (buffer-enabled-packages buf)
             (loop :for package :in (coerce (or enabled-packages #()) 'list)
                   :when (stringp package)

@@ -74,6 +74,10 @@
   :description "Slash command and prompt template package tests"
   :in clawmacs-suite)
 
+(def-suite quaestor-package-suite
+  :description "Structured user-question and queued delivery package tests"
+  :in clawmacs-suite)
+
 (def-suite package-manager-suite
   :description "Package loader tests"
   :in clawmacs-suite)

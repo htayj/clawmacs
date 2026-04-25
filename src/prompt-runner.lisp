@@ -185,8 +185,43 @@ and :TOOL-ID entries. Returns the inserted message."
       (set-message-text (buffer-input-message buf) (buffer-stashed-input buf))
       (setf (buffer-stashed-input buf) nil))
     (notify-buffer-display-change buf :tool-results)
-    ;; Continue: start next streaming request
-    (start-streaming-response buf)))
+    ;; Continue: inject any queued steering before the next provider turn.
+    (or (deliver-next-buffer-steering-message buf)
+        (start-streaming-response buf))))
+
+(defun queued-buffer-message-text (entry)
+  "Return ENTRY's normalized queued message text, or NIL when blank."
+  (let ((text (string-trim '(#\Space #\Tab #\Newline #\Return)
+                           (or (getf entry :text) ""))))
+    (unless (blank-string-p text)
+      text)))
+
+(defun deliver-buffer-queued-message (buf entry)
+  "Finalize ENTRY into BUF as the next user turn and continue the agent run."
+  (let ((text (queued-buffer-message-text entry)))
+    (when text
+      (run-hook-with-args '*before-send-message-hook* buf text)
+      (set-message-text (buffer-input-message buf) text)
+      (buffer-finalize-input buf)
+      (setf (message-face-set (buffer-input-message buf))
+            (gethash :user (buffer-face-registry buf)))
+      (let ((result (send-to-agent-with-context buf)))
+        (run-hook-with-args '*after-send-message-hook* buf text result)
+        result))))
+
+(defun deliver-next-buffer-steering-message (buf)
+  "Deliver the next queued steering message for BUF, if any."
+  (let ((entry (dequeue-buffer-steering-message buf)))
+    (when entry
+      (deliver-buffer-queued-message buf entry)
+      t)))
+
+(defun deliver-next-buffer-follow-up-message (buf)
+  "Deliver the next queued follow-up message for BUF, if any."
+  (let ((entry (dequeue-buffer-follow-up-message buf)))
+    (when entry
+      (deliver-buffer-queued-message buf entry)
+      t)))
 
 (defun start-streaming-response (buf)
   "Start a streaming API call. Creates a placeholder agent message and
@@ -462,10 +497,12 @@ Returns T if still streaming, NIL if done."
                 (progn
                   (begin-tool-approval buf tool-uses)
                   t)
-               (progn
-                 (setf (buffer-status buf) :idle)
-                 (notify-buffer-display-change buf :status)
-                 nil))))
+               (or (deliver-next-buffer-steering-message buf)
+                   (deliver-next-buffer-follow-up-message buf)
+                   (progn
+                     (setf (buffer-status buf) :idle)
+                     (notify-buffer-display-change buf :status)
+                     nil)))))
         ;; Still streaming
         (t t)))))
 
