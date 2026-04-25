@@ -173,17 +173,17 @@ Parity sources:
 - `reference/external_src/codex/sdk/typescript/README.md`
 - `reference/external_src/pi-mono/packages/coding-agent/README.md`
 
-- [ ] Define a stable Clawmacs app-server/RPC surface instead of only shell
+- [x] Define a stable Clawmacs app-server/RPC surface instead of only shell
   wrappers like `prompt.sh`.
-- [ ] Add thread/session APIs for start, resume, fork, read, and list.
-- [ ] Add streamed event output for tool calls, tool results, assistant chunks,
+- [x] Add thread/session APIs for start, resume, fork, read, and list.
+- [x] Add streamed event output for tool calls, tool results, assistant chunks,
   final usage, and interrupts.
-- [ ] Add structured output / output schema support for single turns and
+- [x] Add structured output / output schema support for single turns and
   pipeline stages.
-- [ ] Add a non-interactive JSONL mode suitable for embedding and automation.
-- [ ] Add a minimal Lisp client first; leave Python/TypeScript client shims as
+- [x] Add a non-interactive JSONL mode suitable for embedding and automation.
+- [x] Add a minimal Lisp client first; leave Python/TypeScript client shims as
   follow-on work if the protocol proves stable.
-- [ ] Add tests for structured output validation, resume/fork behavior, and
+- [x] Add tests for structured output validation, resume/fork behavior, and
   streamed event ordering.
 
 ## `mcp-bridge` - MCP Servers, Connectors, External Tool Bridges

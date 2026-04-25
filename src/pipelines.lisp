@@ -21,6 +21,7 @@
   skill-names
   max-tool-iterations
   auto-approve-tools-p
+  output-schema
   output-parser
   runner)
 
@@ -173,6 +174,9 @@ NIL means no explicit skill injection list."
           :max-tool-iterations (getf plist :max-tool-iterations)
           :auto-approve-tools-p
           (not (null (getf plist :auto-approve-tools-p)))
+          :output-schema (or (getf plist :output-schema)
+                             (getf plist :output_schema)
+                             (getf plist :schema))
           :output-parser (or (getf plist :output-parser)
                              (getf plist :parse-output)
                              (getf plist :parser))
@@ -472,13 +476,23 @@ deterministic behavior."
 
 (defun apply-pipeline-stage-output-parser (stage context stage-result)
   "Parse STAGE-RESULT using STAGE's output parser when one is configured."
-  (let ((parser (pipeline-stage-output-parser stage)))
-    (if (null parser)
-        stage-result
-        (let ((text (or (pipeline-stage-result-final-text stage-result) "")))
-          (setf (pipeline-stage-result-parsed-output stage-result)
-                (funcall parser text context stage stage-result))
-          stage-result))))
+  (let ((parser (pipeline-stage-output-parser stage))
+        (schema (pipeline-stage-output-schema stage)))
+    (cond
+      (parser
+       (let ((text (or (pipeline-stage-result-final-text stage-result) "")))
+         (setf (pipeline-stage-result-parsed-output stage-result)
+               (funcall parser text context stage stage-result))
+         stage-result))
+      (schema
+       (or (and (pipeline-stage-result-result stage-result)
+                (setf (pipeline-stage-result-parsed-output stage-result)
+                      (prompt-run-result-structured-output
+                       (pipeline-stage-result-result stage-result))))
+           (apply-output-schema-to-pipeline-stage-result stage-result schema))
+       stage-result)
+      (t
+       stage-result))))
 
 (defun normalize-pipeline-stage-runner-result
     (runner-result stage-name prompt started-at finished-at)
@@ -522,7 +536,7 @@ deterministic behavior."
             stage-name runner-result))))
 
 (defun run-pipeline-stage-on-buffer
-    (context stage &key max-tool-iterations auto-approve-tools-p)
+    (context stage &key max-tool-iterations auto-approve-tools-p event-callback)
   "Run STAGE against CONTEXT's buffer and return a PIPELINE-STAGE-RESULT."
   (let* ((definition (pipeline-context-definition context))
          (buffer (pipeline-context-buffer context))
@@ -589,11 +603,14 @@ deterministic behavior."
                                     nil
                                     (effective-pipeline-stage-max-tool-iterations
                                      stage definition max-tool-iterations)
-                                    (effective-pipeline-stage-auto-approve-tools-p
+                                   (effective-pipeline-stage-auto-approve-tools-p
                                      stage definition auto-approve-tools-p)
                                     (effective-pipeline-stage-tool-names
                                      stage context)
-                                    (pipeline-stage-tool-names-supplied-p stage))
+                                    (pipeline-stage-tool-names-supplied-p stage)
+                                    :output-schema
+                                    (pipeline-stage-output-schema stage)
+                                    :event-callback event-callback)
                                    :status :succeeded
                                    :started-at started-at
                                    :finished-at (get-universal-time)))))
@@ -762,14 +779,21 @@ deterministic behavior."
                  (prompt-run-result-model final-result))
      :think-level (and final-result
                        (prompt-run-result-think-level final-result))
+     :structured-output (and final-result
+                             (prompt-run-result-structured-output final-result))
      :iterations iterations
      :stop-reason (if (eq :succeeded (pipeline-run-result-status run-result))
                       "pipeline_complete"
                       "pipeline_failed")
-     :usage usage)))
+     :usage usage
+     :session-name (and final-result
+                        (prompt-run-result-session-name final-result))
+     :session-id (and final-result
+                      (prompt-run-result-session-id final-result)))))
 
 (defun run-pipeline-on-buffer
-    (pipeline prompt &key buffer max-tool-iterations auto-approve-tools-p)
+    (pipeline prompt &key buffer max-tool-iterations auto-approve-tools-p
+                    event-callback)
   "Run PIPELINE deterministically against BUFFER for PROMPT."
   (let* ((definition (ensure-pipeline-definition pipeline))
          (context (make-pipeline-context
@@ -801,7 +825,8 @@ deterministic behavior."
                    (run-pipeline-stage-on-buffer
                     context stage
                     :max-tool-iterations max-tool-iterations
-                    :auto-approve-tools-p auto-approve-tools-p)))
+                    :auto-approve-tools-p auto-approve-tools-p
+                    :event-callback event-callback)))
             (setf (pipeline-context-stage-results context)
                   (append (pipeline-context-stage-results context)
                           (list stage-result))
@@ -834,12 +859,14 @@ deterministic behavior."
                               (agent-name *default-agent-name*)
                               provider model think-level
                               model-role service-tier
+                              output-schema
                               (session-persistence-mode
                                *default-buffer-session-persistence-mode*)
                               (max-tool-iterations
                                *prompt-max-tool-iterations*)
                               auto-approve-tools-p
-                              package-names)
+                              package-names
+                              event-callback)
   "Run PROMPT through deterministic PIPELINE-NAME and return a prompt result."
   (when (blank-string-p prompt)
     (error "Prompt must be non-empty"))
@@ -865,14 +892,17 @@ deterministic behavior."
                                     :buffer buf
                                     :max-tool-iterations max-tool-iterations
                                     :auto-approve-tools-p
-                                    auto-approve-tools-p)))
+                                    auto-approve-tools-p
+                                    :event-callback event-callback)))
       (when (eq :failed (pipeline-run-result-status run-result))
         (let ((error-text (pipeline-run-result-error run-result)))
           (unless (blank-string-p error-text)
             (buffer-insert-system-message
              buf
             (format nil "[Pipeline error: ~A]" error-text)))))
-      (pipeline-run-result->prompt-run-result run-result))))
+      (apply-output-schema-to-prompt-run-result
+       (pipeline-run-result->prompt-run-result run-result)
+       output-schema))))
 
 (defun run-pipeline-for-buffer (buffer prompt)
   "Run BUFFER's active pipeline for PROMPT, recording stage messages in BUFFER."

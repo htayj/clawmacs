@@ -4423,6 +4423,9 @@ Options:
   --show-reasoning          Print provider-supplied reasoning blocks when present.
   --show-metadata           Print provider/model/iteration metadata to stderr.
   --json                    Emit a JSON result object to stdout.
+  --jsonl                   Stream JSONL turn events to stdout.
+  --output-schema SPEC      Validate the final response JSON against SPEC.
+                            SPEC may be inline JSON or a path to a JSON file.
   --auto-approve-tools      Allow permission-gated tools without an interactive prompt.
   --max-tool-iterations N   Stop after N tool-call turns (default: 20).
   --package NAME            Enable an installed package for this prompt run. May repeat.
@@ -4575,6 +4578,13 @@ Example:
                  (setf (prompt-options-show-metadata-p options) t))
                 ((string= arg "--json")
                  (setf (prompt-options-json-p options) t))
+                ((string= arg "--jsonl")
+                 (setf (prompt-options-jsonl-p options) t))
+                ((string= arg "--output-schema")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-output-schema options) value
+                         remaining rest)))
                 ((string= arg "--auto-approve-tools")
                  (setf (prompt-options-auto-approve-tools-p options) t))
                 ((string= arg "--max-tool-iterations")
@@ -4748,8 +4758,12 @@ Example:
     (:service--tier . ,(prompt-run-result-service-tier result))
     (:iterations . ,(prompt-run-result-iterations result))
     (:stop--reason . ,(prompt-run-result-stop-reason result))
+    (:session--name . ,(prompt-run-result-session-name result))
+    (:session--id . ,(prompt-run-result-session-id result))
     ,@(when (prompt-run-result-usage result)
         `((:usage . ,(token-usage-json (prompt-run-result-usage result)))))
+    ,@(when (prompt-run-result-structured-output result)
+        `((:structured--output . ,(prompt-run-result-structured-output result))))
     (:tool--events . ,(coerce (mapcar #'prompt-tool-event-json
                                        (prompt-run-result-tool-events result))
                               'vector))
@@ -4814,9 +4828,37 @@ Example:
           (write-string-with-final-newline block stream))
         (format stream ";; no provider-supplied reasoning blocks captured~%"))))
 
+(defun write-jsonl-record (record &optional (stream *standard-output*))
+  "Write RECORD as one JSONL line to STREAM."
+  (write-string-with-final-newline
+   (api-json-encode (interop-json-ready record))
+   stream))
+
+(defun prompt-run-result-jsonl-record (result)
+  "Return RESULT as a JSONL completion event."
+  (cons '(:event . "turn.completed")
+        (prompt-run-result-json result)))
+
+(defun prompt-run-error-jsonl-record (condition)
+  "Return CONDITION as a JSONL failure event."
+  `((:event . "turn.failed")
+    (:error . ,(prompt-run-error-message condition))
+    (:iterations . ,(prompt-run-error-iterations condition))
+    (:provider . ,(and (prompt-run-error-provider condition)
+                       (string-downcase
+                        (symbol-name
+                         (prompt-run-error-provider condition)))))
+    (:model . ,(prompt-run-error-model condition))
+    (:reasoning--effort . ,(prompt-run-error-think-level condition))
+    (:tool--events . ,(coerce (mapcar #'prompt-tool-event-json
+                                      (prompt-run-error-tool-events condition))
+                              'vector))))
+
 (defun write-prompt-run-result (result options)
   "Write RESULT according to OPTIONS."
   (cond
+    ((prompt-options-jsonl-p options)
+     (write-jsonl-record (prompt-run-result-jsonl-record result)))
     ((prompt-options-json-p options)
      (write-string-with-final-newline
       (api-json-encode (prompt-run-result-json result))
@@ -4832,7 +4874,7 @@ Example:
       (prompt-run-result-final-text result)
       *standard-output*))))
 
-(defun run-prompt-options (options)
+(defun run-prompt-options (options &key event-callback)
   "Run parsed prompt OPTIONS and return a PROMPT-RUN-RESULT."
   (let* ((ephemeral-p (prompt-options-ephemeral-p options))
          (session-name
@@ -4857,12 +4899,14 @@ Example:
          :think-level (prompt-options-think-level options)
          :model-role (prompt-options-model-role options)
          :service-tier (prompt-options-service-tier options)
+         :output-schema (prompt-options-output-schema options)
          :max-tool-iterations
          (prompt-options-max-tool-iterations options)
          :auto-approve-tools-p
          (prompt-options-auto-approve-tools-p options)
          :package-names
-         (prompt-options-packages options))
+         (prompt-options-packages options)
+         :event-callback event-callback)
         (if session-name
             (run-session-prompt
              (prompt-options-prompt options)
@@ -4873,12 +4917,14 @@ Example:
              :think-level (prompt-options-think-level options)
              :model-role (prompt-options-model-role options)
              :service-tier (prompt-options-service-tier options)
+             :output-schema (prompt-options-output-schema options)
              :max-tool-iterations
              (prompt-options-max-tool-iterations options)
              :auto-approve-tools-p
              (prompt-options-auto-approve-tools-p options)
              :package-names
-             (prompt-options-packages options))
+             (prompt-options-packages options)
+             :event-callback event-callback)
             (run-single-prompt
              (prompt-options-prompt options)
              :session-persistence-mode
@@ -4889,12 +4935,14 @@ Example:
              :think-level (prompt-options-think-level options)
              :model-role (prompt-options-model-role options)
              :service-tier (prompt-options-service-tier options)
+             :output-schema (prompt-options-output-schema options)
              :max-tool-iterations
              (prompt-options-max-tool-iterations options)
              :auto-approve-tools-p
              (prompt-options-auto-approve-tools-p options)
              :package-names
-             (prompt-options-packages options))))))
+             (prompt-options-packages options)
+             :event-callback event-callback)))))
 
 (defun clawmacs-prompt-main* (&key default-session-name usage-string-function)
   "Shared CLI entry point for one-shot and saved-session prompt modes."
@@ -4920,17 +4968,28 @@ Example:
               (format *error-output* ";; isolated-root: ~A~%" root))))
         (dolist (skill-root (prompt-options-skill-roots options))
           (register-skill-root skill-root :scope :user :source :cli))
-          (let ((*inhibit-user-init* (or (prompt-options-isolated-p options)
+        (let ((*inhibit-user-init* (or (prompt-options-isolated-p options)
                                        (prompt-options-inhibit-user-init-p
                                         options))))
-            (initialize-clawmacs-runtime)
-            (reset-interaction-state)
-            (setf *sandbox-root* (truename "."))
-            (ensure-prompt-workspace-project)
-            (let ((result (run-prompt-options options)))
-              (write-prompt-run-result result options)))
+          (initialize-clawmacs-runtime)
+          (reset-interaction-state)
+          (setf *sandbox-root* (truename "."))
+          (ensure-prompt-workspace-project)
+          (let* ((jsonl-lock (and (prompt-options-jsonl-p options)
+                                  (bt:make-lock "prompt-jsonl-output")))
+                 (event-callback
+                   (and (prompt-options-jsonl-p options)
+                        (lambda (event)
+                          (bt:with-lock-held (jsonl-lock)
+                            (write-jsonl-record event))))))
+            (let ((result (run-prompt-options
+                           options
+                           :event-callback event-callback)))
+              (write-prompt-run-result result options))))
         (uiop:quit 0))
       (prompt-run-error (e)
+        (when (and options (prompt-options-jsonl-p options))
+          (write-jsonl-record (prompt-run-error-jsonl-record e)))
         (format *error-output* "~&clawmacs prompt error: ~A~%" e)
         (when options
           (when (prompt-options-show-metadata-p options)

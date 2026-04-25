@@ -629,7 +629,7 @@ the event loop polls for updates via update-streaming-response."
       (return (prompt-stream-state-response state)))
     (sleep 0.02)))
 
-(defun prompt-request-once (buf)
+(defun prompt-request-once (buf &key event-callback stream-state-callback)
   "Send BUF's current conversation once via the streaming provider path.
 Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
   (load-active-packages :buffer buf)
@@ -658,7 +658,8 @@ Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
         (let ((*openai-codex-prompt-cache-key* prompt-cache-key)
               (*openai-codex-prompt-cache-retention*
                 prompt-cache-retention))
-          (let* ((request-args (list :model model
+          (let* ((last-stream-text "")
+                 (request-args (list :model model
                                      :tools tools
                                      :system-prompt system-prompt
                                      :reasoning-effort think-level))
@@ -668,28 +669,52 @@ Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
                                            (list :service-tier service-tier)))))
                  (state (apply #'provider-request-streaming
                                provider messages
-                               (lambda (state) (declare (ignore state)))
-                               request-args))
-                 (response (wait-for-prompt-stream-state state)))
-            (declare (ignore _ignored))
-            (maybe-run-hook-with-args
-             '*after-provider-response-hook*
-             buf
-             response
-             provider
-             model
-             (response-usage response))
-            (values response
-                    provider
-                    model
-                    think-level
-                    service-tier)))))))
+                               (lambda (state)
+                                 (when event-callback
+                                   (let ((text (stream-state-display-text
+                                                state
+                                                :show-reasoning-p nil)))
+                                     (when (and (stringp text)
+                                                (not (string= text
+                                                              last-stream-text)))
+                                       (let ((delta (if (and (<= (length last-stream-text)
+                                                                (length text))
+                                                             (string= last-stream-text
+                                                                      text
+                                                                      :end2
+                                                                      (length last-stream-text)))
+                                                        (subseq text
+                                                                (length last-stream-text))
+                                                        text)))
+                                         (funcall event-callback
+                                                  (list :event "assistant.chunk"
+                                                        :delta delta
+                                                        :text text)))
+                                       (setf last-stream-text text)))))
+                               request-args)))
+            (when stream-state-callback
+              (funcall stream-state-callback state))
+            (let ((response (wait-for-prompt-stream-state state)))
+              (declare (ignore _ignored))
+              (maybe-run-hook-with-args
+               '*after-provider-response-hook*
+               buf
+               response
+               provider
+               model
+               (response-usage response))
+              (values response
+                      provider
+                      model
+                      think-level
+                      service-tier))))))))
 
 (defun denied-tool-result-data (reason)
   "Return a Lisp data denial payload for a non-interactive tool denial."
   (tool-denied-result-data reason))
 
-(defun execute-prompt-tool-call (buf tool-use-block agent-kw auto-approve-tools-p)
+(defun execute-prompt-tool-call
+    (buf tool-use-block agent-kw auto-approve-tools-p &key event-callback)
   "Execute TOOL-USE-BLOCK for prompt mode and return values RESULT and EVENT.
 RESULT is the alist consumed by INSERT-TOOL-RESULTS-MESSAGE. EVENT is a
 PROMPT-TOOL-EVENT for terminal/debug output."
@@ -730,23 +755,40 @@ PROMPT-TOOL-EVENT for terminal/debug output."
                  :result-text result-text
                  :display display
                  :denied-p denied-p)))
+    (when event-callback
+      (funcall event-callback
+               (list :event "tool.call"
+                     :id tool-id
+                     :name tool-name
+                     :input tool-input))
+      (funcall event-callback
+               (list :event "tool.result"
+                     :id tool-id
+                     :name tool-name
+                     :result result-text
+                     :denied-p denied-p)))
     (values result event)))
 
-(defun execute-prompt-tool-calls (buf tool-uses auto-approve-tools-p)
+(defun execute-prompt-tool-calls (buf tool-uses auto-approve-tools-p
+                                  &key event-callback)
   "Execute TOOL-USES, insert their tool-result message into BUF, and return events."
   (let ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
         (results nil)
         (events nil))
     (dolist (tool-use tool-uses)
       (multiple-value-bind (result event)
-          (execute-prompt-tool-call buf tool-use agent-kw auto-approve-tools-p)
+          (execute-prompt-tool-call
+           buf tool-use agent-kw auto-approve-tools-p
+           :event-callback event-callback)
         (push result results)
         (push event events)))
     (insert-tool-results-message buf (nreverse results))
     (nreverse events)))
 
 (defun run-prompt-buffer-loop (buf prompt max-tool-iterations
-                               auto-approve-tools-p)
+                               auto-approve-tools-p
+                               &key output-schema event-callback
+                                 stream-state-callback)
   "Run BUF through prompt-mode provider/tool iterations for PROMPT."
   (let ((tool-events nil)
         (final-provider nil)
@@ -770,7 +812,10 @@ PROMPT-TOOL-EVENT for terminal/debug output."
         (incf iterations)
         (multiple-value-bind (response provider* model* think-level* service-tier*)
             (handler-case
-                (prompt-request-once buf)
+                (prompt-request-once buf
+                                     :event-callback event-callback
+                                     :stream-state-callback
+                                     stream-state-callback)
               (error (condition)
                 (fail "Prompt provider request failed: ~A" condition)))
           (setf final-provider provider*
@@ -794,29 +839,45 @@ PROMPT-TOOL-EVENT for terminal/debug output."
                       (append tool-events
                               (handler-case
                                   (execute-prompt-tool-calls
-                                   buf tool-uses auto-approve-tools-p)
+                                   buf tool-uses auto-approve-tools-p
+                                   :event-callback event-callback)
                                 (error (condition)
                                   (fail "Prompt tool loop failed: ~A"
                                         condition)))))
-                (return
-                  (make-prompt-run-result
-                   :prompt prompt
-                   :final-text (content-text-blocks canonical-content)
-                   :tool-events tool-events
-                   :reasoning-blocks (content-reasoning-blocks
-                                      canonical-content)
-                   :agent-name (buffer-agent-name buf)
-                   :provider final-provider
-                   :model final-model
-                   :think-level final-think-level
-                   :service-tier final-service-tier
-                   :iterations iterations
-                   :stop-reason stop-reason
-                   :usage aggregate-usage)))))))))
+                (let ((result
+                        (make-prompt-run-result
+                         :prompt prompt
+                         :final-text (content-text-blocks canonical-content)
+                         :tool-events tool-events
+                         :reasoning-blocks (content-reasoning-blocks
+                                            canonical-content)
+                         :agent-name (buffer-agent-name buf)
+                         :provider final-provider
+                         :model final-model
+                         :think-level final-think-level
+                         :service-tier final-service-tier
+                         :iterations iterations
+                         :stop-reason stop-reason
+                         :usage aggregate-usage
+                         :session-name (and (buffer-session buf)
+                                            (session-name
+                                             (buffer-session buf)))
+                         :session-id (and (buffer-session buf)
+                                          (session-id
+                                           (buffer-session buf))))))
+                  (handler-case
+                      (return
+                        (apply-output-schema-to-prompt-run-result
+                         result output-schema))
+                    (error (condition)
+                      (fail "Structured output validation failed: ~A"
+                            condition)))))))))))
 
 (defun run-prompt-with-buffer (buf prompt custom-tool-definitions
                                max-tool-iterations auto-approve-tools-p
-                               tool-names tool-names-supplied-p)
+                               tool-names tool-names-supplied-p
+                               &key output-schema event-callback
+                                 stream-state-callback)
   "Run a prepared prompt BUF with optional custom tools."
   (let* ((temporary-tool-table
            (temporary-tool-table-from-definitions custom-tool-definitions))
@@ -831,18 +892,24 @@ PROMPT-TOOL-EVENT for terminal/debug output."
       (run-prompt-buffer-loop buf
                               prompt
                               max-tool-iterations
-                              auto-approve-tools-p))))
+                              auto-approve-tools-p
+                              :output-schema output-schema
+                              :event-callback event-callback
+                              :stream-state-callback stream-state-callback))))
 
 (defun run-single-prompt (prompt &key (agent-name *default-agent-name*)
                                  provider model think-level
                                  model-role service-tier
+                                 output-schema
                                  (session-persistence-mode
                                   *default-buffer-session-persistence-mode*)
                                  (max-tool-iterations *prompt-max-tool-iterations*)
                                  auto-approve-tools-p
                                  package-names
                                  (tool-names nil tool-names-supplied-p)
-                                 custom-tools)
+                                 custom-tools
+                                 event-callback
+                                 stream-state-callback)
   "Run PROMPT once without a UI and return a PROMPT-RUN-RESULT.
 The request loops through tool_use responses until the provider returns a final
 assistant response or MAX-TOOL-ITERATIONS is exceeded."
@@ -864,17 +931,23 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
                             max-tool-iterations
                             auto-approve-tools-p
                             tool-names
-                            tool-names-supplied-p)))
+                            tool-names-supplied-p
+                            :output-schema output-schema
+                            :event-callback event-callback
+                            :stream-state-callback stream-state-callback)))
 
 (defun run-session-prompt (prompt &key session-name
                                   (agent-name *default-agent-name*)
                                   provider model think-level
                                   model-role service-tier
+                                  output-schema
                                   (max-tool-iterations *prompt-max-tool-iterations*)
                                   auto-approve-tools-p
                                   package-names
                                   (tool-names nil tool-names-supplied-p)
-                                  custom-tools)
+                                  custom-tools
+                                  event-callback
+                                  stream-state-callback)
   "Append PROMPT to SESSION-NAME, run the agent, and save the session."
   (when (blank-string-p prompt)
     (error "Prompt must be non-empty"))
@@ -896,4 +969,7 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
                             max-tool-iterations
                             auto-approve-tools-p
                             tool-names
-                            tool-names-supplied-p)))
+                            tool-names-supplied-p
+                            :output-schema output-schema
+                            :event-callback event-callback
+                            :stream-state-callback stream-state-callback)))

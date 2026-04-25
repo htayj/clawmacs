@@ -1328,6 +1328,7 @@
    #:run-clawmacs-mcclim
    #:clawmacs-prompt-main
    #:clawmacs-session-prompt-main
+   #:clawmacs-app-server-main
    #:run-single-prompt
    #:run-session-prompt
    #:pipeline-stage
@@ -1345,6 +1346,7 @@
    #:pipeline-stage-skill-names
    #:pipeline-stage-max-tool-iterations
    #:pipeline-stage-auto-approve-tools-p
+   #:pipeline-stage-output-schema
    #:pipeline-stage-output-parser
    #:pipeline-stage-runner
    #:pipeline-definition
@@ -1431,6 +1433,7 @@
    #:prompt-run-result-final-text
    #:prompt-run-result-tool-events
    #:prompt-run-result-reasoning-blocks
+   #:prompt-run-result-structured-output
    #:prompt-run-result-agent-name
    #:prompt-run-result-provider
    #:prompt-run-result-model
@@ -1439,6 +1442,8 @@
    #:prompt-run-result-iterations
    #:prompt-run-result-stop-reason
    #:prompt-run-result-usage
+   #:prompt-run-result-session-name
+   #:prompt-run-result-session-id
    #:prompt-run-error
    #:prompt-run-error-message
    #:prompt-run-error-tool-events
@@ -1456,6 +1461,51 @@
    #:prompt-run-tool-names
    #:prompt-run-tool-count
    #:prompt-run-used-tool-p
+   #:structured-output-validation-error
+   #:structured-output-validation-error-schema
+   #:structured-output-validation-error-text
+   #:structured-output-validation-error-reason
+   #:normalize-output-schema
+   #:parse-and-validate-structured-output
+   #:apply-output-schema-to-prompt-run-result
+   #:apply-output-schema-to-pipeline-stage-result
+   #:interop-thread
+   #:interop-thread-id
+   #:interop-thread-buffer
+   #:interop-thread-ephemeral-p
+   #:interop-thread-created-at
+   #:interop-thread-updated-at
+   #:interop-thread-current-turn-id
+   #:interop-thread-last-result
+   #:interop-thread-summary
+   #:start-interop-thread
+   #:resume-interop-thread
+   #:fork-interop-thread
+   #:list-interop-threads
+   #:read-interop-thread
+   #:run-interop-thread
+   #:interop-turn
+   #:interop-turn-id
+   #:interop-turn-thread-id
+   #:interop-turn-status
+   #:interop-turn-input
+   #:interop-turn-output-schema
+   #:interop-turn-created-at
+   #:interop-turn-updated-at
+   #:interop-turn-started-at
+   #:interop-turn-finished-at
+   #:interop-turn-result
+   #:interop-turn-error
+   #:interop-turn-current-stream-state
+   #:interop-turn-interrupt-requested-p
+   #:interop-turn-summary
+   #:start-interop-turn
+   #:read-interop-turn
+   #:interrupt-interop-turn
+   #:interop-client
+   #:make-interop-local-client
+   #:interop-client-call
+   #:handle-interop-request
    #:send-to-agent-with-context
    #:stop-streaming-response
    #:stop-llm-command

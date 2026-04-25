@@ -86,6 +86,10 @@
   :description "Attachment and durable artifact package tests"
   :in clawmacs-suite)
 
+(def-suite interop-suite
+  :description "App-server, JSONL, and structured-output interop tests"
+  :in clawmacs-suite)
+
 (def-suite package-manager-suite
   :description "Package loader tests"
   :in clawmacs-suite)

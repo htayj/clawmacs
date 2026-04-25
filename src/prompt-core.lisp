@@ -31,6 +31,7 @@
   final-text
   tool-events
   reasoning-blocks
+  structured-output
   agent-name
   provider
   model
@@ -38,7 +39,9 @@
   service-tier
   iterations
   stop-reason
-  usage)
+  usage
+  session-name
+  session-id)
 
 (defstruct prompt-options
   "Command-line options for CLAWMACS-PROMPT-MAIN."
@@ -53,6 +56,8 @@
   (show-reasoning-p nil :type boolean)
   (show-metadata-p nil :type boolean)
   (json-p nil :type boolean)
+  (jsonl-p nil :type boolean)
+  output-schema
   (auto-approve-tools-p nil :type boolean)
   (max-tool-iterations *prompt-max-tool-iterations* :type integer)
   (skill-roots nil :type list)

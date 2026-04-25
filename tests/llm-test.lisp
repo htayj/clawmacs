@@ -1436,6 +1436,36 @@ same
     (is (clawmacs::prompt-options-ephemeral-p options))
     (is (string= "say hello" (clawmacs::prompt-options-prompt options)))))
 
+(test parse-clawmacs-prompt-args-supports-jsonl-and-output-schema
+  "Prompt parser accepts JSONL streaming and structured-output schema flags."
+  (let ((options (clawmacs::parse-clawmacs-prompt-args
+                  '("--jsonl"
+                    "--output-schema" "{\"type\":\"object\"}"
+                    "emit" "json"))))
+    (is (clawmacs::prompt-options-jsonl-p options))
+    (is (string= "{\"type\":\"object\"}"
+                 (clawmacs::prompt-options-output-schema options)))
+    (is (string= "emit json" (clawmacs::prompt-options-prompt options)))))
+
+(test write-prompt-run-result-jsonl-emits-turn-completed-record
+  "JSONL prompt output writes a turn-completed record with structured output."
+  (let* ((result (clawmacs::make-prompt-run-result
+                  :prompt "emit json"
+                  :final-text "{\"status\":\"ok\"}"
+                  :structured-output '((:status . "ok"))
+                  :agent-name "writer"
+                  :provider :zai
+                  :model "glm-5"
+                  :iterations 1
+                  :stop-reason "end_turn"))
+         (options (clawmacs::make-prompt-options :jsonl-p t))
+         (output (with-output-to-string (stream)
+                   (let ((*standard-output* stream))
+                     (clawmacs::write-prompt-run-result result options)))))
+    (is (search "\"event\":\"turn.completed\"" output))
+    (is (search "\"final_text\":\"{\\\"status\\\":\\\"ok\\\"}\"" output))
+    (is (search "\"structured_output\":{\"status\":\"ok\"}" output))))
+
 (test run-prompt-options-resolves-continue-session-for-current-directory
   "Prompt options can resume the most recent saved session for the cwd."
   (let* ((*sessions-dir* (temp-session-test-directory "continue-prompt"))
