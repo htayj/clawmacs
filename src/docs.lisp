@@ -3705,7 +3705,7 @@ documentation in *extended-docs*."
   :category "packages"
   :usage "M-x minibuffer-toggle-package-command"
   :returns "nil"
-  :side-effects "Opens a minibuffer package selector; RET cycles default, buffer, agent, and global enablement. Newly enabled packages append their prompt/tool context to non-empty buffers."
+  :side-effects "Opens a minibuffer package selector; RET cycles default, buffer, agent, and global enablement. Newly enabled packages append their prompt/tool context to non-empty buffers, and disabling a package retracts its injected context from the live buffer transcript."
   :see-also (cycle-package-enablement-scope describe-installed-package-command))
 
 (defdoc describe-installed-package-command

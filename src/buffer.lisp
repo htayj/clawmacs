@@ -868,6 +868,39 @@ and create a new empty input message at the tail."
         (setf (buffer-first-message buf) msg)))
   msg)
 
+(defun buffer-remove-message (buf msg)
+  "Remove MSG from BUF's linked list and return BUF.
+
+The input message is never removed."
+  (when (and buf msg)
+    (when (eq msg (buffer-input-message buf))
+      (error "Cannot remove the input message from a buffer."))
+    (let ((prev (message-prev msg))
+          (next (message-next msg)))
+      (when prev
+        (setf (message-next prev) next))
+      (when next
+        (setf (message-prev next) prev))
+      (when (eq msg (buffer-first-message buf))
+        (setf (buffer-first-message buf) next))
+      (when (eq msg (buffer-last-message buf))
+        (setf (buffer-last-message buf) prev))
+      (setf (message-prev msg) nil
+            (message-next msg) nil)
+      (notify-buffer-display-change buf :message)
+      (autosave-session-snapshot buf)))
+  buf)
+
+(defun buffer-remove-messages-if (buf predicate)
+  "Remove every finalized message in BUF for which PREDICATE returns true."
+  (loop :for msg := (buffer-first-message buf)
+        :then next
+        :for next := (and msg (message-next msg))
+        :while (and msg (not (eq msg (buffer-input-message buf))))
+        :when (funcall predicate msg)
+          :do (buffer-remove-message buf msg))
+  buf)
+
 (defun buffer-insert-read-only-message
     (buf sender text &key raw-content metadata face-set timestamp
                       (record-p t) (run-hook-p t))

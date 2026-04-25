@@ -1285,6 +1285,31 @@
           (is (string= "user" (cdr (assoc :role last-message))))
           (is (search "<package_context package=\"sexed\">" text)))))))
 
+(test package-disable-removes-injected-context-from-buffer-and-provider-messages
+  "Disabling an enabled package retracts its injected context cleanly."
+  (with-interactive-command-test-buffer (buf)
+    (with-package-state-override ((default-package-test-channels))
+      (clawmacs::set-message-text (buffer-input-message buf)
+                                  "existing conversation context")
+      (buffer-finalize-input buf)
+      (clawmacs:set-package-enablement-scope "sexed" :global :buffer buf)
+      (let ((context (find :context
+                           (buffer-test-history-messages buf)
+                           :key #'message-sender)))
+        (is (not (null context)))
+        (is (search "<package_context package=\"sexed\">"
+                    (message-text context))))
+      (clawmacs:set-package-enablement-scope "sexed" :default :buffer buf)
+      (is (null (find :context
+                      (buffer-test-history-messages buf)
+                      :key #'message-sender)))
+      (let ((provider-messages (build-conversation-messages buf)))
+        (is (= 1 (length provider-messages)))
+        (is (string= "user" (cdr (assoc :role (first provider-messages)))))
+        (let* ((content (cdr (assoc :content (first provider-messages))))
+               (text (cdr (assoc :text (aref content 0)))))
+          (is (search "existing conversation context" text)))))))
+
 (test describe-installed-package-command-opens-help-buffer
   "The describe package command loads package metadata and opens a help buffer."
   (with-interactive-command-test-buffer (buf)

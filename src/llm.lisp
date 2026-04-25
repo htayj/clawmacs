@@ -1915,31 +1915,40 @@ and should not be sent to the API."
           :do (let ((sender (message-sender msg)))
                 ;; Skip system messages — they are display-only (shell output, etc.)
                 (unless (eq sender :system)
-                  (let* ((role (cond
-                                 ((eq sender :user) "user")
-                                 ((eq sender :tool-result) "user")
-                                 ((eq sender :compaction-summary) "user")
-                                 ((eq sender :branch-summary) "user")
-                                 ((eq sender :context) "user")
-                                 (t "assistant")))
-                         (content (canonicalize-message-content
-                                   role
-                                   (or (message-raw-content msg)
-                                       (message-text msg)))))
-                    (when (and (eq sender :user)
-                               (null (message-raw-content msg)))
-                      (dolist (skill-text
-                                (handler-case
-                                    (skill-injection-messages (message-text msg))
-                                  (error () nil)))
-                        (let ((skill-content
-                                (canonicalize-message-content "user" skill-text)))
-                          (push `((:role . "user")
-                                  (:content . ,(coerce skill-content 'vector)))
-                                messages))))
-                    (push `((:role . ,role)
-                            (:content . ,(coerce content 'vector)))
-                          messages)))))
+                  (let* ((metadata (message-metadata msg))
+                         (package-name
+                           (and metadata (message-metadata-value metadata
+                                                                 :package-name))))
+                    (unless (and package-name
+                                 (not (package-active-p package-name
+                                                        :buffer buf)))
+                      (let* ((role (cond
+                                     ((eq sender :user) "user")
+                                     ((eq sender :tool-result) "user")
+                                     ((eq sender :compaction-summary) "user")
+                                     ((eq sender :branch-summary) "user")
+                                     ((eq sender :context) "user")
+                                     (t "assistant")))
+                             (content (canonicalize-message-content
+                                       role
+                                       (or (message-raw-content msg)
+                                           (message-text msg)))))
+                        (when (and (eq sender :user)
+                                   (null (message-raw-content msg)))
+                          (dolist (skill-text
+                                    (handler-case
+                                        (skill-injection-messages
+                                         (message-text msg))
+                                      (error () nil)))
+                            (let ((skill-content
+                                    (canonicalize-message-content
+                                     "user" skill-text)))
+                              (push `((:role . "user")
+                                      (:content . ,(coerce skill-content 'vector)))
+                                    messages))))
+                        (push `((:role . ,role)
+                                (:content . ,(coerce content 'vector)))
+                              messages)))))))
     (nreverse messages)))
 
 (defun canonical-tool-use-block (id name input)

@@ -1354,15 +1354,8 @@ Returns true when KEY was consumed by completion."
            "Enable Package" items
            (lambda (item)
              (let* ((name (getf item :package-name))
-                    (definition (getf item :package))
-                    (previous-scope
-                      (package-enablement-scope name :buffer buffer))
-                    (had-context-p
-                      (buffer-has-conversation-context-p buffer))
                     (scope (cycle-package-enablement-scope name :buffer buffer)))
                (load-active-packages :buffer buffer)
-               (maybe-insert-enabled-package-context
-                buffer definition previous-scope scope had-context-p)
                (buffer-insert-system-message
                 buffer
                 (format nil "[Package ~A ~A]"

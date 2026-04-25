@@ -238,11 +238,12 @@ problems observed while reviewing the current Clawmacs tree.
 - [x] Either implement `shell_exec` timeouts or remove `:timeout` from the
   contract. The tool parses `:timeout` and then explicitly ignores it
   (`src/tools.lisp:771-789`).
-- [ ] Make package enable/disable update prompt context symmetrically. Enabling
+- [x] Make package enable/disable update prompt context symmetrically. Enabling
   appends package prompt content into an already-populated session
   (`src/package-manager.lisp:724-735`), but disabling only mutates enablement
-  tables (`src/package-manager.lisp:484-520`). That leaves stale package
-  guidance in the conversation history even though tool execution is correctly
+  tables (`src/package-manager.lisp:484-520`). The live transcript and
+  provider-facing conversation now retract package context cleanly even when a
+  session already contained it, while tool execution is still correctly
   blocked for inactive packages (`src/tools.lisp:587-670`).
 - [x] Stop swallowing session manifest decode failures. `read-session-manifest`
   now returns a structured parse error object for malformed manifests, direct

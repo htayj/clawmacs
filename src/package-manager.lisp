@@ -553,7 +553,15 @@ removes the package from the other scopes in the same context."
          (agent (or agent-name
                     (and buffer (buffer-agent-name buffer))
                     *default-agent-name*))
-         (configuration (ensure-package-configuration-loaded)))
+         (configuration (ensure-package-configuration-loaded))
+         (previous-scope (and buffer
+                              (package-enablement-scope
+                               name
+                               :buffer buffer
+                               :agent-name agent)))
+         (definition (and buffer (find-installed-package name)))
+         (had-context-p (and buffer
+                             (buffer-has-conversation-context-p buffer))))
     (unless (member scope '(:default :buffer :agent :global) :test #'eq)
       (error "Unsupported package enablement scope: ~S" scope))
     (when buffer
@@ -573,6 +581,13 @@ removes the package from the other scopes in the same context."
       (:global
        (set-package-name-enabled-in-table
         name (package-configuration-global-table configuration) t)))
+    (when buffer
+      (cond
+        ((eq scope :default)
+         (remove-package-context-messages buffer name))
+        ((eq previous-scope :default)
+         (maybe-insert-enabled-package-context buffer definition previous-scope scope
+                                               had-context-p))))
     (save-package-configuration)
     (maybe-run-hook-with-args
      '*package-enablement-changed-hook*
@@ -764,6 +779,17 @@ removes the package from the other scopes in the same context."
   "Return the stable marker used for PACKAGE-NAME context messages."
   (format nil "<package_context package=~S>" package-name))
 
+(defun package-context-message-p (msg package-name)
+  "Return true when MSG is the injected context message for PACKAGE-NAME."
+  (and (eq (message-sender msg) :context)
+       (let* ((metadata (message-metadata msg))
+              (metadata-package-name
+                (and metadata (message-metadata-value metadata :package-name)))
+              (marker (package-context-message-marker package-name)))
+         (or (and metadata-package-name
+                  (string= package-name metadata-package-name))
+             (search marker (message-text msg))))))
+
 (defun buffer-has-conversation-context-p (buffer)
   "Return true when BUFFER already has provider-visible context."
   (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
@@ -772,11 +798,18 @@ removes the package from the other scopes in the same context."
 
 (defun buffer-package-context-message-present-p (buffer package-name)
   "Return true when BUFFER already contains PACKAGE-NAME's context marker."
-  (let ((marker (package-context-message-marker package-name)))
-    (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
-          :while (and msg (not (eq msg (buffer-input-message buffer))))
-          :thereis (and (eq (message-sender msg) :context)
-                        (search marker (message-text msg))))))
+  (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
+        :while (and msg (not (eq msg (buffer-input-message buffer))))
+        :thereis (package-context-message-p msg package-name)))
+
+(defun remove-package-context-messages (buffer package-name)
+  "Remove injected context messages for PACKAGE-NAME from BUFFER."
+  (when buffer
+    (buffer-remove-messages-if
+     buffer
+     (lambda (msg)
+       (package-context-message-p msg package-name))))
+  buffer)
 
 (defun package-owned-tool-definitions-for-context (package-name)
   "Return provider-style tool definitions owned by PACKAGE-NAME."
@@ -817,7 +850,10 @@ removes the package from the other scopes in the same context."
                (not (buffer-package-context-message-present-p buffer name)))
       (let ((text (package-system-prompt-context-text definition buffer)))
         (when text
-          (buffer-insert-context-message buffer text))))))
+          (buffer-insert-context-message
+           buffer text
+           :metadata `((:package-context . t)
+                       (:package-name . ,name))))))))
 
 (defun package-owned-extended-docs (package-name)
   "Return extended documentation entries registered by PACKAGE-NAME."
