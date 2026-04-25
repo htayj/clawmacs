@@ -385,9 +385,10 @@ Resource prompt body.")
            (templata (find "templata" definitions
                            :key #'clawmacs:package-definition-name
                            :test #'string=)))
-      (is (equal '("artifactum" "git" "lispi" "modelaria" "netcons" "organa"
-                   "packrat" "pipelines" "prove" "quaestor" "sexed" "slop"
-                   "speculum" "subagent" "templata")
+      (is (equal '("artifactum" "git" "lispi" "mcp-bridge" "modelaria"
+                   "netcons" "organa" "packrat" "pipelines" "prove"
+                   "quaestor" "sexed" "slop" "speculum" "subagent"
+                   "templata")
                  names))
       (is (not (null git)))
       (is (eq :builtin (clawmacs:package-definition-source-tier git)))

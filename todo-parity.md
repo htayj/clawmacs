@@ -192,15 +192,15 @@ Parity sources:
 - `reference/external_src/codex/docs/config.md`
 - `reference/external_src/codex/codex-rs/docs/codex_mcp_interface.md`
 
-- [ ] Add stdio and HTTP MCP server configuration.
-- [ ] Map external MCP tools into Clawmacs tool definitions with package
+- [x] Add stdio and HTTP MCP server configuration.
+- [x] Map external MCP tools into Clawmacs tool definitions with package
   ownership and approval metadata.
-- [ ] Surface per-server and per-tool approval settings in the UI.
-- [ ] Add commands to list, inspect, enable, disable, and doctor external MCP
+- [x] Surface per-server and per-tool approval settings in the UI.
+- [x] Add commands to list, inspect, enable, disable, and doctor external MCP
   integrations.
-- [ ] Add connector-style resource mentions where an external integration should
+- [x] Add connector-style resource mentions where an external integration should
   surface a resource instead of raw tool text.
-- [ ] Add tests for server discovery, tool registration, approval routing, and
+- [x] Add tests for server discovery, tool registration, approval routing, and
   failure recovery.
 
 ## Internal Review Findings (2026-04-24)

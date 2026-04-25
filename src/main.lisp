@@ -4703,6 +4703,10 @@ Example:
           (merge-pathnames #P"skills.json" config-dir)
           *personality-prompt-path*
           (merge-pathnames #P"personality-prompt.txt" root))
+    (when (boundp '*mcp-server-configuration-path*)
+      (setf *mcp-server-configuration-path*
+            (merge-pathnames #P"mcp-servers.json" config-dir)
+            *mcp-server-registry* nil))
     (ensure-directories-exist
      (merge-pathnames #P".keep" *project-definitions-directory*))
     (ensure-directories-exist

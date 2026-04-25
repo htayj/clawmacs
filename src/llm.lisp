@@ -1923,8 +1923,8 @@ and should not be sent to the API."
                 (unless (eq sender :system)
                   (let* ((metadata (message-metadata msg))
                          (package-name
-                           (and metadata (message-metadata-value metadata
-                                                                 :package-name))))
+                           (and metadata
+                                (message-metadata-value metadata :package-name))))
                     (unless (and package-name
                                  (not (package-active-p package-name
                                                         :buffer buf)))
@@ -1948,10 +1948,28 @@ and should not be sent to the API."
                                       (error () nil)))
                             (let ((skill-content
                                     (canonicalize-message-content
-                                     "user" skill-text)))
+                                     "user"
+                                     skill-text)))
                               (push `((:role . "user")
-                                      (:content . ,(coerce skill-content 'vector)))
-                                    messages))))
+                                      (:content
+                                       . ,(coerce skill-content 'vector)))
+                                    messages)))
+                          (when (fboundp 'mcp-resource-injection-messages)
+                            (dolist (resource-text
+                                      (handler-case
+                                          (funcall
+                                           (symbol-function
+                                            'mcp-resource-injection-messages)
+                                           (message-text msg))
+                                        (error () nil)))
+                              (let ((resource-content
+                                      (canonicalize-message-content
+                                       "user"
+                                       resource-text)))
+                                (push `((:role . "user")
+                                        (:content
+                                         . ,(coerce resource-content 'vector)))
+                                      messages)))))
                         (push `((:role . ,role)
                                 (:content . ,(coerce content 'vector)))
                               messages)))))))

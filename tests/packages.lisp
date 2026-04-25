@@ -90,6 +90,10 @@
   :description "App-server, JSONL, and structured-output interop tests"
   :in clawmacs-suite)
 
+(def-suite mcp-bridge-package-suite
+  :description "External MCP server bridge package tests"
+  :in clawmacs-suite)
+
 (def-suite package-manager-suite
   :description "Package loader tests"
   :in clawmacs-suite)
