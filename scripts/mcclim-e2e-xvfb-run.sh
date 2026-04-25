@@ -2,15 +2,12 @@
 set -eu
 
 DISPLAY_NUMBER=${CLAWMACS_MCCLIM_E2E_DISPLAY_NUMBER:-99}
-DISPLAY_VALUE=":$DISPLAY_NUMBER"
-X_SOCKET="/tmp/.X11-unix/X$DISPLAY_NUMBER"
+DISPLAY_VALUE="localhost:$DISPLAY_NUMBER"
 LOG_PATH=".cache/mcclim-e2e-xvfb.log"
 
-mkdir -p /tmp/.X11-unix
 mkdir -p .cache
-rm -f "$X_SOCKET"
 
-Xvfb "$DISPLAY_VALUE" -screen 0 1280x900x24 -nolisten tcp -ac >"$LOG_PATH" 2>&1 &
+Xvfb ":$DISPLAY_NUMBER" -screen 0 1280x900x24 -listen tcp -ac >"$LOG_PATH" 2>&1 &
 XVFB_PID=$!
 
 cleanup() {
@@ -24,7 +21,7 @@ trap cleanup EXIT INT TERM
 
 attempt=0
 while [ "$attempt" -lt 100 ]; do
-  if [ -S "$X_SOCKET" ]; then
+  if DISPLAY="$DISPLAY_VALUE" xdotool getdisplaygeometry >/dev/null 2>&1; then
     break
   fi
   if ! kill -0 "$XVFB_PID" 2>/dev/null; then
@@ -35,9 +32,9 @@ while [ "$attempt" -lt 100 ]; do
   sleep 0.1
 done
 
-if [ ! -S "$X_SOCKET" ]; then
+if ! DISPLAY="$DISPLAY_VALUE" xdotool getdisplaygeometry >/dev/null 2>&1; then
   cat "$LOG_PATH" >&2 || true
-  echo "Xvfb did not create $X_SOCKET" >&2
+  echo "Xvfb did not become ready on $DISPLAY_VALUE" >&2
   exit 1
 fi
 

@@ -227,6 +227,16 @@ two")
     ;; 21 lines, terminal height 30, max = 10
     (is (= 10 (clawmacs::calculate-input-height buf 30 80)))))
 
+(test mcclim-pixel-grid-index-rounds-to-nearest-cell
+  "Pointer-to-grid conversion snaps to the nearest cell and clamps below zero."
+  (is (= 0 (clawmacs::mcclim-pixel-grid-index 0 12)))
+  (is (= 0 (clawmacs::mcclim-pixel-grid-index 5 12)))
+  (is (= 1 (clawmacs::mcclim-pixel-grid-index 7 12)))
+  (is (= 1 (clawmacs::mcclim-pixel-grid-index 17 12)))
+  (is (= 2 (clawmacs::mcclim-pixel-grid-index 25 12)))
+  (is (= 0 (clawmacs::mcclim-pixel-grid-index -4 12)))
+  (is (= 0 (clawmacs::mcclim-pixel-grid-index 10 0))))
+
 (test mcclim-desired-input-pane-rows-expands-for-wrapped-chat-input
   "Wrapped chat input expands the dedicated McCLIM input pane."
   (let ((buf (make-buffer "chat-wrap")))

@@ -1004,6 +1004,12 @@ Fills a background rectangle first, then draws the text on top."
                  (clim:text-size pane text
                                  :text-style text-style))))
 
+(defun mcclim-pixel-grid-index (pixel cell-size)
+  "Return the nearest zero-based grid index for PIXEL at CELL-SIZE."
+  (if (plusp cell-size)
+      (max 0 (round pixel cell-size))
+      0))
+
 (defun draw-text-at-pixels
     (pane x y text fg-ink bg-ink text-style char-h
      &key drawing-options background-width)
@@ -2368,21 +2374,13 @@ ordinary input text."
                                   (= point-off chunk-end))))
                 (let* ((cursor-offset (- point-off chunk-start))
                        (base-col (if first-row-p 0 prefix-len))
-                       (base-x (* base-col char-w))
-                       (leading-text
-                         (concatenate
-                          'string
-                          (if first-row-p prefix "")
-                          (subseq chunk-text 0 cursor-offset)))
                        (cursor-text
                          (if (< point-off content-len)
                              (string (char content point-off))
                              " "))
                        (cursor-x-pixels
-                         (+ base-x
-                            (text-pixel-width pane leading-text ts)))
-                       (cursor-width
-                         (max 1 (text-pixel-width pane cursor-text ts))))
+                         (* (+ base-col cursor-offset) char-w))
+                       (cursor-width char-w))
                   (setf cursor-y row
                         cursor-x (+ prefix-len cursor-offset))
                   (draw-text-at-pixels pane cursor-x-pixels (* row char-h)
@@ -3047,18 +3045,9 @@ into spans and draws each span as a single draw-text-at call."
               (multiple-value-bind (fg bg cursor-ts opts)
                   (resolve-global-face-inks :minibuffer-cursor)
                 (declare (ignore cursor-ts))
-                (let* ((cursor-prefix-end (+ (length prompt-str) point))
-                       (cursor-prefix (subseq prompt-line
-                                              0
-                                              (min cursor-prefix-end
-                                                   (length visible))))
-                       (cursor-x (+ (* col char-w)
-                                    (text-pixel-width pane cursor-prefix
-                                                      prompt-ts)))
+                (let* ((cursor-x (* cursor-col char-w))
                        (cursor-text (string char-at-cursor))
-                       (cursor-width (max 1
-                                          (text-pixel-width pane cursor-text
-                                                            prompt-ts))))
+                       (cursor-width char-w))
                   (draw-text-at-pixels pane cursor-x (* row char-h)
                                        cursor-text fg bg prompt-ts char-h
                                        :drawing-options opts
@@ -3353,8 +3342,8 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
   (ensure-char-metrics frame pane)
   (let ((char-w (frame-char-width frame))
         (char-h (frame-char-height frame)))
-    (values (max 0 (floor (clim:pointer-event-y event) char-h))
-            (max 0 (floor (clim:pointer-event-x event) char-w)))))
+    (values (mcclim-pixel-grid-index (clim:pointer-event-y event) char-h)
+            (mcclim-pixel-grid-index (clim:pointer-event-x event) char-w))))
 
 (defun mcclim-completion-popup-geometry (cols rows)
   "Return popup geometry matching `mcclim-render-completion-popup'."
