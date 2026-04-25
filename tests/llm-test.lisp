@@ -65,10 +65,27 @@
     (ensure-directories-exist (merge-pathnames #P".keep" base))
     (merge-pathnames "guard.json" base)))
 
+(defun temp-package-test-directory (label)
+  (make-pathname :directory (list :absolute "tmp"
+                                  (format nil "clawmacs-package-tests-~A-~36R-~36R-~A"
+                                          label
+                                          (get-universal-time)
+                                          (get-internal-real-time)
+                                          (gensym)))))
+
 (defmacro with-approval-policy-path-override ((path) &body body)
   `(let ((clawmacs::*approval-policy-path* ,path)
-         (clawmacs::*approval-policy-registry* nil))
+         (clawmacs::*approval-policy-registry* nil)
+         (clawmacs::*approval-policy-project-registry-cache*
+           (make-hash-table :test #'equal)))
      ,@body))
+
+(defun default-package-test-channels ()
+  (list (clawmacs:make-package-channel
+         :name "default"
+         :root clawmacs:*default-package-channel-directory*
+         :description "Bundled Clawmacs packages"
+         :source :builtin)))
 
 (defmacro with-agent-definition-registry-override (() &body body)
   `(let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal)))
@@ -119,6 +136,14 @@
                     ,@implementation))
             ,@body)
        (setf (symbol-function ',name) original-function))))
+
+(defun write-test-file (path contents)
+  (ensure-directories-exist path)
+  (with-open-file (stream path
+                          :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create)
+    (write-string contents stream)))
 
 (defmacro with-tool-table-restored (&body body)
   `(let* ((snapshot (make-hash-table :test (hash-table-test clawmacs::*tool-table*)))
@@ -348,6 +373,108 @@
           (is (string= "write"
                        (cdr (assoc :tool-name
                                    (buffer-approval-pending buf))))))))))
+
+(test approval-policy-round-trips-sandbox-and-working-directory-settings
+  "Guard policy JSON persists sandbox and working-directory defaults and overrides."
+  (let ((path (temp-approval-policy-path)))
+    (with-approval-policy-path-override (path)
+      (clawmacs::set-approval-policy-default-sandbox-permission :workspace-write)
+      (clawmacs::set-approval-policy-default-working-directory-permission
+       :workspace)
+      (clawmacs::set-approval-policy-sandbox-permission "write" :full-access)
+      (clawmacs::set-approval-policy-working-directory-permission
+       "write" :project-root)
+      (clawmacs::save-approval-policy)
+      (setf clawmacs::*approval-policy-registry* nil)
+      (clawmacs::load-approval-policy)
+      (is (eq :workspace-write
+              (clawmacs:approval-policy-default-sandbox-permission)))
+      (is (eq :workspace
+              (clawmacs:approval-policy-default-working-directory-permission)))
+      (is (eq :full-access
+              (clawmacs:approval-policy-sandbox-permission "write")))
+      (is (eq :project-root
+              (clawmacs:approval-policy-working-directory-permission "write"))))))
+
+(test approval-policy-project-settings-override-user-settings
+  "Project-local guard settings override user policy for effective sandbox/workdir resolution."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs::register-tool "guard-test-tool"
+                             "Guard test tool"
+                             '((:type . "object"))
+                             :agent-allowed
+                             (lambda (_args)
+                               (declare (ignore _args))
+                               "ok"))
+    (let* ((path (temp-approval-policy-path))
+           (project-root
+             (make-pathname
+              :directory (list :absolute "tmp"
+                               (format nil "clawmacs-guard-project-~A"
+                                       (gensym)))))
+           (buffer (make-buffer "guard-project"
+                                :working-directory project-root)))
+      (with-approval-policy-path-override (path)
+        (clawmacs::set-approval-policy-default-sandbox-permission :read-only)
+        (clawmacs::set-approval-policy-default-working-directory-permission
+         :workspace)
+        (clawmacs::set-approval-policy-default-sandbox-permission
+         :workspace-write
+         :directory project-root)
+        (clawmacs::set-approval-policy-default-working-directory-permission
+         :project-root
+         :directory project-root)
+        (clawmacs::set-approval-policy-sandbox-permission
+         "guard-test-tool" :full-access :directory project-root)
+        (clawmacs::set-approval-policy-working-directory-permission
+         "guard-test-tool" :any :directory project-root)
+        (is (eq :full-access
+                (clawmacs::effective-tool-sandbox-permission
+                 "guard-test-tool" :buffer buffer)))
+        (is (eq :any
+                (clawmacs::effective-tool-working-directory-permission
+                 "guard-test-tool" :buffer buffer)))
+        (is (eq :workspace-write
+                (clawmacs::effective-tool-sandbox-permission
+                 "lisp_eval" :buffer buffer)))
+        (is (eq :project-root
+                (clawmacs::effective-tool-working-directory-permission
+                 "lisp_eval" :buffer buffer)))))))
+
+(test approval-policy-history-is-recorded-and-review-hook-runs
+  "Guard history entries persist and notify approval review hooks."
+  (let ((path (temp-approval-policy-path))
+        (hook-calls nil))
+    (with-approval-policy-path-override (path)
+      (let* ((buffer (make-buffer "guard-history"
+                                  :working-directory
+                                  (uiop:pathname-directory-pathname path)))
+             (*approval-review-hook*
+               (list (lambda (buf tool-name decision policy entry)
+                       (push (list :buffer (and buf (buffer-name buf))
+                                   :tool tool-name
+                                   :decision decision
+                                   :policy policy
+                                   :entry entry)
+                             hook-calls)))))
+        (clawmacs::approval-policy-record-history-entry
+         buffer "write" :approve
+         :policy :agent-with-permission
+         :entry "write allowed")
+        (let ((history (clawmacs:approval-policy-history-entries
+                        :buffer buffer)))
+          (is (plusp (length history)))
+          (is (string= "write"
+                       (cdr (assoc :tool-name (first history)))))
+          (is (string= "approve"
+                       (cdr (assoc :decision (first history)))))
+          (is (string= "write allowed"
+                       (cdr (assoc :entry (first history))))))
+        (is (= 1 (length hook-calls)))
+        (is (equal "guard-history"
+                   (getf (first hook-calls) :buffer)))
+        (is (equal "write" (getf (first hook-calls) :tool)))))))
 
 (test init-tools-hides-lispi-tools-until-package-enabled
   "init-tools exposes built-in lisp_eval without lispi package tools."

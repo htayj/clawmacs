@@ -459,6 +459,7 @@
    #:project-description
    #:project-source
    #:project-systems
+   #:project-packages
    #:project-check-functions
    #:project-reload-function
    #:change-set
@@ -529,6 +530,7 @@
    #:project-find-references-to-string
    #:project-package-map-to-string
    #:project-describe-definition-to-string
+   #:load-project-declared-packages
 
    ;; Skills
    #:skill
@@ -617,6 +619,7 @@
    #:parse-slash-command-line
    #:parse-prompt-template-markdown
    #:discover-prompt-templates-in-directory
+   #:discover-prompt-templates
    #:expand-prompt-template-body
    #:process-slash-command
 
@@ -737,12 +740,33 @@
    #:*temporary-tool-table*
    #:*current-tool-buffer*
    #:approval-policy-default-permission
+   #:approval-policy-default-sandbox-permission
+   #:approval-policy-default-working-directory-permission
+   #:approval-policy-default-network-permission
    #:approval-policy-tool-permission
+   #:approval-policy-sandbox-permission
+   #:approval-policy-working-directory-permission
+   #:approval-policy-network-permission
+   #:approval-policy-network-default
+   #:approval-policy-network-tools
+   #:approval-policy-history-entries
+   #:approval-policy-history-to-string
    #:set-approval-policy-default-permission
+   #:set-approval-policy-default-sandbox-permission
+   #:set-approval-policy-default-working-directory-permission
+   #:set-approval-policy-default-network-permission
    #:set-approval-policy-tool-permission
+   #:set-approval-policy-sandbox-permission
+   #:set-approval-policy-working-directory-permission
+   #:set-approval-policy-network-default
+   #:set-approval-policy-network-permission
    #:load-approval-policy
    #:save-approval-policy
    #:effective-tool-permission
+   #:effective-tool-sandbox-permission
+   #:effective-tool-working-directory-permission
+   #:effective-tool-network-toggle
+   #:approval-policy-tool-network-allowed-p
    #:lisp-eval-record
    #:lisp-eval-record-code
    #:lisp-eval-record-package
@@ -920,6 +944,8 @@
    #:list-skills-command
    #:minibuffer-toggle-package-command
    #:describe-installed-package-command
+   #:describe-guard-policy-command
+   #:describe-guard-history-command
 
    ;; Model selector (overlay)
    #:*model-selector-active*
@@ -1168,6 +1194,22 @@
    #:find-available-package
    #:list-installed-packages
    #:find-installed-package
+   #:package-install-record-for-definition
+   #:package-install-record-source-type
+   #:package-install-record-resource-types
+   #:package-install-record-scope
+   #:package-install-record-project
+   #:package-install-record-source
+   #:package-install-record-ref
+   #:package-install-status-entry
+   #:package-status-to-string
+   #:package-doctor-report
+   #:package-doctor-to-string
+   #:install-package-status-string
+   #:package-resource-policy-string
+   #:remove-installed-package
+   #:update-installed-package
+   #:set-installed-package-resource-types
    #:package-enablement-scope
    #:set-package-enablement-scope
    #:cycle-package-enablement-scope
@@ -1215,6 +1257,7 @@
    #:*after-buffer-display-change-hook*
    #:*after-provider-response-hook*
    #:*package-enablement-changed-hook*
+   #:*approval-review-hook*
    #:*after-session-save-hook*
    #:*after-session-load-hook*
    #:add-hook

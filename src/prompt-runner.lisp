@@ -103,6 +103,11 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
     (cond
       ;; Approved: execute the tool
       ((eq response :approve)
+       (approval-policy-record-history-entry
+        buf tool-name :approved
+        :policy :interactive
+        :reason "User approved interactive tool request"
+        :entry tool-input)
        (let* ((*current-caller* agent-kw)
               (*current-tool-buffer* buf)
               (result-text
@@ -117,6 +122,11 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
       ;; Denied with message
       ((and (consp response) (eq (car response) :deny-with-message))
        (let ((reason (cdr response)))
+         (approval-policy-record-history-entry
+          buf tool-name :denied
+          :policy :interactive
+          :reason (or reason "User denied this tool call")
+          :entry tool-input)
          (push `((:result . ,(tool-denied-result-data
                               (or reason "User denied this tool call")))
                  (:display . ,(format nil "[~A DENIED: ~A]" tool-name (or reason "denied")))
@@ -124,6 +134,11 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
                (buffer-tool-call-results buf))))
       ;; Denied (no message)
       (t
+       (approval-policy-record-history-entry
+        buf tool-name :denied
+        :policy :interactive
+        :reason "User denied"
+        :entry tool-input)
        (push `((:result . ,(tool-denied-result-data "User denied"))
                (:display . ,(format nil "[~A DENIED]" tool-name))
                (:tool-id . ,tool-id))
@@ -619,8 +634,14 @@ PROMPT-TOOL-EVENT for terminal/debug output."
                         (not auto-approve-tools-p)))
          (result-text
            (if denied-p
-               (denied-tool-result-data
-                "Tool requires interactive approval; prompt mode denied it.")
+               (progn
+                 (approval-policy-record-history-entry
+                  buf tool-name :denied
+                  :policy :prompt-mode
+                  :reason "Prompt mode denied interactive approval"
+                  :entry tool-input)
+                 (denied-tool-result-data
+                  "Tool requires interactive approval; prompt mode denied it."))
                (let ((*current-caller* agent-kw)
                      (*current-tool-buffer* buf))
                  (handler-case

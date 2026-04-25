@@ -78,6 +78,10 @@
   :description "Package loader tests"
   :in clawmacs-suite)
 
+(def-suite guard-suite
+  :description "Approval policy and sandbox preset tests"
+  :in clawmacs-suite)
+
 (def-suite reference-suite
   :description "Common Lisp spec and local library discovery tests"
   :in clawmacs-suite)

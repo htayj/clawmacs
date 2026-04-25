@@ -81,5 +81,6 @@
                               (:file "sexed-test")
                               (:file "slop-test")
                               (:file "llm-test")
+                              (:file "guard-test")
                               (:file "keymap-test")
                               (:file "render-test")))))

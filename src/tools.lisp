@@ -219,6 +219,9 @@ When ALLOW-INHERIT-P is true, NIL and \"inherit\" map to NIL."
 (defun register-agent-tool-metadata (symbol tool-spec
                                      &key command-p lambda-list docstring)
   "Register SYMBOL as an agent tool from explicit TOOL-SPEC metadata."
+  (when (and *current-clawmacs-package*
+             (not (package-resource-type-allowed-p :tool)))
+    (return-from register-agent-tool-metadata nil))
   (if (null tool-spec)
       (unregister-agent-tool-metadata symbol)
       (let* ((metadata (normalize-agent-tool-spec
@@ -286,14 +289,16 @@ buffer is supplied automatically during execution."
   (let ((metadata-var (gensym "COMMAND-METADATA")))
     `(let ((,metadata-var (gethash ',symbol *command-table*)))
        (ensure-agent-tool-function-defined ',symbol)
-       (register-agent-tool-metadata
-        ',symbol ',tool-spec
-        :command-p (not (null ,metadata-var))
-        :lambda-list (and ,metadata-var
-                          (command-metadata-lambda-list ,metadata-var))
-        :docstring (or (and ,metadata-var
-                            (command-metadata-docstring ,metadata-var))
-                       (documentation ',symbol 'function))))))
+       (when (or (null *current-clawmacs-package*)
+                 (package-resource-type-allowed-p :tool))
+         (register-agent-tool-metadata
+          ',symbol ',tool-spec
+          :command-p (not (null ,metadata-var))
+          :lambda-list (and ,metadata-var
+                            (command-metadata-lambda-list ,metadata-var))
+          :docstring (or (and ,metadata-var
+                              (command-metadata-docstring ,metadata-var))
+                         (documentation ',symbol 'function)))))))
 
 (defstruct tool-definition
   "Definition of a tool that can be called by an agent."
@@ -339,6 +344,13 @@ Temporary tools override same-named global tools for the dynamic extent.")
 (defvar *approval-policy-registry* nil
   "Memoized user approval policy registry.")
 
+(defvar *approval-policy-project-registry-cache* (make-hash-table :test #'equal)
+  "Memoized project-local approval policy registries keyed by pathname.")
+
+(defvar *approval-policy-network-dependent-tools*
+  '("http_fetch" "netcons_run" "netcons_search" "netcons_open" "netcons_find")
+  "Names treated as network-dependent for guard policy checks.")
+
 (defvar *http-fetch-max-chars* 50000
   "Default maximum characters returned by http_fetch.")
 
@@ -363,36 +375,199 @@ user-added tools stored in *tool-table* are left intact.")
 (defun make-approval-policy-registry ()
   "Create an empty in-memory approval policy registry."
   (list :default nil
-        :tools (make-hash-table :test #'equal)))
+        :tools (make-hash-table :test #'equal)
+        :sandbox-default nil
+        :sandbox-tools (make-hash-table :test #'equal)
+        :network-default nil
+        :network-tools (make-hash-table :test #'equal)
+        :working-directory-default nil
+        :working-directory-tools (make-hash-table :test #'equal)
+        :history nil))
 
 (defun approval-policy-tools (registry)
   "Return the per-tool permission table stored in REGISTRY."
   (getf registry :tools))
 
-(defun approval-policy-default-permission ()
-  "Return the current default approval override permission, or NIL."
-  (ensure-approval-policy-loaded)
-  (getf *approval-policy-registry* :default))
+(defun approval-policy-sandbox-tools (registry)
+  "Return the per-tool sandbox preset table stored in REGISTRY."
+  (getf registry :sandbox-tools))
 
-(defun approval-policy-tool-permission (name)
-  "Return the approval override permission for tool NAME, or NIL."
-  (ensure-approval-policy-loaded)
-  (gethash (normalize-tool-name name)
-           (approval-policy-tools *approval-policy-registry*)))
+(defun approval-policy-network-tools (registry)
+  "Return the per-tool network toggle table stored in REGISTRY."
+  (getf registry :network-tools))
 
-(defun set-approval-policy-default-permission (permission)
-  "Set the default approval override PERMISSION in memory."
-  (ensure-approval-policy-loaded)
-  (setf (getf *approval-policy-registry* :default)
-        (normalize-tool-permission permission
-                                   :allow-inherit-p t
-                                   :context "Guard policy default"))
-  (approval-policy-default-permission))
+(defun approval-policy-working-directory-tools (registry)
+  "Return the per-tool working-directory table stored in REGISTRY."
+  (getf registry :working-directory-tools))
 
-(defun set-approval-policy-tool-permission (name permission)
-  "Set or clear the approval override PERMISSION for tool NAME in memory."
-  (ensure-approval-policy-loaded)
-  (let* ((tools (approval-policy-tools *approval-policy-registry*))
+(defun approval-policy-history (registry)
+  "Return the audit history stored in REGISTRY."
+  (getf registry :history))
+
+(defun setf-approval-policy-history (registry history)
+  "Store HISTORY in REGISTRY and return it."
+  (setf (getf registry :history) history))
+
+(defun approval-policy-sandbox-default (registry)
+  "Return the default sandbox preset in REGISTRY."
+  (getf registry :sandbox-default))
+
+(defun approval-policy-network-default (registry)
+  "Return the default network toggle in REGISTRY."
+  (getf registry :network-default))
+
+(defun approval-policy-working-directory-default (registry)
+  "Return the default working-directory policy in REGISTRY."
+  (getf registry :working-directory-default))
+
+(defun approval-policy-registry-for-path (path)
+  "Return the approval policy registry associated with PATH."
+  (if (string= (approval-policy-cache-key path)
+               (approval-policy-cache-key *approval-policy-path*))
+      (ensure-approval-policy-loaded)
+      (approval-policy-load-from-path-or-cache path)))
+
+(defun approval-policy-path-for-registry (&key buffer directory)
+  "Return the approval policy pathname for BUFFER or DIRECTORY."
+  (cond
+    (directory (approval-policy-path-for-directory directory))
+    (buffer (approval-policy-path-for-buffer buffer))
+    (t *approval-policy-path*)))
+
+(defun approval-policy-registry-for-context (&key buffer directory)
+  "Return the registry for BUFFER or DIRECTORY, defaulting to the user policy."
+  (let ((path (approval-policy-path-for-registry :buffer buffer
+                                                 :directory directory)))
+    (approval-policy-registry-for-path path)))
+
+(defun approval-policy-user-registry-fallback (path)
+  "Return the user registry when PATH is not the user policy path."
+  (unless (string= (approval-policy-cache-key path)
+                   (approval-policy-cache-key *approval-policy-path*))
+    (ensure-approval-policy-loaded)))
+
+(defun approval-policy-default-permission (&key buffer directory)
+  "Return the default approval override permission for the selected policy."
+  (let ((registry (approval-policy-registry-for-context :buffer buffer
+                                                        :directory directory)))
+    (getf registry :default)))
+
+(defun approval-policy-tool-permission (name &key buffer directory)
+  "Return the approval override permission for tool NAME in the selected policy."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path))
+         (user-registry (approval-policy-user-registry-fallback path))
+         (normalized-name (normalize-tool-name name)))
+    (or (gethash normalized-name (approval-policy-tools registry))
+        (and user-registry
+             (gethash normalized-name
+                      (approval-policy-tools user-registry))))))
+
+(defun approval-policy-sandbox-permission (name &key buffer directory)
+  "Return the sandbox preset override for tool NAME in the selected policy."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path))
+         (user-registry (approval-policy-user-registry-fallback path))
+         (normalized-name (normalize-tool-name name)))
+    (or (gethash normalized-name (approval-policy-sandbox-tools registry))
+        (and user-registry
+             (gethash normalized-name
+                      (approval-policy-sandbox-tools user-registry))))))
+
+(defun approval-policy-working-directory-permission (name &key buffer directory)
+  "Return the working-directory override for tool NAME in the selected policy."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path))
+         (user-registry (approval-policy-user-registry-fallback path))
+         (normalized-name (normalize-tool-name name)))
+    (or (gethash normalized-name
+                 (approval-policy-working-directory-tools registry))
+        (and user-registry
+             (gethash normalized-name
+                      (approval-policy-working-directory-tools
+                       user-registry))))))
+
+(defun approval-policy-default-sandbox-permission (&key buffer directory)
+  "Return the default sandbox preset for the selected policy."
+  (approval-policy-sandbox-default
+   (approval-policy-registry-for-context :buffer buffer
+                                         :directory directory)))
+
+(defun approval-policy-default-working-directory-permission
+    (&key buffer directory)
+  "Return the default working-directory preset for the selected policy."
+  (approval-policy-working-directory-default
+   (approval-policy-registry-for-context :buffer buffer
+                                         :directory directory)))
+
+(defun approval-policy-default-network-permission (&key buffer directory)
+  "Return the default network toggle for the selected policy."
+  (approval-policy-network-default
+   (approval-policy-registry-for-context :buffer buffer
+                                         :directory directory)))
+
+(defun approval-policy-json-key-string (key)
+  "Return KEY as a normalized approval policy JSON key string."
+  (with-output-to-string (stream)
+    (let ((text (json-key-string key))
+          (index 0)
+          (length 0))
+      (setf length (length text))
+      (loop
+        (when (>= index length)
+          (return))
+        (let ((char (char text index)))
+          (if (and (char= char #\_)
+                   (< (1+ index) length)
+                   (char= (char text (1+ index)) #\_))
+              (progn
+                (write-char #\_ stream)
+                (incf index 2))
+              (progn
+                (write-char char stream)
+                (incf index 1))))))))
+
+(defun approval-policy-history-entries (&key buffer directory)
+  "Return a copy of the recorded approval audit entries for the selected policy."
+  (copy-tree
+   (approval-policy-history
+    (approval-policy-registry-for-context :buffer buffer
+                                          :directory directory))))
+
+(defun approval-policy-network-permission (name &key buffer directory)
+  "Return the network toggle override for tool NAME in the selected policy."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path))
+         (user-registry (approval-policy-user-registry-fallback path))
+         (normalized-name (normalize-tool-name name)))
+    (or (gethash normalized-name (approval-policy-network-tools registry))
+        (and user-registry
+             (gethash normalized-name
+                      (approval-policy-network-tools user-registry))))))
+
+(defun set-approval-policy-default-permission (permission &key buffer directory)
+  "Set the default approval override PERMISSION in the selected policy."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path)))
+    (setf (getf registry :default)
+          (normalize-tool-permission permission
+                                     :allow-inherit-p t
+                                     :context "Guard policy default"))
+    (save-approval-policy :buffer buffer :directory directory)
+    (approval-policy-default-permission :buffer buffer :directory directory)))
+
+(defun set-approval-policy-tool-permission (name permission
+                                           &key buffer directory)
+  "Set or clear the approval override PERMISSION for tool NAME."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path))
+         (tools (approval-policy-tools registry))
          (normalized-name (normalize-tool-name name))
          (normalized-permission
            (normalize-tool-permission permission
@@ -403,24 +578,292 @@ user-added tools stored in *tool-table* are left intact.")
     (if normalized-permission
         (setf (gethash normalized-name tools) normalized-permission)
         (remhash normalized-name tools))
+    (save-approval-policy :buffer buffer :directory directory)
     normalized-permission))
 
-(defun load-approval-policy ()
-  "Load and memoize the persisted user approval policy."
+(defun set-approval-policy-sandbox-permission (name permission
+                                              &key buffer directory)
+  "Set or clear the sandbox preset PERMISSION for tool NAME."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path))
+         (tools (approval-policy-sandbox-tools registry))
+         (normalized-name (normalize-tool-name name))
+         (normalized-permission
+           (normalize-approval-preset permission
+                                      :allow-inherit-p t
+                                      :context
+                                      (format nil "Guard sandbox override for ~A"
+                                              normalized-name))))
+    (if normalized-permission
+        (setf (gethash normalized-name tools) normalized-permission)
+        (remhash normalized-name tools))
+    (save-approval-policy :buffer buffer :directory directory)
+    normalized-permission))
+
+(defun set-approval-policy-network-default (permission &key buffer directory)
+  "Set the default network toggle PERMISSION in the selected policy."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path)))
+    (setf (getf registry :network-default)
+          (normalize-network-toggle permission
+                                    :allow-inherit-p t
+                                    :context "Guard network default"))
+    (save-approval-policy :buffer buffer :directory directory)
+    (approval-policy-default-network-permission
+     :buffer buffer
+     :directory directory)))
+
+(defun set-approval-policy-network-permission (name permission
+                                               &key buffer directory)
+  "Set or clear the network toggle PERMISSION for tool NAME."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path))
+         (tools (approval-policy-network-tools registry))
+         (normalized-name (normalize-tool-name name))
+         (normalized-permission
+           (normalize-network-toggle permission
+                                     :allow-inherit-p t
+                                     :context
+                                     (format nil "Guard network override for ~A"
+                                             normalized-name))))
+    (if normalized-permission
+        (setf (gethash normalized-name tools) normalized-permission)
+        (remhash normalized-name tools))
+    (save-approval-policy :buffer buffer :directory directory)
+    normalized-permission))
+
+(defun set-approval-policy-working-directory-permission (name permission
+                                                         &key buffer directory)
+  "Set or clear the working-directory preset PERMISSION for tool NAME."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path))
+         (tools (approval-policy-working-directory-tools registry))
+         (normalized-name (normalize-tool-name name))
+         (normalized-permission
+           (normalize-approval-preset permission
+                                      :allow-inherit-p t
+                                      :context
+                                      (format nil "Guard working-directory override for ~A"
+                                              normalized-name))))
+    (if normalized-permission
+        (setf (gethash normalized-name tools) normalized-permission)
+        (remhash normalized-name tools))
+    (save-approval-policy :buffer buffer :directory directory)
+    normalized-permission))
+
+(defun set-approval-policy-default-sandbox-permission (permission
+                                                       &key buffer directory)
+  "Set the default sandbox preset PERMISSION in the selected policy."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path)))
+    (setf (getf registry :sandbox-default)
+          (normalize-approval-preset permission
+                                     :allow-inherit-p t
+                                     :context "Guard sandbox default"))
+    (save-approval-policy :buffer buffer :directory directory)
+    (approval-policy-default-sandbox-permission
+     :buffer buffer
+     :directory directory)))
+
+(defun set-approval-policy-default-working-directory-permission
+    (permission &key buffer directory)
+  "Set the default working-directory preset PERMISSION in the selected policy."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path)))
+    (setf (getf registry :working-directory-default)
+          (normalize-approval-preset permission
+                                     :allow-inherit-p t
+                                     :context "Guard working-directory default"))
+    (save-approval-policy :buffer buffer :directory directory)
+    (approval-policy-default-working-directory-permission
+     :buffer buffer
+     :directory directory)))
+
+(defun set-approval-policy-default-network-permission (permission
+                                                       &key buffer directory)
+  "Set the default network toggle PERMISSION in the selected policy."
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path)))
+    (setf (getf registry :network-default)
+          (normalize-network-toggle permission
+                                    :allow-inherit-p t
+                                    :context "Guard network default"))
+    (save-approval-policy :buffer buffer :directory directory)
+    (approval-policy-default-network-permission
+     :buffer buffer
+     :directory directory)))
+
+(defun normalize-approval-preset (value &key (allow-inherit-p t) (context "Approval preset"))
+  "Normalize VALUE into a sandbox or working-directory preset keyword."
+  (let ((normalized
+          (cond
+            ((null value) (and allow-inherit-p nil))
+            ((keywordp value) value)
+            ((symbolp value)
+             (intern (string-upcase (symbol-name value)) :keyword))
+            ((stringp value)
+             (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) value)))
+               (when (zerop (length trimmed))
+                 (error "~A must not be blank." context))
+               (intern (string-upcase (substitute #\- #\_ trimmed)) :keyword)))
+            (t
+             (error "~A must be a keyword, symbol, string, or NIL: ~S"
+                    context value)))))
+    (when (and allow-inherit-p (or (null normalized) (eq normalized :inherit)))
+      (return-from normalize-approval-preset nil))
+    (unless (member normalized '(:read-only :workspace-write :full-access
+                                  :project-root :workspace :any)
+                    :test #'eq)
+      (error "~A has unsupported value ~S." context value))
+    normalized))
+
+(defun approval-policy-path-for-directory (directory)
+  "Return the project-local approval policy path for DIRECTORY."
+  (merge-pathnames #P".clawmacs.d/guard.json"
+                   (uiop:ensure-directory-pathname directory)))
+
+(defun approval-policy-path-for-buffer (&optional buffer)
+  "Return the approval policy path relevant to BUFFER or the user default."
+  (if buffer
+      (approval-policy-path-for-directory (buffer-working-directory buffer))
+      *approval-policy-path*))
+
+(defun approval-policy-cache-key (path)
+  "Return a stable cache key for PATH."
+  (namestring (uiop:ensure-directory-pathname path)))
+
+(defun approval-policy-json-sequence->list (value)
+  "Normalize JSON array VALUE into a Common Lisp list."
+  (cond
+    ((null value) nil)
+    ((listp value) value)
+    ((vectorp value) (coerce value 'list))
+    (t (list value))))
+
+(defun approval-policy-json-raw-string (key)
+  "Return KEY as a decoded JSON key string suitable for normalization."
+  (typecase key
+    (string key)
+    (symbol (json-key-string key))
+    (t (princ-to-string key))))
+
+(defun approval-policy-json-key-token (key)
+  "Return KEY as a lower-case token with separators stripped."
+  (let ((raw (approval-policy-json-raw-string key)))
+    (with-output-to-string (stream)
+      (loop :for char :across raw
+            :when (alphanumericp char)
+              :do (write-char (char-downcase char) stream)))))
+
+(defun approval-policy-json-key-name (key)
+  "Return KEY as a normalized guard JSON key string."
+  (let ((raw (approval-policy-json-raw-string key)))
+    (with-output-to-string (stream)
+      (loop :with pending-separator-p := nil
+            :with wrote-any-p := nil
+            :for char :across raw
+            :do (cond
+                  ((char= char #\_)
+                   (when wrote-any-p
+                     (write-char #\_ stream)
+                     (setf wrote-any-p t))
+                   (setf pending-separator-p nil))
+                  ((or (char= char #\-) (char= char #\Space))
+                   (setf pending-separator-p t))
+                  (t
+                   (when (and pending-separator-p wrote-any-p)
+                     (write-char #\- stream))
+                   (setf pending-separator-p nil)
+                   (write-char (char-downcase char) stream)
+                   (setf wrote-any-p t)))))))
+
+(defun approval-policy-lookup-json-value (alist key)
+  "Find KEY in decoded guard JSON ALIST, accepting string or symbol keys."
+  (let ((token (approval-policy-json-key-token key)))
+    (loop :for (entry-key . value) :in alist
+          :when (string= token (approval-policy-json-key-token entry-key))
+            :do (return value))))
+
+(defun approval-policy-tool-name-from-json-key (key)
+  "Return a canonical tool name for a decoded guard JSON KEY."
+  (let ((token (approval-policy-json-key-token key)))
+    (or (loop :for name :being :the :hash-keys :of *tool-table*
+              :for normalized := (normalize-tool-name name)
+              :when (string= token (approval-policy-json-key-token normalized))
+                :do (return normalized))
+        (normalize-tool-name
+         (approval-policy-json-key-name key)))))
+
+(defun approval-policy-json-entry->alist (entry)
+  "Normalize one decoded guard audit ENTRY into a keyword alist."
+  (flet ((canonical-entry-key (entry-key)
+           (let ((token (approval-policy-json-key-token entry-key)))
+             (cond
+               ((string= token "timestamp") :timestamp)
+               ((string= token "buffer") :buffer)
+               ((string= token "workingdirectory") :working-directory)
+               ((string= token "toolname") :tool-name)
+               ((string= token "decision") :decision)
+               ((string= token "policy") :policy)
+               ((string= token "reason") :reason)
+               ((string= token "entry") :entry)
+               (t
+                (intern (string-upcase (approval-policy-json-key-name entry-key))
+                        :keyword))))))
+    (loop :for (entry-key . value) :in (approval-policy-json-sequence->list entry)
+          :collect (cons (canonical-entry-key entry-key) value))))
+
+(defun approval-policy-load-from-path (path)
+  "Load an approval policy registry from PATH."
   (let ((registry (make-approval-policy-registry)))
-    (when (probe-file *approval-policy-path*)
+    (when (probe-file path)
       (handler-case
-          (let* ((json (uiop:read-file-string *approval-policy-path*))
-                 (data (cl-json:decode-json-from-string json))
-                 (default (lookup-json-value data "default"))
-                 (tool-overrides (lookup-json-value data "tools"))
-                 (tools (approval-policy-tools registry)))
+          (let* ((json (uiop:read-file-string path))
+                 (data (api-json-decode json))
+                 (default (approval-policy-lookup-json-value data "default"))
+                 (tool-overrides (approval-policy-lookup-json-value data "tools"))
+                 (sandbox-default
+                   (approval-policy-lookup-json-value data "sandbox-default"))
+                 (sandbox-overrides
+                   (approval-policy-lookup-json-value data "sandbox-tools"))
+                 (network-default
+                   (approval-policy-lookup-json-value data "network-default"))
+                 (network-overrides
+                   (approval-policy-lookup-json-value data "network-tools"))
+                 (working-default
+                   (approval-policy-lookup-json-value data "working-directory-default"))
+                 (working-overrides
+                   (approval-policy-lookup-json-value data "working-directory-tools"))
+                 (history (approval-policy-lookup-json-value data "history"))
+                 (tools (approval-policy-tools registry))
+                 (sandbox-tools (approval-policy-sandbox-tools registry))
+                 (network-tools (approval-policy-network-tools registry))
+                 (working-tools (approval-policy-working-directory-tools registry)))
             (setf (getf registry :default)
                   (normalize-tool-permission default
                                              :allow-inherit-p t
                                              :context "Guard policy default"))
-            (dolist (entry tool-overrides)
-              (let* ((name (json-key-string (car entry)))
+            (setf (getf registry :sandbox-default)
+                  (normalize-approval-preset sandbox-default
+                                             :allow-inherit-p t
+                                             :context "Guard sandbox default"))
+            (setf (getf registry :network-default)
+                  (normalize-network-toggle network-default
+                                            :allow-inherit-p t
+                                            :context "Guard network default"))
+            (setf (getf registry :working-directory-default)
+                  (normalize-approval-preset working-default
+                                             :allow-inherit-p t
+                                             :context "Guard working-directory default"))
+            (dolist (entry (approval-policy-json-sequence->list tool-overrides))
+              (let* ((name (approval-policy-tool-name-from-json-key (car entry)))
                      (permission (normalize-tool-permission
                                   (cdr entry)
                                   :allow-inherit-p t
@@ -429,12 +872,145 @@ user-added tools stored in *tool-table* are left intact.")
                                           name))))
                 (when permission
                   (setf (gethash (normalize-tool-name name) tools)
-                        permission)))))
+                        permission))))
+            (dolist (entry (approval-policy-json-sequence->list sandbox-overrides))
+              (let* ((name (approval-policy-tool-name-from-json-key (car entry)))
+                     (preset (normalize-approval-preset
+                              (cdr entry)
+                              :allow-inherit-p t
+                              :context
+                              (format nil "Guard sandbox override for ~A"
+                                      name))))
+                (when preset
+                  (setf (gethash (normalize-tool-name name) sandbox-tools)
+                        preset))))
+            (dolist (entry (approval-policy-json-sequence->list network-overrides))
+              (let* ((name (approval-policy-tool-name-from-json-key (car entry)))
+                     (toggle (normalize-network-toggle
+                              (cdr entry)
+                              :allow-inherit-p t
+                              :context
+                              (format nil "Guard network override for ~A"
+                                      name))))
+                (when toggle
+                  (setf (gethash (normalize-tool-name name) network-tools)
+                        toggle))))
+            (dolist (entry (approval-policy-json-sequence->list working-overrides))
+              (let* ((name (approval-policy-tool-name-from-json-key (car entry)))
+                     (preset (normalize-approval-preset
+                              (cdr entry)
+                              :allow-inherit-p t
+                              :context
+                              (format nil "Guard working-directory override for ~A"
+                                      name))))
+                (when preset
+                  (setf (gethash (normalize-tool-name name) working-tools)
+                        preset))))
+            (let ((history-list
+                    (mapcar #'approval-policy-json-entry->alist
+                            (approval-policy-json-sequence->list history))))
+              (when history-list
+                (setf (getf registry :history) history-list))))
         (error (condition)
           (warn "Failed to load guard policy from ~A: ~A"
-                *approval-policy-path*
+                path
                 condition))))
-    (setf *approval-policy-registry* registry)))
+    registry))
+
+(defun approval-policy-load-from-path-or-cache (path)
+  "Load and memoize an approval policy registry for PATH."
+  (let* ((key (approval-policy-cache-key path))
+         (cached (gethash key *approval-policy-project-registry-cache*)))
+    (or cached
+        (setf (gethash key *approval-policy-project-registry-cache*)
+              (approval-policy-load-from-path path)))))
+
+(defun approval-policy-registry-for-buffer (&optional buffer)
+  "Return the approval policy registry relevant to BUFFER, if any."
+  (when buffer
+    (approval-policy-load-from-path-or-cache
+     (approval-policy-path-for-buffer buffer))))
+
+(defun approval-policy-record-history-entry
+    (buffer tool-name decision &key policy entry reason directory)
+  "Record one approval decision in the policy history and notify hooks."
+  (let* ((working-directory
+           (or (and buffer
+                    (buffer-working-directory buffer)
+                    (namestring (buffer-working-directory buffer)))
+               (and directory
+                    (namestring
+                     (uiop:ensure-directory-pathname directory)))))
+         (registry (approval-policy-registry-for-context :buffer buffer
+                                                         :directory directory))
+         (audit-entry
+           `((:timestamp . ,(get-universal-time))
+             (:buffer . ,(and buffer (buffer-name buffer)))
+             (:working-directory . ,working-directory)
+             (:tool-name . ,(normalize-tool-name tool-name))
+             (:decision . ,(string-downcase (symbol-name decision)))
+             (:policy . ,(and policy (string-downcase (symbol-name policy))))
+             (:reason . ,reason)
+             (:entry . ,entry)))
+         (history (cons audit-entry (approval-policy-history registry))))
+    (setf (getf registry :history)
+          (subseq history 0 (min (length history) 200)))
+    (save-approval-policy :buffer buffer :directory directory)
+    (maybe-run-hook-with-args '*approval-review-hook*
+                              buffer
+                              (normalize-tool-name tool-name)
+                              decision
+                              policy
+                              audit-entry)
+    audit-entry))
+
+(defun approval-policy->json-payload (registry)
+  "Return REGISTRY as an API-ready JSON alist."
+  `((:version . 3)
+    (:default . ,(tool-permission-json-value
+                  (getf registry :default)))
+    (:tools . ,(let ((entries nil))
+                 (maphash
+                  (lambda (name permission)
+                    (push `(,name . ,(tool-permission-json-value permission))
+                          entries))
+                  (approval-policy-tools registry))
+                 (nreverse entries)))
+    (:sandbox-default . ,(tool-permission-json-value
+                          (approval-policy-sandbox-default registry)))
+    (:sandbox-tools . ,(let ((entries nil))
+                         (maphash
+                          (lambda (name preset)
+                            (push `(,name . ,(tool-permission-json-value preset))
+                                  entries))
+                          (approval-policy-sandbox-tools registry))
+                         (nreverse entries)))
+    (:network-default . ,(tool-permission-json-value
+                           (approval-policy-network-default registry)))
+    (:network-tools . ,(let ((entries nil))
+                         (maphash
+                          (lambda (name toggle)
+                            (push `(,name . ,(tool-permission-json-value toggle))
+                                  entries))
+                          (approval-policy-network-tools registry))
+                         (nreverse entries)))
+    (:working-directory-default . ,(tool-permission-json-value
+                                    (approval-policy-working-directory-default
+                                     registry)))
+    (:working-directory-tools . ,(let ((entries nil))
+                                   (maphash
+                                    (lambda (name preset)
+                                      (push `(,name . ,(tool-permission-json-value preset))
+                                            entries))
+                                    (approval-policy-working-directory-tools registry))
+                                   (nreverse entries)))
+    (:history . ,(coerce (reverse (approval-policy-history registry)) 'vector))))
+
+(defun load-approval-policy ()
+  "Load and memoize the persisted user approval policy."
+  (setf *approval-policy-registry*
+        (approval-policy-load-from-path *approval-policy-path*))
+  *approval-policy-registry*)
 
 (defun ensure-approval-policy-loaded ()
   "Load the approval policy when it has not been memoized yet."
@@ -442,41 +1018,243 @@ user-added tools stored in *tool-table* are left intact.")
     (load-approval-policy))
   *approval-policy-registry*)
 
-(defun save-approval-policy ()
+(defun save-approval-policy (&key buffer directory)
   "Persist the current approval policy registry to disk."
-  (ensure-approval-policy-loaded)
-  (let ((payload
-          `((:version . 1)
-            (:default . ,(tool-permission-json-value
-                          (approval-policy-default-permission)))
-            (:tools
-             . ,(let ((entries nil))
-                  (maphash
-                   (lambda (name permission)
-                     (push `(,name . ,(tool-permission-json-value permission))
-                           entries))
-                   (approval-policy-tools *approval-policy-registry*))
-                  (nreverse entries))))))
-    (ensure-directories-exist *approval-policy-path*)
-    (with-open-file (stream *approval-policy-path*
+  (let* ((path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (registry (approval-policy-registry-for-path path))
+         (payload (approval-policy->json-payload registry)))
+    (ensure-directories-exist path)
+    (with-open-file (stream path
                             :direction :output
                             :if-exists :supersede
                             :if-does-not-exist :create)
       (write-string (api-json-encode payload) stream))
-    *approval-policy-path*))
+    (when (string= (approval-policy-cache-key path)
+                   (approval-policy-cache-key *approval-policy-path*))
+      (setf *approval-policy-registry* registry))
+    path))
 
-(defun effective-tool-permission (definition-or-name)
+(defun effective-tool-permission (definition-or-name &key buffer directory)
   "Return the approval-effective permission for DEFINITION-OR-NAME."
   (let* ((definition (if (tool-definition-p definition-or-name)
                          definition-or-name
                          (effective-tool-definition definition-or-name)))
+         (name (or (and definition (tool-definition-name definition))
+                   (and definition-or-name
+                        (normalize-tool-name definition-or-name))))
          (static-permission (and definition
-                                 (tool-definition-permission definition))))
+                                 (tool-definition-permission definition)))
+         (project-registry
+           (approval-policy-registry-for-context :buffer buffer
+                                                 :directory directory))
+         (user-registry (ensure-approval-policy-loaded))
+         (tool-project-permission
+           (and name project-registry
+                (gethash name (approval-policy-tools project-registry))))
+         (tool-user-permission
+           (and name
+                (gethash name (approval-policy-tools user-registry))))
+         (default-project-permission
+           (and project-registry (getf project-registry :default)))
+         (default-user-permission
+           (getf user-registry :default)))
     (if definition
-        (or (approval-policy-tool-permission (tool-definition-name definition))
-            (approval-policy-default-permission)
+        (or tool-project-permission
+            tool-user-permission
+            default-project-permission
+            default-user-permission
             static-permission)
         nil)))
+
+(defun effective-tool-sandbox-permission (definition-or-name
+                                          &key buffer directory)
+  "Return the effective sandbox preset for DEFINITION-OR-NAME."
+  (effective-tool-sandbox-preset definition-or-name
+                                 :buffer buffer
+                                 :directory directory))
+
+(defun effective-tool-working-directory-permission (definition-or-name
+                                                    &key buffer directory)
+  "Return the effective working-directory preset for DEFINITION-OR-NAME."
+  (effective-tool-working-directory-policy definition-or-name
+                                           :buffer buffer
+                                           :directory directory))
+
+(defun normalize-network-toggle (value &key (allow-inherit-p t) (context "Network toggle"))
+  "Normalize VALUE into a network toggle keyword."
+  (let ((normalized
+          (cond
+            ((null value) (and allow-inherit-p nil))
+            ((keywordp value) value)
+            ((symbolp value)
+             (intern (string-upcase (symbol-name value)) :keyword))
+            ((stringp value)
+             (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) value)))
+               (when (zerop (length trimmed))
+                 (error "~A must not be blank." context))
+               (intern (string-upcase (substitute #\- #\_ trimmed)) :keyword)))
+            ((eq value t) :allow)
+            (t
+             (error "~A must be a keyword, symbol, string, boolean, or NIL: ~S"
+                    context value)))))
+    (when (and allow-inherit-p (or (null normalized) (eq normalized :inherit)))
+      (return-from normalize-network-toggle nil))
+    (unless (member normalized '(:allow :deny) :test #'eq)
+      (error "~A has unsupported value ~S." context value))
+    normalized))
+
+(defun effective-tool-sandbox-preset (definition-or-name &key buffer directory)
+  "Return the effective sandbox preset for DEFINITION-OR-NAME."
+  (let* ((definition (if (tool-definition-p definition-or-name)
+                         definition-or-name
+                         (effective-tool-definition definition-or-name)))
+         (name (or (and definition (tool-definition-name definition))
+                   (and definition-or-name
+                        (normalize-tool-name definition-or-name))))
+         (project-registry
+           (approval-policy-registry-for-context :buffer buffer
+                                                 :directory directory))
+         (user-registry (ensure-approval-policy-loaded)))
+    (or (and name project-registry
+             (gethash name (approval-policy-sandbox-tools project-registry)))
+        (and name
+             (gethash name (approval-policy-sandbox-tools user-registry)))
+        (and project-registry
+             (approval-policy-sandbox-default project-registry))
+        (approval-policy-sandbox-default user-registry)
+        :workspace-write)))
+
+(defun effective-tool-network-toggle (definition-or-name &key buffer directory)
+  "Return the effective network toggle for DEFINITION-OR-NAME."
+  (let* ((definition (if (tool-definition-p definition-or-name)
+                         definition-or-name
+                         (effective-tool-definition definition-or-name)))
+         (name (or (and definition (tool-definition-name definition))
+                   (and definition-or-name
+                        (normalize-tool-name definition-or-name))))
+         (project-registry
+           (approval-policy-registry-for-context :buffer buffer
+                                                 :directory directory))
+         (user-registry (ensure-approval-policy-loaded)))
+    (or (and name project-registry
+             (gethash name (approval-policy-network-tools project-registry)))
+        (and name
+             (gethash name (approval-policy-network-tools user-registry)))
+        (and project-registry (approval-policy-network-default project-registry))
+        (approval-policy-network-default user-registry)
+        :allow)))
+
+(defun effective-tool-working-directory-policy (definition-or-name
+                                              &key buffer directory)
+  "Return the effective working-directory policy for DEFINITION-OR-NAME."
+  (let* ((definition (if (tool-definition-p definition-or-name)
+                         definition-or-name
+                         (effective-tool-definition definition-or-name)))
+         (name (or (and definition (tool-definition-name definition))
+                   (and definition-or-name
+                        (normalize-tool-name definition-or-name))))
+         (project-registry
+           (approval-policy-registry-for-context :buffer buffer
+                                                 :directory directory))
+         (user-registry (ensure-approval-policy-loaded)))
+    (or (and name project-registry
+             (gethash name
+                      (approval-policy-working-directory-tools project-registry)))
+        (and name
+             (gethash name
+                      (approval-policy-working-directory-tools user-registry)))
+        (and project-registry
+             (approval-policy-working-directory-default project-registry))
+        (approval-policy-working-directory-default user-registry)
+        :any)))
+
+(defun buffer-declared-project-root (buffer)
+  "Return BUFFER's declared project root when a project is attached."
+  (when buffer
+    (let ((project-name (buffer-project-name buffer)))
+      (when project-name
+        (let ((project (find-project project-name)))
+          (and project (project-root project)))))))
+
+(defun approval-policy-path-within-root-p (root path)
+  "Return true when PATH is inside ROOT."
+  (and root path
+       (let ((root-path (uiop:ensure-directory-pathname root))
+             (target-path (uiop:ensure-directory-pathname path)))
+         (path-under-directory-p root-path target-path))))
+
+(defun approval-policy-tool-working-directory-allowed-p (definition-or-name
+                                                        &key buffer directory)
+  "Return true when DEFINITION-OR-NAME may run in the selected directory."
+  (let ((policy (effective-tool-working-directory-policy definition-or-name
+                                                        :buffer buffer
+                                                        :directory directory)))
+    (case policy
+      ((nil :any) t)
+      (:workspace
+       (approval-policy-path-within-root-p (truename ".")
+                                           (or directory
+                                               (and buffer
+                                                    (buffer-working-directory buffer)))))
+      (:project-root
+       (let ((allowed-root (or (buffer-declared-project-root buffer)
+                               (and buffer (buffer-working-directory buffer)))))
+         (approval-policy-path-within-root-p
+          allowed-root
+          (or directory
+              (and buffer (buffer-working-directory buffer))))))
+      (:read-only
+       (let ((name (if (tool-definition-p definition-or-name)
+                       (tool-definition-name definition-or-name)
+                       (normalize-tool-name definition-or-name))))
+         (member name '("read" "find" "grep" "git_log" "git_status" "git_show"
+                        "git_diff" "git_branch" "git_remote" "http_fetch")
+                 :test #'string=)))
+      (t t))))
+
+(defun tool-mutates-state-p (name)
+  "Return true when tool NAME is treated as mutating for sandbox checks."
+  (member (normalize-tool-name name)
+          '("write" "edit" "shell_exec" "git_add" "git_commit" "git_push")
+          :test #'string=))
+
+(defun approval-policy-tool-sandbox-allowed-p (definition-or-name
+                                              &key buffer directory)
+  "Return true when DEFINITION-OR-NAME is allowed by the sandbox preset."
+  (let ((preset (effective-tool-sandbox-preset definition-or-name
+                                               :buffer buffer
+                                               :directory directory)))
+    (cond
+      ((or (null preset) (eq preset :full-access)) t)
+      ((eq preset :read-only)
+       (not (tool-mutates-state-p
+             (if (tool-definition-p definition-or-name)
+                 (tool-definition-name definition-or-name)
+                 definition-or-name))))
+      ((eq preset :workspace-write) t)
+      (t t))))
+
+(defun tool-network-dependent-p (name)
+  "Return true when tool NAME needs network access."
+  (member (normalize-tool-name name)
+          *approval-policy-network-dependent-tools*
+          :test #'string=))
+
+(defun approval-policy-tool-network-allowed-p (definition-or-name
+                                               &key buffer directory)
+  "Return true when DEFINITION-OR-NAME is allowed network access."
+  (let ((toggle (effective-tool-network-toggle definition-or-name
+                                               :buffer buffer
+                                               :directory directory)))
+    (cond
+      ((or (null toggle) (eq toggle :allow)) t)
+      ((eq toggle :deny)
+       (let ((name (if (tool-definition-p definition-or-name)
+                       (tool-definition-name definition-or-name)
+                       (normalize-tool-name definition-or-name))))
+         (not (tool-network-dependent-p name))))
+      (t t))))
 
 (defun make-subagent-tool (&key name description input-schema
                              ((:schema schema-arg) nil)
@@ -765,9 +1543,11 @@ Package-owned tools are registered when their package entrypoint is loaded."
                                                (buffer-agent-name buffer))
                                           (caller-agent-name))))))
 
-(defun tool-visible-to-caller-p (definition)
+(defun tool-visible-to-caller-p (definition &key buffer directory)
   "Return true when DEFINITION is visible to *CURRENT-CALLER*."
-  (let ((perm (effective-tool-permission definition)))
+  (let ((perm (effective-tool-permission definition
+                                         :buffer buffer
+                                         :directory directory)))
     (or (eq *current-caller* :user)
         (eq perm :agent-allowed)
         (eq perm :agent-with-permission))))
@@ -779,11 +1559,20 @@ Only includes tools visible to the current *current-caller*."
     (map-effective-tool-definitions
      (lambda (name def)
        (declare (ignore name))
-       (when (and (tool-visible-to-caller-p def)
+       (when (and (tool-visible-to-caller-p def :buffer buffer)
                   (tool-visible-in-package-context-p
                    def
                    :buffer buffer
                    :agent-name agent-name)
+                  (approval-policy-tool-sandbox-allowed-p
+                   def
+                   :buffer buffer)
+                  (approval-policy-tool-network-allowed-p
+                   def
+                   :buffer buffer)
+                  (approval-policy-tool-working-directory-allowed-p
+                   def
+                   :buffer buffer)
                   (tool-allowed-for-active-run-p
                    (tool-definition-name def)))
          (push `((:name . ,(tool-definition-name def))
@@ -821,9 +1610,10 @@ Only includes tools visible to the current *current-caller*."
 
 (defun tool-requires-permission-p (name &key buffer)
   "Return T if tool NAME requires user permission."
-  (declare (ignore buffer))
   (let ((def (effective-tool-definition name)))
-    (and def (eq :agent-with-permission (effective-tool-permission def)))))
+    (and def
+         (eq :agent-with-permission
+             (effective-tool-permission def :buffer buffer)))))
 
 (defun execute-tool (name args)
   "Execute tool NAME with ARGS (an alist of parameter values).
@@ -839,17 +1629,144 @@ Returns a string result or signals an error."
              :buffer *current-tool-buffer*
              :agent-name (caller-agent-name))
       (error "Tool ~A belongs to an inactive package" normalized-name))
-    (let ((perm (effective-tool-permission def)))
+    (unless (approval-policy-tool-sandbox-allowed-p
+             def
+             :buffer *current-tool-buffer*)
+      (approval-policy-record-history-entry
+       *current-tool-buffer* normalized-name :denied
+       :policy (effective-tool-sandbox-preset def
+                                              :buffer *current-tool-buffer*)
+       :reason "Denied by sandbox preset"
+       :entry args)
+      (error "Tool ~A is not allowed by the sandbox preset" normalized-name))
+    (unless (approval-policy-tool-network-allowed-p
+             def
+             :buffer *current-tool-buffer*)
+      (approval-policy-record-history-entry
+       *current-tool-buffer* normalized-name :denied
+       :policy (effective-tool-network-toggle def
+                                             :buffer *current-tool-buffer*)
+       :reason "Denied by network policy"
+       :entry args)
+      (error "Tool ~A is not allowed by the network policy" normalized-name))
+    (unless (approval-policy-tool-working-directory-allowed-p
+             def
+             :buffer *current-tool-buffer*)
+      (approval-policy-record-history-entry
+       *current-tool-buffer* normalized-name :denied
+       :policy (effective-tool-working-directory-policy
+                def :buffer *current-tool-buffer*)
+       :reason "Denied by working-directory policy"
+       :entry args)
+      (error "Tool ~A is not allowed in the current working directory"
+             normalized-name))
+    (let ((perm (effective-tool-permission def :buffer *current-tool-buffer*)))
       (ecase perm
         (:agent-allowed t)
         (:agent-with-permission t)  ; caller is responsible for approval check
         (:user-only
          (unless (eq *current-caller* :user)
+           (approval-policy-record-history-entry
+            *current-tool-buffer* normalized-name :denied
+            :policy perm
+            :reason "Denied by approval policy"
+            :entry args)
            (error "Tool ~A is user-only" normalized-name)))))
+    (approval-policy-record-history-entry
+     *current-tool-buffer* normalized-name :allowed
+     :policy (effective-tool-permission def :buffer *current-tool-buffer*)
+     :reason "Tool execution allowed"
+     :entry args)
     (run-hook-with-args '*before-tool-hook* normalized-name args)
     (let ((result (funcall (tool-definition-execute-fn def) args)))
       (run-hook-with-args '*after-tool-hook* normalized-name args result)
       result)))
+
+(defun approval-policy-entry-summary (entry)
+  "Return a readable summary for an approval audit ENTRY."
+  (with-output-to-string (s)
+    (format s "timestamp=~A buffer=~A cwd=~A tool=~A decision=~A policy=~A"
+            (cdr (assoc :timestamp entry))
+            (or (cdr (assoc :buffer entry)) "unknown")
+            (or (cdr (assoc :working-directory entry)) "unknown")
+            (or (cdr (assoc :tool-name entry)) "unknown")
+            (or (cdr (assoc :decision entry)) "unknown")
+            (or (cdr (assoc :policy entry)) "unknown"))
+    (when (cdr (assoc :reason entry))
+      (format s " reason=~A" (cdr (assoc :reason entry))))
+    (when (cdr (assoc :entry entry))
+      (format s "~%  entry: ~S" (cdr (assoc :entry entry))))))
+
+(defun approval-policy-audit-value-string (value)
+  "Return VALUE as a lower-case audit display string."
+  (if value
+      (string-downcase (symbol-name value))
+      "inherit"))
+
+(defun approval-policy-overrides-section-to-string (title table)
+  "Return one guard policy override section."
+  (let ((entries nil))
+    (maphash (lambda (name value)
+               (push (cons name value) entries))
+             table)
+    (with-output-to-string (s)
+      (when entries
+        (format s "~A~%" title)
+        (dolist (entry (sort entries #'string< :key #'car))
+          (format s "  ~A => ~A~%"
+                  (car entry)
+                  (approval-policy-audit-value-string
+                   (cdr entry))))))))
+
+(defun approval-policy-history-to-string (&key buffer directory (limit 25))
+  "Return a human-readable summary of the selected approval policy."
+  (let* ((registry (approval-policy-registry-for-context :buffer buffer
+                                                         :directory directory))
+         (path (approval-policy-path-for-registry :buffer buffer
+                                                  :directory directory))
+         (history (approval-policy-history registry))
+         (limit (max 0 limit)))
+    (with-output-to-string (s)
+      (format s "Approval Policy~%")
+      (format s "Path: ~A~%" (or (ignore-errors (namestring path)) path))
+      (when buffer
+        (format s "Buffer: ~A~%" (buffer-name buffer)))
+      (format s "Default permission: ~A~%"
+              (approval-policy-audit-value-string
+               (or (getf registry :default) :agent-allowed)))
+      (format s "Sandbox default: ~A~%"
+              (approval-policy-audit-value-string
+               (or (approval-policy-sandbox-default registry)
+                   :workspace-write)))
+      (format s "Network default: ~A~%"
+               (approval-policy-audit-value-string
+                (or (approval-policy-network-default registry) :allow)))
+      (format s "Working-directory default: ~A~%"
+               (approval-policy-audit-value-string
+                (or (approval-policy-working-directory-default registry)
+                    :project-root)))
+      (write-string (approval-policy-overrides-section-to-string
+                     "Approval overrides:"
+                     (approval-policy-tools registry))
+                    s)
+      (write-string (approval-policy-overrides-section-to-string
+                     "Sandbox overrides:"
+                     (approval-policy-sandbox-tools registry))
+                    s)
+      (write-string (approval-policy-overrides-section-to-string
+                     "Network overrides:"
+                     (approval-policy-network-tools registry))
+                    s)
+      (write-string (approval-policy-overrides-section-to-string
+                     "Working-directory overrides:"
+                     (approval-policy-working-directory-tools registry))
+                    s)
+      (if history
+          (progn
+            (format s "Recent decisions:~%")
+            (dolist (entry (subseq history 0 (min limit (length history))))
+              (format s "  - ~A~%" (approval-policy-entry-summary entry))))
+          (format s "Recent decisions: none~%")))))
 
 (defun format-tool-call-sexpr (name args)
   "Format a tool call as a raw s-expression string.

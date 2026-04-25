@@ -136,10 +136,10 @@ Parity sources:
 
 - [x] Formalize approval policies as user-configurable data, not only per-tool
   ad hoc permissions.
-- [ ] Add sandbox presets such as read-only, workspace-write, and full-access,
+- [x] Add sandbox presets such as read-only, workspace-write, and full-access,
   with optional network toggles.
 - [x] Add per-tool approval overrides stored in user/project config.
-- [ ] Add working-directory policies and repo checks for agent runs that should
+- [x] Add working-directory policies and repo checks for agent runs that should
   stay inside a declared project root.
 - [x] Add approval-reviewer hooks for programmatic clients and future app-server
   consumers.
