@@ -1395,6 +1395,135 @@ Returns true when KEY was consumed by completion."
         (buffer-insert-system-message buffer "[No installed packages available.]"))))
 (defcommand describe-installed-package-command)
 
+(defun guard-policy-value-string (value)
+  "Return VALUE as a user-facing guard policy string."
+  (if value
+      (string-downcase (symbol-name value))
+      "inherit"))
+
+(defun guard-policy-table-lines (table)
+  "Return sorted display lines for guard policy hash TABLE."
+  (let ((lines nil))
+    (maphash (lambda (name value)
+               (push (format nil "~A -> ~A"
+                             name
+                             (guard-policy-value-string value))
+                     lines))
+             table)
+    (sort lines #'string<)))
+
+(defun guard-policy-scope-report (title registry path)
+  "Return a formatted report string for one guard policy REGISTRY."
+  (with-output-to-string (stream)
+    (format stream "~A~%  path: ~A~%  default permission: ~A~%  default sandbox: ~A~%  default network: ~A~%  default working-directory: ~A~%"
+            title
+            (namestring path)
+            (guard-policy-value-string (getf registry :default))
+            (guard-policy-value-string
+             (approval-policy-sandbox-default registry))
+            (guard-policy-value-string
+             (approval-policy-network-default registry))
+            (guard-policy-value-string
+             (approval-policy-working-directory-default registry)))
+    (let ((tool-lines (guard-policy-table-lines
+                       (approval-policy-tools registry)))
+          (sandbox-lines (guard-policy-table-lines
+                          (approval-policy-sandbox-tools registry)))
+          (network-lines (guard-policy-table-lines
+                          (approval-policy-network-tools registry)))
+          (working-lines (guard-policy-table-lines
+                          (approval-policy-working-directory-tools registry))))
+      (format stream "~%  tool overrides:~%")
+      (if tool-lines
+          (dolist (line tool-lines)
+            (format stream "    ~A~%" line))
+          (format stream "    (none)~%"))
+      (format stream "~%  sandbox overrides:~%")
+      (if sandbox-lines
+          (dolist (line sandbox-lines)
+            (format stream "    ~A~%" line))
+          (format stream "    (none)~%"))
+      (format stream "~%  network overrides:~%")
+      (if network-lines
+          (dolist (line network-lines)
+            (format stream "    ~A~%" line))
+          (format stream "    (none)~%"))
+      (format stream "~%  working-directory overrides:~%")
+      (if working-lines
+          (dolist (line working-lines)
+            (format stream "    ~A~%" line))
+          (format stream "    (none)~%")))))
+
+(defun guard-policy-report-to-string (buffer)
+  "Return a help-buffer report for BUFFER's effective guard policy scopes."
+  (let* ((user-path *approval-policy-path*)
+         (project-path (approval-policy-path-for-buffer buffer))
+         (user-registry (approval-policy-registry-for-path user-path))
+         (project-registry (approval-policy-registry-for-path project-path)))
+    (with-output-to-string (stream)
+      (format stream "Guard Policy~%~%")
+      (format stream "Buffer: ~A~%Working directory: ~A~%~%"
+              (buffer-name buffer)
+              (namestring (buffer-working-directory buffer)))
+      (write-string
+       (guard-policy-scope-report "Project Policy" project-registry project-path)
+       stream)
+      (format stream "~%~%")
+      (write-string
+       (guard-policy-scope-report "User Policy" user-registry user-path)
+       stream))))
+
+(defun guard-history-report-to-string (buffer)
+  "Return a help-buffer report for BUFFER's guard audit history."
+  (let ((history (approval-policy-history-entries :buffer buffer)))
+    (with-output-to-string (stream)
+      (format stream "Guard History~%~%")
+      (format stream "Buffer: ~A~%Working directory: ~A~%~%"
+              (buffer-name buffer)
+              (namestring (buffer-working-directory buffer)))
+      (if history
+          (dolist (entry history)
+            (format stream "~A  tool=~A  decision=~A  policy=~A~%"
+                    (or (cdr (assoc :timestamp entry)) 0)
+                    (or (cdr (assoc :tool-name entry)) "")
+                    (or (cdr (assoc :decision entry)) "")
+                    (or (cdr (assoc :policy entry)) ""))
+            (when (cdr (assoc :reason entry))
+              (format stream "  reason: ~A~%" (cdr (assoc :reason entry))))
+            (when (cdr (assoc :entry entry))
+              (format stream "  entry: ~A~%" (cdr (assoc :entry entry))))
+            (when (cdr (assoc :working-directory entry))
+              (format stream "  working-directory: ~A~%"
+                      (cdr (assoc :working-directory entry))))
+            (format stream "~%"))
+          (format stream "No approval decisions have been recorded.~%")))))
+
+(defun describe-guard-policy-command (buffer)
+  "Open a help buffer describing BUFFER's effective guard policy scopes."
+  (let* ((content (guard-policy-report-to-string buffer))
+         (buf-name "*help:guard-policy*")
+         (existing (find-buffer-by-name buf-name)))
+    (if existing
+        (progn
+          (set-message-text (message-prev (buffer-input-message existing))
+                            content)
+          (switch-to-buffer existing))
+        (switch-to-buffer (make-help-buffer buf-name content)))))
+(defcommand describe-guard-policy-command)
+
+(defun describe-guard-history-command (buffer)
+  "Open a help buffer showing BUFFER's recorded guard approval history."
+  (let* ((content (guard-history-report-to-string buffer))
+         (buf-name "*help:guard-history*")
+         (existing (find-buffer-by-name buf-name)))
+    (if existing
+        (progn
+          (set-message-text (message-prev (buffer-input-message existing))
+                            content)
+          (switch-to-buffer existing))
+        (switch-to-buffer (make-help-buffer buf-name content)))))
+(defcommand describe-guard-history-command)
+
 ;;; --------------------------------------------------------------------------
 ;;; Model Selection Commands
 ;;; --------------------------------------------------------------------------

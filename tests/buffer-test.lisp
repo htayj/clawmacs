@@ -13,6 +13,23 @@
                                (get-universal-time)
                                (gensym)))))
 
+(defun temp-guard-test-path ()
+  "Return a fresh guard policy path for buffer command tests."
+  (let ((base (make-pathname
+               :directory (list :absolute "tmp"
+                                (format nil "clawmacs-guard-buffer-tests-~A-~A"
+                                        (get-universal-time)
+                                        (gensym))))))
+    (ensure-directories-exist (merge-pathnames #P".keep" base))
+    (merge-pathnames "guard.json" base)))
+
+(defmacro with-approval-policy-path-override ((path) &body body)
+  `(let ((clawmacs::*approval-policy-path* ,path)
+         (clawmacs::*approval-policy-registry* nil)
+         (clawmacs::*approval-policy-project-registry-cache*
+           (make-hash-table :test #'equal)))
+     ,@body))
+
 (defun read-jsonl-events (path)
   "Read JSONL transcript events from PATH."
   (let ((events nil))
@@ -1205,6 +1222,38 @@
         (let ((loaded (load-session session-name)))
           (is (not (null loaded)))
           (is (string= session-name (buffer-name loaded))))))))
+
+(test describe-guard-policy-command-opens-help-buffer
+  "Describing guard policy opens a help buffer with policy sections."
+  (with-interactive-command-test-buffer (buf)
+    (with-approval-policy-path-override ((temp-guard-test-path))
+      (clawmacs::set-approval-policy-default-permission
+       :agent-with-permission :buffer buf)
+      (clawmacs::set-approval-policy-default-sandbox-permission
+       :workspace-write :buffer buf)
+      (clawmacs::set-approval-policy-tool-permission
+       "write" :user-only :buffer buf)
+      (clawmacs::describe-guard-policy-command buf)
+      (let* ((help (current-buffer))
+             (text (help-buffer-text help)))
+        (is (help-buffer-p help))
+        (is (search "Guard Policy" text))
+        (is (search "Project Policy" text))
+        (is (search "write -> user-only" text))))))
+
+(test describe-guard-history-command-opens-help-buffer
+  "Describing guard history opens a help buffer with recorded audit entries."
+  (with-interactive-command-test-buffer (buf)
+    (with-approval-policy-path-override ((temp-guard-test-path))
+      (clawmacs::approval-policy-record-history-entry
+       buf "write" :approve :policy :agent-with-permission :entry "allowed")
+      (clawmacs::describe-guard-history-command buf)
+      (let* ((help (current-buffer))
+             (text (help-buffer-text help)))
+        (is (help-buffer-p help))
+        (is (search "Guard History" text))
+        (is (search "tool=write" text))
+        (is (search "entry: allowed" text))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Package Selector Tests

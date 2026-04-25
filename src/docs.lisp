@@ -2298,6 +2298,96 @@ documentation in *extended-docs*."
   :see-also (buffer-pending-tool-calls buffer-approval-pending))
 
 ;;; ==========================================================================
+;;; Category: guard — Approval policies and sandbox presets
+;;; ==========================================================================
+
+(defdoc approval-policy-default-permission
+  :category "guard"
+  :usage "(approval-policy-default-permission &key BUFFER DIRECTORY)"
+  :returns "keyword or nil — Effective default approval override."
+  :see-also (set-approval-policy-default-permission approval-policy-tool-permission))
+
+(defdoc approval-policy-default-sandbox-permission
+  :category "guard"
+  :usage "(approval-policy-default-sandbox-permission &key BUFFER DIRECTORY)"
+  :returns "keyword or nil — Effective default sandbox preset."
+  :see-also (set-approval-policy-default-sandbox-permission approval-policy-sandbox-permission))
+
+(defdoc approval-policy-default-network-permission
+  :category "guard"
+  :usage "(approval-policy-default-network-permission &key BUFFER DIRECTORY)"
+  :returns "keyword or nil — Effective default network toggle."
+  :see-also (set-approval-policy-default-network-permission approval-policy-network-permission))
+
+(defdoc approval-policy-default-working-directory-permission
+  :category "guard"
+  :usage "(approval-policy-default-working-directory-permission &key BUFFER DIRECTORY)"
+  :returns "keyword or nil — Effective default working-directory policy."
+  :see-also (set-approval-policy-default-working-directory-permission approval-policy-working-directory-permission))
+
+(defdoc approval-policy-tool-permission
+  :category "guard"
+  :usage "(approval-policy-tool-permission NAME:string &key BUFFER DIRECTORY)"
+  :returns "keyword or nil — Per-tool approval override."
+  :see-also (approval-policy-default-permission set-approval-policy-tool-permission))
+
+(defdoc approval-policy-sandbox-permission
+  :category "guard"
+  :usage "(approval-policy-sandbox-permission NAME:string &key BUFFER DIRECTORY)"
+  :returns "keyword or nil — Per-tool sandbox preset override."
+  :see-also (approval-policy-default-sandbox-permission set-approval-policy-sandbox-permission))
+
+(defdoc approval-policy-network-permission
+  :category "guard"
+  :usage "(approval-policy-network-permission NAME:string &key BUFFER DIRECTORY)"
+  :returns "keyword or nil — Per-tool network toggle override."
+  :see-also (approval-policy-default-network-permission set-approval-policy-network-permission))
+
+(defdoc approval-policy-working-directory-permission
+  :category "guard"
+  :usage "(approval-policy-working-directory-permission NAME:string &key BUFFER DIRECTORY)"
+  :returns "keyword or nil — Per-tool working-directory override."
+  :see-also (approval-policy-default-working-directory-permission set-approval-policy-working-directory-permission))
+
+(defdoc approval-policy-history-entries
+  :category "guard"
+  :usage "(approval-policy-history-entries &key BUFFER DIRECTORY)"
+  :returns "list — Recent recorded approval decisions."
+  :see-also (approval-policy-history-to-string describe-guard-history-command))
+
+(defdoc approval-policy-history-to-string
+  :category "guard"
+  :usage "(approval-policy-history-to-string &key BUFFER DIRECTORY LIMIT)"
+  :returns "string — Human-readable guard policy and audit summary."
+  :see-also (approval-policy-history-entries describe-guard-policy-command))
+
+(defdoc set-approval-policy-default-network-permission
+  :category "guard"
+  :usage "(set-approval-policy-default-network-permission PERMISSION &key BUFFER DIRECTORY)"
+  :returns "keyword or nil — Updated default network toggle."
+  :see-also (approval-policy-default-network-permission))
+
+(defdoc set-approval-policy-network-permission
+  :category "guard"
+  :usage "(set-approval-policy-network-permission NAME:string PERMISSION &key BUFFER DIRECTORY)"
+  :returns "keyword or nil — Updated per-tool network toggle."
+  :see-also (approval-policy-network-permission))
+
+(defdoc describe-guard-policy-command
+  :category "guard"
+  :usage "M-x describe-guard-policy-command"
+  :returns "nil — Displays a help buffer."
+  :side-effects "Creates or refreshes *help:guard-policy*."
+  :see-also (guard-policy-report-to-string describe-guard-history-command))
+
+(defdoc describe-guard-history-command
+  :category "guard"
+  :usage "M-x describe-guard-history-command"
+  :returns "nil — Displays a help buffer."
+  :side-effects "Creates or refreshes *help:guard-history*."
+  :see-also (guard-history-report-to-string describe-guard-policy-command))
+
+;;; ==========================================================================
 ;;; Category: global-face — Global face registry
 ;;; ==========================================================================
 
@@ -3768,6 +3858,11 @@ documentation in *extended-docs*."
   :usage "(list-hooks)"
   :returns "list of hook-metadata sorted by hook variable name."
   :see-also (defhook find-hook-metadata))
+
+(defdoc *approval-review-hook*
+  :category "init"
+  :usage "List of functions called when a guard approval decision is recorded."
+  :see-also (add-hook remove-hook run-hook-with-args approval-policy-history-entries))
 
 (defdoc *startup-hook*
   :category "init"
