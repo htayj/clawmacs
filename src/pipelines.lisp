@@ -815,6 +815,8 @@ deterministic behavior."
                             &key session-name
                               (agent-name *default-agent-name*)
                               provider model think-level
+                              (session-persistence-mode
+                               *default-buffer-session-persistence-mode*)
                               (max-tool-iterations
                                *prompt-max-tool-iterations*)
                               auto-approve-tools-p
@@ -828,7 +830,9 @@ deterministic behavior."
                          (make-session-prompt-buffer session-name agent-name)))
                    (append-session-prompt-input session-buffer prompt)
                    session-buffer)
-                 (make-prompt-buffer prompt agent-name))))
+                 (make-prompt-buffer
+                  prompt agent-name
+                  :session-persistence-mode session-persistence-mode))))
     (maybe-apply-prompt-routing-overrides buf provider model think-level)
     (when package-names
       (setf (buffer-enabled-packages buf)

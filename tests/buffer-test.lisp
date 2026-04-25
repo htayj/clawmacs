@@ -146,6 +146,23 @@
     (is (= 1 (buffer-message-count buf)))
     (is (eq :idle (buffer-status buf)))))
 
+(test make-buffer-supports-ephemeral-session-persistence-mode
+  "Explicit ephemeral buffers never attach or persist durable session state."
+  (let* ((*sessions-dir* (temp-session-test-directory "ephemeral-buffer"))
+         (buf (make-buffer "ephemeral-session"
+                           :agent-name "echo"
+                           :session-persistence-mode :ephemeral)))
+    (is (buffer-ephemeral-p buf))
+    (is-false (buffer-persistent-session-p buf))
+    (is (null (buffer-session buf)))
+    (is (null (clawmacs::ensure-buffer-session buf)))
+    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (buffer-finalize-input buf)
+    (save-session buf)
+    (is-false (probe-file (clawmacs::session-path "ephemeral-session")))
+    (is-false (probe-file (clawmacs::session-sidecar-manifest-path
+                           "ephemeral-session")))))
+
 (test package-buffer-type-registration-controls-buffer-defaults
   "Registered buffer types provide package-extensible kind metadata."
   (let ((clawmacs::*buffer-type-registry*
@@ -1968,3 +1985,19 @@
         (is (pathnamep shared-path))
         (is (probe-file shared-path))
         (is (search "/shares/" (namestring shared-path)))))))
+
+(test ephemeral-chat-buffers-do-not-attach-or-autosave-sessions
+  "Ephemeral chat buffers stay off disk until explicitly persisted elsewhere."
+  (let* ((*sessions-dir* (temp-session-test-directory "ephemeral-chat"))
+         (session-name "ephemeral-chat")
+         (buf (make-chat-buffer session-name
+                                :session-persistence-mode :ephemeral)))
+    (is (clawmacs::buffer-ephemeral-p buf))
+    (is (null (buffer-session buf)))
+    (set-message-text (buffer-input-message buf) "hello")
+    (buffer-finalize-input buf)
+    (buffer-insert-agent-message buf "world")
+    (is (null (clawmacs::ensure-buffer-session buf)))
+    (is-false (probe-file (clawmacs::session-path session-name)))
+    (is-false (probe-file
+               (clawmacs::session-sidecar-manifest-path session-name)))))

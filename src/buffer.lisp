@@ -22,6 +22,9 @@
 (defvar *default-pipeline-name* nil
   "When non-nil, new chat buffers run this pipeline when the user sends input.")
 
+(defvar *default-buffer-session-persistence-mode* :persistent
+  "Default session persistence mode for newly created buffers.")
+
 (defvar *scratch-buffer-name* "*scratch*"
   "Name used for the process-local scratch buffer.")
 
@@ -387,6 +390,11 @@ major-mode label, and optional McCLIM presentation functions."
                       :initform nil
                       :type (or null session)
                       :documentation "Persistent session metadata for chat buffers, when attached.")
+   (session-persistence-mode :initarg :session-persistence-mode
+                             :accessor buffer-session-persistence-mode
+                             :initform :persistent
+                             :type keyword
+                             :documentation "Controls whether the buffer should attach and autosave a durable session. Supported values are :persistent and :ephemeral.")
     (face-registry     :initarg :face-registry
                        :accessor buffer-face-registry
                        :type hash-table
@@ -475,9 +483,10 @@ Enforces the invariant that it is not read-only."
                                        (:dirty-p boolean)
                                        (:context-limit integer)
                                        (:pipeline-name (or null string))
-                                       (:enabled-packages list)
-                                       (:session (or null session))
-                                       (:major-mode (or null string symbol)))
+                                      (:enabled-packages list)
+                                      (:session (or null session))
+                                      (:session-persistence-mode keyword)
+                                      (:major-mode (or null string symbol)))
                           buffer)
                 make-buffer))
 (defun make-buffer (name &key (agent-name *default-agent-name*)
@@ -491,9 +500,14 @@ Enforces the invariant that it is not read-only."
                               (pipeline-name *default-pipeline-name*)
                               (enabled-packages nil)
                               (session nil)
+                              (session-persistence-mode
+                               *default-buffer-session-persistence-mode*)
                               major-mode)
   "Create a new buffer with a single empty input message."
   (let* ((normalized-kind (normalize-buffer-kind kind))
+         (normalized-session-mode
+           (normalize-buffer-session-persistence-mode
+            session-persistence-mode))
          (type (find-buffer-type normalized-kind))
          (resolved-major-mode
            (or (and major-mode
@@ -517,10 +531,29 @@ Enforces the invariant that it is not read-only."
                 :pipeline-name pipeline-name
                 :enabled-packages (copy-list enabled-packages)
                 :session session
+                :session-persistence-mode normalized-session-mode
                 :face-registry registry
                 :major-mode resolved-major-mode)))
     (maybe-run-hook-with-args '*after-buffer-create-hook* buf)
     buf))
+
+(defun normalize-buffer-session-persistence-mode (value)
+  "Normalize VALUE to a supported buffer session persistence mode."
+  (let ((mode (if (keywordp value)
+                  value
+                  (normalize-buffer-kind value))))
+    (case mode
+      (:persistent :persistent)
+      (:ephemeral :ephemeral)
+      (t (error "Unsupported session persistence mode: ~S" value)))))
+
+(defun buffer-persistent-session-p (buf)
+  "Return true when BUF should attach and autosave a durable session."
+  (eq (buffer-session-persistence-mode buf) :persistent))
+
+(defun buffer-ephemeral-p (buf)
+  "Return true when BUF should not attach or autosave a durable session."
+  (eq (buffer-session-persistence-mode buf) :ephemeral))
 
 (declaim (ftype (function (buffer) boolean) scratch-buffer-p))
 (defun scratch-buffer-p (buf)
@@ -570,6 +603,7 @@ Enforces the invariant that it is not read-only."
   "Ensure BUF has persistent session metadata when it is a chat buffer."
   (when (and buf
              (not (document-buffer-p buf))
+             (buffer-persistent-session-p buf)
              (null (buffer-session buf)))
     (attach-buffer-session buf
                            (load-or-create-session
@@ -582,6 +616,7 @@ Enforces the invariant that it is not read-only."
   (when (and buf
              (not *suppress-session-autosave*)
              (not (document-buffer-p buf))
+             (buffer-persistent-session-p buf)
              (buffer-session buf))
     (handler-case
         (save-session buf)
@@ -597,6 +632,7 @@ Enforces the invariant that it is not read-only."
   (when (and buf
              msg
              (not *suppress-session-transcript-recording*)
+             (buffer-persistent-session-p buf)
              (buffer-session buf))
     (record-session-message (buffer-session buf) msg)
     (autosave-session-snapshot buf))
@@ -1006,13 +1042,23 @@ Context messages are sent to providers as user-context messages."
 (defun make-chat-buffer
     (name &key (agent-name *default-agent-name*)
                (working-directory (truename "."))
-               (session (load-or-create-session name))
+               (session nil)
+               (session-persistence-mode
+                *default-buffer-session-persistence-mode*)
                (add-to-ring-p nil))
   "Create a chat buffer with default faces, keymap, and optional ring entry."
-  (let ((buf (make-buffer name
-                          :agent-name agent-name
-                          :working-directory working-directory
-                          :session session)))
+  (let* ((normalized-session-mode
+           (normalize-buffer-session-persistence-mode
+            session-persistence-mode))
+         (effective-session
+           (or session
+               (and (eq normalized-session-mode :persistent)
+                    (load-or-create-session name))))
+         (buf (make-buffer name
+                           :agent-name agent-name
+                           :working-directory working-directory
+                           :session-persistence-mode normalized-session-mode
+                           :session effective-session)))
     (initialize-buffer-display-defaults buf)
     (when add-to-ring-p
       (add-buffer-to-ring buf))
@@ -1099,6 +1145,8 @@ The current buffer remains current when a current buffer already exists."
             (:updated-at . ,(session-updated-at (buffer-session buf)))))
       (:agent-name . ,(buffer-agent-name buf))
       (:kind . ,(symbol-name (buffer-kind buf)))
+      (:session-persistence-mode
+       . ,(symbol-name (buffer-session-persistence-mode buf)))
       (:major-mode . ,(buffer-major-mode buf))
       (:working-directory
        . ,(namestring (uiop:ensure-directory-pathname
@@ -1117,19 +1165,20 @@ The current buffer remains current when a current buffer already exists."
 (defun save-session (buf)
   "Save the buffer's conversation to a session file."
   (let ((session (buffer-session buf)))
-    (when session
+    (when (and session (buffer-persistent-session-p buf))
       (setf (session-working-directory session)
             (normalize-buffer-working-directory
              (buffer-working-directory buf)))
       (write-session-manifest session)))
-  (let ((path (session-path (buffer-name buf))))
-    (ensure-directories-exist path)
-    (with-open-file (s path :direction :output
-                            :if-exists :supersede
-                            :if-does-not-exist :create)
-      (write-string (cl-json:encode-json-to-string (serialize-buffer buf)) s))
-    (maybe-run-hook-with-args '*after-session-save-hook* buf path)
-    path))
+  (when (buffer-persistent-session-p buf)
+    (let ((path (session-path (buffer-name buf))))
+      (ensure-directories-exist path)
+      (with-open-file (s path :direction :output
+                              :if-exists :supersede
+                              :if-does-not-exist :create)
+        (write-string (cl-json:encode-json-to-string (serialize-buffer buf)) s))
+      (maybe-run-hook-with-args '*after-session-save-hook* buf path)
+      path)))
 
 (defun replay-serialized-message (buf msg-data)
   "Insert one serialized message into BUF without transcript side effects."
@@ -1214,6 +1263,8 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
            (model-override (cdr (assoc :model-override data)))
            (think-level-override (cdr (assoc :think-level-override data)))
            (pipeline-name (cdr (assoc :pipeline-name data)))
+           (session-persistence-mode
+             (cdr (assoc :session-persistence-mode data)))
            (enabled-packages (cdr (assoc :enabled-packages data)))
            (buffer-state (cdr (assoc :buffer-state data)))
            (messages (cdr (assoc :messages data)))
@@ -1221,6 +1272,10 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
                                   :kind (or kind :chat)
                                   :working-directory working-directory
                                   :major-mode major-mode
+                                  :session-persistence-mode
+                                  (normalize-buffer-session-persistence-mode
+                                   (or session-persistence-mode
+                                       :persistent))
                                   :session (load-or-create-session
                                             name
                                             :working-directory
@@ -1267,6 +1322,7 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
            (buf (make-buffer name :agent-name agent-name
                                   :working-directory
                                   (session-working-directory session)
+                                  :session-persistence-mode :persistent
                                   :session session)))
       (replay-serialized-messages
        buf

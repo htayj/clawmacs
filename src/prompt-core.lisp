@@ -56,6 +56,7 @@
   (packages nil :type list)
   session-name
   (continue-session-p nil :type boolean)
+  (ephemeral-p nil :type boolean)
   pipeline-name
   debug-log-path
   (isolated-p nil :type boolean)

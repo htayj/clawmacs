@@ -506,11 +506,16 @@ the event loop polls for updates via update-streaming-response."
 ;;; Non-interactive Prompt Mode
 ;;; --------------------------------------------------------------------------
 
-(defun make-prompt-buffer (prompt agent-name)
+(defun make-prompt-buffer
+    (prompt agent-name &key
+                        (session-persistence-mode
+                         *default-buffer-session-persistence-mode*))
   "Create a buffer seeded with PROMPT as the only finalized user message."
   (let ((buf (make-chat-buffer "clawmacs:prompt"
                                :agent-name agent-name
-                               :working-directory (truename "."))))
+                               :working-directory (truename ".")
+                               :session-persistence-mode
+                               session-persistence-mode)))
     (set-message-text (buffer-input-message buf) prompt)
     (buffer-finalize-input buf)
     buf))
@@ -764,6 +769,8 @@ PROMPT-TOOL-EVENT for terminal/debug output."
 
 (defun run-single-prompt (prompt &key (agent-name *default-agent-name*)
                                  provider model think-level
+                                 (session-persistence-mode
+                                  *default-buffer-session-persistence-mode*)
                                  (max-tool-iterations *prompt-max-tool-iterations*)
                                  auto-approve-tools-p
                                  package-names
@@ -775,7 +782,9 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
   (when (blank-string-p prompt)
     (error "Prompt must be non-empty"))
   (let* ((custom-tool-definitions (normalize-run-custom-tools custom-tools))
-         (buf (make-prompt-buffer prompt agent-name)))
+         (buf (make-prompt-buffer
+               prompt agent-name
+               :session-persistence-mode session-persistence-mode)))
     (maybe-apply-prompt-routing-overrides buf provider model think-level)
     (when package-names
       (setf (buffer-enabled-packages buf)

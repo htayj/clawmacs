@@ -4399,6 +4399,7 @@ Environment variables:
   (let ((buf (make-chat-buffer session-name
                                :agent-name agent-name
                                :working-directory (truename ".")
+                               :session-persistence-mode :persistent
                                :add-to-ring-p t)))
     (setf *sandbox-root* (truename "."))
     (run-hook-with-args '*initial-buffer-hook* buf)
@@ -4426,6 +4427,8 @@ Options:
   --skill-root PATH         Add a skill root for this prompt run. May repeat.
   --session NAME            Load/update a saved session instead of one-shot mode.
   --continue                Continue the most recent saved session for the current cwd.
+  --ephemeral               Run without a saved session, transcript file, or autosave.
+  --no-session              Alias for --ephemeral.
   --pipeline NAME           Run a deterministic pipeline defined in init.lisp.
   --debug-log PATH          Write low-level debug logs to PATH.
   --isolated                Use temporary prompt config/project/session dirs.
@@ -4459,6 +4462,8 @@ Session options:
                             Default: most recent current-directory session
                             when available, otherwise ~A
   --continue                Continue the most recent saved session for the current cwd.
+  --ephemeral               Run without a saved session, transcript file, or autosave.
+  --no-session              Alias for --ephemeral.
   CLAWMACS_SESSION_PROMPT_SESSION
                             Environment default for --session.
 
@@ -4587,6 +4592,9 @@ Example:
                          remaining rest)))
                 ((string= arg "--continue")
                  (setf (prompt-options-continue-session-p options) t))
+                ((or (string= arg "--ephemeral")
+                     (string= arg "--no-session"))
+                 (setf (prompt-options-ephemeral-p options) t))
                 ((string= arg "--pipeline")
                  (multiple-value-bind (value rest)
                      (require-option-value arg remaining)
@@ -4811,17 +4819,23 @@ Example:
 
 (defun run-prompt-options (options)
   "Run parsed prompt OPTIONS and return a PROMPT-RUN-RESULT."
-  (let ((session-name
-          (or (prompt-options-session-name options)
-              (and (prompt-options-continue-session-p options)
-                   (or (most-recent-saved-session-name
-                        :working-directory (truename "."))
-                       (error "No saved session exists for the current working directory."))))))
+  (let* ((ephemeral-p (prompt-options-ephemeral-p options))
+         (session-name
+           (unless ephemeral-p
+             (or (prompt-options-session-name options)
+                 (and (prompt-options-continue-session-p options)
+                      (or (most-recent-saved-session-name
+                           :working-directory (truename "."))
+                          (error "No saved session exists for the current working directory."))))))
+         (*default-buffer-session-persistence-mode*
+           (if ephemeral-p :ephemeral :persistent)))
     (if (prompt-options-pipeline-name options)
         (run-pipeline-prompt
          (prompt-options-prompt options)
          (prompt-options-pipeline-name options)
          :session-name session-name
+         :session-persistence-mode
+         (if ephemeral-p :ephemeral :persistent)
          :agent-name (prompt-options-agent-name options)
          :provider (prompt-options-provider options)
          :model (prompt-options-model options)
@@ -4848,6 +4862,8 @@ Example:
              (prompt-options-packages options))
             (run-single-prompt
              (prompt-options-prompt options)
+             :session-persistence-mode
+             (if ephemeral-p :ephemeral :persistent)
              :agent-name (prompt-options-agent-name options)
              :provider (prompt-options-provider options)
              :model (prompt-options-model options)
@@ -4866,6 +4882,7 @@ Example:
       (progn
         (setf options (parse-clawmacs-prompt-args))
         (when (and default-session-name
+                   (not (prompt-options-ephemeral-p options))
                    (not (prompt-options-session-name options))
                    (not (prompt-options-continue-session-p options)))
           (setf (prompt-options-session-name options) default-session-name))
@@ -4882,15 +4899,15 @@ Example:
               (format *error-output* ";; isolated-root: ~A~%" root))))
         (dolist (skill-root (prompt-options-skill-roots options))
           (register-skill-root skill-root :scope :user :source :cli))
-        (let ((*inhibit-user-init* (or (prompt-options-isolated-p options)
+          (let ((*inhibit-user-init* (or (prompt-options-isolated-p options)
                                        (prompt-options-inhibit-user-init-p
                                         options))))
-          (initialize-clawmacs-runtime)
-          (reset-interaction-state)
-          (setf *sandbox-root* (truename "."))
-          (ensure-prompt-workspace-project)
-          (let ((result (run-prompt-options options)))
-            (write-prompt-run-result result options)))
+            (initialize-clawmacs-runtime)
+            (reset-interaction-state)
+            (setf *sandbox-root* (truename "."))
+            (ensure-prompt-workspace-project)
+            (let ((result (run-prompt-options options)))
+              (write-prompt-run-result result options)))
         (uiop:quit 0))
       (prompt-run-error (e)
         (format *error-output* "~&clawmacs prompt error: ~A~%" e)

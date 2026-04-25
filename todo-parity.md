@@ -79,7 +79,7 @@ Parity sources:
   (private gist-like flow or user-provided hook).
 - [x] Add a session info view that shows path, ids, timestamps, token usage,
   cache stats, current branch/leaf, and model metadata.
-- [ ] Support ephemeral/no-session runs as a first-class mode rather than a
+- [x] Support ephemeral/no-session runs as a first-class mode rather than a
   side-effect of ad hoc scripting.
 - [x] Add regression tests for export, resume, continue, fork-by-id, and
   session naming.

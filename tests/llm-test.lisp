@@ -1401,6 +1401,7 @@ same
                     "--package" "lispi"
                     "--session" "cache-probe"
                     "--continue"
+                    "--ephemeral"
                     "--pipeline" "plan-build"
                     "--max-tool-iterations" "7"
                     "summarize" "this"))))
@@ -1418,10 +1419,18 @@ same
     (is (string= "cache-probe"
                  (clawmacs::prompt-options-session-name options)))
     (is (clawmacs::prompt-options-continue-session-p options))
+    (is (clawmacs::prompt-options-ephemeral-p options))
     (is (string= "plan-build"
                  (clawmacs::prompt-options-pipeline-name options)))
     (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
     (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
+
+(test parse-clawmacs-prompt-args-supports-no-session-alias
+  "The prompt parser accepts --no-session as an explicit ephemeral alias."
+  (let ((options (clawmacs::parse-clawmacs-prompt-args
+                  '("--no-session" "say" "hello"))))
+    (is (clawmacs::prompt-options-ephemeral-p options))
+    (is (string= "say hello" (clawmacs::prompt-options-prompt options)))))
 
 (test run-prompt-options-resolves-continue-session-for-current-directory
   "Prompt options can resume the most recent saved session for the cwd."
@@ -1448,6 +1457,71 @@ same
           (is (eq :continued result))
           (is (equal '("continue now" "continued-session")
                      captured)))))))
+
+(test run-prompt-options-ephemeral-ignores-session-routing
+  "Ephemeral prompt options bypass saved-session routing and run in no-session mode."
+  (let ((captured nil))
+    (with-function-override (clawmacs::run-single-prompt
+                             (prompt &key session-persistence-mode
+                                     session-name continue-session-p
+                                     &allow-other-keys)
+                             (declare (ignore session-name continue-session-p))
+                             (setf captured (list prompt session-persistence-mode))
+                             :ephemeral)
+      (with-function-override (clawmacs::run-session-prompt
+                               (prompt &rest args)
+                               (declare (ignore prompt args))
+                               :unexpected-session)
+        (let ((result (clawmacs::run-prompt-options
+                       (clawmacs::make-prompt-options
+                        :prompt "no session"
+                        :session-name "saved-session"
+                        :continue-session-p t
+                        :ephemeral-p t))))
+          (is (eq :ephemeral result))
+          (is (equal '("no session" :ephemeral)
+                     captured)))))))
+
+(test run-prompt-options-honors-ephemeral-mode-without-creating-session
+  "Explicit ephemeral prompt mode keeps one-shot runs out of the session store."
+  (let ((path (temp-agent-defaults-path))
+        (request-count 0)
+        (seen-persistence-mode nil)
+        (*sessions-dir* (temp-session-test-directory "ephemeral-prompt")))
+    (with-agent-defaults-path-override (path)
+      (with-tool-table-restored
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore provider messages callback
+                                                  model max-tokens tools
+                                                  reasoning-effort
+                                                  system-prompt))
+                                 (incf request-count)
+                                 (setf seen-persistence-mode
+                                       clawmacs::*default-buffer-session-persistence-mode*)
+                                 (make-completed-stream-state-response
+                                  "end_turn"
+                                  (list (clawmacs::canonical-text-block
+                                         "ephemeral answer"))))
+          (clawmacs::init-default-keymap)
+          (clawmacs::init-global-faces)
+          (initialize-test-tools)
+          (let* ((options (clawmacs::parse-clawmacs-prompt-args
+                           '("--ephemeral"
+                             "--provider" "zai"
+                             "--model" "glm-5"
+                             "ephemeral" "prompt")))
+                 (result (clawmacs::run-prompt-options options)))
+            (is (= 1 request-count))
+            (is (eq :ephemeral seen-persistence-mode))
+            (is (string= "ephemeral answer"
+                         (clawmacs::prompt-run-result-final-text result)))
+            (is-false (probe-file (clawmacs::session-path "clawmacs:prompt")))
+            (is-false (probe-file
+                       (clawmacs::session-sidecar-manifest-path
+                        "clawmacs:prompt")))))))))
 
 (test default-session-prompt-session-name-prefers-most-recent-current-directory
   "session-prompt defaults to the newest saved session for the current cwd."
@@ -1495,6 +1569,7 @@ same
     (is (search "Default without --agent: gpt-5.3-codex" usage))
     (is (search "--package NAME" usage))
     (is (search "--session NAME" usage))
+    (is (search "--ephemeral" usage))
     (is (search "--pipeline NAME" usage))
     (is (search "Skip ~/.clawmacs.d/init.lisp" usage))))
 

@@ -263,6 +263,7 @@
    #:*default-show-reasoning-output*
    #:*default-show-metadata-output*
    #:*default-pipeline-name*
+   #:*default-buffer-session-persistence-mode*
    #:*scratch-buffer-name*
    #:*scratch-buffer-initial-text*
    #:*listener-buffer-name*
@@ -306,6 +307,9 @@
    #:buffer-pipeline-name
    #:buffer-enabled-packages
    #:buffer-session
+   #:buffer-session-persistence-mode
+   #:buffer-persistent-session-p
+   #:buffer-ephemeral-p
    #:set-buffer-provider-override
    #:set-buffer-model-override
    #:set-buffer-think-level-override
