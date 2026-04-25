@@ -1874,7 +1874,7 @@ For :OPENROUTER, dynamically-fetched models are used when an API key is present.
     (save-agent-defaults)
     normalized-provider))
 
-(defun resolve-buffer-provider-and-model (buf)
+(defun resolve-buffer-provider-and-model-base (buf)
   "Resolve BUF's effective provider, model, and think level.
 Resolution order for provider: buffer override → agent definition → legacy agent
 default → *default-provider*.
@@ -1898,6 +1898,12 @@ checked against the resolved provider/model."
     (when (blank-string-p model)
       (error "Resolved model must be a non-empty string"))
     (values resolved-provider model think-level)))
+
+(defun resolve-buffer-provider-and-model (buf)
+  "Resolve BUF's effective provider, model, and think level."
+  (multiple-value-bind (provider model think-level)
+      (resolve-buffer-provider-and-model-base buf)
+    (apply-modelaria-routing buf provider model think-level)))
 
 ;;; --------------------------------------------------------------------------
 ;;; Conversation Building
@@ -2507,6 +2513,7 @@ reasoning_content is present, falls back to reasoning_content."
 
 (defun openai-codex-responses-request-body (messages model max-tokens tools
                                             &key stream reasoning-effort
+                                                 service-tier
                                                  (system-prompt (or (build-system-prompt) "")))
   "Build the request body for an OpenAI Responses API call."
   (declare (ignore max-tokens))
@@ -2521,6 +2528,8 @@ reasoning_content is present, falls back to reasoning_content."
                  (:store . ,+json-false+)
                  (:stream . ,(if stream t +json-false+))
                  (:include . #())
+                 ,@(when service-tier
+                     `((:service--tier . ,service-tier)))
                  ,@(when *openai-codex-prompt-cache-key*
                      `((:prompt--cache--key
                         . ,*openai-codex-prompt-cache-key*)))
@@ -2655,16 +2664,21 @@ reasoning_content is present, falls back to reasoning_content."
                               (max-tokens *default-max-tokens*)
                               tools
                               reasoning-effort
+                              service-tier
                               (system-prompt (build-system-prompt)))
   "Dispatch a non-streaming request by resolved PROVIDER."
   (ecase provider
     (:openai-codex
-     (openai-codex-request messages
-                           :model model
-                           :max-tokens max-tokens
-                           :tools tools
-                           :reasoning-effort reasoning-effort
-                           :system-prompt system-prompt))
+     (let ((request-args (list :model model
+                               :max-tokens max-tokens
+                               :tools tools
+                               :reasoning-effort reasoning-effort
+                               :system-prompt system-prompt)))
+       (when service-tier
+         (setf request-args
+               (append request-args
+                       (list :service-tier service-tier))))
+       (apply #'openai-codex-request messages request-args)))
     (:zai
      (zai-request messages
                   :model model
@@ -2683,16 +2697,24 @@ reasoning_content is present, falls back to reasoning_content."
                                         (max-tokens *default-max-tokens*)
                                         tools
                                         reasoning-effort
+                                        service-tier
                                         (system-prompt (build-system-prompt)))
   "Dispatch a streaming request by resolved PROVIDER."
   (ecase provider
     (:openai-codex
-     (openai-codex-request-streaming messages callback
-                                     :model model
-                                     :max-tokens max-tokens
-                                     :tools tools
-                                     :reasoning-effort reasoning-effort
-                                     :system-prompt system-prompt))
+     (let ((request-args (list :model model
+                               :max-tokens max-tokens
+                               :tools tools
+                               :reasoning-effort reasoning-effort
+                               :system-prompt system-prompt)))
+       (when service-tier
+         (setf request-args
+               (append request-args
+                       (list :service-tier service-tier))))
+       (apply #'openai-codex-request-streaming
+              messages
+              callback
+              request-args)))
     (:zai
      (zai-request-streaming messages callback
                             :model model
@@ -2714,6 +2736,7 @@ reasoning_content is present, falls back to reasoning_content."
                                            (max-tokens *default-max-tokens*)
                                            tools
                                            reasoning-effort
+                                           service-tier
                                            (system-prompt (or (build-system-prompt) "")))
   "Call the OpenAI Responses API for Codex and normalize the response shape."
   (let* ((auth (or (resolve-openai-codex-auth)
@@ -2722,6 +2745,7 @@ reasoning_content is present, falls back to reasoning_content."
          (request-body (openai-codex-responses-request-body
                         messages model max-tokens tools
                         :system-prompt system-prompt
+                        :service-tier service-tier
                         :reasoning-effort reasoning-effort)))
     (multiple-value-bind (body status-code ignored effective-auth)
         (openai-codex-http-request auth request-body)
@@ -3059,6 +3083,7 @@ SSE format: 'field: value' or just 'data: {...}'."
                                             (max-tokens *default-max-tokens*)
                                             tools
                                             reasoning-effort
+                                            service-tier
                                             (system-prompt (or (build-system-prompt) "")))
   "Call the OpenAI Responses API with SSE streaming enabled."
   (declare (ignore callback))
@@ -3070,6 +3095,7 @@ SSE format: 'field: value' or just 'data: {...}'."
             messages model max-tokens tools
             :stream t
             :system-prompt system-prompt
+            :service-tier service-tier
             :reasoning-effort reasoning-effort))
          (state (make-stream-state)))
     (multiple-value-bind (body-stream status-code ignored effective-auth)

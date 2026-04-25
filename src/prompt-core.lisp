@@ -35,6 +35,7 @@
   provider
   model
   think-level
+  service-tier
   iterations
   stop-reason
   usage)
@@ -46,6 +47,8 @@
   provider
   model
   think-level
+  model-role
+  service-tier
   (show-tools-p nil :type boolean)
   (show-reasoning-p nil :type boolean)
   (show-metadata-p nil :type boolean)

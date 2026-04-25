@@ -114,16 +114,16 @@ Parity sources:
 - `reference/external_src/codex/docs/config.md`
 - `reference/external_src/codex/sdk/typescript/README.md`
 
-- [ ] Add scoped model sets per session/project so model cycling is deliberate
+- [x] Add scoped model sets per session/project so model cycling is deliberate
   instead of global and flat.
-- [ ] Add named model roles (`default`, `cheap`, `slow`, `plan`, `review`,
+- [x] Add named model roles (`default`, `cheap`, `slow`, `plan`, `review`,
   etc.) that can be referenced by subagents and pipelines.
-- [ ] Add a usage view for token totals, cache hits/misses, provider cost, and
+- [x] Add a usage view for token totals, cache hits/misses, provider cost, and
   context pressure across the current session.
-- [ ] Add transport/service-tier preferences where providers support them.
-- [ ] Add commands to temporarily override a role for one turn, then fall back
+- [x] Add transport/service-tier preferences where providers support them.
+- [x] Add commands to temporarily override a role for one turn, then fall back
   to the saved scope.
-- [ ] Add tests for role resolution, cycling, session-local overrides, and
+- [x] Add tests for role resolution, cycling, session-local overrides, and
   usage aggregation.
 
 ## `guard` - Approval Policies And Sandbox Presets

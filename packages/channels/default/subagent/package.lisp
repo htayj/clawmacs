@@ -154,6 +154,14 @@
                        args spec "think_level"
                        '(:think-level "think_level" "reasoning_effort")
                        :allow-nil t))
+         (model-role (subagent-tool-string-field
+                      args spec "model_role"
+                      '(:model-role "model_role")
+                      :allow-nil t))
+         (service-tier (subagent-tool-string-field
+                        args spec "service_tier"
+                        '(:service-tier "service_tier")
+                        :allow-nil t))
          (core-prompt (subagent-tool-string-field
                        args spec "core_prompt"
                        '(:core-prompt "core_prompt" "system_prompt")
@@ -177,6 +185,8 @@
                          :provider provider
                          :model model
                          :think-level think-level
+                         :model-role model-role
+                         :service-tier service-tier
                          :core-prompt core-prompt
                          :personality-prompt personality-prompt
                          :max-tool-iterations max-tool-iterations
@@ -211,6 +221,7 @@
                      (prompt-run-result-provider result))
           :model (prompt-run-result-model result)
           :think-level (prompt-run-result-think-level result)
+          :service-tier (prompt-run-result-service-tier result)
           :iterations (prompt-run-result-iterations result)
           :stop-reason (prompt-run-result-stop-reason result)
           :usage (copy-list (prompt-run-result-usage result))

@@ -173,6 +173,7 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
 
 (defun run-subagent (prompt &key (agent-name *default-subagent-name*)
                                   provider model think-level
+                                  model-role service-tier
                                   core-prompt personality-prompt
                                   (tool-names nil tool-names-supplied-p)
                                   custom-tools
@@ -188,6 +189,8 @@ arguments override the registered definition for this run only."
                          :provider provider
                          :model model
                          :think-level think-level
+                         :model-role model-role
+                         :service-tier service-tier
                          :max-tool-iterations max-tool-iterations
                          :auto-approve-tools-p auto-approve-tools-p
                          :custom-tools custom-tools)))
@@ -205,6 +208,7 @@ arguments override the registered definition for this run only."
 
 (defun run-subagent-async (prompt &key (agent-name *default-subagent-name*)
                                         provider model think-level
+                                        model-role service-tier
                                         core-prompt personality-prompt
                                         (tool-names nil tool-names-supplied-p)
                                         custom-tools
@@ -225,6 +229,8 @@ arguments override the registered definition for this run only."
                          :provider provider
                          :model model
                          :think-level think-level
+                         :model-role model-role
+                         :service-tier service-tier
                          :core-prompt core-prompt
                          :personality-prompt personality-prompt
                          :custom-tools custom-tools

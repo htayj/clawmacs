@@ -304,6 +304,9 @@
    #:buffer-provider-override
    #:buffer-model-override
    #:buffer-think-level-override
+   #:buffer-model-role-override
+   #:buffer-model-role-set-override
+   #:buffer-service-tier-override
    #:buffer-pipeline-name
    #:buffer-enabled-packages
    #:buffer-session
@@ -313,9 +316,15 @@
    #:set-buffer-provider-override
    #:set-buffer-model-override
    #:set-buffer-think-level-override
+   #:set-buffer-model-role-override
+   #:set-buffer-model-role-set-override
+   #:set-buffer-service-tier-override
    #:clear-buffer-provider-override
    #:clear-buffer-model-override
    #:clear-buffer-think-level-override
+   #:clear-buffer-model-role-override
+   #:clear-buffer-model-role-set-override
+   #:clear-buffer-service-tier-override
    #:clear-buffer-routing-overrides
    #:set-buffer-pipeline
    #:clear-buffer-pipeline
@@ -670,6 +679,7 @@
      #:load-personality-prompt-file
      #:provider-model-supported-think-levels
      #:reconcile-buffer-think-level-override
+     #:resolve-buffer-service-tier
      #:*boot-file-names*
      #:load-boot-files
      #:*agent-defaults-path*
@@ -1415,6 +1425,7 @@
    #:prompt-run-result-provider
    #:prompt-run-result-model
    #:prompt-run-result-think-level
+   #:prompt-run-result-service-tier
    #:prompt-run-result-iterations
    #:prompt-run-result-stop-reason
    #:prompt-run-result-usage

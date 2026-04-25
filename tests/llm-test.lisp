@@ -1391,6 +1391,8 @@ same
                     "--provider" "openai-codex"
                     "--model" "gpt-5.4"
                     "--think" "high"
+                    "--model-role" "review"
+                    "--service-tier" "priority"
                     "--show-tools"
                     "--show-reasoning"
                     "--show-metadata"
@@ -1409,6 +1411,8 @@ same
     (is (string= "openai-codex" (clawmacs::prompt-options-provider options)))
     (is (string= "gpt-5.4" (clawmacs::prompt-options-model options)))
     (is (string= "high" (clawmacs::prompt-options-think-level options)))
+    (is (string= "review" (clawmacs::prompt-options-model-role options)))
+    (is (string= "priority" (clawmacs::prompt-options-service-tier options)))
     (is (clawmacs::prompt-options-show-tools-p options))
     (is (clawmacs::prompt-options-show-reasoning-p options))
     (is (clawmacs::prompt-options-show-metadata-p options))
@@ -1567,6 +1571,8 @@ same
   (let ((usage (clawmacs::prompt-usage-string)))
     (is (search "Default without --agent: openai-codex" usage))
     (is (search "Default without --agent: gpt-5.3-codex" usage))
+    (is (search "--model-role ROLE" usage))
+    (is (search "--service-tier TIER" usage))
     (is (search "--package NAME" usage))
     (is (search "--session NAME" usage))
     (is (search "--ephemeral" usage))

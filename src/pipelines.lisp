@@ -13,6 +13,8 @@
   provider
   model
   think-level
+  model-role
+  service-tier
   tool-names
   tool-names-supplied-p
   package-names
@@ -149,6 +151,10 @@ NIL means no explicit skill injection list."
           :model (getf plist :model)
           :think-level (or (getf plist :think-level)
                            (getf plist :reasoning-effort))
+          :model-role (or (getf plist :model-role)
+                          (getf plist :model_role))
+          :service-tier (or (getf plist :service-tier)
+                            (getf plist :service_tier))
           :tool-names (and tool-names-supplied-p
                            (pipeline-stage-list-spec-value
                             tool-names
@@ -527,6 +533,8 @@ deterministic behavior."
          (old-provider (buffer-provider-override buffer))
          (old-model (buffer-model-override buffer))
          (old-think-level (buffer-think-level-override buffer))
+         (old-model-role (buffer-model-role-override buffer))
+         (old-service-tier (buffer-service-tier-override buffer))
          (old-packages (copy-list (buffer-enabled-packages buffer)))
          (skill-names (effective-pipeline-stage-skill-names stage context)))
     (insert-pipeline-stage-skill-context-messages buffer skill-names)
@@ -549,6 +557,14 @@ deterministic behavior."
                      (or (normalize-think-level-override
                           (pipeline-stage-think-level stage))
                          old-think-level)
+                     (buffer-model-role-override buffer)
+                     (or (normalize-model-role-override
+                          (pipeline-stage-model-role stage))
+                         old-model-role)
+                     (buffer-service-tier-override buffer)
+                     (or (normalize-service-tier-override
+                          (pipeline-stage-service-tier stage))
+                         old-service-tier)
                      (buffer-enabled-packages buffer)
                      (effective-pipeline-stage-package-names
                       stage context old-packages))
@@ -594,6 +610,8 @@ deterministic behavior."
             (buffer-provider-override buffer) old-provider
             (buffer-model-override buffer) old-model
             (buffer-think-level-override buffer) old-think-level
+            (buffer-model-role-override buffer) old-model-role
+            (buffer-service-tier-override buffer) old-service-tier
             (buffer-enabled-packages buffer) old-packages))))
 
 (defun pipeline-stage-working-directory (context)
@@ -815,6 +833,7 @@ deterministic behavior."
                             &key session-name
                               (agent-name *default-agent-name*)
                               provider model think-level
+                              model-role service-tier
                               (session-persistence-mode
                                *default-buffer-session-persistence-mode*)
                               (max-tool-iterations
@@ -833,7 +852,9 @@ deterministic behavior."
                  (make-prompt-buffer
                   prompt agent-name
                   :session-persistence-mode session-persistence-mode))))
-    (maybe-apply-prompt-routing-overrides buf provider model think-level)
+    (maybe-apply-prompt-routing-overrides buf provider model think-level
+                                          :model-role model-role
+                                          :service-tier service-tier)
     (when package-names
       (setf (buffer-enabled-packages buf)
             (normalize-package-name-list package-names)))

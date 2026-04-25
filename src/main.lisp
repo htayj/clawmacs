@@ -4417,6 +4417,8 @@ Options:
   --model MODEL             Override the model name.
                             Default without --agent: ~A.
   --think LEVEL             Override reasoning effort when supported.
+  --model-role ROLE         Apply a named model role for this run.
+  --service-tier TIER       Prefer auto, default, flex, or priority transport.
   --show-tools              Print tool calls/results to stderr.
   --show-reasoning          Print provider-supplied reasoning blocks when present.
   --show-metadata           Print provider/model/iteration metadata to stderr.
@@ -4548,6 +4550,16 @@ Example:
                  (multiple-value-bind (value rest)
                      (require-option-value arg remaining)
                    (setf (prompt-options-think-level options) value
+                         remaining rest)))
+                ((string= arg "--model-role")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-model-role options) value
+                         remaining rest)))
+                ((string= arg "--service-tier")
+                 (multiple-value-bind (value rest)
+                     (require-option-value arg remaining)
+                   (setf (prompt-options-service-tier options) value
                          remaining rest)))
                 ((or (string= arg "--prompt") (string= arg "-p"))
                  (multiple-value-bind (value rest)
@@ -4733,6 +4745,7 @@ Example:
                         (symbol-name (prompt-run-result-provider result)))))
     (:model . ,(prompt-run-result-model result))
     (:reasoning--effort . ,(prompt-run-result-think-level result))
+    (:service--tier . ,(prompt-run-result-service-tier result))
     (:iterations . ,(prompt-run-result-iterations result))
     (:stop--reason . ,(prompt-run-result-stop-reason result))
     ,@(when (prompt-run-result-usage result)
@@ -4758,6 +4771,8 @@ Example:
           (prompt-run-result-model result))
   (format stream ";; think: ~A~%"
           (or (prompt-run-result-think-level result) "default"))
+  (format stream ";; service-tier: ~A~%"
+          (or (prompt-run-result-service-tier result) "auto"))
   (format stream ";; iterations: ~D~%"
           (prompt-run-result-iterations result))
   (format stream ";; stop-reason: ~A~%"
@@ -4840,6 +4855,8 @@ Example:
          :provider (prompt-options-provider options)
          :model (prompt-options-model options)
          :think-level (prompt-options-think-level options)
+         :model-role (prompt-options-model-role options)
+         :service-tier (prompt-options-service-tier options)
          :max-tool-iterations
          (prompt-options-max-tool-iterations options)
          :auto-approve-tools-p
@@ -4854,6 +4871,8 @@ Example:
              :provider (prompt-options-provider options)
              :model (prompt-options-model options)
              :think-level (prompt-options-think-level options)
+             :model-role (prompt-options-model-role options)
+             :service-tier (prompt-options-service-tier options)
              :max-tool-iterations
              (prompt-options-max-tool-iterations options)
              :auto-approve-tools-p
@@ -4868,6 +4887,8 @@ Example:
              :provider (prompt-options-provider options)
              :model (prompt-options-model options)
              :think-level (prompt-options-think-level options)
+             :model-role (prompt-options-model-role options)
+             :service-tier (prompt-options-service-tier options)
              :max-tool-iterations
              (prompt-options-max-tool-iterations options)
              :auto-approve-tools-p

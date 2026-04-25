@@ -375,6 +375,26 @@ major-mode label, and optional McCLIM presentation functions."
                          :initform nil
                          :type (or null string)
                          :documentation "When non-nil, overrides the model's default reasoning effort.")
+   (model-role-override :initarg :model-role-override
+                        :accessor buffer-model-role-override
+                        :initform nil
+                        :type (or null string)
+                        :documentation "When non-nil, applies a named model-routing role for this buffer/session.")
+   (model-role-set-override :initarg :model-role-set-override
+                            :accessor buffer-model-role-set-override
+                            :initform nil
+                            :type list
+                            :documentation "Ordered named model-routing roles used when cycling models within this buffer/session.")
+   (next-turn-model-role-override :initarg :next-turn-model-role-override
+                                  :accessor buffer-next-turn-model-role-override
+                                  :initform nil
+                                  :type (or null string)
+                                  :documentation "One-turn named model-routing role override cleared after the next send.")
+   (service-tier-override :initarg :service-tier-override
+                          :accessor buffer-service-tier-override
+                          :initform nil
+                          :type (or null string)
+                          :documentation "When non-nil, prefers a provider service tier such as default, flex, or priority.")
    (pipeline-name :initarg :pipeline-name
                   :accessor buffer-pipeline-name
                   :initform *default-pipeline-name*
@@ -793,6 +813,50 @@ Returns the restored messages."
   (notify-buffer-display-change buf :routing)
   buf)
 
+(defun normalize-model-role-override (value)
+  "Normalize VALUE for storage as a model-role override."
+  (when value
+    (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                (string-downcase (string value)))))
+      (when (plusp (length trimmed))
+        trimmed))))
+
+(declaim (ftype (function (buffer (or null string symbol)) buffer)
+                set-buffer-model-role-override))
+(defun set-buffer-model-role-override (buf role)
+  "Set BUF's model-role override to ROLE and return BUF."
+  (setf (buffer-model-role-override buf)
+        (normalize-model-role-override role))
+  (notify-buffer-display-change buf :routing)
+  buf)
+
+(declaim (ftype (function (buffer list) buffer) set-buffer-model-role-set-override))
+(defun set-buffer-model-role-set-override (buf roles)
+  "Set BUF's ordered model-role set override to ROLES and return BUF."
+  (setf (buffer-model-role-set-override buf)
+        (remove nil
+                (mapcar #'normalize-model-role-override roles)
+                :test #'equal))
+  (notify-buffer-display-change buf :routing)
+  buf)
+
+(defun normalize-service-tier-override (value)
+  "Normalize VALUE for storage as a service-tier override."
+  (when value
+    (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                (string-downcase (string value)))))
+      (when (plusp (length trimmed))
+        trimmed))))
+
+(declaim (ftype (function (buffer (or null string symbol)) buffer)
+                set-buffer-service-tier-override))
+(defun set-buffer-service-tier-override (buf service-tier)
+  "Set BUF's service-tier override to SERVICE-TIER and return BUF."
+  (setf (buffer-service-tier-override buf)
+        (normalize-service-tier-override service-tier))
+  (notify-buffer-display-change buf :routing)
+  buf)
+
 (declaim (ftype (function (buffer) buffer) clear-buffer-provider-override))
 (defun clear-buffer-provider-override (buf)
   "Clear BUF's provider override and return BUF."
@@ -814,12 +878,35 @@ Returns the restored messages."
   (notify-buffer-display-change buf :routing)
   buf)
 
+(declaim (ftype (function (buffer) buffer) clear-buffer-model-role-override))
+(defun clear-buffer-model-role-override (buf)
+  "Clear BUF's model-role override and return BUF."
+  (setf (buffer-model-role-override buf) nil)
+  (notify-buffer-display-change buf :routing)
+  buf)
+
+(declaim (ftype (function (buffer) buffer) clear-buffer-model-role-set-override))
+(defun clear-buffer-model-role-set-override (buf)
+  "Clear BUF's model-role set override and return BUF."
+  (setf (buffer-model-role-set-override buf) nil)
+  (notify-buffer-display-change buf :routing)
+  buf)
+
+(declaim (ftype (function (buffer) buffer) clear-buffer-service-tier-override))
+(defun clear-buffer-service-tier-override (buf)
+  "Clear BUF's service-tier override and return BUF."
+  (setf (buffer-service-tier-override buf) nil)
+  (notify-buffer-display-change buf :routing)
+  buf)
+
 (declaim (ftype (function (buffer) buffer) clear-buffer-routing-overrides))
 (defun clear-buffer-routing-overrides (buf)
-  "Clear BUF's provider, model, and think-level overrides and return BUF."
+  "Clear BUF's provider, model, think, role, and service-tier overrides."
   (clear-buffer-provider-override buf)
   (clear-buffer-model-override buf)
   (clear-buffer-think-level-override buf)
+  (clear-buffer-model-role-override buf)
+  (clear-buffer-service-tier-override buf)
   buf)
 
 (declaim (ftype (function (buffer (or null string symbol)) buffer)
@@ -1265,7 +1352,13 @@ The current buffer remains current when a current buffer already exists."
       (:provider-override . ,(buffer-provider-override buf))
       (:model-override . ,(buffer-model-override buf))
       (:think-level-override . ,(buffer-think-level-override buf))
+      (:model-role-override . ,(buffer-model-role-override buf))
+      (:service-tier-override . ,(buffer-service-tier-override buf))
       (:pipeline-name . ,(buffer-pipeline-name buf))
+      ,@(when (buffer-model-role-set-override buf)
+          `((:model-role-set-override
+             . ,(coerce (copy-list (buffer-model-role-set-override buf))
+                        'vector))))
       ,@(when (buffer-user-input-pending buf)
           `((:user-input-pending . ,(buffer-user-input-pending buf))))
       ,@(when (buffer-queued-steering-messages buf)
@@ -1383,6 +1476,9 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
            (provider-override (cdr (assoc :provider-override data)))
            (model-override (cdr (assoc :model-override data)))
            (think-level-override (cdr (assoc :think-level-override data)))
+           (model-role-override (cdr (assoc :model-role-override data)))
+           (model-role-set-override (cdr (assoc :model-role-set-override data)))
+           (service-tier-override (cdr (assoc :service-tier-override data)))
            (pipeline-name (cdr (assoc :pipeline-name data)))
            (user-input-pending (cdr (assoc :user-input-pending data)))
            (queued-steering-messages
@@ -1415,6 +1511,15 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
             model-override
             (buffer-think-level-override buf)
             (normalize-think-level-override think-level-override)
+            (buffer-model-role-override buf)
+            (normalize-model-role-override model-role-override)
+            (buffer-model-role-set-override buf)
+            (remove nil
+                    (mapcar #'normalize-model-role-override
+                            (coerce (or model-role-set-override #()) 'list))
+                    :test #'equal)
+            (buffer-service-tier-override buf)
+            (normalize-service-tier-override service-tier-override)
             (buffer-pipeline-name buf)
             (and (stringp pipeline-name)
                  (plusp (length (string-trim

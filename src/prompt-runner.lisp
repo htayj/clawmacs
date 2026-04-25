@@ -239,46 +239,58 @@ polls for updates via update-streaming-response."
     (handler-case
         (multiple-value-bind (provider model think-level)
             (resolve-buffer-provider-and-model buf)
+          (let ((service-tier (resolve-buffer-service-tier buf)))
           ;; Debug: echo the outgoing request payload before sending
           (let ((req-json (api-json-encode
                            `((:messages . ,(coerce messages 'vector))
                              ,@(when think-level
                                  `((:reasoning . ((:effort . ,think-level)))))
+                             ,@(when service-tier
+                                 `((:service_tier . ,service-tier)))
                              ,@(when (and tools (plusp (length tools)))
                                  `((:tools . ,tools)))))))
             (debug-log buf
-              (format nil "[API REQUEST → ~(~A~)/~A~@[ think=~A~]  msg:~D  tools:~D]~%~A"
+              (format nil "[API REQUEST → ~(~A~)/~A~@[ think=~A~]~@[ tier=~A~]  msg:~D  tools:~D]~%~A"
                       provider model
                       think-level
+                      service-tier
                       (length messages)
                       (if tools (length tools) 0)
                       req-json))
             (file-debug-log "api-request"
-                            "provider=~(~A~) model=~A think=~A msgs=~D tools=~D payload=~A"
+                            "provider=~(~A~) model=~A think=~A tier=~A msgs=~D tools=~D payload=~A"
                             provider model
                             (or think-level "default")
+                            (or service-tier "auto")
                             (length messages)
                             (if tools (length tools) 0)
                             req-json))
-          (let* ((state (provider-request-streaming
-                       provider
-                       messages
-                       (lambda (s) (declare (ignore s)))
-                       :model model
-                       :tools tools
-                       :system-prompt system-prompt
-                       :reasoning-effort think-level))
+          (let* ((request-args (list :model model
+                                     :tools tools
+                                     :system-prompt system-prompt
+                                     :reasoning-effort think-level))
+                 (_ignored (when service-tier
+                             (setf request-args
+                                   (append request-args
+                                           (list :service-tier service-tier)))))
+                 (state (apply #'provider-request-streaming
+                               provider
+                               messages
+                               (lambda (s) (declare (ignore s)))
+                               request-args))
                  ;; Create placeholder message that will be updated as tokens arrive.
                  ;; It becomes durable only when the stream completes or errors.
                  (agent-msg (buffer-insert-agent-message
                              buf ""
                              :record-p nil
                              :run-hook-p nil)))
+          (declare (ignore _ignored))
           (put-message-metadata agent-msg
                                 :agent (buffer-agent-name buf)
                                 :provider provider
                                 :model model
                                 :think-level think-level
+                                :service-tier service-tier
                                 :reasoning-summary-mode
                                 (and (eq provider :openai-codex)
                                      *openai-codex-reasoning-summary*))
@@ -287,7 +299,7 @@ polls for updates via update-streaming-response."
           (setf (buffer-pending-stream buf) state
                 (buffer-streaming-message buf) agent-msg
                 (buffer-status buf) :thinking)
-          (notify-buffer-display-change buf :stream-started)))
+          (notify-buffer-display-change buf :stream-started))))
       (error (e)
         (setf (buffer-status buf) :error)
         (let ((err-msg (buffer-insert-agent-message
@@ -584,14 +596,19 @@ the event loop polls for updates via update-streaming-response."
           (buffer-agent-name buf)
           (session-name-hash (buffer-name buf))))
 
-(defun maybe-apply-prompt-routing-overrides (buf provider model think-level)
-  "Apply optional provider, model, and think-level overrides to BUF."
+(defun maybe-apply-prompt-routing-overrides
+    (buf provider model think-level &key model-role service-tier)
+  "Apply optional routing overrides to BUF."
   (when provider
     (set-buffer-provider-override buf (normalize-provider provider)))
   (when model
     (set-buffer-model-override buf model))
   (when think-level
     (set-buffer-think-level-override buf think-level))
+  (when model-role
+    (set-buffer-model-role-override buf model-role))
+  (when service-tier
+    (set-buffer-service-tier-override buf service-tier))
   buf)
 
 (defun prompt-stream-state-response (state)
@@ -626,12 +643,14 @@ Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
                                                      :buffer buf))))
     (multiple-value-bind (provider model think-level)
         (resolve-buffer-provider-and-model buf)
-      (let ((prompt-cache-key (and (eq provider :openai-codex)
+      (let ((service-tier (resolve-buffer-service-tier buf))
+            (prompt-cache-key (and (eq provider :openai-codex)
                                    (prompt-cache-key-for-buffer buf)))
             (prompt-cache-retention nil))
         (file-debug-log "prompt-request"
-                        "provider=~(~A~) model=~A think=~A msgs=~D tools=~D cache-key=~A cache-retention=~A"
+                        "provider=~(~A~) model=~A think=~A tier=~A msgs=~D tools=~D cache-key=~A cache-retention=~A"
                         provider model (or think-level "default")
+                        (or service-tier "auto")
                         (length messages)
                         (if tools (length tools) 0)
                         (or prompt-cache-key "none")
@@ -639,14 +658,20 @@ Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
         (let ((*openai-codex-prompt-cache-key* prompt-cache-key)
               (*openai-codex-prompt-cache-retention*
                 prompt-cache-retention))
-          (let* ((state (provider-request-streaming
-                         provider messages
-                         (lambda (state) (declare (ignore state)))
-                         :model model
-                         :tools tools
-                         :system-prompt system-prompt
-                         :reasoning-effort think-level))
+          (let* ((request-args (list :model model
+                                     :tools tools
+                                     :system-prompt system-prompt
+                                     :reasoning-effort think-level))
+                 (_ignored (when service-tier
+                             (setf request-args
+                                   (append request-args
+                                           (list :service-tier service-tier)))))
+                 (state (apply #'provider-request-streaming
+                               provider messages
+                               (lambda (state) (declare (ignore state)))
+                               request-args))
                  (response (wait-for-prompt-stream-state state)))
+            (declare (ignore _ignored))
             (maybe-run-hook-with-args
              '*after-provider-response-hook*
              buf
@@ -657,7 +682,8 @@ Returns values RESPONSE, PROVIDER, MODEL, THINK-LEVEL."
             (values response
                     provider
                     model
-                    think-level)))))))
+                    think-level
+                    service-tier)))))))
 
 (defun denied-tool-result-data (reason)
   "Return a Lisp data denial payload for a non-interactive tool denial."
@@ -726,6 +752,7 @@ PROMPT-TOOL-EVENT for terminal/debug output."
         (final-provider nil)
         (final-model nil)
         (final-think-level nil)
+        (final-service-tier nil)
         (aggregate-usage nil)
         (iterations 0))
     (labels ((fail (format-string &rest format-args)
@@ -741,14 +768,15 @@ PROMPT-TOOL-EVENT for terminal/debug output."
           (fail "Exceeded maximum tool iterations (~D)"
                 max-tool-iterations))
         (incf iterations)
-        (multiple-value-bind (response provider* model* think-level*)
+        (multiple-value-bind (response provider* model* think-level* service-tier*)
             (handler-case
                 (prompt-request-once buf)
               (error (condition)
                 (fail "Prompt provider request failed: ~A" condition)))
           (setf final-provider provider*
                 final-model model*
-                final-think-level think-level*)
+                final-think-level think-level*
+                final-service-tier service-tier*)
           (setf aggregate-usage
                 (merge-token-usage aggregate-usage
                                    (response-usage response)))
@@ -781,6 +809,7 @@ PROMPT-TOOL-EVENT for terminal/debug output."
                    :provider final-provider
                    :model final-model
                    :think-level final-think-level
+                   :service-tier final-service-tier
                    :iterations iterations
                    :stop-reason stop-reason
                    :usage aggregate-usage)))))))))
@@ -806,6 +835,7 @@ PROMPT-TOOL-EVENT for terminal/debug output."
 
 (defun run-single-prompt (prompt &key (agent-name *default-agent-name*)
                                  provider model think-level
+                                 model-role service-tier
                                  (session-persistence-mode
                                   *default-buffer-session-persistence-mode*)
                                  (max-tool-iterations *prompt-max-tool-iterations*)
@@ -822,7 +852,9 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
          (buf (make-prompt-buffer
                prompt agent-name
                :session-persistence-mode session-persistence-mode)))
-    (maybe-apply-prompt-routing-overrides buf provider model think-level)
+    (maybe-apply-prompt-routing-overrides buf provider model think-level
+                                          :model-role model-role
+                                          :service-tier service-tier)
     (when package-names
       (setf (buffer-enabled-packages buf)
             (normalize-package-name-list package-names)))
@@ -837,6 +869,7 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
 (defun run-session-prompt (prompt &key session-name
                                   (agent-name *default-agent-name*)
                                   provider model think-level
+                                  model-role service-tier
                                   (max-tool-iterations *prompt-max-tool-iterations*)
                                   auto-approve-tools-p
                                   package-names
@@ -850,7 +883,9 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
     (error "Session prompt mode requires a non-empty session name"))
   (let* ((custom-tool-definitions (normalize-run-custom-tools custom-tools))
          (buf (make-session-prompt-buffer session-name agent-name)))
-    (maybe-apply-prompt-routing-overrides buf provider model think-level)
+    (maybe-apply-prompt-routing-overrides buf provider model think-level
+                                          :model-role model-role
+                                          :service-tier service-tier)
     (when package-names
       (setf (buffer-enabled-packages buf)
             (normalize-package-name-list package-names)))

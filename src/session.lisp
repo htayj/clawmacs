@@ -90,7 +90,7 @@
     usage))
 
 (defun buffer-session-model-metadata (buffer)
-  "Return the newest provider/model/think metadata from BUFFER."
+  "Return the newest provider/model/think/service-tier metadata from BUFFER."
   (loop :for msg := (message-prev (buffer-input-message buffer))
           :then (message-prev msg)
         :while msg
@@ -104,10 +104,14 @@
                                                              :reasoning-effort)
                                      (message-metadata-value metadata
                                                              :think-level)))
-        :when (or provider model think-level)
+        :for service-tier := (and metadata
+                                  (message-metadata-value metadata
+                                                          :service-tier))
+        :when (or provider model think-level service-tier)
           :return (list :provider provider
                         :model model
-                        :think-level think-level)))
+                        :think-level think-level
+                        :service-tier service-tier)))
 
 (defun count-buffer-history-messages (buffer)
   "Return the number of finalized history messages in BUFFER."
@@ -518,7 +522,8 @@ Returns the written event and entry id."
       (declare (ignore event))
       id)))
 
-(defun record-session-model-change (session provider model &key think-level)
+(defun record-session-model-change (session provider model &key think-level
+                                                           role service-tier)
   "Append a model-selection event to SESSION and return its entry id."
   (when session
     (multiple-value-bind (event id)
@@ -527,7 +532,9 @@ Returns the written event and entry id."
          `((:event . "model-change")
            (:provider . ,(string-downcase (symbol-name provider)))
            (:model . ,model)
-           ,@(when think-level `((:think-level . ,think-level)))))
+           ,@(when think-level `((:think-level . ,think-level)))
+           ,@(when role `((:role . ,role)))
+           ,@(when service-tier `((:service-tier . ,service-tier)))))
       (declare (ignore event))
       id)))
 

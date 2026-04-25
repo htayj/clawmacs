@@ -78,6 +78,10 @@
   :description "Structured user-question and queued delivery package tests"
   :in clawmacs-suite)
 
+(def-suite modelaria-package-suite
+  :description "Scoped model-role and usage package tests"
+  :in clawmacs-suite)
+
 (def-suite package-manager-suite
   :description "Package loader tests"
   :in clawmacs-suite)
