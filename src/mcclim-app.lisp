@@ -1231,18 +1231,17 @@ Values are DISPLAY-WIDTH, DISPLAY-HEIGHT, ROWS, and SCALE."
                                       0 clip-y1
                                       (* width char-w) clip-y2
                                       :ink bg)
-                (clim:with-drawing-options
-                    (pane :clipping-region
-                          (clim:make-rectangle*
-                           x clip-y1
-                           (+ x display-width) clip-y2))
-                  (clim:with-scaling (pane scale scale
-                                           (clim:make-point x y))
-                    (clim:draw-pattern*
-                     pane
-                     (mcclim-image-cache-entry-pattern entry)
-                     x
-                     y)))))
+                (clim:draw-design
+                 pane
+                 (mcclim-image-cache-entry-pattern entry)
+                 :x x
+                 :y y
+                 :clipping-region
+                 (clim:make-rectangle*
+                  x clip-y1
+                  (+ x display-width) clip-y2)
+                 :transformation
+                 (clim:make-scaling-transformation scale scale))))
             (1+ image-rows))))))
 
 (defun pane-pixel-size (pane)
@@ -3337,13 +3336,37 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
            (eql (clim:pointer-event-button event)
                 clim:+pointer-left-button+))))
 
+(defun mcclim-sheet-ancestor-of-type (sheet type)
+  "Return SHEET or the nearest ancestor satisfying TYPE, or NIL."
+  (loop :for current := sheet :then (ignore-errors (clim:sheet-parent current))
+        :while current
+        :when (typep current type)
+          :return current))
+
+(defun mcclim-event-position-in-pane (event pane)
+  "Return EVENT coordinates transformed into PANE's local coordinate space."
+  (let ((sheet (clim:event-sheet event)))
+    (if (eq sheet pane)
+        (values (clim:pointer-event-x event)
+                (clim:pointer-event-y event))
+        (handler-case
+            (clim:transform-position
+             (clim:sheet-delta-transformation sheet pane)
+             (clim:pointer-event-x event)
+             (clim:pointer-event-y event))
+          (error ()
+            (values (clim:pointer-event-x event)
+                    (clim:pointer-event-y event)))))))
+
 (defun mcclim-event-grid-position (frame pane event)
   "Return pointer EVENT coordinates as character-grid row and column in PANE."
   (ensure-char-metrics frame pane)
-  (let ((char-w (frame-char-width frame))
-        (char-h (frame-char-height frame)))
-    (values (mcclim-pixel-grid-index (clim:pointer-event-y event) char-h)
-            (mcclim-pixel-grid-index (clim:pointer-event-x event) char-w))))
+  (multiple-value-bind (local-x local-y)
+      (mcclim-event-position-in-pane event pane)
+    (let ((char-w (frame-char-width frame))
+          (char-h (frame-char-height frame)))
+      (values (mcclim-pixel-grid-index local-y char-h)
+              (mcclim-pixel-grid-index local-x char-w)))))
 
 (defun mcclim-completion-popup-geometry (cols rows)
   "Return popup geometry matching `mcclim-render-completion-popup'."
@@ -4039,12 +4062,20 @@ events stay on the standard CLIM event path."
                   (list 'com-clawmacs-dispatch-gestures (list event)))
                  (mcclim-redisplay-frame frame :force-p t))
                 ((typep event 'clim:pointer-button-press-event)
-                 (let ((sheet (clim:event-sheet event)))
+                 (let* ((sheet (clim:event-sheet event))
+                        (transcript-pane
+                          (mcclim-sheet-ancestor-of-type
+                           sheet 'clawmacs-transcript-pane))
+                        (input-pane
+                          (mcclim-sheet-ancestor-of-type
+                           sheet 'clawmacs-drei-input-pane)))
                    (cond
-                     ((typep sheet 'clawmacs-transcript-pane)
-                      (mcclim-handle-main-pane-click frame sheet event))
-                     ((typep sheet 'clawmacs-drei-input-pane)
-                      (mcclim-handle-input-pane-click frame sheet event))
+                     (transcript-pane
+                      (mcclim-handle-main-pane-click
+                       frame transcript-pane event))
+                     (input-pane
+                      (mcclim-handle-input-pane-click
+                       frame input-pane event))
                      (t
                       (clim:handle-event sheet event))))
                  (mcclim-redisplay-frame frame))
