@@ -157,11 +157,14 @@ custom buffer kinds.")
        (package nil package-supplied-p))
   "Register NAME as a buffer type and return its BUFFER-TYPE metadata.
 
-PRESENTATION-FUNCTION, when supplied, is called by the McCLIM transcript pane as
+  PRESENTATION-FUNCTION, when supplied, is called by the McCLIM transcript pane as
 (FUNCTION PANE BUFFER ROWS COLS CHAR-W CHAR-H). INPUT-PRESENTATION-FUNCTION is
 called with the same arguments for the separate Drei input pane. Package
 entrypoints normally leave PACKAGE unset; it defaults to the package currently
 being loaded by the Clawmacs package manager."
+  (when (and *current-clawmacs-package*
+             (not (package-resource-type-allowed-p :buffer-type)))
+    (return-from register-buffer-type nil))
   (let* ((kind (normalize-buffer-kind name))
          (existing (gethash kind *buffer-type-registry*))
          (current-owner
