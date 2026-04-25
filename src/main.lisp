@@ -2518,10 +2518,14 @@ Returns a plist describing the export."
                  (and session
                       (session-name session))))))
 
-(defun open-saved-session-record (source-buffer record)
-  "Switch to RECORD's session buffer, loading it if needed."
+(defun open-saved-session-record (source-buffer record &key (reuse-existing-p t))
+  "Switch to RECORD's session buffer, loading it if needed.
+
+When REUSE-EXISTING-P is NIL, always load a fresh buffer even if the session is
+already open elsewhere."
   (let* ((session-name (getf record :session-name))
-         (existing (find-open-session-buffer session-name)))
+         (existing (and reuse-existing-p
+                        (find-open-session-buffer session-name))))
     (if existing
         (progn
           (switch-to-buffer existing)
@@ -2573,7 +2577,8 @@ Returns a plist describing the export."
                   buffer
                   (or (resolve-saved-session-record
                        (getf item :session-name))
-                      item))
+                      item)
+                  :reuse-existing-p nil)
                (error (e)
                  (buffer-insert-system-message
                   buffer
@@ -4687,6 +4692,10 @@ Example:
           *approval-policy-path*
           (merge-pathnames #P"guard.json" config-dir)
           *approval-policy-registry* nil
+          *approval-policy-project-registry-cache*
+          (make-hash-table :test #'equal)
+          *approval-policy-isolation-root*
+          root
           *agent-defaults-path*
           (merge-pathnames #P"agent-defaults.json" root)
           *packages-directory*

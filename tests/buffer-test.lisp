@@ -1344,6 +1344,32 @@
           (is (eq :user (message-sender msg)))
           (is (string= "hello" (message-text msg))))))))
 
+(test load-session-command-loads-fresh-buffer-even-when-session-is-open
+  "Explicit load-session opens a distinct loaded buffer for an already-open session."
+  (with-interactive-command-test-buffer (buf)
+    (let* ((session-name "saved-session-open")
+           (*sessions-dir* (temp-session-test-directory "load-command-open"))
+           (saved (make-buffer session-name :agent-name "echo")))
+      (clawmacs::set-message-text (buffer-input-message saved) "hello")
+      (buffer-finalize-input saved)
+      (save-session saved)
+      (let ((existing (load-session session-name)))
+        (is (not (null existing)))
+        (add-buffer-to-ring existing)
+        (clawmacs::load-session-command buf)
+        (let ((index (position session-name *minibuffer-filtered-items*
+                               :key (lambda (item)
+                                      (getf item :session-name))
+                               :test #'string=)))
+          (is (not (null index)))
+          (setf *minibuffer-selected-index* index)
+          (minibuffer-confirm))
+        (let ((loaded (current-buffer)))
+          (is (not (eq existing loaded)))
+          (is (string= "saved-session-open<2>" (buffer-name loaded)))
+          (is (string= session-name
+                       (clawmacs::session-name (buffer-session loaded)))))))))
+
 (test new-buffer-command-creates-loadable-session
   "New interactive chat buffers are saved immediately for later loading."
   (with-interactive-command-test-buffer (buf)

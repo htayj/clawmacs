@@ -281,6 +281,74 @@
              (clawmacs::frame-last-render-snapshot frame))
         '((:ready . nil)))))
 
+(defun pane-viewport-region (pane)
+  "Return PANE's viewport region, falling back to its sheet region."
+  (handler-case
+      (clim:window-viewport pane)
+    (error ()
+      (clim:sheet-region pane))))
+
+(defun pane-geometry (frame pane-name)
+  "Return pixel/grid geometry for PANE-NAME in FRAME, or NIL."
+  (let ((pane (and frame (clim:find-pane-named frame pane-name))))
+    (when pane
+      (let* ((region (pane-viewport-region pane))
+             (top-sheet (clim:frame-top-level-sheet frame))
+             (delta (ignore-errors
+                      (clim:sheet-delta-transformation pane top-sheet)))
+             (char-w (max 1 (clawmacs::frame-char-width frame)))
+             (char-h (max 1 (clawmacs::frame-char-height frame))))
+        (clim:with-bounding-rectangle* (x1 y1 x2 y2) region
+          (multiple-value-bind (tx1 ty1)
+              (if delta
+                  (clim:transform-position delta x1 y1)
+                  (values x1 y1))
+            (multiple-value-bind (tx2 ty2)
+                (if delta
+                    (clim:transform-position delta x2 y2)
+                    (values x2 y2))
+              (let* ((left (round (min tx1 tx2)))
+                     (top (round (min ty1 ty2)))
+                     (width (max 1 (round (abs (- tx2 tx1)))))
+                     (height (max 1 (round (abs (- ty2 ty1))))))
+                `((:x . ,left)
+                  (:y . ,top)
+                  (:pixel-width . ,width)
+                  (:pixel-height . ,height)
+                  (:cols . ,(max 1 (floor width char-w)))
+                  (:rows . ,(max 1 (floor height char-h))))))))))))
+
+(defun pane-state ()
+  "Return geometry for the panes used by the McCLIM e2e harness."
+  (let ((frame (current-mcclim-frame)))
+    (if (and frame (typep frame 'clawmacs::clawmacs-gui))
+        `((:main . ,(or (pane-geometry frame 'clawmacs::main-pane)
+                        '((:x . 0)
+                          (:y . 0)
+                          (:pixel-width . 1)
+                          (:pixel-height . 1)
+                          (:cols . 1)
+                          (:rows . 1))))
+          (:input . ,(or (pane-geometry frame 'clawmacs::input-pane)
+                         '((:x . 0)
+                           (:y . 0)
+                           (:pixel-width . 1)
+                           (:pixel-height . 1)
+                           (:cols . 1)
+                           (:rows . 1)))))
+        '((:main . ((:x . 0)
+                    (:y . 0)
+                    (:pixel-width . 1)
+                    (:pixel-height . 1)
+                    (:cols . 1)
+                    (:rows . 1)))
+          (:input . ((:x . 0)
+                     (:y . 0)
+                     (:pixel-width . 1)
+                     (:pixel-height . 1)
+                     (:cols . 1)
+                     (:rows . 1)))))))
+
 (defun window-state ()
   "Return the running McCLIM frame's logical window state."
   (let ((frame (current-mcclim-frame)))
@@ -319,6 +387,7 @@
             (:buffer . ,(when buffer (buffer-state buffer)))
             (:buffers . ,(buffer-ring-state))
             (:windows . ,(window-state))
+            (:panes . ,(pane-state))
             (:render . ,(render-state))
             (:control-result . ,*last-control-result*)
             (:minibuffer . ,(minibuffer-state))

@@ -1005,9 +1005,9 @@ Fills a background rectangle first, then draws the text on top."
                                  :text-style text-style))))
 
 (defun mcclim-pixel-grid-index (pixel cell-size)
-  "Return the nearest zero-based grid index for PIXEL at CELL-SIZE."
+  "Return the zero-based grid cell containing PIXEL at CELL-SIZE."
   (if (plusp cell-size)
-      (max 0 (round pixel cell-size))
+      (max 0 (floor pixel cell-size))
       0))
 
 (defun draw-text-at-pixels
@@ -1223,7 +1223,10 @@ Values are DISPLAY-WIDTH, DISPLAY-HEIGHT, ROWS, and SCALE."
                    (x (* prefix-len char-w))
                    (y (* image-row char-h))
                    (clip-y1 (max 0 y))
-                   (clip-y2 (min (* max-rows char-h) (+ y display-height))))
+                   (clip-y2 (min (* max-rows char-h) (+ y display-height)))
+                   (pattern (mcclim-image-cache-entry-pattern entry))
+                   (image-width (mcclim-image-cache-entry-width entry))
+                   (image-height (mcclim-image-cache-entry-height entry)))
               (when (and (> image-end-row 0)
                          (< image-row max-rows)
                          (< clip-y1 clip-y2))
@@ -1231,17 +1234,24 @@ Values are DISPLAY-WIDTH, DISPLAY-HEIGHT, ROWS, and SCALE."
                                       0 clip-y1
                                       (* width char-w) clip-y2
                                       :ink bg)
-                (clim:draw-design
+                ;; DRAW-PATTERN* applies TRANSFORMATION to both the pattern
+                ;; origin and the clipping region. Build the final translation
+                ;; into the transformation and express clipping in source-image
+                ;; coordinates so scaled inline images stay on-screen.
+                (clim:draw-pattern*
                  pane
-                 (mcclim-image-cache-entry-pattern entry)
-                 :x x
-                 :y y
+                 pattern
+                 0 0
                  :clipping-region
                  (clim:make-rectangle*
-                  x clip-y1
-                  (+ x display-width) clip-y2)
+                  0
+                  (max 0 (/ (- clip-y1 y) scale))
+                  image-width
+                  (min image-height (/ (- clip-y2 y) scale)))
                  :transformation
-                 (clim:make-scaling-transformation scale scale))))
+                 (clim:compose-transformations
+                  (clim:make-translation-transformation x y)
+                  (clim:make-scaling-transformation scale scale)))))
             (1+ image-rows))))))
 
 (defun pane-pixel-size (pane)
@@ -3619,20 +3629,23 @@ should use the standard CLIM presentation-to-command path first."
     (let ((buf (frame-visible-buffer frame)))
       (when (and buf (not (document-buffer-p buf)))
         (mcclim-sync-buffer-from-drei frame)
-        (multiple-value-bind (row col)
-            (mcclim-event-grid-position frame pane event)
-          (multiple-value-bind (cols _rows)
-              (pane-grid-dimensions pane (frame-char-width frame)
-                                    (frame-char-height frame))
-            (declare (ignore _rows))
-            (mcclim-set-message-point-from-grid
-             (buffer-input-message buf) row col cols)
-            (mcclim-sync-drei-point-from-buffer frame)
-            (sync-slash-completion buf)
-            (if *slash-completion-active*
-                (deactivate-skill-completion)
-                (sync-skill-completion buf))
-            t))))))
+        (multiple-value-bind (local-x local-y)
+            (mcclim-event-position-in-pane event pane)
+          (multiple-value-bind (row col)
+              (mcclim-event-grid-position frame pane event)
+            (declare (ignore local-x local-y))
+            (multiple-value-bind (cols _rows)
+                (pane-grid-dimensions pane (frame-char-width frame)
+                                      (frame-char-height frame))
+              (declare (ignore _rows))
+              (mcclim-set-message-point-from-grid
+               (buffer-input-message buf) row col cols)
+              (mcclim-sync-drei-point-from-buffer frame)
+              (sync-slash-completion buf)
+              (if *slash-completion-active*
+                  (deactivate-skill-completion)
+                  (sync-skill-completion buf))
+              t)))))))
 
 (defun mcclim-handle-pointer-scroll (frame event)
   "Handle pointer scroll EVENT according to active Clawmacs UI mode."
@@ -3887,12 +3900,22 @@ in whether keyboard focus is restored to the top-level sheet or to the child
 sheet that was clicked, so Clawmacs' custom top level has to watch the panes
 that can receive keyboard/pointer gestures instead of blocking only on the
 top-level sheet."
-  (remove-duplicates
-   (remove nil
-           (list (ignore-errors (clim:frame-standard-input frame))
-                 (clim:find-pane-named frame 'main-pane)
-                 (frame-drei-input-pane frame)))
-   :test #'eq))
+  (labels ((collect-sheet-and-descendants (sheet seen)
+             (when (and sheet (not (gethash sheet seen)))
+               (setf (gethash sheet seen) t)
+               (cons sheet
+                     (loop :for child :in (ignore-errors (clim:sheet-children sheet))
+                           :nconc (collect-sheet-and-descendants child seen))))))
+    (let ((seen (make-hash-table :test #'eq)))
+      (remove nil
+              (append
+               (list (ignore-errors (clim:frame-standard-input frame)))
+               (collect-sheet-and-descendants
+                (clim:find-pane-named frame 'main-pane)
+                seen)
+               (collect-sheet-and-descendants
+                (frame-drei-input-pane frame)
+                seen))))))
 
 (defun mcclim-input-event-available-p (frame)
   "Return true when any interactive pane for FRAME has queued raw input."

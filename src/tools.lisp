@@ -347,6 +347,11 @@ Temporary tools override same-named global tools for the dynamic extent.")
 (defvar *approval-policy-project-registry-cache* (make-hash-table :test #'equal)
   "Memoized project-local approval policy registries keyed by pathname.")
 
+(defvar *approval-policy-isolation-root* nil
+  "When non-nil, redirect project-local guard state under this root.
+Used by isolated prompt runs so project guard edits and overrides never touch
+the live working tree.")
+
 (defvar *approval-policy-network-dependent-tools*
   '("http_fetch" "netcons_run" "netcons_search" "netcons_open" "netcons_find")
   "Names treated as network-dependent for guard policy checks.")
@@ -726,8 +731,17 @@ user-added tools stored in *tool-table* are left intact.")
 
 (defun approval-policy-path-for-directory (directory)
   "Return the project-local approval policy path for DIRECTORY."
-  (merge-pathnames #P".clawmacs.d/guard.json"
-                   (uiop:ensure-directory-pathname directory)))
+  (let* ((base-directory
+           (if *approval-policy-isolation-root*
+               (merge-pathnames
+                (format nil "projects/~36R/" ; stable enough for one run
+                        (sxhash
+                         (namestring
+                          (uiop:ensure-directory-pathname directory))))
+                (uiop:ensure-directory-pathname
+                 *approval-policy-isolation-root*))
+               (uiop:ensure-directory-pathname directory))))
+    (merge-pathnames #P".clawmacs.d/guard.json" base-directory)))
 
 (defun approval-policy-path-for-buffer (&optional buffer)
   "Return the approval policy path relevant to BUFFER or the user default."

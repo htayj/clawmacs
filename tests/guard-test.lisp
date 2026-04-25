@@ -127,6 +127,27 @@
              (clawmacs:approval-policy-default-network-permission
               :buffer other-buffer)))))))
 
+(test guard-project-local-policy-isolated-during-prompt-isolation
+  "Prompt isolation redirects project-local guard lookup away from the cwd."
+  (let* ((user-path (temp-guard-policy-path))
+         (project-dir (temp-guard-project-directory))
+         (isolation-root (temp-guard-project-directory))
+         (project-guard (merge-pathnames #P".clawmacs.d/guard.json" project-dir)))
+    (ensure-directories-exist project-guard)
+    (with-open-file (stream project-guard
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string "{\"version\":3,\"tools\":{\"write\":\"user-only\"}}" stream))
+    (with-guard-policy-path-override (user-path)
+      (let ((clawmacs::*approval-policy-isolation-root* isolation-root)
+            (buffer (guard-test-buffer "guard-isolated" project-dir)))
+        (is (string/= (namestring project-guard)
+                      (namestring (clawmacs::approval-policy-path-for-buffer
+                                   buffer))))
+        (is (null (clawmacs:approval-policy-tool-permission
+                   "write" :buffer buffer)))))))
+
 (test guard-review-hook-captures-recorded-decisions
   "The approval review hook receives audit entries for recorded decisions."
   (let ((path (temp-guard-policy-path))

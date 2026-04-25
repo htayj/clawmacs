@@ -1119,6 +1119,8 @@ class McclimSession:
             "--eval",
             "(setf clawmacs:*inhibit-user-init* t)",
             "--eval",
+            "(clawmacs::apply-prompt-isolation)",
+            "--eval",
             "(clawmacs/mcclim-e2e:start-control-thread)",
         ]
         for form in self.extra_evals:
@@ -1234,17 +1236,35 @@ class McclimSession:
             (render.get("pixelHeight") or 1) / rows,
         )
 
+    def pane_geometry(self, name):
+        panes = self.snapshot().get("panes") or {}
+        pane = panes.get(name) or {}
+        return {
+            "x": pane.get("x") or 0,
+            "y": pane.get("y") or 0,
+            "pixelWidth": max(1, pane.get("pixelWidth") or 1),
+            "pixelHeight": max(1, pane.get("pixelHeight") or 1),
+            "cols": max(1, pane.get("cols") or 1),
+            "rows": max(1, pane.get("rows") or 1),
+        }
+
     def click_main_cell(self, row, col, button=1):
-        char_w, char_h = self.render_cell_size()
-        self.click_relative((col + 0.5) * char_w, (row + 0.5) * char_h, button)
+        pane = self.pane_geometry("main")
+        char_w = pane["pixelWidth"] / pane["cols"]
+        char_h = pane["pixelHeight"] / pane["rows"]
+        self.click_relative(
+            pane["x"] + ((col + 0.5) * char_w),
+            pane["y"] + ((row + 0.5) * char_h),
+            button,
+        )
 
     def click_input_cell(self, row, col, button=1):
-        render = self.snapshot().get("render") or {}
-        char_w, char_h = self.render_cell_size()
-        main_height = render.get("pixelHeight") or 0
+        pane = self.pane_geometry("input")
+        char_w = pane["pixelWidth"] / pane["cols"]
+        char_h = pane["pixelHeight"] / pane["rows"]
         self.click_relative(
-            (col + 0.5) * char_w,
-            main_height + ((row + 0.5) * char_h),
+            pane["x"] + ((col + 0.5) * char_w),
+            pane["y"] + ((row + 0.5) * char_h),
             button,
         )
 
@@ -1260,7 +1280,9 @@ class McclimSession:
             ],
             timeout=5,
         )
+        self.focused = False
         time.sleep(0.5)
+        self.focus(force=True)
 
     def type_text(self, text):
         text = compact_deterministic_prompt(text)
@@ -1273,7 +1295,7 @@ class McclimSession:
         if text and "\n" not in text:
             self.wait_for_typed_suffix(
                 text,
-                timeout=max(5.0, len(text) / 30.0),
+                timeout=max(5.0, len(text) / 18.0, 20.0 if len(text) > 120 else 0.0),
                 strict=len(text) > 120,
             )
         time.sleep(0.1)
@@ -1626,36 +1648,45 @@ def test_54_input_wrap_expands_input_pane(session):
         cols_text, rows_text = result.replace('"', "").split()
         return int(cols_text), int(rows_text)
 
-    E2E.set_input(session, long_text)
-    session.wait_snapshot(
-        lambda snap: (snap.get("buffer") or {}).get("input") == long_text,
-        timeout=10,
-        description="long input present in buffer snapshot",
-    )
-    initial_cols, initial_rows = input_pane_grid()
-
-    session.resize(640, 420)
-    wait_for_render_width(
-        session,
-        lambda width: width and width < 900,
-        "narrow render width for wrapped input",
-        timeout=20,
-    )
-    narrow_cols, narrow_rows = input_pane_grid()
-
-    if narrow_rows <= 3:
-        fail(
-            f"wrapped input did not grow the pane: cols={narrow_cols} "
-            f"rows={narrow_rows}"
+    try:
+        E2E.set_input(session, long_text)
+        session.wait_snapshot(
+            lambda snap: (snap.get("buffer") or {}).get("input") == long_text,
+            timeout=10,
+            description="long input present in buffer snapshot",
         )
-    if narrow_rows < initial_rows:
-        fail(
-            f"input pane shrank after narrow resize: initial={initial_rows} "
-            f"narrow={narrow_rows}"
+        initial_cols, initial_rows = input_pane_grid()
+
+        session.resize(640, 420)
+        wait_for_render_width(
+            session,
+            lambda width: width and width < 900,
+            "narrow render width for wrapped input",
+            timeout=20,
         )
-    E2E.assert_contains(session.text(), "wrap-input-pane-probe",
-                        "long input remains present")
-    session.screenshot("54-input-wrap-expands-input-pane")
+        narrow_cols, narrow_rows = input_pane_grid()
+
+        if narrow_rows <= 3:
+            fail(
+                f"wrapped input did not grow the pane: cols={narrow_cols} "
+                f"rows={narrow_rows}"
+            )
+        if narrow_rows < initial_rows:
+            fail(
+                f"input pane shrank after narrow resize: initial={initial_rows} "
+                f"narrow={narrow_rows}"
+            )
+        E2E.assert_contains(session.text(), "wrap-input-pane-probe",
+                            "long input remains present")
+        session.screenshot("54-input-wrap-expands-input-pane")
+    finally:
+        session.resize(1000, 680)
+        wait_for_render_width(
+            session,
+            lambda width: width and width > 900,
+            "restored render width after wrapped input test",
+            timeout=20,
+        )
 
 
 def test_55_stream_poll_renders_without_next_input(session):

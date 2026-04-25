@@ -210,7 +210,7 @@ problems observed while reviewing the current Clawmacs tree.
 
 ### P0
 
-- [ ] Stabilize McCLIM input behavior against the offline e2e suite. The
+- [x] Stabilize McCLIM input behavior against the offline e2e suite. The
   current worktree regressed basic input editing in addition to the already
   flaky mouse paths: `25-alt-f`, `30-alt-d`, `61-mouse-click-input-point`,
   `62-mouse-click-buffer-selector`, and
