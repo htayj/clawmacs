@@ -91,18 +91,18 @@ Parity sources:
 - `reference/external_src/pi-mono/packages/coding-agent/README.md`
 - `reference/external_src/codex/docs/config.md`
 
-- [ ] Add user commands for package install, remove, update, list, and config.
-- [ ] Extend installs beyond bare git clone to support git refs, local paths,
+- [x] Add user commands for package install, remove, update, list, and config.
+- [x] Extend installs beyond bare git clone to support git refs, local paths,
   and npm-like package sources where practical.
-- [ ] Support global vs project-local package installation and settings.
-- [ ] Add package resource filtering so users can enable only selected tools,
+- [x] Support global vs project-local package installation and settings.
+- [x] Add package resource filtering so users can enable only selected tools,
   prompts, themes, hooks, or other resources from a package.
-- [ ] Make startup auto-install missing project-declared packages.
-- [ ] Add package resource types beyond the current tool/command/prompt-section
+- [x] Make startup auto-install missing project-declared packages.
+- [x] Add package resource types beyond the current tool/command/prompt-section
   surface, especially prompts and themes.
-- [ ] Add package doctor/status reporting for broken installs or stale package
+- [x] Add package doctor/status reporting for broken installs or stale package
   manifests.
-- [ ] Add tests for install/remove/update/filtering and package precedence
+- [x] Add tests for install/remove/update/filtering and package precedence
   between global and project scope.
 
 ## P1
@@ -138,14 +138,14 @@ Parity sources:
   ad hoc permissions.
 - [ ] Add sandbox presets such as read-only, workspace-write, and full-access,
   with optional network toggles.
-- [ ] Add per-tool approval overrides stored in user/project config.
+- [x] Add per-tool approval overrides stored in user/project config.
 - [ ] Add working-directory policies and repo checks for agent runs that should
   stay inside a declared project root.
-- [ ] Add approval-reviewer hooks for programmatic clients and future app-server
+- [x] Add approval-reviewer hooks for programmatic clients and future app-server
   consumers.
-- [ ] Add an approval audit/history view so the user can inspect prior allow and
+- [x] Add an approval audit/history view so the user can inspect prior allow and
   deny decisions.
-- [ ] Add tests for policy resolution order, override precedence, and approval
+- [x] Add tests for policy resolution order, override precedence, and approval
   persistence.
 
 ## `artifactum` - Attachments And Artifact Buffers

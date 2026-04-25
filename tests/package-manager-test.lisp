@@ -51,6 +51,24 @@
           (clawmacs::make-buffer-type-registry)))
      ,@body))
 
+(defmacro with-project-test-state ((root-var definitions-var) &body body)
+  `(let* ((base (merge-pathnames
+                 (format nil "clawmacs-project-tests-~D-~D-~36R/"
+                         (get-universal-time)
+                         (get-internal-real-time)
+                         (random (expt 36 8)))
+                 #P"/tmp/"))
+          (,root-var (merge-pathnames #P"root/" base))
+          (,definitions-var (merge-pathnames #P"defs/" base))
+          (clawmacs::*project-registry* (make-hash-table :test #'equal))
+          (clawmacs::*project-definitions-directory* ,definitions-var)
+          (clawmacs::*project-definitions-loaded-p* nil)
+          (clawmacs::*buffer-ring* nil)
+          (clawmacs::*buffer-counter* 0))
+     (ensure-directories-exist (merge-pathnames #P".keep" ,root-var))
+     (ensure-directories-exist (merge-pathnames #P".keep" ,definitions-var))
+     ,@body))
+
 (defun default-package-test-channels ()
   (list (clawmacs:make-package-channel
          :name "default"
@@ -74,6 +92,20 @@
           (clawmacs::*buffer-type-registry*
            (clawmacs::make-buffer-type-registry))
           (clawmacs::*enabled-builtin-packages* nil))
+     ,@body))
+
+(defmacro with-packrat-resource-state (() &body body)
+  `(let ((clawmacs::*command-table* (make-hash-table :test #'eq))
+         (clawmacs::*extended-docs* (make-hash-table :test #'eq))
+         (clawmacs::*agent-tool-metadata-table* (make-hash-table :test #'eq))
+         (clawmacs::*agent-tool-name-table* (make-hash-table :test #'equal))
+         (clawmacs::*hook-metadata-table* (make-hash-table :test #'eq))
+         (clawmacs::*advice-table* (make-hash-table :test #'eq))
+         (clawmacs::*slash-command-table* (make-hash-table :test #'equal))
+         (clawmacs::*buffer-type-registry*
+          (clawmacs::make-buffer-type-registry))
+         (clawmacs::*package-prompt-sections* nil)
+         (clawmacs::*current-package-resource-types* nil))
      ,@body))
 
 (defun write-test-file (path contents)
@@ -127,6 +159,89 @@
       (write-test-file (merge-pathnames "test-package.lisp" repo-root) entrypoint-content))
     (commit-test-git-repo repo-root)
     repo-root))
+
+(defun make-package-source-directory (&key label manifest entrypoint-content)
+  (let ((root (uiop:ensure-directory-pathname
+               (temp-package-test-directory (or label "source")))))
+    (ensure-directories-exist (merge-pathnames #P".keep" root))
+    (when manifest
+      (write-test-file (merge-pathnames "manifest.lisp" root) manifest))
+    (when entrypoint-content
+      (write-test-file (merge-pathnames "test-package.lisp" root)
+                       entrypoint-content))
+    root))
+
+(defun packrat-resource-entrypoint-content (version)
+  (format nil "(in-package :clawmacs)
+
+(defvar *packrat-resource-version* ~S)
+
+(defun packrat-resource-command (buffer)
+  (declare (ignore buffer))
+  *packrat-resource-version*)
+
+(defcommand packrat-resource-command)
+
+(defun packrat-resource-tool (args)
+  (declare (ignore args))
+  (lisp-data-string (list :ok t :version *packrat-resource-version*)))
+
+(deftool packrat-resource-tool
+  :name \"packrat_resource_tool\"
+  :description \"Packrat resource tool.\"
+  :permission :agent-allowed
+  :call-style :raw-args
+  :args ((value :type \"string\" :description \"value\")))
+
+(defdoc packrat-resource-command
+  :category \"packrat\"
+  :usage \"(packrat-resource-command)\"
+  :returns \"string\"
+  :see-also ())
+
+(defhook *packrat-resource-hook* (buffer)
+  \"Packrat resource hook.\")
+
+(defun packrat-resource-target (value)
+  value)
+
+(defadvice packrat-resource-target packrat-resource-advice :before (value)
+  (declare (ignore value))
+  nil)
+
+(define-buffer-type :packrat-resource
+  :description \"Packrat resource buffer\"
+  :major-mode \"packrat-resource\")
+" version))
+
+(defun packrat-resource-package-content (version)
+  (concatenate 'string
+               (packrat-resource-entrypoint-content version)
+               "
+
+(register-package-prompt-section
+ \"packrat-resource\"
+ \"## Packrat resource prompt
+PACKRAT RESOURCE PROMPT\"
+ :package \"resource-package\")
+"))
+
+(defun make-packrat-resource-package-source (&key label version)
+  (let* ((root (make-package-source-directory
+                :label label
+                :manifest
+                "(:name \"resource-package\"
+ :description \"Resource package\"
+ :entrypoint \"test-package.lisp\"
+ :prompt-template-directory \"prompts/\")"
+                :entrypoint-content
+                (packrat-resource-package-content version))))
+    (write-test-file (merge-pathnames "prompts/review.md" root)
+                     "---
+description: Resource prompt template
+---
+Resource prompt body.")
+    root))
 
 (defun make-package-channel-root (&key label package-name manifest entrypoint-content)
   (let* ((channel-root (uiop:ensure-directory-pathname
@@ -237,6 +352,9 @@
            (organa (find "organa" definitions
                          :key #'clawmacs:package-definition-name
                          :test #'string=))
+           (packrat (find "packrat" definitions
+                          :key #'clawmacs:package-definition-name
+                          :test #'string=))
            (pipelines (find "pipelines" definitions
                             :key #'clawmacs:package-definition-name
                             :test #'string=))
@@ -258,7 +376,7 @@
            (templata (find "templata" definitions
                            :key #'clawmacs:package-definition-name
                            :test #'string=)))
-      (is (equal '("git" "lispi" "netcons" "organa" "pipelines" "prove"
+      (is (equal '("git" "lispi" "netcons" "organa" "packrat" "pipelines" "prove"
                    "sexed" "slop" "speculum" "subagent" "templata")
                  names))
       (is (not (null git)))
@@ -276,6 +394,10 @@
       (is (eq :builtin (clawmacs:package-definition-source-tier organa)))
       (is (clawmacs:package-definition-autoload organa))
       (is (probe-file (clawmacs:package-definition-entrypoint organa)))
+      (is (not (null packrat)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier packrat)))
+      (is (not (clawmacs:package-definition-autoload packrat)))
+      (is (probe-file (clawmacs:package-definition-entrypoint packrat)))
       (is (not (null pipelines)))
       (is (eq :builtin (clawmacs:package-definition-source-tier pipelines)))
       (is (clawmacs:package-definition-autoload pipelines))
@@ -303,7 +425,15 @@
       (is (not (null templata)))
       (is (eq :builtin (clawmacs:package-definition-source-tier templata)))
       (is (clawmacs:package-definition-autoload templata))
-      (is (probe-file (clawmacs:package-definition-entrypoint templata))))))
+      (is (probe-file (clawmacs:package-definition-entrypoint templata)))
+      (is (not (null (find "packrat" definitions
+                           :key #'clawmacs:package-definition-name
+                           :test #'string=))))
+      (is (eq :builtin
+              (clawmacs:package-definition-source-tier
+               (find "packrat" definitions
+                     :key #'clawmacs:package-definition-name
+                     :test #'string=)))))))
 
 (test load-autoload-packages-skips-disabled-builtin-sexed
   "Bundled sexed stays discoverable but does not autoload by default."
@@ -319,6 +449,7 @@
       (is (not (null (clawmacs:find-available-package "speculum"))))
       (is (not (null (clawmacs:find-available-package "subagent"))))
       (is (not (null (clawmacs:find-available-package "templata"))))
+      (is (not (null (clawmacs:find-available-package "packrat"))))
       (is (null (clawmacs:render-package-prompt-sections))))))
 
 (test load-autoload-packages-registers-enabled-pipelines-surface
@@ -560,6 +691,155 @@ CUSTOM PACKAGE PROMPT\")"
       (is (null (clawmacs:clawmacs-use-package :src-type :git
                                                :repo (namestring source-repo)))))))
 
+(test clawmacs-use-package-installs-path-packages-and-records-metadata
+  "Local-path installs copy the package, persist a record, and report scope."
+  (let* ((source (make-packrat-resource-package-source
+                  :label "packrat-local"
+                  :version "v1"))
+         (packages-root (temp-package-test-directory "packrat-local-root")))
+    (with-packages-directory-override (packages-root)
+      (let ((definition (clawmacs:clawmacs-use-package
+                         :src-type :path
+                         :repo (namestring source)
+                         :resource-types '(:tool :command :doc :buffer-type))))
+        (is (not (null definition)))
+        (is (string= "resource-package"
+                     (clawmacs:package-definition-name definition)))
+        (let ((record (clawmacs:package-install-record-for-definition definition)))
+          (is (eq :path (clawmacs:package-install-record-source-type record)))
+          (is (eq :global (clawmacs:package-install-record-scope record)))
+          (is (equal '(:tool :command :doc :buffer-type)
+                     (clawmacs:package-install-record-resource-types record)))
+          (is (string= (namestring source)
+                       (clawmacs:package-install-record-source record)))
+          (is (probe-file
+               (clawmacs::package-install-metadata-path
+                (clawmacs:package-definition-root definition)))))
+        (is (search "resource-package"
+                    (clawmacs:install-package-status-string definition)))
+        (is (search "resources: tool, command, doc, buffer-type"
+                    (clawmacs:package-resource-policy-string definition))))))
+
+(test clawmacs-use-package-updates-and-removes-installed-packages
+  "Installed package records can be refreshed from source and removed again."
+  (let* ((source (make-packrat-resource-package-source
+                  :label "packrat-cycle"
+                  :version "v1"))
+         (packages-root (temp-package-test-directory "packrat-cycle-root")))
+    (with-packages-directory-override (packages-root)
+      (let ((definition (clawmacs:clawmacs-use-package
+                         :src-type :path
+                         :repo (namestring source))))
+        (is (not (null definition)))
+        (let ((installed-file
+                (merge-pathnames "test-package.lisp"
+                                 (clawmacs:package-definition-root definition))))
+          (is (search "v1" (uiop:read-file-string installed-file)))
+          (write-test-file (merge-pathnames "test-package.lisp" source)
+                           (packrat-resource-package-content "v2"))
+          (is (not (null (clawmacs:update-installed-package
+                          "resource-package"))))
+          (is (search "v2" (uiop:read-file-string installed-file)))
+          (uiop:delete-directory-tree source :validate t :if-does-not-exist :ignore)
+          (let* ((report (clawmacs:package-doctor-report))
+                 (entry (find "resource-package" report
+                              :key (lambda (item) (getf item :name))
+                              :test #'string=)))
+            (is (not (null entry)))
+            (is (eq :missing-source (getf entry :status))))
+          (is (search "missing-source" (clawmacs:package-doctor-to-string)))
+          (is (not (null (clawmacs:remove-installed-package "resource-package"))))
+          (is (null (clawmacs:find-installed-package "resource-package"))))))))
+
+(test clawmacs-use-package-respects-package-resource-filtering
+  "Package resource allowlists control which package-owned artifacts register."
+  (let* ((source (make-packrat-resource-package-source
+                  :label "packrat-filter"
+                  :version "v1"))
+         (packages-root (temp-package-test-directory "packrat-filter-root")))
+    (with-packages-directory-override (packages-root)
+      (with-packrat-resource-state ()
+        (let ((clawmacs::*prompt-template-user-directory*
+                (uiop:ensure-directory-pathname
+                 (temp-package-test-directory "packrat-filter-global"))))
+          (clawmacs:clawmacs-use-package
+           :src-type :path
+           :repo (namestring source)
+           :resource-types '(:tool :command :doc :buffer-type))
+          (clawmacs:set-package-enablement-scope "resource-package" :global)
+          (is (not (null (clawmacs:load-active-packages))))
+          (is (not (null (gethash 'clawmacs::packrat-resource-command
+                                  clawmacs::*command-table*))))
+          (is (not (null (clawmacs:find-agent-tool-metadata
+                          'clawmacs::packrat-resource-tool))))
+          (is (not (null (gethash 'clawmacs::packrat-resource-command
+                                  clawmacs::*extended-docs*))))
+          (is (not (null (clawmacs:find-buffer-type :packrat-resource))))
+          (is (null (clawmacs:find-hook-metadata
+                     'clawmacs::*packrat-resource-hook*)))
+          (is (null (clawmacs:list-advices 'clawmacs::packrat-resource-target)))
+          (is (null (clawmacs:render-package-prompt-sections)))
+          (is (null (clawmacs:discover-prompt-templates
+                     :buffer (make-buffer "packrat-filter")))))))))
+
+(test project-declared-packages-auto-install-and-project-local-install-wins
+  "Project manifests can auto-install declared packages and prefer project-local installs."
+  (let* ((global-source (make-packrat-resource-package-source
+                         :label "packrat-global"
+                         :version "global"))
+         (project-source (make-packrat-resource-package-source
+                          :label "packrat-project"
+                          :version "project"))
+         (project-root (temp-package-test-directory "packrat-project-root"))
+         (project-packages
+           `((:name "resource-package"
+              :src-type :path
+              :path ,(namestring project-source)
+              :scope :project
+              :resource-types (:tool :command)))))
+    (with-project-test-state (root definitions)
+      (with-packages-directory-override
+          ((temp-package-test-directory "packrat-precedence-packages"))
+        (clawmacs:create-project "packrat-project"
+                                 :root project-root
+                                 :packages project-packages)
+        (clawmacs:clawmacs-use-package
+         :src-type :path
+         :repo (namestring global-source))
+        (clawmacs:load-project-definitions)
+        (let* ((project (clawmacs:find-project "packrat-project"))
+               (global-definition (clawmacs:find-installed-package
+                                   "resource-package"))
+               (project-definition
+                 (clawmacs:find-installed-package "resource-package"
+                                                  :project project))
+               (buffer (make-buffer "packrat-project"
+                                    :working-directory project-root)))
+          (is (not (null project)))
+          (is (eq :third-party
+                  (clawmacs:package-definition-source-tier global-definition)))
+          (is (search "global"
+                      (uiop:read-file-string
+                       (merge-pathnames "test-package.lisp"
+                                        (clawmacs:package-definition-root
+                                         global-definition)))))
+          (is (not (null project-definition)))
+          (is (eq :project (clawmacs:package-definition-source-tier
+                            project-definition)))
+          (is (search "project"
+                      (uiop:read-file-string
+                       (merge-pathnames "test-package.lisp"
+                                        (clawmacs:package-definition-root
+                                         project-definition)))))
+          (is (eq :project (clawmacs:package-enablement-scope
+                            "resource-package"
+                            :buffer buffer
+                            :project project)))
+          (is (eq project-definition
+                  (clawmacs:find-installed-package "resource-package"
+                                                   :buffer buffer
+                                                   :project project))))))))
+
 (test load-user-init-file-continues-after-package-warning
   "Package loader failures do not abort later init forms."
   (let* ((packages-root (temp-package-test-directory "init-root"))
@@ -578,7 +858,7 @@ CUSTOM PACKAGE PROMPT\")"
           (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
           (*package-init-continued* nil))
       (clawmacs:load-user-init-file)
-      (is (not (null *package-init-continued*))))))
+      (is (not (null *package-init-continued*)))))))
 
 (test load-user-init-file-can-register-package-channels
   "init.lisp can register additional local package channels."

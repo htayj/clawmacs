@@ -84,6 +84,16 @@ Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
 (defvar *package-prompt-sections* nil
   "Prompt sections registered by loaded packages.")
 
+(defvar *current-package-resource-types* nil
+  "Dynamic list of allowed resource types while loading one package entrypoint.
+When NIL, all package-owned resource types are allowed.")
+
+(defvar *package-install-record-file-name* "packrat.json"
+  "Sidecar metadata file stored alongside each installed package.")
+
+(defvar *supported-package-source-types* '(:git :path :local :npm)
+  "Supported package source types for installed packages.")
+
 (defun emit-package-warning (format-string &rest format-args)
   "Report a non-fatal package warning and return NIL."
   (let ((message (apply #'format nil format-string format-args)))
@@ -93,14 +103,18 @@ Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
 
 (defun normalize-package-source-type (source-type)
   "Normalize SOURCE-TYPE to a keyword, defaulting NIL to :GIT."
-  (cond
-    ((null source-type) :git)
-    ((keywordp source-type) source-type)
-    ((symbolp source-type)
-     (intern (string-upcase (symbol-name source-type)) :keyword))
-    ((stringp source-type)
-     (intern (string-upcase source-type) :keyword))
-    (t nil)))
+  (let ((normalized
+          (cond
+            ((null source-type) :git)
+            ((keywordp source-type) source-type)
+            ((symbolp source-type)
+             (intern (string-upcase (symbol-name source-type)) :keyword))
+            ((stringp source-type)
+             (intern (string-upcase source-type) :keyword))
+            (t nil))))
+    (and normalized
+         (member normalized *supported-package-source-types* :test #'eq)
+         normalized)))
 
 (defun normalize-package-repo (repo)
   "Normalize REPO to a string, or NIL when unsupported."
@@ -185,14 +199,28 @@ Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
                     hash (ldb (byte 64 0) (* hash prime))))
     (format nil "~16,'0X" hash)))
 
-(defun package-install-directory (source-type repo)
+(defun project-packages-directory (project-designator)
+  "Return the directory used for project-local package installs."
+  (let ((project (ensure-project project-designator)))
+    (merge-pathnames #P".clawmacs.d/packages/"
+                     (project-root project))))
+
+(defun package-install-root (&key (scope :global) project)
+  "Return the directory that should hold a package install for SCOPE."
+  (ecase scope
+    (:global *packages-directory*)
+    (:project (or (and project (project-packages-directory project))
+                  (error "Project-local package installs require :PROJECT.")))))
+
+(defun package-install-directory (source-type repo &key (scope :global) project)
   "Return the directory pathname where SOURCE-TYPE/REPO should be installed."
   (let* ((source-label (string-downcase (symbol-name source-type)))
          (repo-label (filesystem-safe-component (repo-display-name repo)))
          (digest (string-downcase (package-source-hash repo)))
-         (dir-name (format nil "~A-~A-~A/" source-label repo-label digest)))
+         (dir-name (format nil "~A-~A-~A/" source-label repo-label digest))
+         (root (package-install-root :scope scope :project project)))
     (uiop:ensure-directory-pathname
-     (merge-pathnames dir-name *packages-directory*))))
+     (merge-pathnames dir-name root))))
 
 (defun package-install-key (install-dir)
   "Return the hash-table key used for INSTALL-DIR."
@@ -213,28 +241,202 @@ Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
   "Create *PACKAGES-DIRECTORY* if needed."
   (ensure-directories-exist (merge-pathnames #P".keep" *packages-directory*)))
 
-(defun ensure-package-installed (repo install-dir)
-  "Clone REPO into INSTALL-DIR when missing. Returns non-nil on success."
-  (ensure-packages-directory-exists)
-  (if (probe-file install-dir)
+(defun package-resource-type-name (value)
+  "Normalize VALUE to a lower-case package resource type keyword."
+  (cond
+    ((null value) nil)
+    ((keywordp value) value)
+    ((symbolp value)
+     (intern (string-upcase (symbol-name value)) :keyword))
+    ((stringp value)
+     (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) value)))
+       (and (plusp (length trimmed))
+            (intern (string-upcase (package-identifier-string trimmed))
+                    :keyword))))
+    (t nil)))
+
+(defun normalize-package-resource-type-list (types)
+  "Return TYPES as a list of normalized resource-type keywords."
+  (remove-duplicates
+   (loop :for type :in (coerce (or types #()) 'list)
+         :for normalized := (package-resource-type-name type)
+         :when normalized
+           :collect normalized)
+   :test #'eq))
+
+(defun package-resource-type-allowed-p (type)
+  "Return true when TYPE is allowed for the package currently being loaded."
+  (let ((policy *current-package-resource-types*))
+    (or (null policy)
+        (member (package-resource-type-name type) policy :test #'eq))))
+
+(defun package-install-metadata-path (install-dir)
+  "Return the sidecar metadata path for INSTALL-DIR."
+  (merge-pathnames *package-install-record-file-name*
+                   (uiop:ensure-directory-pathname install-dir)))
+
+(defun package-install-record-plist (definition &key source-type source ref
+                                                scope project resource-types)
+  "Return a persisted metadata plist for an installed package."
+  (labels ((source-string (value)
+             (cond
+               ((null value) nil)
+               ((stringp value) value)
+               ((pathnamep value) (namestring value))
+               (t (princ-to-string value)))))
+    (list :name (package-definition-name definition)
+          :description (package-definition-description definition)
+          :source-type (package-resource-type-name source-type)
+          :source (source-string source)
+          :ref (manifest-string ref)
+          :scope (package-resource-type-name scope)
+          :project (manifest-string project)
+          :resource-types
+          (coerce (normalize-package-resource-type-list resource-types)
+                  'vector)
+          :installed-at (get-universal-time)
+          :updated-at (get-universal-time))))
+
+(defun package-install-record-source-type (record)
+  "Return RECORD's normalized source type."
+  (package-resource-type-name (getf record :source-type)))
+
+(defun package-install-record-resource-types (record)
+  "Return RECORD's normalized resource type allowlist."
+  (normalize-package-resource-type-list (getf record :resource-types)))
+
+(defun package-install-record-scope (record)
+  "Return RECORD's normalized install scope."
+  (package-resource-type-name (getf record :scope)))
+
+(defun package-install-record-project (record)
+  "Return RECORD's normalized project name."
+  (manifest-string (getf record :project)))
+
+(defun package-install-record-source (record)
+  "Return RECORD's source string."
+  (manifest-string (getf record :source)))
+
+(defun package-install-record-ref (record)
+  "Return RECORD's source ref string."
+  (manifest-string (getf record :ref)))
+
+(defun read-package-install-record (install-dir)
+  "Read the install metadata for INSTALL-DIR, returning a plist or NIL."
+  (let ((path (package-install-metadata-path install-dir)))
+    (when (probe-file path)
+      (handler-case
+          (let ((cl-json:*json-array-type* 'vector))
+            (let ((data (cl-json:decode-json-from-string
+                         (uiop:read-file-string path))))
+              (list :name (manifest-package-name (package-lookup-json-value data "name"))
+                    :description (manifest-string
+                                  (package-lookup-json-value data "description"))
+                    :source-type (package-resource-type-name
+                                  (package-lookup-json-value data "source_type"))
+                    :source (manifest-string (package-lookup-json-value data "source"))
+                    :ref (manifest-string (package-lookup-json-value data "ref"))
+                    :scope (package-resource-type-name
+                            (package-lookup-json-value data "scope"))
+                    :project (manifest-string (package-lookup-json-value data "project"))
+                    :resource-types
+                    (package-install-record-resource-types
+                     (list :resource-types
+                           (package-lookup-json-value data "resource_types")))
+                    :installed-at (package-lookup-json-value data "installed_at")
+                    :updated-at (package-lookup-json-value data "updated_at"))))
+        (error (e)
+          (emit-package-warning "Failed to read package install record ~A: ~A"
+                                (namestring path)
+                                e)
+          nil)))))
+
+(defun write-package-install-record (install-dir record)
+  "Persist RECORD alongside INSTALL-DIR."
+  (let ((path (package-install-metadata-path install-dir)))
+    (ensure-directories-exist path)
+    (with-open-file (stream path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create
+                            :external-format :utf-8)
+      (write-string
+       (cl-json:encode-json-to-string
+        `((:name . ,(getf record :name))
+          (:description . ,(getf record :description))
+          (:source-type . ,(string-downcase
+                            (symbol-name (or (getf record :source-type) :git))))
+          (:source . ,(or (getf record :source) ""))
+          (:ref . ,(or (getf record :ref) ""))
+          (:scope . ,(string-downcase
+                      (symbol-name (or (getf record :scope) :global))))
+          (:project . ,(or (getf record :project) ""))
+          (:resource-types . ,(coerce (package-install-record-resource-types record)
+                                      'vector))
+          (:installed-at . ,(or (getf record :installed-at)
+                                (get-universal-time)))
+          (:updated-at . ,(get-universal-time))))
+       stream))
+    path))
+
+(defun ensure-package-installed (repo install-dir &key (src-type :git) ref)
+  "Install REPO into INSTALL-DIR when missing. Returns non-nil on success."
+  (let ((install-root
+          (uiop:pathname-parent-directory-pathname
+           (uiop:ensure-directory-pathname install-dir))))
+    (ensure-directories-exist (merge-pathnames #P".keep" install-root)))
+  (if (probe-file (merge-pathnames #P"manifest.lisp"
+                                   (uiop:ensure-directory-pathname install-dir)))
       t
       (handler-case
-          (multiple-value-bind (stdout stderr exit-code)
-              (uiop:run-program (list "git" "clone" repo (namestring install-dir))
-                                :output :string
-                                :error-output :string
-                                :ignore-error-status t)
-            (if (zerop exit-code)
-                (progn
-                  (file-debug-log "package"
-                                  "cloned ~A into ~A"
-                                  repo
-                                  (namestring install-dir))
-                  t)
-                (emit-package-warning "Failed to clone package from ~A into ~A: ~A"
-                                      repo
-                                      (namestring install-dir)
-                                      (package-output-summary stdout stderr exit-code))))
+          (let ((source-type (package-resource-type-name src-type)))
+            (cond
+              ((member source-type '(:path :local :npm) :test #'eq)
+               (let* ((source-path (uiop:ensure-directory-pathname (pathname repo)))
+                      (target (uiop:ensure-directory-pathname install-dir)))
+                 (ensure-directories-exist target)
+                 (multiple-value-bind (stdout stderr exit-code)
+                     (uiop:run-program
+                      (list "cp" "-R" (concatenate 'string (namestring source-path) "/.")
+                            (namestring target))
+                      :output :string
+                      :error-output :string
+                      :ignore-error-status t)
+                   (declare (ignore stdout stderr))
+                   (if (zerop exit-code)
+                       t
+                       (emit-package-warning
+                        "Failed to copy package from ~A into ~A (exit ~D)"
+                        source-path
+                        (namestring target)
+                        exit-code)))))
+              (t
+               (multiple-value-bind (stdout stderr exit-code)
+                   (uiop:run-program (list "git" "clone" repo (namestring install-dir))
+                                     :output :string
+                                     :error-output :string
+                                     :ignore-error-status t)
+                 (when (and (zerop exit-code) ref)
+                   (multiple-value-bind (checkout-stdout checkout-stderr checkout-exit-code)
+                       (uiop:run-program (list "git" "-C" (namestring install-dir)
+                                               "checkout" ref)
+                                         :output :string
+                                         :error-output :string
+                                         :ignore-error-status t)
+                     (setf stdout (concatenate 'string stdout checkout-stdout)
+                           stderr (concatenate 'string stderr checkout-stderr)
+                           exit-code (max exit-code checkout-exit-code))))
+                 (if (zerop exit-code)
+                     (progn
+                       (file-debug-log "package"
+                                       "cloned ~A into ~A"
+                                       repo
+                                       (namestring install-dir))
+                       t)
+                     (emit-package-warning "Failed to clone package from ~A into ~A: ~A"
+                                           repo
+                                           (namestring install-dir)
+                                           (package-output-summary stdout stderr exit-code)))))))
         (error (e)
           (emit-package-warning "Failed to start git clone for ~A: ~A" repo e)))))
 
@@ -365,20 +567,45 @@ Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
   (list :global (make-package-enable-table)
         :agents (make-hash-table :test #'equal)))
 
-(defun package-json-key-string (key)
-  "Return KEY as a lowercase JSON field name string."
-  (cond
-    ((keywordp key) (string-downcase (symbol-name key)))
-    ((symbolp key) (string-downcase (symbol-name key)))
-    ((stringp key) key)
-    (t (string key))))
+(defun package-identifier-string (value)
+  "Return VALUE as a lower-case hyphenated identifier string."
+  (let ((raw
+          (cond
+            ((keywordp value) (symbol-name value))
+            ((symbolp value) (symbol-name value))
+            ((stringp value) value)
+            ((pathnamep value) (namestring value))
+            (t (princ-to-string value)))))
+    (with-output-to-string (out)
+      (loop :with last-emitted-separator-p := t
+            :for index :from 0 :below (length raw)
+            :for char := (char raw index)
+            :for previous := (and (> index 0) (char raw (1- index)))
+            :do (cond
+                  ((find char " _-" :test #'char=)
+                   (setf last-emitted-separator-p t))
+                  ((and (upper-case-p char)
+                        previous
+                        (or (lower-case-p previous)
+                            (digit-char-p previous)))
+                   (unless last-emitted-separator-p
+                     (write-char #\- out))
+                   (write-char (char-downcase char) out)
+                   (setf last-emitted-separator-p nil))
+                  (t
+                   (write-char (char-downcase char) out)
+                   (setf last-emitted-separator-p nil)))))))
+
+(defun package-json-normalize-key-string (key)
+  "Return KEY normalized for package JSON lookup."
+  (package-identifier-string key))
 
 (defun package-lookup-json-value (alist key)
   "Look up KEY in decoded JSON ALIST using string-insensitive key matching."
-  (let ((target (string-downcase key)))
+  (let ((target (package-json-normalize-key-string key)))
     (cdr (find target alist
                :key (lambda (entry)
-                      (string-downcase (package-json-key-string (car entry))))
+                      (package-json-normalize-key-string (car entry)))
                :test #'string=))))
 
 (defun package-configuration-global-table (configuration)
@@ -504,13 +731,21 @@ Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
    package-name
    (package-agent-enable-table agent-name)))
 
-(defun package-enablement-scope (package &key buffer agent-name)
-  "Return PACKAGE's effective enablement scope for BUFFER/AGENT-NAME."
+(defun package-enablement-scope (package &key buffer agent-name project)
+  "Return PACKAGE's effective enablement scope for BUFFER/AGENT-NAME/PROJECT."
   (let* ((name (manifest-package-name package))
          (agent (or agent-name
-                    (and buffer (buffer-agent-name buffer)))))
+                    (and buffer (buffer-agent-name buffer))))
+         (project-name (or project
+                           (and buffer (buffer-project-name buffer))))
+         (project-definition (and project-name
+                                  (find-installed-package name
+                                                          :project project-name))))
     (cond
       ((null name) :default)
+      ((and project-definition
+            (eq :project (package-definition-source-tier project-definition)))
+       :project)
       ((buffer-package-name-enabled-p buffer name) :buffer)
       ((package-enabled-for-agent-p name agent) :agent)
       ((package-enabled-globally-p name) :global)
@@ -534,6 +769,11 @@ Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
         (let ((normalized (manifest-package-name name)))
           (when normalized
             (setf (gethash normalized table) t)))))
+    (let ((project (and buffer (buffer-project-name buffer))))
+      (when project
+        (dolist (definition (list-installed-packages :buffer buffer))
+          (when (eq :project (package-definition-source-tier definition))
+            (setf (gethash (package-definition-name definition) table) t)))))
     (package-table-names table)))
 
 (defun package-active-p (package &key buffer agent-name)
@@ -644,6 +884,9 @@ removes the package from the other scopes in the same context."
 
 (defun register-package-prompt-section (name body &key title package)
   "Register BODY as a system-prompt section contributed by a package."
+  (when (and *current-clawmacs-package*
+             (not (package-resource-type-allowed-p :prompt-section)))
+    (return-from register-package-prompt-section nil))
   (let ((normalized-name (manifest-package-name name))
         (normalized-package (or (and package (manifest-package-name package))
                                 *current-clawmacs-package*))
@@ -748,16 +991,26 @@ removes the package from the other scopes in the same context."
              *slash-command-table*)
     (sort entries #'string< :key #'slash-command-name)))
 
-(defun package-owned-prompt-templates (package-name)
-  "Return prompt templates contributed by PACKAGE-NAME's prompt directory."
-  (let ((definition (find-installed-package package-name)))
-    (when definition
+(defun package-owned-prompt-templates (package &key buffer project)
+  "Return prompt templates contributed by PACKAGE's prompt directory."
+  (let* ((definition (typecase package
+                       (package-definition package)
+                       (t (find-installed-package package
+                                                 :buffer buffer
+                                                 :project project))))
+         (record (and definition
+                      (package-install-record-for-definition definition))))
+    (when (and definition
+               (or (null record)
+                   (member :prompt-template
+                           (package-install-record-resource-types record)
+                           :test #'eq)))
       (let ((directory (package-prompt-template-directory definition)))
         (when (and directory (probe-file directory))
           (discover-prompt-templates-in-directory
            directory
            :scope :package
-           :package package-name))))))
+           :package (package-definition-name definition)))))))
 
 (defun package-owned-prompt-sections (package-name)
   "Return prompt sections registered by PACKAGE-NAME."
@@ -912,7 +1165,7 @@ removes the package from the other scopes in the same context."
                          (slash-command-argument-hint command))
                     (or (slash-command-description command) "")))
           (format s "~%")))
-      (let ((templates (package-owned-prompt-templates name)))
+      (let ((templates (package-owned-prompt-templates definition :buffer buffer)))
         (when templates
           (format s "Prompt Templates:~%")
           (dolist (template templates)
@@ -1120,7 +1373,12 @@ Returns a normalized plist or NIL on failure."
   "Load DEFINITION's entrypoint unless its root is already loaded."
   (let* ((install-key (package-install-key (package-definition-root definition)))
          (package-name (package-definition-name definition))
-         (entrypoint (package-definition-entrypoint definition)))
+         (entrypoint (package-definition-entrypoint definition))
+         (install-record (read-package-install-record
+                          (package-definition-root definition)))
+         (*current-package-resource-types*
+           (and install-record
+                (package-install-record-resource-types install-record))))
     (when (gethash install-key *loaded-packages*)
       (return-from load-package-definition-entrypoint definition))
     (handler-case
@@ -1185,7 +1443,7 @@ Returns a normalized plist or NIL on failure."
   "Reload packages active for BUFFER/AGENT-NAME and return loaded definitions."
   (let ((loaded nil))
     (dolist (name (active-package-names :buffer buffer :agent-name agent-name))
-      (let ((definition (find-installed-package name)))
+      (let ((definition (find-installed-package name :buffer buffer)))
         (cond
           ((null definition)
            (emit-package-warning "Enabled Clawmacs package ~A is not installed"
@@ -1292,21 +1550,34 @@ Returns a normalized plist or NIL on failure."
                :key #'package-definition-name
                :test #'string=))))
 
-(defun installed-package-manifest-roots ()
-  "Return package roots installed under *PACKAGES-DIRECTORY*."
-  (when (probe-file *packages-directory*)
-    (loop :for manifest :in (directory
-                             (merge-pathnames #P"*/manifest.lisp"
-                                              *packages-directory*))
-          :collect (uiop:pathname-directory-pathname manifest))))
+(defun installed-package-manifest-roots (&key project)
+  "Return package roots installed under the configured install roots."
+  (let ((roots nil))
+    (when (probe-file *packages-directory*)
+      (push *packages-directory* roots))
+    (when project
+      (let ((project-root (project-packages-directory project)))
+        (when (probe-file project-root)
+          (push project-root roots))))
+    (nreverse roots)))
 
-(defun scan-installed-package-definitions ()
-  "Return package definitions discovered from *PACKAGES-DIRECTORY*."
+(defun scan-installed-package-definitions (&key project)
+  "Return package definitions discovered from installed package roots."
   (let ((definitions nil))
-    (dolist (root (installed-package-manifest-roots))
-      (let ((manifest (read-package-manifest root :source-tier :third-party)))
-        (when manifest
-          (push (package-definition-from-manifest manifest) definitions))))
+    (dolist (root (installed-package-manifest-roots :project project))
+      (let ((source-tier (if (and project
+                                  (equal (namestring (uiop:ensure-directory-pathname root))
+                                         (namestring (project-packages-directory project))))
+                             :project
+                             :third-party)))
+        (dolist (manifest-path (directory
+                                (merge-pathnames #P"*/manifest.lisp"
+                                                 (uiop:ensure-directory-pathname root))))
+          (let ((manifest (read-package-manifest
+                           (uiop:pathname-directory-pathname manifest-path)
+                           :source-tier source-tier)))
+            (when manifest
+              (push (package-definition-from-manifest manifest) definitions))))))
     (nreverse definitions)))
 
 (defun unique-package-definitions (definitions)
@@ -1320,26 +1591,41 @@ Returns a normalized plist or NIL on failure."
           (push definition result))))
     (nreverse result)))
 
-(defun list-installed-packages ()
-  "Return package definitions present on disk and available for enablement."
-  (unique-package-definitions
-   (append (scan-installed-package-definitions)
-           (list-available-packages))))
+(defun package-project-designator (buffer project)
+  "Return the project designator implied by BUFFER or PROJECT."
+  (or project
+      (and buffer (buffer-project-name buffer))))
 
-(defun find-installed-package (name)
+(defun list-installed-packages (&key buffer project)
+  "Return package definitions present on disk and available for enablement."
+  (let* ((project-designator (package-project-designator buffer project))
+         (project-definitions
+           (and project-designator
+                (scan-installed-package-definitions :project project-designator)))
+         (global-definitions
+           (scan-installed-package-definitions)))
+    (unique-package-definitions
+     (append project-definitions
+             global-definitions
+             (list-available-packages)))))
+
+(defun find-installed-package (name &key buffer project)
   "Find an installed package definition by NAME."
   (let ((normalized-name (manifest-package-name name)))
     (and normalized-name
-         (find normalized-name (list-installed-packages)
+         (find normalized-name
+               (list-installed-packages :buffer buffer :project project)
                :key #'package-definition-name
                :test #'string=))))
 
-(defun load-clawmacs-package (package &optional seen)
+(defun load-clawmacs-package (package &key seen buffer project)
   "Load PACKAGE by name or definition, including dependencies.
 Returns the loaded package definition on success, or NIL on warning/failure."
   (let* ((definition (typecase package
                        (package-definition package)
-                       (t (find-installed-package package))))
+                       (t (find-installed-package package
+                                                 :buffer buffer
+                                                 :project project))))
          (name (and definition (package-definition-name definition))))
     (unless definition
       (return-from load-clawmacs-package
@@ -1349,7 +1635,10 @@ Returns the loaded package definition on success, or NIL on warning/failure."
         (return-from load-clawmacs-package definition))
       (setf (gethash name seen-table) t)
       (dolist (dependency (package-definition-dependencies definition))
-        (unless (load-clawmacs-package dependency seen-table)
+        (unless (load-clawmacs-package dependency
+                                       :seen seen-table
+                                       :buffer buffer
+                                       :project project)
           (return-from load-clawmacs-package
             (emit-package-warning
              "Package ~A dependency ~A failed to load"
@@ -1361,13 +1650,14 @@ Returns the loaded package definition on success, or NIL on warning/failure."
   "Load packages active for BUFFER/AGENT-NAME and return loaded definitions."
   (let ((loaded nil))
     (dolist (name (active-package-names :buffer buffer :agent-name agent-name))
-      (let ((definition (find-installed-package name)))
+      (let ((definition (find-installed-package name :buffer buffer)))
         (cond
           ((null definition)
            (emit-package-warning "Enabled Clawmacs package ~A is not installed"
                                  name))
           (t
-           (let ((result (load-clawmacs-package definition)))
+           (let ((result (load-clawmacs-package definition
+                                                :buffer buffer)))
              (when result
                (when (fboundp 'register-package-agent-tool-provider-definitions)
                  (funcall
@@ -1381,25 +1671,275 @@ Returns the loaded package definition on success, or NIL on warning/failure."
   "Compatibility wrapper that loads globally enabled packages."
   (load-active-packages))
 
-(defun clawmacs-use-package (&key (src-type :git) repo &allow-other-keys)
+(defun clawmacs-use-package (&key (src-type :git) repo ref scope project
+                               resource-types &allow-other-keys)
   "Install a Clawmacs package from a git repository without enabling it.
 Returns the installed package definition on success, or NIL on warning/failure."
   (let ((normalized-source-type (normalize-package-source-type src-type))
-        (normalized-repo (normalize-package-repo repo)))
+        (normalized-repo (normalize-package-repo repo))
+        (normalized-scope (or scope :global))
+        (normalized-project (and project (ensure-project project)))
+        (normalized-resource-types
+          (normalize-package-resource-type-list resource-types)))
     (cond
       ((null normalized-repo)
-       (emit-package-warning "clawmacs-use-package requires :repo to be a string or pathname"))
+        (emit-package-warning "clawmacs-use-package requires :repo to be a string or pathname"))
       ((null normalized-source-type)
-       (emit-package-warning "Unsupported package source type ~S" src-type))
-      ((not (eq normalized-source-type :git))
-       (emit-package-warning "Unsupported package source type ~S. Only :git is supported in v1."
-                             src-type))
+        (emit-package-warning "Unsupported package source type ~S" src-type))
       (t
-       (let* ((install-dir (package-install-directory normalized-source-type normalized-repo))
+       (let* ((install-dir (package-install-directory normalized-source-type
+                                                      normalized-repo
+                                                      :scope normalized-scope
+                                                      :project normalized-project))
               (package-root (or (probe-file install-dir) install-dir)))
-         (when (ensure-package-installed normalized-repo install-dir)
+         (when (ensure-package-installed normalized-repo
+                                         install-dir
+                                         :src-type normalized-source-type
+                                         :ref ref)
            (let ((manifest (read-package-manifest
                             package-root
-                            :source-tier :third-party)))
+                            :source-tier (if (eq normalized-scope :project)
+                                             :project
+                                             :third-party))))
+             (when manifest
+               (write-package-install-record
+                install-dir
+                (package-install-record-plist
+                 (package-definition-from-manifest manifest)
+                 :source-type normalized-source-type
+                 :source normalized-repo
+                 :ref ref
+                 :scope normalized-scope
+                 :project (and normalized-project
+                               (project-name normalized-project))
+                 :resource-types normalized-resource-types)))
              (and manifest
                   (package-definition-from-manifest manifest)))))))))
+
+(defun package-install-record-for-definition (definition)
+  "Return persisted install metadata for DEFINITION, when present."
+  (and definition
+       (read-package-install-record (package-definition-root definition))))
+
+(defun package-install-record-scope-label (record)
+  "Return a short human-readable install scope label for RECORD."
+  (case (package-install-record-scope record)
+    (:project "project")
+    (:global "global")
+    (otherwise "legacy")))
+
+(defun package-install-record-resource-summary (record)
+  "Return a display string describing RECORD's resource policy."
+  (let ((types (package-install-record-resource-types record)))
+    (if types
+        (format nil "resources: ~{~(~A~)~^, ~}" types)
+        "resources: all")))
+
+(defun package-install-status-entry (definition &key buffer project)
+  "Return a status plist for an installed package DEFINITION."
+  (let* ((record (package-install-record-for-definition definition))
+         (name (package-definition-name definition))
+         (scope (package-enablement-scope name :buffer buffer)))
+    (list :name name
+          :enabled-scope scope
+          :install-scope (and record (package-install-record-scope record))
+          :source-type (and record (package-install-record-source-type record))
+          :source (and record (package-install-record-source record))
+          :ref (and record (package-install-record-ref record))
+          :project (or (and record (package-install-record-project record))
+                       (and project (project-display-name project)))
+          :resource-types (and record (package-install-record-resource-types record))
+          :description (package-definition-description definition)
+          :root (namestring (package-definition-root definition))
+          :manifest-present-p (probe-file
+                               (merge-pathnames "manifest.lisp"
+                                                (package-definition-root definition)))
+          :record-present-p (probe-file
+                            (package-install-metadata-path
+                             (package-definition-root definition))))))
+
+(defun package-doctor-report (&key buffer project)
+  "Return a list of installed-package health records."
+  (loop :for definition :in (list-installed-packages :buffer buffer :project project)
+        :collect
+        (let* ((root (package-definition-root definition))
+               (manifest (ignore-errors
+                           (read-package-manifest root
+                                                  :source-tier
+                                                  (package-definition-source-tier
+                                                   definition))))
+               (record (package-install-record-for-definition definition))
+               (source-type (and record (package-install-record-source-type record)))
+               (source (and record (package-install-record-source record)))
+               (status (cond
+                         ((null manifest) :broken-manifest)
+                         ((and (member source-type '(:path :local :npm) :test #'eq)
+                               (or (null source) (not (probe-file source))))
+                          :missing-source)
+                         (t :ok))))
+          (list :name (package-definition-name definition)
+                :status status
+                :scope (package-install-record-scope record)
+                :install-scope (package-install-record-scope record)
+                :enabled-scope (package-enablement-scope
+                                (package-definition-name definition)
+                                :buffer buffer)
+                :description (package-definition-description definition)
+                :source-type source-type
+                :source source
+                :ref (and record (package-install-record-ref record))
+                :resource-types (and record (package-install-record-resource-types record))
+                :root (namestring root)
+                :manifest-present-p (not (null manifest))
+                :record-present-p (not (null record))))))
+
+(defun package-status-to-string (&key buffer project)
+  "Return a human-readable package status report."
+  (with-output-to-string (out)
+    (format out "Installed packages:~%")
+    (dolist (entry (package-doctor-report :buffer buffer :project project))
+      (format out "- [~(~A~)] [~(~A~)] ~A~%"
+              (or (getf entry :install-scope) :legacy)
+              (getf entry :enabled-scope)
+              (getf entry :name))
+      (when (getf entry :description)
+        (format out "  ~A~%" (getf entry :description)))
+      (when (getf entry :source-type)
+        (format out "  source: ~(~A~)~@[ ~A~]~%"
+                (getf entry :source-type)
+                (getf entry :source)))
+      (when (getf entry :resource-types)
+        (format out "  resources: ~{~(~A~)~^, ~}~%"
+                (getf entry :resource-types)))
+      (format out "  root: ~A~%" (getf entry :root))
+      (format out "  status: ~(~A~)~%" (getf entry :status))
+      (when (getf entry :ref)
+        (format out "  ref: ~A~%" (getf entry :ref)))
+      (terpri out))))
+
+(defun package-doctor-to-string (&key buffer project)
+  "Return a human-readable package doctor report."
+  (with-output-to-string (out)
+    (format out "Package doctor report:~%")
+    (dolist (entry (package-doctor-report :buffer buffer :project project))
+      (format out "- ~(~A~): ~(~A~)~%" (getf entry :name) (getf entry :status))
+      (when (not (eq (getf entry :status) :ok))
+        (format out "  root: ~A~%" (getf entry :root))
+        (when (getf entry :source)
+          (format out "  source: ~A~%" (getf entry :source)))
+        (when (getf entry :resource-types)
+          (format out "  resources: ~{~(~A~)~^, ~}~%"
+                  (getf entry :resource-types)))))
+    (terpri out)))
+
+(defun package-resource-policy-string (definition)
+  "Return a short resource policy string for DEFINITION."
+  (let ((record (package-install-record-for-definition definition)))
+    (if record
+        (package-install-record-resource-summary record)
+        "resources: all")))
+
+(defun remove-installed-package (package &key buffer project)
+  "Delete PACKAGE's installed files and return its definition."
+  (let* ((definition (typecase package
+                       (package-definition package)
+                       (t (find-installed-package package
+                                                 :buffer buffer
+                                                 :project project))))
+         (root (and definition (package-definition-root definition))))
+    (when definition
+      (reset-package-runtime-state definition)
+      (ignore-errors
+        (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))
+      (clear-package-registry)
+      definition)))
+
+(defun refresh-package-source-directory (definition record)
+  "Refresh DEFINITION's source directory using RECORD."
+  (let* ((root (package-definition-root definition))
+         (source-type (package-install-record-source-type record))
+         (source (package-install-record-source record))
+         (ref (package-install-record-ref record)))
+    (cond
+      ((member source-type '(:path :local :npm) :test #'eq)
+       (when (probe-file root)
+         (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))
+       (ensure-package-installed source root :src-type source-type :ref ref))
+      ((eq source-type :git)
+       (multiple-value-bind (stdout stderr exit-code)
+           (uiop:run-program (list "git" "-C" (namestring root)
+                                   "pull" "--ff-only")
+                             :output :string
+                             :error-output :string
+                             :ignore-error-status t)
+         (if (zerop exit-code)
+             t
+             (emit-package-warning
+              "Failed to update package ~A from ~A: ~A"
+              (package-definition-name definition)
+              source
+              (package-output-summary stdout stderr exit-code)))))
+      (t
+       (emit-package-warning "Package ~A cannot be updated from source type ~S"
+                             (package-definition-name definition)
+                             source-type)))))
+
+(defun update-installed-package (package &key buffer project)
+  "Refresh PACKAGE from its recorded source and return the updated definition."
+  (let* ((definition (typecase package
+                       (package-definition package)
+                       (t (find-installed-package package
+                                                 :buffer buffer
+                                                 :project project))))
+         (record (and definition
+                      (package-install-record-for-definition definition))))
+    (when (and definition record)
+      (when (refresh-package-source-directory definition record)
+        (reset-package-runtime-state definition)
+        (write-package-install-record
+         (package-definition-root definition)
+         (progn
+           (setf (getf record :updated-at) (get-universal-time))
+           record))
+        (clear-package-registry)
+        (reload-clawmacs-package definition)))))
+
+(defun set-installed-package-resource-types (package resource-types
+                                                    &key buffer project)
+  "Persist RESOURCE-TYPES as PACKAGE's allowlist and return the new record."
+  (let* ((definition (typecase package
+                       (package-definition package)
+                       (t (find-installed-package package
+                                                 :buffer buffer
+                                                 :project project))))
+         (root (and definition (package-definition-root definition)))
+         (record (and definition
+                      (or (package-install-record-for-definition definition)
+                          (package-install-record-plist definition))))
+         (normalized (normalize-package-resource-type-list resource-types)))
+    (when (and definition root)
+      (setf (getf record :resource-types) (coerce normalized 'vector)
+            (getf record :updated-at) (get-universal-time))
+      (write-package-install-record root record)
+      (clear-package-registry)
+      (reload-clawmacs-package definition)
+      normalized)))
+
+(defun install-package-status-string (package &key buffer project)
+  "Return a short status string for PACKAGE."
+  (let ((definition (typecase package
+                      (package-definition package)
+                      (t (find-installed-package package
+                                                :buffer buffer
+                                                :project project)))))
+    (if definition
+        (with-output-to-string (out)
+          (format out "[~(~A~)] ~A - ~A~%"
+                  (package-install-record-scope
+                   (or (package-install-record-for-definition definition)
+                       (list :scope :global)))
+                  (package-definition-name definition)
+                  (package-display-description definition))
+          (format out "  root: ~A~%" (namestring (package-definition-root definition)))
+          (format out "  ~A~%" (package-resource-policy-string definition)))
+        "Unknown package.")))
