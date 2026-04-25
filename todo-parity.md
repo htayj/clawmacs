@@ -69,15 +69,15 @@ Parity sources:
 - `reference/external_src/codex/sdk/python/docs/getting-started.md`
 - `reference/external_src/codex/sdk/typescript/README.md`
 
-- [ ] Add persistent session display names separate from buffer names.
-- [ ] Add "continue most recent session for this cwd" behavior in both CLI and
+- [x] Add persistent session display names separate from buffer names.
+- [x] Add "continue most recent session for this cwd" behavior in both CLI and
   UI command flows.
-- [ ] Improve resume/fork selection by id prefix and explicit path.
+- [x] Improve resume/fork selection by id prefix and explicit path.
 - [ ] Add HTML export for the active session, including assistant/tool output,
   reasoning visibility choices, and attached artifacts.
 - [ ] Add pluggable share handlers, with one initial implementation
   (private gist-like flow or user-provided hook).
-- [ ] Add a session info view that shows path, ids, timestamps, token usage,
+- [x] Add a session info view that shows path, ids, timestamps, token usage,
   cache stats, current branch/leaf, and model metadata.
 - [ ] Support ephemeral/no-session runs as a first-class mode rather than a
   side-effect of ad hoc scripting.

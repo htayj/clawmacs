@@ -1090,6 +1090,12 @@ documentation in *extended-docs*."
   :returns "string — Display name of the session."
   :see-also (session buffer-name))
 
+(defdoc session-display-name
+  :category "session"
+  :usage "(session-display-name SESSION:session)"
+  :returns "string or nil — User-facing label stored separately from the session name."
+  :see-also (session-name set-session-display-name session-display-name-or-name))
+
 (defdoc session-id
   :category "session"
   :usage "(session-id SESSION:session)"
@@ -1126,6 +1132,19 @@ documentation in *extended-docs*."
   :returns "session — Existing or newly initialized session metadata."
   :side-effects "Creates a session sidecar directory, manifest, and initial JSONL transcript when missing."
   :see-also (*sessions-dir* buffer-session session-current-transcript-path))
+
+(defdoc session-display-name-or-name
+  :category "session"
+  :usage "(session-display-name-or-name SESSION:session)"
+  :returns "string — Display name when present, otherwise the underlying session name."
+  :see-also (session-display-name session-name set-session-display-name))
+
+(defdoc set-session-display-name
+  :category "session"
+  :usage "(set-session-display-name SESSION:session VALUE:string)"
+  :returns "session — SESSION with updated display-name metadata."
+  :side-effects "Updates the session manifest immediately; blank values clear the display name."
+  :see-also (session-display-name session-display-name-or-name save-session))
 
 (defdoc session-current-transcript-path
   :category "session"
@@ -3555,6 +3574,27 @@ documentation in *extended-docs*."
   :returns "nil"
   :side-effects "Reads a saved session JSON snapshot, creates a chat buffer for it, and switches to that buffer."
   :see-also (load-session list-saved-sessions minibuffer-activate save-session-command))
+
+(defdoc continue-session-command
+  :category "buffer-command"
+  :usage "M-x continue-session-command"
+  :returns "nil"
+  :side-effects "Loads the most recently updated saved session for the current buffer working directory."
+  :see-also (load-session-command most-recent-saved-session-record))
+
+(defdoc session-info-command
+  :category "buffer-command"
+  :usage "M-x session-info-command"
+  :returns "nil"
+  :side-effects "Opens a help buffer summarizing the active session's ids, paths, routing, and token/cache usage."
+  :see-also (set-session-display-name-command continue-session-command))
+
+(defdoc set-session-display-name-command
+  :category "buffer-command"
+  :usage "M-x set-session-display-name-command"
+  :returns "nil"
+  :side-effects "Sets or clears the current chat session's display name, persists it, and inserts a confirmation system message."
+  :see-also (set-session-display-name session-info-command save-session-command))
 
 (defdoc minibuffer-select-project-command
   :category "buffer-command"

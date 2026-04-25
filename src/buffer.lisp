@@ -1087,6 +1087,13 @@ The current buffer remains current when a current buffer already exists."
           :when (message-read-only-p msg)
           :do (push (serialize-message msg) messages))
     `((:name . ,(buffer-name buf))
+      ,@(when (and (buffer-session buf)
+                   (session-display-name (buffer-session buf)))
+          `((:display-name . ,(session-display-name (buffer-session buf)))))
+      ,@(when (buffer-session buf)
+          `((:session-id . ,(session-id (buffer-session buf)))
+            (:created-at . ,(session-created-at (buffer-session buf)))
+            (:updated-at . ,(session-updated-at (buffer-session buf)))))
       (:agent-name . ,(buffer-agent-name buf))
       (:kind . ,(symbol-name (buffer-kind buf)))
       (:major-mode . ,(buffer-major-mode buf))
@@ -1192,6 +1199,8 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
     (let* ((json-str (uiop:read-file-string path))
            (data (cl-json:decode-json-from-string json-str))
            (name (or (cdr (assoc :name data)) session-name))
+           (display-name
+             (normalize-session-display-name (cdr (assoc :display-name data))))
            (agent (or (cdr (assoc :agent-name data)) agent-name))
            (kind (cdr (assoc :kind data)))
            (major-mode (cdr (assoc :major-mode data)))
@@ -1212,7 +1221,8 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
                                   :session (load-or-create-session
                                             name
                                             :working-directory
-                                            working-directory))))
+                                            working-directory
+                                            :display-name display-name))))
       (setf (buffer-provider-override buf)
             (and provider-override
                  (ignore-errors
@@ -1246,7 +1256,11 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
     (when (typep manifest 'session-manifest-parse-error)
       (error manifest))
     (let* ((name (or (cdr (assoc :name manifest)) session-name))
-           (session (load-or-create-session name))
+           (display-name
+             (normalize-session-display-name
+              (cdr (assoc :display-name manifest))))
+           (session (load-or-create-session name
+                                            :display-name display-name))
            (buf (make-buffer name :agent-name agent-name
                                   :working-directory
                                   (session-working-directory session)
@@ -1258,32 +1272,50 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
       (autosave-session-snapshot buf)
       buf)))
 
-(defun load-session (session-name &key (agent-name *default-agent-name*))
-  "Load a saved session into a new buffer. Returns the buffer or nil."
-  (let ((path (session-path session-name)))
-    (let ((buf (if (probe-file path)
-                   (let ((snapshot
-                           (load-session-snapshot session-name path agent-name)))
-                     (when snapshot
-                       (let* ((session (buffer-session snapshot))
-                              (sidecar-messages
-                                (and session
-                                     (session-transcript-message-events
-                                      session))))
-                         (if (buffer-tree-backed-history-p snapshot)
-                             (when sidecar-messages
-                               (replace-buffer-history-with-serialized-messages
-                                snapshot sidecar-messages :autosave-p nil)
-                               (apply-session-branch-state-to-buffer
-                                snapshot session))
-                             (when session
-                               (set-session-current-leaf session nil)))))
-                     snapshot)
-                   (load-session-sidecar session-name
-                                         :agent-name agent-name))))
-      (when buf
-        (maybe-run-hook-with-args '*after-session-load-hook* buf session-name))
-      buf)))
+(defun load-session (session-designator &key (agent-name *default-agent-name*))
+  "Load a saved session into a new buffer. Returns the buffer or nil.
+SESSION-DESIGNATOR may be an exact session name, a unique id prefix, or a
+snapshot/manifest path."
+  (let* ((record (resolve-saved-session-record session-designator))
+         (session-name (or (and record (getf record :session-name))
+                           session-designator))
+         (path (or (and record (getf record :path))
+                   (and (stringp session-name)
+                        (session-path session-name))))
+         (source (and record (getf record :source)))
+         (buf (cond
+                ((or (eq source :snapshot)
+                     (and (null source)
+                          path
+                          (probe-file path)
+                          (not (eq source :sidecar))))
+                 (let ((snapshot
+                         (load-session-snapshot session-name
+                                                (or path
+                                                    (session-path session-name))
+                                                agent-name)))
+                   (when snapshot
+                     (let* ((session (buffer-session snapshot))
+                            (sidecar-messages
+                              (and session
+                                   (session-transcript-message-events
+                                    session))))
+                       (if (buffer-tree-backed-history-p snapshot)
+                           (when sidecar-messages
+                             (replace-buffer-history-with-serialized-messages
+                              snapshot sidecar-messages :autosave-p nil)
+                             (apply-session-branch-state-to-buffer
+                              snapshot session))
+                           (when session
+                             (set-session-current-leaf session nil)))))
+                   snapshot))
+                ((eq source :sidecar)
+                 (load-session-sidecar session-name :agent-name agent-name))
+                (t
+                 (load-session-sidecar session-name :agent-name agent-name)))))
+    (when buf
+      (maybe-run-hook-with-args '*after-session-load-hook* buf session-name))
+    buf))
 
 (defun saved-session-snapshot-names ()
   "Return session names with legacy JSON snapshots."
@@ -1306,6 +1338,184 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
           :when (and (stringp name)
                      (plusp (length name)))
             :collect name)))
+
+(defun session-record-display-name (record)
+  "Return RECORD's display name or its session name."
+  (or (getf record :display-name)
+      (getf record :session-name)))
+
+(defun read-session-record-from-snapshot (session-name path)
+  "Return a session listing record from a legacy JSON snapshot."
+  (let ((cl-json:*json-array-type* 'vector))
+    (handler-case
+        (let* ((data (cl-json:decode-json-from-string
+                      (uiop:read-file-string path)))
+               (display-name
+                 (normalize-session-display-name (cdr (assoc :display-name data)))))
+          (list :session-name (or (cdr (assoc :name data)) session-name)
+                :display-name display-name
+                :session-id (cdr (assoc :session-id data))
+                :working-directory
+                (cdr (assoc :working-directory data))
+                :updated-at (cdr (assoc :updated-at data))
+                :created-at (cdr (assoc :created-at data))
+                :path path
+                :source :snapshot))
+      (error (condition)
+        (warn "Failed to parse session snapshot ~A: ~A" path condition)
+        nil))))
+
+(defun read-session-record-from-sidecar (session-name path)
+  "Return a session listing record from a sidecar manifest."
+  (let ((manifest (read-session-manifest path)))
+    (cond
+      ((null manifest) nil)
+      ((typep manifest 'session-manifest-parse-error)
+       (warn "Failed to parse session manifest ~A: ~A"
+             (session-manifest-parse-error-path manifest)
+             (session-manifest-parse-error-cause manifest))
+       nil)
+      (t
+       (list :session-name (or (cdr (assoc :name manifest)) session-name)
+             :display-name
+             (normalize-session-display-name (cdr (assoc :display-name manifest)))
+             :session-id (cdr (assoc :id manifest))
+             :working-directory (cdr (assoc :working-directory manifest))
+             :updated-at (cdr (assoc :updated-at manifest))
+             :created-at (cdr (assoc :created-at manifest))
+             :path path
+             :source :sidecar)))))
+
+(defun list-saved-session-records ()
+  "Return saved session records with display names and metadata."
+  (when (probe-file *sessions-dir*)
+    (let ((records nil))
+      (dolist (session-name (list-saved-sessions))
+        (let* ((snapshot-path (session-path session-name))
+               (sidecar-path (session-sidecar-manifest-path session-name))
+               (snapshot (and (probe-file snapshot-path)
+                              (read-session-record-from-snapshot
+                               session-name snapshot-path)))
+               (sidecar (and (probe-file sidecar-path)
+                             (read-session-record-from-sidecar
+                              session-name sidecar-path)))
+               (display-name (or (getf snapshot :display-name)
+                                 (getf sidecar :display-name)
+                                 session-name))
+               (working-directory
+                 (or (getf snapshot :working-directory)
+                     (getf sidecar :working-directory)))
+               (updated-at (or (getf snapshot :updated-at)
+                               (getf sidecar :updated-at)))
+               (created-at (or (getf snapshot :created-at)
+                               (getf sidecar :created-at)))
+               (path (or (getf snapshot :path)
+                         (getf sidecar :path)
+                         snapshot-path))
+               (source (or (getf snapshot :source)
+                           (getf sidecar :source)
+                           :unknown)))
+          (push (list :session-name session-name
+                      :display-name display-name
+                      :session-id (or (getf snapshot :session-id)
+                                      (getf sidecar :session-id))
+                      :working-directory working-directory
+                      :updated-at updated-at
+                      :created-at created-at
+                      :path path
+                      :source source)
+                records)))
+      (sort records
+            #'string<
+            :key (lambda (record)
+                   (session-record-display-name record))))))
+
+(defun normalize-session-record-working-directory (value)
+  "Return VALUE as a comparable absolute directory namestring, or NIL."
+  (when value
+    (let* ((path (normalize-session-working-directory value))
+           (resolved (or (ignore-errors (truename path)) path)))
+      (namestring (uiop:ensure-directory-pathname resolved)))))
+
+(defun session-record-timestamp (record)
+  "Return RECORD's best available timestamp for recency sorting."
+  (or (getf record :updated-at)
+      (getf record :created-at)
+      0))
+
+(defun explicit-session-record-from-path (designator)
+  "Return a saved-session record for DESIGNATOR when it names a session path."
+  (let* ((path (probe-file designator))
+         (directory (and path (uiop:directory-pathname-p path))))
+    (cond
+      ((null path) nil)
+      (directory
+       (let ((manifest-path (merge-pathnames #P"session.json" path)))
+         (and (probe-file manifest-path)
+              (read-session-record-from-sidecar "" manifest-path))))
+      ((string= (pathname-name path) "session")
+       (read-session-record-from-sidecar "" path))
+      (t
+       (read-session-record-from-snapshot (pathname-name path) path)))))
+
+(defun resolve-saved-session-record (designator)
+  "Resolve DESIGNATOR to one saved-session record, or NIL when not found.
+DESIGNATOR may be an exact session name, a unique session-id prefix, or a
+snapshot/manifest path."
+  (when (and (stringp designator)
+             (plusp (length (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                         designator))))
+    (or (explicit-session-record-from-path designator)
+        (let* ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                     designator))
+               (records (or (list-saved-session-records) nil))
+               (exact (find trimmed records
+                            :key (lambda (record)
+                                   (getf record :session-name))
+                            :test #'string=)))
+          (or exact
+              (let ((matches
+                      (remove-if-not
+                       (lambda (record)
+                         (let ((session-id (getf record :session-id)))
+                           (and (stringp session-id)
+                                (<= (length trimmed) (length session-id))
+                                (string-equal trimmed
+                                              (subseq session-id 0
+                                                      (length trimmed))))))
+                       records)))
+                (cond
+                  ((null matches) nil)
+                  ((null (rest matches)) (first matches))
+                  (t
+                   (error "Session id prefix ~A is ambiguous: ~{~A~^, ~}"
+                          trimmed
+                          (mapcar (lambda (record)
+                                    (getf record :session-name))
+                                  matches))))))))))
+
+(defun most-recent-saved-session-record (&key working-directory)
+  "Return the most recent saved-session record, optionally scoped to WORKING-DIRECTORY."
+  (let* ((target-directory
+           (normalize-session-record-working-directory working-directory))
+         (records
+           (if target-directory
+               (remove-if-not
+                (lambda (record)
+                  (let ((record-directory
+                          (normalize-session-record-working-directory
+                           (getf record :working-directory))))
+                    (and record-directory
+                         (string= record-directory target-directory))))
+                (or (list-saved-session-records) nil))
+               (or (list-saved-session-records) nil))))
+    (car (sort (copy-list records) #'> :key #'session-record-timestamp))))
+
+(defun most-recent-saved-session-name (&key working-directory)
+  "Return the session name for the most recent saved session."
+  (let ((record (most-recent-saved-session-record
+                 :working-directory working-directory)))
+    (and record (getf record :session-name))))
 
 (defun list-saved-sessions ()
   "Return a list of saved session names."

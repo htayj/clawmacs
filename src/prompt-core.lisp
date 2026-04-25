@@ -55,6 +55,7 @@
   (skill-roots nil :type list)
   (packages nil :type list)
   session-name
+  (continue-session-p nil :type boolean)
   pipeline-name
   debug-log-path
   (isolated-p nil :type boolean)

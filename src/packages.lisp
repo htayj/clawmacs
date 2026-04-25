@@ -166,6 +166,7 @@
    #:*sessions-dir*
    #:session
    #:session-name
+   #:session-display-name
    #:session-id
    #:session-directory
    #:session-manifest-path
@@ -188,6 +189,8 @@
    #:session-find-entry
    #:session-navigation-leaf-for-entry
    #:session-entry-user-message-text
+   #:session-display-name-or-name
+   #:set-session-display-name
    #:set-session-current-leaf
    #:record-session-compaction
    #:record-session-branch-summary
@@ -1006,6 +1009,9 @@
    #:minibuffer-select-think-level-command
    #:minibuffer-select-buffer-command
    #:load-session-command
+   #:continue-session-command
+   #:session-info-command
+   #:set-session-display-name-command
    #:new-listener-buffer-command
    #:help-buffer-p
    #:customize-buffer-p

@@ -741,6 +741,65 @@
                  (clawmacs::session-working-directory
                   (buffer-session loaded)))))))
 
+(test save-and-load-session-round-trips-display-name
+  "Saved sessions preserve a display name separate from the buffer name."
+  (let* ((session-name "display-name-round-trip")
+         (*sessions-dir* (temp-session-test-directory "display-name"))
+         (session (load-or-create-session session-name
+                                          :display-name "Focus Session"))
+         (buf (make-buffer session-name
+                           :agent-name "echo"
+                           :session session)))
+    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (buffer-finalize-input buf)
+    (save-session buf)
+    (let ((loaded (load-session session-name)))
+      (is (string= "Focus Session"
+                   (clawmacs::session-display-name
+                    (buffer-session loaded)))))
+    (let ((records (clawmacs::list-saved-session-records)))
+      (let ((record (find session-name records
+                          :key (lambda (entry)
+                                 (getf entry :session-name))
+                          :test #'string=)))
+        (is (not (null record)))
+        (is (string= "Focus Session" (getf record :display-name)))
+        (is (string= (clawmacs::session-id session)
+                     (getf record :session-id)))))))
+
+(test load-session-accepts-unique-session-id-prefix
+  "Saved sessions can be loaded by a unique session id prefix."
+  (let* ((session-name "load-by-id-prefix")
+         (*sessions-dir* (temp-session-test-directory "id-prefix"))
+         (session (load-or-create-session session-name))
+         (buf (make-buffer session-name
+                           :agent-name "echo"
+                           :session session))
+         (prefix (subseq (clawmacs::session-id session) 0 8)))
+    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (buffer-finalize-input buf)
+    (save-session buf)
+    (let ((loaded (load-session prefix)))
+      (is (not (null loaded)))
+      (is (string= session-name (buffer-name loaded))))))
+
+(test load-session-accepts-explicit-manifest-path
+  "Saved sessions can be loaded directly from a sidecar manifest path."
+  (let* ((session-name "load-by-path")
+         (*sessions-dir* (temp-session-test-directory "manifest-path"))
+         (session (load-or-create-session session-name))
+         (buf (make-buffer session-name
+                           :agent-name "echo"
+                           :session session))
+         (manifest-path
+           (clawmacs::session-sidecar-manifest-path session-name)))
+    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (buffer-finalize-input buf)
+    (save-session buf)
+    (let ((loaded (load-session (namestring manifest-path))))
+      (is (not (null loaded)))
+      (is (string= session-name (buffer-name loaded))))))
+
 (test listener-buffer-state-round-trips-through-session-save
   "Listener buffers preserve package, directory stack, history, and values."
   (let* ((session-name "listener-state-round-trip")
@@ -1179,6 +1238,66 @@
                            (getf item :session-name))
                          *minibuffer-filtered-items*))))))
 
+(test load-session-command-shows-display-names-and-searches-session-ids
+  "The load-session selector exposes display names and id/path match text."
+  (with-interactive-command-test-buffer (buf)
+    (let* ((session-name "saved-session-display")
+           (*sessions-dir* (temp-session-test-directory "selector-display"))
+           (session (load-or-create-session session-name
+                                            :display-name "Focused Work"))
+           (saved (make-buffer session-name :agent-name "echo" :session session)))
+      (save-session saved)
+      (clawmacs::load-session-command buf)
+      (let ((item (find session-name *minibuffer-filtered-items*
+                        :key (lambda (entry)
+                               (getf entry :session-name))
+                        :test #'string=)))
+        (is (not (null item)))
+        (is (search "Focused Work" (getf item :display)))
+        (is (search (clawmacs::session-id session)
+                    (getf item :match-text)))
+        (is (search (namestring (clawmacs::session-path session-name))
+                    (getf item :match-text)))))))
+
+(test load-session-command-preselects-most-recent-session-for-working-directory
+  "The load-session selector preselects the newest session for the buffer cwd."
+  (with-interactive-command-test-buffer (buf)
+    (let* ((working-directory #P"/tmp/clawmacs-load-session-selector/")
+           (*sessions-dir* (temp-session-test-directory "selector-recent"))
+           (older-session (load-or-create-session "selector-older"
+                                                  :working-directory
+                                                  working-directory))
+           (newer-session (load-or-create-session "selector-newer"
+                                                  :working-directory
+                                                  working-directory))
+           (other-session (load-or-create-session "selector-other"
+                                                  :working-directory
+                                                  #P"/tmp/clawmacs-selector-other/"))
+           (older-buffer (make-buffer "selector-older"
+                                      :agent-name "echo"
+                                      :working-directory working-directory
+                                      :session older-session))
+           (newer-buffer (make-buffer "selector-newer"
+                                      :agent-name "echo"
+                                      :working-directory working-directory
+                                      :session newer-session))
+           (other-buffer (make-buffer "selector-other"
+                                      :agent-name "echo"
+                                      :working-directory #P"/tmp/clawmacs-selector-other/"
+                                      :session other-session)))
+      (setf (clawmacs::session-updated-at older-session) 10
+            (clawmacs::session-updated-at newer-session) 20
+            (clawmacs::session-updated-at other-session) 30
+            (buffer-working-directory buf) working-directory)
+      (save-session older-buffer)
+      (save-session newer-buffer)
+      (save-session other-buffer)
+      (clawmacs::load-session-command buf)
+      (let ((selected (nth *minibuffer-selected-index*
+                           *minibuffer-filtered-items*)))
+        (is (string= "selector-newer"
+                     (getf selected :session-name)))))))
+
 (test load-session-command-loads-selected-session-into-a-new-buffer
   "Selecting a saved session loads it into a new current buffer."
   (with-interactive-command-test-buffer (buf)
@@ -1222,6 +1341,84 @@
         (let ((loaded (load-session session-name)))
           (is (not (null loaded)))
           (is (string= session-name (buffer-name loaded))))))))
+
+(test continue-session-command-loads-most-recent-session-for-working-directory
+  "Continuing a session picks the most recent saved session for the buffer cwd."
+  (with-interactive-command-test-buffer (buf)
+    (let* ((working-directory #P"/tmp/clawmacs-continue-session/")
+           (*sessions-dir* (temp-session-test-directory "continue-session"))
+           (older-session (load-or-create-session "older-session"
+                                                  :working-directory
+                                                  working-directory))
+           (newer-session (load-or-create-session "newer-session"
+                                                  :working-directory
+                                                  working-directory))
+           (other-session (load-or-create-session "other-session"
+                                                  :working-directory
+                                                  #P"/tmp/clawmacs-other-session/"))
+           (older-buffer (make-buffer "older-session"
+                                      :agent-name "echo"
+                                      :working-directory working-directory
+                                      :session older-session))
+           (newer-buffer (make-buffer "newer-session"
+                                      :agent-name "echo"
+                                      :working-directory working-directory
+                                      :session newer-session))
+           (other-buffer (make-buffer "other-session"
+                                      :agent-name "echo"
+                                      :working-directory #P"/tmp/clawmacs-other-session/"
+                                      :session other-session)))
+      (setf (clawmacs::session-created-at older-session) 10
+            (clawmacs::session-updated-at older-session) 10
+            (clawmacs::session-created-at newer-session) 20
+            (clawmacs::session-updated-at newer-session) 20
+            (clawmacs::session-created-at other-session) 30
+            (clawmacs::session-updated-at other-session) 30
+            (buffer-working-directory buf) working-directory)
+      (save-session older-buffer)
+      (save-session newer-buffer)
+      (save-session other-buffer)
+      (clawmacs::continue-session-command buf)
+      (let ((loaded (current-buffer)))
+        (is (not (eq buf loaded)))
+        (is (string= "newer-session"
+                     (clawmacs::session-name
+                      (buffer-session loaded))))))))
+
+(test session-info-command-opens-help-buffer-with-display-name
+  "Session info opens a help buffer with display name, routing, and usage."
+  (with-interactive-command-test-buffer (buf)
+    (let ((*sessions-dir* (temp-session-test-directory "session-info")))
+      (setf (buffer-session buf)
+            (load-or-create-session "info-session"
+                                    :display-name "Info Session"))
+      (clawmacs::set-buffer-provider-override buf :openai-codex)
+      (clawmacs::set-buffer-model-override buf "gpt-5.4")
+      (clawmacs::set-buffer-think-level-override buf "high")
+      (let ((agent-message (buffer-insert-agent-message buf "Done"
+                                                        :record-p nil
+                                                        :run-hook-p nil)))
+        (clawmacs::put-message-metadata
+         agent-message
+         :provider :openai-codex
+         :model "gpt-5.4"
+         :think-level "high"
+         :input-tokens 120
+         :cached-input-tokens 96
+         :uncached-input-tokens 24
+         :output-tokens 30
+         :total-tokens 150
+         :cache-hit-rate 0.8))
+      (clawmacs::session-info-command buf)
+      (let* ((help (current-buffer))
+             (text (help-buffer-text help)))
+        (is (help-buffer-p help))
+        (is (search "Session: Info Session" text))
+        (is (search "Session name: info-session" text))
+        (is (search "Provider/model: openai-codex/gpt-5.4" text))
+        (is (search "Thinking: high" text))
+        (is (search "tokens: input=120 cached=96 uncached=24 output=30 total=150 cache-hit=80.0%"
+                    text))))))
 
 (test describe-guard-policy-command-opens-help-buffer
   "Describing guard policy opens a help buffer with policy sections."

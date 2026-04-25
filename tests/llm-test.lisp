@@ -1400,6 +1400,7 @@ same
                     "--package" "sexed"
                     "--package" "lispi"
                     "--session" "cache-probe"
+                    "--continue"
                     "--pipeline" "plan-build"
                     "--max-tool-iterations" "7"
                     "summarize" "this"))))
@@ -1416,10 +1417,53 @@ same
                (clawmacs::prompt-options-packages options)))
     (is (string= "cache-probe"
                  (clawmacs::prompt-options-session-name options)))
+    (is (clawmacs::prompt-options-continue-session-p options))
     (is (string= "plan-build"
                  (clawmacs::prompt-options-pipeline-name options)))
     (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
     (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
+
+(test run-prompt-options-resolves-continue-session-for-current-directory
+  "Prompt options can resume the most recent saved session for the cwd."
+  (let* ((*sessions-dir* (temp-session-test-directory "continue-prompt"))
+         (working-directory (temp-session-test-directory "continue-prompt-cwd"))
+         (session (load-or-create-session "continued-session"
+                                          :working-directory working-directory))
+         (buf (make-buffer "continued-session"
+                           :agent-name "echo"
+                           :working-directory working-directory
+                           :session session))
+         (captured nil))
+    (ensure-directories-exist (merge-pathnames #P".keep" working-directory))
+    (save-session buf)
+    (let ((*default-pathname-defaults* working-directory))
+      (with-function-override (clawmacs::run-session-prompt
+                               (prompt &key session-name &allow-other-keys)
+                               (setf captured (list prompt session-name))
+                               :continued)
+        (let ((result (clawmacs::run-prompt-options
+                       (clawmacs::make-prompt-options
+                        :prompt "continue now"
+                        :continue-session-p t))))
+          (is (eq :continued result))
+          (is (equal '("continue now" "continued-session")
+                     captured)))))))
+
+(test default-session-prompt-session-name-prefers-most-recent-current-directory
+  "session-prompt defaults to the newest saved session for the current cwd."
+  (let* ((*sessions-dir* (temp-session-test-directory "session-prompt-default"))
+         (working-directory (temp-session-test-directory "session-prompt-default-cwd"))
+         (session (load-or-create-session "cwd-default"
+                                          :working-directory working-directory))
+         (buf (make-buffer "cwd-default"
+                           :agent-name "echo"
+                           :working-directory working-directory
+                           :session session)))
+    (ensure-directories-exist (merge-pathnames #P".keep" working-directory))
+    (save-session buf)
+    (let ((*default-pathname-defaults* working-directory))
+      (is (string= "cwd-default"
+                   (clawmacs::default-session-prompt-session-name))))))
 
 (test parse-clawmacs-prompt-args-defaults-to-codex-for-plain-prompt-sh
   "Plain prompt.sh runs default to Codex 5.3 without overriding explicit routing."

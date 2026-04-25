@@ -16,7 +16,7 @@
                 (name id directory manifest-path transcript-directory
                  current-transcript-index current-transcript-path created-at
                  &key updated-at current-leaf-id parent-session
-                      working-directory)))
+                      working-directory display-name)))
   "Persistent chat session metadata and current transcript segment."
   (name "" :type string)
   (id "" :type string)
@@ -28,6 +28,7 @@
   (current-leaf-id nil :type (or null string))
   (parent-session nil :type (or null string))
   (working-directory #P"" :type pathname)
+  (display-name nil :type (or null string))
   (created-at 0 :type integer)
   (updated-at 0 :type integer)
   (lock (bt:make-lock "session-transcript")))
@@ -50,6 +51,69 @@
                 ((null value) (truename "."))
                 (t (error "Invalid session working directory: ~S" value)))))
     (uiop:ensure-directory-pathname path)))
+
+(defun normalize-session-display-name (value)
+  "Return VALUE as a normalized session display name, or NIL."
+  (cond
+    ((null value) nil)
+    ((stringp value)
+     (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) value)))
+       (and (plusp (length trimmed)) trimmed)))
+    ((symbolp value)
+     (normalize-session-display-name (symbol-name value)))
+    (t
+     (error "Invalid session display name: ~S" value))))
+
+(defun session-display-name-or-name (session)
+  "Return SESSION's user-facing display name, or its file name."
+  (or (session-display-name session)
+      (session-name session)))
+
+(defun set-session-display-name (session value)
+  "Set SESSION display name to VALUE, persist it, and return SESSION."
+  (when session
+    (setf (session-display-name session)
+          (normalize-session-display-name value))
+    (write-session-manifest session))
+  session)
+
+(defun buffer-session-usage (buffer)
+  "Return aggregate token usage from BUFFER's persisted messages."
+  (let ((usage nil))
+    (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
+          :while (and msg (not (eq msg (buffer-input-message buffer))))
+          :do (setf usage
+                    (merge-token-usage
+                     usage
+                     (token-usage-from-metadata
+                      (message-metadata msg)))))
+    usage))
+
+(defun buffer-session-model-metadata (buffer)
+  "Return the newest provider/model/think metadata from BUFFER."
+  (loop :for msg := (message-prev (buffer-input-message buffer))
+          :then (message-prev msg)
+        :while msg
+        :for metadata := (message-metadata msg)
+        :for provider := (and metadata
+                              (message-metadata-value metadata :provider))
+        :for model := (and metadata
+                           (message-metadata-value metadata :model))
+        :for think-level := (and metadata
+                                 (or (message-metadata-value metadata
+                                                             :reasoning-effort)
+                                     (message-metadata-value metadata
+                                                             :think-level)))
+        :when (or provider model think-level)
+          :return (list :provider provider
+                        :model model
+                        :think-level think-level)))
+
+(defun count-buffer-history-messages (buffer)
+  "Return the number of finalized history messages in BUFFER."
+  (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
+        :while (and msg (not (eq msg (buffer-input-message buffer))))
+        :count 1))
 
 (defstruct (session-tree-node
             (:constructor make-session-tree-node
@@ -167,6 +231,8 @@
   "Return SESSION as a JSON-ready manifest alist."
   `((:version . ,*session-format-version*)
     (:name . ,(session-name session))
+    ,@(when (session-display-name session)
+        `((:display-name . ,(session-display-name session))))
     (:id . ,(session-id session))
     (:created-at . ,(session-created-at session))
     (:updated-at . ,(session-updated-at session))
@@ -208,6 +274,45 @@ condition object when PATH exists but decoding fails."
         (make-condition 'session-manifest-parse-error
                         :path (namestring path)
                         :cause condition)))))
+
+(defun session-summary-string (session &key buffer)
+  "Return a compact human-readable summary of SESSION.
+When BUFFER is supplied, include live branch usage and model metadata."
+  (with-output-to-string (stream)
+    (format stream "Session: ~A~%" (session-display-name-or-name session))
+    (when (session-display-name session)
+      (format stream "Display name: ~A~%" (session-display-name session)))
+    (format stream "Session name: ~A~%" (session-name session))
+    (format stream "Session id: ~A~%" (session-id session))
+    (format stream "Working directory: ~A~%"
+            (session-path-string (session-working-directory session)))
+    (format stream "Session file: ~A~%" (session-path-string (session-directory session)))
+    (format stream "Transcript file: ~A~%"
+            (session-path-string (session-current-transcript-path session)))
+    (format stream "Created at: ~A~%" (session-created-at session))
+    (format stream "Updated at: ~A~%" (session-updated-at session))
+    (when (session-parent-session session)
+      (format stream "Parent session: ~A~%" (session-parent-session session)))
+    (when (session-current-leaf-id session)
+      (format stream "Current leaf: ~A~%" (session-current-leaf-id session)))
+    (when buffer
+      (format stream "Buffer: ~A~%" (buffer-name buffer))
+      (format stream "Branch messages: ~D~%"
+              (count-buffer-history-messages buffer))
+      (format stream "Enabled packages: ~{~A~^, ~}~%"
+              (or (buffer-enabled-packages buffer)
+                  '("none")))
+      (let ((routing (buffer-session-model-metadata buffer)))
+        (when routing
+          (format stream "Provider/model: ~(~A~)/~A~%"
+                  (or (getf routing :provider) :unknown)
+                  (or (getf routing :model) "unknown"))
+          (format stream "Thinking: ~A~%"
+                  (or (getf routing :think-level) "default"))))
+      (let ((usage-line (format-token-usage-summary
+                         (buffer-session-usage buffer))))
+        (when usage-line
+          (format stream "Usage: ~A~%" usage-line))))))
 
 (defun ensure-session-directories (session)
   "Ensure SESSION sidecar and transcript directories exist."
@@ -682,8 +787,9 @@ Selecting a user message returns its parent so the message can be edited."
          (new-session (load-or-create-session new-name
                                               :parent-session parent
                                               :working-directory
-                                              (session-working-directory
-                                               session)))
+                                              (session-working-directory session)
+                                              :display-name
+                                              (session-display-name session)))
          (labels (session-label-table session))
          (path-ids (mapcar #'session-event-id path)))
     (bt:with-lock-held ((session-lock new-session))
@@ -700,7 +806,8 @@ Selecting a user message returns its parent so the message can be edited."
 
 (defun load-or-create-session
     (name &key (root *sessions-dir*) parent-session
-                    (working-directory (truename ".")))
+                    (working-directory (truename "."))
+                    display-name)
   "Load or initialize persistent session metadata for NAME."
   (let* ((id (session-safe-component name))
          (directory (session-sidecar-directory name :root root))
@@ -718,6 +825,10 @@ Selecting a user message returns its parent so the message can be edited."
            (current-leaf-id (cdr current-leaf-cell))
            (parent-session (or (cdr (assoc :parent-session manifest))
                                parent-session))
+           (display-name
+             (normalize-session-display-name
+              (or (cdr (assoc :display-name manifest))
+                  display-name)))
            (working-directory
              (normalize-session-working-directory
               (or (cdr (assoc :working-directory manifest))
@@ -739,7 +850,8 @@ Selecting a user message returns its parent so the message can be edited."
                                  :updated-at updated-at
                                  :current-leaf-id current-leaf-id
                                  :parent-session parent-session
-                                 :working-directory working-directory)))
+                                 :working-directory working-directory
+                                 :display-name display-name)))
       (ensure-session-directories session)
       (unless (probe-file (session-current-transcript-path session))
         (bt:with-lock-held ((session-lock session))

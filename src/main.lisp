@@ -2172,63 +2172,189 @@ to navigate. Shows buffer name, agent, status, and message count."
            (edit-session-tree-label buffer item))))))
 (defcommand fork-session-command)
 
+(defun session-selector-display-text (record)
+  "Return the display text for one saved-session RECORD."
+  (let ((display-name (getf record :display-name))
+        (session-name (getf record :session-name))
+        (session-id (getf record :session-id)))
+    (if (and display-name
+             (stringp display-name)
+             (not (string= display-name session-name)))
+        (if (and session-id (plusp (length session-id)))
+            (format nil "~A  [~A]  {~A}" display-name session-name session-id)
+            (format nil "~A  [~A]" display-name session-name))
+        (if (and session-id (plusp (length session-id)))
+            (format nil "~A  {~A}" session-name session-id)
+            session-name))))
+
+(defun session-selector-match-text (record)
+  "Return the fuzzy-match text for one saved-session RECORD."
+  (with-output-to-string (stream)
+    (format stream "~A " (or (getf record :session-name) ""))
+    (format stream "~A " (or (getf record :display-name) ""))
+    (format stream "~A " (or (getf record :session-id) ""))
+    (let ((working-directory (getf record :working-directory)))
+      (when working-directory
+        (format stream "~A " working-directory)))
+    (let ((path (getf record :path)))
+      (when path
+        (format stream "~A" path)))))
+
+(defun record-session-selection (name)
+  "Record NAME as the most recently selected session entry."
+  (setf *buffer-selection-history*
+        (cons name
+              (remove name *buffer-selection-history* :test #'string=))))
+
+(defun unique-loaded-buffer-name (base-name)
+  "Return a unique buffer name based on BASE-NAME."
+  (if (null (find-buffer-by-name base-name))
+      base-name
+      (loop :for suffix :from 2
+            :for candidate := (format nil "~A<~D>" base-name suffix)
+            :unless (find-buffer-by-name candidate)
+              :return candidate)))
+
+(defun find-open-session-buffer (session-name)
+  "Return an open buffer already attached to SESSION-NAME, or NIL."
+  (find session-name *buffer-ring*
+        :test #'string=
+        :key (lambda (candidate)
+               (let ((session (buffer-session candidate)))
+                 (and session
+                      (session-name session))))))
+
+(defun open-saved-session-record (source-buffer record)
+  "Switch to RECORD's session buffer, loading it if needed."
+  (let* ((session-name (getf record :session-name))
+         (existing (find-open-session-buffer session-name)))
+    (if existing
+        (progn
+          (switch-to-buffer existing)
+          (record-session-selection (buffer-name existing))
+          existing)
+        (let ((loaded (load-session session-name)))
+          (if loaded
+              (progn
+                (setf (buffer-name loaded)
+                      (unique-loaded-buffer-name (buffer-name loaded)))
+                (initialize-buffer-display-defaults loaded)
+                (add-buffer-to-ring loaded)
+                (switch-to-buffer loaded)
+                (record-session-selection (buffer-name loaded))
+                loaded)
+              (progn
+                (buffer-insert-system-message
+                 source-buffer
+                 (format nil "[Saved session ~A is no longer available.]"
+                         session-name))
+                nil))))))
+
 (defun load-session-command (buffer)
   "Load a saved chat session into a new buffer via minibuffer completion."
-  (labels ((record-selection (name)
-             (setf *buffer-selection-history*
-                   (cons name
-                         (remove name *buffer-selection-history*
-                                 :test #'string=))))
-           (unique-loaded-buffer-name (base-name)
-             (if (null (find-buffer-by-name base-name))
-                 base-name
-                 (loop :for suffix :from 2
-                       :for candidate := (format nil "~A<~D>" base-name suffix)
-                       :unless (find-buffer-by-name candidate)
-                         :return candidate))))
-    (let* ((session-names (sort (copy-list (or (list-saved-sessions) nil))
-                                #'string<))
-           (items (mapcar (lambda (session-name)
-                            (let ((open-p (not (null (find-buffer-by-name
-                                                      session-name)))))
-                              (list :session-name session-name
-                                    :open-p open-p
-                                    :display (if open-p
-                                                 (format nil "~A  [open]"
-                                                         session-name)
-                                                 session-name)
-                                    :match-text session-name)))
-                          session-names)))
-      (if items
+  (let* ((records (copy-list (or (list-saved-session-records) nil)))
+         (recent (most-recent-saved-session-record
+                  :working-directory (buffer-working-directory buffer)))
+         (items (mapcar (lambda (record)
+                          (let* ((session-name (getf record :session-name))
+                                 (open-p (not (null (find-open-session-buffer
+                                                     session-name))))
+                                 (display (session-selector-display-text record)))
+                            (list :session-name session-name
+                                  :open-p open-p
+                                  :display (if open-p
+                                               (format nil "~A  [open]"
+                                                       display)
+                                               display)
+                                  :match-text (session-selector-match-text record))))
+                        records)))
+    (if items
+        (progn
           (minibuffer-activate
            "Load Session"
            items
            (lambda (item)
-             (let ((session-name (getf item :session-name)))
-               (handler-case
-                   (let ((loaded (load-session session-name)))
-                     (if loaded
-                         (progn
-                           (setf (buffer-name loaded)
-                                 (unique-loaded-buffer-name
-                                  (buffer-name loaded)))
-                           (initialize-buffer-display-defaults loaded)
-                           (add-buffer-to-ring loaded)
-                           (switch-to-buffer loaded)
-                           (record-selection (buffer-name loaded)))
-                         (buffer-insert-system-message
-                          buffer
-                          (format nil
-                                  "[Saved session ~A is no longer available.]"
-                                  session-name))))
-                 (error (e)
-                   (buffer-insert-system-message
-                    buffer
-                    (format nil "[Load session failed: ~A]" e)))))))
-          (buffer-insert-system-message
-           buffer
-           "[No saved sessions available.]")))))
+             (handler-case
+                 (open-saved-session-record
+                  buffer
+                  (or (resolve-saved-session-record
+                       (getf item :session-name))
+                      item))
+               (error (e)
+                 (buffer-insert-system-message
+                  buffer
+                  (format nil "[Load session failed: ~A]" e))))))
+          (when recent
+            (let ((index (position (getf recent :session-name)
+                                   *minibuffer-filtered-items*
+                                   :key (lambda (item)
+                                          (getf item :session-name))
+                                   :test #'string=)))
+              (when index
+                (setf *minibuffer-selected-index* index)
+                (minibuffer-ensure-visible)))))
+        (buffer-insert-system-message
+         buffer
+         "[No saved sessions available.]"))))
 (defcommand load-session-command)
+
+(defun continue-session-command (buffer)
+  "Continue the most recent saved session for BUFFER's working directory."
+  (let ((record (most-recent-saved-session-record
+                 :working-directory (buffer-working-directory buffer))))
+    (if record
+        (handler-case
+            (open-saved-session-record buffer record)
+          (error (e)
+            (buffer-insert-system-message
+             buffer
+             (format nil "[Continue session failed: ~A]" e))))
+        (buffer-insert-system-message
+         buffer
+         "[No saved session found for this working directory.]"))))
+(defcommand continue-session-command)
+
+(defun show-session-info-buffer (buffer)
+  "Display BUFFER's session metadata in a reusable help buffer."
+  (let ((session (ensure-buffer-session buffer)))
+    (if (null session)
+        (buffer-insert-system-message buffer "[Current buffer has no session.]"
+                                      :record-p nil)
+        (let ((name "*help:session*")
+              (content (session-summary-string session :buffer buffer)))
+          (let ((existing (find-buffer-by-name name)))
+            (if existing
+                (progn
+                  (let ((message (message-prev (buffer-input-message existing))))
+                    (if message
+                        (set-message-text message content)
+                        (buffer-insert-agent-message existing content)))
+                  (setf (buffer-scroll-offset existing) most-positive-fixnum)
+                  (notify-buffer-display-change existing :session-info)
+                  (switch-to-buffer existing))
+                (switch-to-buffer (make-help-buffer name content))))))))
+
+(defun session-info-command (buffer)
+  "Display the active session's identity and storage details."
+  (show-session-info-buffer buffer))
+(defcommand session-info-command)
+
+(defun set-session-display-name-command (buffer display-name)
+  "Persist DISPLAY-NAME as BUFFER's session label.
+Blank input clears the stored display name."
+  (let ((session (ensure-buffer-session buffer)))
+    (set-session-display-name session display-name)
+    (autosave-session-snapshot buffer)
+    (notify-buffer-display-change buffer :session-display-name)
+    (buffer-insert-system-message
+     buffer
+     (if (session-display-name session)
+         (format nil "[Session display name: ~A]"
+                 (session-display-name session))
+         "[Session display name cleared.]")
+     :record-p nil)))
+(defcommand set-session-display-name-command
+  :prompts ((display-name :prompt "Session display name")))
 
 (defun execute-extended-command (buffer)
   "Select and run a command via the minibuffer. Bound to M-x."
@@ -4005,6 +4131,7 @@ Options:
   --package NAME            Enable an installed package for this prompt run. May repeat.
   --skill-root PATH         Add a skill root for this prompt run. May repeat.
   --session NAME            Load/update a saved session instead of one-shot mode.
+  --continue                Continue the most recent saved session for the current cwd.
   --pipeline NAME           Run a deterministic pipeline defined in init.lisp.
   --debug-log PATH          Write low-level debug logs to PATH.
   --isolated                Use temporary prompt config/project/session dirs.
@@ -4022,7 +4149,8 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt."
   (let ((name (uiop:getenv "CLAWMACS_SESSION_PROMPT_SESSION")))
     (if (and name (not (blank-string-p name)))
         name
-        +session-prompt-default-session-name+)))
+        (or (most-recent-saved-session-name :working-directory (truename "."))
+            +session-prompt-default-session-name+))))
 
 (defun session-prompt-usage-string ()
   "Return command-line help for saved-session prompt mode."
@@ -4032,8 +4160,11 @@ Runs PROMPT against a saved prompt-mode session. The next invocation with the
 same session name reloads the prior transcript before sending the new prompt.
 
 Session options:
-  --session NAME            Saved session to load/update.
-                            Default: ~A
+  --session NAME            Saved session to load/update. Accepts a session
+                            name, unique id prefix, or saved-session path.
+                            Default: most recent current-directory session
+                            when available, otherwise ~A
+  --continue                Continue the most recent saved session for the current cwd.
   CLAWMACS_SESSION_PROMPT_SESSION
                             Environment default for --session.
 
@@ -4160,6 +4291,8 @@ Example:
                      (require-option-value arg remaining)
                    (setf (prompt-options-session-name options) value
                          remaining rest)))
+                ((string= arg "--continue")
+                 (setf (prompt-options-continue-session-p options) t))
                 ((string= arg "--pipeline")
                  (multiple-value-bind (value rest)
                      (require-option-value arg remaining)
@@ -4384,47 +4517,53 @@ Example:
 
 (defun run-prompt-options (options)
   "Run parsed prompt OPTIONS and return a PROMPT-RUN-RESULT."
-  (if (prompt-options-pipeline-name options)
-      (run-pipeline-prompt
-       (prompt-options-prompt options)
-       (prompt-options-pipeline-name options)
-       :session-name (prompt-options-session-name options)
-       :agent-name (prompt-options-agent-name options)
-       :provider (prompt-options-provider options)
-       :model (prompt-options-model options)
-       :think-level (prompt-options-think-level options)
-       :max-tool-iterations
-       (prompt-options-max-tool-iterations options)
-       :auto-approve-tools-p
-       (prompt-options-auto-approve-tools-p options)
-       :package-names
-       (prompt-options-packages options))
-      (if (prompt-options-session-name options)
-          (run-session-prompt
-           (prompt-options-prompt options)
-           :session-name (prompt-options-session-name options)
-           :agent-name (prompt-options-agent-name options)
-           :provider (prompt-options-provider options)
-           :model (prompt-options-model options)
-           :think-level (prompt-options-think-level options)
-           :max-tool-iterations
-           (prompt-options-max-tool-iterations options)
-           :auto-approve-tools-p
-           (prompt-options-auto-approve-tools-p options)
-           :package-names
-           (prompt-options-packages options))
-          (run-single-prompt
-           (prompt-options-prompt options)
-           :agent-name (prompt-options-agent-name options)
-           :provider (prompt-options-provider options)
-           :model (prompt-options-model options)
-           :think-level (prompt-options-think-level options)
-           :max-tool-iterations
-           (prompt-options-max-tool-iterations options)
-           :auto-approve-tools-p
-           (prompt-options-auto-approve-tools-p options)
-           :package-names
-           (prompt-options-packages options)))))
+  (let ((session-name
+          (or (prompt-options-session-name options)
+              (and (prompt-options-continue-session-p options)
+                   (or (most-recent-saved-session-name
+                        :working-directory (truename "."))
+                       (error "No saved session exists for the current working directory."))))))
+    (if (prompt-options-pipeline-name options)
+        (run-pipeline-prompt
+         (prompt-options-prompt options)
+         (prompt-options-pipeline-name options)
+         :session-name session-name
+         :agent-name (prompt-options-agent-name options)
+         :provider (prompt-options-provider options)
+         :model (prompt-options-model options)
+         :think-level (prompt-options-think-level options)
+         :max-tool-iterations
+         (prompt-options-max-tool-iterations options)
+         :auto-approve-tools-p
+         (prompt-options-auto-approve-tools-p options)
+         :package-names
+         (prompt-options-packages options))
+        (if session-name
+            (run-session-prompt
+             (prompt-options-prompt options)
+             :session-name session-name
+             :agent-name (prompt-options-agent-name options)
+             :provider (prompt-options-provider options)
+             :model (prompt-options-model options)
+             :think-level (prompt-options-think-level options)
+             :max-tool-iterations
+             (prompt-options-max-tool-iterations options)
+             :auto-approve-tools-p
+             (prompt-options-auto-approve-tools-p options)
+             :package-names
+             (prompt-options-packages options))
+            (run-single-prompt
+             (prompt-options-prompt options)
+             :agent-name (prompt-options-agent-name options)
+             :provider (prompt-options-provider options)
+             :model (prompt-options-model options)
+             :think-level (prompt-options-think-level options)
+             :max-tool-iterations
+             (prompt-options-max-tool-iterations options)
+             :auto-approve-tools-p
+             (prompt-options-auto-approve-tools-p options)
+             :package-names
+             (prompt-options-packages options))))))
 
 (defun clawmacs-prompt-main* (&key default-session-name usage-string-function)
   "Shared CLI entry point for one-shot and saved-session prompt modes."
@@ -4433,7 +4572,8 @@ Example:
       (progn
         (setf options (parse-clawmacs-prompt-args))
         (when (and default-session-name
-                   (not (prompt-options-session-name options)))
+                   (not (prompt-options-session-name options))
+                   (not (prompt-options-continue-session-p options)))
           (setf (prompt-options-session-name options) default-session-name))
         (when (prompt-options-help-p options)
           (write-string-with-final-newline (funcall usage-string-function)
