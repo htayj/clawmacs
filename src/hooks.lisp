@@ -168,6 +168,10 @@ Returns FUNCTION."
 (defhook *after-session-load-hook* (buffer session-name)
   "List of functions run after a session is loaded into a buffer.")
 
+(defhook *session-share-hook* (buffer export-info)
+  "List of functions run by the built-in session share hook handler.
+Each function receives BUFFER and EXPORT-INFO, and may return a share result.")
+
 ;;; --------------------------------------------------------------------------
 ;;; Advice
 ;;; --------------------------------------------------------------------------

@@ -201,6 +201,15 @@
    #:load-or-create-session
    #:record-session-message
    #:rotate-session-transcript
+   #:export-buffer-session-html
+   #:share-session-export
+   #:session-share-handler
+   #:session-share-handler-name
+   #:session-share-handler-description
+   #:session-share-handler-function
+   #:register-session-share-handler
+   #:find-session-share-handler
+   #:list-session-share-handlers
 
    ;; Message editing
    #:message-insert-char
@@ -1266,6 +1275,7 @@
    #:*approval-review-hook*
    #:*after-session-save-hook*
    #:*after-session-load-hook*
+   #:*session-share-hook*
    #:add-hook
    #:remove-hook
    #:run-hooks

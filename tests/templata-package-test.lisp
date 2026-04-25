@@ -323,3 +323,36 @@ Review body.")
              (is (eq buffer called)))
         (setf (symbol-function 'clawmacs:load-session-command)
               original)))))
+
+(test templata-slash-export-writes-html-and-reports-the-path
+  "The bundled /export command writes HTML instead of only saving JSON."
+  (let* ((*sessions-dir* (temp-session-test-directory "templata-export"))
+         (export-path (merge-pathnames "slash-export.html" *sessions-dir*))
+         (buffer (make-buffer "templata-export" :agent-name "echo")))
+    (clawmacs::attach-buffer-session
+     buffer
+     (load-or-create-session "templata-export"))
+    (set-message-text (buffer-input-message buffer) "Need export")
+    (buffer-finalize-input buffer)
+    (buffer-insert-agent-message
+     buffer
+     "Exported."
+     :raw-content '(((:type . "text") (:text . "Exported."))
+                    ((:type . "reasoning") (:text . "Shown reasoning.")))
+     :metadata '((:provider . :openai-codex)
+                 (:model . "gpt-5.4")
+                 (:think-level . "high")))
+    (let* ((result (clawmacs::templata-slash-export
+                    buffer
+                    (list "--reasoning" "--metadata" (namestring export-path))
+                    (format nil "/export --reasoning --metadata ~A"
+                            (namestring export-path))))
+           (html (uiop:read-file-string export-path))
+           (notice (message-prev (buffer-input-message buffer))))
+      (is (equal (namestring export-path) (namestring result)))
+      (is (probe-file export-path))
+      (is (search "Shown reasoning." html))
+      (is (search "provider/model: openai-codex/gpt-5.4" html))
+      (is (not (null notice)))
+      (is (eq :system (message-sender notice)))
+      (is (search "Session exported to" (message-text notice))))))

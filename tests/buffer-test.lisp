@@ -1847,3 +1847,124 @@
       (clawmacs::handle-think-selector-key (code-char 7) buf)
       (is (null *think-selector-active*))
       (is (string= "medium" (buffer-think-level-override buf))))))
+
+(test export-buffer-session-html-renders-images-reasoning-and-metadata
+  "HTML export writes the current branch with optional reasoning, metadata, and images."
+  (let* ((*sessions-dir* (temp-session-test-directory "export-html"))
+         (image-path (merge-pathnames "diagram.png" *sessions-dir*))
+         (export-path (merge-pathnames "branch.html" *sessions-dir*))
+         (session (load-or-create-session "export-html"
+                                          :display-name "Export HTML"))
+         (buf (make-buffer "export-html"
+                           :agent-name "echo"
+                           :session session)))
+    (ensure-directories-exist image-path)
+    (with-open-file (stream image-path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create
+                            :element-type '(unsigned-byte 8))
+      (write-byte 0 stream))
+    (set-message-text (buffer-input-message buf)
+                      (format nil "Need this~%![Diagram](~A)"
+                              (namestring image-path)))
+    (buffer-finalize-input buf)
+    (buffer-insert-agent-message
+     buf
+     "Done."
+     :raw-content '(((:type . "text") (:text . "Done."))
+                    ((:type . "reasoning") (:text . "Private reasoning.")))
+     :metadata '((:provider . :openai-codex)
+                 (:model . "gpt-5.4")
+                 (:think-level . "high")))
+    (let* ((result (clawmacs::export-buffer-session-html
+                    buf
+                    :path export-path
+                    :show-reasoning-p t
+                    :show-metadata-p t))
+           (html (uiop:read-file-string export-path)))
+      (is (equal (namestring export-path)
+                 (namestring (getf result :path))))
+      (is (search "Export HTML" html))
+      (is (search "Need this" html))
+      (is (search "Private reasoning." html))
+      (is (search "provider/model: openai-codex/gpt-5.4" html))
+      (is (search "think: high" html))
+      (is (search "<img" html))
+      (is (search (namestring image-path) html)))))
+
+(test export-buffer-session-html-hides-reasoning-and-metadata-when-disabled
+  "HTML export omits sidecar reasoning and metadata when requested."
+  (let* ((*sessions-dir* (temp-session-test-directory "export-html-hidden"))
+         (export-path (merge-pathnames "branch.html" *sessions-dir*))
+         (session (load-or-create-session "export-html-hidden"))
+         (buf (make-buffer "export-html-hidden"
+                           :agent-name "echo"
+                           :session session)))
+    (set-message-text (buffer-input-message buf) "Question")
+    (buffer-finalize-input buf)
+    (buffer-insert-agent-message
+     buf
+     "Answer."
+     :raw-content '(((:type . "text") (:text . "Answer."))
+                    ((:type . "reasoning") (:text . "Hidden reasoning.")))
+     :metadata '((:provider . :openai-codex)
+                 (:model . "gpt-5.4")
+                 (:think-level . "high")))
+    (let ((html (progn
+                  (clawmacs::export-buffer-session-html
+                   buf
+                   :path export-path
+                   :show-reasoning-p nil
+                   :show-metadata-p nil)
+                  (uiop:read-file-string export-path))))
+      (is (search "Question" html))
+      (is (search "Answer." html))
+      (is-false (search "Hidden reasoning." html))
+      (is-false (search "provider/model" html))
+      (is-false (search "think: high" html)))))
+
+(test session-export-share-handlers-support-registered-hook-and-local-copy-flows
+  "Session export can dispatch through registered handlers, hook handlers, and the built-in local copy flow."
+  (let* ((*sessions-dir* (temp-session-test-directory "export-share"))
+         (export-path (merge-pathnames "branch.html" *sessions-dir*))
+         (session (load-or-create-session "export-share"))
+         (buf (make-buffer "export-share"
+                           :agent-name "echo"
+                           :session session))
+         (clawmacs::*session-share-handler-table*
+           (make-hash-table :test #'equal))
+         (clawmacs::*session-share-hook* nil)
+         (registered-call nil)
+         (hook-call nil))
+    (set-message-text (buffer-input-message buf) "Share me")
+    (buffer-finalize-input buf)
+    (let ((export-info (clawmacs::export-buffer-session-html
+                        buf
+                        :path export-path)))
+      (clawmacs::register-session-share-handler
+       "capture"
+       (lambda (buffer info)
+         (setf registered-call (list buffer info))
+         "share://capture"))
+      (let ((captured (clawmacs::share-session-export
+                       buf export-info :handler "capture")))
+        (is (equal "capture" (getf captured :handler)))
+        (is (equal "share://capture" (getf captured :result)))
+        (is (eq buf (first registered-call))))
+      (setf clawmacs::*session-share-hook*
+            (list (lambda (buffer info)
+                    (setf hook-call (list buffer info))
+                    "share://hook")))
+      (let ((hooked (clawmacs::share-session-export
+                     buf export-info :handler "hook")))
+        (is (equal "hook" (getf hooked :handler)))
+        (is (equal "share://hook" (getf hooked :result)))
+        (is (eq buf (first hook-call))))
+      (let* ((shared (clawmacs::share-session-export
+                      buf export-info :handler "local-copy"))
+             (shared-path (getf shared :result)))
+        (is (equal "local-copy" (getf shared :handler)))
+        (is (pathnamep shared-path))
+        (is (probe-file shared-path))
+        (is (search "/shares/" (namestring shared-path)))))))

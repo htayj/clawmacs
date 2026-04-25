@@ -27,7 +27,7 @@
                    :description "Create and switch to a new chat buffer.")
                   (:name "export"
                    :handler "templata-slash-export"
-                   :description "Save the current session snapshot to disk.")
+                   :description "Export the current session to HTML, optionally sharing it via a handler.")
                   (:name "reload"
                    :handler "templata-slash-reload"
                    :description "Reload skills, package manifests, and prompt-template files.")))

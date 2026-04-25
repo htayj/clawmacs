@@ -93,14 +93,74 @@
   (declare (ignore buffer args input-text))
   (new-buffer-command nil))
 
+(defun templata-parse-export-request (buffer args)
+  "Return MODE, HANDLER, PATH, SHOW-REASONING-P, and SHOW-METADATA-P for /export."
+  (let ((mode :export)
+        (handler "local-copy")
+        (handler-supplied-p nil)
+        (path nil)
+        (show-reasoning-p (buffer-show-reasoning-p buffer))
+        (show-metadata-p (buffer-show-metadata-p buffer)))
+    (dolist (arg args)
+      (cond
+        ((string= arg "share")
+         (setf mode :share))
+        ((string= arg "--reasoning")
+         (setf show-reasoning-p t))
+        ((string= arg "--no-reasoning")
+         (setf show-reasoning-p nil))
+        ((string= arg "--metadata")
+         (setf show-metadata-p t))
+        ((string= arg "--no-metadata")
+         (setf show-metadata-p nil))
+        ((and (eq mode :share)
+              (not handler-supplied-p))
+         (setf handler arg
+               handler-supplied-p t))
+        ((null path)
+         (setf path arg))
+        (t
+         (error "Too many /export arguments: ~{~A~^ ~}" args))))
+    (values mode handler path show-reasoning-p show-metadata-p)))
+
+(defun templata-display-export-result (value)
+  "Return VALUE as a concise user-facing export/share description."
+  (typecase value
+    (pathname (namestring value))
+    (t (princ-to-string value))))
+
 (defun templata-slash-export (buffer args input-text)
   "Handle /export slash commands."
-  (declare (ignore args input-text))
-  (let ((path (save-session buffer)))
-    (buffer-insert-system-message
-     buffer
-     (format nil "[Session saved to ~A]" path))
-    path))
+  (declare (ignore input-text))
+  (handler-case
+      (multiple-value-bind (mode handler path show-reasoning-p show-metadata-p)
+          (templata-parse-export-request buffer args)
+        (let* ((export-info (export-buffer-session-html
+                             buffer
+                             :path path
+                             :show-reasoning-p show-reasoning-p
+                             :show-metadata-p show-metadata-p))
+               (export-path (getf export-info :path))
+               (share-info (and (eq mode :share)
+                                (share-session-export
+                                 buffer export-info :handler handler))))
+          (buffer-insert-system-message
+           buffer
+           (if share-info
+               (format nil "[Session exported to ~A and shared via ~A: ~A]"
+                       export-path
+                       (getf share-info :handler)
+                       (templata-display-export-result
+                        (getf share-info :result)))
+               (format nil "[Session exported to ~A]" export-path)))
+          (if share-info
+              (getf share-info :result)
+              export-path)))
+    (error (condition)
+      (buffer-insert-system-message
+       buffer
+       (format nil "[Export failed: ~A]" condition))
+      nil)))
 
 (defun templata-slash-reload (buffer args input-text)
   "Handle /reload slash commands."
