@@ -167,9 +167,16 @@ ARGS is a list of shell-like arguments with simple quote handling."
   (let ((entries nil))
     (dolist (package-name (active-package-names :buffer buffer))
       (let* ((definition (find-installed-package package-name))
+             (record (and definition
+                          (package-install-record-for-definition definition)))
              (directory (and definition
                              (package-prompt-template-directory definition))))
-        (when (and directory (probe-file directory))
+        (when (and directory
+                   (probe-file directory)
+                   (or (null record)
+                       (member :prompt-template
+                               (package-install-record-resource-types record)
+                               :test #'eq)))
           (push (list :directory directory
                       :scope :package
                       :package package-name)
@@ -297,6 +304,9 @@ Supports $1, $2, $@, $ARGUMENTS, ${@:N}, and ${@:N:M}."
 
 (defun register-slash-command (name handler &key description argument-hint package)
   "Register a slash command NAME handled by HANDLER."
+  (when (and *current-clawmacs-package*
+             (not (package-resource-type-allowed-p :slash-command)))
+    (return-from register-slash-command nil))
   (let* ((normalized-name (normalize-slash-command-name name))
          (raw-owner (or package *current-clawmacs-package*))
          (owner (and raw-owner (manifest-package-name raw-owner)))
@@ -466,3 +476,41 @@ Returns values HANDLED-P and RESULT."
                   items)))))
     (sort items #'string< :key (lambda (item)
                                  (getf item :name)))))
+
+(defun templata-resolve-session-name (raw-name)
+  "Return the saved session name matching RAW-NAME exactly or by unique prefix."
+  (let* ((query (string-trim '(#\Space #\Tab #\Newline #\Return)
+                             (or raw-name "")))
+         (sessions (or (list-saved-sessions) nil)))
+    (cond
+      ((zerop (length query)) nil)
+      ((member query sessions :test #'string=) query)
+      (t
+       (let ((matches
+               (remove-if-not
+                (lambda (name)
+                  (and (>= (length name) (length query))
+                       (string= query name :end2 (length query))))
+                sessions)))
+         (when (= 1 (length matches))
+           (first matches)))))))
+
+(defun templata-slash-resume (buffer args input-text)
+  "Handle /resume slash commands."
+  (declare (ignore input-text))
+  (if (null args)
+      (load-session-command buffer)
+      (let* ((raw-name (format nil "~{~A~^ ~}" args))
+             (session-name (templata-resolve-session-name raw-name)))
+        (cond
+          ((null session-name)
+           (buffer-insert-system-message
+            buffer
+            "[Use /resume SESSION-NAME to load a saved session by exact name or unique prefix.]"))
+          (t
+           (let ((loaded (load-session session-name)))
+             (if loaded
+                 (switch-to-buffer loaded)
+                 (buffer-insert-system-message
+                  buffer
+                  (format nil "[No saved session named ~A.]" session-name)))))))))

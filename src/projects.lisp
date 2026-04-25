@@ -11,6 +11,7 @@
   description
   source
   systems
+  packages
   check-functions
   reload-function)
 
@@ -115,6 +116,37 @@
      functions)
     (t (list functions))))
 
+(defun normalize-project-package-install-request (value)
+  "Normalize VALUE to a project package install request plist."
+  (cond
+    ((null value) nil)
+    ((and (listp value) (evenp (length value)))
+     (let ((name (getf value :name)))
+       (when name
+         (list :name (project-display-name name)
+               :src-type (clawmacs::normalize-package-source-type
+                          (getf value :src-type))
+               :repo (getf value :repo)
+               :path (getf value :path)
+               :source (getf value :source)
+               :ref (getf value :ref)
+               :scope (or (getf value :scope) :project)
+               :resource-types
+               (clawmacs::normalize-package-resource-type-list
+                (getf value :resource-types))
+               :description (getf value :description)))))
+    ((or (stringp value) (symbolp value))
+     (list :name (project-display-name value)
+           :scope :project))
+    (t nil)))
+
+(defun normalize-project-package-install-request-list (packages)
+  "Normalize PACKAGES to a list of project package install request plists."
+  (loop :for package :in (or packages '())
+        :for request := (normalize-project-package-install-request package)
+        :when request
+          :collect request))
+
 (defun ensure-directory-path-exists (directory)
   "Ensure DIRECTORY exists and return its truename as a directory pathname."
   (let ((dir (uiop:ensure-directory-pathname directory)))
@@ -145,7 +177,8 @@
   (list :name (project-name project)
         :root (namestring (project-root project))
         :description (or (project-description project) "")
-        :systems (or (project-systems project) '())))
+        :systems (or (project-systems project) '())
+        :packages (or (project-packages project) '())))
 
 (defun valid-project-manifest-p (manifest)
   "Return true when MANIFEST is a proper project property list."
@@ -198,6 +231,7 @@ When REPLACE is NIL, an existing project with the same name is preserved."
        (setf (gethash key *project-registry*) project)))))
 
 (defun define-project (name &key root description systems check-functions
+                              packages
                               reload-function (create-if-missing nil)
                               (source :programmatic) (replace t))
   "Define a project named NAME rooted at ROOT."
@@ -211,12 +245,14 @@ When REPLACE is NIL, an existing project with the same name is preserved."
                  :description description
                  :source source
                  :systems (normalize-project-system-list systems)
+                 :packages (normalize-project-package-install-request-list
+                            packages)
                  :check-functions (normalize-project-function-list
                                    check-functions)
                  :reload-function reload-function)
    :replace replace))
 
-(defun create-project (name &key root description systems check-functions
+(defun create-project (name &key root description systems packages check-functions
                               reload-function (persist t)
                               &allow-other-keys)
   "Create a project and optionally persist its manifest.
@@ -230,6 +266,7 @@ When ROOT is omitted, create a directory under *PROJECT-DEFINITIONS-DIRECTORY*."
                     :root (or root default-root)
                     :description description
                     :systems systems
+                    :packages packages
                     :check-functions check-functions
                     :reload-function reload-function
                     :create-if-missing t
@@ -267,8 +304,75 @@ When ROOT is omitted, create a directory under *PROJECT-DEFINITIONS-DIRECTORY*."
       :root (getf manifest :root)
       :description (getf manifest :description)
       :systems (getf manifest :systems)
+      :packages (getf manifest :packages)
       :source :manifest
       :replace replace)))
+
+(defun project-package-installed-p (project request)
+  "Return true when REQUEST's package is already installed in its scope."
+  (let* ((name (getf request :name))
+         (scope (or (getf request :scope) :project))
+         (definition (find-installed-package
+                      name
+                      :project (and (eq scope :project) project))))
+    (and definition
+         (or (and (eq scope :project)
+                  (eq :project (package-definition-source-tier definition)))
+             (and (eq scope :global)
+                  (member (package-definition-source-tier definition)
+                          '(:builtin :channel :third-party)
+                          :test #'eq))))))
+
+(defun project-package-install-request-valid-p (request)
+  "Return true when REQUEST includes enough information to install."
+  (and (getf request :name)
+       (or (getf request :repo)
+           (getf request :path)
+           (getf request :source))))
+
+(defun project-package-install-request->use-package-args (request)
+  "Return keyword arguments for CLAWMACS-USE-PACKAGE from REQUEST."
+  (let ((src-type (or (getf request :src-type)
+                      (getf request :source-type)
+                      :git))
+        (repo (or (getf request :repo)
+                  (getf request :path)
+                  (getf request :source)))
+        (ref (getf request :ref))
+        (resource-types (getf request :resource-types))
+        (scope (or (getf request :scope) :project)))
+    (list :src-type src-type
+          :repo repo
+          :ref ref
+          :resource-types resource-types
+          :scope scope)))
+
+(defun load-project-declared-packages (&optional project-designator)
+  "Install missing project-declared packages for PROJECT-DESIGNATOR or all projects."
+  (let ((loaded nil)
+        (projects (if project-designator
+                      (list (ensure-project project-designator))
+                      (list-projects))))
+    (dolist (project projects)
+      (dolist (request (project-packages project))
+        (let ((name (getf request :name)))
+          (cond
+            ((not (project-package-install-request-valid-p request))
+             (emit-package-warning
+              "Project ~A declared package ~S without install source details"
+              (project-name project)
+              request))
+            ((project-package-installed-p project request)
+             nil)
+            (t
+             (let ((definition
+                     (apply #'clawmacs-use-package
+                            (append (project-package-install-request->use-package-args
+                                     request)
+                                    (list :project project)))))
+               (when definition
+                 (push definition loaded))))))))
+    (nreverse loaded)))
 
 (defun config-project-root ()
   "Return the configured Clawmacs init directory."
@@ -302,9 +406,10 @@ Existing projects, usually from init.lisp, are not overwritten."
     (handler-case
         (load-project-manifest path :replace nil)
       (error (e)
-        (format *error-output*
+      (format *error-output*
                 "~&;; Warning: error loading project manifest ~A:~%;; ~A~%"
                 path e))))
+  (load-project-declared-packages)
   (setf *project-definitions-loaded-p* t)
   (list-projects))
 

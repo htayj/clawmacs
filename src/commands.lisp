@@ -175,6 +175,9 @@ or an agent keyword (e.g., :CODER) during agent tool dispatch.")
                                             (prompts nil prompts-supplied-p)
                                             docstring)
   "Register existing function NAME as a user command."
+  (when (and *current-clawmacs-package*
+             (not (package-resource-type-allowed-p :command)))
+    (return-from register-command-metadata nil))
   (let* ((lambda-list
            (validate-command-lambda-list
             name (command-function-lambda-list name)))
@@ -239,15 +242,18 @@ Example:
     :returns \"buffer — A new buffer object with a single empty input message.\"
     :see-also (buffer buffer-name add-buffer-to-ring)
     :side-effects \"Allocates a new buffer with an empty input message.\")"
-  `(let ((doc (setf (gethash ',name *extended-docs*)
-                    (append
-                     (list ,@(when category `(:category ,category))
-                           ,@(when usage `(:usage ,usage))
-                           ,@(when returns `(:returns ,returns))
-                           ,@(when see-also `(:see-also ',see-also))
-                           ,@(when side-effects `(:side-effects ,side-effects)))
-                     (when *current-clawmacs-package*
-                       (list :package *current-clawmacs-package*))))))
+  `(let ((doc
+           (when (or (null *current-clawmacs-package*)
+                     (package-resource-type-allowed-p :doc))
+             (setf (gethash ',name *extended-docs*)
+                   (append
+                    (list ,@(when category `(:category ,category))
+                          ,@(when usage `(:usage ,usage))
+                          ,@(when returns `(:returns ,returns))
+                          ,@(when see-also `(:see-also ',see-also))
+                          ,@(when side-effects `(:side-effects ,side-effects)))
+                    (when *current-clawmacs-package*
+                      (list :package *current-clawmacs-package*)))))))
      doc))
 
 (defun extended-doc (symbol &optional key)

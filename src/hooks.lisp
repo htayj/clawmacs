@@ -16,6 +16,9 @@
 (defun register-hook-metadata (name args docstring)
   "Register NAME as a hook variable that receives ARGS."
   (check-type name symbol)
+  (when (and *current-clawmacs-package*
+             (not (package-resource-type-allowed-p :hook)))
+    (return-from register-hook-metadata nil))
   (let ((metadata (make-hook-metadata :name name
                                       :args args
                                       :docstring (or docstring ""))))
@@ -54,6 +57,9 @@ HOOK-VAR should name a special variable containing a list of function
 designators. When APPEND is non-nil, add FUNCTION at the end instead of the
 front."
   (check-type hook-var symbol)
+  (when (and *current-clawmacs-package*
+             (not (package-resource-type-allowed-p :hook)))
+    (return-from add-hook function))
   (let ((hooks (symbol-value hook-var)))
     (unless (member function hooks :test #'eq)
       (setf (symbol-value hook-var)
@@ -151,6 +157,10 @@ Returns FUNCTION."
 
 (defhook *package-enablement-changed-hook* (package scope buffer agent-name)
   "List of functions run after a package enablement scope changes.")
+
+(defhook *approval-review-hook*
+    (buffer tool-name decision policy entry)
+  "List of functions run when a tool approval decision is recorded.")
 
 (defhook *after-session-save-hook* (buffer path)
   "List of functions run after a session snapshot is saved.")
@@ -270,6 +280,9 @@ Returns FUNCTION."
   "Add ADVICE around SYMBOL at WHERE and return the registered advice entry."
   (validate-advice-target symbol)
   (validate-advice-where where)
+  (when (and *current-clawmacs-package*
+             (not (package-resource-type-allowed-p :advice)))
+    (return-from add-advice nil))
   (resolve-advice-function advice)
   (let* ((state (ensure-advice-state symbol))
          (entry-name (or name (default-advice-name advice)))
