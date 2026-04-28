@@ -18,6 +18,10 @@
   :description "Buffer tests"
   :in clawmacs-suite)
 
+(def-suite info-suite
+  :description "Info/manual browser tests"
+  :in clawmacs-suite)
+
 (def-suite windows-suite
   :description "Logical window tree tests"
   :in clawmacs-suite)

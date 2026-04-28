@@ -344,14 +344,17 @@
    #:find-buffer-by-name
    #:scratch-buffer-p
    #:file-buffer-p
+   #:info-buffer-p
    #:listener-buffer-p
    #:document-buffer-p
    #:buffer-llm-running-p
    #:make-chat-buffer
+   #:make-info-buffer
    #:scratch-buffer
    #:ensure-scratch-buffer
    #:scratch-buffer-text
    #:file-buffer-text
+   #:info-buffer-text
    #:ensure-file-keymap-initialized
    #:file-buffer-dirty-p
    #:mark-buffer-dirty
@@ -1046,6 +1049,10 @@
    #:session-info-command
    #:set-session-display-name-command
    #:new-listener-buffer-command
+   #:info-directory-command
+   #:info-open-manual-command
+   #:clawmacs-manual-command
+   #:info-goto-node-command
    #:help-buffer-p
    #:customize-buffer-p
    #:help-buffer-text

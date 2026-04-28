@@ -560,27 +560,30 @@ the event loop polls for updates via update-streaming-response."
                         (session-persistence-mode
                          *default-buffer-session-persistence-mode*))
   "Create a buffer seeded with PROMPT as the only finalized user message."
-  (let ((buf (make-chat-buffer "clawmacs:prompt"
-                               :agent-name agent-name
-                               :working-directory (truename ".")
-                               :session-persistence-mode
-                               session-persistence-mode)))
+  (let* ((*buffer-system-prompt-display-enabled* nil)
+         (buf (make-chat-buffer "clawmacs:prompt"
+                                :agent-name agent-name
+                                :working-directory (truename ".")
+                                :session-persistence-mode
+                                session-persistence-mode)))
     (set-message-text (buffer-input-message buf) prompt)
     (buffer-finalize-input buf)
     buf))
 
 (defun make-empty-session-prompt-buffer (session-name agent-name)
   "Create an empty prompt-mode buffer attached to SESSION-NAME."
-  (let ((buf (make-chat-buffer session-name
-                               :agent-name agent-name
-                               :working-directory (truename "."))))
+  (let* ((*buffer-system-prompt-display-enabled* nil)
+         (buf (make-chat-buffer session-name
+                                :agent-name agent-name
+                                :working-directory (truename "."))))
     (autosave-session-snapshot buf)
     buf))
 
 (defun make-session-prompt-buffer (session-name agent-name)
   "Load SESSION-NAME for prompt mode, or create it when missing."
-  (let ((buf (or (load-session session-name :agent-name agent-name)
-                 (make-empty-session-prompt-buffer session-name agent-name))))
+  (let* ((*buffer-system-prompt-display-enabled* nil)
+         (buf (or (load-session session-name :agent-name agent-name)
+                  (make-empty-session-prompt-buffer session-name agent-name))))
     (initialize-buffer-display-defaults buf)
     buf))
 

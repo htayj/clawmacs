@@ -57,6 +57,13 @@
     (setf (message-timestamp msg) (get-universal-time))
     msg))
 
+(defun first-substantive-buffer-message (buffer)
+  "Return BUFFER's first non-synthetic finalized message, or NIL."
+  (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
+        :while (and msg (not (eq msg (buffer-input-message buffer))))
+        :unless (clawmacs::buffer-system-prompt-display-message-p msg)
+          :return msg))
+
 (defun mx-test-noarg-command (buffer)
   "Test command used to verify M-x invocation without arguments."
   (declare (ignore buffer))
@@ -193,19 +200,23 @@
       (is (string= "dashboard" (buffer-major-mode buf))))))
 
 (test built-in-special-buffer-types-are-registered
-  "Help, customize, and listener buffers are first-class non-document kinds."
+  "Help, info, customize, and listener buffers are first-class non-document kinds."
   (let ((clawmacs::*buffer-type-registry*
           (clawmacs::make-buffer-type-registry)))
     (let ((help (find-buffer-type :help))
+          (info (find-buffer-type :info))
           (customize (find-buffer-type :customize))
           (listener (find-buffer-type :listener)))
       (is (not (null help)))
+      (is (not (null info)))
       (is (not (null customize)))
       (is (not (null listener)))
       (is (string= "help" (buffer-type-major-mode help)))
+      (is (string= "info" (buffer-type-major-mode info)))
       (is (string= "customize" (buffer-type-major-mode customize)))
       (is (string= "listener" (buffer-type-major-mode listener)))
       (is (not (buffer-type-document-p help)))
+      (is (not (buffer-type-document-p info)))
       (is (not (buffer-type-document-p customize)))
       (is (not (buffer-type-document-p listener))))))
 
@@ -215,12 +226,17 @@
           (clawmacs::make-buffer-type-registry)))
     (clawmacs::register-mcclim-core-buffer-presentations)
     (let ((help (make-buffer "help" :kind :help))
+          (info (make-buffer "info" :kind :info))
           (customize (make-buffer "customize" :kind :customize))
           (listener (make-buffer "listener" :kind :listener)))
       (is (eq 'clawmacs::mcclim-render-help-buffer
               (buffer-presentation-function help)))
       (is (eq 'clawmacs::mcclim-render-empty-input-pane
               (buffer-input-presentation-function help)))
+      (is (eq 'clawmacs::mcclim-render-info-buffer
+              (buffer-presentation-function info)))
+      (is (eq 'clawmacs::mcclim-render-empty-input-pane
+              (buffer-input-presentation-function info)))
       (is (eq 'clawmacs::mcclim-render-customize-buffer
               (buffer-presentation-function customize)))
       (is (eq 'clawmacs::mcclim-render-empty-input-pane
@@ -315,6 +331,48 @@
     (clawmacs::toggle-metadata-output-command buf)
     (is (not (buffer-show-metadata-p buf)))))
 
+(test make-chat-buffer-shows-system-prompt-header-without-counting-it
+  "Chat buffers show the full system prompt as a synthetic display header."
+  (let ((original (symbol-function 'clawmacs:build-agent-system-prompt)))
+    (unwind-protect
+         (progn
+           (setf (symbol-function 'clawmacs:build-agent-system-prompt)
+                 (lambda (agent-name &key buffer)
+                   (declare (ignore buffer))
+                   (format nil "PROMPT FOR ~A" agent-name)))
+           (let ((buf (make-chat-buffer "prompt-header"
+                                        :agent-name "writer"
+                                        :session-persistence-mode :ephemeral)))
+             (let ((first (buffer-first-message buf)))
+               (is (clawmacs::buffer-system-prompt-display-message-p first))
+               (is (search "PROMPT FOR writer" (message-text first)))
+               (is (eq (buffer-input-message buf) (message-next first)))
+               (is (= 1 (buffer-message-count buf))))))
+      (setf (symbol-function 'clawmacs:build-agent-system-prompt) original))))
+
+(test serialize-buffer-omits-system-prompt-header
+  "Synthetic system-prompt headers do not become durable session messages."
+  (let ((original (symbol-function 'clawmacs:build-agent-system-prompt)))
+    (unwind-protect
+         (progn
+           (setf (symbol-function 'clawmacs:build-agent-system-prompt)
+                 (lambda (agent-name &key buffer)
+                   (declare (ignore buffer))
+                   (format nil "PROMPT FOR ~A" agent-name)))
+           (let ((buf (make-chat-buffer "serialize-header"
+                                        :agent-name "writer"
+                                        :session-persistence-mode :ephemeral)))
+             (let ((data (clawmacs::serialize-buffer buf)))
+               (is (null (coerce (cdr (assoc :messages data)) 'list))))
+             (clawmacs::set-message-text (buffer-input-message buf) "hello")
+             (buffer-finalize-input buf)
+             (let* ((data (clawmacs::serialize-buffer buf))
+                    (messages (coerce (cdr (assoc :messages data)) 'list)))
+               (is (= 1 (length messages)))
+               (is (string= "USER" (cdr (assoc :sender (first messages)))))
+               (is (string= "hello" (cdr (assoc :text (first messages))))))))
+      (setf (symbol-function 'clawmacs:build-agent-system-prompt) original))))
+
 (test explicit-session-records-transcript-events
   "Buffers with an attached session append durable JSONL message events."
   (let* ((*sessions-dir* (temp-session-test-directory "explicit"))
@@ -375,9 +433,38 @@
       (is (not (null loaded)))
       (is (string= session-name (buffer-name loaded)))
       (is (string= "echo" (buffer-agent-name loaded)))
-      (let ((msg (buffer-first-message loaded)))
+      (let ((msg (first-substantive-buffer-message loaded)))
         (is (eq :user (message-sender msg)))
         (is (string= "hello" (message-text msg)))))))
+
+(test load-session-shows-system-prompt-header
+  "Loaded session buffers prepend the current full system prompt as a header."
+  (let* ((session-name "session-with-prompt-header")
+         (*sessions-dir* (temp-session-test-directory "load-prompt-header"))
+         (original (symbol-function 'clawmacs:build-agent-system-prompt)))
+    (unwind-protect
+         (progn
+           (setf (symbol-function 'clawmacs:build-agent-system-prompt)
+                 (lambda (agent-name &key buffer)
+                   (declare (ignore buffer))
+                   (format nil "LOADED PROMPT FOR ~A" agent-name)))
+           (let* ((session (load-or-create-session session-name))
+                  (buf (make-buffer session-name
+                                    :agent-name "reader"
+                                    :session session)))
+             (clawmacs::set-message-text (buffer-input-message buf) "hello")
+             (buffer-finalize-input buf)
+             (save-session buf))
+           (let ((loaded (load-session session-name :agent-name "reader")))
+             (is (not (null loaded)))
+             (let ((first (buffer-first-message loaded)))
+               (is (clawmacs::buffer-system-prompt-display-message-p first))
+               (is (search "LOADED PROMPT FOR reader" (message-text first)))
+               (let ((next (message-next first)))
+                 (is (not (null next)))
+                 (is (eq :user (message-sender next)))
+                 (is (string= "hello" (message-text next)))))))
+      (setf (symbol-function 'clawmacs:build-agent-system-prompt) original))))
 
 (test sidecar-only-session-is-listed-and-loadable
   "Transcript sidecars are visible to the load-session command before a snapshot exists."
@@ -395,7 +482,7 @@
       (is (not (null loaded)))
       (is (string= session-name (buffer-name loaded)))
       (is (probe-file path))
-      (let ((loaded-msg (buffer-first-message loaded)))
+      (let ((loaded-msg (first-substantive-buffer-message loaded)))
         (is (eq :user (message-sender loaded-msg)))
         (is (string= "from transcript" (message-text loaded-msg)))))))
 
@@ -466,10 +553,10 @@
                                                (buffer-input-message loaded))))
                           :collect (message-text msg))))
         (is (not (null loaded)))
-        (is (string= "root" (message-text (buffer-first-message loaded))))
-        (is (string= "new answer"
-                     (message-text
-                      (message-next (buffer-first-message loaded)))))
+        (let ((first (first-substantive-buffer-message loaded)))
+          (is (string= "root" (message-text first)))
+          (is (string= "new answer"
+                       (message-text (message-next first)))))
         (is (not (member "old answer" texts :test #'string=)))))))
 
 (test session-labels-feed-tree-selector
@@ -875,7 +962,7 @@
        stream))
     (let ((buf (load-session session-name)))
       (is (not (null buf)))
-      (let* ((assistant-msg (buffer-first-message buf))
+      (let* ((assistant-msg (first-substantive-buffer-message buf))
              (tool-result-msg (message-next assistant-msg)))
         (is (equal '(((:type . "text")
                       (:text . "Searching"))
@@ -1339,7 +1426,7 @@
         (is (eq *default-keymap* (buffer-keymap loaded)))
         (is (not (null (buffer-session loaded))))
         (is (member session-name *buffer-selection-history* :test #'string=))
-        (let ((msg (buffer-first-message loaded)))
+        (let ((msg (first-substantive-buffer-message loaded)))
           (is (not (eq msg (buffer-input-message loaded))))
           (is (eq :user (message-sender msg)))
           (is (string= "hello" (message-text msg))))))))

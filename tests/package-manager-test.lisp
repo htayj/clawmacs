@@ -582,6 +582,29 @@ Resource prompt body.")
               (clawmacs:cycle-package-enablement-scope "sexed"
                                                        :buffer buf))))))
 
+(test package-enablement-refreshes-system-prompt-header
+  "Changing package enablement refreshes the synthetic system-prompt header."
+  (with-package-state-override ((default-package-test-channels))
+    (let ((original (symbol-function 'clawmacs:build-agent-system-prompt)))
+      (unwind-protect
+           (progn
+             (setf (symbol-function 'clawmacs:build-agent-system-prompt)
+                   (lambda (agent-name &key buffer)
+                     (declare (ignore agent-name))
+                     (format nil "SEXED SCOPE: ~A"
+                             (clawmacs:package-enablement-scope "sexed"
+                                                                 :buffer buffer))))
+             (let ((buf (clawmacs:make-chat-buffer "package-prompt-header"
+                                                   :session-persistence-mode
+                                                   :ephemeral)))
+               (is (search "SEXED SCOPE: DEFAULT"
+                           (message-text (buffer-first-message buf))))
+               (clawmacs:set-package-enablement-scope "sexed" :global :buffer buf)
+               (is (search "SEXED SCOPE: GLOBAL"
+                           (message-text (buffer-first-message buf))))))
+        (setf (symbol-function 'clawmacs:build-agent-system-prompt)
+              original)))))
+
 (test package-channel-loads-package-and-manifest-prompt
   "A local channel can advertise and load a package with a prompt section."
   (let* ((*package-entrypoint-load-count* 0)

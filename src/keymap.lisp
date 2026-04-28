@@ -185,6 +185,8 @@
     (keymap-bind km '(:ctrl-h #\b) 'describe-bindings-command)  ; C-h b = describe keybindings
     (keymap-bind km '(:ctrl-h #\f) 'describe-function-command)  ; C-h f = describe function
     (keymap-bind km '(:ctrl-h #\v) 'describe-variable-command)  ; C-h v = describe variable
+    (keymap-bind km '(:ctrl-h #\i) 'info-directory-command)     ; C-h i = Info directory
+    (keymap-bind km '(:ctrl-h #\I) 'clawmacs-manual-command)    ; C-h I = Clawmacs manual
     (keymap-bind km '(:ctrl-h #\T) 'describe-type-command)      ; C-h T = describe type
     (keymap-bind km '(:ctrl-h #\F) 'customize-face-command)     ; C-h F = customize face
     (keymap-bind km '(:ctrl-h #\D) 'mcclim-debug-status-command) ; C-h D = McCLIM debug status

@@ -332,6 +332,7 @@
                        (load-or-create-session
                         resolved-name
                         :working-directory working-directory)))
+         (*buffer-system-prompt-display-enabled* nil)
          (buffer (make-chat-buffer
                   resolved-name
                   :agent-name agent-name
@@ -355,7 +356,8 @@
 (defun resume-interop-thread (thread-id &key (agent-name *default-agent-name*))
   "Resume THREAD-ID from the live table or saved sessions."
   (or (find-live-interop-thread thread-id)
-      (let ((buffer (load-session thread-id :agent-name agent-name)))
+      (let* ((*buffer-system-prompt-display-enabled* nil)
+             (buffer (load-session thread-id :agent-name agent-name)))
         (and buffer
              (make-interop-thread-from-buffer buffer)))))
 
@@ -370,6 +372,7 @@
          (leaf-id (or (session-current-leaf-id session)
                       (session-last-tree-entry-id session)))
          (new-session (create-branched-session session leaf-id :name name))
+         (*buffer-system-prompt-display-enabled* nil)
          (new-buffer (make-chat-buffer
                       (session-name new-session)
                       :agent-name (buffer-agent-name buffer)

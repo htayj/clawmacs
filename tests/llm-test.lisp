@@ -162,7 +162,26 @@
           (clawmacs::*available-packages* nil)
           (clawmacs::*package-registry-loaded-p* nil)
           (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
-          (clawmacs::*package-prompt-sections* nil))
+          (clawmacs::*package-prompt-sections* nil)
+          (*sessions-dir* (temp-session-test-directory "llm-sessions"))
+          (clawmacs::*buffer-ring* nil)
+          (clawmacs::*buffer-counter* 0)
+          (clawmacs::*startup-hook* nil)
+          (clawmacs::*initial-buffer-hook* nil)
+          (clawmacs::*before-command-hook* nil)
+          (clawmacs::*after-command-hook* nil)
+          (clawmacs::*before-tool-hook* nil)
+          (clawmacs::*after-tool-hook* nil)
+          (clawmacs::*before-send-message-hook* nil)
+          (clawmacs::*after-send-message-hook* nil)
+          (clawmacs::*after-buffer-create-hook* nil)
+          (clawmacs::*after-provider-response-hook* nil)
+          (clawmacs::*approval-policy-path* (temp-approval-policy-path))
+          (clawmacs::*approval-policy-isolation-root*
+           (temp-package-test-directory "approval-policy-isolation"))
+          (clawmacs::*approval-policy-registry* nil)
+          (clawmacs::*approval-policy-project-registry-cache*
+           (make-hash-table :test #'equal)))
      (maphash (lambda (key value)
                 (setf (gethash key snapshot) value))
               clawmacs::*tool-table*)
@@ -203,6 +222,7 @@
 (defun test-buffer-history-messages (buf)
   (loop :for msg := (buffer-first-message buf) :then (message-next msg)
         :while (and msg (not (eq msg (buffer-input-message buf))))
+        :unless (clawmacs::buffer-ephemeral-display-message-p msg)
         :collect msg))
 
 (defun test-buffer-history-senders (buf)
@@ -1121,10 +1141,14 @@ same
        :description "Demo self-modify skill"
        :contents "---\nname: demo-skill\ndescription: Demo self-modify skill\n---\nUse the DEMO-SKILL marker when this skill is injected.\n")
       (with-agent-defaults-path-override (path)
-        (with-pipeline-definition-registry-override ()
-          (let ((clawmacs::*agent-definition-registry*
-                  (make-hash-table :test #'equal)))
-            (with-package-state-override ((default-package-test-channels))
+        (with-approval-policy-path-override ((temp-approval-policy-path))
+          (let ((clawmacs::*approval-policy-isolation-root*
+                  (temp-package-test-directory
+                   "self-modify-approval-isolation")))
+            (with-pipeline-definition-registry-override ()
+              (let ((clawmacs::*agent-definition-registry*
+                      (make-hash-table :test #'equal)))
+                (with-package-state-override ((default-package-test-channels))
               (setf responses
                     (list
                      (list :kind :text
@@ -1259,7 +1283,7 @@ same
                                 :test #'char-equal))
                     (is (search (namestring clawmacs::*user-init-file*)
                                 (princ-to-string (getf init-call :messages))
-                                :test #'char-equal))))))))))))
+                                :test #'char-equal))))))))))))))
 
 (test run-pipeline-on-buffer-reports-invalid-route
   "Pipeline route errors are returned as failed pipeline results."

@@ -25,6 +25,9 @@
 (defvar *default-buffer-session-persistence-mode* :persistent
   "Default session persistence mode for newly created buffers.")
 
+(defvar *buffer-system-prompt-display-enabled* t
+  "When non-nil, interactive chat buffers show a synthetic system-prompt header.")
+
 (defvar *scratch-buffer-name* "*scratch*"
   "Name used for the process-local scratch buffer.")
 
@@ -134,6 +137,7 @@
                     :package nil))))
       (install :chat "Default agent conversation buffer." "chat" nil)
       (install :help "Read-only help buffer." "help" nil)
+      (install :info "Read-only Info manual browser." "info" nil)
       (install :customize "Interactive customization buffer." "customize" nil)
       (install :listener "Interactive Common Lisp listener buffer." "listener" nil)
       (install :scratch "Editable scratch buffer." "scratch" t)
@@ -319,7 +323,7 @@ major-mode label, and optional McCLIM presentation functions."
                       :accessor buffer-kind
                       :initform :chat
                       :type keyword
-                      :documentation "Buffer kind. Built-ins include :chat, :help, :customize, :listener, :scratch, and :file.")
+                      :documentation "Buffer kind. Built-ins include :chat, :help, :info, :customize, :listener, :scratch, and :file.")
    (working-directory :initarg :working-directory
                       :accessor buffer-working-directory
                       :initform (truename ".")
@@ -604,6 +608,8 @@ Enforces the invariant that it is not read-only."
   "Return true when BUF is a read-only help buffer."
   (eq (buffer-kind buf) :help))
 
+(declaim (ftype (function (buffer) boolean) info-buffer-p))
+
 (declaim (ftype (function (buffer) boolean) customize-buffer-p))
 (defun customize-buffer-p (buf)
   "Return true when BUF is an interactive customize buffer."
@@ -781,6 +787,7 @@ Returns the restored messages."
   "Count the number of messages in BUF."
   (loop :for current := (buffer-first-message buf) :then (message-next current)
         :while current
+        :unless (buffer-ephemeral-display-message-p current)
         :count t))
 
 (declaim (ftype (function (buffer keyword) buffer) set-buffer-provider-override))
@@ -1197,6 +1204,123 @@ Context messages are sent to providers as user-context messages."
    :record-p record-p
    :run-hook-p run-hook-p))
 
+(defun buffer-ephemeral-display-message-p (msg)
+  "Return true when MSG is a synthetic display-only helper message."
+  (let ((metadata (and msg (message-metadata msg))))
+    (and metadata
+         (message-metadata-value metadata :ephemeral-display)
+         t)))
+
+(defun buffer-system-prompt-display-message-p (msg)
+  "Return true when MSG is the synthetic system-prompt header message."
+  (let ((metadata (and msg (message-metadata msg))))
+    (and (eq (message-sender msg) :system)
+         metadata
+         (message-metadata-value metadata :system-prompt-display)
+         t)))
+
+(defun find-buffer-system-prompt-display-message (buf)
+  "Return BUF's synthetic system-prompt header message, or NIL."
+  (loop :for msg := (buffer-first-message buf) :then (message-next msg)
+        :while (and msg (not (eq msg (buffer-input-message buf))))
+        :thereis (and (buffer-system-prompt-display-message-p msg) msg)))
+
+(defun buffer-system-prompt-display-text (buf)
+  "Return the display text for BUF's synthetic system-prompt header, or NIL."
+  (when (and *buffer-system-prompt-display-enabled*
+             (eq (buffer-kind buf) :chat))
+    (let ((builder (and (fboundp 'build-agent-system-prompt)
+                        (symbol-function 'build-agent-system-prompt))))
+      (when builder
+        (handler-case
+            (let ((prompt (funcall builder (buffer-agent-name buf) :buffer buf)))
+              (unless (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                                  (or prompt ""))))
+                (format nil "[System Prompt]~%~%~A" prompt)))
+          (error (condition)
+            (when (fboundp 'file-debug-log)
+              (ignore-errors
+                (funcall (symbol-function 'file-debug-log)
+                         "system-prompt-display"
+                         "failed to build system prompt for ~A: ~A"
+                         (buffer-name buf)
+                         condition)))
+            nil))))))
+
+(defun unlink-message-from-buffer (buf msg)
+  "Detach MSG from BUF without transcript or autosave side effects."
+  (when (and buf msg)
+    (let ((prev (message-prev msg))
+          (next (message-next msg)))
+      (when prev
+        (setf (message-next prev) next))
+      (when next
+        (setf (message-prev next) prev))
+      (when (eq msg (buffer-first-message buf))
+        (setf (buffer-first-message buf) next))
+      (when (eq msg (buffer-last-message buf))
+        (setf (buffer-last-message buf) prev))
+      (setf (message-prev msg) nil
+            (message-next msg) nil)))
+  msg)
+
+(defun insert-message-at-buffer-start (buf msg)
+  "Insert MSG as BUF's first finalized message."
+  (let ((first (buffer-first-message buf)))
+    (setf (message-prev msg) nil
+          (message-next msg) first)
+    (when first
+      (setf (message-prev first) msg))
+    (setf (buffer-first-message buf) msg)
+    (when (null (buffer-last-message buf))
+      (setf (buffer-last-message buf) msg)))
+  msg)
+
+(defun sync-buffer-system-prompt-display (buf)
+  "Ensure BUF shows the current full system prompt at the top of chat buffers.
+
+The header message is synthetic: it is visible in the buffer, but it is not
+recorded into transcripts or saved snapshots."
+  (when buf
+    (let* ((text (buffer-system-prompt-display-text buf))
+           (existing (find-buffer-system-prompt-display-message buf))
+           (changed-p nil))
+      (cond
+        ((null text)
+         (when existing
+           (unlink-message-from-buffer buf existing)
+           (setf changed-p t)))
+        ((null existing)
+         (let ((msg (make-message :system :read-only-p t)))
+           (set-message-text msg text)
+           (setf (message-timestamp msg) (get-universal-time)
+                 (message-metadata msg)
+                 '((:system-prompt-display . t)
+                   (:ephemeral-display . t)))
+           (let ((face-set (gethash :system (buffer-face-registry buf))))
+             (when face-set
+               (setf (message-face-set msg) face-set)))
+           (insert-message-at-buffer-start buf msg)
+           (setf changed-p t)))
+        (t
+         (unless (eq existing (buffer-first-message buf))
+           (unlink-message-from-buffer buf existing)
+           (insert-message-at-buffer-start buf existing)
+           (setf changed-p t))
+         (unless (string= text (message-text existing))
+           (set-message-text existing text)
+           (setf (message-timestamp existing) (get-universal-time))
+           (setf changed-p t))
+         (setf (message-metadata existing)
+               '((:system-prompt-display . t)
+                 (:ephemeral-display . t)))
+         (let ((face-set (gethash :system (buffer-face-registry buf))))
+           (when face-set
+             (setf (message-face-set existing) face-set)))))
+      (when changed-p
+        (notify-buffer-display-change buf :system-prompt))
+      buf)))
+
 (defun ensure-default-keymap-initialized ()
   "Ensure the default keymap exists when keymap code is loaded."
   (when (and (boundp '*default-keymap*)
@@ -1258,6 +1382,7 @@ Context messages are sent to providers as user-context messages."
                            :session-persistence-mode normalized-session-mode
                            :session effective-session)))
     (initialize-buffer-display-defaults buf)
+    (sync-buffer-system-prompt-display buf)
     (when add-to-ring-p
       (add-buffer-to-ring buf))
     buf))
@@ -1331,7 +1456,8 @@ The current buffer remains current when a current buffer already exists."
   (let ((messages nil))
     (loop :for msg := (buffer-first-message buf) :then (message-next msg)
           :while (and msg (not (eq msg (buffer-input-message buf))))
-          :when (message-read-only-p msg)
+          :when (and (message-read-only-p msg)
+                     (not (buffer-ephemeral-display-message-p msg)))
           :do (push (serialize-message msg) messages))
     `((:name . ,(buffer-name buf))
       ,@(when (and (buffer-session buf)
@@ -1540,6 +1666,7 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
       (restore-buffer-extra-state buf buffer-state)
       (ignore-errors
         (reconcile-buffer-think-level-override buf))
+      (sync-buffer-system-prompt-display buf)
       buf)))
 
 (defun load-session-sidecar (session-name &key (agent-name *default-agent-name*))
@@ -1565,6 +1692,7 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
        buf
        (session-transcript-message-events session))
       (apply-session-branch-state-to-buffer buf session :overwrite-nil-p t)
+      (sync-buffer-system-prompt-display buf)
       (autosave-session-snapshot buf)
       buf)))
 
@@ -1610,6 +1738,7 @@ snapshot/manifest path."
                 (t
                  (load-session-sidecar session-name :agent-name agent-name)))))
     (when buf
+      (sync-buffer-system-prompt-display buf)
       (maybe-run-hook-with-args '*after-session-load-hook* buf session-name))
     buf))
 

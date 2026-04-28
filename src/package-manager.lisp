@@ -828,6 +828,8 @@ removes the package from the other scopes in the same context."
         ((eq previous-scope :default)
          (maybe-insert-enabled-package-context buffer definition previous-scope scope
                                                had-context-p))))
+    (when buffer
+      (sync-buffer-system-prompt-display buffer))
     (save-package-configuration)
     (maybe-run-hook-with-args
      '*package-enablement-changed-hook*

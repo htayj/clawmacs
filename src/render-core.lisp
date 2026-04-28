@@ -426,6 +426,9 @@ Mode dispatch priority matches handle-key-event in main.lisp."
         (*think-selector-active*
          (setf row1 " RET: select  C-g/q: cancel"
                row2 " C-p/C-n: navigate  default=clear  *=active"))
+        ((and buf (info-buffer-p buf))
+         (setf row1 " Info: RET follow  TAB next-link  n/p/u/t/l/d navigate  g goto"
+               row2 " PgUp/PgDn scroll  r forward  q/C-g close  C-h i directory"))
         ((and buf (help-buffer-p buf))
          (setf row1 " Help buffer: PgUp/PgDn scroll  q/C-g close"
                row2 " C-x C-b: buffers  M-x: command"))

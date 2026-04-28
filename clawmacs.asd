@@ -14,7 +14,8 @@
   :version "0.1.0"
   :licence "AGPL-3.0-only"
   :depends-on ("lispi" "mcclim" "esa-mcclim" "drei-mcclim"
-               "alexandria" "drakma" "cl-json" "bordeaux-threads")
+               "alexandria" "drakma" "cl-json" "bordeaux-threads"
+               "chipz")
   :serial t
   :components ((:module "src"
                 :serial t
@@ -45,6 +46,7 @@
                              (:file "compaction")
                              (:file "prompt-runner")
                              (:file "pipelines")
+                             (:file "info")
                              (:file "render-core")
                              (:file "minibuffer")
                              (:file "prefix")
@@ -92,4 +94,5 @@
                               (:file "llm-test")
                               (:file "guard-test")
                               (:file "keymap-test")
+                              (:file "info-test")
                               (:file "render-test")))))

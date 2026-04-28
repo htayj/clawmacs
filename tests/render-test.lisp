@@ -173,6 +173,23 @@
         (is (search "click edit" row1))
         (is (search "r revert" row2))))))
 
+(test format-who-line-info-describes-navigation
+  "Info buffers advertise link and node navigation."
+  (let ((*minibuffer-active* nil)
+        (*buffer-selector-active* nil)
+        (*model-selector-active* nil)
+        (*think-selector-active* nil)
+        (*customize-face-state* nil)
+        (*openai-oauth-pending* nil)
+        (*deny-message-mode* nil)
+        (clawmacs::*buffer-ring* nil))
+    (let ((buf (make-buffer "*info*" :kind :info)))
+      (multiple-value-bind (row1 row2)
+          (clawmacs::format-who-line buf 120)
+        (is (search "TAB next-link" row1))
+        (is (search "g goto" row1))
+        (is (search "C-h i directory" row2))))))
+
 (test format-who-line-listener-describes-eval-and-commands
   "Listener buffers advertise Lisp evaluation and comma commands."
   (let ((*minibuffer-active* nil)

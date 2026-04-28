@@ -212,6 +212,9 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
 (clim:define-presentation-type help-line-ref ()
   :description "a line in a help buffer")
 
+(clim:define-presentation-type info-link-ref ()
+  :description "an Info manual link")
+
 (clim:define-presentation-type customize-field-ref ()
   :description "a customize buffer field")
 
@@ -417,6 +420,19 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
     ((field 'customize-field-ref))
   (mcclim-select-customize-field field))
 
+(defun mcclim-follow-info-link (link)
+  "Follow LINK from an Info buffer presentation."
+  (let ((buf (and (boundp 'clim:*application-frame*)
+                  (frame-visible-buffer clim:*application-frame*))))
+    (when (and buf (info-buffer-p buf) link)
+      (info-follow-link buf link))))
+
+(clim:define-command (com-follow-info-link
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((link 'info-link-ref))
+  (mcclim-follow-info-link link))
+
 (clim:define-presentation-to-command-translator click-buffer-ref
     (buffer-ref com-select-buffer clawmacs-mcclim-command-table
                 :gesture :select
@@ -537,6 +553,16 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
                          :priority 30
                          :documentation "Edit this customize field"
                          :pointer-documentation "Edit this customize field")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-info-link
+    (info-link-ref com-follow-info-link
+                   clawmacs-mcclim-command-table
+                   :gesture :select
+                   :priority 30
+                   :documentation "Follow this Info link"
+                   :pointer-documentation "Follow this Info link")
     (object)
   (list object))
 
@@ -1907,6 +1933,116 @@ display through the same renderer as the transcript keeps repaint stable."
                       entries)))
     (nreverse entries)))
 
+(defun mcclim-wrap-info-line-segments (segments cols)
+  "Wrap one Info display line SEGMENTS into fixed-width rows."
+  (let ((width (max 1 cols))
+        (rows nil)
+        (current-row nil)
+        (current-col 0))
+    (labels ((flush-row ()
+               (push (nreverse current-row) rows)
+               (setf current-row nil
+                     current-col 0))
+             (push-piece (text face link-index)
+               (push (make-info-segment :text text
+                                        :face face
+                                        :link-index link-index)
+                     current-row)
+               (incf current-col (length text))))
+      (dolist (segment segments)
+        (let* ((text (or (info-segment-text segment) ""))
+               (face (info-segment-face segment))
+               (link-index (info-segment-link-index segment))
+               (start 0)
+               (length (length text)))
+          (when (zerop length)
+            (when (and (null current-row) (null rows))
+              (flush-row)))
+          (loop :while (< start length)
+                :do (when (>= current-col width)
+                      (flush-row))
+                    (let* ((remaining (- width current-col))
+                           (end (min length (+ start remaining))))
+                      (push-piece (subseq text start end) face link-index)
+                      (setf start end)))))
+      (when (or current-row (null rows))
+        (flush-row)))
+    (nreverse rows)))
+
+(defun mcclim-info-display-rows (buf cols)
+  "Return wrapped display rows for BUF's current Info document."
+  (let* ((state (info-buffer-state buf))
+         (document (and state (info-state-document state)))
+         (rows nil))
+    (dolist (line (and document (info-document-lines document)))
+      (setf rows
+            (append rows
+                    (mcclim-wrap-info-line-segments line cols))))
+    rows))
+
+(defun mcclim-draw-info-row (pane row cols row-segments selected-index document
+                             char-w char-h)
+  "Draw one wrapped Info ROW-SEGMENTS."
+  (multiple-value-bind (default-fg default-bg default-ts default-opts)
+      (resolve-global-face-inks :default-text)
+    (declare (ignore default-fg default-ts default-opts))
+    (fill-row pane row cols default-bg char-w char-h))
+  (let ((col 0))
+    (dolist (segment row-segments)
+      (let* ((text (or (info-segment-text segment) ""))
+             (link-index (info-segment-link-index segment))
+             (link (and document
+                        link-index
+                        (nth link-index (info-document-links document))))
+             (selected-p (and link-index
+                              selected-index
+                              (= link-index selected-index)))
+             (face (cond
+                     (selected-p :selector-selected)
+                     (link-index :selector-entry)
+                     (t (or (info-segment-face segment) :default-text)))))
+        (multiple-value-bind (fg bg ts opts)
+            (resolve-global-face-inks face)
+          (flet ((draw ()
+                   (draw-text-at pane row col text fg bg ts char-w char-h
+                                 :drawing-options opts)))
+            (if link
+                (clim:with-output-as-presentation
+                    (pane link 'info-link-ref)
+                  (draw))
+                (draw))))
+        (incf col (length text))))))
+
+(defun mcclim-render-info-buffer (pane buf rows cols char-w char-h)
+  "Render BUF as a dedicated Info/manual browser."
+  (clear-pane-with-ink pane *mcclim-bg-ink*)
+  (when (plusp rows)
+    (mcclim-render-buffer-title pane buf cols char-w char-h))
+  (let* ((content-rows (max 0 (1- rows)))
+         (display-rows (mcclim-info-display-rows buf cols))
+         (total-rows (length display-rows))
+         (state (info-buffer-state buf))
+         (document (info-state-document state))
+         (selected-index (info-state-selected-link-index state)))
+    (multiple-value-bind (visible-top visible-bottom)
+        (mcclim-entry-scroll-window buf total-rows content-rows)
+      (loop :for index :from visible-top :below visible-bottom
+            :for screen-row :from 1
+            :for row-segments := (nth index display-rows)
+            :while (< screen-row rows)
+            :do (mcclim-draw-info-row pane screen-row cols
+                                      row-segments selected-index document
+                                      char-w char-h)))
+    (mcclim-record-render-snapshot (clim:pane-frame pane)
+                                   pane
+                                   buf
+                                   :info-buffer
+                                   rows
+                                   cols
+                                   :input-start-row -1
+                                   :history-height content-rows
+                                   :visible-messages nil)))
+
 (defun mcclim-customize-field-line (face field index selected-p)
   "Return the display line for one customize FIELD."
   (let* ((label (format nil "~A:" (customize-face-field-label field)))
@@ -2053,6 +2189,11 @@ display through the same renderer as the transcript keeps repaint stable."
                               (mcclim-help-display-entries buf cols)
                               :help-buffer))
 
+(defun mcclim-render-empty-input-pane (pane buf rows cols char-w char-h)
+  "Render no editable input for read-only/special-purpose buffers."
+  (declare (ignore buf rows cols char-w char-h))
+  (clear-pane-with-ink pane *mcclim-bg-ink*))
+
 (defun mcclim-render-customize-buffer (pane buf rows cols char-w char-h)
   "Render BUF as a dedicated customize buffer presentation."
   (mcclim-render-entry-buffer pane buf rows cols char-w char-h
@@ -2161,11 +2302,6 @@ display through the same renderer as the transcript keeps repaint stable."
                                  :prefix (listener-prompt-text buf)
                                  :render-images-p nil)))
 
-(defun mcclim-render-empty-input-pane (pane buf rows cols char-w char-h)
-  "Render no editable input for read-only/special-purpose buffers."
-  (declare (ignore buf rows cols char-w char-h))
-  (clear-pane-with-ink pane *mcclim-bg-ink*))
-
 (defun register-mcclim-core-buffer-presentations ()
   "Install McCLIM presentation functions for built-in special buffers."
   (register-buffer-type
@@ -2174,6 +2310,14 @@ display through the same renderer as the transcript keeps repaint stable."
    :major-mode "help"
    :presentation-function 'mcclim-render-help-buffer
    :input-presentation-function 'mcclim-render-empty-input-pane)
+  (register-buffer-type
+   :info
+   :description "Read-only Info manual browser."
+   :major-mode "info"
+   :presentation-function 'mcclim-render-info-buffer
+   :input-presentation-function 'mcclim-render-empty-input-pane
+   :serialize-state-function 'info-serialize-buffer-state
+   :restore-state-function 'info-restore-buffer-state)
   (register-buffer-type
    :customize
    :description "Interactive customization buffer."

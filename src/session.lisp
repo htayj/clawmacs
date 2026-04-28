@@ -117,6 +117,7 @@
   "Return the number of finalized history messages in BUFFER."
   (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
         :while (and msg (not (eq msg (buffer-input-message buffer))))
+        :unless (buffer-ephemeral-display-message-p msg)
         :count 1))
 
 (defstruct (session-tree-node

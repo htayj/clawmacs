@@ -157,12 +157,16 @@
           (clawmacs::run-prompt-with-buffer
            (buffer prompt custom-tool-definitions
                    max-tool-iterations auto-approve-tools-p
-                   tool-names tool-names-supplied-p)
+                   tool-names tool-names-supplied-p
+                   &key output-schema event-callback stream-state-callback)
            (declare (ignore prompt custom-tool-definitions
                             max-tool-iterations
                             auto-approve-tools-p
                             tool-names
-                            tool-names-supplied-p))
+                            tool-names-supplied-p
+                            output-schema
+                            event-callback
+                            stream-state-callback))
            (setf prompt-capture
                  (list :role (clawmacs::buffer-model-role-override buffer)
                        :tier (clawmacs::buffer-service-tier-override buffer)))
@@ -208,12 +212,16 @@
           (clawmacs::run-prompt-with-buffer
            (buffer prompt custom-tool-definitions
                    max-tool-iterations auto-approve-tools-p
-                   tool-names tool-names-supplied-p)
+                   tool-names tool-names-supplied-p
+                   &key output-schema event-callback stream-state-callback)
            (declare (ignore prompt custom-tool-definitions
                             max-tool-iterations
                             auto-approve-tools-p
                             tool-names
-                            tool-names-supplied-p))
+                            tool-names-supplied-p
+                            output-schema
+                            event-callback
+                            stream-state-callback))
            (setf pipeline-capture
                  (list :role (clawmacs::buffer-model-role-override buffer)
                        :tier (clawmacs::buffer-service-tier-override buffer)))

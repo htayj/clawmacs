@@ -469,6 +469,52 @@
          (invoke-command buffer command))))
     (t nil)))
 
+(defun handle-info-key (buffer key)
+  "Handle KEY in a read-only Info buffer."
+  (cond
+    ((or (eq key :page-up)
+         (eq key :page-down)
+         (and (characterp key) (char= key (code-char 22))))
+     (let ((command (keymap-lookup *default-keymap* key)))
+       (when command
+         (invoke-command buffer command))))
+    ((or (eq key #\Return)
+         (eq key #\Newline))
+     (info-follow-selected-link buffer))
+    ((or (eq key #\Tab)
+         (eq key :tab))
+     (info-select-next-link buffer))
+    ((or (equal key '(:meta #\Tab))
+         (equal key '(:meta :tab))
+         (eq key :backtab)
+         (eq key :shift-tab))
+     (info-select-previous-link buffer))
+    ((and (characterp key)
+          (or (char= key #\q)
+              (char= key (code-char 7))))
+     (kill-buffer-from-ring buffer))
+    ((and (characterp key) (char-equal key #\n))
+     (info-go-next-node buffer))
+    ((and (characterp key) (char-equal key #\p))
+     (info-go-prev-node buffer))
+    ((and (characterp key) (char-equal key #\u))
+     (info-go-up-node buffer))
+    ((and (characterp key) (char-equal key #\t))
+     (info-go-top-node buffer))
+    ((and (characterp key) (char-equal key #\d))
+     (info-go-directory buffer))
+    ((and (characterp key) (char-equal key #\l))
+     (info-go-back buffer))
+    ((and (characterp key) (char-equal key #\r))
+     (info-go-forward buffer))
+    ((and (characterp key) (char-equal key #\g))
+     (invoke-command buffer 'info-goto-node-command))
+    ((and (listp key) (member (first key) '(:ctrl-x :meta :alt)))
+     (let ((command (keymap-lookup *default-keymap* key)))
+       (when command
+         (invoke-command buffer command))))
+    (t nil)))
+
 ;;; --------------------------------------------------------------------------
 ;;; OpenAI Codex OAuth Command
 ;;; --------------------------------------------------------------------------
@@ -1663,6 +1709,7 @@ Returns true when KEY was consumed by completion."
     (setf (buffer-agent-name buffer) resolved-name)
     (clear-buffer-routing-overrides buffer)
     (ensure-buffer-agent-face-set buffer resolved-name)
+    (sync-buffer-system-prompt-display buffer)
     (buffer-insert-system-message buffer (format-agent-selection-message resolved-name))
     buffer))
 
@@ -4012,6 +4059,8 @@ Used to group keybindings in the describe-bindings listing."
       ((or (search "model" name) (search "select-model" name))
        "Model Selection")
       ((or (search "describe" name) (search "help" name)
+           (search "info" name)
+           (search "manual" name)
            (search "customize" name)
            (search "execute-extended" name))
        "Help & Introspection")
@@ -4188,6 +4237,12 @@ KEY is already normalized by the interface before calling this."
       ;; Navigation and selection within the think-level overlay
       (*think-selector-active*
        (handle-think-selector-key key buf)
+       nil)
+
+      ;; === HELP MODE ===
+      ;; Help buffers are read-only views with a dedicated presentation.
+      ((and buf (info-buffer-p buf))
+       (handle-info-key buf key)
        nil)
 
       ;; === HELP MODE ===
@@ -4408,6 +4463,7 @@ Environment variables:
                                :add-to-ring-p t)))
     (setf *sandbox-root* (truename "."))
     (run-hook-with-args '*initial-buffer-hook* buf)
+    (sync-buffer-system-prompt-display buf)
     (autosave-session-snapshot buf)
     buf))
 
