@@ -161,6 +161,16 @@
     (is (null clawmacs::*meta-pending*))
     (is (null clawmacs::*alt-pending*))))
 
+(test mcclim-actionable-input-event-includes-pointer-motion
+  "Pointer motion events are preserved for CLIM hover highlighting."
+  (let ((event (make-instance 'clim:pointer-motion-event
+                              :sheet nil
+                              :pointer nil
+                              :modifier-state 0
+                              :x 0
+                              :y 0)))
+    (is (clawmacs::mcclim-actionable-input-event-p event))))
+
 (test mcclim-ui-state-dynamically-binds-interaction-specials
   "McCLIM frame-local UI state shadows and persists modal interaction specials."
   (let ((clawmacs::*minibuffer-active* nil)

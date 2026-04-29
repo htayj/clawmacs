@@ -896,6 +896,9 @@ Returns two values: success-p and a human-readable message."
       (:main-pane
        (values (and frame (clim:find-pane-named frame 'main-pane))
                "main pane"))
+      (:compose-pane
+       (values (and frame (clim:find-pane-named frame 'compose-pane))
+               "compose section pane"))
       (:input-pane
        (values (and frame
                     (fboundp 'frame-drei-input-pane)
@@ -904,6 +907,9 @@ Returns two values: success-p and a human-readable message."
       (:minibuffer-pane
        (values (and frame (clim:find-pane-named frame 'minibuffer-pane))
                "minibuffer pane"))
+      (:pointer-doc-pane
+       (values (and frame (clim:find-pane-named frame 'pointer-doc-pane))
+               "pointer documentation pane"))
       (:render-snapshot
        (values (and frame
                     (fboundp 'frame-last-render-snapshot)
@@ -1048,8 +1054,8 @@ Returns two values: success-p and a human-readable message."
                        (frame-visible-buffer frame)
                        buffer)))))
       (format out "~%Panes:~%")
-      (dolist (pane-name '(main-pane input-pane minibuffer-pane
-                           modeline-pane who-line-pane))
+      (dolist (pane-name '(main-pane compose-pane input-pane minibuffer-pane
+                           modeline-pane who-line-pane pointer-doc-pane))
         (mcclim-debug-pane-report frame pane-name out))
       (format out "~%Logical windows:~%")
       (mcclim-debug-window-report

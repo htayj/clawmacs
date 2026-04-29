@@ -110,3 +110,10 @@
       (is (find "render-snapshot"
                 (coerce (getf result :allowlist) 'list)
                 :test #'string=)))))
+
+(test speculum-pane-summary-includes-service-panes
+  "Standard pane summaries include compose and pointer documentation panes."
+  (let* ((summaries (clawmacs::speculum-panes-summary nil))
+         (names (map 'list (lambda (entry) (getf entry :name)) summaries)))
+    (is (member "compose-pane" names :test #'string=))
+    (is (member "pointer-doc-pane" names :test #'string=))))

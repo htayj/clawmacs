@@ -546,6 +546,16 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
     (object)
   (list object))
 
+(clim:define-presentation-to-command-translator click-slash-candidate
+    (slash-candidate-ref com-select-slash-candidate
+                         clawmacs-mcclim-command-table
+                         :gesture :select
+                         :priority 30
+                         :documentation "Insert this slash command"
+                         :pointer-documentation "Insert this slash command")
+    (object)
+  (list object))
+
 (clim:define-presentation-to-command-translator click-customize-field
     (customize-field-ref com-select-customize-field
                          clawmacs-mcclim-command-table
@@ -782,6 +792,45 @@ recursive repainting display function."
   (declare (ignore frame))
   (clear-pane-with-ink pane (clim:make-rgb-color 0.93 0.93 0.93)))
 
+(defun compose-pane-label-text (buf)
+  "Return the label shown in the dedicated compose/input service pane."
+  (cond
+    ((null buf) "Input")
+    ((listener-buffer-p buf) "Listener Input")
+    ((document-buffer-p buf) "Editor")
+    ((and (buffer-input-presentation-function buf)
+          (eq (buffer-input-presentation-function buf)
+              'mcclim-render-empty-input-pane))
+     "Read-Only")
+    (t "Compose Message")))
+
+(defun display-compose-pane (frame pane)
+  "Display the compose/input section header as its own CLIM pane."
+  (with-mcclim-frame-ui-state (frame)
+    (ensure-char-metrics frame pane)
+    (let* ((char-w (frame-char-width frame))
+           (char-h (frame-char-height frame))
+           (buf (frame-visible-buffer frame)))
+      (when (zerop char-w)
+        (return-from display-compose-pane))
+      (multiple-value-bind (cols rows)
+          (pane-grid-dimensions pane char-w char-h)
+        (declare (ignore rows))
+        (let* ((bg (clim:make-rgb-color 0.93 0.93 0.93))
+               (fg (clim:make-rgb-color 0.0 0.0 0.0))
+               (ts (clim:make-text-style :fix :roman :normal))
+               (text (compose-pane-label-text buf)))
+          (fill-row pane 0 cols bg char-w char-h)
+          (draw-text-at pane 0 1
+                        (subseq text 0 (min (length text) (max 0 (1- cols))))
+                        fg bg ts char-w char-h)
+          (clim:draw-line* pane
+                           0
+                           (1- char-h)
+                           (* cols char-w)
+                           (1- char-h)
+                           :ink (clim:make-rgb-color 0.67 0.67 0.67)))))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Application Frame
 ;;; --------------------------------------------------------------------------
@@ -811,11 +860,27 @@ recursive repainting display function."
    (poll-pulse-event :accessor frame-poll-pulse-event :initform nil)
    (syncing-drei-p :accessor frame-syncing-drei-p :initform nil)
    (last-drei-buffer :accessor frame-last-drei-buffer :initform nil)
+   (hover-presentation :accessor frame-hover-presentation :initform nil)
+   (hover-pane :accessor frame-hover-pane :initform nil)
+   (pointer-documentation-text
+    :accessor frame-pointer-documentation-text
+    :initform "")
    (ui-state :accessor frame-ui-state
              :initform (make-mcclim-ui-state)))
   (:command-table (clawmacs-mcclim-command-table :inherit-from nil))
   (:panes
    (main-pane clawmacs-transcript-pane)
+   (compose-pane :application
+                 :display-function 'display-compose-pane
+                 :display-time :command-loop
+                 :incremental-redisplay t
+                 :height 20
+                 :min-height 20
+                 :max-height 20
+                 :text-style (clim:make-text-style :fix :roman :normal)
+                 :scroll-bars nil
+                 :background (clim:make-rgb-color 0.93 0.93 0.93)
+                 :foreground (clim:make-rgb-color 0.0 0.0 0.0))
    (input-pane clawmacs-drei-input-pane
                :display-function 'display-drei-input-pane
                :display-time :command-loop
@@ -823,6 +888,16 @@ recursive repainting display function."
                :min-height 20
                :max-height 90)
    (minibuffer-pane clawmacs-minibuffer-pane)
+   (pointer-doc-pane :application
+                     :display-function 'display-pointer-doc-pane
+                     :display-time :command-loop
+                     :incremental-redisplay t
+                     :height 18
+                     :min-height 18
+                     :max-height 18
+                     :text-style (clim:make-text-style :fix :roman :normal)
+                     :background (clim:make-rgb-color 0.98 0.98 0.98)
+                     :foreground (clim:make-rgb-color 0.0 0.0 0.0))
    (modeline-pane :application
                   :display-function 'display-modeline-pane
                   :display-time :command-loop
@@ -849,13 +924,15 @@ recursive repainting display function."
    (default
     (clim:vertically ()
       (:fill main-pane)
+      compose-pane
       input-pane
       who-line-pane
       modeline-pane
+      pointer-doc-pane
       minibuffer-pane)))
   (:top-level (clawmacs-esa-top-level))
   (:menu-bar nil)
-  (:pointer-documentation t))
+  (:pointer-documentation nil))
 
 (defclass clawmacs-display-change-event (clim:window-event)
   ((buffer :initarg :buffer :reader display-change-event-buffer)
@@ -1707,6 +1784,29 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
                               wl-fg wl-bg wl-ts char-w char-h
                               :drawing-options wl-opts)))))))))
 
+(defun display-pointer-doc-pane (frame pane)
+  "Display function for the pointer documentation strip."
+  (with-mcclim-frame-ui-state (frame)
+    (ensure-char-metrics frame pane)
+    (let* ((char-w (frame-char-width frame))
+           (char-h (frame-char-height frame))
+           (text (or (frame-pointer-documentation-text frame) "")))
+      (when (zerop char-w)
+        (return-from display-pointer-doc-pane))
+      (multiple-value-bind (cols rows)
+          (pane-grid-dimensions pane char-w char-h)
+        (declare (ignore rows))
+        (clim:updating-output (pane :unique-id 'pointer-doc-content
+                                    :cache-value text
+                                    :cache-test #'string=)
+          (let ((fg (clim:make-rgb-color 0.0 0.0 0.0))
+                (bg (clim:make-rgb-color 0.98 0.98 0.98))
+                (ts (clim:make-text-style :fix :roman :normal)))
+            (fill-row pane 0 cols bg char-w char-h)
+            (draw-text-at pane 0 0
+                          (subseq text 0 (min (length text) cols))
+                          fg bg ts char-w char-h)))))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Main Pane Display
 ;;; --------------------------------------------------------------------------
@@ -1723,6 +1823,16 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
         width
         show-reasoning-p
         show-metadata-p))
+
+(defun mcclim-rendered-message-presentation-type (msg)
+  "Return the presentation type used for transcript MSG."
+  (cond
+    ((eq :tool-result (message-sender msg))
+     'tool-result)
+    ((tool-call-message-p msg)
+     'tool-call)
+    (t
+     'chat-message)))
 
 (defun mcclim-window-layout-entries (frame rows cols)
   "Return logical window layout entries and separators for FRAME."
@@ -1763,7 +1873,8 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
                           (eql selected-window-id
                                (clawmacs-window-id window)))))
     (when (and window buf (plusp rows) (plusp cols))
-      (clim:with-output-as-presentation (pane window 'clawmacs-window-ref)
+      (clim:with-output-as-presentation
+          (pane window 'clawmacs-window-ref :single-box t)
         (clim:with-drawing-options
             (pane :clipping-region (clim:make-rectangle* x y x2 y2))
           (clim:with-translation (pane x y)
@@ -2008,7 +2119,7 @@ display through the same renderer as the transcript keeps repaint stable."
                                  :drawing-options opts)))
             (if link
                 (clim:with-output-as-presentation
-                    (pane link 'info-link-ref)
+                    (pane link 'info-link-ref :single-box t)
                   (draw))
                 (draw))))
         (incf col (length text))))))
@@ -2168,7 +2279,7 @@ display through the same renderer as the transcript keeps repaint stable."
                       (presentation-type (getf entry :presentation-type)))
                   (if presentation-type
                       (clim:with-output-as-presentation
-                          (pane object presentation-type)
+                          (pane object presentation-type :single-box t)
                         (mcclim-draw-styled-entry pane screen-row cols
                                                   entry char-w char-h))
                       (mcclim-draw-styled-entry pane screen-row cols
@@ -2273,7 +2384,7 @@ display through the same renderer as the transcript keeps repaint stable."
             :do (let ((object (getf entry :object)))
                   (push (getf object :message) visible-messages)
                   (clim:with-output-as-presentation
-                      (pane object 'listener-entry-ref)
+                      (pane object 'listener-entry-ref :single-box t)
                     (mcclim-draw-styled-entry pane screen-row cols
                                               entry char-w char-h)))))
     (when footer-row
@@ -2394,9 +2505,9 @@ ordinary input text."
                     (when (and (< msg-top visible-bottom)
                                (> msg-bottom visible-top))
                       (let ((screen-row (+ 1 (- msg-top visible-top)))
-                            (ptype (if (eq :tool-result (message-sender msg))
-                                       'tool-result
-                                       'chat-message)))
+                            (ptype
+                              (mcclim-rendered-message-presentation-type
+                               msg)))
                         (push msg visible-messages)
                         (clim:updating-output
                             (pane
@@ -2407,7 +2518,8 @@ ordinary input text."
                               msg screen-row width
                               show-reasoning-p show-metadata-p)
                              :cache-test #'equal)
-                          (clim:with-output-as-presentation (pane msg ptype)
+                          (clim:with-output-as-presentation
+                              (pane msg ptype :single-box t)
                             (mcclim-render-message-lines
                              pane msg screen-row width
                              char-w char-h
@@ -2596,7 +2708,7 @@ Returns the number of visual rows consumed."
                        (let ((reference (getf block :reference))
                              (consumed 0))
                          (clim:with-output-as-presentation
-                             (pane reference 'image-reference)
+                             (pane reference 'image-reference :single-box t)
                            (setf consumed
                                  (mcclim-render-image-block
                                   pane
@@ -2691,7 +2803,7 @@ Returns the number of visual rows consumed."
             (destructuring-bind (action col text) segment
               (when (< col width)
                 (clim:with-output-as-presentation
-                    (pane action 'approval-action)
+                    (pane action 'approval-action :single-box t)
                   (draw-text-at pane row col
                                 (subseq text 0
                                         (min (length text) (- width col)))
@@ -2761,7 +2873,8 @@ Returns the number of visual rows consumed."
           :for msg-count := (max 0 (1- (buffer-message-count buf)))
           :for count-str := (format nil "~D" msg-count)
           :for line := (format-selector-line marker name agent status count-str width)
-          :do (clim:with-output-as-presentation (pane buf 'buffer-ref)
+          :do (clim:with-output-as-presentation
+                  (pane buf 'buffer-ref :single-box t)
                 (multiple-value-bind (fg bg ts opts)
                     (resolve-global-face-inks (if selected-p
                                                   :selector-selected
@@ -2855,7 +2968,8 @@ Returns the number of visual rows consumed."
                                (active-p " *")
                                (t "  "))
           :for line := (format-model-selector-line marker provider model width)
-          :do (clim:with-output-as-presentation (pane entry 'model-ref)
+          :do (clim:with-output-as-presentation
+                  (pane entry 'model-ref :single-box t)
                 (multiple-value-bind (fg bg ts opts)
                     (resolve-global-face-inks (if selected-p
                                                   :selector-selected
@@ -2944,7 +3058,8 @@ Returns the number of visual rows consumed."
                                (active-p " *")
                                (t "  "))
           :for line := (format-think-selector-line marker label width)
-          :do (clim:with-output-as-presentation (pane entry 'think-level-ref)
+          :do (clim:with-output-as-presentation
+                  (pane entry 'think-level-ref :single-box t)
                 (multiple-value-bind (fg bg ts opts)
                     (resolve-global-face-inks (if selected-p
                                                   :selector-selected
@@ -3035,7 +3150,7 @@ Returns the number of visual rows consumed."
           :for marker := (if selected-p "> " "  ")
           :for line := (format-session-tree-selector-line marker item width)
           :do (clim:with-output-as-presentation
-                  (pane item 'session-tree-entry-ref)
+                  (pane item 'session-tree-entry-ref :single-box t)
                 (multiple-value-bind (fg bg ts opts)
                     (resolve-global-face-inks (if selected-p
                                                   :selector-selected
@@ -3246,7 +3361,7 @@ into spans and draws each span as a single draw-text-at call."
                                            (- px-right char-w) (* (1+ row) char-h)
                                            :ink base-bg)
                      (clim:with-output-as-presentation
-                         (pane candidate-object candidate-ptype)
+                         (pane candidate-object candidate-ptype :single-box t)
                        ;; A padded blank record makes the whole candidate row
                        ;; an easy CLIM presentation target.
                        (draw-text-at pane row (+ popup-left 1)
@@ -3883,6 +3998,12 @@ should use the standard CLIM presentation-to-command path first."
     (when (plusp char-h)
       (unless (= char-h (frame-pane-space-char-height frame))
         (setf (frame-pane-space-char-height frame) char-h)
+        (let ((compose-pane (clim:find-pane-named frame 'compose-pane)))
+          (when compose-pane
+            (clim:change-space-requirements compose-pane
+                                            :height char-h
+                                            :min-height char-h
+                                            :max-height char-h)))
         (let ((ml-pane (clim:find-pane-named frame 'modeline-pane)))
           (when ml-pane
             (clim:change-space-requirements ml-pane
@@ -4009,8 +4130,8 @@ Returns true when application state may have changed."
   (remove nil
           (mapcar (lambda (name)
                     (clim:find-pane-named frame name))
-                  '(main-pane input-pane who-line-pane
-                    modeline-pane minibuffer-pane))))
+                  '(main-pane compose-pane input-pane who-line-pane
+                    modeline-pane pointer-doc-pane minibuffer-pane))))
 
 (defun mcclim-flush-frame-output (frame)
   "Force pending output for FRAME's visible pane streams."
@@ -4072,7 +4193,297 @@ top-level sheet."
   "Return true when EVENT is a gesture Clawmacs should dispatch directly."
   (or (typep event 'clim:key-press-event)
       (typep event 'clim:pointer-button-press-event)
+      (typep event 'clim:pointer-motion-event)
       (typep event 'clime:pointer-scroll-event)))
+
+(defun mcclim-nearest-output-recording-pane (sheet frame)
+  "Return SHEET or an ancestor that records output for FRAME, or NIL."
+  (loop :for current := sheet
+          :then (ignore-errors (clim:sheet-parent current))
+        :while current
+        :when (and (eq (ignore-errors (clim:pane-frame current)) frame)
+                   (ignore-errors
+                     (clim:output-recording-stream-p current)))
+          :return current))
+
+(defun mcclim-pointer-tracking-pane (frame event)
+  "Return the pane whose presentations should answer pointer feedback."
+  (mcclim-nearest-output-recording-pane (clim:event-sheet event) frame))
+
+(defun mcclim-presentation-type-symbol (presentation)
+  "Return PRESENTATION's primary type symbol."
+  (let ((type (clim:presentation-type presentation)))
+    (if (consp type)
+        (car type)
+        type)))
+
+(defparameter *mcclim-named-panes*
+  '(main-pane compose-pane input-pane who-line-pane modeline-pane
+    pointer-doc-pane minibuffer-pane)
+  "Named panes in the standard Clawmacs McCLIM frame.")
+
+(defun mcclim-frame-pane-name (frame pane)
+  "Return FRAME's symbolic pane name for PANE, or NIL."
+  (when (and frame pane)
+    (loop :for name :in *mcclim-named-panes*
+          :for named-pane := (ignore-errors (clim:find-pane-named frame name))
+          :when (eq named-pane pane)
+            :return name)))
+
+(defun mcclim-hyper-modifier-p (modifier-state)
+  "Return true when MODIFIER-STATE includes Hyper."
+  (and modifier-state
+       (not (zerop (logand modifier-state clim:+hyper-key+)))))
+
+(defun mcclim-presentation-object-safe (presentation)
+  "Return PRESENTATION's object, or NIL when the runtime does not expose it."
+  (let* ((package (find-package :clim))
+         (symbol (and package (find-symbol "PRESENTATION-OBJECT" package))))
+    (when (and symbol (fboundp symbol))
+      (ignore-errors
+        (funcall symbol presentation)))))
+
+(defun mcclim-hover-summary-text (text &optional (limit 48))
+  "Return TEXT normalized to one line and bounded to LIMIT characters."
+  (let* ((raw (string-trim '(#\Space #\Tab #\Newline #\Return)
+                           (or text "")))
+         (single-line (substitute #\Space #\Newline raw)))
+    (cond
+      ((zerop (length single-line)) "")
+      ((<= (length single-line) limit) single-line)
+      (t (concatenate 'string (subseq single-line 0 limit) "...")))))
+
+(defun mcclim-hover-object-summary (presentation-type object)
+  "Return a concise object summary for PRESENTATION-TYPE and OBJECT."
+  (labels ((plist-display (value)
+             (cond
+               ((null value) nil)
+               ((stringp value) value)
+               ((and (listp value) (getf value :display))
+                (getf value :display))
+               ((and (listp value) (getf value :label))
+                (getf value :label))
+               (t nil))))
+    (let ((summary
+            (case presentation-type
+              (buffer-ref
+               (and (typep object 'buffer)
+                    (format nil "buffer ~S" (buffer-name object))))
+              (clawmacs-window-ref
+               (and (typep object 'clawmacs-window)
+                    (let ((buffer (clawmacs-window-buffer object)))
+                      (if buffer
+                          (format nil "window ~D showing ~S"
+                                  (clawmacs-window-id object)
+                                  (buffer-name buffer))
+                          (format nil "window ~D"
+                                  (clawmacs-window-id object))))))
+              (model-ref
+               (or (and (listp object)
+                        (getf object :provider)
+                        (getf object :model)
+                        (format nil "model ~A/~A"
+                                (getf object :provider)
+                                (getf object :model)))
+                   (plist-display object)))
+              (think-level-ref
+               (or (and (listp object)
+                        (getf object :think-level)
+                        (format nil "think level ~A"
+                                (getf object :think-level)))
+                   (plist-display object)))
+              (session-tree-entry-ref
+               (or (plist-display object)
+                   (and (typep object 'session-tree-node)
+                        (let ((label (session-tree-node-label object)))
+                          (and label
+                               (format nil "session entry ~A" label))))))
+              ((rendered-message-ref chat-message)
+               (and (typep object 'message)
+                    (format nil "~(~A~) message"
+                            (message-sender object))))
+              (tool-call
+               (and (typep object 'message)
+                    (let ((preview (mcclim-hover-summary-text
+                                    (message-text object)
+                                    32)))
+                      (if (plusp (length preview))
+                          (format nil "tool call ~A" preview)
+                          "tool call"))))
+              (tool-result
+               (and (typep object 'message)
+                    (let ((preview (mcclim-hover-summary-text
+                                    (message-text object)
+                                    32)))
+                      (if (plusp (length preview))
+                          (format nil "tool result ~A" preview)
+                          "tool result"))))
+              (image-reference
+               (and (typep object 'display-image-reference)
+                    (let ((alt (mcclim-hover-summary-text
+                                (display-image-reference-alt object)
+                                24))
+                          (path (display-image-reference-path object)))
+                      (if (plusp (length alt))
+                          (format nil "image ~S (~A)" path alt)
+                          (format nil "image ~S" path)))))
+              (approval-action
+               (format nil "approval action ~A" object))
+              ((minibuffer-candidate-ref skill-candidate-ref slash-candidate-ref)
+               (let ((display (ignore-errors (minibuffer-item-display object))))
+                 (and display
+                      (format nil "~A ~A"
+                              (string-downcase
+                               (symbol-name presentation-type))
+                              display))))
+              (help-line-ref
+               (and (listp object)
+                    (format nil "help line ~D"
+                            (1+ (or (getf object :line) 0)))))
+              (info-link-ref
+               (and (typep object 'info-link)
+                    (let ((label (mcclim-hover-summary-text
+                                  (info-link-label object)
+                                  32)))
+                      (if (plusp (length label))
+                          (format nil "Info link ~A" label)
+                          "Info link"))))
+              (customize-field-ref
+               (and (listp object)
+                    (let ((field (getf object :field)))
+                      (format nil "customize field ~A"
+                              (if field
+                                  (customize-face-field-label field)
+                                  (1+ (or (getf object :index) 0)))))))
+              (listener-entry-ref
+               (and (listp object)
+                    (let* ((msg (getf object :message))
+                           (preview (mcclim-hover-summary-text
+                                     (or (getf object :text)
+                                         (and msg (message-text msg)))
+                                     32)))
+                      (if (plusp (length preview))
+                          (format nil "listener entry ~A" preview)
+                          "listener entry"))))
+              (otherwise
+               (cond
+                 ((null object) nil)
+                 ((stringp object) object)
+                 (t (mcclim-debug-object-summary object)))))))
+      (when summary
+        (mcclim-hover-summary-text summary 96)))))
+
+(defun mcclim-hover-identity-documentation
+    (pane-name presentation-type object)
+  "Return Hyper-hover identity text for PANE-NAME and OBJECT."
+  (let* ((pane-text (and pane-name
+                         (string-downcase (symbol-name pane-name))))
+         (object-text (mcclim-hover-object-summary presentation-type object)))
+    (cond
+      ((and pane-text object-text)
+       (format nil "Pane: ~A | Object: ~A" pane-text object-text))
+      (pane-text
+       (format nil "Pane: ~A" pane-text))
+      (object-text
+       (format nil "Object: ~A" object-text))
+      (t ""))))
+
+(defun mcclim-hover-documentation-text
+    (frame pane presentation modifier-state)
+  "Return pointer documentation for PANE/PRESENTATION under MODIFIER-STATE."
+  (let* ((presentation-type
+           (and presentation
+                (mcclim-presentation-type-symbol presentation)))
+         (pane-name (mcclim-frame-pane-name frame pane))
+         (object (and presentation
+                      (mcclim-presentation-object-safe presentation)))
+         (action-text
+           (and presentation
+                (mcclim-presentation-pointer-documentation presentation))))
+    (if (mcclim-hyper-modifier-p modifier-state)
+        (mcclim-hover-identity-documentation pane-name presentation-type object)
+        (or action-text ""))))
+
+(defun mcclim-presentation-pointer-documentation (presentation)
+  "Return the pointer documentation string for PRESENTATION, or NIL."
+  (case (mcclim-presentation-type-symbol presentation)
+    (buffer-ref "L: Switch to this buffer")
+    (clawmacs-window-ref "L: Select this window")
+    (model-ref "L: Apply this model")
+    (think-level-ref "L: Apply this think level")
+    (session-tree-entry-ref "L: Navigate to this session entry")
+    ((rendered-message-ref chat-message tool-call tool-result)
+     "Describe this message")
+    (image-reference "Describe this image")
+    (approval-action "L: Choose approval action")
+    (minibuffer-candidate-ref "L: Choose this candidate")
+    (skill-candidate-ref "L: Insert this skill mention")
+    (slash-candidate-ref "L: Insert this slash command")
+    (customize-field-ref "L: Edit this customize field")
+    (info-link-ref "L: Follow this Info link")
+    (otherwise nil)))
+
+(defun mcclim-find-interactive-presentation (pane x y)
+  "Return the innermost interactive presentation at PANE position X/Y."
+  (labels ((visit (record)
+             (clim:map-over-output-records-containing-position
+              #'visit record x y)
+             (when (and (clim:presentationp record)
+                        (mcclim-presentation-pointer-documentation record))
+               (return-from mcclim-find-interactive-presentation record))))
+    (visit (clim:stream-output-history pane))
+    nil))
+
+(defun mcclim-clear-hover-highlight (frame)
+  "Remove any active hover highlight remembered on FRAME."
+  (let ((presentation (frame-hover-presentation frame))
+        (pane (frame-hover-pane frame)))
+    (when (and presentation pane)
+      (ignore-errors
+        (clim:highlight-output-record presentation pane :unhighlight))))
+  (setf (frame-hover-presentation frame) nil
+        (frame-hover-pane frame) nil)
+  frame)
+
+(defun mcclim-refresh-pointer-doc-pane (frame)
+  "Redraw FRAME's pointer documentation pane immediately."
+  (let ((pane (clim:find-pane-named frame 'pointer-doc-pane)))
+    (when pane
+      (display-pointer-doc-pane frame pane)
+      (ignore-errors
+        (force-output pane))))
+  frame)
+
+(defun mcclim-track-pointer-feedback (frame pane event)
+  "Update hover highlighting and pointer documentation for EVENT over PANE."
+  (multiple-value-bind (local-x local-y)
+      (mcclim-event-position-in-pane event pane)
+    (let* ((presentation
+             (mcclim-find-interactive-presentation pane local-x local-y))
+           (doc-text
+             (mcclim-hover-documentation-text
+              frame pane presentation
+              (ignore-errors (clim:event-modifier-state event)))))
+      (unless (and (eq presentation (frame-hover-presentation frame))
+                   (eq pane (frame-hover-pane frame)))
+        (mcclim-clear-hover-highlight frame)
+        (when presentation
+          (ignore-errors
+            (clim:highlight-output-record presentation pane :highlight))
+          (setf (frame-hover-presentation frame) presentation
+                (frame-hover-pane frame) pane)))
+      (setf (frame-pointer-documentation-text frame) (or doc-text ""))
+      (mcclim-refresh-pointer-doc-pane frame)))
+  (mcclim-flush-frame-output frame)
+  t)
+
+(defun mcclim-clear-pointer-feedback (frame)
+  "Clear any highlighted presentation and pointer documentation on FRAME."
+  (mcclim-clear-hover-highlight frame)
+  (setf (frame-pointer-documentation-text frame) "")
+  (mcclim-refresh-pointer-doc-pane frame)
+  (mcclim-flush-frame-output frame)
+  t)
 
 (defun mcclim-read-input-event-no-hang (frame)
   "Read one queued gesture from FRAME's interactive panes, if available.
@@ -4228,6 +4639,13 @@ events stay on the standard CLIM event path."
                   frame
                   (list 'com-clawmacs-dispatch-gestures (list event)))
                  (mcclim-redisplay-frame frame :force-p t))
+                ((typep event 'clim:pointer-motion-event)
+                 (let ((tracking-pane
+                         (mcclim-pointer-tracking-pane frame event)))
+                   (if tracking-pane
+                       (mcclim-track-pointer-feedback
+                        frame tracking-pane event)
+                       (mcclim-clear-pointer-feedback frame))))
                 ((typep event 'clim:pointer-button-press-event)
                  (let* ((sheet (clim:event-sheet event))
                         (transcript-pane

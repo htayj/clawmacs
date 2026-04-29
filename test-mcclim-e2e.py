@@ -1227,6 +1227,21 @@ class McclimSession:
         run_checked(["xdotool", "click", str(button)], timeout=5)
         time.sleep(0.3)
 
+    def move_relative(self, x, y):
+        self.focus()
+        run_checked(
+            [
+                "xdotool",
+                "mousemove",
+                "--window",
+                self.window_id,
+                str(int(x)),
+                str(int(y)),
+            ],
+            timeout=5,
+        )
+        time.sleep(0.3)
+
     def render_cell_size(self):
         render = self.snapshot().get("render") or {}
         cols = max(1, render.get("cols") or 1)
@@ -1256,6 +1271,15 @@ class McclimSession:
             pane["x"] + ((col + 0.5) * char_w),
             pane["y"] + ((row + 0.5) * char_h),
             button,
+        )
+
+    def move_main_cell(self, row, col):
+        pane = self.pane_geometry("main")
+        char_w = pane["pixelWidth"] / pane["cols"]
+        char_h = pane["pixelHeight"] / pane["rows"]
+        self.move_relative(
+            pane["x"] + ((col + 0.5) * char_w),
+            pane["y"] + ((row + 0.5) * char_h),
         )
 
     def click_input_cell(self, row, col, button=1):
@@ -1676,6 +1700,16 @@ def test_54_input_wrap_expands_input_pane(session):
                 f"input pane shrank after narrow resize: initial={initial_rows} "
                 f"narrow={narrow_rows}"
             )
+        panes = session.snapshot().get("panes") or {}
+        compose = panes.get("compose") or {}
+        input_pane = panes.get("input") or {}
+        if (compose.get("rows") or 0) <= 0:
+            fail(f"compose pane missing or collapsed: {compose}")
+        if (compose.get("y") or 0) >= (input_pane.get("y") or 0):
+            fail(
+                f"compose pane did not stay above input pane: "
+                f"compose={compose} input={input_pane}"
+            )
         E2E.assert_contains(session.text(), "wrap-input-pane-probe",
                             "long input remains present")
         session.screenshot("54-input-wrap-expands-input-pane")
@@ -1912,6 +1946,39 @@ def test_62_mouse_click_buffer_selector_row(session):
         timeout=10,
         description="buffer selector active for mouse click",
     )
+    session.move_main_cell(5, 3)
+    wait_until(
+        lambda: (
+            (session.snapshot().get("pointerDocumentation") or {}).get("active")
+            and (
+                ((session.snapshot().get("pointerDocumentation") or {}).get("count") or 0)
+                > 0
+            )
+            and "Switch to this buffer"
+            in str((session.snapshot().get("pointerDocumentation") or {}).get("text") or "")
+        ),
+        timeout=10,
+        interval=0.1,
+        description="hover highlight and pointer documentation active",
+    )
+    hyper_doc = session.eval_lisp(
+        r'''(let* ((frame (and (boundp 'clawmacs::*clawmacs-frame*)
+                              clawmacs::*clawmacs-frame*))
+                   (pane (and frame (clawmacs::frame-hover-pane frame)))
+                   (presentation
+                    (and frame
+                         (clawmacs::frame-hover-presentation frame))))
+              (unless (and frame pane presentation)
+                (error "hover state unavailable"))
+              (clawmacs::mcclim-hover-documentation-text
+               frame
+               pane
+               presentation
+               clim:+hyper-key+))''',
+        timeout=10,
+    ).strip().strip('"')
+    if "Pane: main-pane" not in hyper_doc or "Object: buffer" not in hyper_doc:
+        fail(f"unexpected Hyper hover documentation: {hyper_doc!r}")
     session.click_main_cell(5, 3)
     session.wait_snapshot(
         lambda snap: not (snap.get("selectors") or {}).get("bufferSelectorActive"),

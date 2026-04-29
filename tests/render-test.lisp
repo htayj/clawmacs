@@ -268,6 +268,25 @@ two")
                       (make-string 120 :initial-element #\x))
     (is (= 3 (clawmacs::mcclim-desired-input-pane-rows buf 24 20)))))
 
+(test mcclim-hover-identity-documentation-names-pane-and-object
+  "Hyper hover text names the pane and the presented object."
+  (let ((buf (make-buffer "hovered-session")))
+    (is (string=
+         "Pane: main-pane | Object: buffer \"hovered-session\""
+         (clawmacs::mcclim-hover-identity-documentation
+          'main-pane
+          'buffer-ref
+          buf)))))
+
+(test mcclim-hover-identity-documentation-falls-back-to-pane-name
+  "Hyper hover text still names the pane when no presentation is present."
+  (is (string=
+       "Pane: input-pane"
+       (clawmacs::mcclim-hover-identity-documentation
+        'input-pane
+        nil
+        nil))))
+
 (test scratch-buffer-scroll-geometry-bottom-aligns-long-text
   "Scratch render geometry uses full-window rows and bottom-aligned scrolling."
   (let ((buf (make-buffer "*scratch*" :kind :scratch)))
@@ -472,6 +491,23 @@ two")
     (is (member :tool-call-number faces))
     (is (equal "(" (first texts)))
     (is (search "\"(+ 1 2)\"" (format nil "~{~A~}" texts)))))
+
+(test mcclim-rendered-message-presentation-type-detects-tool-shapes
+  "Transcript messages use dedicated presentation types for tool calls/results."
+  (let ((chat (make-message :agent))
+        (tool-call (make-message :agent))
+        (tool-result (make-message :tool-result)))
+    (setf (message-raw-content tool-call)
+          '(((:type . "tool_use")
+             (:id . "toolu_1")
+             (:name . "lisp_eval")
+             (:input . ((:code . "(+ 1 2)"))))))
+    (is (eq 'clawmacs::chat-message
+            (clawmacs::mcclim-rendered-message-presentation-type chat)))
+    (is (eq 'clawmacs::tool-call
+            (clawmacs::mcclim-rendered-message-presentation-type tool-call)))
+    (is (eq 'clawmacs::tool-result
+            (clawmacs::mcclim-rendered-message-presentation-type tool-result)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Selector Rendering Tests
