@@ -1263,8 +1263,8 @@ class McclimSession:
             "rows": max(1, pane.get("rows") or 1),
         }
 
-    def click_main_cell(self, row, col, button=1):
-        pane = self.pane_geometry("main")
+    def click_pane_cell(self, pane_name, row, col, button=1):
+        pane = self.pane_geometry(pane_name)
         char_w = pane["pixelWidth"] / pane["cols"]
         char_h = pane["pixelHeight"] / pane["rows"]
         self.click_relative(
@@ -1273,8 +1273,8 @@ class McclimSession:
             button,
         )
 
-    def move_main_cell(self, row, col):
-        pane = self.pane_geometry("main")
+    def move_pane_cell(self, pane_name, row, col):
+        pane = self.pane_geometry(pane_name)
         char_w = pane["pixelWidth"] / pane["cols"]
         char_h = pane["pixelHeight"] / pane["rows"]
         self.move_relative(
@@ -1282,15 +1282,14 @@ class McclimSession:
             pane["y"] + ((row + 0.5) * char_h),
         )
 
+    def click_main_cell(self, row, col, button=1):
+        self.click_pane_cell("main", row, col, button)
+
+    def move_main_cell(self, row, col):
+        self.move_pane_cell("main", row, col)
+
     def click_input_cell(self, row, col, button=1):
-        pane = self.pane_geometry("input")
-        char_w = pane["pixelWidth"] / pane["cols"]
-        char_h = pane["pixelHeight"] / pane["rows"]
-        self.click_relative(
-            pane["x"] + ((col + 0.5) * char_w),
-            pane["y"] + ((row + 0.5) * char_h),
-            button,
-        )
+        self.click_pane_cell("input", row, col, button)
 
     def resize(self, width, height):
         run_checked(
@@ -1893,24 +1892,8 @@ def test_60_inline_image_markdown_renders(session):
         fail("inline image message was not tracked in render snapshot")
 
 
-def popup_candidate_cell(session):
-    snapshot = session.snapshot()
-    render = snapshot.get("render") or {}
-    rows = max(1, render.get("rows") or 1)
-    cols = max(1, render.get("cols") or 1)
-    skill = snapshot.get("skillCompletion") or {}
-    minibuffer = snapshot.get("minibuffer") or {}
-    skill_popup = bool(skill.get("active") and not minibuffer.get("active"))
-    total = (skill if skill_popup else minibuffer).get("filteredCount") or 0
-    popup_w = min(cols - 4, max(40, (cols * 3) // 5))
-    max_height = 12
-    max_item_rows = max(0, min(max_height, rows - 4))
-    display_total = max(1, total) if skill_popup else total
-    item_rows = min(display_total, max_item_rows)
-    popup_h = 1 + item_rows
-    popup_left = (cols - popup_w) // 2
-    popup_top = (rows - popup_h) // 2
-    return popup_top + 1, popup_left + 3
+def completion_candidate_cell(_session):
+    return "completion", 1, 3
 
 
 def test_61_mouse_click_input_moves_point(session):
@@ -1946,7 +1929,7 @@ def test_62_mouse_click_buffer_selector_row(session):
         timeout=10,
         description="buffer selector active for mouse click",
     )
-    session.move_main_cell(5, 3)
+    session.move_pane_cell("selector", 5, 3)
     wait_until(
         lambda: (
             (session.snapshot().get("pointerDocumentation") or {}).get("active")
@@ -1977,9 +1960,9 @@ def test_62_mouse_click_buffer_selector_row(session):
                clim:+hyper-key+))''',
         timeout=10,
     ).strip().strip('"')
-    if "Pane: main-pane" not in hyper_doc or "Object: buffer" not in hyper_doc:
+    if "Pane: selector-pane" not in hyper_doc or "Object: buffer" not in hyper_doc:
         fail(f"unexpected Hyper hover documentation: {hyper_doc!r}")
-    session.click_main_cell(5, 3)
+    session.click_pane_cell("selector", 5, 3)
     session.wait_snapshot(
         lambda snap: not (snap.get("selectors") or {}).get("bufferSelectorActive"),
         timeout=10,
@@ -1997,8 +1980,8 @@ def test_63_mouse_click_completion_candidates(session):
         timeout=10,
         description="minibuffer active for candidate click",
     )
-    row, col = popup_candidate_cell(session)
-    session.click_main_cell(row, col)
+    pane_name, row, col = completion_candidate_cell(session)
+    session.click_pane_cell(pane_name, row, col)
     session.wait_snapshot(
         lambda snap: not (snap.get("minibuffer") or {}).get("active"),
         timeout=10,
@@ -2011,8 +1994,8 @@ def test_63_mouse_click_completion_candidates(session):
         timeout=10,
         description="skill popup active for candidate click",
     )
-    row, col = popup_candidate_cell(session)
-    session.click_main_cell(row, col)
+    pane_name, row, col = completion_candidate_cell(session)
+    session.click_pane_cell(pane_name, row, col)
     session.wait_snapshot(
         lambda snap: "[$demo-skill]" in ((snap.get("buffer") or {}).get("input") or ""),
         timeout=10,

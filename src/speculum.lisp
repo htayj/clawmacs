@@ -259,7 +259,8 @@
   "Return summaries for the standard Clawmacs McCLIM panes."
   (coerce (mapcar (lambda (name)
                     (speculum-pane-summary frame name))
-                  '(main-pane compose-pane input-pane who-line-pane modeline-pane
+                  '(selector-pane main-pane compose-pane input-pane
+                    completion-pane who-line-pane modeline-pane
                     pointer-doc-pane minibuffer-pane))
           'vector))
 

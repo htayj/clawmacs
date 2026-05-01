@@ -896,6 +896,9 @@ Returns two values: success-p and a human-readable message."
       (:main-pane
        (values (and frame (clim:find-pane-named frame 'main-pane))
                "main pane"))
+      (:selector-pane
+       (values (and frame (clim:find-pane-named frame 'selector-pane))
+               "selector pane"))
       (:compose-pane
        (values (and frame (clim:find-pane-named frame 'compose-pane))
                "compose section pane"))
@@ -904,6 +907,9 @@ Returns two values: success-p and a human-readable message."
                     (fboundp 'frame-drei-input-pane)
                     (frame-drei-input-pane frame))
                "Drei input pane"))
+      (:completion-pane
+       (values (and frame (clim:find-pane-named frame 'completion-pane))
+               "completion pane"))
       (:minibuffer-pane
        (values (and frame (clim:find-pane-named frame 'minibuffer-pane))
                "minibuffer pane"))
