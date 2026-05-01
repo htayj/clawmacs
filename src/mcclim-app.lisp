@@ -3873,53 +3873,80 @@ Returns the number of visual rows consumed."
 ;;; Buffer Selector Rendering
 ;;; --------------------------------------------------------------------------
 
+(defun mcclim-stream-write-global-face (pane face text &key (newlinep t))
+  "Write TEXT to PANE using global FACE as ordinary CLIM stream output."
+  (mcclim-call-with-global-face pane face
+                                (lambda ()
+                                  (write-string text pane)))
+  (when newlinep
+    (terpri pane)))
+
+(defun mcclim-selector-visible-scroll (selected-index scroll max-visible count)
+  "Return a normalized selector scroll offset."
+  (cond
+    ((zerop count) 0)
+    ((< selected-index scroll) selected-index)
+    ((>= selected-index (+ scroll max-visible))
+     (max 0 (1+ (- selected-index max-visible))))
+    (t scroll)))
+
+(defun mcclim-stream-render-fuzzy-text (pane text match-positions
+                                        base-face match-face)
+  "Write TEXT to PANE, highlighting MATCH-POSITIONS with MATCH-FACE."
+  (let ((match-set (when match-positions
+                     (let ((table (make-hash-table :test #'eql)))
+                       (dolist (position match-positions table)
+                         (setf (gethash position table) t))))))
+    (labels ((emit-span (start end matchedp)
+               (when (< start end)
+                 (let ((span (subseq text start end)))
+                   (mcclim-stream-write-global-face
+                    pane
+                    (if matchedp match-face base-face)
+                    span
+                    :newlinep nil)))))
+      (let ((limit (length text))
+            (span-start 0)
+            (span-match-p nil))
+        (loop :for index :from 0 :below limit
+              :for matchedp := (and match-set (gethash index match-set))
+              :do (cond
+                    ((zerop index)
+                     (setf span-match-p matchedp))
+                    ((not (eql (not matchedp) (not span-match-p)))
+                     (emit-span span-start index span-match-p)
+                     (setf span-start index
+                           span-match-p matchedp))))
+        (emit-span span-start limit span-match-p)))))
+
 (defun mcclim-render-buffer-selector (pane rows cols char-w char-h frame)
-  "Render the buffer selector overlay."
+  "Render the buffer selector pane using ordinary CLIM stream output."
+  (declare (ignore char-w char-h))
   (let* ((width cols)
          (height rows)
          (buffers *buffer-ring*)
          (num-buffers (length buffers))
          (current (frame-visible-buffer frame))
          (max-entries (max 1 (- height 7)))
-         (scroll (cond
-                   ((< *buffer-selector-index* *buffer-selector-scroll*)
-                    *buffer-selector-index*)
-                   ((>= *buffer-selector-index*
-                        (+ *buffer-selector-scroll* max-entries))
-                    (max 0 (1+ (- *buffer-selector-index* max-entries))))
-                   (t *buffer-selector-scroll*))))
+         (scroll (mcclim-selector-visible-scroll *buffer-selector-index*
+                                                 *buffer-selector-scroll*
+                                                 max-entries
+                                                 num-buffers)))
     (setf *buffer-selector-scroll* scroll)
     (clear-pane-with-ink pane *mcclim-bg-ink*)
-    ;; Title
-    (when (< 1 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-title)
-        (draw-text-at pane 1 2 "Agent Sessions" fg bg ts char-w char-h
-                      :drawing-options opts)))
-    ;; Separator
-    (when (< 2 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-separator)
-        (draw-text-at pane 2 2
-                      (make-string (min (- width 4) 50) :initial-element #\─)
-                      fg bg ts char-w char-h
-                      :drawing-options opts)))
-    ;; Column headers
-    (when (< 3 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-header)
-        (let ((header (format-selector-line "  " "NAME" "AGENT" "STATUS" "MSGS" width)))
-          (fill-row pane 3 width bg char-w char-h)
-          (draw-text-at pane 3 0
-                        (subseq header 0 (min (length header) width))
-                        fg bg ts char-w char-h
-                        :drawing-options opts))))
-    ;; Buffer entries — wrapped as buffer-name presentations for clickability
+    (mcclim-stream-write-global-face pane :selector-title "Agent Sessions")
+    (mcclim-stream-write-global-face
+     pane
+     :selector-separator
+     (make-string (min (max 8 width) 50) :initial-element #\─))
+    (mcclim-stream-write-global-face
+     pane
+     :selector-header
+     (format-selector-line "  " "NAME" "AGENT" "STATUS" "MSGS" width))
+    (terpri pane)
     (loop :for absolute-idx :from scroll
           :below (min (+ scroll max-entries) num-buffers)
           :for buf := (nth absolute-idx buffers)
-          :for row := (+ 5 (- absolute-idx scroll))
-          :while (< row (- height 2))
           :for selected-p := (= absolute-idx *buffer-selector-index*)
           :for current-p := (eq buf current)
           :for marker := (cond ((and selected-p current-p) "▸*")
@@ -3934,90 +3961,56 @@ Returns the number of visual rows consumed."
           :for line := (format-selector-line marker name agent status count-str width)
           :do (clim:with-output-as-presentation
                   (pane buf 'buffer-ref :single-box t)
-                (multiple-value-bind (fg bg ts opts)
-                    (resolve-global-face-inks (if selected-p
-                                                  :selector-selected
-                                                  :selector-entry))
-                  (fill-row pane row width bg char-w char-h)
-                  (draw-text-at pane row 0
-                                (subseq line 0 (min (length line) width))
-                                fg bg ts char-w char-h
-                                :drawing-options opts))))
-    ;; Scroll indicator
+                (mcclim-stream-write-global-face
+                 pane
+                 (if selected-p :selector-selected :selector-entry)
+                 line)))
     (when (> num-buffers max-entries)
-      (let ((indicator (format nil "[~D-~D of ~D]"
-                               (1+ scroll)
-                               (min (+ scroll max-entries) num-buffers)
-                               num-buffers))
-            (ind-row (+ 5 (min max-entries (- num-buffers scroll)))))
-        (when (< ind-row (- height 1))
-          (multiple-value-bind (fg bg ts opts)
-              (resolve-global-face-inks :selector-scroll)
-            (draw-text-at pane ind-row 2
-                          (subseq indicator 0 (min (length indicator) (- width 4)))
-                          fg bg ts char-w char-h
-                          :drawing-options opts)))))
-    ;; Footer
-    (let ((footer-row (1- height)))
-      (when (plusp footer-row)
-        (multiple-value-bind (fg bg ts opts)
-            (resolve-global-face-inks :selector-footer)
-          (draw-text-at pane footer-row 2
-                        "[RET] select  [C-g/q] cancel  [n] new  [k] kill"
-                        fg bg ts char-w char-h
-                        :drawing-options opts))))))
+      (terpri pane)
+      (mcclim-stream-write-global-face
+       pane
+       :selector-scroll
+       (format nil "[~D-~D of ~D]"
+               (1+ scroll)
+               (min (+ scroll max-entries) num-buffers)
+               num-buffers)))
+    (terpri pane)
+    (mcclim-stream-write-global-face
+     pane
+     :selector-footer
+     "[RET] select  [C-g/q] cancel  [n] new  [k] kill")))
 
 ;;; --------------------------------------------------------------------------
 ;;; Model Selector Rendering
 ;;; --------------------------------------------------------------------------
 
 (defun mcclim-render-model-selector (pane rows cols char-w char-h frame)
-  "Render the model selector overlay."
-  (declare (ignore frame))
+  "Render the model selector pane using ordinary CLIM stream output."
+  (declare (ignore char-w char-h frame))
   (let* ((width cols)
          (height rows)
          (entries *model-selector-entries*)
          (num-entries (length entries))
          (max-visible (max 1 (- height 7)))
-         (scroll (cond
-                   ((< *model-selector-index* *model-selector-scroll*)
-                    *model-selector-index*)
-                   ((>= *model-selector-index*
-                        (+ *model-selector-scroll* max-visible))
-                    (max 0 (1+ (- *model-selector-index* max-visible))))
-                   (t *model-selector-scroll*))))
+         (scroll (mcclim-selector-visible-scroll *model-selector-index*
+                                                 *model-selector-scroll*
+                                                 max-visible
+                                                 num-entries)))
     (setf *model-selector-scroll* scroll)
     (clear-pane-with-ink pane *mcclim-bg-ink*)
-    ;; Title
-    (when (< 1 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-title)
-        (draw-text-at pane 1 2 "Select Model" fg bg ts char-w char-h
-                      :drawing-options opts)))
-    ;; Separator
-    (when (< 2 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-separator)
-        (draw-text-at pane 2 2
-                      (make-string (min (- width 4) 50) :initial-element #\─)
-                      fg bg ts char-w char-h
-                      :drawing-options opts)))
-    ;; Column headers
-    (when (< 3 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-header)
-        (let ((header (format-model-selector-line "  " "PROVIDER" "MODEL" width)))
-          (fill-row pane 3 width bg char-w char-h)
-          (draw-text-at pane 3 0
-                        (subseq header 0 (min (length header) width))
-                        fg bg ts char-w char-h
-                        :drawing-options opts))))
-    ;; Model entries — wrapped as model-name presentations for clickability
+    (mcclim-stream-write-global-face pane :selector-title "Select Model")
+    (mcclim-stream-write-global-face
+     pane
+     :selector-separator
+     (make-string (min (max 8 width) 50) :initial-element #\─))
+    (mcclim-stream-write-global-face
+     pane
+     :selector-header
+     (format-model-selector-line "  " "PROVIDER" "MODEL" width))
+    (terpri pane)
     (loop :for absolute-idx :from scroll
           :below (min (+ scroll max-visible) num-entries)
           :for entry := (nth absolute-idx entries)
-          :for row := (+ 5 (- absolute-idx scroll))
-          :while (< row (- height 2))
           :for selected-p := (= absolute-idx *model-selector-index*)
           :for active-p := (getf entry :active-p)
           :for provider := (string-downcase (symbol-name (getf entry :provider)))
@@ -4029,86 +4022,56 @@ Returns the number of visual rows consumed."
           :for line := (format-model-selector-line marker provider model width)
           :do (clim:with-output-as-presentation
                   (pane entry 'model-ref :single-box t)
-                (multiple-value-bind (fg bg ts opts)
-                    (resolve-global-face-inks (if selected-p
-                                                  :selector-selected
-                                                  :selector-entry))
-                  (fill-row pane row width bg char-w char-h)
-                  (draw-text-at pane row 0
-                                (subseq line 0 (min (length line) width))
-                                fg bg ts char-w char-h
-                                :drawing-options opts))))
-    ;; Scroll indicator
+                (mcclim-stream-write-global-face
+                 pane
+                 (if selected-p :selector-selected :selector-entry)
+                 line)))
     (when (> num-entries max-visible)
-      (let ((indicator (format nil "[~D-~D of ~D]"
-                               (1+ scroll)
-                               (min (+ scroll max-visible) num-entries)
-                               num-entries))
-            (ind-row (+ 5 (min max-visible (- num-entries scroll)))))
-        (when (< ind-row (- height 1))
-          (multiple-value-bind (fg bg ts opts)
-              (resolve-global-face-inks :selector-scroll)
-            (draw-text-at pane ind-row 2
-                          (subseq indicator 0 (min (length indicator) (- width 4)))
-                          fg bg ts char-w char-h
-                          :drawing-options opts)))))
-    ;; Footer
-    (let ((footer-row (1- height)))
-      (when (plusp footer-row)
-        (multiple-value-bind (fg bg ts opts)
-            (resolve-global-face-inks :selector-footer)
-          (draw-text-at pane footer-row 2
-                        "[RET] select  [C-g/q] cancel  * = active"
-                        fg bg ts char-w char-h
-                        :drawing-options opts))))))
+      (terpri pane)
+      (mcclim-stream-write-global-face
+       pane
+       :selector-scroll
+       (format nil "[~D-~D of ~D]"
+               (1+ scroll)
+               (min (+ scroll max-visible) num-entries)
+               num-entries)))
+    (terpri pane)
+    (mcclim-stream-write-global-face
+     pane
+     :selector-footer
+     "[RET] select  [C-g/q] cancel  * = active")))
 
 ;;; --------------------------------------------------------------------------
 ;;; Think Selector Rendering
 ;;; --------------------------------------------------------------------------
 
 (defun mcclim-render-think-selector (pane rows cols char-w char-h frame)
-  "Render the think-level selector overlay."
-  (declare (ignore frame))
+  "Render the think-level selector pane using ordinary CLIM stream output."
+  (declare (ignore char-w char-h frame))
   (let* ((width cols)
          (height rows)
          (entries *think-selector-entries*)
          (num-entries (length entries))
          (max-visible (max 1 (- height 7)))
-         (scroll (cond
-                   ((< *think-selector-index* *think-selector-scroll*)
-                    *think-selector-index*)
-                   ((>= *think-selector-index*
-                        (+ *think-selector-scroll* max-visible))
-                    (max 0 (1+ (- *think-selector-index* max-visible))))
-                   (t *think-selector-scroll*))))
+         (scroll (mcclim-selector-visible-scroll *think-selector-index*
+                                                 *think-selector-scroll*
+                                                 max-visible
+                                                 num-entries)))
     (setf *think-selector-scroll* scroll)
     (clear-pane-with-ink pane *mcclim-bg-ink*)
-    (when (< 1 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-title)
-        (draw-text-at pane 1 2 "Select Think Level" fg bg ts char-w char-h
-                      :drawing-options opts)))
-    (when (< 2 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-separator)
-        (draw-text-at pane 2 2
-                      (make-string (min (- width 4) 50) :initial-element #\─)
-                      fg bg ts char-w char-h
-                      :drawing-options opts)))
-    (when (< 3 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-header)
-        (let ((header (format-think-selector-line "  " "THINK LEVEL" width)))
-          (fill-row pane 3 width bg char-w char-h)
-          (draw-text-at pane 3 0
-                        (subseq header 0 (min (length header) width))
-                        fg bg ts char-w char-h
-                        :drawing-options opts))))
+    (mcclim-stream-write-global-face pane :selector-title "Select Think Level")
+    (mcclim-stream-write-global-face
+     pane
+     :selector-separator
+     (make-string (min (max 8 width) 50) :initial-element #\─))
+    (mcclim-stream-write-global-face
+     pane
+     :selector-header
+     (format-think-selector-line "  " "THINK LEVEL" width))
+    (terpri pane)
     (loop :for absolute-idx :from scroll
           :below (min (+ scroll max-visible) num-entries)
           :for entry := (nth absolute-idx entries)
-          :for row := (+ 5 (- absolute-idx scroll))
-          :while (< row (- height 2))
           :for selected-p := (= absolute-idx *think-selector-index*)
           :for active-p := (getf entry :active-p)
           :for label := (getf entry :display)
@@ -4119,161 +4082,88 @@ Returns the number of visual rows consumed."
           :for line := (format-think-selector-line marker label width)
           :do (clim:with-output-as-presentation
                   (pane entry 'think-level-ref :single-box t)
-                (multiple-value-bind (fg bg ts opts)
-                    (resolve-global-face-inks (if selected-p
-                                                  :selector-selected
-                                                  :selector-entry))
-                  (fill-row pane row width bg char-w char-h)
-                  (draw-text-at pane row 0
-                                (subseq line 0 (min (length line) width))
-                                fg bg ts char-w char-h
-                                :drawing-options opts))))
+                (mcclim-stream-write-global-face
+                 pane
+                 (if selected-p :selector-selected :selector-entry)
+                 line)))
     (when (> num-entries max-visible)
-      (let ((indicator (format nil "[~D-~D of ~D]"
-                               (1+ scroll)
-                               (min (+ scroll max-visible) num-entries)
-                               num-entries))
-            (ind-row (+ 5 (min max-visible (- num-entries scroll)))))
-        (when (< ind-row (- height 1))
-          (multiple-value-bind (fg bg ts opts)
-              (resolve-global-face-inks :selector-scroll)
-            (draw-text-at pane ind-row 2
-                          (subseq indicator 0 (min (length indicator) (- width 4)))
-                          fg bg ts char-w char-h
-                          :drawing-options opts)))))
-    (let ((footer-row (1- height)))
-      (when (plusp footer-row)
-        (multiple-value-bind (fg bg ts opts)
-            (resolve-global-face-inks :selector-footer)
-          (draw-text-at pane footer-row 2
-                        "[RET] select  [C-g/q] cancel  default = clear  * = active"
-                        fg bg ts char-w char-h
-                        :drawing-options opts))))))
+      (terpri pane)
+      (mcclim-stream-write-global-face
+       pane
+       :selector-scroll
+       (format nil "[~D-~D of ~D]"
+               (1+ scroll)
+               (min (+ scroll max-visible) num-entries)
+               num-entries)))
+    (terpri pane)
+    (mcclim-stream-write-global-face
+     pane
+     :selector-footer
+     "[RET] select  [C-g/q] cancel  default = clear  * = active")))
 
 (defun mcclim-render-session-tree-selector (pane rows cols char-w char-h frame)
-  "Render the session tree selector overlay."
-  (declare (ignore frame))
+  "Render the session tree selector pane using ordinary CLIM stream output."
+  (declare (ignore char-w char-h frame))
   (session-tree-selector-update-filter)
   (let* ((width cols)
          (height rows)
          (items *session-tree-selector-filtered-items*)
          (num-items (length items))
          (max-visible (max 1 (- height 7)))
-         (scroll (cond
-                   ((< *session-tree-selector-index*
-                       *session-tree-selector-scroll*)
-                    *session-tree-selector-index*)
-                   ((>= *session-tree-selector-index*
-                        (+ *session-tree-selector-scroll* max-visible))
-                    (max 0
-                         (1+ (- *session-tree-selector-index*
-                                max-visible))))
-                   (t *session-tree-selector-scroll*))))
+         (scroll (mcclim-selector-visible-scroll *session-tree-selector-index*
+                                                 *session-tree-selector-scroll*
+                                                 max-visible
+                                                 num-items)))
     (setf *session-tree-selector-scroll* scroll)
     (clear-pane-with-ink pane *mcclim-bg-ink*)
-    (when (< 1 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-title)
-        (draw-text-at pane 1 2
-                      (format nil "Session Tree: ~A"
-                              (if *session-tree-selector-buffer*
-                                  (buffer-name *session-tree-selector-buffer*)
-                                  ""))
-                      fg bg ts char-w char-h
-                      :drawing-options opts)))
-    (when (< 2 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-separator)
-        (draw-text-at pane 2 2
-                      (make-string (min (- width 4) 50)
-                                   :initial-element #\─)
-                      fg bg ts char-w char-h
-                      :drawing-options opts)))
-    (when (< 3 height)
-      (multiple-value-bind (fg bg ts opts)
-          (resolve-global-face-inks :selector-header)
-        (let ((header (format nil "  filter:~(~A~)  search:~A"
-                              *session-tree-selector-filter-mode*
-                              *session-tree-selector-search*)))
-          (fill-row pane 3 width bg char-w char-h)
-          (draw-text-at pane 3 0
-                        (subseq header 0 (min (length header) width))
-                        fg bg ts char-w char-h
-                        :drawing-options opts))))
+    (mcclim-stream-write-global-face
+     pane
+     :selector-title
+     (format nil "Session Tree: ~A"
+             (if *session-tree-selector-buffer*
+                 (buffer-name *session-tree-selector-buffer*)
+                 "")))
+    (mcclim-stream-write-global-face
+     pane
+     :selector-separator
+     (make-string (min (max 8 width) 50) :initial-element #\─))
+    (mcclim-stream-write-global-face
+     pane
+     :selector-header
+     (format nil "  filter:~(~A~)  search:~A"
+             *session-tree-selector-filter-mode*
+             *session-tree-selector-search*))
+    (terpri pane)
     (loop :for absolute-idx :from scroll
           :below (min (+ scroll max-visible) num-items)
           :for item := (nth absolute-idx items)
-          :for row := (+ 5 (- absolute-idx scroll))
-          :while (< row (- height 2))
           :for selected-p := (= absolute-idx *session-tree-selector-index*)
           :for marker := (if selected-p "> " "  ")
           :for line := (format-session-tree-selector-line marker item width)
           :do (clim:with-output-as-presentation
                   (pane item 'session-tree-entry-ref :single-box t)
-                (multiple-value-bind (fg bg ts opts)
-                    (resolve-global-face-inks (if selected-p
-                                                  :selector-selected
-                                                  :selector-entry))
-                  (fill-row pane row width bg char-w char-h)
-                  (draw-text-at pane row 0
-                                (subseq line 0 (min (length line) width))
-                                fg bg ts char-w char-h
-                                :drawing-options opts))))
+                (mcclim-stream-write-global-face
+                 pane
+                 (if selected-p :selector-selected :selector-entry)
+                 line)))
     (when (> num-items max-visible)
-      (let ((indicator (format nil "[~D-~D of ~D]"
-                               (1+ scroll)
-                               (min (+ scroll max-visible) num-items)
-                               num-items))
-            (ind-row (+ 5 (min max-visible (- num-items scroll)))))
-        (when (< ind-row (- height 1))
-          (multiple-value-bind (fg bg ts opts)
-              (resolve-global-face-inks :selector-scroll)
-            (draw-text-at pane ind-row 2
-                          (subseq indicator 0
-                                  (min (length indicator) (- width 4)))
-                          fg bg ts char-w char-h
-                          :drawing-options opts)))))
-    (let ((footer-row (1- height)))
-      (when (plusp footer-row)
-        (multiple-value-bind (fg bg ts opts)
-            (resolve-global-face-inks :selector-footer)
-          (draw-text-at pane footer-row 2
-                        "[RET] select  [C-g/q] cancel  L label  <- fold  -> unfold  C-o filter"
-                        fg bg ts char-w char-h
-                        :drawing-options opts))))))
+      (terpri pane)
+      (mcclim-stream-write-global-face
+       pane
+       :selector-scroll
+       (format nil "[~D-~D of ~D]"
+               (1+ scroll)
+               (min (+ scroll max-visible) num-items)
+               num-items)))
+    (terpri pane)
+    (mcclim-stream-write-global-face
+     pane
+     :selector-footer
+     "[RET] select  [C-g/q] cancel  L label  <- fold  -> unfold  C-o filter")))
 
 ;;; --------------------------------------------------------------------------
 ;;; Popup Completion Overlay
 ;;; --------------------------------------------------------------------------
-
-(defun draw-fuzzy-match-spans (pane row start-col text match-set
-                               base-fg base-bg base-ts base-options
-                               match-fg match-bg match-ts match-options
-                               char-w char-h)
-  "Draw TEXT at (ROW, START-COL) with match-highlighted characters in spans.
-Instead of drawing per-character, collects consecutive same-style characters
-into spans and draws each span as a single draw-text-at call."
-  (let ((len (length text))
-        (span-start 0)
-        (span-matched nil))
-    (labels ((flush-span (end)
-               (when (> end span-start)
-                 (let ((span-text (subseq text span-start end))
-                       (col (+ start-col span-start)))
-                   (if span-matched
-                       (draw-text-at pane row col span-text
-                                     match-fg match-bg match-ts char-w char-h
-                                     :drawing-options match-options)
-                       (draw-text-at pane row col span-text
-                                     base-fg base-bg base-ts char-w char-h
-                                     :drawing-options base-options))))))
-      (loop :for i :from 0 :below len
-            :for cur-matched := (and match-set (gethash i match-set))
-            :do (when (and (plusp i) (not (eq (not cur-matched) (not span-matched))))
-                  (flush-span i)
-                  (setf span-start i))
-                (setf span-matched cur-matched))
-      (flush-span len))))
 
 (defun mcclim-completion-popup-mode ()
   "Return the active completion popup mode keyword, or NIL."
@@ -4284,7 +4174,8 @@ into spans and draws each span as a single draw-text-at call."
     (t nil)))
 
 (defun mcclim-render-completion-popup (pane cols rows char-w char-h)
-  "Render the active completion list inside the dedicated completion pane."
+  "Render the active completion list as ordinary CLIM stream output."
+  (declare (ignore char-w char-h))
   (let* ((mode (mcclim-completion-popup-mode))
          (items (ecase mode
                   (:minibuffer *minibuffer-filtered-items*)
@@ -4327,45 +4218,15 @@ into spans and draws each span as a single draw-text-at call."
          (display-total (if (eq mode :minibuffer) total (max 1 total)))
          (item-rows (min display-total (max 0 (1- rows)))))
     (clear-pane-with-ink pane *mcclim-bg-ink*)
-    ;; Prompt row: "prompt: input" with block cursor.
     (let* ((prompt-line (concatenate 'string prompt-str input))
            (display-width (max 1 cols))
-           (visible (subseq prompt-line 0 (min (length prompt-line) display-width)))
-           (row 0)
-           (col 0))
-      (let (prompt-ts)
-        (multiple-value-bind (fg bg ts opts)
-            (resolve-global-face-inks :minibuffer-prompt)
-          (declare (ignore bg))
-          (setf prompt-ts ts)
-          (fill-row pane row cols bg char-w char-h)
-          (draw-text-at pane row col visible fg bg ts char-w char-h
-                        :drawing-options opts))
-        ;; Block cursor
-        (let ((cursor-col (+ col (length prompt-str) point)))
-          (when (< cursor-col cols)
-            (let ((char-at-cursor (if (< point (length input))
-                                      (char input point)
-                                      #\Space)))
-              (multiple-value-bind (fg bg cursor-ts opts)
-                  (resolve-global-face-inks :minibuffer-cursor)
-                (declare (ignore cursor-ts))
-                (let* ((cursor-x (* cursor-col char-w))
-                       (cursor-text (string char-at-cursor))
-                       (cursor-width char-w))
-                  (draw-text-at-pixels pane cursor-x (* row char-h)
-                                       cursor-text fg bg prompt-ts char-h
-                                       :drawing-options opts
-                                       :background-width cursor-width))))))))
-    ;; Candidate rows.
+           (visible (subseq prompt-line 0 (min (length prompt-line)
+                                               display-width))))
+      (declare (ignore point))
+      (mcclim-stream-write-global-face pane :minibuffer-prompt visible))
     (if (and (not (eq mode :minibuffer)) (zerop total) (plusp item-rows))
-        (multiple-value-bind (base-fg base-bg base-ts base-opts)
-            (resolve-global-face-inks :minibuffer-candidate)
-          (let ((row 1))
-            (fill-row pane row cols base-bg char-w char-h)
-            (draw-text-at pane row 2 no-match-text
-                          base-fg base-bg base-ts char-w char-h
-                          :drawing-options base-opts)))
+        (mcclim-stream-write-global-face pane :minibuffer-candidate
+                                         no-match-text)
         (loop :for row-idx :from 0 :below item-rows
               :for item-idx := (+ scroll row-idx)
               :while (< item-idx total)
@@ -4377,36 +4238,33 @@ into spans and draws each span as a single draw-text-at call."
                                        (:slash 'slash-candidate-ref)
                                        (:skill 'skill-candidate-ref))
               :for display := (minibuffer-item-display item)
-              :for display-trimmed := (subseq display 0 (min (length display) (max 1 (- cols 2))))
+              :for display-trimmed := (subseq display 0
+                                              (min (length display)
+                                                   (max 1 (- cols 2))))
               :for match-pos := (nth item-idx positions)
               :for selected-p := (= item-idx selected)
               :do
                  (let* ((base-face-name (if selected-p :minibuffer-selected :minibuffer-candidate))
-                        (match-face-name (if selected-p :minibuffer-selected-match :minibuffer-match))
-                        (match-set (when match-pos
-                                     (let ((ht (make-hash-table :test #'eql)))
-                                       (dolist (p match-pos ht)
-                                         (setf (gethash p ht) t))))))
-                   (multiple-value-bind (base-fg base-bg base-ts base-opts)
-                       (resolve-global-face-inks base-face-name)
-                     (fill-row pane row cols base-bg char-w char-h)
-                     (clim:with-output-as-presentation
-                         (pane candidate-object candidate-ptype :single-box t)
-                       (draw-text-at pane row 0
-                                     (make-string (max 1 cols)
-                                                  :initial-element #\Space)
-                                     base-fg base-bg base-ts char-w char-h
-                                     :drawing-options base-opts)
-                       (draw-text-at pane row 0 "  "
-                                     base-fg base-bg base-ts char-w char-h
-                                     :drawing-options base-opts)
-                       (multiple-value-bind (match-fg match-bg match-ts match-opts)
-                           (resolve-global-face-inks match-face-name)
-                         (draw-fuzzy-match-spans pane row 2
-                                                 display-trimmed match-set
-                                                 base-fg base-bg base-ts base-opts
-                                                 match-fg match-bg match-ts match-opts
-                                                 char-w char-h)))))))))
+                        (match-face-name (if selected-p
+                                             :minibuffer-selected-match
+                                             :minibuffer-match))
+                        (padding (max 0 (- cols 2 (length display-trimmed)))))
+                   (clim:with-output-as-presentation
+                       (pane candidate-object candidate-ptype :single-box t)
+                     (mcclim-stream-write-global-face pane base-face-name "  "
+                                                      :newlinep nil)
+                     (mcclim-stream-render-fuzzy-text pane
+                                                      display-trimmed
+                                                      match-pos
+                                                      base-face-name
+                                                      match-face-name)
+                     (when (plusp padding)
+                       (mcclim-stream-write-global-face
+                        pane
+                        base-face-name
+                        (make-string padding :initial-element #\Space)
+                        :newlinep nil))
+                     (terpri pane)))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Key Normalization (McCLIM-specific)
