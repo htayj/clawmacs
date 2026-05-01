@@ -1063,8 +1063,6 @@ viewport-sized pane so they do not grow a transcript scrollbar."
   (:metaclass esa-utils:modual-class)
   (:default-initargs
    :display-time :command-loop
-   :incremental-redisplay nil
-   :display-function 'display-drei-input-pane
    :background (clim:make-rgb-color 1.0 1.0 1.0)
    :foreground (clim:make-rgb-color 0.0 0.0 0.0)
    :text-style (clim:make-text-style :fix :roman :normal)
@@ -1206,7 +1204,6 @@ kept as a minimal ESA-compatible service pane for commands that expect a real
                  :background (clim:make-rgb-color 0.93 0.93 0.93)
                  :foreground (clim:make-rgb-color 0.0 0.0 0.0))
    (input-pane clawmacs-drei-input-pane
-               :display-function 'display-drei-input-pane
                :display-time :command-loop
                :height 42
                :min-height 20
@@ -2459,6 +2456,30 @@ WIDTH and PREFIX-LEN use the same wrapped grid geometry as
               (mcclim-set-message-point-from-absolute-offset
                input point-offset))))))))
 
+(defun mcclim-drei-offset-grid-position (pane offset)
+  "Return OFFSET in PANE as wrapped grid column and row values."
+  (let* ((frame (clim:pane-frame pane)))
+    (ensure-char-metrics frame pane)
+    (let* ((char-w (max 1 (frame-char-width frame)))
+           (char-h (max 1 (frame-char-height frame)))
+           (cols (max 1 (nth-value 0 (pane-grid-dimensions pane char-w char-h))))
+           (text (mcclim-drei-pane-text pane))
+           (limit (min (max 0 offset) (length text)))
+           (row 0)
+           (col 0))
+      (loop :for index :from 0 :below limit
+            :for ch := (char text index)
+            :do (cond
+                  ((char= ch #\Newline)
+                   (incf row)
+                   (setf col 0))
+                  (t
+                   (incf col)
+                   (when (>= col cols)
+                     (incf row)
+                     (setf col 0)))))
+      (values col row char-w char-h))))
+
 (defun mcclim-set-input-point-from-pane-click (frame pane event)
   "Map EVENT in input PANE into the visible buffer's input message point."
   (let ((buf (frame-visible-buffer frame)))
@@ -2499,6 +2520,22 @@ WIDTH and PREFIX-LEN use the same wrapped grid geometry as
                          (frame-last-drei-buffer frame) buf))
               (setf (frame-syncing-drei-p frame) nil)))
           (mcclim-sync-drei-point-from-buffer frame))))))
+
+(defmethod drei:display-drei-view-cursor ((pane clawmacs-drei-input-pane)
+                                          (view clawmacs-drei-input-view)
+                                          (cursor drei:drei-cursor))
+  "Render Drei's cursor in our fixed-pitch input pane without basic-medium text metrics."
+  (declare (ignore view))
+  (multiple-value-bind (col row char-w char-h)
+      (mcclim-drei-offset-grid-position pane
+                                        (drei-buffer:offset (drei:mark cursor)))
+    (let ((x (* col char-w))
+          (y (* row char-h)))
+      (clim:draw-rectangle* pane
+                            x y
+                            (+ x 2)
+                            (+ y char-h)
+                            :ink (drei:ink cursor)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Modeline Display
@@ -2746,39 +2783,6 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
         (if (mcclim-completion-pane-active-p)
             (mcclim-render-completion-popup pane cols rows char-w char-h)
             (clear-pane-with-ink pane *mcclim-bg-ink*))))))
-
-(defun display-drei-input-pane (frame pane)
-  "Display the Drei-backed input pane using Clawmacs' text renderer.
-Drei owns the editable text buffer; Clawmacs renders it here so the McCLIM UI
-uses the same face/cursor behavior as the transcript pane."
-  (with-mcclim-frame-ui-state (frame)
-    (ensure-char-metrics frame pane)
-    (let* ((char-w (frame-char-width frame))
-           (char-h (frame-char-height frame))
-           (buf (frame-visible-buffer frame)))
-      (when (zerop char-w) (return-from display-drei-input-pane))
-      (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
-        (clear-pane-with-ink pane *mcclim-bg-ink*)
-        (cond
-          ((and buf (buffer-input-presentation-function buf))
-           (funcall (buffer-input-presentation-function buf)
-                    pane buf rows cols char-w char-h))
-          ((and buf (not (document-buffer-p buf)))
-           (mcclim-render-message-lines pane (buffer-input-message buf)
-                                        0 cols char-w char-h
-                                        :show-cursor t
-                                        :max-rows rows
-                                        :prefix ""
-                                        :render-images-p nil)))))))
-
-(defmethod drei:display-drei-view-contents
-    ((pane clawmacs-drei-input-pane) view)
-  "Keep Drei's buffer storage, but paint the input with Clawmacs output.
-Some Drei redisplay paths compute text metrics on a basic medium before the
-pane has the backend medium methods needed by McCLIM/CLX. Routing content
-display through the same renderer as the transcript keeps repaint stable."
-  (declare (ignore view))
-  (display-drei-input-pane (clim:pane-frame pane) pane))
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Title Bar
@@ -5483,12 +5487,6 @@ provider streams moving even when no key or window event arrives."
     (with-mcclim-frame-ui-state (frame)
       (mcclim-sync-buffer-from-drei frame)
       (mcclim-redisplay-frame frame :force-p t))))
-
-(defmethod clim:handle-repaint ((pane clawmacs-drei-input-pane) region)
-  (declare (ignore region))
-  (let ((frame (clim:pane-frame pane)))
-    (with-mcclim-frame-ui-state (frame)
-      (display-drei-input-pane frame pane))))
 
 (defmethod clim:redisplay-frame-panes :before ((frame clawmacs-gui)
                                                &key force-p)
