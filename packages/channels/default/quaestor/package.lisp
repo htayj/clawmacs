@@ -812,14 +812,17 @@ Returns true when the key was consumed."
         (values-list outcome))))
 
 (defadvice execute-prompt-tool-call quaestor-prompt-tool-call :around
-    (next buffer tool-use-block agent-kw auto-approve-tools-p)
+    (next buffer tool-use-block agent-kw auto-approve-tools-p
+          &key event-callback &allow-other-keys)
   (let* ((*quaestor-request-user-input-catch-active* t)
          (outcome (catch 'quaestor-suspend
                     (multiple-value-list
                      (funcall next buffer tool-use-block agent-kw
-                              auto-approve-tools-p)))))
+                              auto-approve-tools-p
+                              :event-callback event-callback)))))
     (if (quaestor-request-tool-suspension-p outcome)
         (let* ((tool-id (cdr (assoc :id tool-use-block)))
+               (tool-input (cdr (assoc :input tool-use-block)))
                (display "[request_user_input unavailable in prompt mode]")
                (result-text
                  (tool-error-result-data
@@ -830,10 +833,22 @@ Returns true when the key was consumed."
                (event (make-prompt-tool-event
                        :id tool-id
                        :name "request_user_input"
-                       :input (cdr (assoc :input tool-use-block))
+                       :input tool-input
                        :result-text result-text
                        :display display
                        :denied-p t)))
+          (when event-callback
+            (funcall event-callback
+                     (list :event "tool.call"
+                           :id tool-id
+                           :name "request_user_input"
+                           :input tool-input))
+            (funcall event-callback
+                     (list :event "tool.result"
+                           :id tool-id
+                           :name "request_user_input"
+                           :result result-text
+                           :denied-p t)))
           (values result event))
         (values-list outcome))))
 

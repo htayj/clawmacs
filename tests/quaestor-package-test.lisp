@@ -199,16 +199,33 @@
            (tool-use (clawmacs::canonical-tool-use-block
                       "call-1"
                       "request_user_input"
-                      (quaestor-test-request-args))))
+                      (quaestor-test-request-args)))
+           (events nil))
       (multiple-value-bind (result event)
-          (clawmacs::execute-prompt-tool-call buf tool-use :agent t)
+          (clawmacs::execute-prompt-tool-call
+           buf tool-use :agent t
+           :event-callback (lambda (payload)
+                             (push payload events)))
+        (let ((events (nreverse events)))
         (is (search "unavailable in prompt mode"
                     (cdr (assoc :display result))
                     :test #'char-equal))
         (is (search "unavailable in non-interactive prompt mode"
                     (cdr (assoc :result result))
                     :test #'char-equal))
-        (is (clawmacs::prompt-tool-event-denied-p event))))))
+        (is (clawmacs::prompt-tool-event-denied-p event))
+        (is (= 2 (length events)))
+        (is (string= "tool.call"
+                     (getf (first events) :event)))
+        (is (string= "call-1"
+                     (getf (first events) :id)))
+        (is (string= "request_user_input"
+                     (getf (first events) :name)))
+        (is (equal (quaestor-test-request-args)
+                   (getf (first events) :input)))
+        (is (string= "tool.result"
+                     (getf (second events) :event)))
+        (is-true (getf (second events) :denied-p)))))))
 
 (test quaestor-lisp-api-resumes-with-structured-payload
   "The Lisp API can suspend for user input and resume with normalized answers."
