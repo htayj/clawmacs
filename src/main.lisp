@@ -2477,6 +2477,12 @@ Returns a plist describing the export."
   "Fork BUFFER's session from selected tree ITEM into a new buffer."
   (let* ((session (buffer-session buffer))
          (entry-id (getf item :id))
+         (new-buffer (fork-session-from-entry-id buffer entry-id)))
+    new-buffer))
+
+(defun fork-session-from-entry-id (buffer entry-id)
+  "Fork BUFFER's session from ENTRY-ID into a new buffer."
+  (let* ((session (buffer-session buffer))
          (leaf-id (session-navigation-leaf-for-entry session entry-id))
          (input-text (session-entry-user-message-text session entry-id))
          (new-session (create-branched-session session leaf-id))
@@ -2499,7 +2505,8 @@ Returns a plist describing the export."
     (buffer-insert-system-message
      new-buffer
      (format nil "[Forked from ~A]" entry-id)
-     :record-p nil)))
+     :record-p nil)
+    new-buffer))
 
 (defun fork-session-command (buffer)
   "Fork a selected session tree point into a new session buffer."

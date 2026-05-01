@@ -1550,6 +1550,27 @@
         (is (search "tokens: input=120 cached=96 uncached=24 output=30 total=150 cache-hit=80.0%"
                     text))))))
 
+(test fork-session-from-entry-id-branches-directly-from-message
+  "Message entry ids are enough to fork a new session buffer."
+  (with-interactive-command-test-buffer (buf)
+    (let ((*sessions-dir* (temp-session-test-directory "fork-from-entry")))
+      (clawmacs::ensure-buffer-session buf)
+      (set-message-text (buffer-input-message buf) "Draft feature plan")
+      (buffer-finalize-input buf)
+      (let* ((message (message-prev (buffer-input-message buf)))
+             (entry-id (message-entry-id message)))
+        (is (stringp entry-id))
+        (is (not (string= "" entry-id)))
+        (clawmacs::fork-session-from-entry-id buf entry-id)
+        (let ((forked (current-buffer)))
+          (is (not (eq buf forked)))
+          (is (search "branch" (buffer-name forked) :test #'char-equal))
+          (is (string= "Draft feature plan"
+                       (message-text (buffer-input-message forked))))
+          (is (search "[Forked from "
+                      (message-text
+                       (message-prev (buffer-input-message forked))))))))))
+
 (test describe-guard-policy-command-opens-help-buffer
   "Describing guard policy opens a help buffer with policy sections."
   (with-interactive-command-test-buffer (buf)

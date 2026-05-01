@@ -336,6 +336,16 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
                                   (mcclim-message-description message))))
       (switch-to-buffer help))))
 
+(clim:define-command (com-fork-chat-message-session
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((message 'chat-message))
+  (let ((buffer (current-buffer)))
+    (when (and message
+               (message-entry-id message)
+               (buffer-session buffer))
+      (fork-session-from-entry-id buffer (message-entry-id message)))))
+
 (defun mcclim-image-description (reference)
   "Return a help-buffer description for inline image REFERENCE."
   (with-output-to-string (out)
@@ -615,6 +625,18 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
                           :priority 10
                           :documentation "Describe this message"
                           :pointer-documentation "Describe this message")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-chat-message
+    (chat-message com-fork-chat-message-session
+                  clawmacs-mcclim-command-table
+                  :gesture :select
+                  :priority 25
+                  :tester ((message)
+                           (not (null (message-entry-id message))))
+                  :documentation "Fork a new session from this message"
+                  :pointer-documentation "Fork a new session from this message")
     (object)
   (list object))
 

@@ -31,7 +31,7 @@ Historical direction:
   - dependency presentations that jump to linked TODOs
   - later: move/reorder and dependency editing via visual operations
 
-- [ ] Transcript message command presentations
+- [x] Transcript message command presentations
   - richer actions on chat messages, tool calls, and tool results
   - inspect metadata, raw provider payload, entry ids, and branch ancestry
   - fork session directly from a message/tree point
