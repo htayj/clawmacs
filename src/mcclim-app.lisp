@@ -1984,13 +1984,28 @@ Values are HISTORY-MESSAGES, MESSAGE-HEIGHTS, and TOTAL-HISTORY-ROWS."
            (mcclim-approval-prompt-rows (buffer-approval-pending buf))
            0))))
 
+(defun mcclim-native-stream-buffer-p (buf)
+  "Return true when BUF should render through a native CLIM stream/scroller."
+  (and buf
+       (or (eq (buffer-kind buf) :chat)
+           (help-buffer-p buf)
+           (info-buffer-p buf)
+           (customize-buffer-p buf)
+           (listener-buffer-p buf))))
+
 (defun mcclim-native-transcript-scroll-p (frame &optional (buf (frame-visible-buffer frame)))
-  "Return true when BUF in FRAME should use a native CLIM transcript scroller."
+  "Return true when BUF in FRAME should use a native CLIM scroller."
   (declare (ignore frame))
-  (let ((buf buf))
-    (and buf
-         (null (buffer-presentation-function buf))
-         (not (document-buffer-p buf)))))
+  (mcclim-native-stream-buffer-p buf))
+
+(defun mcclim-pane-content-rows (pane char-h)
+  "Return PANE's current content height in character rows."
+  (let ((region (or (ignore-errors (clim:sheet-region pane))
+                    (ignore-errors (clim:window-viewport pane))
+                    (ignore-errors (clim:pane-viewport-region pane)))))
+    (if (and region (plusp char-h))
+        (max 1 (ceiling (clim:bounding-rectangle-height region) char-h))
+        1)))
 
 (defun mcclim-selector-pane-target-rows ()
   "Return the desired row count for the selector pane."
@@ -2039,22 +2054,9 @@ Values are HISTORY-MESSAGES, MESSAGE-HEIGHTS, and TOTAL-HISTORY-ROWS."
              (char-h (max 1 (frame-char-height frame))))
         (multiple-value-bind (viewport-width viewport-height)
             (pane-viewport-pixel-size main-pane)
-          (when native-scroll-p
-            (setf pixel-width viewport-width)
-            (setf pixel-height viewport-height)
-            (multiple-value-bind (cols _rows)
-                (pane-viewport-grid-dimensions main-pane char-w char-h)
-              (declare (ignore _rows))
-              (setf pixel-height
-                    (* (mcclim-transcript-total-content-rows
-                        buf
-                        cols
-                        char-w
-                        char-h)
-                       char-h))))
-          (unless native-scroll-p
-            (setf pixel-width viewport-width
-                  pixel-height viewport-height))
+          (declare (ignore char-w char-h))
+          (setf pixel-width viewport-width
+                pixel-height viewport-height)
           (when (eq main-pane (frame-selected-window-pane frame))
             (setf (frame-main-pane-space-height frame) pixel-height))
           (clim:change-space-requirements
@@ -2078,11 +2080,10 @@ Values are HISTORY-MESSAGES, MESSAGE-HEIGHTS, and TOTAL-HISTORY-ROWS."
       (when (and main-pane buf)
         (let ((char-w (max 1 (frame-char-width frame)))
               (char-h (max 1 (frame-char-height frame))))
-          (multiple-value-bind (cols viewport-rows)
+          (multiple-value-bind (_cols viewport-rows)
               (pane-viewport-grid-dimensions main-pane char-w char-h)
-            (let* ((content-rows
-                     (mcclim-transcript-total-content-rows
-                      buf cols char-w char-h))
+            (declare (ignore _cols))
+            (let* ((content-rows (mcclim-pane-content-rows main-pane char-h))
                    (max-scroll (max 0 (- content-rows viewport-rows)))
                    (viewport-y
                      (or (nth-value 1
@@ -2096,14 +2097,8 @@ Values are HISTORY-MESSAGES, MESSAGE-HEIGHTS, and TOTAL-HISTORY-ROWS."
                                      (clim:sheet-region main-pane))))
                            (clim:bounding-rectangle-min-y region))
                          0))
-                   (max-viewport-y (* max-scroll char-h))
-                   (top-row
-                     (cond
-                       ((<= (abs (- max-viewport-y viewport-y)) char-h)
-                        max-scroll)
-                       (t
-                        (min max-scroll
-                             (max 0 (round viewport-y char-h)))))))
+                   (top-row (min max-scroll
+                                 (max 0 (round viewport-y char-h)))))
               (setf (buffer-scroll-offset buf)
                     (max 0 (- content-rows viewport-rows top-row)))))))))
   frame)
@@ -2116,11 +2111,10 @@ Values are HISTORY-MESSAGES, MESSAGE-HEIGHTS, and TOTAL-HISTORY-ROWS."
       (when (and main-pane buf)
         (let ((char-w (max 1 (frame-char-width frame)))
               (char-h (max 1 (frame-char-height frame))))
-          (multiple-value-bind (cols viewport-rows)
+          (multiple-value-bind (_cols viewport-rows)
               (pane-viewport-grid-dimensions main-pane char-w char-h)
-            (let* ((content-rows
-                     (mcclim-transcript-total-content-rows
-                      buf cols char-w char-h))
+            (declare (ignore _cols))
+            (let* ((content-rows (mcclim-pane-content-rows main-pane char-h))
                    (max-scroll (max 0 (- content-rows viewport-rows)))
                    (desired-bottom-offset
                      (min (max 0 (buffer-scroll-offset buf)) max-scroll))
@@ -2146,11 +2140,10 @@ Values are HISTORY-MESSAGES, MESSAGE-HEIGHTS, and TOTAL-HISTORY-ROWS."
           (char-w (max 1 (frame-char-width frame)))
           (char-h (max 1 (frame-char-height frame))))
       (when (and main-pane buf (plusp char-w) (plusp char-h))
-        (multiple-value-bind (cols viewport-rows)
+        (multiple-value-bind (_cols viewport-rows)
             (pane-viewport-grid-dimensions main-pane char-w char-h)
-          (let* ((content-rows
-                   (mcclim-transcript-total-content-rows
-                    buf cols char-w char-h))
+          (declare (ignore _cols))
+          (let* ((content-rows (mcclim-pane-content-rows main-pane char-h))
                  (max-scroll (max 0 (- content-rows viewport-rows)))
                  (page-rows (max 1 (- viewport-rows 3)))
                  (delta-y (* page-rows char-h))
@@ -2802,6 +2795,203 @@ display through the same renderer as the transcript keeps repaint stable."
     (clim:draw-line* pane 0 (1- char-h) (* cols char-w) (1- char-h)
                       :ink (clim:make-rgb-color 0.67 0.67 0.67))))
 
+(defun mcclim-call-with-drawing-style (pane fg text-style drawing-options thunk)
+  "Run THUNK in PANE with FG, TEXT-STYLE, and DRAWING-OPTIONS active."
+  (apply #'clim:invoke-with-drawing-options
+         pane
+         (lambda (medium)
+           (declare (ignore medium))
+           (funcall thunk))
+         :ink fg
+         :text-style text-style
+         drawing-options))
+
+(defun mcclim-call-with-global-face (pane face thunk)
+  "Run THUNK in PANE using the resolved global FACE drawing style."
+  (multiple-value-bind (fg _bg ts opts)
+      (resolve-global-face-inks face)
+    (declare (ignore _bg))
+    (mcclim-call-with-drawing-style pane fg ts opts thunk)))
+
+(defun mcclim-call-with-message-face (pane msg thunk)
+  "Run THUNK in PANE using MSG's default drawing style."
+  (let* ((face-set (message-face-set msg))
+         (face (if face-set
+                   (or (get-face face-set :default) (make-default-text-face))
+                   (make-default-text-face)))
+         (resolved (resolve-face face)))
+    (multiple-value-bind (fg _bg ts opts _underline-p)
+        (resolve-face-inks resolved)
+      (declare (ignore _bg _underline-p))
+      (mcclim-call-with-drawing-style pane fg ts opts thunk))))
+
+(defun mcclim-stream-render-buffer-title (pane buf)
+  "Render BUF's title as ordinary CLIM stream output."
+  (mcclim-call-with-global-face
+   pane
+   :selector-title
+   (lambda ()
+     (write-string (buffer-name buf) pane)))
+  (terpri pane)
+  (mcclim-call-with-global-face
+   pane
+   :selector-separator
+   (lambda ()
+     (write-string (make-string (max 8 (length (buffer-name buf)))
+                                :initial-element #\-)
+                   pane)))
+  (terpri pane)
+  (terpri pane))
+
+(defun mcclim-stream-render-text-block (pane text width prefix prefix-spaces)
+  "Render TEXT to PANE as wrapped CLIM stream output."
+  (let ((first-output-p t))
+    (dolist (line (split-string-by-newline text))
+      (dolist (chunk (mcclim-wrap-display-line line width))
+        (write-string (if first-output-p prefix prefix-spaces) pane)
+        (write-string chunk pane)
+        (terpri pane)
+        (setf first-output-p nil)))
+    (when first-output-p
+      (write-string prefix pane)
+      (terpri pane))))
+
+(defun mcclim-stream-render-image-block (pane reference width prefix prefix-len char-w char-h)
+  "Render image REFERENCE to PANE and return its source entry if loaded."
+  (let* ((prefix-spaces (make-string prefix-len :initial-element #\Space)))
+    (multiple-value-bind (entry error-text)
+        (mcclim-load-display-image-reference reference)
+      (let ((caption (mcclim-inline-image-caption reference entry error-text)))
+        (mcclim-stream-render-text-block pane caption width prefix prefix-spaces))
+      (when (and entry (null error-text))
+        (multiple-value-bind (display-width display-height _rows scale)
+            (mcclim-inline-image-geometry entry width prefix-len char-w char-h)
+          (declare (ignore display-width _rows))
+          (multiple-value-bind (_cursor-x cursor-y)
+              (clim:stream-cursor-position pane)
+            (declare (ignore _cursor-x))
+            (clim:with-output-as-presentation
+                (pane reference 'image-reference :single-box t)
+              (clim:draw-pattern*
+               pane
+               (mcclim-image-cache-entry-pattern entry)
+               0 0
+               :transformation
+               (clim:compose-transformations
+                (clim:make-translation-transformation (* prefix-len char-w)
+                                                      cursor-y)
+                (clim:make-scaling-transformation scale scale))))
+            (setf (clim:stream-cursor-position pane)
+                  (values 0 (+ cursor-y display-height)))
+            (terpri pane))))
+      entry)))
+
+(defun mcclim-stream-render-message (pane msg width char-w char-h
+                                     &key show-reasoning-p show-metadata-p
+                                       (prefix (message-sender-prefix msg))
+                                       (render-images-p t))
+  "Render MSG to PANE as native CLIM stream output."
+  (let* ((prefix-len (length prefix))
+         (display-width (max 1 (- width prefix-len)))
+         (prefix-spaces (make-string prefix-len :initial-element #\Space)))
+    (mcclim-call-with-message-face
+     pane
+     msg
+     (lambda ()
+       (dolist (block (if render-images-p
+                          (message-display-blocks
+                           msg
+                           :show-reasoning-p show-reasoning-p
+                           :show-metadata-p show-metadata-p)
+                          (mapcar (lambda (entry)
+                                    (list :type :text
+                                          :text (car entry)
+                                          :source-line (cdr entry)))
+                                  (message-display-line-entries
+                                   msg
+                                   :show-reasoning-p show-reasoning-p
+                                   :show-metadata-p show-metadata-p))))
+         (ecase (getf block :type)
+           (:text
+            (mcclim-stream-render-text-block pane
+                                             (getf block :text)
+                                             display-width
+                                             prefix
+                                             prefix-spaces))
+           (:image
+            (mcclim-stream-render-image-block pane
+                                              (getf block :reference)
+                                              width
+                                              prefix
+                                              prefix-len
+                                              char-w
+                                              char-h))))))))
+
+(defun mcclim-stream-render-approval-prompt (pane approval width)
+  "Render APPROVAL as native CLIM stream output."
+  (let ((tool-name (cdr (assoc :tool-name approval)))
+        (raw-sexpr (cdr (assoc :display-raw approval)))
+        (expanded (cdr (assoc :display-expanded approval)))
+        (extra (cdr (assoc :display-extra approval))))
+    (mcclim-call-with-global-face
+     pane
+     :approval-header
+     (lambda ()
+       (write-string (format nil "-- PERMISSION REQUIRED: ~A --" tool-name)
+                     pane)))
+    (terpri pane)
+    (terpri pane)
+    (dolist (line (split-string-by-newline (or raw-sexpr "")))
+      (mcclim-call-with-global-face
+       pane
+       :approval-raw
+       (lambda ()
+         (write-string line pane)))
+      (terpri pane))
+    (when expanded
+      (terpri pane)
+      (dolist (line (split-string-by-newline expanded))
+        (mcclim-call-with-global-face
+         pane
+         :approval-expanded
+         (lambda ()
+           (write-string line pane)))
+        (terpri pane)))
+    (when extra
+      (terpri pane)
+      (dolist (line (split-string-by-newline extra))
+        (mcclim-call-with-global-face
+         pane
+         :approval-extra
+         (lambda ()
+           (write-string line pane)))
+        (terpri pane)))
+    (terpri pane)
+    (mcclim-call-with-global-face
+     pane
+     :approval-options
+     (lambda ()
+       (write-string "[a]pprove  [d]eny  [m]essage" pane)))
+    (terpri pane)))
+
+(defun mcclim-stream-render-styled-entry-list (pane entries)
+  "Render styled ENTRIES as CLIM stream output."
+  (dolist (entry entries)
+    (let ((text (or (getf entry :text) ""))
+          (face (or (getf entry :face) :default-text))
+          (object (getf entry :object))
+          (presentation-type (getf entry :presentation-type)))
+      (mcclim-call-with-global-face
+       pane
+       face
+       (lambda ()
+         (if presentation-type
+             (clim:with-output-as-presentation
+                 (pane object presentation-type :single-box t)
+               (write-string text pane))
+             (write-string text pane))))
+      (terpri pane))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Buffer Rendering
 ;;; --------------------------------------------------------------------------
@@ -2944,33 +3134,44 @@ display through the same renderer as the transcript keeps repaint stable."
 
 (defun mcclim-render-info-buffer (pane buf rows cols char-w char-h)
   "Render BUF as a dedicated Info/manual browser."
-  (clear-pane-with-ink pane *mcclim-bg-ink*)
-  (when (plusp rows)
-    (mcclim-render-buffer-title pane buf cols char-w char-h))
-  (let* ((content-rows (max 0 (1- rows)))
-         (display-rows (mcclim-info-display-rows buf cols))
-         (total-rows (length display-rows))
-         (state (info-buffer-state buf))
-         (document (info-state-document state))
-         (selected-index (info-state-selected-link-index state)))
-    (multiple-value-bind (visible-top visible-bottom)
-        (mcclim-entry-scroll-window buf total-rows content-rows)
-      (loop :for index :from visible-top :below visible-bottom
-            :for screen-row :from 1
-            :for row-segments := (nth index display-rows)
-            :while (< screen-row rows)
-            :do (mcclim-draw-info-row pane screen-row cols
-                                      row-segments selected-index document
-                                      char-w char-h)))
-    (mcclim-record-render-snapshot (clim:pane-frame pane)
-                                   pane
-                                   buf
-                                   :info-buffer
-                                   rows
-                                   cols
-                                   :input-start-row -1
-                                   :history-height content-rows
-                                   :visible-messages nil)))
+  (declare (ignore char-w char-h))
+  (mcclim-stream-render-buffer-title pane buf)
+  (let* ((state (info-buffer-state buf))
+         (document (and state (info-state-document state)))
+         (selected-index (and state
+                              (info-state-selected-link-index state))))
+    (dolist (row-segments (mcclim-info-display-rows buf cols))
+      (dolist (segment row-segments)
+        (let* ((text (or (info-segment-text segment) ""))
+               (link-index (info-segment-link-index segment))
+               (link (and document
+                          link-index
+                          (nth link-index (info-document-links document))))
+               (face (cond
+                       ((and link-index selected-index
+                             (= link-index selected-index))
+                        :selector-selected)
+                       (link-index :selector-entry)
+                       (t (or (info-segment-face segment) :default-text)))))
+          (mcclim-call-with-global-face
+           pane
+           face
+           (lambda ()
+             (if link
+                 (clim:with-output-as-presentation
+                     (pane link 'info-link-ref :single-box t)
+                   (write-string text pane))
+                 (write-string text pane))))))
+      (terpri pane)))
+  (mcclim-record-render-snapshot (clim:pane-frame pane)
+                                 pane
+                                 buf
+                                 :info-buffer
+                                 rows
+                                 cols
+                                 :input-start-row -1
+                                 :history-height (max 0 (1- rows))
+                                 :visible-messages nil))
 
 (defun mcclim-customize-field-line (face field index selected-p)
   "Return the display line for one customize FIELD."
@@ -3082,35 +3283,18 @@ display through the same renderer as the transcript keeps repaint stable."
 (defun mcclim-render-entry-buffer
     (pane buf rows cols char-w char-h entries mode)
   "Render BUF using precomputed styled ENTRIES."
-  (clear-pane-with-ink pane *mcclim-bg-ink*)
-  (when (plusp rows)
-    (mcclim-render-buffer-title pane buf cols char-w char-h))
-  (let* ((content-rows (max 0 (1- rows)))
-         (total-rows (length entries)))
-    (multiple-value-bind (visible-top visible-bottom)
-        (mcclim-entry-scroll-window buf total-rows content-rows)
-      (loop :for index :from visible-top :below visible-bottom
-            :for screen-row :from 1
-            :for entry := (nth index entries)
-            :while (and entry (< screen-row rows))
-            :do (let ((object (getf entry :object))
-                      (presentation-type (getf entry :presentation-type)))
-                  (if presentation-type
-                      (clim:with-output-as-presentation
-                          (pane object presentation-type :single-box t)
-                        (mcclim-draw-styled-entry pane screen-row cols
-                                                  entry char-w char-h))
-                      (mcclim-draw-styled-entry pane screen-row cols
-                                                entry char-w char-h))))
-      (mcclim-record-render-snapshot (clim:pane-frame pane)
-                                     pane
-                                     buf
-                                     mode
-                                     rows
-                                     cols
-                                     :input-start-row -1
-                                     :history-height content-rows
-                                     :visible-messages nil))))
+  (declare (ignore char-w char-h))
+  (mcclim-stream-render-buffer-title pane buf)
+  (mcclim-stream-render-styled-entry-list pane entries)
+  (mcclim-record-render-snapshot (clim:pane-frame pane)
+                                 pane
+                                 buf
+                                 mode
+                                 rows
+                                 cols
+                                 :input-start-row -1
+                                 :history-height (max 0 (1- rows))
+                                 :visible-messages nil))
 
 (defun mcclim-render-help-buffer (pane buf rows cols char-w char-h)
   "Render BUF as a dedicated read-only help buffer presentation."
@@ -3185,28 +3369,20 @@ display through the same renderer as the transcript keeps repaint stable."
 
 (defun mcclim-render-listener-buffer (pane buf rows cols char-w char-h)
   "Render BUF as a McCLIM Listener-style buffer."
-  (clear-pane-with-ink pane *mcclim-bg-ink*)
-  (when (plusp rows)
-    (mcclim-render-buffer-title pane buf cols char-w char-h))
-  (let* ((footer-row (and (> rows 1) (1- rows)))
-         (content-rows (max 0 (if footer-row (- rows 2) (1- rows))))
-         (entries (mcclim-listener-display-entries buf cols))
-         (total-rows (length entries))
-         (visible-messages nil))
-    (multiple-value-bind (visible-top visible-bottom)
-        (mcclim-entry-scroll-window buf total-rows content-rows)
-      (loop :for index :from visible-top :below visible-bottom
-            :for screen-row :from 1
-            :for entry := (nth index entries)
-            :while (and entry (< screen-row (or footer-row rows)))
-            :do (let ((object (getf entry :object)))
-                  (push (getf object :message) visible-messages)
-                  (clim:with-output-as-presentation
-                      (pane object 'listener-entry-ref :single-box t)
-                    (mcclim-draw-styled-entry pane screen-row cols
-                                              entry char-w char-h)))))
-    (when footer-row
-      (mcclim-render-listener-footer pane buf footer-row cols char-w char-h))
+  (declare (ignore char-w char-h))
+  (mcclim-stream-render-buffer-title pane buf)
+  (let ((visible-messages nil))
+    (dolist (entry (mcclim-listener-display-entries buf cols))
+      (let ((object (getf entry :object)))
+        (push (getf object :message) visible-messages))
+      (mcclim-stream-render-styled-entry-list pane (list entry)))
+    (terpri pane)
+    (mcclim-call-with-global-face
+     pane
+     :who-line
+     (lambda ()
+       (write-string (listener-wholine-text buf) pane)))
+    (terpri pane)
     (mcclim-record-render-snapshot (clim:pane-frame pane)
                                    pane
                                    buf
@@ -3214,7 +3390,7 @@ display through the same renderer as the transcript keeps repaint stable."
                                    rows
                                    cols
                                    :input-start-row -1
-                                   :history-height content-rows
+                                   :history-height (max 0 (- rows 2))
                                    :visible-messages
                                    (remove-duplicates
                                     (nreverse visible-messages)
@@ -3279,83 +3455,57 @@ still render in the transcript because they are modal interaction state, not
 ordinary input text."
   (let ((frame (and pane (ignore-errors (clim:pane-frame pane)))))
     (when (and frame
-               (mcclim-native-transcript-scroll-p frame))
-      (let ((approval (buffer-approval-pending buf))
-            (visible-messages nil))
+               (mcclim-native-transcript-scroll-p frame buf))
+      (let ((presentation-function (buffer-presentation-function buf)))
         (multiple-value-bind (viewport-cols viewport-rows)
             (pane-viewport-grid-dimensions pane char-w char-h)
-          (multiple-value-bind (history-messages msg-heights total-history-rows)
-              (mcclim-transcript-history-layout buf viewport-cols char-w char-h)
-            (let* ((input-start-row (if approval
-                                        (1+ total-history-rows)
-                                        0))
-                   (content-rows
-                     (+ 1
-                        total-history-rows
-                        (if approval
-                            (mcclim-approval-prompt-rows approval)
-                            0)))
-                   (max-scroll (max 0 (- content-rows viewport-rows)))
-                   (desired-bottom-offset
-                     (min (max 0 (buffer-scroll-offset buf)) max-scroll))
-                   (viewport-top-row
-                     (max 0 (- content-rows viewport-rows
-                                desired-bottom-offset)))
-                   (viewport-bottom-row (+ viewport-top-row viewport-rows)))
-              (clear-pane-region-with-ink
-               pane
-               (or (ignore-errors (clim:pane-viewport-region pane))
-                   (clim:sheet-region pane))
-               *mcclim-bg-ink*)
-              (mcclim-render-buffer-title pane buf viewport-cols char-w char-h)
-              (let ((virtual-row 0)
+          (if presentation-function
+              (progn
+                (funcall presentation-function
+                         pane buf viewport-rows viewport-cols char-w char-h)
+                (return-from mcclim-render-buffer buf))
+              (let ((approval (buffer-approval-pending buf))
+                    (visible-messages nil)
                     (show-reasoning-p (buffer-show-reasoning-p buf))
                     (show-metadata-p (buffer-show-metadata-p buf)))
-                (loop :for msg :in history-messages
-                      :for msg-h :in msg-heights
-                      :for msg-top := (1+ virtual-row)
-                      :for msg-bottom := (+ msg-top msg-h)
-                      :do (setf virtual-row (+ virtual-row msg-h))
-                          (when (and (< msg-top viewport-bottom-row)
-                                     (> msg-bottom viewport-top-row))
-                            (push msg visible-messages))
-                          (let ((absolute-row msg-top)
-                                (ptype
-                                  (mcclim-rendered-message-presentation-type
-                                   msg)))
-                            (clim:updating-output
-                                (pane
-                                 :unique-id (list *mcclim-render-window-id* msg)
-                                 :id-test #'equal
-                                 :cache-value
-                                 (mcclim-message-cache-value
-                                  msg absolute-row viewport-cols
-                                  show-reasoning-p show-metadata-p)
-                                 :cache-test #'equal)
-                              (clim:with-output-as-presentation
-                                  (pane msg ptype :single-box t)
-                                (mcclim-render-message-lines
-                                 pane msg absolute-row viewport-cols
-                                 char-w char-h
-                                 :max-rows content-rows
-                                 :show-reasoning-p show-reasoning-p
-                                 :show-metadata-p show-metadata-p))))))
-              (when approval
-                (mcclim-render-approval-prompt pane buf input-start-row
-                                               viewport-cols char-w char-h
-                                               content-rows))
-              (mcclim-record-render-snapshot frame
-                                             pane
-                                             buf
-                                             :buffer
-                                             viewport-rows
-                                             viewport-cols
-                                             :input-start-row input-start-row
-                                             :history-height
-                                             (max 0 (1- viewport-rows))
-                                             :visible-messages
-                                             (nreverse visible-messages)))
-            (return-from mcclim-render-buffer buf))))))
+                (mcclim-stream-render-buffer-title pane buf)
+                (dolist (msg (mcclim-transcript-history-messages buf))
+                  (push msg visible-messages)
+                  (let ((ptype
+                          (mcclim-rendered-message-presentation-type msg)))
+                    (clim:updating-output
+                        (pane
+                         :unique-id (list *mcclim-render-window-id* msg)
+                         :id-test #'equal
+                         :cache-value
+                         (mcclim-message-cache-value
+                          msg 0 viewport-cols
+                          show-reasoning-p show-metadata-p)
+                         :cache-test #'equal)
+                      (clim:with-output-as-presentation
+                          (pane msg ptype :single-box t)
+                        (mcclim-stream-render-message pane
+                                                      msg
+                                                      viewport-cols
+                                                      char-w
+                                                      char-h
+                                                      :show-reasoning-p show-reasoning-p
+                                                      :show-metadata-p show-metadata-p))))
+                  (terpri pane))
+                (when approval
+                  (mcclim-stream-render-approval-prompt pane approval viewport-cols))
+                (mcclim-record-render-snapshot frame
+                                               pane
+                                               buf
+                                               :buffer
+                                               viewport-rows
+                                               viewport-cols
+                                               :input-start-row -1
+                                               :history-height
+                                               (max 0 (1- viewport-rows))
+                                               :visible-messages
+                                               (nreverse visible-messages))))
+          (return-from mcclim-render-buffer buf)))))
   (let ((presentation-function (buffer-presentation-function buf)))
     (when presentation-function
       (return-from mcclim-render-buffer
