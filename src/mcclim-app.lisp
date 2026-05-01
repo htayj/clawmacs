@@ -972,8 +972,23 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
 ;;; McCLIM Pane Classes
 ;;; --------------------------------------------------------------------------
 
-(defclass clawmacs-transcript-pane (esa:esa-pane-mixin clim:application-pane)
+(defclass clawmacs-workspace-placeholder-pane
+    (esa:esa-pane-mixin clim:application-pane)
   ()
+  (:default-initargs
+   :display-function (lambda (_frame _pane)
+                       (declare (ignore _frame _pane))
+                       nil)
+   :display-time :command-loop
+   :incremental-redisplay t
+   :background (clim:make-rgb-color 1.0 1.0 1.0)
+   :foreground (clim:make-rgb-color 0.0 0.0 0.0)
+   :command-table 'clawmacs-mcclim-command-table))
+
+(defclass clawmacs-transcript-pane (esa:esa-pane-mixin clim:application-pane)
+  ((window-id :initarg :window-id
+              :initform nil
+              :reader transcript-pane-window-id))
   (:default-initargs
    :display-function 'display-main-pane
    :display-time :command-loop
@@ -1012,14 +1027,15 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
 Selectors, popup overlays, special buffers, and multiwindow layouts keep the
 viewport-sized pane so they do not grow a transcript scrollbar."
   (let* ((frame (ignore-errors (clim:pane-frame pane)))
+         (buf (and frame (transcript-pane-buffer frame pane)))
          (char-w (max 1 (or (and frame (ignore-errors (frame-char-width frame))) 7)))
          (char-h (max 1 (or (and frame (ignore-errors (frame-char-height frame))) 14)))
          (cols (max 1 (floor width char-w)))
-         (native-scroll-p (and frame
-                               (mcclim-native-transcript-scroll-p frame)))
+         (native-scroll-p (and frame buf
+                               (mcclim-native-transcript-scroll-p frame buf)))
          (rows (if native-scroll-p
                    (mcclim-transcript-total-content-rows
-                    (frame-visible-buffer frame)
+                    buf
                     cols
                     char-w
                     char-h)
@@ -1138,6 +1154,16 @@ kept as a minimal ESA-compatible service pane for commands that expect a real
    (window-tree :initarg :window-tree
                 :initform nil
                 :accessor frame-window-tree)
+   (workspace-parent-pane :initform nil
+                          :accessor frame-workspace-parent-pane)
+   (workspace-root-pane :initform nil
+                        :accessor frame-workspace-root-pane)
+   (window-pane-table :initform (make-hash-table :test #'eql)
+                      :accessor frame-window-pane-table)
+   (window-layout-signature :initform nil
+                            :accessor frame-window-layout-signature)
+   (workspace-syncing-p :initform nil
+                        :accessor frame-workspace-syncing-p)
    (selected-window-id :initarg :selected-window-id
                        :initform nil
                        :accessor frame-selected-window-id)
@@ -1167,7 +1193,7 @@ kept as a minimal ESA-compatible service pane for commands that expect a real
   (:command-table (clawmacs-mcclim-command-table :inherit-from nil))
   (:panes
    (selector-pane clawmacs-selector-pane)
-   (main-pane clawmacs-transcript-pane)
+   (workspace-pane clawmacs-workspace-placeholder-pane)
    (compose-pane :application
                  :display-function 'display-compose-pane
                  :display-time :command-loop
@@ -1217,8 +1243,7 @@ kept as a minimal ESA-compatible service pane for commands that expect a real
    (default
     (clim:vertically ()
       selector-pane
-      (:fill (clim:scrolling (:scroll-bars :vertical)
-               main-pane))
+      (:fill workspace-pane)
       compose-pane
       input-pane
       completion-pane
@@ -1229,6 +1254,205 @@ kept as a minimal ESA-compatible service pane for commands that expect a real
   (:menu-bar nil)
   (:pointer-documentation t))
 
+(defun mcclim-window-tree-signature (node)
+  "Return a structural signature for logical window NODE."
+  (cond
+    ((null node) nil)
+    ((clawmacs-window-node-leaf-p node)
+     (list :leaf
+           (clawmacs-window-id
+            (clawmacs-window-node-window node))))
+    ((clawmacs-window-node-split-p node)
+     (list :split
+           (clawmacs-window-node-orientation node)
+           (mcclim-window-tree-signature
+            (clawmacs-window-node-first node))
+           (mcclim-window-tree-signature
+            (clawmacs-window-node-second node))))
+    (t nil)))
+
+(defun mcclim-bind-workspace-parent (frame)
+  "Record FRAME's stable workspace parent and current workspace child."
+  (unless (frame-workspace-parent-pane frame)
+    (let ((workspace-pane (clim:find-pane-named frame 'workspace-pane)))
+      (when workspace-pane
+        (setf (frame-workspace-parent-pane frame)
+              (ignore-errors (clim:sheet-parent workspace-pane))
+              (frame-workspace-root-pane frame)
+              workspace-pane))))
+  frame)
+
+(defun frame-window-pane (frame window-or-id)
+  "Return FRAME's transcript pane for WINDOW-OR-ID, or NIL."
+  (let ((window-id (etypecase window-or-id
+                     (integer window-or-id)
+                     (clawmacs-window (clawmacs-window-id window-or-id)))))
+    (gethash window-id (frame-window-pane-table frame))))
+
+(defun frame-window-panes-in-display-order (frame)
+  "Return FRAME transcript panes in logical display order."
+  (let ((tree (frame-window-tree frame)))
+    (remove nil
+            (mapcar (lambda (window)
+                      (frame-window-pane frame window))
+                    (and tree
+                         (clawmacs-window-tree-windows tree))))))
+
+(defun frame-selected-window-pane (frame)
+  "Return FRAME's selected transcript pane, or NIL."
+  (let ((window-id (frame-selected-window-id frame)))
+    (and window-id
+         (frame-window-pane frame window-id))))
+
+(defun transcript-pane-window (frame pane)
+  "Return FRAME's logical window displayed by transcript PANE."
+  (let ((window-id (and pane (transcript-pane-window-id pane))))
+    (and window-id
+         (clawmacs-window-tree-find-window
+          (frame-window-tree frame)
+          window-id))))
+
+(defun transcript-pane-buffer (frame pane)
+  "Return the buffer displayed by transcript PANE."
+  (let ((window (transcript-pane-window frame pane)))
+    (or (and window (clawmacs-window-buffer window))
+        (frame-visible-buffer frame))))
+
+(defun mcclim-maybe-make-box-adjuster ()
+  "Return a McCLIM box adjuster gadget when available."
+  (let* ((package (find-package :clim-extensions))
+         (symbol (and package (find-symbol "BOX-ADJUSTER-GADGET" package))))
+    (when (and symbol (ignore-errors (find-class symbol nil)))
+      (clim:make-pane symbol))))
+
+(defun mcclim-build-window-pane-constellation (window pane-table)
+  "Return a native transcript pane subtree for WINDOW."
+  (let ((pane (clim:make-pane 'clawmacs-transcript-pane
+                              :window-id (clawmacs-window-id window))))
+    (setf (gethash (clawmacs-window-id window) pane-table) pane)
+    (clim:scrolling (:scroll-bars :vertical)
+      pane)))
+
+(defun mcclim-build-workspace-root (node pane-table)
+  "Return a native CLIM pane subtree mirroring logical window NODE."
+  (cond
+    ((null node)
+     (clim:make-pane 'clawmacs-workspace-placeholder-pane))
+    ((clawmacs-window-node-leaf-p node)
+     (mcclim-build-window-pane-constellation
+      (clawmacs-window-node-window node)
+      pane-table))
+    ((clawmacs-window-node-split-p node)
+     (let* ((first (mcclim-build-workspace-root
+                    (clawmacs-window-node-first node)
+                    pane-table))
+            (second (mcclim-build-workspace-root
+                     (clawmacs-window-node-second node)
+                     pane-table))
+            (adjuster (mcclim-maybe-make-box-adjuster)))
+       (case (clawmacs-window-node-orientation node)
+         (:vertical
+          (if adjuster
+              (clim:vertically ()
+                first
+                adjuster
+                second)
+              (clim:vertically ()
+                first
+                second)))
+         (:horizontal
+          (if adjuster
+              (clim:horizontally ()
+                first
+                adjuster
+                second)
+              (clim:horizontally ()
+                first
+                second))))))
+    (t
+     (clim:make-pane 'clawmacs-workspace-placeholder-pane))))
+
+(defun mcclim-install-workspace-root (frame root)
+  "Replace FRAME's current workspace child with ROOT.
+Returns true when the replacement succeeded."
+  (labels ((layout-child-panes (pane)
+             (cond
+               ((null pane) nil)
+               ((typep pane 'climi::box-layout-mixin)
+                (loop :for client :in (climi::box-layout-mixin-clients pane)
+                      :for child := (climi::box-client-pane client)
+                      :when child
+                        :collect child))
+               (t
+                (remove nil
+                        (copy-list
+                         (ignore-errors (clim:sheet-children pane))))))))
+    (let* ((parent (frame-workspace-parent-pane frame))
+           (old-root (frame-workspace-root-pane frame))
+           (children (and parent (layout-child-panes parent))))
+      (when (and parent old-root children)
+        (let ((index (or (position old-root children :test #'eq)
+                         (max 0 (1- (length children))))))
+          (ignore-errors
+            (clim:sheet-disown-child parent old-root))
+          (clim:sheet-adopt-child parent root)
+          (if (typep parent 'climi::box-layout-mixin)
+              (let* ((clients (copy-list (climi::box-layout-mixin-clients parent)))
+                     (new-client (find root clients :key #'climi::box-client-pane))
+                     (remaining (remove new-client clients :test #'eq)))
+                (setf index (min index (length remaining)))
+                (setf clients
+                      (append (subseq remaining 0 index)
+                              (list new-client)
+                              (subseq remaining index)))
+                (setf (climi::box-layout-mixin-clients parent) clients)
+                (clim:change-space-requirements parent))
+              (let ((new-order (remove old-root
+                                       (remove root
+                                               (layout-child-panes parent)
+                                               :test #'eq)
+                                       :test #'eq)))
+                (setf index (min index (length new-order)))
+                (setf new-order
+                      (append (subseq new-order 0 index)
+                              (list root)
+                              (subseq new-order index)))
+                (clim:reorder-sheets parent new-order)))
+          (setf (frame-workspace-root-pane frame) root)
+          (clim:layout-frame frame)
+          t)))))
+
+(defun mcclim-sync-workspace-from-window-tree (frame)
+  "Ensure FRAME's workspace subtree mirrors its logical window tree."
+  (unless (frame-workspace-syncing-p frame)
+    (mcclim-bind-workspace-parent frame)
+    (let* ((tree (frame-window-tree frame))
+           (signature (mcclim-window-tree-signature tree))
+           (needs-rebuild-p
+             (and tree
+                  (or (null (frame-workspace-root-pane frame))
+                      (null (frame-workspace-parent-pane frame))
+                      (not (equal signature
+                                  (frame-window-layout-signature frame)))))))
+      (when needs-rebuild-p
+        (let ((pane-table (make-hash-table :test #'eql)))
+          (clim:with-look-and-feel-realization ((clim:frame-manager frame) frame)
+            (let ((root (mcclim-build-workspace-root tree pane-table)))
+              (setf (frame-workspace-syncing-p frame) t)
+              (unwind-protect
+                  (when (mcclim-install-workspace-root frame root)
+                    (setf (frame-window-pane-table frame) pane-table
+                          (frame-window-layout-signature frame) signature))
+                (setf (frame-workspace-syncing-p frame) nil))))))))
+  (mcclim-sync-esa-windows frame)
+  frame)
+
+(defmethod clim:find-pane-named ((frame clawmacs-gui) pane-name)
+  (if (eq pane-name 'main-pane)
+      (or (frame-selected-window-pane frame)
+          (call-next-method))
+      (call-next-method)))
+
 (defclass clawmacs-display-change-event (clim:window-event)
   ((buffer :initarg :buffer :reader display-change-event-buffer)
    (reason :initarg :reason :reader display-change-event-reason)
@@ -1238,11 +1462,11 @@ kept as a minimal ESA-compatible service pane for commands that expect a real
 (clim:define-gesture-name :clawmacs-poll :timer :clawmacs-poll)
 
 (defmethod clim:frame-standard-input ((frame clawmacs-gui))
-  (or (clim:find-pane-named frame 'main-pane)
+  (or (frame-selected-window-pane frame)
       (call-next-method)))
 
 (defmethod clim:frame-standard-output ((frame clawmacs-gui))
-  (or (clim:find-pane-named frame 'main-pane)
+  (or (frame-selected-window-pane frame)
       (call-next-method)))
 
 (defmethod esa:minibuffer ((frame clawmacs-gui))
@@ -1290,10 +1514,6 @@ to the existing Clawmacs command/keymap system."
 (defmethod clim:adopt-frame :after (frame-manager (frame clawmacs-gui))
   (declare (ignore frame-manager))
   (with-mcclim-frame-ui-state (frame)
-    (let ((main-pane (clim:find-pane-named frame 'main-pane)))
-      (when main-pane
-        (setf (esa:windows frame) (list main-pane))))
-    (mcclim-ensure-window-tree frame)
     (mcclim-install-frame-command-table frame)
     (mcclim-sync-drei-from-buffer frame :force-p t)
     (mcclim-ensure-polling frame)))
@@ -1764,13 +1984,13 @@ Values are HISTORY-MESSAGES, MESSAGE-HEIGHTS, and TOTAL-HISTORY-ROWS."
            (mcclim-approval-prompt-rows (buffer-approval-pending buf))
            0))))
 
-(defun mcclim-native-transcript-scroll-p (frame)
-  "Return true when FRAME should use a native CLIM scroller for the main pane."
-  (let ((buf (frame-visible-buffer frame)))
+(defun mcclim-native-transcript-scroll-p (frame &optional (buf (frame-visible-buffer frame)))
+  "Return true when BUF in FRAME should use a native CLIM transcript scroller."
+  (declare (ignore frame))
+  (let ((buf buf))
     (and buf
          (null (buffer-presentation-function buf))
-         (not (document-buffer-p buf))
-         (<= (clawmacs-window-tree-count (mcclim-ensure-window-tree frame)) 1))))
+         (not (document-buffer-p buf)))))
 
 (defun mcclim-selector-pane-target-rows ()
   "Return the desired row count for the selector pane."
@@ -1810,41 +2030,41 @@ Values are HISTORY-MESSAGES, MESSAGE-HEIGHTS, and TOTAL-HISTORY-ROWS."
 (defun mcclim-update-main-pane-space-requirements (frame)
   "Refresh the main transcript pane scroller requirements for FRAME."
   (when (mcclim-primary-frame-p frame)
-    (let ((main-pane (clim:find-pane-named frame 'main-pane)))
-      (when main-pane
-        (let ((pixel-height 0)
-              (pixel-width 0)
-              (native-scroll-p (mcclim-native-transcript-scroll-p frame))
-              (char-w (max 1 (frame-char-width frame)))
-              (char-h (max 1 (frame-char-height frame))))
-          (multiple-value-bind (viewport-width viewport-height)
-              (pane-viewport-pixel-size main-pane)
-            (when native-scroll-p
-              (setf pixel-width viewport-width)
-              (setf pixel-height viewport-height)
-              (multiple-value-bind (cols _rows)
-                  (pane-viewport-grid-dimensions main-pane char-w char-h)
-                (declare (ignore _rows))
-                (setf pixel-height
-                      (* (mcclim-transcript-total-content-rows
-                          (frame-visible-buffer frame)
-                          cols
-                          char-w
-                          char-h)
-                         char-h))))
-            (unless native-scroll-p
-              (setf pixel-width viewport-width
-                    pixel-height viewport-height)))
-          (unless (= pixel-height (frame-main-pane-space-height frame))
-            (setf (frame-main-pane-space-height frame) pixel-height)
-            (clim:change-space-requirements
-             main-pane
-             :width pixel-width
-             :min-width (if native-scroll-p pixel-width 0)
-             :max-width (if native-scroll-p pixel-width clim:+fill+)
-             :height pixel-height
-             :min-height (if native-scroll-p pixel-height 0)
-             :max-height (if native-scroll-p pixel-height clim:+fill+)))
+    (dolist (main-pane (frame-window-panes-in-display-order frame))
+      (let* ((buf (transcript-pane-buffer frame main-pane))
+             (pixel-height 0)
+             (pixel-width 0)
+             (native-scroll-p (mcclim-native-transcript-scroll-p frame buf))
+             (char-w (max 1 (frame-char-width frame)))
+             (char-h (max 1 (frame-char-height frame))))
+        (multiple-value-bind (viewport-width viewport-height)
+            (pane-viewport-pixel-size main-pane)
+          (when native-scroll-p
+            (setf pixel-width viewport-width)
+            (setf pixel-height viewport-height)
+            (multiple-value-bind (cols _rows)
+                (pane-viewport-grid-dimensions main-pane char-w char-h)
+              (declare (ignore _rows))
+              (setf pixel-height
+                    (* (mcclim-transcript-total-content-rows
+                        buf
+                        cols
+                        char-w
+                        char-h)
+                       char-h))))
+          (unless native-scroll-p
+            (setf pixel-width viewport-width
+                  pixel-height viewport-height))
+          (when (eq main-pane (frame-selected-window-pane frame))
+            (setf (frame-main-pane-space-height frame) pixel-height))
+          (clim:change-space-requirements
+           main-pane
+           :width pixel-width
+           :min-width (if native-scroll-p pixel-width 0)
+           :max-width (if native-scroll-p pixel-width clim:+fill+)
+           :height pixel-height
+           :min-height (if native-scroll-p pixel-height 0)
+           :max-height (if native-scroll-p pixel-height clim:+fill+))
           (unless native-scroll-p
             (ignore-errors
               (clim:scroll-extent main-pane 0 0)))))))
@@ -1974,9 +2194,13 @@ Values are HISTORY-MESSAGES, MESSAGE-HEIGHTS, and TOTAL-HISTORY-ROWS."
 ESA records command state on the current window and uses the first window as
 `*standard-output*' in its top level, so this slot must contain McCLIM panes
 rather than Clawmacs' logical application windows."
-  (let ((main-pane (clim:find-pane-named frame 'main-pane)))
-    (when main-pane
-      (setf (esa:windows frame) (list main-pane)))))
+  (let* ((panes (frame-window-panes-in-display-order frame))
+         (selected (frame-selected-window-pane frame)))
+    (when panes
+      (setf (esa:windows frame)
+            (if (and selected (member selected panes :test #'eq))
+                (cons selected (remove selected panes :test #'eq))
+                panes)))))
 
 (defun mcclim-ensure-window-tree (frame)
   "Ensure FRAME has a live logical window tree and selected window id."
@@ -1995,7 +2219,7 @@ rather than Clawmacs' logical application windows."
           (when first-window
             (setf (frame-selected-window-id frame)
                   (clawmacs-window-id first-window)))))
-      (mcclim-sync-esa-windows frame)
+      (mcclim-sync-workspace-from-window-tree frame)
       tree)))
 
 (defun frame-selected-window (frame)
@@ -2047,6 +2271,12 @@ rather than Clawmacs' logical application windows."
       (mcclim-sync-drei-from-buffer frame :force-p t)
       live-window)))
 
+(defun mcclim-select-window-pane (frame pane)
+  "Select transcript PANE's logical window in FRAME."
+  (let ((window (transcript-pane-window frame pane)))
+    (when window
+      (mcclim-select-window frame window))))
+
 (defun mcclim-sync-selected-window-from-current-buffer (frame previous-buffer)
   "Update FRAME's selected logical window after a command changed current buffer."
   (mcclim-ensure-window-tree frame)
@@ -2068,6 +2298,7 @@ rather than Clawmacs' logical application windows."
                            (clawmacs-window-id selected)
                            orientation))))
     (when new-window
+      (mcclim-sync-workspace-from-window-tree frame)
       (mcclim-sync-esa-windows frame)
       (notify-buffer-display-change (clawmacs-window-buffer selected)
                                     :windows))
@@ -2082,6 +2313,7 @@ rather than Clawmacs' logical application windows."
           (delete-clawmacs-window-from-tree
            tree (clawmacs-window-id selected))
         (setf (frame-window-tree frame) new-tree)
+        (mcclim-sync-workspace-from-window-tree frame)
         (when replacement
           (setf (frame-selected-window-id frame)
                 (clawmacs-window-id replacement))
@@ -2104,6 +2336,7 @@ rather than Clawmacs' logical application windows."
         (setf (frame-window-tree frame) new-tree
               (frame-selected-window-id frame)
               (clawmacs-window-id selected))
+        (mcclim-sync-workspace-from-window-tree frame)
         (mcclim-sync-esa-windows frame)
         (when deleted-p
           (notify-buffer-display-change (frame-visible-buffer frame)
@@ -2482,14 +2715,12 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
     (ensure-char-metrics frame pane)
     (let* ((char-w (frame-char-width frame))
            (char-h (frame-char-height frame))
-           (buf (frame-visible-buffer frame)))
+           (buf (transcript-pane-buffer frame pane)))
       (when (zerop char-w) (return-from display-main-pane))
       (multiple-value-bind (cols rows) (pane-viewport-grid-dimensions pane char-w char-h)
         (mcclim-ensure-window-tree frame)
-        (if (> (clawmacs-window-tree-count (frame-window-tree frame)) 1)
-            (mcclim-render-logical-window-tree frame pane rows cols
-                                               char-w char-h)
-            (mcclim-render-buffer pane buf rows cols char-w char-h))))))
+        (when buf
+          (mcclim-render-buffer pane buf rows cols char-w char-h))))))
 
 (defun display-selector-pane (frame pane)
   "Display function for the dedicated selector pane."
@@ -4388,11 +4619,13 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
 (defun update-pane-sizes (frame)
   "Resize fixed panes and the input pane based on current wrapped input."
   (let ((char-h (frame-char-height frame))
-        (char-w (frame-char-width frame)))
+        (char-w (frame-char-width frame))
+        (changed-p nil))
     (when (plusp char-h)
       (mcclim-update-main-pane-space-requirements frame)
       (unless (= char-h (frame-pane-space-char-height frame))
         (setf (frame-pane-space-char-height frame) char-h)
+        (setf changed-p t)
         (let ((compose-pane (clim:find-pane-named frame 'compose-pane)))
           (when compose-pane
             (clim:change-space-requirements compose-pane
@@ -4424,6 +4657,7 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
         (when (and selector-pane
                    (/= selector-height (frame-selector-pane-space-height frame)))
           (setf (frame-selector-pane-space-height frame) selector-height)
+          (setf changed-p t)
           (clim:change-space-requirements selector-pane
                                           :height selector-height
                                           :min-height selector-height
@@ -4432,6 +4666,7 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
                    (/= completion-height
                        (frame-completion-pane-space-height frame)))
           (setf (frame-completion-pane-space-height frame) completion-height)
+          (setf changed-p t)
           (clim:change-space-requirements completion-pane
                                           :height completion-height
                                           :min-height completion-height
@@ -4455,11 +4690,13 @@ Returns a character, a keyword, a list (:meta key), (:alt key), (:ctrl-x key), e
                              (frame-input-pane-space-height frame))
                     (setf (frame-input-pane-space-height frame)
                           desired-height)
+                    (setf changed-p t)
                     (clim:change-space-requirements input-pane
                                                     :height desired-height
                                                     :min-height desired-height
                                                     :max-height
-                                                    desired-height)))))))))))
+                                                    desired-height)))))))))
+    changed-p))
 
 (defun mcclim-input-pane-prefix (buf)
   "Return the visual prefix rendered in BUF's input pane."
@@ -4504,7 +4741,6 @@ Returns (values need-redisplay-p force-redisplay-p)."
                (previous-buffer (current-buffer))
                (key (mcclim-normalize-gesture gesture buf))
                (force-redisplay-p nil))
-          (mcclim-sync-buffer-scroll-from-main-pane frame)
           (file-debug-log "mcclim-input" "gesture ~S normalized to ~S"
                           gesture key)
           (when key
@@ -4551,11 +4787,15 @@ Returns true when application state may have changed."
 (defun mcclim-frame-output-panes (frame)
   "Return FRAME panes that may have pending CLIM output."
   (remove nil
-          (mapcar (lambda (name)
-                    (clim:find-pane-named frame name))
-                  '(selector-pane main-pane compose-pane input-pane
-                    completion-pane who-line-pane
-                    modeline-pane pointer-doc-pane))))
+          (append
+           (list (clim:find-pane-named frame 'selector-pane))
+           (frame-window-panes-in-display-order frame)
+           (list (clim:find-pane-named frame 'compose-pane)
+                 (clim:find-pane-named frame 'input-pane)
+                 (clim:find-pane-named frame 'completion-pane)
+                 (clim:find-pane-named frame 'who-line-pane)
+                 (clim:find-pane-named frame 'modeline-pane)
+                 (clim:find-pane-named frame 'pointer-doc-pane)))))
 
 (defun mcclim-flush-frame-output (frame)
   "Force pending output for FRAME's visible pane streams."
@@ -4566,6 +4806,8 @@ Returns true when application state may have changed."
 (defun mcclim-redisplay-frame (frame &key force-p)
   "Refresh FRAME through the standard CLIM redisplay path."
   (with-mcclim-frame-ui-state (frame)
+    (mcclim-bind-workspace-parent frame)
+    (mcclim-ensure-window-tree frame)
     (mcclim-sync-buffer-from-drei frame)
     (mcclim-update-scroll-page-size frame)
     (update-pane-sizes frame)
@@ -4573,7 +4815,12 @@ Returns true when application state may have changed."
     (mcclim-sync-drei-from-buffer frame)
     (clim:redisplay-frame-panes frame :force-p force-p)
     (mcclim-sync-main-pane-to-buffer-scroll frame)
-    (mcclim-flush-frame-output frame)))
+    (mcclim-flush-frame-output frame)
+    (when (update-pane-sizes frame)
+      (mcclim-sync-main-pane-to-buffer-scroll frame)
+      (clim:redisplay-frame-panes frame :force-p force-p)
+      (mcclim-sync-main-pane-to-buffer-scroll frame)
+      (mcclim-flush-frame-output frame))))
 
 ;;; --------------------------------------------------------------------------
 ;;; ESA/Pulse Event Integration
@@ -4605,9 +4852,9 @@ top-level sheet."
                (collect-sheet-and-descendants
                 (clim:find-pane-named frame 'selector-pane)
                 seen)
-               (collect-sheet-and-descendants
-                (clim:find-pane-named frame 'main-pane)
-                seen)
+               (mapcan (lambda (pane)
+                         (collect-sheet-and-descendants pane seen))
+                       (frame-window-panes-in-display-order frame))
                (collect-sheet-and-descendants
                 (clim:find-pane-named frame 'completion-pane)
                 seen)
@@ -4681,10 +4928,12 @@ top-level sheet."
 (defun mcclim-frame-pane-name (frame pane)
   "Return FRAME's symbolic pane name for PANE, or NIL."
   (when (and frame pane)
-    (loop :for name :in *mcclim-named-panes*
-          :for named-pane := (ignore-errors (clim:find-pane-named frame name))
-          :when (eq named-pane pane)
-            :return name)))
+    (or (and (typep pane 'clawmacs-transcript-pane)
+             'main-pane)
+        (loop :for name :in *mcclim-named-panes*
+              :for named-pane := (ignore-errors (clim:find-pane-named frame name))
+              :when (eq named-pane pane)
+                :return name))))
 
 (defun mcclim-hyper-modifier-p (modifier-state)
   "Return true when MODIFIER-STATE includes Hyper."
@@ -4862,6 +5111,10 @@ top-level sheet."
            (and presentation
                 (mcclim-presentation-type-symbol presentation)))
          (pane-name (mcclim-frame-pane-name frame pane))
+         (pane-buffer (and frame
+                           (if (typep pane 'clawmacs-transcript-pane)
+                               (transcript-pane-buffer frame pane)
+                               (frame-visible-buffer frame))))
          (object (and presentation
                       (mcclim-presentation-object-safe presentation)))
          (action-text
@@ -4871,7 +5124,7 @@ top-level sheet."
            (and (null presentation)
                 (not (mcclim-hyper-modifier-p modifier-state))
                 (eq pane-name 'main-pane)
-                (let ((buf (frame-visible-buffer frame)))
+                (let ((buf pane-buffer))
                   (and buf
                        (document-buffer-p buf)
                        "L: Move point")))))
@@ -5051,6 +5304,11 @@ provider streams moving even when no key or window event arrives."
                               (event clim:pointer-button-press-event))
   (call-next-method))
 
+(defun mcclim-activate-transcript-pane (frame pane)
+  "Make transcript PANE the selected logical window in FRAME."
+  (when (and frame (typep pane 'clawmacs-transcript-pane))
+    (mcclim-select-window-pane frame pane)))
+
 (defmethod clim:handle-event ((pane clawmacs-drei-input-pane)
                               (event clim:pointer-button-press-event))
   (let ((frame (clim:pane-frame pane)))
@@ -5107,6 +5365,8 @@ keymap so keys like C-u keep their editor meaning; CLIM presentation and window
 events stay on the standard CLIM event path."
   (unless (eq (clim:frame-state frame) :enabled)
     (clim:enable-frame frame))
+  (mcclim-bind-workspace-parent frame)
+  (mcclim-ensure-window-tree frame)
   (mcclim-install-frame-command-table frame)
   (mcclim-sync-drei-from-buffer frame :force-p t)
   (mcclim-redisplay-frame frame :force-p t)
@@ -5142,6 +5402,8 @@ events stay on the standard CLIM event path."
                        (mcclim-clear-pointer-feedback frame))))
                 ((typep event 'clim:pointer-button-press-event)
                  (let ((sheet (mcclim-pointer-button-target-sheet frame event)))
+                   (when (typep sheet 'clawmacs-transcript-pane)
+                     (mcclim-activate-transcript-pane frame sheet))
                    (unless (and (typep sheet 'clim:output-recording-stream)
                                 (mcclim-handle-presentation-button-press
                                  frame sheet event))
@@ -5153,6 +5415,10 @@ events stay on the standard CLIM event path."
                 ((mcclim-handle-pointer-scroll frame event)
                  (mcclim-redisplay-frame frame))
                 ((typep event 'clime:pointer-scroll-event)
+                 (let ((tracking-pane
+                         (mcclim-pointer-tracking-pane frame event)))
+                   (when (typep tracking-pane 'clawmacs-transcript-pane)
+                     (mcclim-activate-transcript-pane frame tracking-pane)))
                  (clim:handle-event (clim:event-sheet event) event)
                  (mcclim-sync-buffer-scroll-from-main-pane frame)
                  (mcclim-redisplay-frame frame))
@@ -5171,10 +5437,10 @@ events stay on the standard CLIM event path."
 (defvar *clawmacs-frame* nil
   "The currently running primary Clawmacs McCLIM frame, or NIL.")
 
-(defun run-clawmacs-mcclim (initial-buffer)
+(defun run-clawmacs-mcclim (initial-buffer &key (window-title "Clawmacs"))
   "Run the Clawmacs McCLIM application for INITIAL-BUFFER."
   (let ((frame (clim:make-application-frame 'clawmacs-gui
-                 :pretty-name "Clawmacs"
+                 :pretty-name window-title
                  :display-buffer initial-buffer
                  :follow-current-buffer-p t
                  :width 900

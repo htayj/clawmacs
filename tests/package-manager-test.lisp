@@ -24,7 +24,10 @@
   `(let ((original-runner (symbol-function 'clawmacs:run-clawmacs-mcclim)))
      (unwind-protect
           (progn
-            (setf (symbol-function 'clawmacs:run-clawmacs-mcclim) #'identity)
+            (setf (symbol-function 'clawmacs:run-clawmacs-mcclim)
+                  (lambda (buffer &rest _keys)
+                    (declare (ignore _keys))
+                    buffer))
             ,@body)
        (setf (symbol-function 'clawmacs:run-clawmacs-mcclim)
              original-runner))))

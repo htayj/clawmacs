@@ -5113,10 +5113,11 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
    :default-session-name (default-session-prompt-session-name)
    :usage-string-function #'session-prompt-usage-string))
 
-(declaim (ftype (function (buffer) *) run-clawmacs-mcclim))
+(declaim (ftype (function (buffer &key (:window-title t)) *) run-clawmacs-mcclim))
 
 (defun clawmacs-main (&key (session-name "clawmacs:session-01")
-                           (agent-name *default-agent-name*))
+                           (agent-name *default-agent-name*)
+                           (window-title "Clawmacs"))
   "Entry point for clawmacs. Initializes state and starts the McCLIM app."
   (parse-clawmacs-args)
   (initialize-clawmacs-runtime)
@@ -5124,4 +5125,4 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
   (reset-interaction-state)
   (let ((buf (make-initial-chat-buffer session-name agent-name)))
     (ensure-scratch-buffer)
-    (run-clawmacs-mcclim buf)))
+    (run-clawmacs-mcclim buf :window-title window-title)))

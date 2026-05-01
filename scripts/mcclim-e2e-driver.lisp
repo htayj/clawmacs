@@ -16,6 +16,12 @@
     (:error . ""))
   "Last deterministic e2e control command result.")
 
+(defun json-boolean (value)
+  "Return VALUE encoded as an unambiguous JSON boolean."
+  (if value
+      t
+      clawmacs::+json-false+))
+
 (defun control-dir ()
   (or (uiop:getenv "CLAWMACS_MCCLIM_E2E_CONTROL_DIR")
       (error "CLAWMACS_MCCLIM_E2E_CONTROL_DIR is not set.")))
@@ -85,7 +91,7 @@
   "Record a JSON-ready result for the latest deterministic control command."
   (setf *last-control-result*
         `((:sequence . ,(incf *control-result-sequence*))
-          (:ok . ,ok)
+          (:ok . ,(json-boolean ok))
           (:value . ,(or value ""))
           (:error . ,(or error-text "")))))
 
@@ -279,7 +285,7 @@
                     clawmacs::*clawmacs-frame*)))
     (or (and frame
              (clawmacs::frame-last-render-snapshot frame))
-        '((:ready . nil)))))
+        `((:ready . ,(json-boolean nil))))))
 
 (defun pointer-documentation-state ()
   "Return semantic hover-documentation state for the running McCLIM frame."
@@ -288,10 +294,10 @@
         (let ((text (or (ignore-errors
                           (clawmacs::frame-pointer-documentation-text frame))
                         "")))
-          `((:active . ,(plusp (length text)))
+          `((:active . ,(json-boolean (plusp (length text))))
             (:count . ,(if (plusp (length text)) 1 0))
             (:text . ,text)))
-        '((:active . nil)
+        `((:active . ,(json-boolean nil))
           (:count . 0)
           (:text . "")))))
 
@@ -452,7 +458,7 @@
   (handler-case
       (with-current-mcclim-ui-state
         (let ((buffer (current-buffer)))
-          `((:ready . ,(not (null buffer)))
+          `((:ready . ,(json-boolean (not (null buffer))))
             (:timestamp . ,(get-universal-time))
             (:buffer . ,(when buffer (buffer-state buffer)))
             (:buffers . ,(buffer-ring-state))
@@ -466,7 +472,7 @@
             (:skill-completion . ,(skill-completion-state))
             (:selectors . ,(selector-state)))))
     (error (condition)
-      `((:ready . nil)
+      `((:ready . ,(json-boolean nil))
         (:timestamp . ,(get-universal-time))
         (:error . ,(format nil "~A" condition))))))
 

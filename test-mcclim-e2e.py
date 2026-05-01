@@ -1093,6 +1093,7 @@ class McclimSession:
         )
         self.control_dir = os.path.join(self.artifact_root, "control")
         self.log_path = os.path.join(self.artifact_root, "clawmacs.log")
+        self.window_title = f"Clawmacs E2E {os.path.basename(self.artifact_root)}"
         os.makedirs(self.control_dir, exist_ok=True)
         os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
@@ -1134,7 +1135,8 @@ class McclimSession:
                 "(format *error-output* \"~&MCCLIM-E2E-ERROR: ~A~%\" condition) "
                 "(sb-debug:print-backtrace :stream *error-output* :count 120) "
                 "(sb-ext:exit :code 70)))) "
-                f'(clawmacs:clawmacs-main :session-name "{SESSION_NAME}"))'
+                f'(clawmacs:clawmacs-main :session-name "{SESSION_NAME}" '
+                f':window-title "{self.window_title}"))'
             ),
         ])
 
@@ -1149,24 +1151,65 @@ class McclimSession:
         )
         self.window_id = self.wait_for_window()
         wait_until(
-            lambda: self.snapshot().get("ready"),
+            lambda: (
+                self.snapshot().get("ready")
+                and ((self.snapshot().get("render") or {}).get("ready"))
+                and (((self.snapshot().get("panes") or {}).get("main") or {})
+                     .get("pixelWidth", 0) > 200)
+            ),
             timeout=30,
-            description="semantic snapshot",
+            description="render-ready semantic snapshot",
         )
+        self.focused = False
+        self.focus(force=True)
         return self
 
     def wait_for_window(self):
+        def largest_window_id(result):
+            ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            best_id = None
+            best_area = -1
+            log_lines = []
+            for window_id in ids:
+                geometry = subprocess.run(
+                    ["xdotool", "getwindowgeometry", "--shell", window_id],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+                if geometry.returncode != 0:
+                    continue
+                width = 0
+                height = 0
+                for line in geometry.stdout.splitlines():
+                    if line.startswith("WIDTH="):
+                        width = int(line.split("=", 1)[1] or 0)
+                    elif line.startswith("HEIGHT="):
+                        height = int(line.split("=", 1)[1] or 0)
+                area = width * height
+                log_lines.append(f"{window_id} {width}x{height} area={area}")
+                if area > best_area:
+                    best_area = area
+                    best_id = window_id
+            with open(os.path.join(self.artifact_root, "window-search.log"),
+                      "a", encoding="utf-8") as stream:
+                stream.write("candidates for Clawmacs\n")
+                for line in log_lines:
+                    stream.write(line + "\n")
+                stream.write(f"selected {best_id}\n")
+            return best_id
+
         def find_window():
             if self.proc.poll() is not None:
                 fail(f"clawmacs exited early; see {self.log_path}")
             result = subprocess.run(
-                ["xdotool", "search", "--name", "^Clawmacs$"],
+                ["xdotool", "search", "--name", "Clawmacs"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
             )
             if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip().splitlines()[-1]
+                return largest_window_id(result)
             return None
 
         window_id = wait_until(find_window, timeout=30, description="Clawmacs window")
@@ -1175,11 +1218,25 @@ class McclimSession:
 
     def focus(self, force=False):
         if self.window_id and (force or not self.focused):
-            for args in (
-                ["xdotool", "windowfocus", "--sync", self.window_id],
-                ["xdotool", "mousemove", "--window", self.window_id, "20", "20"],
-                ["xdotool", "click", "1"],
-            ):
+            actions = [["xdotool", "windowfocus", "--sync", self.window_id]]
+            try:
+                pane = self.pane_geometry("input")
+            except Exception:
+                pane = None
+            if pane and pane["pixelWidth"] > 1 and pane["pixelHeight"] > 1:
+                target_x = pane["x"] + max(4, pane["pixelWidth"] // 4)
+                target_y = pane["y"] + max(4, pane["pixelHeight"] // 2)
+            else:
+                target_x = 20
+                target_y = 20
+            actions.extend(
+                [
+                    ["xdotool", "mousemove", "--window", self.window_id,
+                     str(int(target_x)), str(int(target_y))],
+                    ["xdotool", "click", "1"],
+                ]
+            )
+            for args in actions:
                 try:
                     subprocess.run(
                         args,
