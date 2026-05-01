@@ -69,8 +69,8 @@
       (is (search "openai-codex/gpt-5.4" pm))
       (is (search "[think:high]" pm)))))
 
-(test format-who-line-default-includes-redraw-hint
-  "Default who-line help mentions the redraw keybinding."
+(test format-who-line-default-shows-status-context
+  "The who-line is a status strip, not a keybinding legend."
   (let ((*minibuffer-active* nil)
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
@@ -83,11 +83,15 @@
                             :working-directory #P"/tmp/")))
       (multiple-value-bind (row1 row2)
           (clawmacs::format-who-line buf 120)
-        (declare (ignore row1))
-        (is (search "C-l: redraw" row2))))))
+        (is (search "buf:s1" row1))
+        (is (search "mode:chat" row1))
+        (is (search "agent:agent" row1))
+        (is (search "dir:/tmp/" row1))
+        (is (search "state:ready" row1))
+        (is (string= "" (string-trim " " row2)))))))
 
-(test format-who-line-streaming-advertises-escape-stop
-  "Chat buffers advertise Escape cancellation while an LLM stream is active."
+(test format-who-line-streaming-shows-running-state
+  "Streaming chat buffers show a running status tag."
   (let ((*minibuffer-active* nil)
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
@@ -101,11 +105,28 @@
       (setf (buffer-pending-stream buf) (clawmacs::make-stream-state))
       (multiple-value-bind (row1 row2)
           (clawmacs::format-who-line buf 120)
-        (is (search "response in progress" row1))
-        (is (search "Esc: stop response" row2))))))
+        (is (search "state:running" row1))
+        (is (string= "" (string-trim " " row2)))))))
 
-(test format-who-line-scratch-describes-editing
-  "Scratch buffers advertise editing rather than chat send semantics."
+(test format-who-line-selector-state-overrides-buffer-idle-state
+  "Modal selectors surface as who-line state tags."
+  (let ((*minibuffer-active* nil)
+        (*buffer-selector-active* t)
+        (*model-selector-active* nil)
+        (*think-selector-active* nil)
+        (*customize-face-state* nil)
+        (*openai-oauth-pending* nil)
+        (*deny-message-mode* nil)
+        (clawmacs::*buffer-ring* nil))
+    (let ((buf (make-buffer "s1" :agent-name "agent"
+                            :working-directory #P"/tmp/")))
+      (multiple-value-bind (row1 row2)
+          (clawmacs::format-who-line buf 120)
+        (is (search "state:buffers" row1))
+        (is (string= "" (string-trim " " row2)))))))
+
+(test format-who-line-approval-includes-tool-name
+  "Approval state carries the pending tool name."
   (let ((*minibuffer-active* nil)
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
@@ -114,15 +135,18 @@
         (*openai-oauth-pending* nil)
         (*deny-message-mode* nil)
         (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "*scratch*" :kind :scratch)))
+    (let ((buf (make-buffer "s1" :agent-name "agent"
+                            :working-directory #P"/tmp/")))
+      (setf (buffer-approval-pending buf)
+            '((:tool-name . "write")
+              (:tool-id . "toolu_1")))
       (multiple-value-bind (row1 row2)
           (clawmacs::format-who-line buf 120)
-        (is (search "Scratch buffer" row1))
-        (is (search "RET: newline" row1))
-        (is (search "switch" row2))))))
+        (is (search "state:approval:write" row1))
+        (is (string= "" (string-trim " " row2)))))))
 
-(test format-who-line-file-describes-editor-keys
-  "File buffers advertise editor commands."
+(test format-who-line-listener-shows-buffer-mode-and-directory
+  "Listener buffers still report their current buffer and mode context."
   (let ((*minibuffer-active* nil)
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
@@ -131,16 +155,17 @@
         (*openai-oauth-pending* nil)
         (*deny-message-mode* nil)
         (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "p:file.txt" :kind :file)))
+    (let ((buf (make-buffer "*listener*" :kind :listener
+                            :working-directory #P"/tmp/")))
       (multiple-value-bind (row1 row2)
           (clawmacs::format-who-line buf 120)
-        (is (search "C-s search" row1))
-        (is (search "C-SPC mark" row1))
-        (is (search "C-x C-s save" row2))
-        (is (search "C-x C-v revert" row2))))))
+        (is (search "buf:*listener*" row1))
+        (is (search "mode:listener" row1))
+        (is (search "dir:/tmp/" row1))
+        (is (string= "" (string-trim " " row2)))))))
 
-(test format-who-line-help-describes-read-only-navigation
-  "Help buffers advertise read-only navigation and close keys."
+(test format-who-line-truncates-to-width
+  "The who-line formatter bounds the status row to WIDTH."
   (let ((*minibuffer-active* nil)
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
@@ -149,62 +174,14 @@
         (*openai-oauth-pending* nil)
         (*deny-message-mode* nil)
         (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "*help:test*" :kind :help)))
+    (let ((buf (make-buffer "very-long-buffer-name"
+                            :agent-name "long-agent"
+                            :working-directory
+                            #P"/tmp/very/long/path/for/who-line/testing/")))
       (multiple-value-bind (row1 row2)
-          (clawmacs::format-who-line buf 120)
-        (is (search "Help buffer" row1))
-        (is (search "q/C-g close" row1))
-        (is (search "M-x" row2))))))
-
-(test format-who-line-customize-describes-field-actions
-  "Customize buffers advertise field editing actions."
-  (let ((*minibuffer-active* nil)
-        (*buffer-selector-active* nil)
-        (*model-selector-active* nil)
-        (*think-selector-active* nil)
-        (*customize-face-state* (list :field-index 0))
-        (*openai-oauth-pending* nil)
-        (*deny-message-mode* nil)
-        (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "*customize:test*" :kind :customize)))
-      (multiple-value-bind (row1 row2)
-          (clawmacs::format-who-line buf 120)
-        (is (search "Customize" row1))
-        (is (search "click edit" row1))
-        (is (search "r revert" row2))))))
-
-(test format-who-line-info-describes-navigation
-  "Info buffers advertise link and node navigation."
-  (let ((*minibuffer-active* nil)
-        (*buffer-selector-active* nil)
-        (*model-selector-active* nil)
-        (*think-selector-active* nil)
-        (*customize-face-state* nil)
-        (*openai-oauth-pending* nil)
-        (*deny-message-mode* nil)
-        (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "*info*" :kind :info)))
-      (multiple-value-bind (row1 row2)
-          (clawmacs::format-who-line buf 120)
-        (is (search "TAB next-link" row1))
-        (is (search "g goto" row1))
-        (is (search "C-h i directory" row2))))))
-
-(test format-who-line-listener-describes-eval-and-commands
-  "Listener buffers advertise Lisp evaluation and comma commands."
-  (let ((*minibuffer-active* nil)
-        (*buffer-selector-active* nil)
-        (*model-selector-active* nil)
-        (*think-selector-active* nil)
-        (*customize-face-state* nil)
-        (*openai-oauth-pending* nil)
-        (*deny-message-mode* nil)
-        (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "*listener*" :kind :listener)))
-      (multiple-value-bind (row1 row2)
-          (clawmacs::format-who-line buf 120)
-        (is (search "RET evals Lisp" row1))
-        (is (search ",Help Commands" row2))))))
+          (clawmacs::format-who-line buf 40)
+        (is (= 40 (length row1)))
+        (is (string= "" (string-trim " " row2)))))))
 
 (test format-modeline-file-shows-position-and-mark
   "Document buffers show point and mark status in the modeline."

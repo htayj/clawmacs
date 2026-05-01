@@ -398,70 +398,121 @@ when nil it is resolved from the buffer's agent defaults."
           (concatenate 'string padded (make-string extra :initial-element #\Space))))))
 
 ;;; --------------------------------------------------------------------------
-;;; Who-Line Formatting (pure string functions, McCLIM Genera-style)
+;;; Who-Line Formatting (pure string functions, Lisp-machine style)
 ;;; --------------------------------------------------------------------------
 
+(defun who-line-clock-string (&optional (time (get-universal-time)))
+  "Return TIME formatted for the who-line."
+  (multiple-value-bind (second minute hour date month year)
+      (decode-universal-time time)
+    (format nil "~2,'0D/~2,'0D/~2,'0D ~2,'0D:~2,'0D:~2,'0D"
+            month date (mod year 100) hour minute second)))
+
+(defun who-line-machine-identity ()
+  "Return the user@host identity string for the who-line."
+  (format nil "~A@~A"
+          (or (uiop:getenv "USER") "user")
+          (machine-instance)))
+
+(defun who-line-memory-summary ()
+  "Return a compact implementation-specific memory summary."
+  #+sbcl
+  (format nil "~D MB consed"
+          (round (sb-ext:get-bytes-consed) 1048576))
+  #-sbcl
+  "memory n/a")
+
+(defun who-line-abbreviate-directory (pathname)
+  "Return PATHNAME as a compact namestring for who-line display."
+  (let* ((namestring (namestring (uiop:ensure-directory-pathname pathname)))
+         (home (namestring (uiop:ensure-directory-pathname
+                            (user-homedir-pathname)))))
+    (if (and (>= (length namestring) (length home))
+             (string= home namestring :end1 (length home) :end2 (length home)))
+        (concatenate 'string "~/" (subseq namestring (length home)))
+        namestring)))
+
+(defun who-line-status-string (buf)
+  "Return a concise status tag for BUF and current modal state."
+  (cond
+    (*openai-oauth-pending* "oauth")
+    (*minibuffer-active* "minibuffer")
+    (*buffer-selector-active* "buffers")
+    (*model-selector-active* "models")
+    (*think-selector-active* "think")
+    (*deny-message-mode* "deny")
+    ((and buf (buffer-approval-pending buf))
+     (let ((tool-name (or (cdr (assoc :tool-name
+                                      (buffer-approval-pending buf)))
+                          "")))
+       (if (blank-string-p tool-name)
+           "approval"
+           (format nil "approval:~A" tool-name))))
+    ((and buf (buffer-user-input-pending buf))
+     "question")
+    ((and buf (buffer-llm-running-p buf))
+     "running")
+    ((and buf (buffer-status buf) (not (eq (buffer-status buf) :idle)))
+     (string-downcase (symbol-name (buffer-status buf))))
+    (t
+     "ready")))
+
+(defun who-line-field-data (buf)
+  "Return ordered who-line field plists for BUF."
+  (let ((fields nil))
+    (labels ((add-field (id text &key object presentation-type)
+               (unless (blank-string-p text)
+                 (push (list :id id
+                             :text text
+                             :object object
+                             :presentation-type presentation-type)
+                       fields))))
+      (add-field :clock (who-line-clock-string))
+      (add-field :identity (who-line-machine-identity))
+      (when buf
+        (add-field :buffer
+                   (format nil "buf:~A" (buffer-name buf))
+                   :object buf
+                   :presentation-type 'buffer-ref)
+        (add-field :mode
+                   (format nil "mode:~A" (buffer-major-mode buf)))
+        (when (and (eq (buffer-kind buf) :chat)
+                   (not (blank-string-p (buffer-agent-name buf))))
+          (add-field :agent
+                     (format nil "agent:~A" (buffer-agent-name buf))))
+        (when (buffer-pipeline-name buf)
+          (add-field :pipeline
+                     (format nil "pipe:~A" (buffer-pipeline-name buf))))
+        (when (buffer-working-directory buf)
+          (add-field :directory
+                     (format nil "dir:~A"
+                             (who-line-abbreviate-directory
+                              (buffer-working-directory buf)))
+                     :object (buffer-working-directory buf)
+                     :presentation-type 'pathname)))
+      (add-field :state
+                 (format nil "state:~A" (who-line-status-string buf)))
+      (add-field :memory
+                 (who-line-memory-summary)))
+    (nreverse fields)))
+
 (defun format-who-line (buf width)
-  "Return two strings (row1 row2) for the who-line, context-dependent hints.
-BUF is the current buffer. WIDTH is the available character columns.
-Mode dispatch priority matches handle-key-event in main.lisp."
+  "Return two strings for the who-line.
+
+The first value is the single visible status row.  The second value is blank
+for compatibility with older callers and snapshots that still expect two
+values."
   (flet ((pad (str)
            (if (>= (length str) width)
                (subseq str 0 width)
                (concatenate 'string str
                             (make-string (- width (length str))
                                          :initial-element #\Space)))))
-    (let ((row1 "")
-          (row2 ""))
-      (cond
-        (*minibuffer-active*
-         (setf row1 " C-n/C-p: navigate  RET: confirm  C-g: cancel"
-               row2 " Type to filter candidates"))
-        (*buffer-selector-active*
-         (setf row1 " RET: select  n: new  k: kill  C-g/q: cancel"
-               row2 " C-p/C-n: navigate"))
-        (*model-selector-active*
-         (setf row1 " RET: select  C-g/q: cancel"
-               row2 " C-p/C-n: navigate  *=active"))
-        (*think-selector-active*
-         (setf row1 " RET: select  C-g/q: cancel"
-               row2 " C-p/C-n: navigate  default=clear  *=active"))
-        ((and buf (info-buffer-p buf))
-         (setf row1 " Info: RET follow  TAB next-link  n/p/u/t/l/d navigate  g goto"
-               row2 " PgUp/PgDn scroll  r forward  q/C-g close  C-h i directory"))
-        ((and buf (help-buffer-p buf))
-         (setf row1 " Help buffer: PgUp/PgDn scroll  q/C-g close"
-               row2 " C-x C-b: buffers  M-x: command"))
-        ((and buf (customize-buffer-p buf) *customize-face-state*)
-         (setf row1 " Customize: C-n/C-p move  RET/click edit  SPC toggle"
-               row2 " C-c C-c apply  C-c C-k/C-g cancel  r revert"))
-        ((and buf (eq (buffer-kind buf) :listener))
-         (setf row1 " Listener: RET evals Lisp  comma starts commands  #! runs shell"
-               row2 " ,Help Commands lists commands  C-x k kills listener  M-x runs Clawmacs commands"))
-        (*openai-oauth-pending*
-         (setf row1 " Browser login in progress"
-               row2 " C-g: cancel"))
-        (*deny-message-mode*
-         (setf row1 " Type denial reason, then RET to send"
-               row2 " Normal editing keys available"))
-        ((and buf (buffer-approval-pending buf))
-         (let* ((approval (buffer-approval-pending buf))
-                (tool-name (or (cdr (assoc :tool-name approval)) "")))
-           (setf row1 " a: approve  d: deny  m: deny with message"
-                 row2 (format nil " ~A" tool-name))))
-        ((and buf (buffer-llm-running-p buf))
-         (setf row1 " Agent response in progress"
-               row2 " Esc: stop response  C-l: redraw"))
-        ((and buf (scratch-buffer-p buf))
-         (setf row1 " Scratch buffer: edit freely  RET: newline"
-               row2 " C-x b/C-x C-b: switch  C-l: redraw"))
-        ((and buf (file-buffer-p buf))
-         (setf row1 " File buffer: RET newline  C-s search  C-SPC mark  C-w kill  M-w copy"
-               row2 " C-x C-s save  C-x C-w write  C-x C-v revert  C-x C-f open  C-g cancel"))
-        (t
-         (setf row1 " RET: send  C-o: newline  C-k: kill  C-y: yank  PgUp/Dn: scroll"
-               row2 " C-x C-b: buffers  C-c A: agent  C-c C-m: model  C-c C-r: think  C-l: redraw  C-x C-c: quit")))
-      (values (pad row1) (pad row2)))))
+    (let* ((texts (mapcar (lambda (field) (getf field :text))
+                          (who-line-field-data buf)))
+           (row1 (format nil "~{~A~^  ~}" texts)))
+      (values (pad row1)
+              (pad "")))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Line Wrapping Helpers (pure geometry)
