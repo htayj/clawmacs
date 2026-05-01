@@ -42,6 +42,10 @@
   :description "Skill discovery and prompt injection tests"
   :in clawmacs-suite)
 
+(def-suite font-editor-suite
+  :description "Bitmap font editor tests"
+  :in clawmacs-suite)
+
 (def-suite sexed-suite
   :description "Agent-oriented s-expression editing tests"
   :in clawmacs-suite)

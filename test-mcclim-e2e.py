@@ -2280,6 +2280,56 @@ def test_70_listener_buffer_eval_and_commands(session):
     switch_to_session_buffer(session)
 
 
+def test_70_font_editor_import_smoke(session):
+    """Font editor imports AST into its dedicated buffer and renders it."""
+    try:
+        result = session.eval_lisp(
+            r'''(let* ((root (merge-pathnames
+                              (format nil ".cache/mcclim-e2e-font-editor-~D-~D/"
+                                      (get-universal-time)
+                                      (get-internal-real-time))
+                              (truename ".")))
+                       (path (merge-pathnames "demo.ast" root))
+                       (buf (clawmacs:ensure-font-editor-buffer)))
+                  (ensure-directories-exist (merge-pathnames ".keep" root))
+                  (with-open-file (stream path
+                                          :direction :output
+                                          :if-exists :supersede
+                                          :if-does-not-exist :create)
+                    (write-string
+                     (format nil
+                             "0 KSTID TEST;DEMO KST~%6 HEIGHT~%5 BASE LINE~%0 COLUMN POSITION ADJUSTMENT~C65 CHARACTER CODE TEST;DEMO KST~%3 RASTER WIDTH~%4 CHARACTER WIDTH~%0 LEFT KERN~%***~%* *~%***~C66 CHARACTER CODE TEST;DEMO KST~%3 RASTER WIDTH~%4 CHARACTER WIDTH~%0 LEFT KERN~%** ~%* *~%** ~%"
+                             #\Page
+                             #\Page)
+                     stream))
+                  (clawmacs::font-editor-load-font-into-buffer
+                   buf
+                   (clawmacs:import-ast-font path)
+                   path)
+                  (clawmacs:switch-to-buffer buf)
+                  (clawmacs:notify-buffer-display-change buf :e2e-font-editor)
+                  (let* ((font (clawmacs:font-editor-current-font buf))
+                         (glyph (clawmacs:font-editor-current-glyph buf)))
+                    (format nil "~A ~D ~D"
+                            (clawmacs:bitmap-font-name font)
+                            (clawmacs::bitmap-glyph-width glyph)
+                            (clawmacs::bitmap-glyph-height glyph))))''',
+            timeout=20,
+        )
+        session.wait_snapshot(
+            lambda snap: (snap.get("buffer") or {}).get("kind") == "font-editor",
+            timeout=10,
+            description="font editor buffer active",
+        )
+        E2E.assert_contains(result, "DEMO", "font editor imported AST font name")
+        E2E.assert_contains(result, "3", "font editor imported glyph width")
+        E2E.assert_contains(result, "6", "font editor imported glyph height")
+        session.screenshot("70-font-editor-import-smoke")
+    finally:
+        switch_to_session_buffer(session)
+
+
+
 def test_71_tools_lispi_package_enable_and_eval(session):
     """Enable lispi, inspect its help, and exercise lisp_eval plus file tools."""
     probe_root = tempfile.mkdtemp(
@@ -3524,6 +3574,7 @@ def test_registry(group):
         ("68-toggle-reasoning-metadata-tool-results", test_68_toggle_reasoning_metadata_and_tool_results),
         ("69-mcclim-debug-status-and-snapshot", test_69_mcclim_debug_status_and_snapshot),
         ("70-listener-buffer-eval-commands", test_70_listener_buffer_eval_and_commands),
+        ("70-font-editor-import-smoke", test_70_font_editor_import_smoke),
         ("38-shell-prefix", E2E.test_38_shell_prefix),
         ("39-debug-mode", E2E.test_39_debug_mode_toggle),
         ("40-save-session", E2E.test_40_save_session),

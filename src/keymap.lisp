@@ -203,6 +203,7 @@
     (keymap-bind km '(:ctrl-x #\p) 'minibuffer-select-project-command) ; C-x p
     (keymap-bind km '(:ctrl-x #\n) 'new-buffer-command)       ; C-x n = new buffer
     (keymap-bind km '(:ctrl-x #\l) 'new-listener-buffer-command) ; C-x l = listener
+    (keymap-bind km '(:ctrl-x #\F) 'font-editor-command) ; C-x F = font editor
     (keymap-bind km '(:ctrl-x #\k) 'kill-buffer-command)      ; C-x k = kill buffer
     (keymap-bind km '(:ctrl-x #\2) 'split-window-below-command) ; C-x 2
     (keymap-bind km '(:ctrl-x #\3) 'split-window-right-command) ; C-x 3

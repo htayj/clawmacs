@@ -4275,6 +4275,11 @@ KEY is already normalized by the interface before calling this."
        (handle-customize-key key)
        nil)
 
+      ;; === FONT EDITOR MODE ===
+      ;; CADR-style bitmap font editor buffers own their keyboard interaction.
+      ((and buf (font-editor-buffer-p buf))
+       (or (font-editor-handle-key buf key) nil))
+
       ;; === OPENAI OAUTH MODE ===
       ;; OAuth is pending in a background localhost callback server; only C-g cancels.
       (*openai-oauth-pending*

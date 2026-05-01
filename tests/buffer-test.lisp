@@ -206,19 +206,23 @@
     (let ((help (find-buffer-type :help))
           (info (find-buffer-type :info))
           (customize (find-buffer-type :customize))
-          (listener (find-buffer-type :listener)))
+          (listener (find-buffer-type :listener))
+          (font-editor (find-buffer-type :font-editor)))
       (is (not (null help)))
       (is (not (null info)))
       (is (not (null customize)))
       (is (not (null listener)))
+      (is (not (null font-editor)))
       (is (string= "help" (buffer-type-major-mode help)))
       (is (string= "info" (buffer-type-major-mode info)))
       (is (string= "customize" (buffer-type-major-mode customize)))
       (is (string= "listener" (buffer-type-major-mode listener)))
+      (is (string= "font-editor" (buffer-type-major-mode font-editor)))
       (is (not (buffer-type-document-p help)))
       (is (not (buffer-type-document-p info)))
       (is (not (buffer-type-document-p customize)))
-      (is (not (buffer-type-document-p listener))))))
+      (is (not (buffer-type-document-p listener)))
+      (is (not (buffer-type-document-p font-editor))))))
 
 (test mcclim-registers-built-in-special-presentations
   "The McCLIM UI installs presentation renderers for special built-in buffers."
@@ -228,7 +232,8 @@
     (let ((help (make-buffer "help" :kind :help))
           (info (make-buffer "info" :kind :info))
           (customize (make-buffer "customize" :kind :customize))
-          (listener (make-buffer "listener" :kind :listener)))
+          (listener (make-buffer "listener" :kind :listener))
+          (font-editor (make-buffer "font" :kind :font-editor)))
       (is (eq 'clawmacs::mcclim-render-help-buffer
               (buffer-presentation-function help)))
       (is (eq 'clawmacs::mcclim-render-empty-input-pane
@@ -245,12 +250,22 @@
               (buffer-presentation-function listener)))
       (is (eq 'clawmacs::mcclim-render-listener-input-pane
               (buffer-input-presentation-function listener)))
+      (is (eq 'clawmacs::mcclim-render-font-editor-buffer
+              (buffer-presentation-function font-editor)))
+      (is (eq 'clawmacs::font-editor-empty-input-pane
+              (buffer-input-presentation-function font-editor)))
       (is (eq 'clawmacs::listener-serialize-buffer-state
               (clawmacs::buffer-type-serialize-state-function
                (find-buffer-type :listener))))
       (is (eq 'clawmacs::listener-restore-buffer-state
               (clawmacs::buffer-type-restore-state-function
-               (find-buffer-type :listener)))))))
+               (find-buffer-type :listener))))
+      (is (eq 'clawmacs::font-editor-serialize-buffer-state
+              (clawmacs::buffer-type-serialize-state-function
+               (find-buffer-type :font-editor))))
+      (is (eq 'clawmacs::font-editor-restore-buffer-state
+              (clawmacs::buffer-type-restore-state-function
+               (find-buffer-type :font-editor)))))))
 
 (test make-listener-buffer-evaluates-lisp-and-comma-commands
   "Listener buffers evaluate Lisp forms and dispatch McCLIM-style comma commands."

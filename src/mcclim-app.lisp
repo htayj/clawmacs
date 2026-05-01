@@ -224,6 +224,15 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
 (clim:define-presentation-type listener-entry-ref ()
   :description "a Common Lisp listener transcript entry")
 
+(clim:define-presentation-type font-editor-glyph-ref ()
+  :description "a font editor glyph entry")
+
+(clim:define-presentation-type font-editor-pixel-ref ()
+  :description "a font editor pixel cell")
+
+(clim:define-presentation-type font-editor-action-ref ()
+  :description "a font editor action")
+
 ;;; --------------------------------------------------------------------------
 ;;; CLIM Command Tables + Presentation Translators
 ;;;
@@ -401,6 +410,32 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
                       :name t)
     ((candidate 'minibuffer-candidate-ref))
   (mcclim-select-minibuffer-candidate candidate))
+
+(clim:define-command (com-select-font-editor-glyph
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((code 'font-editor-glyph-ref))
+  (let ((buf (frame-visible-buffer clim:*application-frame*)))
+    (when (and buf (font-editor-buffer-p buf))
+      (font-editor-select-glyph buf code))))
+
+(clim:define-command (com-toggle-font-editor-pixel
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((cell 'font-editor-pixel-ref))
+  (let ((buf (frame-visible-buffer clim:*application-frame*)))
+    (when (and buf (font-editor-buffer-p buf) (listp cell))
+      (font-editor-toggle-pixel buf
+                                (or (getf cell :x) 0)
+                                (or (getf cell :y) 0)))))
+
+(clim:define-command (com-apply-font-editor-action
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((action 'font-editor-action-ref))
+  (let ((buf (frame-visible-buffer clim:*application-frame*)))
+    (when (and buf (font-editor-buffer-p buf))
+      (font-editor-handle-action buf action))))
 
 (defun mcclim-select-skill-candidate (candidate)
   "Select CANDIDATE from the active automatic skill completion popup."
@@ -720,6 +755,36 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
     (object)
   (list object))
 
+(clim:define-presentation-to-command-translator click-font-editor-glyph
+    (font-editor-glyph-ref com-select-font-editor-glyph
+                           clawmacs-mcclim-command-table
+                           :gesture :select
+                           :priority 30
+                           :documentation "Select this glyph"
+                           :pointer-documentation "Select this glyph")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-font-editor-pixel
+    (font-editor-pixel-ref com-toggle-font-editor-pixel
+                           clawmacs-mcclim-command-table
+                           :gesture :select
+                           :priority 30
+                           :documentation "Toggle this pixel"
+                           :pointer-documentation "Toggle this pixel")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-font-editor-action
+    (font-editor-action-ref com-apply-font-editor-action
+                            clawmacs-mcclim-command-table
+                            :gesture :select
+                            :priority 30
+                            :documentation "Invoke this action"
+                            :pointer-documentation "Invoke this action")
+    (object)
+  (list object))
+
 (clim:define-presentation-to-command-translator click-main-pane-blank-area
     (clim:blank-area com-main-pane-blank-area-select
                 clawmacs-mcclim-command-table
@@ -1022,6 +1087,7 @@ kept as a minimal ESA-compatible service pane for commands that expect a real
   "Return the label shown in the dedicated compose/input service pane."
   (cond
     ((null buf) "Input")
+    ((font-editor-buffer-p buf) "Font Editor")
     ((listener-buffer-p buf) "Listener Input")
     ((document-buffer-p buf) "Editor")
     ((and (buffer-input-presentation-function buf)
@@ -2895,7 +2961,15 @@ display through the same renderer as the transcript keeps repaint stable."
    :presentation-function 'mcclim-render-listener-buffer
    :input-presentation-function 'mcclim-render-listener-input-pane
    :serialize-state-function 'listener-serialize-buffer-state
-   :restore-state-function 'listener-restore-buffer-state))
+   :restore-state-function 'listener-restore-buffer-state)
+  (register-buffer-type
+   :font-editor
+   :description "Interactive CADR-style bitmap font editor."
+   :major-mode "font-editor"
+   :presentation-function 'mcclim-render-font-editor-buffer
+   :input-presentation-function 'font-editor-empty-input-pane
+   :serialize-state-function 'font-editor-serialize-buffer-state
+   :restore-state-function 'font-editor-restore-buffer-state))
 
 (register-mcclim-core-buffer-presentations)
 
@@ -4677,6 +4751,17 @@ top-level sheet."
                       (if (plusp (length preview))
                           (format nil "listener entry ~A" preview)
                           "listener entry"))))
+              (font-editor-glyph-ref
+               (and (integerp object)
+                    (format nil "glyph ~D" object)))
+              (font-editor-pixel-ref
+               (and (listp object)
+                    (format nil "pixel ~D,~D"
+                            (or (getf object :x) 0)
+                            (or (getf object :y) 0))))
+              (font-editor-action-ref
+               (and object
+                    (format nil "font action ~A" object)))
               (otherwise
                (cond
                  ((null object) nil)

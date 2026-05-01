@@ -376,6 +376,47 @@
    #:make-listener-buffer
    #:ensure-listener-buffer
    #:submit-listener-input
+   ;; Font editor buffers
+   #:*font-editor-buffer-name*
+   #:*font-editor-default-extract-directory*
+   #:bitmap-glyph
+   #:make-bitmap-glyph
+   #:bitmap-glyph-code
+   #:bitmap-glyph-name
+   #:bitmap-glyph-advance-width
+   #:bitmap-glyph-x-offset
+   #:bitmap-glyph-y-offset
+   #:bitmap-glyph-bitmap
+   #:bitmap-font
+   #:make-empty-bitmap-font
+   #:bitmap-font-name
+   #:bitmap-font-line-spacing
+   #:bitmap-font-baseline
+   #:bitmap-font-default-width
+   #:bitmap-font-blinker-width
+   #:bitmap-font-blinker-height
+   #:bitmap-font-glyph
+   #:bitmap-font-glyph-codes
+   #:font-editor-state
+   #:font-editor-buffer-p
+   #:font-editor-buffer-state
+   #:font-editor-current-font
+   #:font-editor-current-glyph
+   #:make-font-editor-buffer
+   #:ensure-font-editor-buffer
+   #:read-font-file
+   #:write-clawfont-file
+   #:read-clawfont-file
+   #:write-bdf-font
+   #:import-bdf-font
+   #:import-ast-font
+   #:extract-genera-bdf-fonts
+   #:font-editor-command
+   #:font-editor-open-file-command
+   #:font-editor-save-font-command
+   #:font-editor-export-bdf-command
+   #:font-editor-set-sample-string-command
+   #:font-editor-extract-genera-fonts-command
    #:buffer-clear-history-before-input
    #:buffer-insert-read-only-message
    #:buffer-insert-agent-message

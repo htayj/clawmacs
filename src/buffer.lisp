@@ -140,6 +140,7 @@
       (install :info "Read-only Info manual browser." "info" nil)
       (install :customize "Interactive customization buffer." "customize" nil)
       (install :listener "Interactive Common Lisp listener buffer." "listener" nil)
+      (install :font-editor "Interactive CADR-style bitmap font editor." "font-editor" nil)
       (install :scratch "Editable scratch buffer." "scratch" t)
       (install :file "Project-backed editable file buffer." "file" t))
     registry))
