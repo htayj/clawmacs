@@ -721,9 +721,13 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
                     (subseq string 0 (1- safe-width))
                     ">")))))
 
-(defun organa-render-row (text &key todo face)
+(defun organa-render-row (text &key todo face object presentation-type)
   "Return a render row plist."
-  (list :text text :todo todo :face face))
+  (list :text text
+        :todo todo
+        :face face
+        :object object
+        :presentation-type presentation-type))
 
 (defun organa-todo-label (todo &key (include-id-p nil))
   "Return one-line TODO label."
@@ -824,10 +828,11 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
          (organa-render-row
           (format nil "~A <- ~{~A~^ <- ~}"
                   (organa-todo-label todo)
-                  (mapcar (lambda (id)
+                 (mapcar (lambda (id)
                             (organa-dependency-title id by-id))
                           (organa-todo-depends-on todo)))
-          :todo todo
+          :object (first (organa-todo-depends-on todo))
+          :presentation-type 'organa-dependency-ref
           :face :dependency)
          rows)))
     (let ((result (nreverse rows)))
@@ -866,6 +871,57 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
 (clim:define-presentation-type organa-todo-ref ()
   :description "an Organa TODO")
 
+(clim:define-presentation-type organa-dependency-ref ()
+  :description "an Organa dependency reference")
+
+(defun organa-next-status (status)
+  "Return the next Organa workflow status after STATUS."
+  (let* ((normalized (organa-normalize-status status))
+         (position (position normalized *organa-todo-keywords*
+                             :test #'string=)))
+    (nth (mod (1+ (or position 0))
+              (length *organa-todo-keywords*))
+         *organa-todo-keywords*)))
+
+(defun organa-todo-selector (todo)
+  "Return the best selector string for TODO."
+  (or (organa-todo-id todo)
+      (organa-todo-title todo)))
+
+(defun organa-cycle-todo-status (buffer todo)
+  "Advance TODO to its next workflow status in BUFFER."
+  (unless (and buffer todo)
+    (return-from organa-cycle-todo-status nil))
+  (let ((next-status (organa-next-status (organa-todo-status todo))))
+    (organa-apply-buffer-mutation
+     buffer
+     (lambda (lines path)
+       (values (organa-set-status-in-lines lines
+                                           (organa-todo-selector todo)
+                                           next-status
+                                           :path path)
+               next-status)))))
+
+(defun organa-focus-todo-by-id (buffer todo-id)
+  "Switch BUFFER to outline view and scroll TODO-ID into view."
+  (unless (and buffer todo-id)
+    (return-from organa-focus-todo-by-id nil))
+  (let* ((location (organa-read-buffer-location buffer))
+         (model (organa-location-model location))
+         (todo-index (position todo-id (organa-model-todos model)
+                               :key #'organa-todo-id
+                               :test #'string=)))
+    (if todo-index
+        (progn
+          (setf (organa-view-for-buffer buffer) :outline
+                (buffer-scroll-offset buffer) (max 0 (- todo-index 2)))
+          (notify-buffer-display-change buffer :organa-focus)
+          todo-id)
+        (buffer-insert-system-message
+         buffer
+         (format nil "[Organa dependency target not found: ~A]" todo-id)
+         :record-p nil))))
+
 (defun organa-todo-description (todo)
   "Return help text for TODO."
   (with-output-to-string (stream)
@@ -891,37 +947,81 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
                                   (organa-todo-description todo))))
       (switch-to-buffer help))))
 
+(clim:define-command (com-organa-cycle-todo-status
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((todo 'organa-todo-ref))
+  (let ((buffer (current-buffer)))
+    (when (and todo (eq :organa (buffer-kind buffer)))
+      (organa-cycle-todo-status buffer todo))))
+
+(clim:define-command (com-organa-follow-dependency
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((todo-id 'organa-dependency-ref))
+  (let ((buffer (current-buffer)))
+    (when (and todo-id (eq :organa (buffer-kind buffer)))
+      (organa-focus-todo-by-id buffer todo-id))))
+
 (clim:define-presentation-to-command-translator click-organa-todo
-    (organa-todo-ref com-organa-describe-todo
+    (organa-todo-ref com-organa-cycle-todo-status
                      clawmacs-mcclim-command-table
                      :gesture :select
+                     :priority 20
+                     :documentation "Advance this TODO status"
+                     :pointer-documentation "Advance this TODO status")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator describe-organa-todo
+    (organa-todo-ref com-organa-describe-todo
+                     clawmacs-mcclim-command-table
+                     :gesture :describe
                      :priority 20
                      :documentation "Describe this TODO"
                      :pointer-documentation "Describe this TODO")
     (object)
   (list object))
 
+(clim:define-presentation-to-command-translator click-organa-dependency
+    (organa-dependency-ref com-organa-follow-dependency
+                           clawmacs-mcclim-command-table
+                           :gesture :select
+                           :priority 20
+                           :documentation "Follow this dependency"
+                           :pointer-documentation "Follow this dependency")
+    (object)
+  (list object))
+
 (defun organa-row-colors (row)
   "Return foreground and background ink for ROW."
-  (declare (ignore row))
-  (values (clim:make-rgb-color 0.02 0.02 0.02)
-          *mcclim-bg-ink*
-          (default-clawmacs-text-style)
-          nil))
+  (let ((face (case (getf row :face)
+                (:ready :tool-result)
+                (:blocked :system)
+                (:dependency :selector-entry)
+                (:outline :default-text)
+                (otherwise :default-text))))
+    (resolve-global-face-inks face)))
 
-(defun organa-draw-row (pane row cols text todo char-w char-h)
-  "Draw one Organa row, wrapping TODO rows as presentations."
+(defun organa-draw-row (pane row cols row-data char-w char-h)
+  "Draw one Organa row, wrapping semantic rows as presentations."
   (multiple-value-bind (fg bg ts opts)
-      (organa-row-colors text)
+      (organa-row-colors row-data)
     (fill-row pane row cols bg char-w char-h)
-    (if todo
-        (clim:with-output-as-presentation (pane todo 'organa-todo-ref)
+    (let* ((text (getf row-data :text))
+           (todo (getf row-data :todo))
+           (object (or (getf row-data :object) todo))
+           (presentation-type
+             (or (getf row-data :presentation-type)
+                 (and todo 'organa-todo-ref))))
+      (if (and object presentation-type)
+          (clim:with-output-as-presentation (pane object presentation-type)
+            (draw-text-at pane row 0 (organa-fit text cols)
+                          fg bg ts char-w char-h
+                          :drawing-options opts))
           (draw-text-at pane row 0 (organa-fit text cols)
                         fg bg ts char-w char-h
-                        :drawing-options opts))
-        (draw-text-at pane row 0 (organa-fit text cols)
-                      fg bg ts char-w char-h
-                      :drawing-options opts))))
+                        :drawing-options opts)))))
 
 (defun organa-render-buffer (pane buffer rows cols char-w char-h)
   "Render BUFFER as an Organa project TODO board."
@@ -948,10 +1048,7 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
         (setf (buffer-scroll-offset buffer) scroll-offset)
         (loop :for row-data :in visible
               :for row :from 0 :below rows
-              :do (organa-draw-row pane row cols
-                                   (getf row-data :text)
-                                   (getf row-data :todo)
-                                   char-w char-h))
+              :do (organa-draw-row pane row cols row-data char-w char-h))
         (mcclim-record-render-snapshot (clim:pane-frame pane)
                                        pane
                                        buffer
@@ -961,8 +1058,9 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
                                        :history-height rows))
     (error (condition)
       (organa-draw-row pane 0 cols
-                       (format nil "Organa error: ~A" condition)
-                       nil char-w char-h))))
+                       (organa-render-row
+                        (format nil "Organa error: ~A" condition))
+                       char-w char-h))))
 
 (defun organa-render-input (pane buffer rows cols char-w char-h)
   "Render the Organa input pane."

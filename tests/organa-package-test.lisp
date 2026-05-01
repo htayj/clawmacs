@@ -186,3 +186,55 @@
       (clawmacs::organa-cycle-view-command buffer)
       (is (eq :dependency (clawmacs::organa-view-for-buffer buffer)))
       (is (not (null (find-buffer-type :organa)))))))
+
+(test organa-todo-presentations-can-cycle-status
+  "Selecting an Organa TODO advances it to the next workflow status."
+  (with-organa-package-state
+    (write-organa-test-file
+     root
+     "#+TITLE: Project
+
+* TODO First task
+")
+    (load-test-organa-package)
+    (let* ((buffer (clawmacs::organa-open-todo-file "tasks.org"))
+           (model (clawmacs::organa-location-model
+                   (clawmacs::organa-read-buffer-location buffer)))
+           (todo (first (clawmacs::organa-model-todos model))))
+      (is (string= "TODO" (clawmacs::organa-todo-status todo)))
+      (is (string= "NEXT"
+                   (clawmacs::organa-cycle-todo-status buffer todo)))
+      (is (search "* NEXT First task"
+                  (uiop:read-file-string (organa-test-file root)))))))
+
+(test organa-dependency-rows-follow-blockers
+  "Dependency rows expose dependency references that focus the target TODO."
+  (with-organa-package-state
+    (write-organa-test-file
+     root
+     "#+TITLE: Project
+
+* NEXT Implement package
+:PROPERTIES:
+:ID: implement-package
+:END:
+* TODO Test package
+:PROPERTIES:
+:ID: test-package
+:ORGANA_DEPENDS: implement-package
+:END:
+")
+    (load-test-organa-package)
+    (let* ((buffer (clawmacs::organa-open-todo-file "tasks.org"))
+           (location (clawmacs::organa-read-buffer-location buffer))
+           (rows (clawmacs::organa-dependency-rows
+                  (clawmacs::organa-location-model location)))
+           (row (first rows)))
+      (is (eq 'clawmacs::organa-dependency-ref
+              (getf row :presentation-type)))
+      (is (string= "implement-package" (getf row :object)))
+      (is (string= "implement-package"
+                   (clawmacs::organa-focus-todo-by-id
+                    buffer
+                    (getf row :object))))
+      (is (eq :outline (clawmacs::organa-view-for-buffer buffer))))))

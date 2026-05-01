@@ -26,7 +26,7 @@ Historical direction:
   - describe shows full package docs
   - later: update/remove/resource-policy actions
 
-- [ ] Organa TODO action presentations
+- [x] Organa TODO action presentations
   - clickable TODOs with direct status changes
   - dependency presentations that jump to linked TODOs
   - later: move/reorder and dependency editing via visual operations
