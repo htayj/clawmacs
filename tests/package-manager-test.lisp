@@ -679,6 +679,41 @@ CUSTOM PACKAGE PROMPT\")"
         (clawmacs::mcclim-render-buffer nil buf 10 80 8 16)
         (is (equal '(:rendered "dashboard") *package-buffer-rendered*))))))
 
+(test package-dashboard-display-entries-include-installed-packages
+  "The package dashboard exposes installed packages as presented entries."
+  (with-package-state-override ((default-package-test-channels))
+    (let* ((origin (make-buffer "chat" :agent-name "coder"))
+           (dashboard (make-buffer "*Packages*" :kind :package-dashboard
+                                   :agent-name "packages")))
+      (setf (clawmacs::package-dashboard-origin-buffer dashboard) origin)
+      (let* ((entries (clawmacs::package-dashboard-display-entries dashboard))
+             (sexed (find-if (lambda (entry)
+                               (and (eq 'clawmacs::package-dashboard-entry-ref
+                                        (getf entry :presentation-type))
+                                    (search " sexed :: " (getf entry :text))))
+                             entries)))
+        (is (not (null sexed)))
+        (is (search "[default] [ok] sexed" (getf sexed :text)))
+        (is (eq origin (getf (getf sexed :object) :origin-buffer)))))))
+
+(test package-dashboard-toggle-entry-cycles-origin-buffer-scope
+  "Selecting a package dashboard entry cycles scope in the originating buffer context."
+  (with-package-state-override ((default-package-test-channels))
+    (let* ((origin (make-buffer "chat" :agent-name "coder"))
+           (dashboard (make-buffer "*Packages*" :kind :package-dashboard
+                                   :agent-name "packages"))
+           (entry (find "sexed"
+                        (clawmacs::package-doctor-report :buffer origin)
+                        :key (lambda (item) (getf item :name))
+                        :test #'string=)))
+      (setf (clawmacs::package-dashboard-origin-buffer dashboard) origin)
+      (is (eq :buffer
+              (clawmacs::package-dashboard-toggle-entry dashboard entry
+                                                        :origin-buffer origin)))
+      (is (eq :buffer
+              (clawmacs:package-enablement-scope "sexed" :buffer origin)))
+      (is (member "sexed" (buffer-enabled-packages origin) :test #'string=)))))
+
 (test clawmacs-use-package-honors-packages-directory-override
   "The install root follows *packages-directory*."
   (let* ((*package-entrypoint-load-count* 0)

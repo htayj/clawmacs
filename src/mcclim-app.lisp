@@ -191,6 +191,9 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
 (clim:define-presentation-type buffer-ref ()
   :description "a buffer reference")
 
+(clim:define-presentation-type package-dashboard-entry-ref ()
+  :description "an installed package entry")
+
 (clim:define-presentation-type clawmacs-window-ref ()
   :description "a Clawmacs logical window")
 
@@ -251,6 +254,23 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
     ((target-window 'clawmacs-window-ref))
   (when target-window
     (mcclim-select-window clim:*application-frame* target-window)))
+
+(clim:define-command (com-select-package-dashboard-entry
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((entry 'package-dashboard-entry-ref))
+  (when (listp entry)
+    (package-dashboard-toggle-entry (getf entry :dashboard-buffer)
+                                    (getf entry :entry)
+                                    :origin-buffer (getf entry :origin-buffer))))
+
+(clim:define-command (com-describe-package-dashboard-entry
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((entry 'package-dashboard-entry-ref))
+  (when (listp entry)
+    (package-dashboard-describe-entry (getf entry :entry)
+                                      :buffer (getf entry :origin-buffer))))
 
 (clim:define-command (com-select-model-entry
                       :command-table clawmacs-mcclim-command-table
@@ -534,6 +554,28 @@ Values are ink, background-ink, text-style, drawing-options, and underline-p."
                                     (clawmacs-window-id object))))
                          :documentation "Select this window"
                          :pointer-documentation "Select this window")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator click-package-dashboard-entry
+    (package-dashboard-entry-ref
+     com-select-package-dashboard-entry
+     clawmacs-mcclim-command-table
+     :gesture :select
+     :priority 20
+     :documentation "Toggle package scope"
+     :pointer-documentation "Toggle package scope")
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator describe-package-dashboard-entry
+    (package-dashboard-entry-ref
+     com-describe-package-dashboard-entry
+     clawmacs-mcclim-command-table
+     :gesture :describe
+     :priority 20
+     :documentation "Describe this package"
+     :pointer-documentation "Describe this package")
     (object)
   (list object))
 

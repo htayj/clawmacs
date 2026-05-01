@@ -1705,6 +1705,17 @@
           (is (search "Prompt Sections:" text))
           (is (search "Structural editing with sexed" text)))))))
 
+(test package-dashboard-command-opens-package-dashboard-buffer
+  "The package dashboard opens a dedicated special buffer."
+  (with-interactive-command-test-buffer (buf)
+    (with-package-state-override ((default-package-test-channels))
+      (clawmacs::package-dashboard-command buf)
+      (let ((dashboard (current-buffer)))
+        (is (eq :package-dashboard (buffer-kind dashboard)))
+        (is (string= "*Packages*" (buffer-name dashboard)))
+        (is (eq buf (clawmacs::package-dashboard-origin-buffer dashboard)))
+        (is (string= "package-dashboard" (buffer-major-mode dashboard)))))))
+
 ;;; --------------------------------------------------------------------------
 ;;; Agent Selector Tests
 ;;; --------------------------------------------------------------------------

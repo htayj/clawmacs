@@ -1844,6 +1844,173 @@ Returns the installed package definition on success, or NIL on warning/failure."
         (package-install-record-resource-summary record)
         "resources: all")))
 
+(defvar *package-dashboard-origin-buffer-table* (make-hash-table :test #'eq)
+  "Map package dashboard buffers to the originating interaction buffer.")
+
+(defun package-dashboard-origin-buffer (buffer)
+  "Return the originating interaction buffer for package dashboard BUFFER."
+  (gethash buffer *package-dashboard-origin-buffer-table*))
+
+(defun (setf package-dashboard-origin-buffer) (origin buffer)
+  "Record ORIGIN as the interaction buffer for package dashboard BUFFER."
+  (setf (gethash buffer *package-dashboard-origin-buffer-table*) origin))
+
+(defun package-dashboard-buffer-p (buffer)
+  "Return true when BUFFER is a package dashboard buffer."
+  (and buffer (eq (buffer-kind buffer) :package-dashboard)))
+
+(defun package-dashboard-entry-face (scope status)
+  "Return a display face for package entry SCOPE and STATUS."
+  (cond
+    ((not (eq status :ok)) :system)
+    ((eq scope :default) :selector-entry)
+    (t :selector-selected)))
+
+(defun package-dashboard-entry-line (entry)
+  "Return one summary line for dashboard ENTRY."
+  (format nil "[~A] [~A] ~A :: ~A"
+          (package-scope-label (getf entry :enabled-scope))
+          (string-downcase (symbol-name (or (getf entry :status) :unknown)))
+          (getf entry :name)
+          (or (getf entry :description) "")))
+
+(defun package-dashboard-detail-line (entry)
+  "Return a secondary detail line for dashboard ENTRY."
+  (let* ((source-type (getf entry :source-type))
+         (source (getf entry :source))
+         (resource-types (getf entry :resource-types))
+         (project (getf entry :project))
+         (parts
+           (remove nil
+                   (list
+                    (and source-type
+                         (format nil "source: ~(~A~)~@[ ~A~]"
+                                 source-type source))
+                    (and resource-types
+                         (format nil "resources: ~{~(~A~)~^, ~}"
+                                 resource-types))
+                    (and project
+                         (format nil "project: ~A" project))))))
+    (if parts
+        (format nil "  ~{~A~^ | ~}" parts)
+        "  source: bundled")))
+
+(defun package-dashboard-display-entries (dashboard-buffer)
+  "Return styled entries for DASHBOARD-BUFFER."
+  (let* ((origin (package-dashboard-origin-buffer dashboard-buffer))
+         (items (package-doctor-report :buffer origin))
+         (target-name (if origin
+                          (buffer-name origin)
+                          "<default>"))
+         (target-agent (if origin
+                           (buffer-agent-name origin)
+                           *default-agent-name*))
+         (entries
+           (list
+            (list :text (format nil "Packages for ~A" target-name)
+                  :face :selector-title)
+            (list :text (format nil "Target agent: ~A" target-agent)
+                  :face :selector-header)
+            (list :text "Select toggles scope. Describe shows full package help."
+                  :face :selector-footer)
+            (list :text "" :face :default-text))))
+    (if items
+        (dolist (entry (sort (copy-list items) #'string< :key (lambda (item)
+                                                                (getf item :name)))
+                 (nreverse entries))
+          (push (list :text (package-dashboard-detail-line entry)
+                      :face :selector-footer)
+                entries)
+          (push (list :text (package-dashboard-entry-line entry)
+                      :face (package-dashboard-entry-face
+                             (getf entry :enabled-scope)
+                             (getf entry :status))
+                      :object (list :dashboard-buffer dashboard-buffer
+                                    :origin-buffer origin
+                                    :entry entry)
+                      :presentation-type 'package-dashboard-entry-ref)
+                entries))
+        (nconc entries
+               (list (list :text "[No installed packages available.]"
+                           :face :system))))))
+
+(defun package-dashboard-refresh (dashboard-buffer)
+  "Request redisplay of DASHBOARD-BUFFER."
+  (when dashboard-buffer
+    (notify-buffer-display-change dashboard-buffer :package-dashboard))
+  dashboard-buffer)
+
+(defun package-dashboard-toggle-entry (dashboard-buffer entry &key origin-buffer)
+  "Cycle the package scope for ENTRY from DASHBOARD-BUFFER."
+  (let* ((origin (or origin-buffer
+                     (package-dashboard-origin-buffer dashboard-buffer)))
+         (name (getf entry :name))
+         (scope (cycle-package-enablement-scope name :buffer origin)))
+    (load-active-packages :buffer origin)
+    (when origin
+      (buffer-insert-system-message
+       origin
+       (format nil "[Package ~A ~A]"
+               name
+               (package-scope-message scope))))
+    (package-dashboard-refresh dashboard-buffer)
+    scope))
+
+(defun package-dashboard-describe-entry (entry &key buffer)
+  "Open a help buffer describing package dashboard ENTRY."
+  (let* ((definition (or (find-installed-package (getf entry :name) :buffer buffer)
+                         (find-installed-package (getf entry :name))))
+         (name (and definition (package-definition-name definition))))
+    (when definition
+      (let* ((content (describe-installed-package-to-string definition buffer))
+             (buf-name (format nil "*help:package:~A*" name))
+             (existing (find-buffer-by-name buf-name)))
+        (if existing
+            (progn
+              (set-message-text (message-prev (buffer-input-message existing))
+                                content)
+              (switch-to-buffer existing))
+            (switch-to-buffer (make-help-buffer buf-name content)))))))
+
+(defun package-dashboard-render-buffer (pane buffer rows cols char-w char-h)
+  "Render BUFFER as a package dashboard with package presentations."
+  (mcclim-render-entry-buffer pane buffer rows cols char-w char-h
+                              (package-dashboard-display-entries buffer)
+                              :package-dashboard))
+
+(defun open-package-dashboard (&key buffer)
+  "Open or refresh the package dashboard for BUFFER."
+  (reload-package-channels)
+  (let* ((origin (or buffer (current-buffer)))
+         (existing (find-buffer-by-name "*Packages*")))
+    (if (and existing (package-dashboard-buffer-p existing))
+        (progn
+          (setf (package-dashboard-origin-buffer existing) origin
+                (buffer-working-directory existing)
+                (if origin
+                    (buffer-working-directory origin)
+                    (truename ".")))
+          (package-dashboard-refresh existing)
+          (switch-to-buffer existing))
+        (let ((dashboard (make-buffer "*Packages*"
+                                      :agent-name "packages"
+                                      :kind :package-dashboard
+                                      :working-directory
+                                      (if origin
+                                          (buffer-working-directory origin)
+                                          (truename ".")))))
+          (initialize-buffer-display-defaults dashboard)
+          (setf (buffer-major-mode dashboard) "package-dashboard"
+                (package-dashboard-origin-buffer dashboard) origin)
+          (add-buffer-to-ring dashboard)
+          (switch-to-buffer dashboard)))))
+
+(register-buffer-type
+ :package-dashboard
+ :description "Presentation-driven installed package browser."
+ :major-mode "package-dashboard"
+ :presentation-function 'package-dashboard-render-buffer)
+
 (defun remove-installed-package (package &key buffer project)
   "Delete PACKAGE's installed files and return its definition."
   (let* ((definition (typecase package

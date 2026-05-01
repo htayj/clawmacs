@@ -1441,6 +1441,11 @@ Returns true when KEY was consumed by completion."
         (buffer-insert-system-message buffer "[No installed packages available.]"))))
 (defcommand describe-installed-package-command)
 
+(defun package-dashboard-command (buffer)
+  "Open the installed package dashboard for BUFFER."
+  (open-package-dashboard :buffer buffer))
+(defcommand package-dashboard-command)
+
 (defun guard-policy-value-string (value)
   "Return VALUE as a user-facing guard policy string."
   (if value

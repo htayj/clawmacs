@@ -20,7 +20,7 @@ Historical direction:
 
 ## Highest Priority
 
-- [ ] Package dashboard buffer with package presentations
+- [x] Package dashboard buffer with package presentations
   - visual list of installed packages, scopes, source, resources, and health
   - select toggles enablement in the originating chat buffer context
   - describe shows full package docs

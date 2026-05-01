@@ -983,6 +983,7 @@
    #:list-skills-command
    #:minibuffer-toggle-package-command
    #:describe-installed-package-command
+   #:package-dashboard-command
    #:describe-guard-policy-command
    #:describe-guard-history-command
 
@@ -1270,6 +1271,7 @@
    #:package-system-prompt-context-text
    #:maybe-insert-enabled-package-context
    #:describe-installed-package-to-string
+   #:open-package-dashboard
    #:load-clawmacs-package
    #:load-active-packages
    #:reload-active-packages
