@@ -417,8 +417,15 @@ when nil it is resolved from the buffer's agent defaults."
 (defun who-line-memory-summary ()
   "Return a compact implementation-specific memory summary."
   #+sbcl
-  (format nil "~D MB consed"
-          (round (sb-ext:get-bytes-consed) 1048576))
+  (let* ((pkg (find-package :sb-kernel))
+         (sym (and pkg (find-symbol "DYNAMIC-USAGE" pkg)))
+         (usage (and sym (fboundp sym)
+                     (ignore-errors (funcall sym)))))
+    (if usage
+        (format nil "~D MB live"
+                (round usage 1048576))
+        (format nil "~D MB consed"
+                (round (sb-ext:get-bytes-consed) 1048576))))
   #-sbcl
   "memory n/a")
 
@@ -912,7 +919,7 @@ When PREFIX is provided, prepend it using the base face for BASE-FACE-NAME."
                                    (message-sender-prefix
                                     (buffer-input-message buf))))
   "Calculate the visual height of the input area in rows.
-Minimum 3, maximum (floor terminal-height 3). Accounts for line wrapping.
+Minimum 3, maximum (floor terminal-height 2). Accounts for line wrapping.
 During approval prompts, allows up to 2/3 of terminal height."
   (let* ((input (buffer-input-message buf))
          (visual-height (message-visual-height input width :prefix prefix))
@@ -920,7 +927,8 @@ During approval prompts, allows up to 2/3 of terminal height."
          (approval-active (buffer-approval-pending buf))
          (max-height (if approval-active
                          (floor (* terminal-height 2) 3)
-                         (floor terminal-height 3))))
+                         (max min-height
+                              (floor terminal-height 2)))))
     (if approval-active
         ;; During approval, give enough room for the full prompt
         (max min-height (min (max 12 visual-height) max-height))

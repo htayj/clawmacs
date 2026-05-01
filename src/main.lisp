@@ -445,9 +445,14 @@
 (defun scroll-down-command (buffer)
   "Scroll history down (forward) by one page."
   (when *scroll-page-size*
-    (decf (buffer-scroll-offset buffer) *scroll-page-size*)
-    (when (minusp (buffer-scroll-offset buffer))
-      (setf (buffer-scroll-offset buffer) 0))))
+    (let ((offset (buffer-scroll-offset buffer))
+          (page-size *scroll-page-size*))
+      (if (<= offset (1+ page-size))
+          (setf (buffer-scroll-offset buffer) 0)
+          (progn
+            (decf (buffer-scroll-offset buffer) page-size)
+            (when (minusp (buffer-scroll-offset buffer))
+              (setf (buffer-scroll-offset buffer) 0)))))))
 (defcommand scroll-down-command)
 
 (defun handle-help-key (buffer key)

@@ -214,12 +214,12 @@ two")
     (is (= 3 (clawmacs::calculate-input-height buf 30 80)))))
 
 (test calculate-input-height-maximum
-  "Input height is capped at (floor terminal-height 3)."
+  "Input height is capped at (floor terminal-height 2) for normal chat input."
   (let ((buf (make-buffer "test")))
     (dotimes (i 20)
       (message-insert-newline (buffer-input-message buf)))
-    ;; 21 lines, terminal height 30, max = 10
-    (is (= 10 (clawmacs::calculate-input-height buf 30 80)))))
+    ;; 21 lines, terminal height 30, max = 15
+    (is (= 15 (clawmacs::calculate-input-height buf 30 80)))))
 
 (test mcclim-pixel-grid-index-uses-containing-cell
   "Pointer-to-grid conversion uses the containing cell and clamps below zero."

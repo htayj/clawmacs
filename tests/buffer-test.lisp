@@ -78,6 +78,22 @@
   :prompts ((count :prompt "Count" :reader parse-integer)
             (label :prompt "Label")))
 
+(test scroll-down-command-clamps-near-bottom
+  "One page down from within one page of bottom returns to offset zero."
+  (let ((buf (make-buffer "scroll-clamp")))
+    (let ((clawmacs::*scroll-page-size* 16))
+      (setf (buffer-scroll-offset buf) 17)
+      (clawmacs::scroll-down-command buf)
+      (is (= 0 (buffer-scroll-offset buf))))))
+
+(test scroll-down-command-subtracts-page-when-far-from-bottom
+  "Page down keeps a positive offset when more than one page from bottom."
+  (let ((buf (make-buffer "scroll-page")))
+    (let ((clawmacs::*scroll-page-size* 16))
+      (setf (buffer-scroll-offset buf) 40)
+      (clawmacs::scroll-down-command buf)
+      (is (= 24 (buffer-scroll-offset buf))))))
+
 (defmacro with-interactive-command-test-buffer ((buffer-var) &body body)
   `(let ((*buffer-ring* nil)
          (clawmacs::*buffer-counter* 0)
