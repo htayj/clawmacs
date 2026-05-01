@@ -1122,20 +1122,12 @@ kept as a minimal ESA-compatible service pane for commands that expect a real
       (multiple-value-bind (cols rows)
           (pane-grid-dimensions pane char-w char-h)
         (declare (ignore rows))
-        (let* ((bg (clim:make-rgb-color 0.93 0.93 0.93))
-               (fg (clim:make-rgb-color 0.0 0.0 0.0))
-               (ts (clim:make-text-style :fix :roman :normal))
-               (text (compose-pane-label-text buf)))
-          (fill-row pane 0 cols bg char-w char-h)
-          (draw-text-at pane 0 1
-                        (subseq text 0 (min (length text) (max 0 (1- cols))))
-                        fg bg ts char-w char-h)
-          (clim:draw-line* pane
-                           0
-                           (1- char-h)
-                           (* cols char-w)
-                           (1- char-h)
-                           :ink (clim:make-rgb-color 0.67 0.67 0.67)))))))
+        (let* ((text (compose-pane-label-text buf))
+               (visible (subseq text 0 (min (length text) (max 0 (1- cols))))))
+          (clim:updating-output (pane :unique-id 'compose-pane-content
+                                      :cache-value visible
+                                      :cache-test #'string=)
+            (write-string visible pane)))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Application Frame
@@ -2551,7 +2543,7 @@ WIDTH and PREFIX-LEN use the same wrapped grid geometry as
       (when (zerop char-w) (return-from display-modeline-pane))
       (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
         (declare (ignore rows))
-        (mcclim-render-modeline pane buf cols char-w char-h)))))
+        (mcclim-render-modeline pane buf cols)))))
 
 (defun mcclim-fit-modeline-text (text cols)
   "Pad or truncate TEXT to exactly COLS display columns."
@@ -2589,7 +2581,7 @@ WIDTH and PREFIX-LEN use the same wrapped grid geometry as
     (when text
       (mcclim-fit-modeline-text text cols))))
 
-(defun mcclim-render-modeline (pane buf cols char-w char-h)
+(defun mcclim-render-modeline (pane buf cols)
   "Render the modeline string into PANE using the modeline face.
 Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
   (let* ((ml-face (make-modeline-face))
@@ -2600,10 +2592,16 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
     (clim:updating-output (pane :unique-id 'modeline-content
                                 :cache-value text
                                 :cache-test #'string=)
-      (multiple-value-bind (fg bg ts opts) (resolve-face-inks resolved)
-        (fill-row pane 0 cols bg char-w char-h)
-        (draw-text-at pane 0 0 text fg bg ts char-w char-h
-                      :drawing-options opts)))))
+      (multiple-value-bind (fg _bg ts opts) (resolve-face-inks resolved)
+        (declare (ignore _bg))
+        (apply #'clim:invoke-with-drawing-options
+               pane
+               (lambda (medium)
+                 (declare (ignore medium))
+                 (write-string text pane))
+               :ink fg
+               :text-style ts
+               opts)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Who-Line Display
@@ -2624,30 +2622,30 @@ Wrapped in updating-output so CLIM skips redraw when the text hasn't changed."
   "Display function for the who-line pane. Shows a single status wholine."
   (with-mcclim-frame-ui-state (frame)
     (ensure-char-metrics frame pane)
-    (let ((buf (frame-visible-buffer frame)))
-      (let* ((fields (who-line-field-data buf))
-             (cache-key (mapcar (lambda (field)
-                                  (list (getf field :id)
-                                        (getf field :text)))
-                                fields)))
-        (clim:updating-output (pane :unique-id 'who-line-content
-                                    :cache-value cache-key
-                                    :cache-test #'equal)
-          (multiple-value-bind (wl-fg wl-bg wl-ts wl-opts)
-              (resolve-global-face-inks :who-line)
-            (declare (ignore wl-opts))
-            (clim:with-bounding-rectangle* (x0 y0 x1 y1) (clim:sheet-region pane)
-              (clim:draw-rectangle* pane x0 y0 x1 y1
-                                    :filled t
-                                    :ink wl-bg))
-            (setf (clim:stream-cursor-position pane) (values 4 0))
-            (clim:with-drawing-options (pane :ink wl-fg
-                                             :text-style wl-ts)
-              (loop :for field :in fields
-                    :for first-p := t :then nil
-                    :do (unless first-p
-                          (write-string "  " pane))
-                        (mcclim-present-who-line-field pane field)))))))))
+    (let* ((char-w (frame-char-width frame))
+           (char-h (frame-char-height frame))
+           (buf (frame-visible-buffer frame)))
+      (when (zerop char-w)
+        (return-from display-who-line-pane))
+      (multiple-value-bind (cols rows) (pane-grid-dimensions pane char-w char-h)
+        (declare (ignore rows))
+        (multiple-value-bind (row1 _row2)
+            (format-who-line buf cols)
+          (declare (ignore _row2))
+          (clim:updating-output (pane :unique-id 'who-line-content
+                                      :cache-value row1
+                                      :cache-test #'string=)
+            (multiple-value-bind (wl-fg _wl-bg wl-ts wl-opts)
+                (resolve-global-face-inks :who-line)
+              (declare (ignore _wl-bg))
+              (apply #'clim:invoke-with-drawing-options
+                     pane
+                     (lambda (medium)
+                       (declare (ignore medium))
+                       (write-string row1 pane))
+                     :ink wl-fg
+                     :text-style wl-ts
+                     wl-opts))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Main Pane Display
