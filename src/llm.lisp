@@ -339,11 +339,55 @@ Keys with double-dashes encode as underscores (e.g., :TOOL--USE -> tool_use)."
 (defparameter +json-false+ (make-instance 'json-false-literal)
   "Shared marker object that encodes as a literal JSON false value.")
 
+(defclass json-empty-object-literal ()
+  ()
+  (:documentation "Marker object that encodes as a literal empty JSON object."))
+
+(defparameter +json-empty-object+ (make-instance 'json-empty-object-literal)
+  "Shared marker object that encodes as a literal empty JSON object.")
+
 (defmethod cl-json:encode-json ((object json-false-literal)
                                 &optional (stream cl-json:*json-output*))
   "Encode OBJECT as a literal JSON false value."
   (declare (ignore object))
   (write-string "false" stream))
+
+(defmethod cl-json:encode-json ((object json-empty-object-literal)
+                                &optional (stream cl-json:*json-output*))
+  "Encode OBJECT as a literal empty JSON object."
+  (declare (ignore object))
+  (write-string "{}" stream))
+
+(defun json-schema-object-slot-p (key)
+  "Return true when KEY names a JSON Schema slot whose value must be an object."
+  (member key '(:properties :definitions :$defs :pattern-properties
+                :dependent-schemas "properties" "definitions" "$defs"
+                "patternProperties" "dependentSchemas")
+          :test #'equal))
+
+(defun provider-ready-json-schema (schema)
+  "Return SCHEMA normalized for provider JSON encoding.
+
+In particular, empty object-valued schema slots such as :properties must encode
+as `{}` rather than `null`."
+  (labels ((walk (value &optional key)
+             (cond
+               ((and (null value)
+                     (json-schema-object-slot-p key))
+                +json-empty-object+)
+               ((stringp value)
+                value)
+               ((vectorp value)
+                (map 'vector (lambda (item) (walk item)) value))
+               ((consp value)
+                (mapcar (lambda (entry)
+                          (if (consp entry)
+                              (cons (car entry) (walk (cdr entry) (car entry)))
+                              (walk entry)))
+                        value))
+               (t
+                value))))
+    (walk schema)))
 
 (declaim (ftype (function (t) (or null list)) normalize-legacy-raw-content))
 
@@ -2323,7 +2367,8 @@ reasoning_content is present, falls back to reasoning_content."
            :collect `((:type . "function")
                       (:function . ((:name . ,(cdr (assoc :name tool)))
                                     (:description . ,(cdr (assoc :description tool)))
-                                    (:parameters . ,(cdr (assoc :input--schema tool)))))))
+                                    (:parameters . ,(provider-ready-json-schema
+                                                     (cdr (assoc :input--schema tool))))))))
      'vector)))
 
 (defun conversation-messages->openai-messages (messages)
@@ -2426,7 +2471,8 @@ reasoning_content is present, falls back to reasoning_content."
            :collect `((:type . "function")
                       (:name . ,(cdr (assoc :name tool)))
                       (:description . ,(cdr (assoc :description tool)))
-                      (:parameters . ,(cdr (assoc :input--schema tool)))))
+                      (:parameters . ,(provider-ready-json-schema
+                                       (cdr (assoc :input--schema tool))))))
      'vector)))
 
 (defun responses-output-item-text (item)

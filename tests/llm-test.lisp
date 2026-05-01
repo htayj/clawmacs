@@ -563,6 +563,34 @@
       (is (string= "user-read"
                    (clawmacs:execute-tool "read" nil))))))
 
+(test tool-definitions->responses-tools-encodes-empty-properties-as-object
+  "Zero-arg tool schemas encode JSON object properties as `{}`, not `null`."
+  (let* ((tools (vector
+                 '((:name . "artifactum_list")
+                   (:description . "List artifacts.")
+                   (:input--schema
+                    (:type . "object")
+                    (:properties)
+                    (:required . #())))))
+         (json (clawmacs:api-json-encode
+                (clawmacs::tool-definitions->responses-tools tools))))
+    (is (search "\"properties\":{}" json))
+    (is-false (search "\"properties\":null" json))))
+
+(test tool-definitions->openai-tools-encodes-empty-properties-as-object
+  "Chat-completions tool schemas also encode empty properties as `{}`."
+  (let* ((tools (vector
+                 '((:name . "artifactum_list")
+                   (:description . "List artifacts.")
+                   (:input--schema
+                    (:type . "object")
+                    (:properties)
+                    (:required . #())))))
+         (json (clawmacs:api-json-encode
+                (clawmacs::tool-definitions->openai-tools tools))))
+    (is (search "\"properties\":{}" json))
+    (is-false (search "\"properties\":null" json))))
+
 (test load-active-packages-reregisters-active-package-tools
   "Active package loading restores package tools after init-tools resets core."
   (with-tool-table-restored
