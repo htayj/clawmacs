@@ -1173,7 +1173,20 @@ same
                    "self-modify-approval-isolation")))
             (with-pipeline-definition-registry-override ()
               (let ((clawmacs::*agent-definition-registry*
-                      (make-hash-table :test #'equal)))
+                      (make-hash-table :test #'equal))
+                    (clawmacs::*tool-table*
+                      (make-hash-table :test #'equal))
+                    (clawmacs::*agent-tool-metadata-table*
+                      (make-hash-table :test #'eq))
+                    (clawmacs::*agent-tool-name-table*
+                      (make-hash-table :test #'equal))
+                    (clawmacs::*command-table*
+                      (make-hash-table :test #'eq))
+                    (clawmacs::*extended-docs*
+                      (make-hash-table :test #'eq))
+                    (clawmacs::*slash-command-table*
+                      (make-hash-table :test #'equal))
+                    (clawmacs::*compaction-point* nil))
                 (with-package-state-override ((default-package-test-channels))
               (setf responses
                     (list

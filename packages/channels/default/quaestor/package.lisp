@@ -677,25 +677,6 @@ Returns true when the key was consumed."
       (quaestor-set-current-request buffer request)
       (quaestor-toggle-current-option buffer))))
 
-(defun quaestor-format-who-line (buffer width)
-  "Return who-line rows for BUFFER's quaestor state."
-  (declare (ignore width))
-  (cond
-    ((buffer-user-input-pending buffer)
-     (let* ((request (buffer-user-input-pending buffer))
-            (question (quaestor-request-current-question request)))
-       (values
-        (format nil " Answering: ~A"
-                (quaestor-alist-value question :header))
-        " TAB notes/options  RET next-or-submit  PgUp/PgDn question")))
-    ((buffer-has-queued-messages-p buffer)
-     (values
-      (format nil " ~D queued follow-up~:P"
-              (buffer-queued-message-count buffer))
-      " C-c q: inspect  C-c Q: recall  C-c j: steer  C-c J: cancel/restore"))
-    (t
-     (values nil nil))))
-
 (defun quaestor-request-user-input-tool (args)
   "Suspend the active agent turn and request structured user input."
   (unless *quaestor-request-user-input-catch-active*
@@ -801,17 +782,6 @@ Returns true when the key was consumed."
                            :denied-p t)))
           (values result event))
         (values-list outcome))))
-
-(defadvice format-who-line quaestor-format-who-line-advice :around
-    (next buffer width)
-  (multiple-value-bind (row1 row2)
-      (funcall next buffer width)
-    (multiple-value-bind (override1 override2)
-        (if (quaestor-package-active-p buffer)
-            (quaestor-format-who-line buffer width)
-            (values nil nil))
-      (values (or override1 row1)
-              (or override2 row2)))))
 
 (defadvice init-default-keymap quaestor-init-default-keymap :after (result)
   (declare (ignore result))

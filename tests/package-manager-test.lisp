@@ -82,7 +82,8 @@
           (clawmacs::*package-prompt-sections* nil)
           (clawmacs::*buffer-type-registry*
            (clawmacs::make-buffer-type-registry))
-          (clawmacs::*enabled-builtin-packages* nil))
+          (clawmacs::*enabled-builtin-packages* nil)
+          (clawmacs::*advice-table* (make-hash-table :test #'eq)))
      ,@body))
 
 (defmacro with-packrat-resource-state (() &body body)
@@ -1036,7 +1037,8 @@ CUSTOM PACKAGE PROMPT\")"
           (*startup-hook-ran* nil)
           (*initial-buffer-hook-ran* nil)
           (*initial-buffer-hook-binding* nil))
-      (let ((buf (clawmacs:clawmacs-main :session-name "init-customization")))
+      (let ((buf (clawmacs:clawmacs-main :session-name "init-customization"
+                                          :run-frame nil)))
         (is (string= "Custom personality prompt from init file."
                      clawmacs:*default-personality-prompt*))
         (is (not (null *startup-hook-ran*)))

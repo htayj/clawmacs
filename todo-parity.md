@@ -218,9 +218,8 @@ problems observed while reviewing the current Clawmacs tree.
   `test-mcclim-e2e.py:1859`, `test-mcclim-e2e.py:1875`,
   `test-mcclim-e2e.py:1893`, plus the deterministic suite entries at
   `test-mcclim-e2e.py:3291-3293`, `test-mcclim-e2e.py:3323`, and
-  `test-mcclim-e2e.py:3328`. The likely hot paths are the pointer/input bridge
-  in `src/mcclim-app.lisp:3373-3641` and the recent input/theme edits in
-  `src/mcclim-app.lisp` and `src/render-core.lisp`.
+  `test-mcclim-e2e.py:3328`. This entry refers to the removed pre-rewrite
+  McCLIM renderer.
 - [x] Persist each buffer's working directory in session snapshots and sidecar
   transcripts. `serialize-buffer` drops `working-directory`
   (`src/buffer.lisp:954-971`), and both loaders reconstruct buffers with

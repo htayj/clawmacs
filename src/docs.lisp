@@ -2919,7 +2919,7 @@ documentation in *extended-docs*."
 
 (defdoc clawmacs-main
   :category "main"
-  :usage "(clawmacs-main) — Initializes the application state."
+  :usage "(clawmacs-main &key session-name agent-name window-title (run-frame t))"
   :returns "buffer — The initial chat buffer."
-  :side-effects "Initializes state, loads the configured personality prompt file, loads user init, runs *startup-hook*, creates the initial buffer, and runs *initial-buffer-hook*."
+  :side-effects "Initializes state, loads the configured personality prompt file, loads user init, runs *startup-hook*, creates the initial buffer, runs *initial-buffer-hook*, and starts the McCLIM frame unless RUN-FRAME is NIL."
   :see-also (current-buffer *default-keymap* init-tools *startup-hook* *initial-buffer-hook*))

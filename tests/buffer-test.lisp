@@ -2008,6 +2008,23 @@
       (is (search "<img" html))
       (is (search (namestring image-path) html)))))
 
+(test message-metadata-help-string-includes-core-message-fields
+  "The McCLIM metadata help text reports stable message identity and metadata."
+  (let ((msg (make-message :agent :read-only-p t)))
+    (set-message-text msg "Hello")
+    (setf (message-timestamp msg) 42
+          (message-entry-id msg) "entry-1"
+          (message-parent-entry-id msg) "parent-1"
+          (message-raw-content msg) '(((:type . "text") (:text . "Hello")))
+          (message-metadata msg) '((:provider . :test)
+                                   (:model . "model-1")))
+    (let ((help (clawmacs::message-metadata-help-string msg)))
+      (is (search "Sender: AGENT" help))
+      (is (search "Entry id: entry-1" help))
+      (is (search "Parent entry id: parent-1" help))
+      (is (search "Raw content blocks: 1" help))
+      (is (search ":PROVIDER" help)))))
+
 (test export-buffer-session-html-hides-reasoning-and-metadata-when-disabled
   "HTML export omits sidecar reasoning and metadata when requested."
   (let* ((*sessions-dir* (temp-session-test-directory "export-html-hidden"))

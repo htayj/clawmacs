@@ -71,9 +71,11 @@ conversation encoding, auth, and agent/provider definitions.
 
 ### UI
 
-`src/render-core.lisp`, `src/windows.lisp`, and `src/minibuffer.lisp` are the
-remaining UI-support side. They should format state and route input, not become
-the place where feature policy lives.
+`src/mcclim-interface.lisp` owns the fresh presentation-based chat frame. It
+should stay as a CLIM adapter over buffer state: display functions render
+messages, commands mutate buffers, and async updates request normal McCLIM pane
+redisplay. `src/windows.lisp` and `src/minibuffer.lisp` are legacy logical UI
+support and should not become feature-policy owners.
 
 ## Current Boundaries
 

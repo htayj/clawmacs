@@ -309,6 +309,22 @@ threads notify the UI as deltas arrive."
       (when (string= "text" (content-block-type block))
         (setf latest (or (cdr (assoc :text block)) ""))))))
 
+(defun stream-reasoning-display-lines (reasoning-blocks &key visible-text)
+  "Return reasoning lines for in-progress stream display text."
+  (let ((visible (string-trim '(#\Space #\Tab #\Newline #\Return)
+                              (or visible-text "")))
+        (lines nil))
+    (dolist (reasoning reasoning-blocks)
+      (let ((text (or reasoning "")))
+        (unless (or (blank-string-p text)
+                    (string= visible
+                             (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                          text)))
+          (push ";; reasoning" lines)
+          (dolist (line (split-string-by-newline text))
+            (push line lines)))))
+    (nreverse lines)))
+
 (defun stream-state-display-text (state &key show-reasoning-p)
   "Return STATE's in-progress text without double-counting accumulators.
 Some providers keep the current partial text only in STREAM-STATE-TEXT, while
@@ -319,8 +335,8 @@ OpenAI-compatible providers also mirror it into CONTENT-BLOCKS on every delta."
            (content-text (content-text-blocks content-blocks))
            (reasoning-text
              (and show-reasoning-p
-                  (display-text-from-line-strings
-                   (reasoning-block-display-lines
+                  (join-lines-with-newlines
+                   (stream-reasoning-display-lines
                     (content-reasoning-blocks content-blocks)
                     :visible-text content-text))))
            (latest-text (latest-text-block-text content-blocks)))

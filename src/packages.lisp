@@ -894,9 +894,6 @@
    #:buffer-pending-tool-calls
    #:buffer-tool-call-results
 
-   ;; Rendering
-   #:resolve-modeline-provider-model
-
    ;; Buffer selector
    #:*buffer-selector-active*
    #:*buffer-selector-index*
@@ -997,7 +994,6 @@
    #:sort-models-by-recency
    #:*buffer-selection-history*
    #:sort-buffers-by-recency
-   #:minibuffer-current-height
    #:invoke-command
    #:execute-extended-command
    #:minibuffer-select-agent-command
@@ -1199,10 +1195,6 @@
 
    ;; McCLIM presentation types
    #:chat-message
-   #:tool-call
-   #:buffer-ref
-   #:clawmacs-window-ref
-   #:model-ref
 
    ;; Main
    #:clawmacs-main
