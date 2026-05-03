@@ -11,6 +11,9 @@
     (object (type chat-message))
   (typep object 'message))
 
+(clim:define-gesture-name
+    :describe-presentation :pointer-button-press (:left :control :shift))
+
 (clim:define-presentation-type tool-approval ())
 
 (clim:define-presentation-method clim:presentation-typep
