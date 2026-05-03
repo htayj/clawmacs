@@ -4115,14 +4115,14 @@ documentation in *extended-docs*."
   :category "mcclim"
   :usage "Application frame class used by the interactive Clawmacs UI."
   :returns "McCLIM application frame class."
-  :see-also (run-clawmacs-mcclim clawmacs-main mcclim-redisplay-frame))
+  :see-also (run-clawmacs-mcclim clawmacs-main))
 
 (defdoc run-clawmacs-mcclim
   :category "mcclim"
   :usage "(run-clawmacs-mcclim INITIAL-BUFFER)"
   :returns "nil — Returns when the user quits."
   :side-effects "Creates the Clawmacs McCLIM application frame, registers it for display-change events, and runs the frame top level."
-  :see-also (clawmacs-gui clawmacs-main mcclim-redisplay-frame))
+  :see-also (clawmacs-gui clawmacs-main))
 
 (defdoc mcclim-debug-feature-status
   :category "mcclim"

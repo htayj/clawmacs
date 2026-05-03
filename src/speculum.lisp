@@ -131,31 +131,30 @@
   (or (and frame (ignore-errors (frame-render-sequence frame))) 0))
 
 (defun speculum-refresh-frame (frame)
-  "Request a standard McCLIM redisplay for FRAME and wait briefly."
+  "Wait briefly for FRAME's next native McCLIM frame-state sync command."
   (if (null frame)
       (list :requested nil :completed nil :reason "No live frame.")
       (let ((before (speculum-render-sequence frame))
-            (queued nil)
-            (queue-error nil))
+            (requested nil)
+            (request-error nil))
         (handler-case
             (progn
-              (mcclim-queue-display-change
-               frame (frame-visible-buffer frame) :speculum :force-p t)
-              (setf queued t))
+              (clawmacs::mcclim-queue-frame-state-sync frame)
+              (setf requested t))
           (error (condition)
-            (setf queue-error (format nil "~A" condition))))
+            (setf request-error (format nil "~A" condition))))
         (let ((completed nil))
-          (when queued
+          (when requested
             (loop :repeat *speculum-refresh-wait-attempts*
                   :do (when (> (speculum-render-sequence frame) before)
                         (setf completed t)
                         (return))
                       (sleep *speculum-refresh-wait-interval*)))
-          (list :requested queued
+          (list :requested requested
                 :completed completed
                 :sequence-before before
                 :sequence-after (speculum-render-sequence frame)
-                :error queue-error)))))
+                :error request-error)))))
 
 (defun speculum-message-summary (message)
   "Return an agent-readable summary of MESSAGE."
@@ -226,8 +225,6 @@
             (not (null (ignore-errors (frame-follow-current-buffer-p frame))))
             :char-width (or (ignore-errors (frame-char-width frame)) 0)
             :char-height (or (ignore-errors (frame-char-height frame)) 0)
-            :pane-space-char-height
-            (or (ignore-errors (frame-pane-space-char-height frame)) 0)
             :render-sequence (speculum-render-sequence frame)
             :live-frame-count (length (mcclim-live-frames)))))
 
@@ -586,8 +583,6 @@
                       (and frame
                            (list :char-width (frame-char-width frame)
                                  :char-height (frame-char-height frame)
-                                 :pane-space-char-height
-                                 (frame-pane-space-char-height frame)
                                  :render-sequence
                                  (frame-render-sequence frame))))
                      ((string= normalized "visible-buffer")

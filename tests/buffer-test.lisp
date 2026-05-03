@@ -252,24 +252,19 @@
           (font-editor (make-buffer "font" :kind :font-editor)))
       (is (eq 'clawmacs::mcclim-render-help-buffer
               (buffer-presentation-function help)))
-      (is (eq 'clawmacs::mcclim-render-empty-input-pane
-              (buffer-input-presentation-function help)))
+      (is (null (buffer-input-presentation-function help)))
       (is (eq 'clawmacs::mcclim-render-info-buffer
               (buffer-presentation-function info)))
-      (is (eq 'clawmacs::mcclim-render-empty-input-pane
-              (buffer-input-presentation-function info)))
+      (is (null (buffer-input-presentation-function info)))
       (is (eq 'clawmacs::mcclim-render-customize-buffer
               (buffer-presentation-function customize)))
-      (is (eq 'clawmacs::mcclim-render-empty-input-pane
-              (buffer-input-presentation-function customize)))
+      (is (null (buffer-input-presentation-function customize)))
       (is (eq 'clawmacs::mcclim-render-listener-buffer
               (buffer-presentation-function listener)))
-      (is (eq 'clawmacs::mcclim-render-listener-input-pane
-              (buffer-input-presentation-function listener)))
+      (is (null (buffer-input-presentation-function listener)))
       (is (eq 'clawmacs::mcclim-render-font-editor-buffer
               (buffer-presentation-function font-editor)))
-      (is (eq 'clawmacs::font-editor-empty-input-pane
-              (buffer-input-presentation-function font-editor)))
+      (is (null (buffer-input-presentation-function font-editor)))
       (is (eq 'clawmacs::listener-serialize-buffer-state
               (clawmacs::buffer-type-serialize-state-function
                (find-buffer-type :listener))))

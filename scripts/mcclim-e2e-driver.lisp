@@ -115,8 +115,7 @@
       (:delete-window
        (clawmacs::mcclim-delete-selected-window frame))
       (:delete-other-windows
-       (clawmacs::mcclim-delete-other-windows frame)))
-    (clawmacs::mcclim-redisplay-frame frame :force-p t))
+       (clawmacs::mcclim-delete-other-windows frame))))
   (record-control-result t (safe-control-result-string command) ""))
 
 (defun apply-control-command (command)
@@ -284,7 +283,22 @@
   (let ((frame (and (boundp 'clawmacs::*clawmacs-frame*)
                     clawmacs::*clawmacs-frame*)))
     (or (and frame
-             (clawmacs::frame-last-render-snapshot frame))
+             (let* ((render (copy-tree (clawmacs::frame-last-render-snapshot frame)))
+                    (main (and render (pane-geometry frame 'clawmacs::main-pane))))
+               (when (and render main)
+                 (let ((pixel-width (cdr (assoc :pixel-width main)))
+                       (pixel-height (cdr (assoc :pixel-height main)))
+                       (cols (cdr (assoc :cols main)))
+                       (rows (cdr (assoc :rows main))))
+                   (when pixel-width
+                     (setf (cdr (assoc :pixel-width render)) pixel-width))
+                   (when pixel-height
+                     (setf (cdr (assoc :pixel-height render)) pixel-height))
+                   (when cols
+                     (setf (cdr (assoc :cols render)) cols))
+                   (when rows
+                     (setf (cdr (assoc :rows render)) rows))))
+               render))
         `((:ready . ,(json-boolean nil))))))
 
 (defun pointer-documentation-state ()
@@ -301,59 +315,29 @@
           (:count . 0)
           (:text . "")))))
 
-(defun pane-viewport-region (pane)
-  "Return PANE's viewport region, falling back to its sheet region."
-  (handler-case
-      (clim:window-viewport pane)
-    (error ()
-      (clim:sheet-region pane))))
-
 (defun pane-geometry-candidate (frame sheet)
   "Return pixel/grid geometry for SHEET in FRAME, or NIL."
   (when sheet
-    (let* ((region (pane-viewport-region sheet))
-           (top-sheet (clim:frame-top-level-sheet frame))
-           (delta (ignore-errors
-                    (clim:sheet-delta-transformation sheet top-sheet)))
+    (let* ((region (clawmacs::mcclim-pane-native-region sheet))
            (char-w (max 1 (clawmacs::frame-char-width frame)))
            (char-h (max 1 (clawmacs::frame-char-height frame))))
       (clim:with-bounding-rectangle* (x1 y1 x2 y2) region
-        (multiple-value-bind (tx1 ty1)
-            (if delta
-                (clim:transform-position delta x1 y1)
-                (values x1 y1))
-          (multiple-value-bind (tx2 ty2)
-              (if delta
-                  (clim:transform-position delta x2 y2)
-                  (values x2 y2))
-            (let* ((left (round (min tx1 tx2)))
-                   (top (round (min ty1 ty2)))
-                   (width (max 1 (round (abs (- tx2 tx1)))))
-                   (height (max 1 (round (abs (- ty2 ty1))))))
-              `((:x . ,left)
-                (:y . ,top)
-                (:pixel-width . ,width)
-                (:pixel-height . ,height)
-                (:cols . ,(max 1 (floor width char-w)))
-                (:rows . ,(max 1 (floor height char-h)))))))))))
-
-(defun pane-geometry-visible-sheet (frame pane-name pane)
-  "Return the sheet whose visible viewport should represent PANE-NAME."
-  (let ((parent (ignore-errors (clim:sheet-parent pane))))
-    (if (and (member pane-name '(clawmacs::main-pane) :test #'eq)
-             parent
-             (eq (ignore-errors (clim:pane-frame parent)) frame))
-        parent
-        pane)))
+        (let* ((left (round (min x1 x2)))
+               (top (round (min y1 y2)))
+               (width (max 1 (round (abs (- x2 x1)))))
+               (height (max 1 (round (abs (- y2 y1))))))
+          `((:x . ,left)
+            (:y . ,top)
+            (:pixel-width . ,width)
+            (:pixel-height . ,height)
+            (:cols . ,(max 1 (floor width char-w)))
+            (:rows . ,(max 1 (floor height char-h)))))))))
 
 (defun pane-geometry (frame pane-name)
   "Return pixel/grid geometry for PANE-NAME in FRAME, or NIL."
   (let ((pane (and frame (clim:find-pane-named frame pane-name))))
     (when pane
-      (or (pane-geometry-candidate
-           frame
-           (pane-geometry-visible-sheet frame pane-name pane))
-          (pane-geometry-candidate frame pane)))))
+      (pane-geometry-candidate frame pane))))
 
 (defun pane-state ()
   "Return geometry for the panes used by the McCLIM e2e harness."
@@ -457,7 +441,11 @@
   "Return a JSON-ready semantic snapshot of the running McCLIM session."
   (handler-case
       (with-current-mcclim-ui-state
-        (let ((buffer (current-buffer)))
+        (let ((frame (current-mcclim-frame)))
+          (when (and frame (typep frame 'clawmacs::clawmacs-gui))
+            (ignore-errors
+              (clawmacs::mcclim-sync-buffer-from-drei frame)))
+          (let ((buffer (current-buffer)))
           `((:ready . ,(json-boolean (not (null buffer))))
             (:timestamp . ,(get-universal-time))
             (:buffer . ,(when buffer (buffer-state buffer)))
@@ -470,7 +458,7 @@
             (:minibuffer . ,(minibuffer-state))
             (:slash-completion . ,(slash-completion-state))
             (:skill-completion . ,(skill-completion-state))
-            (:selectors . ,(selector-state)))))
+            (:selectors . ,(selector-state))))))
     (error (condition)
       `((:ready . ,(json-boolean nil))
         (:timestamp . ,(get-universal-time))
