@@ -6,57 +6,28 @@
 
 (in-suite render-suite)
 
-(test format-modeline-basic
-  "format-modeline produces a left/right aligned string with major mode."
-  (let* ((buf (make-buffer "test:session" :agent-name "coder"
-                           :working-directory #P"/tmp/")))
-    (setf (buffer-token-count buf) 1000
-          (buffer-context-limit buf) 200000
-          (buffer-status buf) :idle)
-    (let ((ml (clawmacs::format-modeline buf 100 :provider-model "zai/test-model")))
-      (is (= 100 (length ml)))
-      ;; Major mode defaults to "chat"
-      (is (search "[chat]" ml))
-      (is (search "test:session" ml))
-      (is (search "zai/test-model" ml))
-      (is (search "1000/200000" ml))
-      (is (search "IDLE" ml)))))
 
-(test format-modeline-major-mode
-  "format-modeline displays the provided major-mode."
-  (let* ((buf (make-buffer "s1" :agent-name "agent"
-                           :working-directory #P"/tmp/")))
-    (setf (buffer-status buf) :idle)
-    (let ((ml (clawmacs::format-modeline buf 120
-                :major-mode "buffer-selector"
-                :provider-model "zai/glm-5")))
-      (is (= 120 (length ml)))
-      (is (search "[buffer-selector]" ml))
-      (is (search "zai/glm-5" ml)))))
+(test modeline-field-data-preserves-presentation-metadata
+  "Native McCLIM modeline rendering can present semantic fields."
+  (let ((directory #P"/tmp/")
+        (buf (make-buffer "test:session" :agent-name "coder"
+                          :working-directory #P"/tmp/")))
+    (let* ((fields (clawmacs::modeline-field-data
+                    buf :major-mode "chat"
+                    :provider-model "zai/test-model"))
+           (buffer-field (find :buffer fields :key (lambda (field)
+                                                     (getf field :id))))
+           (directory-field (find :directory fields :key (lambda (field)
+                                                           (getf field :id)))))
+      (is (eq buf (getf buffer-field :object)))
+      (is (eq 'clawmacs::buffer-ref
+              (getf buffer-field :presentation-type)))
+      (is (equal directory (getf directory-field :object)))
+      (is (eq 'pathname
+              (getf directory-field :presentation-type)))
+      (is (find :provider-model fields :key (lambda (field)
+                                              (getf field :id)))))))
 
-(test format-modeline-provider-model-position
-  "provider/model appears between agent name and working directory."
-  (let* ((buf (make-buffer "s1" :agent-name "myagent"
-                           :working-directory #P"/home/")))
-    (setf (buffer-status buf) :idle)
-    (let ((ml (clawmacs::format-modeline buf 120
-                :provider-model "openai-codex/o4-mini")))
-      ;; The order in the modeline should be: [chat] s1 | myagent | openai-codex/o4-mini | /home/
-      (let ((mode-pos (search "[chat]" ml))
-            (name-pos (search "s1" ml))
-            (agent-pos (search "myagent" ml))
-            (pm-pos (search "openai-codex/o4-mini" ml))
-            (wd-pos (search "/home/" ml)))
-        (is (not (null mode-pos)))
-        (is (not (null name-pos)))
-        (is (not (null agent-pos)))
-        (is (not (null pm-pos)))
-        (is (not (null wd-pos)))
-        ;; Verify ordering
-        (is (< mode-pos name-pos))
-        (is (< name-pos agent-pos))
-        (is (< agent-pos pm-pos))
-        (is (< pm-pos wd-pos))))))
 
 (test resolve-modeline-provider-model-includes-think-level
   "Modeline provider/model text includes think level when a buffer override is set."
@@ -69,8 +40,9 @@
       (is (search "openai-codex/gpt-5.4" pm))
       (is (search "[think:high]" pm)))))
 
-(test format-who-line-default-shows-status-context
-  "The who-line is a status strip, not a keybinding legend."
+
+(test who-line-field-data-preserves-presentation-metadata
+  "Native McCLIM who-line rendering can present semantic status fields."
   (let ((*minibuffer-active* nil)
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
@@ -79,133 +51,21 @@
         (*openai-oauth-pending* nil)
         (*deny-message-mode* nil)
         (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "s1" :agent-name "agent"
-                            :working-directory #P"/tmp/")))
-      (multiple-value-bind (row1 row2)
-          (clawmacs::format-who-line buf 120)
-        (is (search "buf:s1" row1))
-        (is (search "mode:chat" row1))
-        (is (search "agent:agent" row1))
-        (is (search "dir:/tmp/" row1))
-        (is (search "state:ready" row1))
-        (is (string= "" (string-trim " " row2)))))))
+    (let* ((directory #P"/tmp/")
+           (buf (make-buffer "s1" :agent-name "agent"
+                             :working-directory directory))
+           (fields (clawmacs::who-line-field-data buf))
+           (buffer-field (find :buffer fields :key (lambda (field)
+                                                     (getf field :id))))
+           (directory-field (find :directory fields :key (lambda (field)
+                                                           (getf field :id)))))
+      (is (eq buf (getf buffer-field :object)))
+      (is (eq 'clawmacs::buffer-ref
+              (getf buffer-field :presentation-type)))
+      (is (equal directory (getf directory-field :object)))
+      (is (eq 'pathname
+              (getf directory-field :presentation-type))))))
 
-(test format-who-line-streaming-shows-running-state
-  "Streaming chat buffers show a running status tag."
-  (let ((*minibuffer-active* nil)
-        (*buffer-selector-active* nil)
-        (*model-selector-active* nil)
-        (*think-selector-active* nil)
-        (*customize-face-state* nil)
-        (*openai-oauth-pending* nil)
-        (*deny-message-mode* nil)
-        (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "s1" :agent-name "agent"
-                            :working-directory #P"/tmp/")))
-      (setf (buffer-pending-stream buf) (clawmacs::make-stream-state))
-      (multiple-value-bind (row1 row2)
-          (clawmacs::format-who-line buf 120)
-        (is (search "state:running" row1))
-        (is (string= "" (string-trim " " row2)))))))
-
-(test format-who-line-selector-state-overrides-buffer-idle-state
-  "Modal selectors surface as who-line state tags."
-  (let ((*minibuffer-active* nil)
-        (*buffer-selector-active* t)
-        (*model-selector-active* nil)
-        (*think-selector-active* nil)
-        (*customize-face-state* nil)
-        (*openai-oauth-pending* nil)
-        (*deny-message-mode* nil)
-        (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "s1" :agent-name "agent"
-                            :working-directory #P"/tmp/")))
-      (multiple-value-bind (row1 row2)
-          (clawmacs::format-who-line buf 120)
-        (is (search "state:buffers" row1))
-        (is (string= "" (string-trim " " row2)))))))
-
-(test format-who-line-approval-includes-tool-name
-  "Approval state carries the pending tool name."
-  (let ((*minibuffer-active* nil)
-        (*buffer-selector-active* nil)
-        (*model-selector-active* nil)
-        (*think-selector-active* nil)
-        (*customize-face-state* nil)
-        (*openai-oauth-pending* nil)
-        (*deny-message-mode* nil)
-        (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "s1" :agent-name "agent"
-                            :working-directory #P"/tmp/")))
-      (setf (buffer-approval-pending buf)
-            '((:tool-name . "write")
-              (:tool-id . "toolu_1")))
-      (multiple-value-bind (row1 row2)
-          (clawmacs::format-who-line buf 120)
-        (is (search "state:approval:write" row1))
-        (is (string= "" (string-trim " " row2)))))))
-
-(test format-who-line-listener-shows-buffer-mode-and-directory
-  "Listener buffers still report their current buffer and mode context."
-  (let ((*minibuffer-active* nil)
-        (*buffer-selector-active* nil)
-        (*model-selector-active* nil)
-        (*think-selector-active* nil)
-        (*customize-face-state* nil)
-        (*openai-oauth-pending* nil)
-        (*deny-message-mode* nil)
-        (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "*listener*" :kind :listener
-                            :working-directory #P"/tmp/")))
-      (multiple-value-bind (row1 row2)
-          (clawmacs::format-who-line buf 120)
-        (is (search "buf:*listener*" row1))
-        (is (search "mode:listener" row1))
-        (is (search "dir:/tmp/" row1))
-        (is (string= "" (string-trim " " row2)))))))
-
-(test format-who-line-truncates-to-width
-  "The who-line formatter bounds the status row to WIDTH."
-  (let ((*minibuffer-active* nil)
-        (*buffer-selector-active* nil)
-        (*model-selector-active* nil)
-        (*think-selector-active* nil)
-        (*customize-face-state* nil)
-        (*openai-oauth-pending* nil)
-        (*deny-message-mode* nil)
-        (clawmacs::*buffer-ring* nil))
-    (let ((buf (make-buffer "very-long-buffer-name"
-                            :agent-name "long-agent"
-                            :working-directory
-                            #P"/tmp/very/long/path/for/who-line/testing/")))
-      (multiple-value-bind (row1 row2)
-          (clawmacs::format-who-line buf 40)
-        (is (= 40 (length row1)))
-        (is (string= "" (string-trim " " row2)))))))
-
-(test format-modeline-file-shows-position-and-mark
-  "Document buffers show point and mark status in the modeline."
-  (let ((buf (make-buffer "p:file.txt" :kind :file
-                          :agent-name "file"
-                          :working-directory #P"/tmp/")))
-    (clawmacs::set-message-text (buffer-input-message buf) "one
-two")
-    (message-forward-line (buffer-input-message buf))
-    (message-set-mark-at-point (buffer-input-message buf))
-    (let ((ml (clawmacs::format-modeline buf 100
-                :major-mode "text"
-                :provider-model "file/local")))
-      (is (search "L2:C0 Mark" ml)))))
-
-(test format-modeline-truncates-to-width
-  "format-modeline truncates when content exceeds width."
-  (let* ((buf (make-buffer "very-long-session-name" :agent-name "long-agent-name"
-                           :working-directory #P"/a/very/long/path/that/goes/on/forever/")))
-    (setf (buffer-token-count buf) 999999
-          (buffer-context-limit buf) 999999
-          (buffer-status buf) :thinking)
-    (let ((ml (clawmacs::format-modeline buf 40 :provider-model "openai-codex/gpt-5.4")))
-      (is (= 40 (length ml))))))
 
 (test calculate-input-height-minimum
   "Input height is at least 3 rows."
@@ -221,48 +81,30 @@ two")
     ;; 21 lines, terminal height 30, max = 15
     (is (= 15 (clawmacs::calculate-input-height buf 30 80)))))
 
-(test mcclim-pixel-grid-index-uses-containing-cell
-  "Pointer-to-grid conversion uses the containing cell and clamps below zero."
-  (is (= 0 (clawmacs::mcclim-pixel-grid-index 0 12)))
-  (is (= 0 (clawmacs::mcclim-pixel-grid-index 5 12)))
-  (is (= 0 (clawmacs::mcclim-pixel-grid-index 7 12)))
-  (is (= 1 (clawmacs::mcclim-pixel-grid-index 17 12)))
-  (is (= 2 (clawmacs::mcclim-pixel-grid-index 25 12)))
-  (is (= 0 (clawmacs::mcclim-pixel-grid-index -4 12)))
-  (is (= 0 (clawmacs::mcclim-pixel-grid-index 10 0))))
 
-(test mcclim-desired-input-pane-rows-expands-for-wrapped-chat-input
-  "Wrapped chat input expands the dedicated McCLIM input pane."
+(test mcclim-desired-input-pane-rows-keep-chat-input-stable
+  "Chat compose uses a stable Drei pane height."
   (let ((buf (make-buffer "chat-wrap")))
     (set-message-text (buffer-input-message buf)
                       (make-string 120 :initial-element #\x))
-    (is (> (clawmacs::mcclim-desired-input-pane-rows buf 24 20) 3))))
+    (is (= clawmacs::*mcclim-chat-input-pane-rows*
+           (clawmacs::mcclim-desired-input-pane-rows buf 24 20)))))
 
-(test mcclim-desired-input-pane-rows-keeps-document-buffers-fixed
-  "Document buffers keep the legacy fixed-height input strip."
+(test mcclim-desired-input-pane-rows-keep-document-input-stable
+  "Document editors use a stable shared Drei pane height."
   (let ((buf (make-buffer "scratch" :kind :scratch)))
     (set-message-text (buffer-input-message buf)
                       (make-string 120 :initial-element #\x))
-    (is (= 3 (clawmacs::mcclim-desired-input-pane-rows buf 24 20)))))
+    (is (= clawmacs::*mcclim-document-input-pane-rows*
+           (clawmacs::mcclim-desired-input-pane-rows buf 24 20)))))
 
-(test mcclim-hover-identity-documentation-names-pane-and-object
-  "Hyper hover text names the pane and the presented object."
-  (let ((buf (make-buffer "hovered-session")))
-    (is (string=
-         "Pane: main-pane | Object: buffer \"hovered-session\""
-         (clawmacs::mcclim-hover-identity-documentation
-          'main-pane
-          'buffer-ref
-          buf)))))
+(test mcclim-desired-input-pane-rows-hide-noneditable-special-buffers
+  "Read-only and presentation-driven special buffers do not reserve a Drei pane."
+  (dolist (kind '(:help :info :customize :font-editor))
+    (let ((buf (make-buffer (string-downcase (symbol-name kind)) :kind kind)))
+      (is (= 0 (clawmacs::mcclim-desired-input-pane-rows buf 24 20))))))
 
-(test mcclim-hover-identity-documentation-falls-back-to-pane-name
-  "Hyper hover text still names the pane when no presentation is present."
-  (is (string=
-       "Pane: input-pane"
-       (clawmacs::mcclim-hover-identity-documentation
-        'input-pane
-        nil
-        nil))))
+
 
 (test scratch-buffer-scroll-geometry-bottom-aligns-long-text
   "Scratch render geometry uses full-window rows and bottom-aligned scrolling."
@@ -281,20 +123,8 @@ two")
       (is (= 2 max-scroll)))))
 
 ;;; --------------------------------------------------------------------------
-;;; Line Wrapping Tests
+;;; Logical Line Height Tests
 ;;; --------------------------------------------------------------------------
-
-(test wrapped-line-count-short
-  "Short lines take 1 row."
-  (is (= 1 (clawmacs::wrapped-line-count "" 40)))
-  (is (= 1 (clawmacs::wrapped-line-count "hello" 40)))
-  (is (= 1 (clawmacs::wrapped-line-count (make-string 40 :initial-element #\x) 40))))
-
-(test wrapped-line-count-wrapping
-  "Long lines wrap to multiple rows."
-  (is (= 2 (clawmacs::wrapped-line-count (make-string 41 :initial-element #\x) 40)))
-  (is (= 2 (clawmacs::wrapped-line-count (make-string 80 :initial-element #\x) 40)))
-  (is (= 3 (clawmacs::wrapped-line-count (make-string 81 :initial-element #\x) 40))))
 
 (test message-visual-height-basic
   "A single-line message takes 1 visual row."
@@ -309,14 +139,12 @@ two")
     ;; 3 empty lines = 3 rows
     (is (= 3 (clawmacs::message-visual-height m 80)))))
 
-(test message-visual-height-with-wrapping
-  "Long lines in messages wrap, increasing visual height."
+(test message-visual-height-with-long-line
+  "Long physical lines remain one logical CLIM stream line."
   (let ((m (make-message :user)))
-    ;; prefix "user> " = 6 chars, so display-width = 80 - 6 = 74
-    ;; Insert 150 chars = ceiling(150/74) = 3 visual rows
     (dotimes (i 150)
       (message-insert-char m #\x))
-    (is (= 3 (clawmacs::message-visual-height m 80)))))
+    (is (= 1 (clawmacs::message-visual-height m 80)))))
 
 (test message-display-lines-include-reasoning-when-enabled
   "Reasoning blocks are display-only lines hidden unless explicitly enabled."
@@ -404,7 +232,7 @@ two")
                   :test #'string=))
       (is (= 11 (length lines))))
     (is (= 1 (clawmacs::message-visual-height m 80)))
-    (is (= 12 (clawmacs::message-visual-height
+    (is (= 11 (clawmacs::message-visual-height
               m 80
               :show-metadata-p t)))))
 
@@ -485,61 +313,3 @@ two")
             (clawmacs::mcclim-rendered-message-presentation-type tool-call)))
     (is (eq 'clawmacs::tool-result
             (clawmacs::mcclim-rendered-message-presentation-type tool-result)))))
-
-;;; --------------------------------------------------------------------------
-;;; Buffer Selector Rendering Tests
-;;; --------------------------------------------------------------------------
-
-(test format-selector-line-fits-width
-  "format-selector-line output is exactly the given width."
-  (let ((line (clawmacs::format-selector-line "▸ " "my-session" "coder" "idle" "5" 80)))
-    (is (= 80 (length line)))
-    (is (search "my-session" line))
-    (is (search "coder" line))
-    (is (search "idle" line))
-    (is (search "5" line))))
-
-(test format-selector-line-truncates-at-narrow-width
-  "format-selector-line truncates to fit narrow terminals."
-  (let ((line (clawmacs::format-selector-line "  " "very-long-session-name" "coder" "thinking" "12" 40)))
-    (is (= 40 (length line)))))
-
-;;; --------------------------------------------------------------------------
-;;; Model Selector Rendering Tests
-;;; --------------------------------------------------------------------------
-
-(test format-model-selector-line-fits-width
-  "format-model-selector-line output is exactly the given width."
-  (let ((line (clawmacs::format-model-selector-line "▸ " "zai" "glm-5" 80)))
-    (is (= 80 (length line)))
-    (is (search "zai" line))
-    (is (search "glm-5" line))))
-
-(test format-model-selector-line-with-active-marker
-  "format-model-selector-line shows the active marker."
-  (let ((line (clawmacs::format-model-selector-line "▸*" "zai" "glm-5" 80)))
-    (is (= 80 (length line)))
-    (is (search "▸*" line))
-    (is (search "zai" line))
-    (is (search "glm-5" line))))
-
-(test format-model-selector-line-truncates-at-narrow-width
-  "format-model-selector-line truncates for narrow terminals."
-  (let ((line (clawmacs::format-model-selector-line "  " "openai-codex" "codex-mini-latest" 30)))
-    (is (= 30 (length line)))))
-
-;;; --------------------------------------------------------------------------
-;;; Think Selector Rendering Tests
-;;; --------------------------------------------------------------------------
-
-(test format-think-selector-line-fits-width
-  "format-think-selector-line output is exactly the given width."
-  (let ((line (clawmacs::format-think-selector-line "▸ " "high" 40)))
-    (is (= 40 (length line)))
-    (is (search "▸ " line))
-    (is (search "high" line))))
-
-(test format-think-selector-line-truncates-at-narrow-width
-  "format-think-selector-line truncates for narrow terminals."
-  (let ((line (clawmacs::format-think-selector-line "  " "default" 8)))
-    (is (= 8 (length line)))))

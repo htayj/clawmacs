@@ -1223,177 +1223,96 @@ These extracted files remain outside the repository."
             (or char #\Space)
             preview)))
 
-(defun font-editor-draw-action-button
-    (pane x y label action char-h text-style)
-  "Draw one clickable action button."
-  (let* ((fg (clim:make-rgb-color 0.0 0.0 0.0))
-         (bg (clim:make-rgb-color 0.87 0.87 0.87))
-         (width (+ 12 (text-pixel-width pane label text-style))))
-    (clim:with-output-as-presentation
-        (pane action 'font-editor-action-ref :single-box t)
-      (clim:draw-rectangle* pane x y (+ x width) (+ y char-h)
-                            :filled t
-                            :ink bg)
-      (clim:draw-rectangle* pane x y (+ x width) (+ y char-h)
-                            :ink fg)
-      (draw-text-at-pixels pane (+ x 6) y label fg bg text-style char-h))
-    width))
+(defun font-editor-write-action (pane label action)
+  "Write one font-editor action as a native CLIM presentation."
+  (clim:with-output-as-presentation
+      (pane action 'font-editor-action-ref :single-box t)
+    (write-string label pane)))
 
-(defun font-editor-draw-pixel-grid
-    (pane buf origin-x origin-y cell-size)
-  "Draw BUF's editable glyph pixel grid."
-  (let* ((glyph (font-editor-current-glyph buf))
-         (bitmap (bitmap-glyph-bitmap glyph))
-         (state (font-editor-buffer-state buf))
-         (canvas-width (font-editor-canvas-width buf))
-         (canvas-height (font-editor-canvas-height buf))
-         (ink-on (clim:make-rgb-color 0.1 0.1 0.1))
-         (ink-off (clim:make-rgb-color 1.0 1.0 1.0))
-         (ink-grid (clim:make-rgb-color 0.72 0.72 0.72))
-         (ink-cursor (clim:make-rgb-color 0.82 0.1 0.1)))
-    (dotimes (y canvas-height)
-      (dotimes (x canvas-width)
-        (let* ((x0 (+ origin-x (* x cell-size)))
-               (y0 (+ origin-y (* y cell-size)))
-               (x1 (+ x0 cell-size))
-               (y1 (+ y0 cell-size))
-               (filled-p (and (< y (array-dimension bitmap 0))
-                              (< x (array-dimension bitmap 1))
-                              (= 1 (aref bitmap y x)))))
-          (clim:with-output-as-presentation
-              (pane (list :x x :y y) 'font-editor-pixel-ref :single-box t)
-            (clim:draw-rectangle* pane x0 y0 x1 y1
-                                  :filled t
-                                  :ink (if filled-p ink-on ink-off))
-            (clim:draw-rectangle* pane x0 y0 x1 y1 :ink ink-grid))
-          (when (and (= x (font-editor-state-cursor-x state))
-                     (= y (font-editor-state-cursor-y state)))
-            (clim:draw-rectangle* pane (+ x0 1) (+ y0 1) (- x1 1) (- y1 1)
-                                  :ink ink-cursor)))))))
-
-(defun font-editor-draw-preview-grid
-    (pane bitmap origin-x origin-y pixel-size)
-  "Draw BITMAP preview at ORIGIN-X / ORIGIN-Y."
-  (let* ((height (array-dimension bitmap 0))
-         (width (array-dimension bitmap 1))
-         (ink-on (clim:make-rgb-color 0.0 0.0 0.0))
-         (ink-off (clim:make-rgb-color 1.0 1.0 1.0))
-         (ink-grid (clim:make-rgb-color 0.85 0.85 0.85)))
+(defun font-editor-write-raster-lines (pane glyph)
+  "Write GLYPH bitmap as text rows; no custom pixel canvas is drawn."
+  (let* ((bitmap (bitmap-glyph-bitmap glyph))
+         (height (array-dimension bitmap 0))
+         (width (array-dimension bitmap 1)))
     (dotimes (y height)
       (dotimes (x width)
-        (let ((x0 (+ origin-x (* x pixel-size)))
-              (y0 (+ origin-y (* y pixel-size)))
-              (x1 (+ origin-x (* (1+ x) pixel-size)))
-              (y1 (+ origin-y (* (1+ y) pixel-size))))
-          (clim:draw-rectangle* pane x0 y0 x1 y1
-                                :filled t
-                                :ink (if (= 1 (aref bitmap y x))
-                                         ink-on
-                                         ink-off))
-          (when (> pixel-size 2)
-            (clim:draw-rectangle* pane x0 y0 x1 y1 :ink ink-grid)))))))
+        (let ((cell (list :x x :y y)))
+          (clim:with-output-as-presentation
+              (pane cell 'font-editor-pixel-ref :single-box t)
+            (write-char (if (= 1 (aref bitmap y x)) #\# #\.) pane))))
+      (terpri pane))))
 
-(defun font-editor-draw-catalog (pane buf origin-x origin-y row-height text-style)
-  "Draw the visible glyph catalog for BUF."
+(defun font-editor-write-catalog (pane buf)
+  "Write the visible glyph catalog as native CLIM stream presentations."
   (let* ((state (font-editor-buffer-state buf))
-         (fg (clim:make-rgb-color 0.0 0.0 0.0))
-         (normal-bg (clim:make-rgb-color 0.96 0.96 0.96))
-         (selected-bg (clim:make-rgb-color 0.78 0.87 1.0))
-         (codes (font-editor-visible-catalog-codes buf)))
-    (loop :for code :in codes
-          :for row :from 0
-          :for glyph := (bitmap-font-glyph (font-editor-state-font state) code)
-          :for y := (+ origin-y (* row row-height))
-          :for line := (font-editor-catalog-line glyph)
-          :for bg := (if (= code (font-editor-state-selected-code state))
-                         selected-bg
-                         normal-bg)
-          :do (clim:with-output-as-presentation
-                  (pane code 'font-editor-glyph-ref :single-box t)
-                (draw-text-at-pixels pane origin-x y line fg bg text-style row-height
-                                     :background-width
-                                     (+ 8 (text-pixel-width pane line text-style)))))))
+         (selected-code (font-editor-state-selected-code state)))
+    (clim:formatting-table (pane)
+      (clim:formatting-row (pane)
+        (clim:formatting-cell (pane) (write-string "Code" pane))
+        (clim:formatting-cell (pane) (write-string "Glyph" pane))
+        (clim:formatting-cell (pane) (write-string "Preview" pane)))
+      (dolist (code (font-editor-visible-catalog-codes buf))
+        (let* ((glyph (bitmap-font-glyph (font-editor-state-font state) code))
+               (char (printable-code-char code)))
+          (clim:with-output-as-presentation
+              (pane code 'font-editor-glyph-ref :single-box t)
+            (clim:formatting-row (pane)
+              (clim:formatting-cell (pane)
+                (format pane "~:[ ~;>~] ~D"
+                        (= code selected-code)
+                        code))
+              (clim:formatting-cell (pane)
+                (format pane "~:[ ~;~C~]"
+                        (not (null char))
+                        (or char #\Space)))
+              (clim:formatting-cell (pane)
+                (write-string (font-editor-mini-preview glyph) pane)))))))))
 
 (defun mcclim-render-font-editor-buffer (pane buf rows cols char-w char-h)
-  "Render BUF's CADR-style bitmap font editor in PANE."
-  (declare (ignore rows))
+  "Render BUF's font editor as a native CLIM presentation-based view.
+
+This intentionally sacrifices the hand-drawn CADR-style pixel canvas. Pixels,
+glyphs, and actions remain semantic presentations rendered as stream text."
+  (declare (ignore char-w char-h))
   (let* ((state (font-editor-buffer-state buf))
          (font (font-editor-state-font state))
-         (glyph (font-editor-current-glyph buf))
-         (pane-width (* cols char-w))
-         (pane-height (nth-value 1 (pane-pixel-size pane)))
-         (text-style (clim:make-text-style :fix :roman :normal))
-         (fg (clim:make-rgb-color 0.0 0.0 0.0))
-         (bg (clim:make-rgb-color 1.0 1.0 1.0))
-         (header-h char-h)
-         (button-y 0)
-         (info-y (+ button-y (* 2 char-h)))
-         (grid-origin-x 10)
-         (grid-origin-y (+ info-y (* 3 char-h)))
-         (catalog-x (max (+ grid-origin-x 380) (- pane-width 290)))
-         (catalog-y (+ info-y char-h))
-         (catalog-row-h char-h)
-         (preview-y (+ catalog-y (* 12 catalog-row-h)))
-         (canvas-width (font-editor-canvas-width buf))
-         (canvas-height (font-editor-canvas-height buf))
-         (cell-size (max 8
-                         (min 22
-                              (floor (max 80 (- catalog-x grid-origin-x 20))
-                                     (max 1 canvas-width))
-                              (floor (max 80 (- pane-height grid-origin-y 40))
-                                     (max 1 canvas-height)))))
-         (preview (font-editor-preview-raster
-                   font
-                   (font-editor-state-sample-string state))))
-    (clear-pane-with-ink pane bg)
-    (let ((button-x 10))
-      (dolist (entry '(("Open" . :open)
-                       ("Save" . :save)
-                       ("Export BDF" . :export-bdf)
-                       ("Extract Genera BDF" . :extract-genera)
-                       ("Sample" . :sample)
-                       ("Prev Glyph" . :prev-glyph)
-                       ("Next Glyph" . :next-glyph)))
-        (incf button-x
-              (+ 8
-                 (font-editor-draw-action-button pane button-x button-y
-                                                 (car entry)
-                                                 (cdr entry)
-                                                 header-h
-                                                 text-style)))))
-    (draw-text-at-pixels pane 10 info-y
-                         (format nil "~A | font ~A | baseline ~D line ~D | dirty ~:[no~;yes~]"
-                                 (font-editor-glyph-heading buf)
-                                 (bitmap-font-name font)
-                                 (bitmap-font-baseline font)
-                                 (bitmap-font-line-spacing font)
-                                 (font-editor-state-dirty-p state))
-                         fg bg text-style char-h)
-    (draw-text-at-pixels pane 10 (+ info-y char-h)
-                         (format nil "advance ~D  x-offset ~D  y-offset ~D  source ~A"
-                                 (bitmap-glyph-advance-width glyph)
-                                 (bitmap-glyph-x-offset glyph)
-                                 (bitmap-glyph-y-offset glyph)
-                                 (or (and (font-editor-state-source-path state)
-                                          (file-namestring
-                                           (font-editor-state-source-path state)))
-                                     "none"))
-                         fg bg text-style char-h)
-    (draw-text-at-pixels pane 10 (+ info-y (* 2 char-h))
-                         (font-editor-state-status-text state)
-                         fg bg text-style char-h)
-    (font-editor-draw-pixel-grid pane buf grid-origin-x grid-origin-y cell-size)
-    (draw-text-at-pixels pane catalog-x info-y
-                         "Glyph Catalog"
-                         fg bg text-style char-h)
-    (font-editor-draw-catalog pane buf catalog-x catalog-y catalog-row-h text-style)
-    (draw-text-at-pixels pane catalog-x preview-y
-                         "Sample Preview"
-                         fg bg text-style char-h)
-    (font-editor-draw-preview-grid pane preview
-                                   catalog-x
-                                   (+ preview-y char-h)
-                                   2)
+         (glyph (font-editor-current-glyph buf)))
+    (write-string (font-editor-glyph-heading buf) pane)
+    (terpri pane)
+    (format pane "font ~A  baseline ~D  line ~D  dirty ~:[no~;yes~]~%"
+            (bitmap-font-name font)
+            (bitmap-font-baseline font)
+            (bitmap-font-line-spacing font)
+            (font-editor-state-dirty-p state))
+    (format pane "advance ~D  x-offset ~D  y-offset ~D  source ~A~%"
+            (bitmap-glyph-advance-width glyph)
+            (bitmap-glyph-x-offset glyph)
+            (bitmap-glyph-y-offset glyph)
+            (or (and (font-editor-state-source-path state)
+                     (file-namestring
+                      (font-editor-state-source-path state)))
+                "none"))
+    (write-string (font-editor-state-status-text state) pane)
+    (terpri pane)
+    (terpri pane)
+    (dolist (entry '(("Open" . :open)
+                     ("Save" . :save)
+                     ("Export BDF" . :export-bdf)
+                     ("Extract Genera BDF" . :extract-genera)
+                     ("Sample" . :sample)
+                     ("Prev Glyph" . :prev-glyph)
+                     ("Next Glyph" . :next-glyph)))
+      (font-editor-write-action pane (car entry) (cdr entry))
+      (write-string "  " pane))
+    (terpri pane)
+    (terpri pane)
+    (write-string "Bitmap" pane)
+    (terpri pane)
+    (font-editor-write-raster-lines pane glyph)
+    (terpri pane)
+    (write-string "Glyph Catalog" pane)
+    (terpri pane)
+    (font-editor-write-catalog pane buf)
     (when (fboundp 'mcclim-record-render-snapshot)
       (funcall (symbol-function 'mcclim-record-render-snapshot)
                (clim:pane-frame pane)
@@ -1408,8 +1327,8 @@ These extracted files remain outside the repository."
 
 (defun font-editor-empty-input-pane (pane buf rows cols char-w char-h)
   "Render the empty input area for a font editor buffer."
-  (declare (ignore buf rows cols char-w char-h))
-  (clear-pane-with-ink pane (clim:make-rgb-color 0.96 0.96 0.96)))
+  (declare (ignore pane buf rows cols char-w char-h))
+  nil)
 
 (defun font-editor-handle-key (buf key)
   "Handle BUF-local key input for the bitmap font editor."

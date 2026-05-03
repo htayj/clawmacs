@@ -361,10 +361,23 @@ Returns a string like \"zai/glm-5\" or \"??\" on error."
     (error () "??")))
 
 (defun format-modeline (buf width &key (major-mode "chat") provider-model)
-  "Format the modeline string for BUF, fitting within WIDTH columns.
-MAJOR-MODE is displayed on the far left (e.g. \"chat\", \"buffer-selector\").
-PROVIDER-MODEL is the provider/model string (e.g. \"zai/glm-5\");
-when nil it is resolved from the buffer's agent defaults."
+  "Compatibility helper for tooling that still expects a string modeline."
+  (let* ((texts (mapcar (lambda (field) (getf field :text))
+                        (modeline-field-data buf
+                                            :major-mode major-mode
+                                            :provider-model provider-model)))
+         (row (format nil "~{~A~^ | ~}" texts)))
+    (if (>= (length row) width)
+        (subseq row 0 width)
+        (concatenate 'string row
+                     (make-string (- width (length row))
+                                  :initial-element #\Space)))))
+
+;;; Modeline rendering uses `modeline-field-data' and native CLIM stream
+;;; presentations; fixed-width modeline strings were removed.
+
+(defun modeline-field-data (buf &key (major-mode "chat") provider-model)
+  "Return ordered modeline field plists for native CLIM presentation output."
   (let* ((pm (or provider-model (resolve-modeline-provider-model buf)))
          (dirty-marker (if (and buf (buffer-dirty-p buf)) "*" ""))
          (input (and buf (buffer-input-message buf)))
@@ -374,28 +387,33 @@ when nil it is resolved from the buffer's agent defaults."
                                 (message-current-line-number input)
                                 (message-current-column-number input)
                                 (message-mark-active-p input))))
-         (left (format nil " [~A~A] ~A | ~A | ~A | ~A"
-                       major-mode
-                       dirty-marker
-                       (buffer-name buf)
-                       (buffer-agent-name buf)
-                       pm
-                       (namestring (buffer-working-directory buf))))
-         (position-prefix (if position
-                              (format nil "~A | " position)
-                              ""))
-         (right (format nil "~A~A/~A | ~A "
-                        position-prefix
-                        (buffer-token-count buf)
-                        (buffer-context-limit buf)
-                        (buffer-status buf)))
-         (padding (max 1 (- width (length left) (length right))))
-         (pad-str (make-string padding :initial-element #\Space))
-         (padded (concatenate 'string left pad-str right)))
-    (if (>= (length padded) width)
-        (subseq padded 0 width)
-        (let ((extra (- width (length padded))))
-          (concatenate 'string padded (make-string extra :initial-element #\Space))))))
+         (fields nil))
+    (labels ((add-field (id text &key object presentation-type)
+               (unless (blank-string-p text)
+                 (push (list :id id
+                             :text text
+                             :object object
+                             :presentation-type presentation-type)
+                       fields))))
+      (add-field :mode (format nil "[~A~A]" major-mode dirty-marker))
+      (when buf
+        (add-field :buffer (buffer-name buf)
+                   :object buf
+                   :presentation-type 'buffer-ref)
+        (add-field :agent (buffer-agent-name buf))
+        (add-field :provider-model pm)
+        (when (buffer-working-directory buf)
+          (add-field :directory (namestring (buffer-working-directory buf))
+                     :object (buffer-working-directory buf)
+                     :presentation-type 'pathname))
+        (when position
+          (add-field :position position))
+        (add-field :tokens
+                   (format nil "~A/~A"
+                           (buffer-token-count buf)
+                           (buffer-context-limit buf)))
+        (add-field :status (format nil "~A" (buffer-status buf))))
+      (nreverse fields))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Who-Line Formatting (pure string functions, Lisp-machine style)
@@ -498,39 +516,42 @@ when nil it is resolved from the buffer's agent defaults."
                      :object (buffer-working-directory buf)
                      :presentation-type 'pathname)))
       (add-field :state
-                 (format nil "state:~A" (who-line-status-string buf)))
-      (add-field :memory
-                 (who-line-memory-summary)))
+                 (format nil "state:~A" (who-line-status-string buf))))
     (nreverse fields)))
 
 (defun format-who-line (buf width)
-  "Return two strings for the who-line.
+  "Compatibility helper for tooling that still expects fixed who-line strings."
+  (let* ((texts (mapcar (lambda (field) (getf field :text))
+                        (who-line-field-data buf)))
+         (row (format nil "~{~A~^  ~}" texts)))
+    (flet ((pad (str)
+             (if (>= (length str) width)
+                 (subseq str 0 width)
+                 (concatenate 'string str
+                              (make-string (- width (length str))
+                                           :initial-element #\Space)))))
+      (values (pad row) (pad "")))))
 
-The first value is the single visible status row.  The second value is blank
-for compatibility with older callers and snapshots that still expect two
-values."
-  (flet ((pad (str)
-           (if (>= (length str) width)
-               (subseq str 0 width)
-               (concatenate 'string str
-                            (make-string (- width (length str))
-                                         :initial-element #\Space)))))
-    (let* ((texts (mapcar (lambda (field) (getf field :text))
-                          (who-line-field-data buf)))
-           (row1 (format nil "~{~A~^  ~}" texts)))
-      (values (pad row1)
-              (pad "")))))
+(defun format-session-tree-selector-line (marker item width)
+  "Compatibility helper for tooling that still expects a selector row string."
+  (let* ((line (format nil "~A ~A~A~A"
+                       marker
+                       (or (getf item :tree-prefix) "")
+                       (if (getf item :active-p) "*" " ")
+                       (or (getf item :label)
+                           (plist-display item)
+                           ""))))
+    (if (>= (length line) width)
+        (subseq line 0 width)
+        (concatenate 'string line
+                     (make-string (- width (length line))
+                                  :initial-element #\Space)))))
 
-;;; --------------------------------------------------------------------------
-;;; Line Wrapping Helpers (pure geometry)
-;;; --------------------------------------------------------------------------
+;;; Who-line rendering uses `who-line-field-data' and native CLIM stream
+;;; presentations; fixed-width who-line strings were removed.
 
-(defun wrapped-line-count (content display-width)
-  "Return the number of visual rows needed to display CONTENT within DISPLAY-WIDTH.
-An empty string takes 1 row. A string exactly DISPLAY-WIDTH chars takes 1 row."
-  (if (or (zerop (length content)) (<= (length content) display-width))
-      1
-      (ceiling (length content) display-width)))
+;;; CLIM stream panes own line wrapping; render-core keeps logical line data
+;;; only.
 
 (defun message-line-entries (msg)
   "Return display line entries for MSG as (TEXT . SOURCE-LINE)."
@@ -746,15 +767,15 @@ VISIBLE-TEXT is used to avoid showing the same provider fallback text twice."
 (defun message-visual-height (msg width &key (prefix (message-sender-prefix msg))
                                              show-reasoning-p
                                              show-metadata-p)
-  "Return the total visual rows MSG needs at the given terminal WIDTH.
-Accounts for the sender prefix and line wrapping."
-  (let* ((prefix-len (length prefix))
-         (display-width (max 1 (- width prefix-len))))
-    (loop :for line :in (message-display-line-strings
-                         msg
-                         :show-reasoning-p show-reasoning-p
-                         :show-metadata-p show-metadata-p)
-          :sum (wrapped-line-count line display-width))))
+  "Return a logical line count for MSG.
+
+CLIM owns physical wrapping; WIDTH and PREFIX are compatibility arguments for
+legacy scroll metadata."
+  (declare (ignore width prefix))
+  (length (message-display-line-strings
+           msg
+           :show-reasoning-p show-reasoning-p
+           :show-metadata-p show-metadata-p)))
 
 (defun scratch-buffer-scroll-geometry (buf viewport-height width)
   "Return scratch render geometry as values START-ROW, SCROLL-OFFSET, MAX-SCROLL.
@@ -945,78 +966,9 @@ During approval prompts, allows up to 2/3 of terminal height."
         :collect (subseq str start (or pos (length str)))
         :while pos))
 
-;;; --------------------------------------------------------------------------
-;;; Selector Formatting (pure string functions)
-;;; --------------------------------------------------------------------------
-
-(defun format-selector-line (marker name agent status count-str width)
-  "Format a single line for the buffer selector with aligned columns.
-Adapts column widths to the terminal WIDTH."
-  (let* ((name-width (max 8 (min 30 (floor width 4))))
-         (agent-width (max 6 (min 15 (floor width 6))))
-         (status-width (max 6 (min 12 (floor width 8))))
-         (line (format nil "~A~VA  ~VA  ~VA  ~A"
-                       marker
-                       name-width name
-                       agent-width agent
-                       status-width status
-                       count-str)))
-    (if (<= (length line) width)
-        (concatenate 'string line
-                     (make-string (- width (length line)) :initial-element #\Space))
-        (subseq line 0 width))))
-
-(defun format-model-selector-line (marker provider model width)
-  "Format a single line for the model selector with aligned columns.
-MARKER is a 2-char prefix (e.g. \"*\" or \"  \").
-Adapts column widths to the terminal WIDTH."
-  (let* ((provider-width (max 10 (min 20 (floor width 4))))
-         (model-width (max 15 (- width (length marker) provider-width 4)))
-         (line (format nil "~A~VA  ~A"
-                       marker
-                       provider-width provider
-                       model)))
-    (if (<= (length line) width)
-        (concatenate 'string line
-                     (make-string (- width (length line)) :initial-element #\Space))
-        (subseq line 0 width))))
-
-(defun format-think-selector-line (marker label width)
-  "Format a single line for the think-level selector.
-LABEL is typically \"default\", \"low\", or another reasoning-effort value."
-  (let ((line (format nil "~A~A" marker label)))
-    (if (<= (length line) width)
-        (concatenate 'string line
-                     (make-string (- width (length line)) :initial-element #\Space))
-        (subseq line 0 width))))
-
-(defun format-session-tree-selector-line (marker item width)
-  "Format a single session tree selector ITEM."
-  (let* ((prefix (or (getf item :tree-prefix) ""))
-         (active (if (getf item :active-p) "*" " "))
-         (kind (or (getf item :kind-label) "entry"))
-         (label (getf item :label))
-         (label-part (if label
-                         (format nil " [~A]" label)
-                         ""))
-         (fold-part (cond
-                      ((getf item :folded-p) "+ ")
-                      ((plusp (or (getf item :children-count) 0))
-                       "- ")
-                      (t "  ")))
-         (line (format nil "~A~A ~A~A~A ~A ~A"
-                       marker
-                       active
-                       prefix
-                       fold-part
-                       kind
-                       label-part
-                       (or (getf item :content) ""))))
-    (if (<= (length line) width)
-        (concatenate 'string line
-                     (make-string (- width (length line))
-                                  :initial-element #\Space))
-        (subseq line 0 width))))
+;;; Selector views are rendered by McCLIM formatted-output tables and
+;;; presentations.  Fixed-width string selector formatters were removed with
+;;; the hand-rolled renderer.
 
 ;;; --------------------------------------------------------------------------
 ;;; Minibuffer State Query (pure function)

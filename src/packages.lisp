@@ -1103,7 +1103,6 @@
    #:list-functions
    #:find-keybindings-for-command
    #:format-key-binding
-   #:format-session-tree-selector-line
    #:describe-function-to-string
    #:make-help-buffer
    #:describe-function-command

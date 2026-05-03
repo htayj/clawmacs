@@ -78,9 +78,6 @@
          (clawmacs:remove-advice 'clawmacs::mcclim-render-buffer
                                  'clawmacs::quaestor-mcclim-render-buffer))
        (ignore-errors
-         (clawmacs:remove-advice 'clawmacs::format-who-line
-                                 'clawmacs::quaestor-format-who-line-advice))
-       (ignore-errors
          (clawmacs:remove-advice 'clawmacs::init-default-keymap
                                  'clawmacs::quaestor-init-default-keymap)))))
 
