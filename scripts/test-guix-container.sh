@@ -23,6 +23,7 @@ TMP_CONTAINER_BIN="$TMP_DIR/container-bin"
 mkdir -p "$TMP_CONTAINER_BIN"
 TMP_SSL_LIB="$TMP_DIR/ssl/lib"
 mkdir -p "$TMP_SSL_LIB"
+export TMP_SSL_LIB
 touch "$TMP_SSL_LIB/libssl.so.3"
 TMP_FONT_DIR="$TMP_DIR/fonts"
 mkdir -p "$TMP_FONT_DIR"
@@ -32,8 +33,9 @@ TMP_FONT_UNREADABLE="$TMP_FONT_DIR/unreadable.ttf"
 cp "$TMP_FONT_FILE" "$TMP_FONT_UNREADABLE"
 chmod 000 "$TMP_FONT_UNREADABLE"
 REAL_SHA256SUM=$(command -v sha256sum)
+REAL_MKDIR=$(command -v mkdir)
 EXPECTED_SHA=$(printf 'quicklisp\n' | "$REAL_SHA256SUM" | cut -d' ' -f1)
-export REAL_SHA256SUM
+export REAL_SHA256SUM REAL_MKDIR
 TEST_CONTAINER_PATH="$TMP_CONTAINER_BIN"
 export TEST_CONTAINER_PATH
 
@@ -47,6 +49,17 @@ write_bootstrap_env() {
 }
 
 write_bootstrap_env "$EXPECTED_SHA"
+cat > "$TMP_BIN/mkdir" <<'EOF'
+#!/bin/sh
+case ":${LD_LIBRARY_PATH:-}:" in
+  *:"$TMP_SSL_LIB":*)
+    exit 97
+    ;;
+esac
+exec "$REAL_MKDIR" "$@"
+EOF
+chmod +x "$TMP_BIN/mkdir"
+
 
 cat > "$TMP_BIN/sbcl" <<'EOF'
 #!/bin/sh

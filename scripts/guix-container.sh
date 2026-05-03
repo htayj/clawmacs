@@ -14,6 +14,7 @@ HOST_HOME=''
 HOST_QUICKLISP_SETUP=''
 HOST_CONFIG_DIR=''
 RESOLVED_SSL_LIB_PATH=''
+RUNTIME_LD_LIBRARY_PATH=''
 CONTAINER_LAUNCH_DIR=/tmp
 GUIX_MANIFEST_PATH=''
 HOST_USER_HOME=${HOME:-}
@@ -459,23 +460,26 @@ validate_canonical_override() {
   override_path_has_allowed_prefix "$canonical_path" || fail 117 "invalid override path"
 }
 
-prepend_ld_library_path() {
+add_runtime_library_path() {
   lib_dir="$1"
 
   if [ -z "$lib_dir" ] || [ ! -d "$lib_dir" ]; then
     return 0
   fi
+  if [ -e "$lib_dir/libc.so" ] || [ -e "$lib_dir/libc.so.6" ]; then
+    return 0
+  fi
 
-  case ":${LD_LIBRARY_PATH:-}:" in
+  case ":${RUNTIME_LD_LIBRARY_PATH:-}:" in
     *:"$lib_dir":*)
       return 0
       ;;
   esac
 
-  if [ -n "${LD_LIBRARY_PATH:-}" ]; then
-    export LD_LIBRARY_PATH="$lib_dir:$LD_LIBRARY_PATH"
+  if [ -n "${RUNTIME_LD_LIBRARY_PATH:-}" ]; then
+    RUNTIME_LD_LIBRARY_PATH="$lib_dir:$RUNTIME_LD_LIBRARY_PATH"
   else
-    export LD_LIBRARY_PATH="$lib_dir"
+    RUNTIME_LD_LIBRARY_PATH="$lib_dir"
   fi
 }
 
@@ -498,6 +502,7 @@ validate_runtime_openssl_path() {
     fi
 
     if [ -n "$resolved_ssl_file" ]; then
+      resolved_ssl_file=$(resolve_canonical_path "$resolved_ssl_file" || printf '%s\n' "$resolved_ssl_file")
       RESOLVED_SSL_LIB_PATH=${resolved_ssl_file%/*}
     fi
   fi
@@ -509,7 +514,7 @@ validate_runtime_openssl_path() {
     return 0
   fi
 
-  prepend_ld_library_path "$RESOLVED_SSL_LIB_PATH"
+  add_runtime_library_path "$RESOLVED_SSL_LIB_PATH"
 }
 
 resolve_runtime_libgcc_path() {
@@ -522,7 +527,8 @@ resolve_runtime_libgcc_path() {
   fi
 
   if [ -n "$resolved_libgcc_file" ]; then
-    prepend_ld_library_path "${resolved_libgcc_file%/*}"
+    resolved_libgcc_file=$(resolve_canonical_path "$resolved_libgcc_file" || printf '%s\n' "$resolved_libgcc_file")
+    add_runtime_library_path "${resolved_libgcc_file%/*}"
   fi
 }
 
@@ -620,8 +626,9 @@ launch_payload() {
     fi
   fi
 
+  export RUNTIME_LD_LIBRARY_PATH
   # shellcheck disable=SC2086
-  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_DEBUG_LOG|CLAWMACS_PROMPT_PROJECT_ROOT|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}" CLAWMACS_PROMPT_PROJECT_ROOT="${CLAWMACS_PROMPT_PROJECT_ROOT:-/workspace}"; exec "$@"' bash "$@"
+  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_DEBUG_LOG|CLAWMACS_PROMPT_PROJECT_ROOT|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|RUNTIME_LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}" CLAWMACS_PROMPT_PROJECT_ROOT="${CLAWMACS_PROMPT_PROJECT_ROOT:-/workspace}"; if [ -n "${RUNTIME_LD_LIBRARY_PATH:-}" ]; then export LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH"; else unset LD_LIBRARY_PATH; fi; exec "$@"' bash "$@"
 }
 
 main() {
