@@ -1053,7 +1053,6 @@ same
                                                "PLAN OK"
                                                "BUILD OK")))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (initialize-test-tools)
             (let ((result (clawmacs:run-pipeline-prompt
                            "ship fizzbuzz"
@@ -1113,7 +1112,6 @@ same
                                       (list (clawmacs::canonical-text-block
                                              text)))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (initialize-test-tools)
             (let* ((buf (clawmacs::make-prompt-buffer "fix failing tests"
                                                        "agent"))
@@ -1200,6 +1198,7 @@ same
                      (list :kind :text
                            :text "{\"passed\":true,\"summary\":\"unit passed\",\"feedback\":\"unit passed on second run\",\"tests\":[\"unit\"]}")
                      (list :kind :text :text "DOCS DONE")
+                     (list :kind :text :text "INIT DONE")
                      (list :kind :text :text "INIT DONE"))
                     test-reports
                     (list
@@ -1265,7 +1264,6 @@ same
                                   (getf response :name)
                                   (getf response :input))))))))
                   (clawmacs::init-default-keymap)
-                  (clawmacs::init-global-faces)
                   (initialize-test-tools)
                   (let* ((buf (clawmacs::make-prompt-buffer
                                "build a self-modifying workflow"
@@ -1282,7 +1280,7 @@ same
                          (first-implement (second calls))
                          (first-test (third calls))
                          (second-plan (fifth calls))
-                         (init-call (tenth calls)))
+                         (init-call (first (last calls))))
                     (is (equal '("plan" "implement" "test"
                                  "plan" "implement" "test"
                                  "docs" "init")
@@ -1337,7 +1335,6 @@ same
                                     (list (clawmacs::canonical-text-block
                                            "DONE"))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (initialize-test-tools)
             (let* ((buf (clawmacs::make-prompt-buffer "go" "agent"))
                    (result (clawmacs:run-pipeline-on-buffer
@@ -1380,11 +1377,9 @@ same
                                     (list (clawmacs::canonical-text-block
                                            "PIPELINE DONE"))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (initialize-test-tools)
             (let ((buf (make-buffer "pipeline-chat"
                                     :pipeline-name "one-stage")))
-              (clawmacs::init-face-registry buf)
               (clawmacs:set-buffer-provider-override buf :zai)
               (clawmacs:set-buffer-model-override buf "glm-5")
               (clawmacs::set-message-text (buffer-input-message buf)
@@ -1592,7 +1587,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "ephemeral answer"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let* ((options (clawmacs::parse-clawmacs-prompt-args
                            '("--ephemeral"
@@ -1817,8 +1811,6 @@ same
         (saw-input nil)
         (saw-read-only nil)
         (sent-p nil))
-    (clawmacs::init-global-faces)
-    (clawmacs::init-face-registry buf)
     (clawmacs::set-message-text (buffer-input-message buf)
                                 "current user request")
     (with-function-override (clawmacs::send-to-agent-with-context (buffer)
@@ -1912,7 +1904,6 @@ same
                                       (clawmacs::canonical-reasoning-block
                                        "provider reasoning summary"))))
         (clawmacs::init-default-keymap)
-        (clawmacs::init-global-faces)
         (initialize-test-tools)
         (let ((result (clawmacs:run-single-prompt
                        "Say hello"
@@ -1970,7 +1961,6 @@ same
                                           :uncached-input-tokens 40
                                           :cache-hit-rate 0.6666667)))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let* ((result (clawmacs:run-single-prompt
                           "Compute two plus three"
@@ -2039,7 +2029,6 @@ same
                                         (list (clawmacs::canonical-text-block
                                                "second answer"))))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let* ((first (clawmacs:run-session-prompt
                          "First prompt"
@@ -2102,7 +2091,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "cached"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let ((result (clawmacs:run-session-prompt
                          "Cache probe"
@@ -2144,7 +2132,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "delegated answer"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let ((result (clawmacs:run-subagent
                          "Research this"
@@ -2180,7 +2167,6 @@ same
                                     (list (clawmacs::canonical-text-block
                                            "custom answer"))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (initialize-test-tools)
             (let ((result (clawmacs:run-subagent
                            "Use a custom prompt"
@@ -2235,7 +2221,6 @@ same
                                     (list (clawmacs::canonical-text-block
                                            "done"))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (clawmacs:run-subagent "Find docs" :agent-name "docs")
             (is (equal '("doc_lookup") captured-tool-names))
             (setf captured-tool-names nil)
@@ -2280,7 +2265,6 @@ same
                                       (list (clawmacs::canonical-text-block
                                              "custom done")))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (let* ((tool (clawmacs:make-subagent-tool
                         :name "custom_echo"
                         :description "Echo a payload."
@@ -2336,7 +2320,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "done"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (clawmacs:run-subagent
            "Use available tools"
            :agent-name "custom-tool-agent"
@@ -2404,7 +2387,6 @@ same
                                         (list (clawmacs::canonical-text-block
                                                "handled denial"))))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (let* ((result (clawmacs:run-subagent
                           "Try the wrong tool"
                           :agent-name "docs"
@@ -2446,7 +2428,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "async answer"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let ((handle (clawmacs:run-subagent-async
                          "Do async work"
@@ -2486,7 +2467,6 @@ same
                                                   reasoning-effort system-prompt))
                                  (error "provider boom"))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let ((handle (clawmacs:run-subagent-async
                          "Fail async work"
@@ -2517,7 +2497,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "late answer"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let ((handle (clawmacs:run-subagent-async
                          "Cancel async work"
@@ -2626,7 +2605,6 @@ same
                                     "lisp_eval"
                                     '((:code . "(+ 1 1)"))))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (handler-case
               (progn

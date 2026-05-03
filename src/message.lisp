@@ -68,11 +68,6 @@
                   :initform nil
                   :type (or null integer)
                   :documentation "Universal time when this message was finalized, or nil.")
-   (face-set      :initarg :face-set
-                  :accessor message-face-set
-                  :initform nil
-                  :type (or null drawing-style-set)
-                  :documentation "Drawing style set used to render this message, or nil for default.")
    (read-only-p   :initarg :read-only-p
                   :accessor message-read-only-p
                   :initform nil
@@ -117,11 +112,10 @@ This is not sent to providers.")
 a point and optional mark for intra-message cursor/selection, sender
 identity, and links to adjacent messages in the buffer."))
 
-(declaim (ftype (function (keyword &key (:face-set (or null drawing-style-set))
-                                       (:read-only-p boolean))
+(declaim (ftype (function (keyword &key (:read-only-p boolean))
                           message)
                 make-message))
-(defun make-message (sender &key face-set (read-only-p nil))
+(defun make-message (sender &key (read-only-p nil))
   "Create a new message with a single empty line. Point starts at offset 0."
   (let* ((initial-line (make-line ""))
          (msg (make-instance 'message
@@ -130,7 +124,6 @@ identity, and links to adjacent messages in the buffer."))
                 :point-line initial-line
                 :point-offset 0
                 :sender sender
-                :face-set face-set
                 :read-only-p read-only-p)))
     msg))
 

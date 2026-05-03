@@ -536,15 +536,14 @@ src/
   prompt-core.lisp     Shared prompt harness option parsing and defaults
   prompt-runner.lisp   Non-interactive prompt/session execution path
   render-core.lisp     Pure rendering geometry and formatting functions
-  mcclim-app.lisp      McCLIM application frame, panes, events, redisplay
-  debug.lisp           McCLIM debugger, Clouseau, and listener integration
+  debug.lisp           Debug logging helpers
   main.lisp            Commands, key dispatch, startup, prompt entrypoints
   docs.lisp            Extended documentation entries
 #+end_example
 
-The core architecture follows Emacs patterns: buffers hold messages (not file lines), keymaps dispatch to commands, faces control rendering, and McCLIM owns the interactive display.
+The core architecture follows Emacs patterns: buffers hold messages (not file lines), keymaps dispatch to commands, and commands operate on buffer state.
 
-The rendering layer is split: =render-core.lisp= contains pure geometry and formatting functions (line wrapping, modeline formatting, selector line layout), while =mcclim-app.lisp= translates that state into CLIM drawing, presentations, and redisplay.
+The current rewrite keeps =render-core.lisp= as pure geometry and formatting support while the interactive UI layer is rebuilt.
 
 * vs Emacs
 

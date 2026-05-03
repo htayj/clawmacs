@@ -75,9 +75,6 @@
          (clawmacs:remove-advice 'clawmacs::execute-prompt-tool-call
                                  'clawmacs::quaestor-prompt-tool-call))
        (ignore-errors
-         (clawmacs:remove-advice 'clawmacs::mcclim-render-buffer
-                                 'clawmacs::quaestor-mcclim-render-buffer))
-       (ignore-errors
          (clawmacs:remove-advice 'clawmacs::init-default-keymap
                                  'clawmacs::quaestor-init-default-keymap)))))
 

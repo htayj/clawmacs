@@ -26,9 +26,7 @@ Shows text parts and tool call summaries. Stores raw-content for round-trip."
                       agent-kw
                       (string-trim '(#\Space #\Tab #\Newline #\Return)
                                    display)
-                      :raw-content canonical-content
-                      :face-set (gethash agent-kw
-                                         (buffer-face-registry buf)))))
+                      :raw-content canonical-content)))
     agent-msg))
 
 (defun begin-tool-approval (buf tool-use-blocks)
@@ -170,8 +168,7 @@ and :TOOL-ID entries. Returns the inserted message."
      buf
      :tool-result
      display-text
-     :raw-content canonical-result-blocks
-     :face-set (gethash agent-kw (buffer-face-registry buf)))))
+     :raw-content canonical-result-blocks)))
 
 (defun finalize-tool-results (buf)
   "Insert the accumulated tool results as a message and continue the conversation."
@@ -203,8 +200,6 @@ and :TOOL-ID entries. Returns the inserted message."
       (run-hook-with-args '*before-send-message-hook* buf text)
       (set-message-text (buffer-input-message buf) text)
       (buffer-finalize-input buf)
-      (setf (message-face-set (buffer-input-message buf))
-            (gethash :user (buffer-face-registry buf)))
       (let ((result (send-to-agent-with-context buf)))
         (run-hook-with-args '*after-send-message-hook* buf text result)
         result))))
@@ -296,8 +291,6 @@ threads notify the UI as deltas arrive."
                                 :reasoning-summary-mode
                                 (and (eq provider :openai-codex)
                                      *openai-codex-reasoning-summary*))
-          (setf (message-face-set agent-msg)
-                (gethash agent-kw (buffer-face-registry buf)))
           (setf (buffer-pending-stream buf) state
                 (buffer-streaming-message buf) agent-msg
                 (buffer-status buf) :thinking)
@@ -306,8 +299,7 @@ threads notify the UI as deltas arrive."
         (setf (buffer-status buf) :error)
         (let ((err-msg (buffer-insert-agent-message
                          buf (format nil "[Error: ~A]" e))))
-          (setf (message-face-set err-msg)
-                (gethash agent-kw (buffer-face-registry buf))))
+          (declare (ignore err-msg)))
         (notify-buffer-display-change buf :status)))))
 
 (defun latest-text-block-text (content-blocks)
@@ -352,8 +344,7 @@ OpenAI-compatible providers also mirror it into CONTENT-BLOCKS on every delta."
 
 (defun finalize-cancelled-streaming-response (buf state msg)
   "Finalize MSG after STATE is stopped by the user."
-  (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
-         (content-blocks (cancelled-stream-content-blocks state))
+  (let* ((content-blocks (cancelled-stream-content-blocks state))
          (canonical-content
            (canonicalize-message-content "assistant" content-blocks))
          (final-text
@@ -377,14 +368,10 @@ OpenAI-compatible providers also mirror it into CONTENT-BLOCKS on every delta."
     (if (blank-string-p final-text)
         (progn
           (setf (message-sender msg) :system
-                (message-raw-content msg) nil
-                (message-face-set msg) (gethash :system
-                                                (buffer-face-registry buf)))
+                (message-raw-content msg) nil)
           (set-message-text msg "[Response stopped by user]"))
         (progn
-          (setf (message-face-set msg)
-                (gethash agent-kw (buffer-face-registry buf))
-                (message-raw-content msg) canonical-content)
+          (setf (message-raw-content msg) canonical-content)
           (set-message-text msg
                             (format nil "~A~%[Stopped by user]"
                                     final-text))))

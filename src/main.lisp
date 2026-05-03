@@ -123,8 +123,6 @@
                                  :reason :pre-user-message
                                  :include-current-input-p t))
          (buffer-finalize-input buffer)
-         (setf (message-face-set (buffer-input-message buffer))
-               (gethash :user (buffer-face-registry buffer)))
          (let ((result
                  ;; Check for prefix commands before sending to the LLM
                  (or (process-prefix-command buffer input-text)
@@ -804,7 +802,6 @@
        (not *buffer-selector-active*)
        (not *model-selector-active*)
        (not *think-selector-active*)
-       (not *customize-face-state*)
        (not *openai-oauth-pending*)
        (not *deny-message-mode*)
        (not (buffer-approval-pending buffer))))
@@ -1079,7 +1076,6 @@ to disable it without changing *AUTOMATIC-SKILL-COMPLETION-ENABLED*.")
        (not *buffer-selector-active*)
        (not *model-selector-active*)
        (not *think-selector-active*)
-       (not *customize-face-state*)
        (not *openai-oauth-pending*)
        (not *deny-message-mode*)
        (not (buffer-approval-pending buffer))))
@@ -1710,7 +1706,7 @@ Returns true when KEY was consumed by completion."
       (format nil "[Agent changed to ~A]" agent-name))))
 
 (defun switch-buffer-to-agent (buffer agent-name)
-  "Switch BUFFER to AGENT-NAME, clear overrides, ensure faces, and confirm."
+  "Switch BUFFER to AGENT-NAME, clear overrides, and confirm."
   (normalize-agent-name-key agent-name)
   (let* ((definition (find-agent-definition agent-name))
          (resolved-name (if definition
@@ -1718,7 +1714,6 @@ Returns true when KEY was consumed by completion."
                             (string-trim '(#\Space #\Tab #\Newline #\Return) agent-name))))
     (setf (buffer-agent-name buffer) resolved-name)
     (clear-buffer-routing-overrides buffer)
-    (ensure-buffer-agent-face-set buffer resolved-name)
     (sync-buffer-system-prompt-display buffer)
     (buffer-insert-system-message buffer (format-agent-selection-message resolved-name))
     buffer))
@@ -1939,47 +1934,6 @@ to navigate. Shows buffer name, agent, status, and message count."
   (when (cdr *buffer-ring*)  ; Don't kill the last buffer
     (kill-buffer-from-ring (current-buffer))))
 (defcommand kill-buffer-command)
-
-(declaim (special *clawmacs-frame*))
-
-(defun call-mcclim-window-command (buffer function-name &rest args)
-  "Invoke a McCLIM frame window operation, or report that no frame is active."
-  (cond
-    ((and (boundp '*clawmacs-frame*)
-          *clawmacs-frame*
-          (fboundp function-name))
-     (apply (symbol-function function-name) *clawmacs-frame* args))
-    (buffer
-     (buffer-insert-system-message
-      buffer
-      "[Window commands are available in the McCLIM interface.]")
-     nil)
-    (t nil)))
-
-(defun split-window-below-command (buffer)
-  "Split the selected window into top and bottom windows."
-  (call-mcclim-window-command buffer 'mcclim-split-selected-window :vertical))
-(defcommand split-window-below-command)
-
-(defun split-window-right-command (buffer)
-  "Split the selected window into left and right windows."
-  (call-mcclim-window-command buffer 'mcclim-split-selected-window :horizontal))
-(defcommand split-window-right-command)
-
-(defun delete-window-command (buffer)
-  "Delete the selected logical window."
-  (call-mcclim-window-command buffer 'mcclim-delete-selected-window))
-(defcommand delete-window-command)
-
-(defun delete-other-windows-command (buffer)
-  "Delete every logical window except the selected one."
-  (call-mcclim-window-command buffer 'mcclim-delete-other-windows))
-(defcommand delete-other-windows-command)
-
-(defun other-window-command (buffer)
-  "Select the next logical window."
-  (call-mcclim-window-command buffer 'mcclim-select-other-window))
-(defcommand other-window-command)
 
 ;;; --------------------------------------------------------------------------
 ;;; Session Commands
@@ -2770,233 +2724,6 @@ Bound to C-c C-d."
        "[Debug mode OFF]")))
 (defcommand toggle-debug-mode-command)
 
-(defun show-mcclim-debug-buffer (name content)
-  "Display CONTENT in a reusable McCLIM debug help buffer named NAME."
-  (let ((existing (find-buffer-by-name name)))
-    (if existing
-        (progn
-          (let ((message (message-prev (buffer-input-message existing))))
-            (if message
-                (set-message-text message content)
-                (buffer-insert-agent-message existing content)))
-          (setf (buffer-scroll-offset existing) most-positive-fixnum)
-          (notify-buffer-display-change existing :mcclim-debug-help)
-          (switch-to-buffer existing))
-        (switch-to-buffer (make-help-buffer name content)))))
-
-(defun mcclim-debug-status-command (buffer)
-  "Show McCLIM debugger, Clouseau, and CLIM Listener integration status."
-  (declare (ignore buffer))
-  (show-mcclim-debug-buffer "*McCLIM Debug*"
-                             (mcclim-debug-status-to-string)))
-(defcommand mcclim-debug-status-command)
-
-(defun mcclim-debug-snapshot-command (buffer)
-  "Show a textual snapshot of the active McCLIM frame, panes, and buffers."
-  (show-mcclim-debug-buffer "*McCLIM Runtime Snapshot*"
-                             (mcclim-debug-snapshot-to-string buffer)))
-(defcommand mcclim-debug-snapshot-command)
-
-(defun mcclim-debug-run-and-report (buffer thunk)
-  "Run THUNK and report its status or error in BUFFER."
-  (handler-case
-      (buffer-insert-system-message buffer (funcall thunk))
-    (error (condition)
-      (buffer-insert-system-message
-       buffer
-       (format nil "[McCLIM debug command failed: ~A]" condition)))))
-
-(defun mcclim-install-debugger-command (buffer)
-  "Install McCLIM's clim-debugger as the process debugger hook."
-  (mcclim-debug-run-and-report buffer #'mcclim-install-debugger))
-(defcommand mcclim-install-debugger-command)
-
-(defun mcclim-disable-debugger-command (buffer)
-  "Restore the debugger hook that was active before installing clim-debugger."
-  (mcclim-debug-run-and-report buffer #'mcclim-disable-debugger))
-(defcommand mcclim-disable-debugger-command)
-
-(defun mcclim-launch-listener-command (buffer)
-  "Launch a CLIM Listener process for interactive McCLIM debugging."
-  (mcclim-debug-run-and-report buffer #'mcclim-launch-listener))
-(defcommand mcclim-launch-listener-command)
-
-(defun mcclim-toggle-listener-debugger-command (buffer)
-  "Toggle whether CLIM Listener launches with McCLIM debugger integration."
-  (setf *mcclim-listener-debugger-enabled*
-        (not *mcclim-listener-debugger-enabled*))
-  (buffer-insert-system-message
-   buffer
-   (format nil "[CLIM Listener debugger integration ~A]"
-           (if *mcclim-listener-debugger-enabled* "ON" "OFF"))))
-(defcommand mcclim-toggle-listener-debugger-command)
-
-(defun mcclim-inspect-current-frame-command (buffer)
-  "Inspect the current Clawmacs McCLIM application frame with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :frame buffer))))
-(defcommand mcclim-inspect-current-frame-command)
-
-(defun mcclim-inspect-visible-buffer-command (buffer)
-  "Inspect the buffer visible in the selected McCLIM window with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :visible-buffer buffer))))
-(defcommand mcclim-inspect-visible-buffer-command)
-
-(defun mcclim-inspect-current-buffer-command (buffer)
-  "Inspect the current buffer with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :current-buffer buffer))))
-(defcommand mcclim-inspect-current-buffer-command)
-
-(defun mcclim-inspect-window-tree-command (buffer)
-  "Inspect the active logical window tree with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :window-tree buffer))))
-(defcommand mcclim-inspect-window-tree-command)
-
-(defun mcclim-inspect-selected-window-command (buffer)
-  "Inspect the selected logical window with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :selected-window buffer))))
-(defcommand mcclim-inspect-selected-window-command)
-
-(defun mcclim-inspect-main-pane-command (buffer)
-  "Inspect the main transcript pane with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :main-pane buffer))))
-(defcommand mcclim-inspect-main-pane-command)
-
-(defun mcclim-inspect-input-pane-command (buffer)
-  "Inspect the Drei input pane with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :input-pane buffer))))
-(defcommand mcclim-inspect-input-pane-command)
-
-(defun mcclim-inspect-render-snapshot-command (buffer)
-  "Inspect the last McCLIM render snapshot with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :render-snapshot buffer))))
-(defcommand mcclim-inspect-render-snapshot-command)
-
-(defun mcclim-inspect-debug-status-command (buffer)
-  "Inspect the McCLIM debug status plist with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :debug-status buffer))))
-(defcommand mcclim-inspect-debug-status-command)
-
-(defun mcclim-inspect-lisp-form-command (buffer form)
-  "Evaluate FORM in the Clawmacs package and inspect its first value."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-lisp-form form))))
-(defcommand mcclim-inspect-lisp-form-command
-  :prompts ((form :prompt "Inspect Lisp form")))
-
-(defun mcclim-refresh-inspectors-command (buffer)
-  "Refresh Clouseau inspector roots opened by Clawmacs debug commands."
-  (mcclim-debug-run-and-report buffer #'mcclim-refresh-inspectors))
-(defcommand mcclim-refresh-inspectors-command)
-
-(defun clouseau-status-command (buffer)
-  "Show Clouseau integration status, usage notes, and commands."
-  (declare (ignore buffer))
-  (show-mcclim-debug-buffer "*Clouseau*"
-                             (clouseau-status-to-string)))
-(defcommand clouseau-status-command)
-
-(defun clouseau-install-extensions-command (buffer)
-  "Load Clouseau and install Clawmacs-specific inspection methods."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (ensure-clouseau-support :force t))))
-(defcommand clouseau-install-extensions-command)
-
-(defun clouseau-list-inspectors-command (buffer)
-  "Show Clouseau inspectors opened through Clawmacs."
-  (declare (ignore buffer))
-  (show-mcclim-debug-buffer "*Clouseau Inspectors*"
-                             (clouseau-inspectors-to-string)))
-(defcommand clouseau-list-inspectors-command)
-
-(defun clouseau-refresh-inspectors-command (buffer)
-  "Refresh Clouseau inspector roots opened through Clawmacs."
-  (mcclim-debug-run-and-report buffer #'mcclim-refresh-inspectors))
-(defcommand clouseau-refresh-inspectors-command)
-
-(defun clouseau-inspect-application-state-command (buffer)
-  "Inspect a live Clawmacs application-state plist with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :application-state buffer))))
-(defcommand clouseau-inspect-application-state-command)
-
-(defun clouseau-inspect-buffer-ring-command (buffer)
-  "Inspect the global buffer ring with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :buffer-ring buffer))))
-(defcommand clouseau-inspect-buffer-ring-command)
-
-(defun clouseau-inspect-current-session-command (buffer)
-  "Inspect the current buffer's saved session with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :current-session buffer))))
-(defcommand clouseau-inspect-current-session-command)
-
-(defun clouseau-inspect-input-message-command (buffer)
-  "Inspect the current editable input message with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :input-message buffer))))
-(defcommand clouseau-inspect-input-message-command)
-
-(defun clouseau-inspect-package-registry-command (buffer)
-  "Inspect package channels and discovered package definitions with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :package-registry buffer))))
-(defcommand clouseau-inspect-package-registry-command)
-
-(defun clouseau-inspect-tool-registry-command (buffer)
-  "Inspect registered provider-callable agent tools with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :tool-registry buffer))))
-(defcommand clouseau-inspect-tool-registry-command)
-
-(defun clouseau-inspect-pipeline-registry-command (buffer)
-  "Inspect deterministic pipeline definitions with Clouseau."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda () (mcclim-debug-inspect-target :pipeline-registry buffer))))
-(defcommand clouseau-inspect-pipeline-registry-command)
-
-(defun clouseau-set-inspector-root-command (buffer inspector-id form)
-  "Evaluate FORM and make it the remembered root for Clouseau inspector ID."
-  (mcclim-debug-run-and-report
-   buffer
-   (lambda ()
-     (let* ((id (parse-integer
-                 (string-trim '(#\Space #\Tab #\Newline #\Return)
-                              inspector-id)))
-            (object (mcclim-debug-read-eval-form form)))
-       (clouseau-update-inspector-root
-        id object :label (format nil "result of ~A" form))))))
-(defcommand clouseau-set-inspector-root-command
-  :prompts ((inspector-id :prompt "Inspector id")
-            (form :prompt "New root Lisp form")))
-
 (defun redraw-screen-command (buffer)
   "Request a full screen redraw. Bound to C-l."
   (declare (ignore buffer))
@@ -3005,533 +2732,6 @@ Bound to C-c C-d."
 
 ;;; --------------------------------------------------------------------------
 ;;; Customize Drawing Style
-;;; --------------------------------------------------------------------------
-
-(defvar *customize-face-state* nil
-  "When non-nil, a plist describing the drawing-style customization session:
-  :face — the drawing-style object being customized
-  :label — display label (e.g. \"user:default\")
-  :field-index — 0-5 (which field is selected)
-  :original-values — alist of original attribute values for revert
-  :buffer — the customize buffer")
-
-(defvar *customize-face-fields*
-  '(:ink :background-ink :text-style :drawing-options :underline-p :parent)
-  "List of drawing-style field keywords in display order.")
-
-(defun cga-color-name (value)
-  "Return a human-readable name for a CGA color value (0-15)."
-  (case value
-    (0 "black") (1 "red") (2 "green") (3 "yellow")
-    (4 "blue") (5 "magenta") (6 "cyan") (7 "white")
-    (8 "bright-black") (9 "bright-red") (10 "bright-green") (11 "bright-yellow")
-    (12 "bright-blue") (13 "bright-magenta") (14 "bright-cyan") (15 "bright-white")
-    (t (format nil "~D" value))))
-
-(defun format-color-spec-display (cs)
-  "Compatibility formatter for old color-spec values."
-  (if (typep cs 'color-spec)
-      (ecase (color-spec-type cs)
-        (:cga (format nil "~A (CGA ~D)" (cga-color-name (color-spec-value cs))
-                      (color-spec-value cs)))
-        (:256 (format nil "color-~D (256)" (color-spec-value cs)))
-        (:hex (format nil "~A (hex)" (color-spec-value cs))))
-      (format-clim-ink-display cs)))
-
-(defun format-clim-ink-display (ink)
-  "Format a CLIM ink for human-readable display."
-  (cond
-    ((null ink) "(inherit)")
-    ((typep ink 'color-spec) (format-color-spec-display ink))
-    (t
-     (handler-case
-         (multiple-value-bind (r g b) (clim:color-rgb ink)
-           (format nil "#~2,'0X~2,'0X~2,'0X"
-                   (round (* 255 r))
-                   (round (* 255 g))
-                   (round (* 255 b))))
-       (error ()
-         (let ((*print-readably* nil)
-               (*print-pretty* nil)
-               (*print-length* 5)
-               (*print-level* 3))
-           (truncate-value-string (prin1-to-string ink) 48)))))))
-
-(defun format-clim-text-style-display (text-style)
-  "Format a CLIM text-style for human-readable display."
-  (if (null text-style)
-      "(inherit)"
-      (handler-case
-          (format nil "(~S ~S ~S)"
-                  (clim:text-style-family text-style)
-                  (clim:text-style-face text-style)
-                  (clim:text-style-size text-style))
-        (error ()
-          (let ((*print-readably* nil)
-                (*print-pretty* nil)
-                (*print-length* 5)
-                (*print-level* 3))
-            (truncate-value-string (prin1-to-string text-style) 48))))))
-
-(defun format-drawing-options-display (options)
-  "Format a CLIM drawing-options plist for display."
-  (if (null options)
-      "(inherit)"
-      (let ((*print-readably* nil)
-            (*print-pretty* nil)
-            (*print-length* 12)
-            (*print-level* 4))
-        (truncate-value-string (prin1-to-string options) 72))))
-
-(defun format-boolean-display (val)
-  "Format a boolean face attribute for display.
-NIL means inherit from parent, T means yes."
-  (if val "yes" "(inherit)"))
-
-(defun format-face-parent-display (parent-style)
-  "Format a drawing style's parent for display."
-  (if (null parent-style)
-      "(none)"
-      (format nil "~(~A~)" (drawing-style-name parent-style))))
-
-(defun customize-face-field-value (style field)
-  "Get the current value of FIELD on STYLE."
-  (ecase field
-    (:ink (drawing-style-ink style))
-    (:background-ink (drawing-style-background-ink style))
-    (:text-style (drawing-style-text-style style))
-    (:drawing-options (drawing-style-drawing-options style))
-    ;; Compatibility for callers that still use old field names.
-    (:foreground (drawing-style-ink style))
-    (:background (drawing-style-background-ink style))
-    (:bold-p (slot-value style 'bold-p))
-    (:underline-p (slot-value style 'underline-p))
-    (:reverse-p (slot-value style 'reverse-p))
-    (:parent (drawing-style-parent style))))
-
-(defun customize-face-set-field-value (style field value)
-  "Set the value of FIELD on STYLE to VALUE."
-  (ecase field
-    (:ink (setf (drawing-style-ink style) value))
-    (:background-ink (setf (drawing-style-background-ink style) value))
-    (:text-style (setf (drawing-style-text-style style) value))
-    (:drawing-options (setf (drawing-style-drawing-options style) value))
-    ;; Compatibility for callers that still use old field names.
-    (:foreground (setf (drawing-style-ink style) value))
-    (:background (setf (drawing-style-background-ink style) value))
-    (:bold-p (setf (face-bold-p style) value))
-    (:underline-p (setf (drawing-style-underline-p style) value))
-    (:reverse-p (setf (face-reverse-p style) value))
-    (:parent (setf (drawing-style-parent style) value))))
-
-(defun customize-face-field-label (field)
-  "Return the human-readable label for a drawing-style field keyword."
-  (ecase field
-    (:ink "Ink")
-    (:background-ink "Background Ink")
-    (:text-style "Text Style")
-    (:drawing-options "Drawing Options")
-    (:foreground "Ink")
-    (:background "Background Ink")
-    (:bold-p "Bold")
-    (:underline-p "Underline")
-    (:reverse-p "Reverse")
-    (:parent "Parent")))
-
-(defun customize-face-field-display (style field)
-  "Return the display string for FIELD's current value on STYLE."
-  (ecase field
-    ((:ink :foreground :background-ink :background)
-     (format-clim-ink-display (customize-face-field-value style field)))
-    (:text-style
-     (format-clim-text-style-display (customize-face-field-value style field)))
-    (:drawing-options
-     (format-drawing-options-display (customize-face-field-value style field)))
-    ((:bold-p :underline-p :reverse-p)
-     (format-boolean-display (customize-face-field-value style field)))
-    (:parent
-     (format-face-parent-display (customize-face-field-value style field)))))
-
-(defun customize-face-snapshot (face)
-  "Take a snapshot of FACE's current attribute values for revert.
-Returns an alist of (field . value) pairs."
-  (mapcar (lambda (field)
-            (cons field (customize-face-field-value face field)))
-          *customize-face-fields*))
-
-(defun customize-face-restore-snapshot (face snapshot)
-  "Restore FACE's attributes from SNAPSHOT (an alist from customize-face-snapshot)."
-  (dolist (entry snapshot)
-    (customize-face-set-field-value face (car entry) (cdr entry))))
-
-(defun build-customize-face-content (face label field-index)
-  "Build the text content for a customize buffer.
-FACE is the drawing style being customized, LABEL is its display name,
-FIELD-INDEX is the currently selected field (0-5)."
-  (with-output-to-string (s)
-    (format s "Customize Drawing Style: ~A~%" label)
-    (format s "~A~%~%"
-            (make-string (min 50 (+ 16 (length label)))
-                         :initial-element #\═))
-    ;; Fields
-    (loop :for field :in *customize-face-fields*
-          :for idx :from 0
-          :for selected-p := (= idx field-index)
-          :for marker := (if selected-p "▸" " ")
-          :for field-label := (customize-face-field-label field)
-          :for value-str := (customize-face-field-display face field)
-          :do (format s "~A ~A:~A~A~%"
-                      marker
-                      field-label
-                      (make-string (max 1 (- 14 (length field-label)))
-                                   :initial-element #\Space)
-                      value-str))
-    ;; Resolved preview
-    (format s "~%Resolved CLIM drawing values:~%")
-    (handler-case
-        (let ((resolved (resolve-drawing-style face)))
-          (when resolved
-            (format s "  Ink: ~A  Background: ~A~%"
-                    (format-clim-ink-display
-                     (resolved-drawing-style-ink resolved))
-                    (format-clim-ink-display
-                     (resolved-drawing-style-background-ink resolved)))
-            (format s "  Text Style: ~A~%"
-                    (format-clim-text-style-display
-                     (resolved-drawing-style-text-style resolved)))
-            (format s "  Drawing Options: ~A~%"
-                    (format-drawing-options-display
-                     (resolved-drawing-style-drawing-options resolved)))
-            (format s "  Underline: ~:[no~;yes~]~%"
-                    (resolved-drawing-style-underline-p resolved))))
-      (error () (format s "  (cannot resolve drawing style)~%")))
-    ;; Keybinding help
-    (format s "~%~A~%" (make-string 40 :initial-element #\─))
-    (format s "[RET] Edit  [SPC] Toggle  [C-n/C-p] Navigate~%")
-    (format s "[C-c C-c] Apply  [C-c C-k] Cancel  [r] Revert")))
-
-(defun rebuild-customize-face-display ()
-  "Notify the active customize buffer that its presentation should redisplay."
-  (when *customize-face-state*
-    (notify-buffer-display-change (getf *customize-face-state* :buffer)
-                                  :customize)))
-
-(defun customize-face-select-field (index &key edit-p)
-  "Select customize field INDEX, optionally opening the field editor."
-  (when (and *customize-face-state*
-             (integerp index)
-             (<= 0 index)
-             (< index (length *customize-face-fields*)))
-    (setf (getf *customize-face-state* :field-index) index)
-    (rebuild-customize-face-display)
-    (when edit-p
-      (customize-face-edit-field))
-    t))
-
-(defun customize-face-next-field ()
-  "Move to the next field in the customize form."
-  (when *customize-face-state*
-    (let ((idx (getf *customize-face-state* :field-index)))
-      (when (< idx (1- (length *customize-face-fields*)))
-        (setf (getf *customize-face-state* :field-index) (1+ idx))
-        (rebuild-customize-face-display)))))
-
-(defun customize-face-prev-field ()
-  "Move to the previous field in the customize form."
-  (when *customize-face-state*
-    (let ((idx (getf *customize-face-state* :field-index)))
-      (when (plusp idx)
-        (setf (getf *customize-face-state* :field-index) (1- idx))
-        (rebuild-customize-face-display)))))
-
-(defun customize-face-toggle-field ()
-  "Toggle the underline field between yes (t) and inherit (nil)."
-  (when *customize-face-state*
-    (let* ((face (getf *customize-face-state* :face))
-           (field-index (getf *customize-face-state* :field-index))
-           (field (nth field-index *customize-face-fields*)))
-      (when (eq field :underline-p)
-        (let ((current (customize-face-field-value face field)))
-          (customize-face-set-field-value face field (not current))
-          (rebuild-customize-face-display))))))
-
-(defun collect-all-faces ()
-  "Collect all unique face objects from the global face registry and
-all buffer face registries. Returns a sorted list of plists with
-:face, :owner, :name, and :label keys."
-  (let ((seen (make-hash-table :test #'eq))
-        (result nil))
-    ;; Global faces first
-    (maphash (lambda (name face)
-               (unless (gethash face seen)
-                 (setf (gethash face seen) t)
-                 (push (list :face face
-                             :owner :global
-                             :name name
-                             :label (format nil "global:~(~A~)" name))
-                       result)))
-             *global-face-registry*)
-    ;; Per-buffer faces
-    (dolist (buf *buffer-ring*)
-      (maphash (lambda (owner face-set)
-                 (maphash (lambda (name face)
-                            (unless (gethash face seen)
-                              (setf (gethash face seen) t)
-                              (push (list :face face
-                                          :owner owner
-                                          :name name
-                                          :label (format nil "~(~A~):~(~A~)"
-                                                         owner name))
-                                    result)))
-                          (face-set-faces face-set)))
-               (buffer-face-registry buf)))
-    (sort (nreverse result) #'string< :key (lambda (p) (getf p :label)))))
-
-(defun make-color-selection-items ()
-  "Build the list of CLIM ink items for the minibuffer.
-Includes CGA colors 0-15 with names, plus an inherit option."
-  (let ((items nil))
-    (push (list :ink nil :color-spec nil :display "(inherit / nil)") items)
-    (loop :for i :from 0 :to 15
-          :do (push (list :ink (make-cga-ink i)
-                          :color-spec (make-color-spec :cga i)
-                          :display (format nil "CGA ~2D: ~A" i (cga-color-name i)))
-                    items))
-    (nreverse items)))
-
-(defun make-text-style-selection-items ()
-  "Build the list of common CLIM text-style items for the minibuffer."
-  (list (list :text-style nil :display "(inherit / nil)")
-        (list :text-style (make-clim-text-style :fix :roman :normal)
-              :display "fixed roman normal")
-        (list :text-style (make-clim-text-style :fix :bold :normal)
-              :display "fixed bold normal")
-        (list :text-style (make-clim-text-style :fix :italic :normal)
-              :display "fixed italic normal")
-        (list :text-style (make-clim-text-style :fix :roman :large)
-              :display "fixed roman large")))
-
-(defun make-drawing-options-selection-items ()
-  "Build common CLIM drawing-options choices.
-Arbitrary drawing option plists can still be set programmatically from init."
-  (list (list :drawing-options nil :display "(inherit / nil)")
-        (list :drawing-options (list :ink (make-cga-ink 1))
-              :display "ink red")
-        (list :drawing-options (list :ink (make-cga-ink 4))
-              :display "ink blue")
-        (list :drawing-options
-              (list :text-style (make-clim-text-style :fix :bold :normal))
-              :display "text-style fixed bold")))
-
-(defun make-boolean-selection-items ()
-  "Build the list of items for boolean field selection in the minibuffer."
-  (list (list :value t :display "yes")
-        (list :value nil :display "inherit (nil)")))
-
-(defun make-parent-selection-items (current-face)
-  "Build the list of parent face candidates for the minibuffer.
-Excludes CURRENT-FACE to prevent inheritance cycles."
-  (let ((items (list (list :face nil :display "(none)"))))
-    (dolist (entry (collect-all-faces))
-      (let ((face (getf entry :face)))
-        (unless (eq face current-face)
-          (push (list :face face
-                      :display (getf entry :label))
-                items))))
-    (nreverse items)))
-
-(defun customize-face-edit-field ()
-  "Edit the currently selected field using the minibuffer.
-Opens a field-appropriate minibuffer for CLIM ink/text-style/drawing-options."
-  (when *customize-face-state*
-    (let* ((face (getf *customize-face-state* :face))
-           (field-index (getf *customize-face-state* :field-index))
-           (field (nth field-index *customize-face-fields*)))
-      (ecase field
-        ;; Ink fields — pick from CGA palette
-        ((:ink :background-ink)
-         (let ((field-label (customize-face-field-label field)))
-           (minibuffer-activate
-            (format nil "Set ~A" field-label)
-            (make-color-selection-items)
-            (lambda (item)
-              (customize-face-set-field-value face field (getf item :ink))
-              (rebuild-customize-face-display)))))
-        (:text-style
-         (minibuffer-activate
-          "Set Text Style"
-          (make-text-style-selection-items)
-          (lambda (item)
-            (customize-face-set-field-value face field (getf item :text-style))
-            (rebuild-customize-face-display))))
-        (:drawing-options
-         (minibuffer-activate
-          "Set Drawing Options"
-          (make-drawing-options-selection-items)
-          (lambda (item)
-            (customize-face-set-field-value face field
-                                            (getf item :drawing-options))
-            (rebuild-customize-face-display))))
-        (:underline-p
-         (minibuffer-activate
-          "Set Underline"
-          (make-boolean-selection-items)
-          (lambda (item)
-            (customize-face-set-field-value face field (getf item :value))
-            (rebuild-customize-face-display))))
-        ;; Parent field — pick from available faces
-        (:parent
-         (minibuffer-activate
-          "Set Parent"
-          (make-parent-selection-items face)
-          (lambda (item)
-            (customize-face-set-field-value face :parent (getf item :face))
-            (rebuild-customize-face-display))))))))
-
-(defun customize-face-apply ()
-  "Apply face customizations and close the customize buffer.
-Changes are already applied to the face object (modified in-place),
-so this just closes the buffer and confirms."
-  (when *customize-face-state*
-    (let ((buf (getf *customize-face-state* :buffer))
-          (label (getf *customize-face-state* :label)))
-      (setf *customize-face-state* nil)
-      (kill-buffer-from-ring buf)
-      ;; Show confirmation in the new current buffer
-      (buffer-insert-system-message
-       (current-buffer)
-       (format nil "[Drawing style ~A customized successfully]" label)))))
-
-(defun customize-face-cancel ()
-  "Cancel face customization, reverting all changes to original values.
-Closes the customize buffer and switches to the previous buffer."
-  (when *customize-face-state*
-    (let ((face (getf *customize-face-state* :face))
-          (snapshot (getf *customize-face-state* :original-values))
-          (buf (getf *customize-face-state* :buffer)))
-      (customize-face-restore-snapshot face snapshot)
-      (setf *customize-face-state* nil)
-      (kill-buffer-from-ring buf))))
-
-(defun customize-face-revert-to-original ()
-  "Revert all fields to their original values without closing the buffer."
-  (when *customize-face-state*
-    (let ((face (getf *customize-face-state* :face))
-          (snapshot (getf *customize-face-state* :original-values)))
-      (customize-face-restore-snapshot face snapshot)
-      (rebuild-customize-face-display))))
-
-(defun make-customize-face-buffer (face label)
-  "Create a customize buffer for FACE with display LABEL.
-Sets up the customize state and returns the new buffer."
-  (let* ((buf-name (format nil "*customize:~A*" label))
-         (existing (find-buffer-by-name buf-name)))
-    ;; Kill any existing customize buffer for this face
-    (when existing
-      (kill-buffer-from-ring existing))
-    (let* ((snapshot (customize-face-snapshot face))
-           (buf (make-buffer buf-name
-                             :agent-name "customize"
-                             :kind :customize)))
-      (init-face-registry buf)
-      (setf (buffer-keymap buf) *default-keymap*)
-      (setf (buffer-major-mode buf) "customize"
-            (buffer-scroll-offset buf) most-positive-fixnum)
-      ;; Set up customize state
-      (setf *customize-face-state*
-            (list :face face
-                  :label label
-                  :field-index 0
-                  :original-values snapshot
-                  :buffer buf))
-      (add-buffer-to-ring buf)
-      buf)))
-
-(defun handle-customize-key (key)
-  "Handle a key event while in customize mode.
-Supports field navigation (C-n/C-p), editing (Return), toggling (Space),
-apply (C-c C-c), cancel (C-c C-k / C-g / q), revert (r), and passes
-through global command bindings like C-x and M-x."
-  (cond
-    ;; C-c C-c: apply changes (C-c prefix then C-c = ETX = ASCII 3)
-    ((equal key '(:ctrl-c #\Etx))
-     (customize-face-apply))
-    ;; C-c C-k: cancel (C-c prefix then C-k = VT = ASCII 11)
-    ((equal key '(:ctrl-c #\Vt))
-     (customize-face-cancel))
-    ;; C-g: cancel
-    ((and (characterp key) (char= key (code-char 7)))
-     (customize-face-cancel))
-    ;; q: cancel
-    ((and (characterp key) (char= key #\q))
-     (customize-face-cancel))
-    ;; C-n or Down arrow: next field
-    ((or (eq key :down)
-         (and (characterp key) (char= key (code-char 14))))
-     (customize-face-next-field))
-    ;; C-p or Up arrow: previous field
-    ((or (eq key :up)
-         (and (characterp key) (char= key (code-char 16))))
-     (customize-face-prev-field))
-    ;; Return: edit selected field via minibuffer
-    ((and (characterp key) (or (char= key #\Return) (char= key #\Newline)))
-     (customize-face-edit-field))
-    ;; Space: toggle boolean field
-    ((and (characterp key) (char= key #\Space))
-     (customize-face-toggle-field))
-    ;; r: revert to original values
-    ((and (characterp key) (char= key #\r))
-     (customize-face-revert-to-original))
-    ;; Pass through global bindings like C-x commands and M-x.
-    ((and (listp key) (member (first key) '(:ctrl-x :meta :alt)))
-     (let ((command (keymap-lookup *default-keymap* key)))
-       (when command
-         (invoke-command (current-buffer) command))))
-    ;; Scroll keys
-    ((or (eq key :page-up) (eq key :page-down))
-     (let ((command (keymap-lookup *default-keymap* key)))
-       (when command
-         (invoke-command (current-buffer) command))))
-    ;; Everything else: ignore
-    (t nil)))
-
-(defun customize-drawing-style-command (buffer)
-  "Open a drawing-style selector, then customize the selected style.
-Lists global and buffer drawing styles. The stored values are CLIM inks,
-CLIM text styles, and CLIM drawing option plists."
-  (declare (ignore buffer))
-  (let ((faces (collect-all-faces)))
-    (if (null faces)
-        (buffer-insert-system-message
-         (current-buffer)
-         "[No drawing styles found to customize]")
-        (minibuffer-activate
-         "Customize Drawing Style"
-         (mapcar (lambda (entry)
-                   (let* ((face (getf entry :face))
-                          (label (getf entry :label))
-                          (ink (format-clim-ink-display
-                                (drawing-style-ink face)))
-                          (bg (format-clim-ink-display
-                               (drawing-style-background-ink face)))
-                          (display (format nil "~A  ink:~A  bg:~A"
-                                           label ink bg)))
-                     (list :face face
-                           :label label
-                           :display display)))
-                 faces)
-         (lambda (item)
-           (let* ((face (getf item :face))
-                  (label (getf item :label))
-                  (buf (make-customize-face-buffer face label)))
-             (switch-to-buffer buf)))))))
-(defcommand customize-drawing-style-command)
-
-(defun customize-face-command (buffer)
-  "Compatibility command. Use CUSTOMIZE-DRAWING-STYLE-COMMAND."
-  (customize-drawing-style-command buffer))
-(defcommand customize-face-command)
-
 ;;; --------------------------------------------------------------------------
 ;;; Introspection: list-functions & describe-function
 ;;; --------------------------------------------------------------------------
@@ -4078,7 +3278,6 @@ Used to group keybindings in the describe-bindings listing."
       ((or (search "describe" name) (search "help" name)
            (search "info" name)
            (search "manual" name)
-           (search "customize" name)
            (search "execute-extended" name))
        "Help & Introspection")
       ((or (search "debug" name) (search "toggle" name)
@@ -4268,18 +3467,6 @@ KEY is already normalized by the interface before calling this."
        (handle-help-key buf key)
        nil)
 
-      ;; === CUSTOMIZE MODE ===
-      ;; When the current buffer is a customize buffer, dispatch to
-      ;; the customize key handler for field navigation and editing.
-      ;; Clean up stale state if the customize buffer was killed.
-      ((and *customize-face-state*
-            (let ((cbuf (getf *customize-face-state* :buffer)))
-              (if (member cbuf *buffer-ring*)
-                  (eq buf cbuf)
-                  (progn (setf *customize-face-state* nil) nil))))
-       (handle-customize-key key)
-       nil)
-
       ;; === FONT EDITOR MODE ===
       ;; CADR-style bitmap font editor buffers own their keyboard interaction.
       ((and buf (font-editor-buffer-p buf))
@@ -4427,12 +3614,6 @@ Environment variables:
   "Initialize shared runtime state before either UI or prompt execution."
   (init-default-keymap)
   (init-tools)
-  (init-global-faces)
-  ;; Apply McCLIM defaults before user init so init.lisp can override any
-  ;; drawing-style ink/text-style/drawing-options without being clobbered when
-  ;; the frame starts.
-  (when (fboundp 'mcclim-apply-genera-theme)
-    (funcall (symbol-function 'mcclim-apply-genera-theme)))
   ;; Load the configured personality prompt file before init.lisp so user init
   ;; may still override it directly or reload after changing the path.
   (load-personality-prompt-file)
@@ -5113,16 +4294,18 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
    :default-session-name (default-session-prompt-session-name)
    :usage-string-function #'session-prompt-usage-string))
 
-(declaim (ftype (function (buffer &key (:window-title t)) *) run-clawmacs-mcclim))
-
 (defun clawmacs-main (&key (session-name "clawmacs:session-01")
                            (agent-name *default-agent-name*)
                            (window-title "Clawmacs"))
-  "Entry point for clawmacs. Initializes state and starts the McCLIM app."
+  "Entry point for clawmacs. Initializes state and returns the initial buffer.
+
+The McCLIM interface has been removed on the mcclim-rewrite branch, so this
+entry point no longer starts an application frame."
+  (declare (ignore window-title))
   (parse-clawmacs-args)
   (initialize-clawmacs-runtime)
   ;; Create initial buffer and initialize global state
   (reset-interaction-state)
   (let ((buf (make-initial-chat-buffer session-name agent-name)))
     (ensure-scratch-buffer)
-    (run-clawmacs-mcclim buf :window-title window-title)))
+    buf))

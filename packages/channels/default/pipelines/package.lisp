@@ -333,20 +333,6 @@ if you must modify that file from the running process."
    :command
    '("./scripts/guix-container.sh" "--mode" "run" "--" "sh" "-lc"
      "sbcl --noinform --load \"$CLAWMACS_QUICKLISP_SETUP\" --eval \"(push (truename \\\".\\\") asdf:*central-registry*)\" --eval \"(ql:quickload :clawmacs/tests)\" --eval \"(fiveam:run! (quote clawmacs/tests::clawmacs-suite))\" --eval \"(quit)\""))
-  (dolist (group '(("mcclim-offline" "offline" "Run the offline McCLIM e2e suite.")
-                   ("mcclim-smoke" "smoke" "Run the smoke McCLIM e2e suite.")
-                   ("mcclim-packages" "packages" "Run the package-focused McCLIM e2e suite.")
-                   ("mcclim-windows" "windows" "Run the logical-window McCLIM e2e suite.")
-                   ("mcclim-readline" "readline" "Run the readline-oriented McCLIM e2e suite.")
-                   ("mcclim-online" "online" "Run the live-provider McCLIM e2e suite.")
-                   ("mcclim-online-zai" "online-zai" "Run the live ZAI McCLIM e2e suite.")
-                   ("mcclim-online-openai-codex" "online-openai-codex"
-                    "Run the live OpenAI Codex McCLIM e2e suite.")))
-    (destructuring-bind (name only description) group
-      (register-pipeline-test-profile
-       name
-       :description description
-       :command (list "./scripts/mcclim-e2e.sh" "--only" only))))
   (register-pipeline-test-profile
    "prompt-probes"
    :description "Run the full live prompt.sh probe harness."
@@ -445,7 +431,7 @@ if you must modify that file from the running process."
 
 (defdoc register-pipeline-test-profile
   :category "pipelines"
-  :usage "(register-pipeline-test-profile \"unit\" :description \"Run unit tests\" :command '(\"./scripts/mcclim-e2e.sh\" \"--only\" \"smoke\"))"
+  :usage "(register-pipeline-test-profile \"unit\" :description \"Run unit tests\" :command '(\"./scripts/guix-container.sh\" \"--mode\" \"run\" ...))"
   :returns "pipeline-test-profile - The registered deterministic test profile."
   :side-effects "Updates the process-local test profile registry used by run-pipeline-test-profiles and shipped pipelines such as self-modify."
   :see-also (define-pipeline-test-profile list-pipeline-test-profiles run-pipeline-test-profiles))
@@ -464,7 +450,7 @@ if you must modify that file from the running process."
 
 (defdoc run-pipeline-test-profiles
   :category "pipelines"
-  :usage "(run-pipeline-test-profiles '(\"unit\" \"mcclim-offline\") :directory #P\"/path/to/repo/\")"
+  :usage "(run-pipeline-test-profiles '(\"unit\" \"prompt-probes\") :directory #P\"/path/to/repo/\")"
   :returns "plist - Structured test report with :passed-p, :summary, and per-profile command results."
   :side-effects "Runs registered shell command profiles sequentially in the given directory."
   :see-also (register-pipeline-test-profile list-pipeline-test-profiles define-pipeline))

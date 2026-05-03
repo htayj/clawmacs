@@ -47,7 +47,6 @@
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
         (*think-selector-active* nil)
-        (*customize-face-state* nil)
         (*openai-oauth-pending* nil)
         (*deny-message-mode* nil)
         (clawmacs::*buffer-ring* nil))
@@ -80,30 +79,6 @@
       (message-insert-newline (buffer-input-message buf)))
     ;; 21 lines, terminal height 30, max = 15
     (is (= 15 (clawmacs::calculate-input-height buf 30 80)))))
-
-
-(test mcclim-desired-input-pane-rows-keep-chat-input-stable
-  "Chat compose uses a stable Drei pane height."
-  (let ((buf (make-buffer "chat-wrap")))
-    (set-message-text (buffer-input-message buf)
-                      (make-string 120 :initial-element #\x))
-    (is (= clawmacs::*mcclim-chat-input-pane-rows*
-           (clawmacs::mcclim-desired-input-pane-rows buf 24 20)))))
-
-(test mcclim-desired-input-pane-rows-keep-document-input-stable
-  "Document editors use a stable shared Drei pane height."
-  (let ((buf (make-buffer "scratch" :kind :scratch)))
-    (set-message-text (buffer-input-message buf)
-                      (make-string 120 :initial-element #\x))
-    (is (= clawmacs::*mcclim-document-input-pane-rows*
-           (clawmacs::mcclim-desired-input-pane-rows buf 24 20)))))
-
-(test mcclim-desired-input-pane-rows-hide-noneditable-special-buffers
-  "Read-only and presentation-driven special buffers do not reserve a Drei pane."
-  (dolist (kind '(:help :info :customize :font-editor))
-    (let ((buf (make-buffer (string-downcase (symbol-name kind)) :kind kind)))
-      (is (= 0 (clawmacs::mcclim-desired-input-pane-rows buf 24 20))))))
-
 
 
 (test scratch-buffer-scroll-geometry-bottom-aligns-long-text
@@ -252,16 +227,6 @@
         (is (string= "screenshots/mcclim/probe.png"
                      (clawmacs::display-image-reference-path reference)))))))
 
-(test init-global-faces-registers-tool-highlight-faces
-  "Global theme initialization includes dedicated tool-call/result faces."
-  (clawmacs::init-global-faces)
-  (dolist (name '(:tool-call :tool-call-paren :tool-call-keyword
-                   :tool-call-string :tool-call-comment :tool-call-number
-                   :tool-result :tool-result-paren :tool-result-keyword
-                   :tool-result-string :tool-result-comment :tool-result-number
-                   :compaction-summary))
-    (is (typep (clawmacs::global-face name) 'drawing-style))))
-
 (test tool-displays-use-lisp-shaped-text
   "Tool call/result display strings are formatted for Lisp-oriented rendering."
   (let* ((tool-use '((:type . "tool_use")
@@ -296,20 +261,3 @@
     (is (member :tool-call-number faces))
     (is (equal "(" (first texts)))
     (is (search "\"(+ 1 2)\"" (format nil "~{~A~}" texts)))))
-
-(test mcclim-rendered-message-presentation-type-detects-tool-shapes
-  "Transcript messages use dedicated presentation types for tool calls/results."
-  (let ((chat (make-message :agent))
-        (tool-call (make-message :agent))
-        (tool-result (make-message :tool-result)))
-    (setf (message-raw-content tool-call)
-          '(((:type . "tool_use")
-             (:id . "toolu_1")
-             (:name . "lisp_eval")
-             (:input . ((:code . "(+ 1 2)"))))))
-    (is (eq 'clawmacs::chat-message
-            (clawmacs::mcclim-rendered-message-presentation-type chat)))
-    (is (eq 'clawmacs::tool-call
-            (clawmacs::mcclim-rendered-message-presentation-type tool-call)))
-    (is (eq 'clawmacs::tool-result
-            (clawmacs::mcclim-rendered-message-presentation-type tool-result)))))

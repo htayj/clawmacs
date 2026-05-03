@@ -58,81 +58,6 @@
    ;; General utilities
    #:count-occurrences
 
-   ;; Legacy color specs
-   #:color-spec
-   #:make-color-spec
-   #:color-spec-type
-   #:color-spec-value
-
-   ;; CLIM drawing styles
-   #:make-cga-ink
-   #:make-256-color-ink
-   #:make-hex-ink
-   #:make-clim-ink
-   #:make-clim-text-style
-   #:default-clawmacs-text-style
-   #:bold-clawmacs-text-style
-   #:drawing-style
-   #:make-drawing-style
-   #:drawing-style-name
-   #:drawing-style-ink
-   #:drawing-style-background-ink
-   #:drawing-style-text-style
-   #:drawing-style-drawing-options
-   #:drawing-style-underline-p
-   #:drawing-style-parent
-   #:drawing-style-transform
-   #:resolved-drawing-style
-   #:resolved-drawing-style-ink
-   #:resolved-drawing-style-background-ink
-   #:resolved-drawing-style-text-style
-   #:resolved-drawing-style-drawing-options
-   #:resolved-drawing-style-underline-p
-   #:resolve-drawing-style
-
-   ;; Legacy faces
-   #:face
-   #:face-name
-   #:face-foreground
-   #:face-background
-   #:face-bold-p
-   #:face-underline-p
-   #:face-reverse-p
-   #:face-parent
-   #:face-transform
-   #:resolved-face
-   #:resolved-face-foreground
-   #:resolved-face-background
-   #:resolved-face-bold-p
-   #:resolved-face-underline-p
-   #:resolved-face-reverse-p
-   #:resolved-face-text-style
-   #:resolved-face-drawing-options
-   #:resolve-face
-
-   ;; Drawing style sets / legacy face sets
-   #:drawing-style-set
-   #:drawing-style-set-owner
-   #:drawing-style-set-styles
-   #:make-drawing-style-set
-   #:get-drawing-style
-   #:face-set
-   #:face-set-owner
-   #:face-set-faces
-   #:make-face-set
-   #:get-face
-
-   ;; Global face registry
-   #:*global-face-registry*
-   #:global-face
-   #:init-global-faces
-   #:collect-global-faces
-   #:make-default-system-face-set
-   #:make-default-compaction-summary-face-set
-   #:make-default-text-face
-   #:init-face-registry
-   #:ensure-buffer-agent-face-set
-
    ;; Lines
    #:line
    #:make-line
@@ -151,7 +76,6 @@
    #:message-mark-offset
    #:message-sender
    #:message-timestamp
-   #:message-face-set
    #:message-read-only-p
    #:message-next
    #:message-prev
@@ -328,7 +252,6 @@
    #:clear-buffer-routing-overrides
    #:set-buffer-pipeline
    #:clear-buffer-pipeline
-   #:buffer-face-registry
    #:buffer-keymap
    #:buffer-scroll-offset
    #:buffer-show-tool-results-p
@@ -994,11 +917,6 @@
    #:session-tree-command
    #:fork-session-command
    #:list-buffers-command
-   #:split-window-below-command
-   #:split-window-right-command
-   #:delete-window-command
-   #:delete-other-windows-command
-   #:other-window-command
    #:minibuffer-select-project-command
    #:open-project-file-command
    #:create-project-file-command
@@ -1096,7 +1014,6 @@
    #:clawmacs-manual-command
    #:info-goto-node-command
    #:help-buffer-p
-   #:customize-buffer-p
    #:help-buffer-text
 
    ;; Introspection / Help
@@ -1118,42 +1035,6 @@
    #:categorize-command
    #:describe-bindings-to-string
    #:describe-bindings-command
-
-   ;; Customize face
-   #:*customize-face-state*
-   #:*customize-face-fields*
-   #:cga-color-name
-   #:format-color-spec-display
-   #:format-clim-ink-display
-   #:format-clim-text-style-display
-   #:format-drawing-options-display
-   #:format-boolean-display
-   #:format-face-parent-display
-   #:customize-face-field-value
-   #:customize-face-set-field-value
-   #:customize-face-field-label
-   #:customize-face-field-display
-   #:customize-face-snapshot
-   #:customize-face-restore-snapshot
-   #:build-customize-face-content
-   #:rebuild-customize-face-display
-   #:customize-face-next-field
-   #:customize-face-prev-field
-   #:customize-face-toggle-field
-   #:collect-all-faces
-   #:make-color-selection-items
-   #:make-text-style-selection-items
-   #:make-drawing-options-selection-items
-   #:make-boolean-selection-items
-   #:make-parent-selection-items
-   #:customize-face-edit-field
-   #:customize-face-apply
-   #:customize-face-cancel
-   #:customize-face-revert-to-original
-   #:make-customize-face-buffer
-   #:handle-customize-key
-   #:customize-drawing-style-command
-   #:customize-face-command
 
    ;; Type introspection
    #:list-types
@@ -1182,56 +1063,7 @@
    #:*debug-log-file*
    #:debug-log
    #:file-debug-log
-   #:*mcclim-debugger-enabled*
-   #:*mcclim-listener-debugger-enabled*
-   #:*mcclim-debug-inspector-frames*
-   #:*clouseau-extensions-installed-p*
-   #:*clouseau-extension-classes*
-   #:mcclim-debug-feature-status
-   #:mcclim-debug-status-to-string
-   #:mcclim-debug-snapshot-to-string
-   #:ensure-clouseau-support
-   #:clouseau-status-to-string
-   #:clouseau-inspector-entries
-   #:clouseau-inspectors-to-string
-   #:clouseau-update-inspector-root
-   #:clouseau-application-state
-   #:mcclim-install-debugger
-   #:mcclim-disable-debugger
-   #:mcclim-launch-listener
-   #:mcclim-debug-inspect-target
-   #:mcclim-debug-inspect-lisp-form
-   #:mcclim-refresh-inspectors
    #:toggle-debug-mode-command
-   #:mcclim-debug-status-command
-   #:mcclim-debug-snapshot-command
-   #:mcclim-install-debugger-command
-   #:mcclim-disable-debugger-command
-   #:mcclim-launch-listener-command
-   #:mcclim-toggle-listener-debugger-command
-   #:mcclim-inspect-current-frame-command
-   #:mcclim-inspect-visible-buffer-command
-   #:mcclim-inspect-current-buffer-command
-   #:mcclim-inspect-window-tree-command
-   #:mcclim-inspect-selected-window-command
-   #:mcclim-inspect-main-pane-command
-   #:mcclim-inspect-input-pane-command
-   #:mcclim-inspect-render-snapshot-command
-   #:mcclim-inspect-debug-status-command
-   #:mcclim-inspect-lisp-form-command
-   #:mcclim-refresh-inspectors-command
-   #:clouseau-status-command
-   #:clouseau-install-extensions-command
-   #:clouseau-list-inspectors-command
-   #:clouseau-refresh-inspectors-command
-   #:clouseau-inspect-application-state-command
-   #:clouseau-inspect-buffer-ring-command
-   #:clouseau-inspect-current-session-command
-   #:clouseau-inspect-input-message-command
-   #:clouseau-inspect-package-registry-command
-   #:clouseau-inspect-tool-registry-command
-   #:clouseau-inspect-pipeline-registry-command
-   #:clouseau-set-inspector-root-command
    #:toggle-reasoning-output-command
    #:toggle-metadata-output-command
    #:redraw-screen-command
@@ -1374,7 +1206,6 @@
 
    ;; Main
    #:clawmacs-main
-   #:run-clawmacs-mcclim
    #:clawmacs-prompt-main
    #:clawmacs-session-prompt-main
    #:clawmacs-app-server-main

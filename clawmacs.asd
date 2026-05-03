@@ -20,7 +20,6 @@
   :components ((:module "src"
                 :serial t
                 :components ((:file "packages")
-                             (:file "faces")
                              (:file "message")
                              (:file "session")
                              (:file "buffer")
@@ -53,8 +52,6 @@
                              (:file "listener")
                              (:file "font-editor")
                              (:file "main")
-                             (:file "mcclim-app")
-                             (:file "speculum")
                              (:file "reference")
                              (:file "sexed")
                              (:file "slop")
@@ -73,7 +70,6 @@
                               (:file "organa-package-test")
                               (:file "netcons-package-test")
                               (:file "prove-package-test")
-                              (:file "speculum-package-test")
                               (:file "subagent-package-test")
                               (:file "templata-package-test")
                               (:file "quaestor-package-test")
@@ -82,7 +78,6 @@
                               (:file "interop-test")
                               (:file "mcp-bridge-package-test")
                               (:file "reference-test")
-                              (:file "faces-test")
                               (:file "message-test")
                               (:file "buffer-test")
                               (:file "windows-test")

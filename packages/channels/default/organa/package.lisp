@@ -864,16 +864,6 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
     (:outline (organa-outline-rows model))
     (otherwise (organa-dashboard-rows model))))
 
-;;; --------------------------------------------------------------------------
-;;; McCLIM presentation
-;;; --------------------------------------------------------------------------
-
-(clim:define-presentation-type organa-todo-ref ()
-  :description "an Organa TODO")
-
-(clim:define-presentation-type organa-dependency-ref ()
-  :description "an Organa dependency reference")
-
 (defun organa-next-status (status)
   "Return the next Organa workflow status after STATUS."
   (let* ((normalized (organa-normalize-status status))
@@ -938,61 +928,6 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
     (when (organa-todo-tags todo)
       (format stream "Tags: ~{~A~^, ~}~%" (organa-todo-tags todo)))))
 
-(clim:define-command (com-organa-describe-todo
-                      :command-table clawmacs-mcclim-command-table
-                      :name t)
-    ((todo 'organa-todo-ref))
-  (when todo
-    (let ((help (make-help-buffer "*help:organa-todo*"
-                                  (organa-todo-description todo))))
-      (switch-to-buffer help))))
-
-(clim:define-command (com-organa-cycle-todo-status
-                      :command-table clawmacs-mcclim-command-table
-                      :name t)
-    ((todo 'organa-todo-ref))
-  (let ((buffer (current-buffer)))
-    (when (and todo (eq :organa (buffer-kind buffer)))
-      (organa-cycle-todo-status buffer todo))))
-
-(clim:define-command (com-organa-follow-dependency
-                      :command-table clawmacs-mcclim-command-table
-                      :name t)
-    ((todo-id 'organa-dependency-ref))
-  (let ((buffer (current-buffer)))
-    (when (and todo-id (eq :organa (buffer-kind buffer)))
-      (organa-focus-todo-by-id buffer todo-id))))
-
-(clim:define-presentation-to-command-translator click-organa-todo
-    (organa-todo-ref com-organa-cycle-todo-status
-                     clawmacs-mcclim-command-table
-                     :gesture :select
-                     :priority 20
-                     :documentation "Advance this TODO status"
-                     :pointer-documentation "Advance this TODO status")
-    (object)
-  (list object))
-
-(clim:define-presentation-to-command-translator describe-organa-todo
-    (organa-todo-ref com-organa-describe-todo
-                     clawmacs-mcclim-command-table
-                     :gesture :describe
-                     :priority 20
-                     :documentation "Describe this TODO"
-                     :pointer-documentation "Describe this TODO")
-    (object)
-  (list object))
-
-(clim:define-presentation-to-command-translator click-organa-dependency
-    (organa-dependency-ref com-organa-follow-dependency
-                           clawmacs-mcclim-command-table
-                           :gesture :select
-                           :priority 20
-                           :documentation "Follow this dependency"
-                           :pointer-documentation "Follow this dependency")
-    (object)
-  (list object))
-
 (defun organa-row-face (row)
   "Return the global face name for one Organa display ROW."
   (case (getf row :face)
@@ -1036,32 +971,10 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
               (organa-stream-entry row-data cols))
             rows)))
 
-(defun organa-render-buffer (pane buffer rows cols char-w char-h)
-  "Render BUFFER as an Organa project TODO board."
-  (declare (ignore char-w char-h))
-  (handler-case
-      (let ((entries (organa-display-entries buffer cols)))
-        (mcclim-stream-render-buffer-title pane buffer)
-        (mcclim-stream-render-styled-entry-list pane entries)
-        (mcclim-record-render-snapshot (clim:pane-frame pane)
-                                       pane
-                                       buffer
-                                       :organa
-                                       rows
-                                       cols
-                                       :history-height rows))
-    (error (condition)
-      (mcclim-stream-render-buffer-title pane buffer)
-      (mcclim-stream-render-styled-entry-list
-       pane
-       (list (list :text (format nil "Organa error: ~A" condition)
-                   :face :system))))))
-
 (define-buffer-type :organa
   :description "Org-mode TODO project management buffer."
   :major-mode "organa"
-  :document-p t
-  :presentation-function 'organa-render-buffer)
+  :document-p t)
 
 ;;; --------------------------------------------------------------------------
 ;;; User commands

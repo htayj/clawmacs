@@ -73,7 +73,6 @@
      (ensure-directories-exist (merge-pathnames #P".keep" *sessions-dir*))
      (ensure-directories-exist (merge-pathnames #P".keep" package-root))
      (clawmacs::init-default-keymap)
-     (clawmacs::init-global-faces)
      (clawmacs::init-tools)
      ,@body))
 

@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`src/` holds the Common Lisp application, loaded serially by [`clawmacs.asd`](/home/tay/projects/clawmacs/clawmacs.asd). Keep new modules in dependency order there: core data structures first, McCLIM UI code and `main.lisp` later. `tests/` contains FiveAM suites named `*-test.lisp`; `test-mcclim-e2e.py` and `scripts/mcclim-e2e.sh` cover graphical end-to-end flows. `scripts/` contains environment wrappers, `docs/` stores design and process notes, and `docs/img/` holds screenshots and other documentation assets.
+`src/` holds the Common Lisp application, loaded serially by [`clawmacs.asd`](/home/tay/projects/clawmacs/clawmacs.asd). Keep new modules in dependency order there: core data structures first, UI-independent runtime code and `main.lisp` later. `tests/` contains FiveAM suites named `*-test.lisp`. `scripts/` contains environment wrappers, `docs/` stores design and process notes, and `docs/img/` holds screenshots and other documentation assets.
 
 ## Build, Test, and Development Commands
 Use the container wrappers instead of invoking SBCL directly.
@@ -9,7 +9,6 @@ Use the container wrappers instead of invoking SBCL directly.
 - `./run.sh` launches the McCLIM UI in the Guix container.
 - `./scripts/guix-container.sh --preflight-only --mode run -- true` validates the local Guix/Quicklisp setup without starting the app.
 - `./scripts/guix-container.sh --mode run -- sh -lc 'sbcl --noinform --load "$CLAWMACS_QUICKLISP_SETUP" --eval "(push (truename \".\") asdf:*central-registry*)" --eval "(ql:quickload :clawmacs/tests)" --eval "(fiveam:run! (quote clawmacs/tests::clawmacs-suite))" --eval "(quit)"'` runs the unit suite.
-- `./scripts/mcclim-e2e.sh` runs Python-based McCLIM tests; `./scripts/mcclim-e2e.sh --only readline` targets one scenario.
 
 ## Coding Style & Naming Conventions
 Follow the repository’s Common Lisp posture in `docs/DESIGN.md`: functional-first, immutable by default, and explicit about side effects. Use standard Lisp indentation with aligned keyword arguments, lowercase-hyphenated symbol names, and `*earmuffed*` globals for special variables. Export public API from `src/packages.lisp`, and add SBCL type declarations where they clarify intent. No formatter or linter is enforced here, so match nearby code exactly.

@@ -398,16 +398,7 @@ run_case invalid-e2e-args-toggle 122 yes CLAWMACS_TEST_INVALID_E2E_ARGS --mode e
 run_env_case preflight-precedence-credential-over-bootstrap 116 CLAWMACS_TEST_MISSING_PROVIDER_CREDENTIAL=1 CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
 run_env_case preflight-precedence-override-over-bootstrap 117 CLAWMACS_TEST_INVALID_OVERRIDE_PATH=1 CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
 run_env_case preflight-precedence-openssl-over-bootstrap 121 CLAWMACS_TEST_MISSING_OPENSSL_PATH=1 CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
-run_env_case e2e-credential-missing-required 116 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only online
-run_env_case e2e-credential-openai-present 0 OPENAI_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only online
-run_env_case e2e-credential-zai-present 0 ZAI_CODING_MAX_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only online
-run_env_case e2e-credential-openrouter-present 0 OPENROUTER_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only online
-run_env_case e2e-credential-optional-readline 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only readline
 run_env_case e2e-credential-generic-command-optional 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 -c 'print("ok")'
-run_env_case e2e-credential-default-mcclim-optional 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py
-run_env_case e2e-credential-last-only-wins-required 116 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only readline --only online
-run_env_case e2e-credential-last-only-wins-optional 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only online --only readline
-run_env_case e2e-args-only-missing-value 122 OPENAI_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 test-mcclim-e2e.py --only
 run_env_case host-tools-not-required-for-run-preflight 0 CLAWMACS_FAIL_HOST_TOOL_USE=1 "$LAUNCHER" --mode run --preflight-only
 run_env_case host-tools-not-required-for-e2e-preflight 0 CLAWMACS_FAIL_HOST_TOOL_USE=1 OPENAI_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 --version
 run_case payload-exit-code-passthrough 37 no - --mode run -- sh -c 'exit 37'

@@ -138,7 +138,6 @@
       (install :chat "Default agent conversation buffer." "chat" nil)
       (install :help "Read-only help buffer." "help" nil)
       (install :info "Read-only Info manual browser." "info" nil)
-      (install :customize "Interactive customization buffer." "customize" nil)
       (install :listener "Interactive Common Lisp listener buffer." "listener" nil)
       (install :font-editor "Interactive CADR-style bitmap font editor." "font-editor" nil)
       (install :scratch "Editable scratch buffer." "scratch" t)
@@ -149,8 +148,8 @@
   "Registry of known buffer kinds.
 
 Packages may add entries with REGISTER-BUFFER-TYPE or DEFINE-BUFFER-TYPE.
-The McCLIM interface uses the registered presentation functions to render
-custom buffer kinds.")
+Registered presentation functions are retained as metadata for future
+interfaces.")
 
 (defun register-buffer-type
     (name
@@ -165,11 +164,9 @@ custom buffer kinds.")
        (package nil package-supplied-p))
   "Register NAME as a buffer type and return its BUFFER-TYPE metadata.
 
-  PRESENTATION-FUNCTION, when supplied, is called by the McCLIM transcript pane as
-(FUNCTION PANE BUFFER ROWS COLS CHAR-W CHAR-H). INPUT-PRESENTATION-FUNCTION is
-called with the same arguments for the separate Drei input pane. Package
-entrypoints normally leave PACKAGE unset; it defaults to the package currently
-being loaded by the Clawmacs package manager."
+  PRESENTATION-FUNCTION and INPUT-PRESENTATION-FUNCTION are retained as optional
+interface metadata. Package entrypoints normally leave PACKAGE unset; it
+defaults to the package currently being loaded by the Clawmacs package manager."
   (when (and *current-clawmacs-package*
              (not (package-resource-type-allowed-p :buffer-type)))
     (return-from register-buffer-type nil))
@@ -261,12 +258,12 @@ major-mode label, and optional McCLIM presentation functions."
   (find-buffer-type (buffer-kind buf)))
 
 (defun buffer-presentation-function (buf)
-  "Return BUF's registered main-pane presentation function, if any."
+  "Return BUF's registered presentation function, if any."
   (let ((type (buffer-type-for-buffer buf)))
     (and type (buffer-type-presentation-function type))))
 
 (defun buffer-input-presentation-function (buf)
-  "Return BUF's registered input-pane presentation function, if any."
+  "Return BUF's registered input presentation function, if any."
   (let ((type (buffer-type-for-buffer buf)))
     (and type (buffer-type-input-presentation-function type))))
 
@@ -324,7 +321,7 @@ major-mode label, and optional McCLIM presentation functions."
                       :accessor buffer-kind
                       :initform :chat
                       :type keyword
-                      :documentation "Buffer kind. Built-ins include :chat, :help, :info, :customize, :listener, :scratch, and :file.")
+                      :documentation "Buffer kind. Built-ins include :chat, :help, :info, :listener, :scratch, and :file.")
    (working-directory :initarg :working-directory
                       :accessor buffer-working-directory
                       :initform (truename ".")
@@ -420,10 +417,6 @@ major-mode label, and optional McCLIM presentation functions."
                              :initform :persistent
                              :type keyword
                              :documentation "Controls whether the buffer should attach and autosave a durable session. Supported values are :persistent and :ephemeral.")
-    (face-registry     :initarg :face-registry
-                       :accessor buffer-face-registry
-                       :type hash-table
-                       :documentation "Hash table mapping sender keywords to face-set objects for rendering.")
    (keymap            :initarg :keymap
                       :accessor buffer-keymap
                       :initform nil
@@ -554,7 +547,6 @@ Enforces the invariant that it is not read-only."
                (and type (buffer-type-major-mode type))
                (buffer-kind-default-major-mode normalized-kind)))
          (input-msg (make-message :user))
-         (registry (make-hash-table :test #'eq))
          (buf (make-instance 'buffer
                 :name name
                 :first-message input-msg
@@ -571,7 +563,6 @@ Enforces the invariant that it is not read-only."
                 :enabled-packages (copy-list enabled-packages)
                 :session session
                 :session-persistence-mode normalized-session-mode
-                :face-registry registry
                 :major-mode resolved-major-mode)))
     (maybe-run-hook-with-args '*after-buffer-create-hook* buf)
     buf))
@@ -610,11 +601,6 @@ Enforces the invariant that it is not read-only."
   (eq (buffer-kind buf) :help))
 
 (declaim (ftype (function (buffer) boolean) info-buffer-p))
-
-(declaim (ftype (function (buffer) boolean) customize-buffer-p))
-(defun customize-buffer-p (buf)
-  "Return true when BUF is an interactive customize buffer."
-  (eq (buffer-kind buf) :customize))
 
 (declaim (ftype (function (buffer) boolean) document-buffer-p))
 (defun document-buffer-p (buf)
@@ -1147,7 +1133,7 @@ The input message is never removed."
   buf)
 
 (defun buffer-insert-read-only-message
-    (buf sender text &key raw-content metadata face-set timestamp
+    (buf sender text &key raw-content metadata timestamp
                       (record-p t) (run-hook-p t))
   "Create a read-only SENDER message with TEXT before BUF's input message."
   (let ((msg (make-message sender :read-only-p t)))
@@ -1157,11 +1143,6 @@ The input message is never removed."
       (setf (message-raw-content msg) raw-content))
     (when metadata
       (setf (message-metadata msg) metadata))
-    (let ((resolved-face-set (or face-set
-                                 (gethash sender
-                                          (buffer-face-registry buf)))))
-      (when resolved-face-set
-        (setf (message-face-set msg) resolved-face-set)))
     (insert-message-before-input buf msg)
     (when run-hook-p
       (maybe-run-hook-with-args '*after-message-insert-hook* buf msg))
@@ -1171,37 +1152,34 @@ The input message is never removed."
     msg))
 
 (defun buffer-insert-agent-message
-    (buf text &key (record-p t) raw-content metadata face-set (run-hook-p t))
+    (buf text &key (record-p t) raw-content metadata (run-hook-p t))
   "Create a read-only agent message with TEXT before BUF's input message."
   (let ((agent-keyword (intern (string-upcase (buffer-agent-name buf)) :keyword)))
     (buffer-insert-read-only-message
      buf agent-keyword text
      :raw-content raw-content
      :metadata metadata
-     :face-set face-set
      :record-p record-p
      :run-hook-p run-hook-p)))
 
 (defun buffer-insert-context-message
-    (buf text &key (record-p t) raw-content metadata face-set (run-hook-p t))
+    (buf text &key (record-p t) raw-content metadata (run-hook-p t))
   "Create a read-only context message with TEXT before BUF's input message.
 Context messages are sent to providers as user-context messages."
   (buffer-insert-read-only-message
    buf :context text
    :raw-content raw-content
    :metadata metadata
-   :face-set face-set
    :record-p record-p
    :run-hook-p run-hook-p))
 
 (defun buffer-insert-system-message
-    (buf text &key (record-p t) raw-content metadata face-set (run-hook-p t))
+    (buf text &key (record-p t) raw-content metadata (run-hook-p t))
   "Create a read-only display-only system message before BUF's input message."
   (buffer-insert-read-only-message
    buf :system text
    :raw-content raw-content
    :metadata metadata
-   :face-set face-set
    :record-p record-p
    :run-hook-p run-hook-p))
 
@@ -1298,9 +1276,6 @@ recorded into transcripts or saved snapshots."
                  (message-metadata msg)
                  '((:system-prompt-display . t)
                    (:ephemeral-display . t)))
-           (let ((face-set (gethash :system (buffer-face-registry buf))))
-             (when face-set
-               (setf (message-face-set msg) face-set)))
            (insert-message-at-buffer-start buf msg)
            (setf changed-p t)))
         (t
@@ -1315,9 +1290,7 @@ recorded into transcripts or saved snapshots."
          (setf (message-metadata existing)
                '((:system-prompt-display . t)
                  (:ephemeral-display . t)))
-         (let ((face-set (gethash :system (buffer-face-registry buf))))
-           (when face-set
-             (setf (message-face-set existing) face-set)))))
+         nil))
       (when changed-p
         (notify-buffer-display-change buf :system-prompt))
       buf)))
@@ -1354,9 +1327,7 @@ recorded into transcripts or saved snapshots."
       (ensure-default-keymap-initialized)))
 
 (defun initialize-buffer-display-defaults (buf &key keymap)
-  "Install default faces and KEYMAP on BUF when those systems are loaded."
-  (when (fboundp 'init-face-registry)
-    (funcall (symbol-function 'init-face-registry) buf))
+  "Install KEYMAP on BUF when the keymap system is loaded."
   (setf (buffer-keymap buf)
         (or keymap
             (ensure-default-keymap-initialized)))

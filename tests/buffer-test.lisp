@@ -109,7 +109,6 @@
          (clawmacs::*session-tree-selector-folded-ids* nil)
          (*model-selector-active* nil)
          (*think-selector-active* nil)
-         (*customize-face-state* nil)
          (*openai-oauth-pending* nil)
          (*deny-message-mode* nil)
          (*cc-pending* nil)
@@ -130,7 +129,6 @@
          (*mx-test-command-log* nil))
      (clawmacs::init-default-keymap)
      (let ((,buffer-var (make-buffer "test-session")))
-       (clawmacs::init-face-registry ,buffer-var)
        (setf (buffer-keymap ,buffer-var) *default-keymap*)
        (add-buffer-to-ring ,buffer-var)
        ,@body)))
@@ -216,67 +214,25 @@
       (is (string= "dashboard" (buffer-major-mode buf))))))
 
 (test built-in-special-buffer-types-are-registered
-  "Help, info, customize, and listener buffers are first-class non-document kinds."
+  "Help, info, listener, and font editor buffers are first-class non-document kinds."
   (let ((clawmacs::*buffer-type-registry*
           (clawmacs::make-buffer-type-registry)))
     (let ((help (find-buffer-type :help))
           (info (find-buffer-type :info))
-          (customize (find-buffer-type :customize))
           (listener (find-buffer-type :listener))
           (font-editor (find-buffer-type :font-editor)))
       (is (not (null help)))
       (is (not (null info)))
-      (is (not (null customize)))
       (is (not (null listener)))
       (is (not (null font-editor)))
       (is (string= "help" (buffer-type-major-mode help)))
       (is (string= "info" (buffer-type-major-mode info)))
-      (is (string= "customize" (buffer-type-major-mode customize)))
       (is (string= "listener" (buffer-type-major-mode listener)))
       (is (string= "font-editor" (buffer-type-major-mode font-editor)))
       (is (not (buffer-type-document-p help)))
       (is (not (buffer-type-document-p info)))
-      (is (not (buffer-type-document-p customize)))
       (is (not (buffer-type-document-p listener)))
       (is (not (buffer-type-document-p font-editor))))))
-
-(test mcclim-registers-built-in-special-presentations
-  "The McCLIM UI installs presentation renderers for special built-in buffers."
-  (let ((clawmacs::*buffer-type-registry*
-          (clawmacs::make-buffer-type-registry)))
-    (clawmacs::register-mcclim-core-buffer-presentations)
-    (let ((help (make-buffer "help" :kind :help))
-          (info (make-buffer "info" :kind :info))
-          (customize (make-buffer "customize" :kind :customize))
-          (listener (make-buffer "listener" :kind :listener))
-          (font-editor (make-buffer "font" :kind :font-editor)))
-      (is (eq 'clawmacs::mcclim-render-help-buffer
-              (buffer-presentation-function help)))
-      (is (null (buffer-input-presentation-function help)))
-      (is (eq 'clawmacs::mcclim-render-info-buffer
-              (buffer-presentation-function info)))
-      (is (null (buffer-input-presentation-function info)))
-      (is (eq 'clawmacs::mcclim-render-customize-buffer
-              (buffer-presentation-function customize)))
-      (is (null (buffer-input-presentation-function customize)))
-      (is (eq 'clawmacs::mcclim-render-listener-buffer
-              (buffer-presentation-function listener)))
-      (is (null (buffer-input-presentation-function listener)))
-      (is (eq 'clawmacs::mcclim-render-font-editor-buffer
-              (buffer-presentation-function font-editor)))
-      (is (null (buffer-input-presentation-function font-editor)))
-      (is (eq 'clawmacs::listener-serialize-buffer-state
-              (clawmacs::buffer-type-serialize-state-function
-               (find-buffer-type :listener))))
-      (is (eq 'clawmacs::listener-restore-buffer-state
-              (clawmacs::buffer-type-restore-state-function
-               (find-buffer-type :listener))))
-      (is (eq 'clawmacs::font-editor-serialize-buffer-state
-              (clawmacs::buffer-type-serialize-state-function
-               (find-buffer-type :font-editor))))
-      (is (eq 'clawmacs::font-editor-restore-buffer-state
-              (clawmacs::buffer-type-restore-state-function
-               (find-buffer-type :font-editor)))))))
 
 (test make-listener-buffer-evaluates-lisp-and-comma-commands
   "Listener buffers evaluate Lisp forms and dispatch McCLIM-style comma commands."
@@ -301,7 +257,7 @@
 
       (set-message-text (buffer-input-message buf) ",Help Commands")
       (submit-listener-input buf)
-      (is (search "McCLIM Listener commands"
+      (is (search "Common Lisp listener commands"
                   (message-text (latest-buffer-message buf))))
 
       (set-message-text (buffer-input-message buf) ",Package cl-user")
@@ -323,21 +279,6 @@
       (is (string= "help" (buffer-major-mode buf)))
       (is (search "Help title" (help-buffer-text buf)))
       (is (= 1 (length (buffer-test-history-messages buf)))))))
-
-(test make-customize-face-buffer-uses-dedicated-buffer-kind
-  "Customize buffers are not backed by a rendered agent message."
-  (let ((*buffer-ring* nil)
-        (*customize-face-state* nil))
-    (clawmacs::init-default-keymap)
-    (let* ((style (make-drawing-style :test-customize
-                                      :ink (make-cga-ink 1)))
-           (buf (clawmacs::make-customize-face-buffer
-                 style "test-customize")))
-      (is (customize-buffer-p buf))
-      (is (string= "customize" (buffer-major-mode buf)))
-      (is (eq buf (getf *customize-face-state* :buffer)))
-      (is (= 0 (length (buffer-test-history-messages buf))))
-      (is (= 1 (buffer-message-count buf))))))
 
 (test toggle-reasoning-output-command-flips-buffer-flag
   "The reasoning output toggle controls per-buffer reasoning display."
@@ -613,9 +554,7 @@
         (*scratch-buffer-name* "*scratch*")
         (*scratch-buffer-initial-text* "notes"))
     (clawmacs::init-default-keymap)
-    (clawmacs::init-global-faces)
     (let ((chat (make-buffer "chat")))
-      (clawmacs::init-face-registry chat)
       (setf (buffer-keymap chat) *default-keymap*)
       (add-buffer-to-ring chat)
       (let ((scratch (ensure-scratch-buffer)))
@@ -636,7 +575,6 @@
   (let ((*buffer-ring* nil)
         (*scratch-buffer-initial-text* ""))
     (clawmacs::init-default-keymap)
-    (clawmacs::init-global-faces)
     (let ((scratch (ensure-scratch-buffer)))
       (setf (scratch-buffer-text scratch) "alpha")
       (is (string= "alpha" (scratch-buffer-text scratch)))
@@ -1026,7 +964,6 @@
         (clawmacs::*session-tree-selector-active* nil)
         (*model-selector-active* nil)
         (*think-selector-active* nil)
-        (*customize-face-state* nil)
         (*openai-oauth-pending* nil)
         (*deny-message-mode* nil)
         (*cc-pending* nil)
@@ -1141,7 +1078,6 @@
         (clawmacs::*buffer-selector-scroll* 99))
     (clawmacs::init-default-keymap)
     (let ((buf (make-buffer "test")))
-      (clawmacs::init-face-registry buf)
       (setf (buffer-keymap buf) *default-keymap*)
       (add-buffer-to-ring buf)
       (list-buffers-command buf)
@@ -1216,7 +1152,6 @@
         (clawmacs::*buffer-selector-scroll* 0))
     (clawmacs::init-default-keymap)
     (let ((buf1 (make-buffer "session-1")))
-      (clawmacs::init-face-registry buf1)
       (setf (buffer-keymap buf1) *default-keymap*)
       (add-buffer-to-ring buf1)
       (clawmacs::handle-buffer-selector-key #\n)
@@ -1264,9 +1199,7 @@
         (clawmacs::*buffer-counter* 0)
         (*scratch-buffer-initial-text* ""))
     (clawmacs::init-default-keymap)
-    (clawmacs::init-global-faces)
     (let ((chat (make-buffer "chat")))
-      (clawmacs::init-face-registry chat)
       (setf (buffer-keymap chat) *default-keymap*)
       (add-buffer-to-ring chat)
       (let ((scratch (ensure-scratch-buffer)))
@@ -1291,9 +1224,7 @@
         (clawmacs::*buffer-selector-scroll* 0)
         (*scratch-buffer-initial-text* ""))
     (clawmacs::init-default-keymap)
-    (clawmacs::init-global-faces)
     (let ((chat (make-buffer "chat")))
-      (clawmacs::init-face-registry chat)
       (setf (buffer-keymap chat) *default-keymap*)
       (add-buffer-to-ring chat)
       (let ((scratch (ensure-scratch-buffer)))
@@ -1310,7 +1241,6 @@
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
         (*think-selector-active* nil)
-        (*customize-face-state* nil)
         (*openai-oauth-pending* nil)
         (*deny-message-mode* nil)
         (*cc-pending* nil)
@@ -1319,7 +1249,6 @@
         (*meta-pending* nil)
         (*scratch-buffer-initial-text* ""))
     (clawmacs::init-default-keymap)
-    (clawmacs::init-global-faces)
     (let ((scratch (ensure-scratch-buffer)))
       (clawmacs::handle-key-event scratch #\a)
       (clawmacs::handle-key-event scratch #\Return)
@@ -1341,7 +1270,6 @@
                                       (symbol-name (gensym "DIR")))))))
          (path (clawmacs::session-path *scratch-buffer-name*)))
     (clawmacs::init-default-keymap)
-    (clawmacs::init-global-faces)
     (let ((scratch (ensure-scratch-buffer)))
       (clawmacs::save-session-command scratch)
       (is (not (probe-file path)))
@@ -1808,7 +1736,6 @@
       (is (null (buffer-provider-override buf)))
       (is (null (buffer-model-override buf)))
       (is (null (buffer-think-level-override buf)))
-      (is (not (null (gethash :PAIR (buffer-face-registry buf)))))
       (let ((msg (latest-buffer-message buf)))
         (is (not (null msg)))
         (is (eq :system (message-sender msg)))

@@ -1127,23 +1127,6 @@ def test_46_describe_type(s):
     assert_not_contains(screen, "Describe Type", "minibuffer closed")
 
 
-def test_47_customize_face(s):
-    """Test: C-c F opens drawing-style customization minibuffer."""
-    s.press("Ctrl+c")
-    time.sleep(0.3)
-    s.press("F")
-    time.sleep(0.5)
-    screen = s.text()
-    assert_contains(screen, "Customize Drawing Style", "customize drawing style prompt")
-    assert_contains(screen, "ink:", "drawing style ink display format")
-    assert_contains(screen, "bg:", "drawing style background display format")
-    s.screenshot("47-customize-face")
-    cancel_minibuffer(s)
-    time.sleep(0.3)
-    screen = s.text()
-    assert_not_contains(screen, "Customize Drawing Style", "minibuffer closed")
-
-
 def test_52_skill_completion(s):
     """Test: Typing $ opens automatic skill completion and inserts a mention."""
     clear_input(s)
