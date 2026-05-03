@@ -225,8 +225,8 @@ and :TOOL-ID entries. Returns the inserted message."
 
 (defun start-streaming-response (buf)
   "Start a streaming API call. Creates a placeholder agent message and
-stores the stream state on the buffer. Non-blocking -- the event loop
-polls for updates via update-streaming-response."
+stores the stream state on the buffer. Non-blocking -- provider reader
+threads notify the UI as deltas arrive."
   (load-active-packages :buffer buf)
   (maybe-compact-buffer buf :reason :pre-request)
   (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
@@ -276,7 +276,9 @@ polls for updates via update-streaming-response."
                  (state (apply #'provider-request-streaming
                                provider
                                messages
-                               (lambda (s) (declare (ignore s)))
+                               (lambda (stream-state)
+                                 (declare (ignore stream-state))
+                                 (notify-buffer-display-change buf :streaming))
                                request-args))
                  ;; Create placeholder message that will be updated as tokens arrive.
                  ;; It becomes durable only when the stream completes or errors.
@@ -545,7 +547,7 @@ Returns T if still streaming, NIL if done."
 (declaim (ftype (function (buffer) buffer) send-to-agent-with-context))
 (defun send-to-agent-with-context (buf)
   "Start a streaming conversation with the LLM. Non-blocking --
-the event loop polls for updates via update-streaming-response."
+provider reader threads surface updates asynchronously."
   (setf (buffer-status buf) :thinking)
   (notify-buffer-display-change buf :status)
   (start-streaming-response buf)

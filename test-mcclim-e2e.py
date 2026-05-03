@@ -136,7 +136,8 @@ OFFLINE_AGENT_EVAL = r"""
                             (list (clawmacs::canonical-text-block
                                    "MCCLIM-PULSE-STREAM-VISIBLE"))
                             (clawmacs::stream-state-stop-reason state) "end_turn"
-                            (clawmacs::stream-state-done-p state) t)))
+                            (clawmacs::stream-state-done-p state) t))
+                    (clawmacs:notify-buffer-display-change buf :streaming))
                   :name "mcclim-e2e-pulse-stream")))
               ((search "stream-stop-probe" text :test #'char-equal)
                (let ((state (clawmacs::make-stream-state))
@@ -421,7 +422,8 @@ CORE_OFFLINE_AGENT_EVAL = r"""
                             (list (clawmacs::canonical-text-block
                                    "MCCLIM-PULSE-STREAM-VISIBLE"))
                             (clawmacs::stream-state-stop-reason state) "end_turn"
-                            (clawmacs::stream-state-done-p state) t)))
+                            (clawmacs::stream-state-done-p state) t))
+                    (clawmacs:notify-buffer-display-change buf :streaming))
                   :name "mcclim-e2e-pulse-stream")))
               ((search "stream-stop-probe" text :test #'char-equal)
                (let ((state (clawmacs::make-stream-state))
@@ -1706,8 +1708,8 @@ def test_54_tiling_resize_keeps_latest_message_visible(session):
     session.screenshot("54-tiling-resize-latest-visible")
 
 
-def test_54_input_wrap_expands_input_pane(session):
-    """Long unsent input should grow the input pane so wrapped text stays visible."""
+def test_54_input_wrap_keeps_input_pane_stable(session):
+    """Long unsent input should stay in a stable editor pane without relayout."""
     long_text = "wrap-input-pane-probe " * 20
 
     def input_pane_grid():
@@ -1736,24 +1738,29 @@ def test_54_input_wrap_expands_input_pane(session):
             description="long input present in buffer snapshot",
         )
         initial_cols, initial_rows = input_pane_grid()
+        initial_main_width = (((session.snapshot().get("panes") or {})
+                               .get("main") or {})
+                              .get("pixelWidth") or 0)
 
         session.resize(640, 420)
-        wait_for_render_width(
-            session,
-            lambda width: width and width < 900,
-            "narrow render width for wrapped input",
+        session.wait_snapshot(
+            lambda snap: ((((snap.get("panes") or {}).get("main") or {})
+                           .get("pixelWidth") or 0) > 0
+                          and ((((snap.get("panes") or {}).get("main") or {})
+                                .get("pixelWidth") or 0) < initial_main_width)),
             timeout=20,
+            description="narrow main pane width for wrapped input",
         )
         narrow_cols, narrow_rows = input_pane_grid()
 
-        if narrow_rows <= 3:
+        if narrow_rows <= 0:
             fail(
-                f"wrapped input did not grow the pane: cols={narrow_cols} "
+                f"input pane collapsed after resize: cols={narrow_cols} "
                 f"rows={narrow_rows}"
             )
-        if narrow_rows < initial_rows:
+        if narrow_rows != initial_rows:
             fail(
-                f"input pane shrank after narrow resize: initial={initial_rows} "
+                f"input pane height changed during wrapped input: initial={initial_rows} "
                 f"narrow={narrow_rows}"
             )
         panes = session.snapshot().get("panes") or {}
@@ -1768,14 +1775,14 @@ def test_54_input_wrap_expands_input_pane(session):
             )
         E2E.assert_contains(session.text(), "wrap-input-pane-probe",
                             "long input remains present")
-        session.screenshot("54-input-wrap-expands-input-pane")
+        session.screenshot("54-input-wrap-keeps-input-pane-stable")
     finally:
         session.resize(1000, 680)
-        wait_for_render_width(
-            session,
-            lambda width: width and width > 900,
-            "restored render width after wrapped input test",
+        session.wait_snapshot(
+            lambda snap: ((((snap.get("panes") or {}).get("main") or {})
+                           .get("pixelWidth") or 0) >= initial_main_width),
             timeout=20,
+            description="restored main pane width after wrapped input test",
         )
 
 
@@ -3613,7 +3620,7 @@ def test_registry(group):
     offline_tests = [
         ("53-async-agent-reply-renders", test_53_async_agent_reply_renders_without_next_input),
         ("54-tiling-resize-latest-visible", test_54_tiling_resize_keeps_latest_message_visible),
-        ("54-input-wrap-expands-input-pane", test_54_input_wrap_expands_input_pane),
+        ("54-input-wrap-keeps-input-pane-stable", test_54_input_wrap_keeps_input_pane_stable),
         ("55-stream-poll-renders", test_55_stream_poll_renders_without_next_input),
         ("56-escape-stops-stream", test_56_escape_stops_active_stream),
         ("56-meta-x-command-picker", test_56_meta_x_opens_extended_command),

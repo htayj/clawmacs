@@ -1270,6 +1270,8 @@ Returns the access token on success."
           (openai-oauth-flow-cancelled-p flow) cancelled
           (openai-oauth-flow-error flow) error
           (openai-oauth-flow-token flow) token))
+  (when (openai-oauth-flow-buffer flow)
+    (notify-buffer-display-change (openai-oauth-flow-buffer flow) :oauth))
   flow)
 
 (defun openai-oauth-flow-snapshot (flow)
@@ -2842,6 +2844,13 @@ reasoning_content is present, falls back to reasoning_content."
   reader-thread
   (lock (bt:make-lock "stream-state")))
 
+(defun maybe-call-streaming-callback (callback state)
+  "Invoke CALLBACK with STATE when CALLBACK is non-nil.
+Reader threads should not fail because UI notification raised."
+  (when callback
+    (ignore-errors
+      (funcall callback state))))
+
 (defun stream-state-cancel-requested-p-safe (state)
   "Return true when STATE has been cancelled, holding its lock."
   (and state
@@ -2989,7 +2998,7 @@ SSE format: 'field: value' or just 'data: {...}'."
             (setf (stream-state-stop-reason state)
                   (openai-finish-reason->stop-reason finish-reason))))))))
 
-(defun read-openai-sse-stream (stream state)
+(defun read-openai-sse-stream (stream state callback)
   "Read OpenAI SSE events from STREAM into STATE."
   (handler-case
       (loop :with data-buffer := nil
@@ -3002,6 +3011,7 @@ SSE format: 'field: value' or just 'data: {...}'."
                        (process-openai-sse-event
                         (format nil "~{~A~}" (nreverse data-buffer))
                         state)
+                       (maybe-call-streaming-callback callback state)
                        (setf data-buffer nil)))
                     (t
                      (multiple-value-bind (field value) (parse-sse-line trimmed)
@@ -3013,7 +3023,8 @@ SSE format: 'field: value' or just 'data: {...}'."
           (setf (stream-state-error-p state) (format nil "~A" e)))
         (setf (stream-state-done-p state) t))))
   (bt:with-lock-held ((stream-state-lock state))
-    (setf (stream-state-done-p state) t)))
+    (setf (stream-state-done-p state) t))
+  (maybe-call-streaming-callback callback state))
 
 (defun responses-stream-tool-use-present-p (state)
   "Return non-nil when STATE already contains a tool_use block."
@@ -3116,7 +3127,7 @@ SSE format: 'field: value' or just 'data: {...}'."
            (setf (stream-state-error-p state) message
                  (stream-state-done-p state) t)))))))
 
-(defun read-openai-codex-responses-sse-stream (stream state)
+(defun read-openai-codex-responses-sse-stream (stream state callback)
   "Read Responses API SSE events from STREAM into STATE."
   (handler-case
       (loop :with data-buffer := nil
@@ -3129,6 +3140,7 @@ SSE format: 'field: value' or just 'data: {...}'."
                        (process-openai-codex-responses-sse-event
                         (format nil "~{~A~}" (nreverse data-buffer))
                         state)
+                       (maybe-call-streaming-callback callback state)
                        (setf data-buffer nil)))
                     (t
                      (multiple-value-bind (field value) (parse-sse-line trimmed)
@@ -3140,7 +3152,8 @@ SSE format: 'field: value' or just 'data: {...}'."
           (setf (stream-state-error-p state) (format nil "~A" e)))
         (setf (stream-state-done-p state) t))))
   (bt:with-lock-held ((stream-state-lock state))
-    (setf (stream-state-done-p state) t)))
+    (setf (stream-state-done-p state) t))
+  (maybe-call-streaming-callback callback state))
 
 (defun openai-codex-request-streaming (messages callback
                                        &key (model *openai-codex-model*)
@@ -3150,7 +3163,6 @@ SSE format: 'field: value' or just 'data: {...}'."
                                             service-tier
                                             (system-prompt (or (build-system-prompt) "")))
   "Call the OpenAI Responses API with SSE streaming enabled."
-  (declare (ignore callback))
   (let* ((auth (or (resolve-openai-codex-auth)
                    (error 'simple-error
                           :format-control "No OpenAI Codex auth. Save a bearer token to ~/.config/clawmacs/openai-codex-token or sign in via ~/.codex/auth.json")))
@@ -3178,7 +3190,8 @@ SSE format: 'field: value' or just 'data: {...}'."
                 (bt:make-thread
                  (lambda ()
                    (unwind-protect
-                        (read-openai-codex-responses-sse-stream sse-stream state)
+                        (read-openai-codex-responses-sse-stream
+                         sse-stream state callback)
                      (ignore-errors (close sse-stream))))
                  :name "clawmacs-openai-codex-responses")))
           (register-stream-state-reader state sse-stream thread)
@@ -3242,7 +3255,6 @@ Uses the OpenAI-compatible chat completions protocol."
                                           (system-prompt (build-system-prompt)))
   "Call the OpenRouter Chat Completions API with SSE streaming enabled.
 Uses the same OpenAI-compatible streaming protocol."
-  (declare (ignore callback))
   (let* ((token (or (read-provider-token :openrouter)
                     (error 'simple-error
                            :format-control "No OpenRouter API key. Set OPENROUTER_API_KEY env var or save to ~/.config/clawmacs/openrouter-api-key")))
@@ -3285,7 +3297,7 @@ Uses the same OpenAI-compatible streaming protocol."
               (bt:make-thread
                (lambda ()
                  (unwind-protect
-                      (read-openai-sse-stream body-stream state)
+                      (read-openai-sse-stream body-stream state callback)
                    (ignore-errors (close body-stream))))
                :name "clawmacs-openrouter-sse-reader")))
         (register-stream-state-reader state body-stream thread)
@@ -3346,7 +3358,6 @@ The API follows the OpenAI Chat Completions format."
                                     (system-prompt (build-system-prompt)))
   "Call Z.AI Chat Completions API with SSE streaming enabled.
 Uses the same OpenAI-compatible streaming protocol."
-  (declare (ignore callback))
   (let* ((token (or (read-provider-token :zai)
                     (error 'simple-error
                            :format-control "No Z.AI API key. Set ZAI_CODING_MAX_API_KEY env var or save to ~/.config/clawmacs/zai-api-key")))
@@ -3388,7 +3399,7 @@ Uses the same OpenAI-compatible streaming protocol."
               (bt:make-thread
                (lambda ()
                  (unwind-protect
-                      (read-openai-sse-stream body-stream state)
+                      (read-openai-sse-stream body-stream state callback)
                    (ignore-errors (close body-stream))))
                :name "clawmacs-zai-sse-reader")))
         (register-stream-state-reader state body-stream thread)
