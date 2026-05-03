@@ -394,6 +394,64 @@
                        (cdr (assoc :tool-name
                                    (buffer-approval-pending buf))))))))))
 
+(test mcclim-compose-approval-continues-lisp-eval-tool-loop
+  "The McCLIM compose helper can approve a pending lisp_eval call and continue."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (clawmacs::set-approval-policy-tool-permission
+     "lisp_eval" :agent-with-permission)
+    (let ((request-count 0))
+      (with-function-override (clawmacs::resolve-buffer-provider-and-model
+                               (buffer)
+                               (declare (ignore buffer))
+                               (values :zai "glm-test" nil))
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                             reasoning-effort system-prompt
+                                             service-tier)
+                                 (declare (ignore provider messages callback
+                                                  model max-tokens tools
+                                                  reasoning-effort
+                                                  system-prompt service-tier))
+                                 (incf request-count)
+                                 (if (= request-count 1)
+                                     (make-completed-stream-state-response
+                                      "tool_use"
+                                      (list
+                                       (clawmacs::canonical-tool-use-block
+                                        "call-1"
+                                        "lisp_eval"
+                                        '((:code . "(+ 1 1)")
+                                          (:package . "CLAWMACS")))))
+                                     (make-completed-stream-state-response
+                                      "end_turn"
+                                      (list
+                                       (clawmacs::canonical-text-block
+                                        "the result is 2")))))
+          (let ((buf (make-buffer "mcclim-approval" :agent-name "agent")))
+            (clawmacs::start-streaming-response buf)
+            (is (= 1 request-count))
+            (is-true (clawmacs::update-streaming-response buf))
+            (is (eq :approval (buffer-status buf)))
+            (is (string= "lisp_eval"
+                         (cdr (assoc :tool-name
+                                     (buffer-approval-pending buf)))))
+            (is-true (clawmacs::handle-chat-compose-text buf ""))
+            (is (= 2 request-count))
+            (is (null (buffer-approval-pending buf)))
+            (is-false (clawmacs::update-streaming-response buf))
+            (let ((messages (test-buffer-history-messages buf)))
+              (is (member :tool-result
+                          (mapcar #'message-sender messages)))
+              (is (some (lambda (text)
+                          (and (search ";; lisp_eval" text)
+                               (search "2" text)))
+                        (mapcar #'message-text messages)))
+              (is (some (lambda (text)
+                          (search "the result is 2" text))
+                        (mapcar #'message-text messages))))))))))
+
 (test approval-policy-round-trips-sandbox-and-working-directory-settings
   "Guard policy JSON persists sandbox and working-directory defaults and overrides."
   (let ((path (temp-approval-policy-path)))
