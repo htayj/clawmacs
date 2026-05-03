@@ -662,31 +662,29 @@ Returns true when the key was consumed."
 
 (defun quaestor-render-request-buffer (pane buffer rows cols char-w char-h)
   "Render BUFFER's active quaestor request overlay into PANE."
+  (declare (ignore rows cols char-w char-h))
   (let* ((request (quaestor-current-request buffer))
          (question (and request (quaestor-request-current-question request)))
-         (row 1)
-         (width cols)
-         (max-rows rows)
          (options (and question (quaestor-alist-value question :options)))
          (selected (and question
                         (quaestor-request-selected-options
                          request
                          (quaestor-alist-value question :id))))
          (option-index (or (quaestor-alist-value request :option-index) 0)))
-    (clear-pane-with-ink pane *mcclim-bg-ink*)
-    (mcclim-render-buffer-title pane buffer cols char-w char-h)
-    (labels ((draw-line (text face-name)
-               (when (< row max-rows)
-                 (multiple-value-bind (fg bg ts opts)
-                     (resolve-global-face-inks face-name)
-                   (fill-row pane row width bg char-w char-h)
-                   (draw-text-at pane row 0
-                                 (subseq text 0 (min (length text) width))
-                                 fg bg ts char-w char-h
-                                 :drawing-options opts))
-                 (incf row))))
+    (mcclim-stream-render-buffer-title pane buffer)
+    (labels ((emit-line (text face-name &key object presentation-type)
+               (mcclim-call-with-global-face
+                pane
+                face-name
+                (lambda ()
+                  (if presentation-type
+                      (clim:with-output-as-presentation
+                          (pane object presentation-type :single-box t)
+                        (write-string text pane))
+                      (write-string text pane))))
+               (terpri pane)))
       (when question
-        (draw-line
+        (emit-line
          (format nil "-- INPUT REQUESTED: ~A [~D/~D]"
                  (quaestor-alist-value question :header)
                  (1+ (quaestor-request-current-index request))
@@ -694,38 +692,83 @@ Returns true when the key was consumed."
          :approval-header)
         (dolist (line (split-string-by-newline
                        (quaestor-alist-value question :question)))
-          (draw-line line :approval-text))
-        (dolist (option options)
+          (emit-line line :approval-text))
+        (loop :for option :in options
+              :for index :from 0
+              :do
           (let* ((label (quaestor-alist-value option :label))
                  (description (quaestor-alist-value option :description))
                  (selected-p (member label selected :test #'string=))
                  (prefix (cond
                            ((quaestor-alist-value question :multiple)
                             (if selected-p "[x]" "[ ]"))
-                           ((and (= option-index
-                                    (position label
-                                              (mapcar (lambda (entry)
-                                                        (quaestor-alist-value entry :label))
-                                                      options)
-                                              :test #'string=))
+                           ((and (= option-index index)
                                  selected-p)
                             "(*)")
                            (selected-p "(x)")
-                           (t "( )"))))
-            (draw-line (format nil "~A ~A - ~A" prefix label description)
-                       :approval-options)))
+                           (t "( )")))
+                 (option-object (list :question-id
+                                      (quaestor-alist-value question :id)
+                                      :index index
+                                      :label label)))
+            (emit-line
+             (format nil "~A ~A - ~A" prefix label description)
+             (if (= option-index index)
+                 :selector-selected
+                 :approval-options)
+             :object option-object
+             :presentation-type 'quaestor-option-ref)))
         (when (quaestor-request-allows-notes-p question)
-          (draw-line
+          (emit-line
            (format nil "Notes: ~A"
                    (or (quaestor-trimmed-string
                         (message-text (buffer-input-message buffer)))
                        ""))
-           :approval-text))
-        (draw-line
+           (if (eq (quaestor-request-focus request) :notes)
+               :selector-selected
+               :approval-text)))
+        (emit-line
          (if (quaestor-request-allows-notes-p question)
              "TAB notes/options  RET next-or-submit  PgUp/PgDn question  SPC toggle"
              "RET next-or-submit  PgUp/PgDn question  SPC toggle")
          :approval-options)))))
+
+(clim:define-presentation-type quaestor-option-ref ())
+
+(defun quaestor-activate-option (buffer option)
+  "Select OPTION in BUFFER's current request and toggle/choose it."
+  (let* ((request (quaestor-current-request buffer))
+         (question (and request (quaestor-request-current-question request)))
+         (question-id (and question (quaestor-alist-value question :id)))
+         (index (and (listp option) (getf option :index))))
+    (when (and request question question-id
+               (listp option)
+               (string= question-id (or (getf option :question-id) ""))
+               (integerp index)
+               (<= 0 index)
+               (< index (length (quaestor-alist-value question :options))))
+      (setf request (quaestor-alist-put request :focus :options))
+      (setf request (quaestor-alist-put request :option-index index))
+      (quaestor-set-current-request buffer request)
+      (quaestor-toggle-current-option buffer))))
+
+(clim:define-command (com-quaestor-select-option
+                      :command-table clawmacs-mcclim-command-table
+                      :name t)
+    ((option 'quaestor-option-ref))
+  (let ((buffer (current-buffer)))
+    (when (and buffer option (buffer-user-input-pending buffer))
+      (quaestor-activate-option buffer option))))
+
+(clim:define-presentation-to-command-translator click-quaestor-option
+    (quaestor-option-ref com-quaestor-select-option
+                         clawmacs-mcclim-command-table
+                         :gesture :select
+                         :priority 20
+                         :documentation "Choose this option"
+                         :pointer-documentation "Choose this option")
+    (object)
+  (list object))
 
 (defun quaestor-format-who-line (buffer width)
   "Return who-line rows for BUFFER's quaestor state."

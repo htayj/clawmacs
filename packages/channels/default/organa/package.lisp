@@ -993,62 +993,56 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
     (object)
   (list object))
 
-(defun organa-row-colors (row)
-  "Return foreground and background ink for ROW."
-  (let ((face (case (getf row :face)
-                (:ready :tool-result)
-                (:blocked :system)
-                (:dependency :selector-entry)
-                (:outline :default-text)
-                (otherwise :default-text))))
-    (resolve-global-face-inks face)))
+(defun organa-row-face (row)
+  "Return the global face name for one Organa display ROW."
+  (case (getf row :face)
+    (:ready :tool-result)
+    (:blocked :system)
+    (:dependency :selector-entry)
+    (:outline :default-text)
+    (otherwise :default-text)))
 
-(defun organa-draw-row (pane row cols row-data char-w char-h)
-  "Draw one Organa row, wrapping semantic rows as presentations."
-  (multiple-value-bind (fg bg ts opts)
-      (organa-row-colors row-data)
-    (fill-row pane row cols bg char-w char-h)
-    (let* ((text (getf row-data :text))
-           (todo (getf row-data :todo))
-           (object (or (getf row-data :object) todo))
-           (presentation-type
-             (or (getf row-data :presentation-type)
-                 (and todo 'organa-todo-ref))))
-      (if (and object presentation-type)
-          (clim:with-output-as-presentation (pane object presentation-type)
-            (draw-text-at pane row 0 (organa-fit text cols)
-                          fg bg ts char-w char-h
-                          :drawing-options opts))
-          (draw-text-at pane row 0 (organa-fit text cols)
-                        fg bg ts char-w char-h
-                        :drawing-options opts)))))
+(defun organa-stream-entry (row-data cols)
+  "Return one CLIM stream entry plist for Organa ROW-DATA."
+  (let* ((text (organa-fit (getf row-data :text) cols))
+         (todo (getf row-data :todo))
+         (object (or (getf row-data :object) todo))
+         (presentation-type
+           (or (getf row-data :presentation-type)
+               (and todo 'organa-todo-ref))))
+    (list :text text
+          :face (organa-row-face row-data)
+          :object object
+          :presentation-type presentation-type)))
+
+(defun organa-display-entries (buffer cols)
+  "Return CLIM stream entries for BUFFER's current Organa view."
+  (let* ((location (organa-read-buffer-location buffer))
+         (model (organa-location-model location))
+         (view (organa-view-for-buffer buffer))
+         (header (format nil "Organa ~A | ~A | ~D TODO~:P"
+                         (string-downcase (symbol-name view))
+                         (organa-location-display location)
+                         (length (organa-model-todos model))))
+         (hint "M-x organa-add-todo-command, organa-link-todo-command, organa-cycle-view-command")
+         (footer "File-backed view. Use presentations, M-x commands, or organa_* tools.")
+         (rows (append (list (organa-render-row header)
+                             (organa-render-row hint)
+                             (organa-render-row ""))
+                       (organa-view-rows model view cols)
+                       (list (organa-render-row "")
+                             (organa-render-row footer :face :dependency)))))
+    (mapcar (lambda (row-data)
+              (organa-stream-entry row-data cols))
+            rows)))
 
 (defun organa-render-buffer (pane buffer rows cols char-w char-h)
   "Render BUFFER as an Organa project TODO board."
-  (clear-pane-with-ink pane *mcclim-bg-ink*)
+  (declare (ignore char-w char-h))
   (handler-case
-      (let* ((location (organa-read-buffer-location buffer))
-             (model (organa-location-model location))
-             (view (organa-view-for-buffer buffer))
-             (header (format nil "Organa ~A | ~A | ~D TODO~:P"
-                             (string-downcase (symbol-name view))
-                             (organa-location-display location)
-                             (length (organa-model-todos model))))
-             (hint "M-x organa-add-todo-command, organa-link-todo-command, organa-cycle-view-command")
-             (content-rows (append (list (organa-render-row header)
-                                         (organa-render-row hint)
-                                         (organa-render-row ""))
-                                   (organa-view-rows model view cols)))
-             (scroll-offset (min (buffer-scroll-offset buffer)
-                                 (max 0 (- (length content-rows) rows))))
-             (visible (subseq content-rows
-                              scroll-offset
-                              (min (length content-rows)
-                                   (+ scroll-offset rows)))))
-        (setf (buffer-scroll-offset buffer) scroll-offset)
-        (loop :for row-data :in visible
-              :for row :from 0 :below rows
-              :do (organa-draw-row pane row cols row-data char-w char-h))
+      (let ((entries (organa-display-entries buffer cols)))
+        (mcclim-stream-render-buffer-title pane buffer)
+        (mcclim-stream-render-styled-entry-list pane entries)
         (mcclim-record-render-snapshot (clim:pane-frame pane)
                                        pane
                                        buffer
@@ -1057,30 +1051,17 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
                                        cols
                                        :history-height rows))
     (error (condition)
-      (organa-draw-row pane 0 cols
-                       (organa-render-row
-                        (format nil "Organa error: ~A" condition))
-                       char-w char-h))))
-
-(defun organa-render-input (pane buffer rows cols char-w char-h)
-  "Render the Organa input pane."
-  (declare (ignore buffer rows))
-  (multiple-value-bind (fg bg ts opts)
-      (resolve-global-face-inks :who-line)
-    (fill-row pane 0 cols bg char-w char-h)
-    (draw-text-at pane 0 0
-                  (organa-fit
-                   "Organa edits are file-backed. Use M-x commands or organa_* tools."
-                   cols)
-                  fg bg ts char-w char-h
-                  :drawing-options opts)))
+      (mcclim-stream-render-buffer-title pane buffer)
+      (mcclim-stream-render-styled-entry-list
+       pane
+       (list (list :text (format nil "Organa error: ~A" condition)
+                   :face :system))))))
 
 (define-buffer-type :organa
   :description "Org-mode TODO project management buffer."
   :major-mode "organa"
   :document-p t
-  :presentation-function 'organa-render-buffer
-  :input-presentation-function 'organa-render-input)
+  :presentation-function 'organa-render-buffer)
 
 ;;; --------------------------------------------------------------------------
 ;;; User commands
