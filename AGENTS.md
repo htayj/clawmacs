@@ -13,6 +13,11 @@ Use the container wrappers instead of invoking SBCL directly.
 ## Coding Style & Naming Conventions
 Follow the repository’s Common Lisp posture in `docs/DESIGN.md`: functional-first, immutable by default, and explicit about side effects. Use standard Lisp indentation with aligned keyword arguments, lowercase-hyphenated symbol names, and `*earmuffed*` globals for special variables. Export public API from `src/packages.lisp`, and add SBCL type declarations where they clarify intent. No formatter or linter is enforced here, so match nearby code exactly.
 
+## McCLIM Interface Work
+For any McCLIM UI work, use the `mcclim-manual` skill first. Treat canonical CLIM/McCLIM patterns as the default design constraint: application frames own UI state, panes are declared with `define-application-frame`, application panes use display functions and output records, semantic objects are rendered as presentations, actions are commands and presentation translators, and dynamic views redisplay through CLIM redisplay mechanisms. Prefer Drei for text editing panes and CLIM gadgets only for conventional controls.
+
+Avoid ad hoc repaint loops, raw coordinate hit testing, widget-callback-first designs, and direct output-record surgery unless the local code and manual show a clear reason. When deviating from canonical CLIM style, document the reason in the code or commit message and keep the deviation narrowly scoped.
+
 ## Testing Guidelines
 Add unit coverage in `tests/*-test.lisp` and register new suites under `clawmacs-suite` in [`tests/packages.lisp`](/home/tay/projects/clawmacs/tests/packages.lisp). Prefer deterministic FiveAM tests for buffer, rendering, keymap, and provider helpers. Reserve live-provider checks such as `tests/openrouter-live-test.lisp` for manual runs. McCLIM E2E tests require Xvfb, xdotool, ImageMagick, and provider credentials only for online scenarios.
 
