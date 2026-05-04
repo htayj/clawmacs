@@ -24,6 +24,105 @@
 (defclass clawmacs-chat-redisplay-event (clim:window-event)
   ())
 
+(clim:define-command-table clawmacs-chat-control-menu
+  :menu (("Stop Response" :command com-chat-stop-response
+          :documentation "Stop the active streaming response.")))
+
+(clim:define-command-table clawmacs-chat-view-menu
+  :menu (("Tool Results" :command com-chat-toggle-tool-results
+          :documentation "Toggle tool result messages.")
+         ("Reasoning Output" :command com-chat-toggle-reasoning-output
+          :documentation "Toggle provider reasoning blocks.")
+         ("Metadata Output" :command com-chat-toggle-metadata-output
+          :documentation "Toggle provider response metadata.")
+         ("Debug Mode" :command com-chat-toggle-debug-mode
+          :documentation "Toggle API debug messages.")))
+
+(defun chat-menu-check-label (enabled-p name)
+  "Return NAME prefixed with a check mark when ENABLED-P."
+  (format nil "~A ~A" (if enabled-p "✓" " ") name))
+
+(defun no-chat-menu-items-label (label)
+  "Return a non-action menu item for an empty dynamic menu."
+  `((,label :divider nil)))
+
+(defun chat-skill-menu-items ()
+  "Return dynamic menu items for file-backed skills."
+  (let ((items
+          (loop :for skill :in (list-skills :include-disabled t)
+                :for key := (skill-path-key skill)
+                :when key
+                  :collect
+                  `(,(chat-menu-check-label
+                      (skill-enabled-p skill)
+                      (skill-name skill))
+                    :command (com-chat-toggle-skill ,key)
+                    :documentation ,(skill-display-description skill)))))
+    (or items (no-chat-menu-items-label "No skills available"))))
+
+(defun chat-buffer-package-enabled-p (buffer package-name)
+  "Return true when BUFFER explicitly enables PACKAGE-NAME."
+  (and buffer
+       (buffer-package-name-enabled-p buffer
+                                      (manifest-package-name package-name))))
+
+(defun chat-package-menu-items (buffer)
+  "Return dynamic menu items for packages visible to BUFFER."
+  (let ((items
+          (loop :for definition :in (list-installed-packages :buffer buffer)
+                :for name := (package-definition-name definition)
+                :collect
+                `(,(chat-menu-check-label
+                    (chat-buffer-package-enabled-p buffer name)
+                    name)
+                  :command (com-chat-toggle-package ,name)
+                  :documentation ,(package-display-description definition)))))
+    (or items (no-chat-menu-items-label "No packages available"))))
+
+(defun chat-menu-context-buffer (context)
+  "Return the chat buffer represented by CONTEXT."
+  (cond
+    ((null context) nil)
+    ((typep context 'buffer) context)
+    (t (chat-frame-buffer context))))
+
+(defun make-chat-menu-bar-command-table (&optional context)
+  "Return a frame-local chat menu command table for CONTEXT."
+  (let* ((buffer (chat-menu-context-buffer context))
+         (skills-menu
+           (clim:make-command-table
+            nil
+            :inherit-from nil
+            :menu (chat-skill-menu-items)))
+         (packages-menu
+           (clim:make-command-table
+            nil
+            :inherit-from nil
+            :menu (chat-package-menu-items buffer))))
+    (clim:make-command-table
+     nil
+     :inherit-from '(clawmacs-chat-frame)
+     :menu `(("Chat" :menu ,(clim:find-command-table
+                             'clawmacs-chat-control-menu)
+              :documentation "Chat controls.")
+             ("View" :menu ,(clim:find-command-table
+                             'clawmacs-chat-view-menu)
+              :documentation "Transcript display controls.")
+             ("Skills" :menu ,skills-menu
+              :documentation "Enable or disable skills.")
+             ("Packages" :menu ,packages-menu
+              :documentation "Enable or disable packages for this chat.")))))
+
+(defun rebuild-chat-menu-bar-command-tables (&optional context)
+  "Return a fresh chat menu command table for CONTEXT."
+  (make-chat-menu-bar-command-table context))
+
+(defun refresh-chat-frame-menu-bar (frame)
+  "Refresh FRAME's frame-local dynamic menu-bar entries."
+  (setf (clim:frame-command-table frame)
+        (make-chat-menu-bar-command-table frame))
+  frame)
+
 (defun chat-message-kind (msg)
   "Return MSG's high-level display kind."
   (case (message-sender msg)
@@ -194,6 +293,7 @@
    (redisplay-repeat-p :initform nil
                        :accessor chat-frame-redisplay-repeat-p))
   (:pointer-documentation t)
+  (:menu-bar t)
   (:panes
    (transcript :application
                :display-function 'display-chat-transcript
@@ -244,14 +344,20 @@
     (when (buffer-approval-pending buf)
       (display-chat-approval stream (buffer-approval-pending buf)))))
 
+(defun submit-chat-compose-pane (frame compose-pane)
+  "Submit COMPOSE-PANE through FRAME's chat command path."
+  (let ((text (clim:gadget-value compose-pane))
+        (buf (chat-frame-buffer frame)))
+    (when (handle-chat-compose-text buf text)
+      (setf (clim:gadget-value compose-pane) "")
+      (request-chat-frame-redisplay frame)
+      t)))
+
 (defun compose-pane-activated (gadget)
-  "Submit the compose pane contents."
+  "Dispatch compose activation as a frame command."
+  (declare (ignore gadget))
   (clim:with-application-frame (frame)
-    (let ((text (clim:gadget-value gadget))
-          (buf (chat-frame-buffer frame)))
-      (when (handle-chat-compose-text buf text)
-        (setf (clim:gadget-value gadget) "")
-        (request-chat-frame-redisplay frame)))))
+    (clim:execute-frame-command frame '(com-chat-submit-compose))))
 
 (defun queue-chat-frame-redisplay-event (frame)
   "Queue one redisplay event for FRAME when its sheet is available."
@@ -307,10 +413,119 @@
       (request-chat-frame-redisplay frame)
       t)))
 
+(defun run-chat-frame-buffer-command (frame command)
+  "Run COMMAND on FRAME's buffer and request a transcript redisplay."
+  (funcall command (chat-frame-buffer frame))
+  (request-chat-frame-redisplay frame))
+
+(defun toggle-chat-skill-for-buffer (buffer skill-key)
+  "Toggle SKILL-KEY and record feedback in BUFFER."
+  (let ((skill (find-skill-by-path skill-key :include-disabled t)))
+    (unless skill
+      (error "Unknown skill: ~A" skill-key))
+    (let ((enabled-p (not (skill-enabled-p skill))))
+      (set-skill-enabled skill enabled-p)
+      (buffer-insert-system-message
+       buffer
+       (format nil "[Skill ~A ~A]"
+               (skill-name skill)
+               (if enabled-p "enabled" "disabled")))
+      enabled-p)))
+
+(defun toggle-chat-package-for-buffer (buffer package-name)
+  "Toggle explicit BUFFER enablement for PACKAGE-NAME."
+  (unless buffer
+    (error "Package toolbar toggles require a chat buffer."))
+  (let* ((name (manifest-package-name package-name))
+         (agent (buffer-agent-name buffer))
+         (definition (find-installed-package name :buffer buffer))
+         (previous-scope (package-enablement-scope
+                          name
+                          :buffer buffer
+                          :agent-name agent))
+         (had-context-p (buffer-has-conversation-context-p buffer))
+         (enabled-p (not (buffer-package-name-enabled-p buffer name))))
+    (unless definition
+      (error "Unknown package: ~A" package-name))
+    (set-buffer-package-name-enabled buffer name enabled-p)
+    (if enabled-p
+        (maybe-insert-enabled-package-context
+         buffer definition previous-scope :buffer had-context-p)
+        (remove-package-context-messages buffer name))
+    (sync-buffer-system-prompt-display buffer)
+    (load-active-packages :buffer buffer)
+    (maybe-run-hook-with-args
+     '*package-enablement-changed-hook*
+     name
+     (package-enablement-scope name :buffer buffer :agent-name agent)
+     buffer
+     agent)
+    (buffer-insert-system-message
+     buffer
+     (format nil "[Package ~A ~A for this buffer]"
+             name
+             (if enabled-p "enabled" "disabled")))
+    enabled-p))
+
 (define-clawmacs-chat-frame-command
     (com-show-message-metadata :name nil)
     ((msg 'chat-message))
   (open-message-help-window msg))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-submit-compose :name nil)
+    ()
+  (clim:with-application-frame (frame)
+    (submit-chat-compose-pane
+     frame
+     (clim:find-pane-named frame 'compose))))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-stop-response :name "Stop Response")
+    ()
+  (clim:with-application-frame (frame)
+    (when (stop-streaming-response (chat-frame-buffer frame))
+      (request-chat-frame-redisplay frame))))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-toggle-tool-results :name "Toggle Tool Results")
+    ()
+  (clim:with-application-frame (frame)
+    (run-chat-frame-buffer-command frame #'toggle-tool-results-command)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-toggle-reasoning-output :name "Toggle Reasoning Output")
+    ()
+  (clim:with-application-frame (frame)
+    (run-chat-frame-buffer-command frame #'toggle-reasoning-output-command)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-toggle-metadata-output :name "Toggle Metadata Output")
+    ()
+  (clim:with-application-frame (frame)
+    (run-chat-frame-buffer-command frame #'toggle-metadata-output-command)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-toggle-debug-mode :name "Toggle Debug Mode")
+    ()
+  (clim:with-application-frame (frame)
+    (run-chat-frame-buffer-command frame #'toggle-debug-mode-command)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-toggle-skill :name nil)
+    ((skill-key 'string))
+  (clim:with-application-frame (frame)
+    (toggle-chat-skill-for-buffer (chat-frame-buffer frame) skill-key)
+    (request-chat-frame-redisplay frame)
+    (refresh-chat-frame-menu-bar frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-toggle-package :name nil)
+    ((package-name 'string))
+  (clim:with-application-frame (frame)
+    (toggle-chat-package-for-buffer (chat-frame-buffer frame) package-name)
+    (request-chat-frame-redisplay frame)
+    (refresh-chat-frame-menu-bar frame)))
 
 (define-clawmacs-chat-frame-command
     (com-approve-tool :name "Approve Tool")
@@ -336,6 +551,7 @@
   (list object))
 
 (defmethod clim:run-frame-top-level :around ((frame clawmacs-chat-frame) &key)
+  (refresh-chat-frame-menu-bar frame)
   (let ((hook (lambda (buf reason)
                 (declare (ignore reason))
                 (when (eq buf (chat-frame-buffer frame))

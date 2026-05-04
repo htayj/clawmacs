@@ -452,6 +452,150 @@
                           (search "the result is 2" text))
                         (mapcar #'message-text messages))))))))))
 
+(test mcclim-chat-menu-bar-exposes-toolbar-commands
+  "The McCLIM chat frame exposes its MVP toolbar through command-table menus."
+  (let* ((menu-table (clawmacs::make-chat-menu-bar-command-table))
+         (chat-menu (clim:find-menu-item "Chat" menu-table :errorp nil))
+         (view-menu (clim:find-menu-item "View" menu-table :errorp nil))
+         (skills-menu (clim:find-menu-item "Skills" menu-table :errorp nil))
+         (packages-menu (clim:find-menu-item "Packages" menu-table :errorp nil)))
+    (is (not (null chat-menu)))
+    (is (not (null view-menu)))
+    (is (not (null skills-menu)))
+    (is (not (null packages-menu)))
+    (is (eq :menu (clim:command-menu-item-type chat-menu)))
+    (is (eq :menu (clim:command-menu-item-type view-menu)))
+    (is (eq :menu (clim:command-menu-item-type skills-menu)))
+    (is (eq :menu (clim:command-menu-item-type packages-menu)))
+    (let ((chat-table (clim:command-menu-item-value chat-menu))
+          (view-table (clim:command-menu-item-value view-menu)))
+      (flet ((menu-command (name table)
+               (let ((item (clim:find-menu-item name table :errorp nil)))
+                 (and item (clim:command-menu-item-value item)))))
+        (is (eq 'clawmacs::com-chat-stop-response
+                (menu-command "Stop Response" chat-table)))
+        (is (eq 'clawmacs::com-chat-toggle-tool-results
+                (menu-command "Tool Results" view-table)))
+        (is (eq 'clawmacs::com-chat-toggle-reasoning-output
+                (menu-command "Reasoning Output" view-table)))
+        (is (eq 'clawmacs::com-chat-toggle-metadata-output
+                (menu-command "Metadata Output" view-table)))
+        (is (eq 'clawmacs::com-chat-toggle-debug-mode
+                (menu-command "Debug Mode" view-table)))))
+    (dolist (command '(clawmacs::com-chat-stop-response
+                       clawmacs::com-chat-toggle-tool-results
+                       clawmacs::com-chat-toggle-reasoning-output
+                       clawmacs::com-chat-toggle-metadata-output
+                       clawmacs::com-chat-toggle-debug-mode
+                       clawmacs::com-chat-submit-compose
+                       clawmacs::com-chat-toggle-skill
+                       clawmacs::com-chat-toggle-package))
+      (is (clim:command-accessible-in-command-table-p
+           command menu-table)))))
+
+(defun test-command-table-menu-labels (table)
+  "Return menu labels from TABLE in display order."
+  (let ((labels nil))
+    (clim:map-over-command-table-menu-items
+     (lambda (name keystroke item)
+       (declare (ignore keystroke item))
+       (push name labels))
+     table
+     :inherited nil)
+    (nreverse labels)))
+
+(defun test-chat-menu-submenu (table name)
+  "Return the submenu table named NAME from TABLE."
+  (clim:command-menu-item-value
+   (clim:find-menu-item name table :errorp t)))
+
+(test mcclim-chat-skills-menu-toggles-enabled-state
+  "The McCLIM skills menu shows checkmarks and toggles persisted skill state."
+  (with-isolated-skills (root)
+    (write-demo-skill root :name "demo")
+    (register-skill-root root)
+    (let* ((buf (make-buffer "skill-toolbar"))
+           (skill (first (list-skills :include-disabled t)))
+           (key (clawmacs::skill-path-key skill)))
+      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
+        (is (member "✓ demo"
+                    (test-command-table-menu-labels
+                     (test-chat-menu-submenu menu-table "Skills"))
+                    :test #'string=)))
+      (is-false (clawmacs::toggle-chat-skill-for-buffer buf key))
+      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
+        (is (member "  demo"
+                    (test-command-table-menu-labels
+                     (test-chat-menu-submenu menu-table "Skills"))
+                    :test #'string=)))
+      (is-false (skill-enabled-p
+                 (clawmacs::find-skill-by-path key :include-disabled t)))
+      (is (search "[Skill demo disabled]"
+                  (message-text (message-prev (buffer-input-message buf))))))))
+
+(test mcclim-chat-frame-menu-tables-are-frame-local
+  "Each McCLIM chat frame owns package menu state for its own buffer."
+  (with-package-state-override ((default-package-test-channels))
+    (let* ((enabled-buffer (make-buffer "enabled-package-toolbar"
+                                        :agent-name "agent"))
+           (default-buffer (make-buffer "default-package-toolbar"
+                                        :agent-name "agent"))
+           (enabled-frame (clim:make-application-frame
+                           'clawmacs::clawmacs-chat-frame
+                           :buffer enabled-buffer))
+           (default-frame (clim:make-application-frame
+                           'clawmacs::clawmacs-chat-frame
+                           :buffer default-buffer)))
+      (clawmacs::set-buffer-package-name-enabled enabled-buffer "sexed" t)
+      (clawmacs::refresh-chat-frame-menu-bar enabled-frame)
+      (clawmacs::refresh-chat-frame-menu-bar default-frame)
+      (is (not (eq (clim:frame-command-table enabled-frame)
+                   (clim:frame-command-table default-frame))))
+      (is (member "✓ sexed"
+                  (test-command-table-menu-labels
+                   (test-chat-menu-submenu
+                    (clim:frame-command-table enabled-frame)
+                    "Packages"))
+                  :test #'string=))
+      (is (member "  sexed"
+                  (test-command-table-menu-labels
+                   (test-chat-menu-submenu
+                    (clim:frame-command-table default-frame)
+                    "Packages"))
+                  :test #'string=))
+      (is (member "✓ sexed"
+                  (test-command-table-menu-labels
+                   (test-chat-menu-submenu
+                    (clim:frame-command-table enabled-frame)
+                    "Packages"))
+                  :test #'string=)))))
+
+(test mcclim-chat-packages-menu-toggles-buffer-package-state
+  "The McCLIM packages menu toggles current-buffer package enablement."
+  (with-package-state-override ((default-package-test-channels))
+    (let ((buf (make-buffer "package-toolbar" :agent-name "agent")))
+      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
+        (is (member "  sexed"
+                    (test-command-table-menu-labels
+                     (test-chat-menu-submenu menu-table "Packages"))
+                    :test #'string=)))
+      (is-true (clawmacs::toggle-chat-package-for-buffer buf "sexed"))
+      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
+        (is (member "✓ sexed"
+                    (test-command-table-menu-labels
+                     (test-chat-menu-submenu menu-table "Packages"))
+                    :test #'string=)))
+      (is (member "sexed" (buffer-enabled-packages buf) :test #'string=))
+      (is-false (clawmacs::package-enabled-globally-p "sexed"))
+      (is-false (clawmacs::toggle-chat-package-for-buffer buf "sexed"))
+      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
+        (is (member "  sexed"
+                    (test-command-table-menu-labels
+                     (test-chat-menu-submenu menu-table "Packages"))
+                    :test #'string=)))
+      (is-false (member "sexed" (buffer-enabled-packages buf)
+                        :test #'string=)))))
+
 (test approval-policy-round-trips-sandbox-and-working-directory-settings
   "Guard policy JSON persists sandbox and working-directory defaults and overrides."
   (let ((path (temp-approval-policy-path)))
