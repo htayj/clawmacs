@@ -24,6 +24,9 @@
 (defclass clawmacs-chat-redisplay-event (clim:window-event)
   ())
 
+(defclass clawmacs-chat-menu-refresh-event (clim:window-event)
+  ())
+
 (clim:define-command-table clawmacs-chat-control-menu
   :menu (("Stop Response" :command com-chat-stop-response
           :documentation "Stop the active streaming response.")))
@@ -387,6 +390,32 @@ When BUFFER is nil, use the default buffer visibility settings."
        (make-instance 'clawmacs-chat-redisplay-event :sheet frame))
       t)))
 
+(defun chat-frame-grafted-top-level-sheet (frame)
+  "Return FRAME's grafted top-level sheet, or NIL before FRAME is running."
+  (let ((sheet (ignore-errors (clim:frame-top-level-sheet frame))))
+    (and sheet
+         (ignore-errors (clim:sheet-grafted-p sheet))
+         sheet)))
+
+(defun queue-chat-frame-menu-refresh-event (frame)
+  "Queue one menu refresh event for FRAME when its sheet is grafted."
+  (let ((sheet (chat-frame-grafted-top-level-sheet frame)))
+    (when sheet
+      (clim:queue-event
+       sheet
+       (make-instance 'clawmacs-chat-menu-refresh-event :sheet frame))
+      t)))
+
+(defun request-chat-frame-menu-refresh (frame)
+  "Refresh FRAME's dynamic menu bar outside active menu callbacks.
+
+Unstarted frames have no grafted top-level sheet, so tests and pre-run frame
+setup refresh synchronously. Running frames use the event queue so a menu command
+does not replace McCLIM submenu sheets while pointer tracking is still unwinding."
+  (unless (queue-chat-frame-menu-refresh-event frame)
+    (refresh-chat-frame-menu-bar frame))
+  frame)
+
 (defun request-chat-frame-redisplay (frame)
   "Request one coalesced transcript redisplay for FRAME."
   (let ((queue-now-p nil))
@@ -424,6 +453,11 @@ When BUFFER is nil, use the default buffer visibility settings."
   (declare (ignore event))
   (handle-chat-frame-redisplay frame))
 
+(defmethod clim:handle-event
+    ((frame clawmacs-chat-frame) (event clawmacs-chat-menu-refresh-event))
+  (declare (ignore event))
+  (refresh-chat-frame-menu-bar frame))
+
 (defun respond-to-chat-approval (frame response)
   "Apply RESPONSE to FRAME's pending approval and redisplay."
   (let ((buf (chat-frame-buffer frame)))
@@ -435,7 +469,7 @@ When BUFFER is nil, use the default buffer visibility settings."
 (defun run-chat-frame-buffer-command (frame command)
   "Run COMMAND on FRAME's buffer and refresh frame UI state."
   (funcall command (chat-frame-buffer frame))
-  (refresh-chat-frame-menu-bar frame)
+  (request-chat-frame-menu-refresh frame)
   (request-chat-frame-redisplay frame))
 
 (defun toggle-chat-skill-for-buffer (buffer skill-key)
@@ -536,16 +570,16 @@ When BUFFER is nil, use the default buffer visibility settings."
     ((skill-key 'string))
   (clim:with-application-frame (frame)
     (toggle-chat-skill-for-buffer (chat-frame-buffer frame) skill-key)
-    (request-chat-frame-redisplay frame)
-    (refresh-chat-frame-menu-bar frame)))
+    (request-chat-frame-menu-refresh frame)
+    (request-chat-frame-redisplay frame)))
 
 (define-clawmacs-chat-frame-command
     (com-chat-toggle-package :name nil)
     ((package-name 'string))
   (clim:with-application-frame (frame)
     (toggle-chat-package-for-buffer (chat-frame-buffer frame) package-name)
-    (request-chat-frame-redisplay frame)
-    (refresh-chat-frame-menu-bar frame)))
+    (request-chat-frame-menu-refresh frame)
+    (request-chat-frame-redisplay frame)))
 
 (define-clawmacs-chat-frame-command
     (com-approve-tool :name "Approve Tool")
