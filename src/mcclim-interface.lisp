@@ -28,19 +28,34 @@
   :menu (("Stop Response" :command com-chat-stop-response
           :documentation "Stop the active streaming response.")))
 
-(clim:define-command-table clawmacs-chat-view-menu
-  :menu (("Tool Results" :command com-chat-toggle-tool-results
-          :documentation "Toggle tool result messages.")
-         ("Reasoning Output" :command com-chat-toggle-reasoning-output
-          :documentation "Toggle provider reasoning blocks.")
-         ("Metadata Output" :command com-chat-toggle-metadata-output
-          :documentation "Toggle provider response metadata.")
-         ("Debug Mode" :command com-chat-toggle-debug-mode
-          :documentation "Toggle API debug messages.")))
-
 (defun chat-menu-check-label (enabled-p name)
   "Return NAME prefixed with a check mark when ENABLED-P."
   (format nil "~A ~A" (if enabled-p "✓" " ") name))
+
+(defun chat-view-menu-items (&optional buffer)
+  "Return dynamic menu items for transcript display options.
+When BUFFER is nil, use the default buffer visibility settings."
+  (let ((show-tool-results-p (if buffer
+                                 (buffer-show-tool-results-p buffer)
+                                 *default-show-tool-results*))
+        (show-reasoning-p (if buffer
+                              (buffer-show-reasoning-p buffer)
+                              *default-show-reasoning-output*))
+        (show-metadata-p (if buffer
+                             (buffer-show-metadata-p buffer)
+                             *default-show-metadata-output*)))
+    `((,(chat-menu-check-label show-tool-results-p "Tool Results")
+       :command com-chat-toggle-tool-results
+       :documentation "Toggle tool result messages.")
+      (,(chat-menu-check-label show-reasoning-p "Reasoning Output")
+       :command com-chat-toggle-reasoning-output
+       :documentation "Toggle provider reasoning blocks.")
+      (,(chat-menu-check-label show-metadata-p "Metadata Output")
+       :command com-chat-toggle-metadata-output
+       :documentation "Toggle provider response metadata.")
+      (,(chat-menu-check-label *debug-mode* "Debug Mode")
+       :command com-chat-toggle-debug-mode
+       :documentation "Toggle API debug messages."))))
 
 (defun no-chat-menu-items-label (label)
   "Return a non-action menu item for an empty dynamic menu."
@@ -89,6 +104,11 @@
 (defun make-chat-menu-bar-command-table (&optional context)
   "Return a frame-local chat menu command table for CONTEXT."
   (let* ((buffer (chat-menu-context-buffer context))
+         (view-menu
+           (clim:make-command-table
+            nil
+            :inherit-from nil
+            :menu (chat-view-menu-items buffer)))
          (skills-menu
            (clim:make-command-table
             nil
@@ -105,8 +125,7 @@
      :menu `(("Chat" :menu ,(clim:find-command-table
                              'clawmacs-chat-control-menu)
               :documentation "Chat controls.")
-             ("View" :menu ,(clim:find-command-table
-                             'clawmacs-chat-view-menu)
+             ("View" :menu ,view-menu
               :documentation "Transcript display controls.")
              ("Skills" :menu ,skills-menu
               :documentation "Enable or disable skills.")
@@ -414,8 +433,9 @@
       t)))
 
 (defun run-chat-frame-buffer-command (frame command)
-  "Run COMMAND on FRAME's buffer and request a transcript redisplay."
+  "Run COMMAND on FRAME's buffer and refresh frame UI state."
   (funcall command (chat-frame-buffer frame))
+  (refresh-chat-frame-menu-bar frame)
   (request-chat-frame-redisplay frame))
 
 (defun toggle-chat-skill-for-buffer (buffer skill-key)

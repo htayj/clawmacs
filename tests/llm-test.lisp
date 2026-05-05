@@ -475,13 +475,13 @@
         (is (eq 'clawmacs::com-chat-stop-response
                 (menu-command "Stop Response" chat-table)))
         (is (eq 'clawmacs::com-chat-toggle-tool-results
-                (menu-command "Tool Results" view-table)))
+                (menu-command "✓ Tool Results" view-table)))
         (is (eq 'clawmacs::com-chat-toggle-reasoning-output
-                (menu-command "Reasoning Output" view-table)))
+                (menu-command "  Reasoning Output" view-table)))
         (is (eq 'clawmacs::com-chat-toggle-metadata-output
-                (menu-command "Metadata Output" view-table)))
+                (menu-command "  Metadata Output" view-table)))
         (is (eq 'clawmacs::com-chat-toggle-debug-mode
-                (menu-command "Debug Mode" view-table)))))
+                (menu-command "  Debug Mode" view-table)))))
     (dolist (command '(clawmacs::com-chat-stop-response
                        clawmacs::com-chat-toggle-tool-results
                        clawmacs::com-chat-toggle-reasoning-output
@@ -508,6 +508,54 @@
   "Return the submenu table named NAME from TABLE."
   (clim:command-menu-item-value
    (clim:find-menu-item name table :errorp t)))
+
+(test mcclim-chat-view-menu-shows-checkmarks-and-refreshes-frame-state
+  "The McCLIM view menu shows checkmarks and refreshes after toggles."
+  (let* ((buf (make-buffer "view-toolbar" :agent-name "agent"))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf)))
+    (let ((*debug-mode* nil))
+      (clawmacs::refresh-chat-frame-menu-bar frame)
+      (let ((view-menu (test-chat-menu-submenu
+                        (clim:frame-command-table frame)
+                        "View")))
+        (is (member "✓ Tool Results"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "  Reasoning Output"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "  Metadata Output"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "  Debug Mode"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=)))
+      (clawmacs::run-chat-frame-buffer-command
+       frame
+       #'clawmacs::toggle-reasoning-output-command)
+      (clawmacs::run-chat-frame-buffer-command
+       frame
+       #'clawmacs::toggle-metadata-output-command)
+      (clawmacs::run-chat-frame-buffer-command
+       frame
+       #'clawmacs::toggle-debug-mode-command)
+      (let ((view-menu (test-chat-menu-submenu
+                        (clim:frame-command-table frame)
+                        "View")))
+        (is (member "✓ Tool Results"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "✓ Reasoning Output"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "✓ Metadata Output"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "✓ Debug Mode"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))))))
 
 (test mcclim-chat-skills-menu-toggles-enabled-state
   "The McCLIM skills menu shows checkmarks and toggles persisted skill state."
