@@ -1629,6 +1629,53 @@ same
           (is (not (null date-pos)))
           (is (< boot-pos core-pos personality-pos date-pos)))))))
 
+(test load-boot-files-injects-ancestor-agents-md-instructions
+  "Boot-file loading discovers AGENTS.md from the active directory ancestry."
+  (let* ((root (temp-package-test-directory "agents-injection"))
+         (nested (merge-pathnames #P"src/ui/" root))
+         (root-agents (merge-pathnames "AGENTS.md" root))
+         (nested-agents (merge-pathnames "AGENTS.md" nested)))
+    (ensure-directories-exist (merge-pathnames #P".keep" nested))
+    (write-test-file root-agents "ROOT AGENTS MARKER")
+    (write-test-file nested-agents "NESTED AGENTS MARKER")
+    (let* ((clawmacs::*boot-file-names* '("AGENTS.md"))
+           (instructions (clawmacs:load-boot-files :directory nested))
+           (root-pos (search "ROOT AGENTS MARKER" instructions))
+           (nested-pos (search "NESTED AGENTS MARKER" instructions)))
+      (is (search "# AGENTS.md instructions for " instructions))
+      (is (search "<INSTRUCTIONS>" instructions))
+      (is (search "</INSTRUCTIONS>" instructions))
+      (is (not (null root-pos)))
+      (is (not (null nested-pos)))
+      (is (< root-pos nested-pos)))))
+
+(test build-agent-system-prompt-injects-buffer-working-directory-agents-md
+  "System prompts use the buffer working directory for AGENTS.md injection."
+  (with-tool-table-restored
+    (with-isolated-skills (skills-root)
+      skills-root
+      (with-package-state-override (nil)
+        (let* ((root (temp-package-test-directory "buffer-agents-injection"))
+               (nested (merge-pathnames #P"project/subdir/" root))
+               (agents-path (merge-pathnames "AGENTS.md" root)))
+          (ensure-directories-exist (merge-pathnames #P".keep" nested))
+          (write-test-file agents-path "BUFFER WORKING DIRECTORY AGENTS")
+          (let* ((clawmacs::*boot-file-names* '("AGENTS.md"))
+                 (clawmacs::*default-core-system-prompt* "CORE")
+                 (clawmacs::*default-personality-prompt* "PERSONALITY")
+                 (clawmacs::*buffer-system-prompt-display-enabled* nil)
+                 (buf (make-chat-buffer
+                       "agents-buffer"
+                       :working-directory nested
+                       :session-persistence-mode :ephemeral))
+                 (prompt (clawmacs:build-agent-system-prompt "agent"
+                                                             :buffer buf)))
+            (is (search "BUFFER WORKING DIRECTORY AGENTS" prompt))
+            (is (search (namestring nested) prompt))
+            (let ((clawmacs::*current-tool-buffer* buf))
+              (is (equal (buffer-working-directory buf)
+                         (clawmacs::default-prompt-working-directory))))))))))
+
 (test build-agent-system-prompt-falls-back-to-default-components
   "Missing agent prompt slots fall back to the default core and personality prompts."
   (with-agent-definition-registry-override ()

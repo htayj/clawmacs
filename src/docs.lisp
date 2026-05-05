@@ -1538,8 +1538,9 @@ documentation in *extended-docs*."
 
 (defdoc load-boot-files
   :category "llm"
-  :usage "(load-boot-files)"
-  :returns "string or nil — Concatenated boot-file content, or NIL when none are present."
+  :usage "(load-boot-files &key :directory)"
+  :returns "string or nil — Wrapped boot-file instruction content, or NIL when none are present."
+  :side-effects "Reads AGENTS.md/SOUL.md-style files from the active buffer working-directory's ancestors, falling back to ~/.config/clawmacs/ when no project-local file applies."
   :see-also (*boot-file-names* build-agent-system-prompt))
 
 (defdoc *agent-defaults-path*
@@ -2812,21 +2813,21 @@ documentation in *extended-docs*."
 
 (defdoc run-single-prompt
   :category "main"
-  :usage "(run-single-prompt PROMPT &key :agent-name :provider :model :think-level :max-tool-iterations :auto-approve-tools-p :tool-names :custom-tools)"
+  :usage "(run-single-prompt PROMPT &key :agent-name :provider :model :think-level :working-directory :max-tool-iterations :auto-approve-tools-p :tool-names :custom-tools)"
   :returns "prompt-run-result — Final text, routing metadata, iteration count, and captured tool events."
   :side-effects "Creates an in-memory prompt buffer, sends non-streaming provider requests, executes agent-allowed tools, inserts tool_result messages into the prompt buffer, and loops until a final assistant response is returned."
   :see-also (clawmacs-prompt-main run-subagent provider-request execute-tool build-conversation-messages))
 
 (defdoc run-subagent
   :category "main"
-  :usage "(run-subagent PROMPT &key :agent-name :provider :model :think-level :core-prompt :personality-prompt :tool-names :custom-tools :max-tool-iterations :auto-approve-tools-p)"
+  :usage "(run-subagent PROMPT &key :agent-name :provider :model :think-level :working-directory :core-prompt :personality-prompt :tool-names :custom-tools :max-tool-iterations :auto-approve-tools-p)"
   :returns "prompt-run-result — The delegated agent's final response and tool evidence."
   :side-effects "Runs a synchronous prompt-mode subagent. Transient prompt overrides and custom tools are dynamically scoped and do not mutate the agent or tool registries."
   :see-also (run-subagent-async make-subagent-tool register-agent-definition prompt-run-result prompt-run-used-tool-p *active-tool-names*))
 
 (defdoc run-subagent-async
   :category "main"
-  :usage "(run-subagent-async PROMPT &key :agent-name :provider :model :think-level :core-prompt :personality-prompt :tool-names :custom-tools :max-tool-iterations :auto-approve-tools-p)"
+  :usage "(run-subagent-async PROMPT &key :agent-name :provider :model :think-level :working-directory :core-prompt :personality-prompt :tool-names :custom-tools :max-tool-iterations :auto-approve-tools-p)"
   :returns "subagent-handle — A process-local handle for polling, waiting, cancellation, and result inspection."
   :side-effects "Starts a background thread and stores the returned handle in the process-local subagent registry."
   :see-also (wait-subagent cancel-subagent subagent-snapshot run-subagent make-subagent-tool))

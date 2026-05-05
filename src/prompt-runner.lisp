@@ -562,13 +562,14 @@ provider reader threads surface updates asynchronously."
 
 (defun make-prompt-buffer
     (prompt agent-name &key
+                        (working-directory (default-prompt-working-directory))
                         (session-persistence-mode
                          *default-buffer-session-persistence-mode*))
   "Create a buffer seeded with PROMPT as the only finalized user message."
   (let* ((*buffer-system-prompt-display-enabled* nil)
          (buf (make-chat-buffer "clawmacs:prompt"
                                 :agent-name agent-name
-                                :working-directory (truename ".")
+                                :working-directory working-directory
                                 :session-persistence-mode
                                 session-persistence-mode)))
     (set-message-text (buffer-input-message buf) prompt)
@@ -909,6 +910,8 @@ PROMPT-TOOL-EVENT for terminal/debug output."
                                  provider model think-level
                                  model-role service-tier
                                  output-schema
+                                 (working-directory
+                                  (default-prompt-working-directory))
                                  (session-persistence-mode
                                   *default-buffer-session-persistence-mode*)
                                  (max-tool-iterations *prompt-max-tool-iterations*)
@@ -926,6 +929,7 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
   (let* ((custom-tool-definitions (normalize-run-custom-tools custom-tools))
          (buf (make-prompt-buffer
                prompt agent-name
+               :working-directory working-directory
                :session-persistence-mode session-persistence-mode)))
     (maybe-apply-prompt-routing-overrides buf provider model think-level
                                           :model-role model-role
