@@ -534,6 +534,18 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
      frame
      (clim:find-pane-named frame 'compose))))
 
+(clim:add-keystroke-to-command-table
+ 'clawmacs-chat-frame
+ '(#\Return)
+ :command '(com-chat-submit-compose)
+ :errorp nil)
+
+(clim:add-keystroke-to-command-table
+ 'clawmacs-chat-frame
+ '(#\Newline)
+ :command '(com-chat-submit-compose)
+ :errorp nil)
+
 (define-clawmacs-chat-frame-command
     (com-chat-stop-response :name "Stop Response")
     ()

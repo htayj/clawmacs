@@ -452,6 +452,42 @@
                           (search "the result is 2" text))
                         (mapcar #'message-text messages))))))))))
 
+(defun test-command-table-key-command (table key-character)
+  "Return the inherited command bound to KEY-CHARACTER in command TABLE."
+  (let ((event (make-instance 'clim:key-press-event
+                              :sheet nil
+                              :x 0
+                              :y 0
+                              :key-name nil
+                              :key-character key-character
+                              :modifier-state (clim:make-modifier-state))))
+    (let ((item (esa::find-gestures-with-inheritance (list event) table)))
+      (and item (clim:command-menu-item-value item)))))
+
+(test mcclim-compose-return-keystrokes-submit-message
+  "The McCLIM chat frame binds Return/Newline to submit the message."
+  (let* ((buf (make-buffer "mcclim-ret-submit" :agent-name "agent"))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf))
+         (table (clim:find-command-table 'clawmacs::clawmacs-chat-frame))
+         (menu-table (clawmacs::make-chat-menu-bar-command-table frame))
+         (drei-order-table
+           (clim:make-command-table
+            nil
+            :inherit-from (list menu-table 'drei:editor-table))))
+    (is (clim:command-accessible-in-command-table-p
+         'clawmacs::com-chat-submit-compose
+         table))
+    (is (equal '(clawmacs::com-chat-submit-compose)
+               (test-command-table-key-command table #\Return)))
+    (is (equal '(clawmacs::com-chat-submit-compose)
+               (test-command-table-key-command table #\Newline)))
+    (is (equal '(clawmacs::com-chat-submit-compose)
+               (test-command-table-key-command menu-table #\Return)))
+    (is (equal '(clawmacs::com-chat-submit-compose)
+               (test-command-table-key-command drei-order-table #\Return)))))
+
 (test mcclim-chat-menu-bar-exposes-toolbar-commands
   "The McCLIM chat frame exposes its MVP toolbar through command-table menus."
   (let* ((menu-table (clawmacs::make-chat-menu-bar-command-table))
