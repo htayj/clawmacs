@@ -335,6 +335,63 @@ When BUFFER is nil, use the default buffer visibility settings."
       transcript
       compose))))
 
+(defun mcclim-kill-items-vector (items)
+  "Return ITEMS in the vector representation McCLIM's kill history expects."
+  (if (vectorp items)
+      items
+      (coerce items 'vector)))
+
+;; McCLIM's Edward kill history reinserts killed items with AREF, so the
+;; list-producing kill commands need to hand it vectors.
+(defmethod climi::ie-erase-word
+    ((sheet clim:text-editor-pane) (buffer cluffer:buffer) event numeric-argument)
+  (declare (ignore buffer event))
+  (loop :with cursor := (climi::edit-cursor sheet)
+        :repeat numeric-argument
+        :do (loop :for item := (climi::smooth-erase-item cursor)
+                  :when item
+                    :collect item :into result
+                  :until (or (cluffer:beginning-of-line-p cursor)
+                             (cluffer:beginning-of-buffer-p cursor)
+                             (char= (cluffer:item-before-cursor cursor) #\space))
+                  :finally
+                     (climi::edward-kill-object
+                      sheet
+                      (mcclim-kill-items-vector (nreverse result))
+                      :front))))
+
+(defmethod climi::ie-delete-word
+    ((sheet clim:text-editor-pane) (buffer cluffer:buffer) event numeric-argument)
+  (declare (ignore buffer event))
+  (loop :with cursor := (climi::edit-cursor sheet)
+        :repeat numeric-argument
+        :do (loop :for item := (climi::smooth-delete-item cursor)
+                  :when item
+                    :collect item :into result
+                  :until (or (cluffer:end-of-line-p cursor)
+                             (cluffer:end-of-buffer-p cursor)
+                             (char= (cluffer:item-after-cursor cursor) #\space))
+                  :finally
+                     (climi::edward-kill-object
+                      sheet
+                      (mcclim-kill-items-vector result)
+                      :back))))
+
+(defmethod climi::ie-kill-line
+    ((sheet clim:text-editor-pane) (buffer cluffer:buffer) event numeric-argument)
+  (declare (ignore buffer event))
+  (handler-bind ((cluffer:end-of-buffer
+                   (lambda (condition)
+                     (declare (ignore condition))
+                     (return-from climi::ie-kill-line))))
+    (loop :with cursor := (climi::edit-cursor sheet)
+          :repeat numeric-argument
+          :for line := (climi::smooth-kill-line cursor)
+          :do (climi::edward-kill-object
+               sheet
+               (mcclim-kill-items-vector line)
+               :back))))
+
 (defun display-chat-message (stream msg)
   "Display MSG as one chat-message presentation on STREAM."
   (let ((sender (chat-message-label msg))

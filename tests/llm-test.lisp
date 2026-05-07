@@ -488,6 +488,33 @@
     (is (equal '(clawmacs::com-chat-submit-compose)
                (test-command-table-key-command drei-order-table #\Return)))))
 
+(test mcclim-kill-items-vector-normalizes-list-kills
+  "The McCLIM kill helper converts list kills into the vector form Edward expects."
+  (let ((items (clawmacs::mcclim-kill-items-vector
+                (list #\b #\u #\t #\t #\o #\n #\Space))))
+    (is (vectorp items))
+    (is (equal "button " (coerce items 'string)))))
+
+(test mcclim-compose-kill-commands-use-vector-kill-ring-items
+  "McCLIM compose word-kill entries can be yanked without list/AREF crashes."
+  (let* ((compose (make-instance 'clim:text-editor-pane :value "button "))
+         (buffer (climi::input-editor-buffer compose)))
+    (let ((climi::*killring-uses-clipboard* nil))
+      (is-true
+       (handler-case
+           (progn
+             (climi::ie-erase-word compose buffer nil 1)
+             t)
+         (error () nil)))
+      (is (string= "" (clim:gadget-value compose)))
+      (is-true
+       (handler-case
+           (progn
+             (climi::ie-yank-kill-ring compose buffer nil 1)
+             t)
+         (error () nil)))
+      (is (string= "button " (clim:gadget-value compose))))))
+
 (test mcclim-chat-menu-bar-exposes-toolbar-commands
   "The McCLIM chat frame exposes its MVP toolbar through command-table menus."
   (let* ((menu-table (clawmacs::make-chat-menu-bar-command-table))
