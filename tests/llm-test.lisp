@@ -521,17 +521,21 @@
          (chat-menu (clim:find-menu-item "Chat" menu-table :errorp nil))
          (view-menu (clim:find-menu-item "View" menu-table :errorp nil))
          (skills-menu (clim:find-menu-item "Skills" menu-table :errorp nil))
-         (packages-menu (clim:find-menu-item "Packages" menu-table :errorp nil)))
+         (packages-menu (clim:find-menu-item "Packages" menu-table :errorp nil))
+         (system-menu (clim:find-menu-item "System" menu-table :errorp nil)))
     (is (not (null chat-menu)))
     (is (not (null view-menu)))
     (is (not (null skills-menu)))
     (is (not (null packages-menu)))
+    (is (not (null system-menu)))
     (is (eq :menu (clim:command-menu-item-type chat-menu)))
     (is (eq :menu (clim:command-menu-item-type view-menu)))
     (is (eq :menu (clim:command-menu-item-type skills-menu)))
     (is (eq :menu (clim:command-menu-item-type packages-menu)))
+    (is (eq :menu (clim:command-menu-item-type system-menu)))
     (let ((chat-table (clim:command-menu-item-value chat-menu))
-          (view-table (clim:command-menu-item-value view-menu)))
+          (view-table (clim:command-menu-item-value view-menu))
+          (system-table (clim:command-menu-item-value system-menu)))
       (flet ((menu-command (name table)
                (let ((item (clim:find-menu-item name table :errorp nil)))
                  (and item (clim:command-menu-item-value item)))))
@@ -544,7 +548,9 @@
         (is (eq 'clawmacs::com-chat-toggle-metadata-output
                 (menu-command "  Metadata Output" view-table)))
         (is (eq 'clawmacs::com-chat-toggle-debug-mode
-                (menu-command "  Debug Mode" view-table)))))
+                (menu-command "  Debug Mode" view-table)))
+        (is (eq 'clawmacs::com-chat-recurse
+                (menu-command "Recurse" system-table)))))
     (dolist (command '(clawmacs::com-chat-stop-response
                        clawmacs::com-chat-toggle-tool-results
                        clawmacs::com-chat-toggle-reasoning-output
@@ -552,7 +558,8 @@
                        clawmacs::com-chat-toggle-debug-mode
                        clawmacs::com-chat-submit-compose
                        clawmacs::com-chat-toggle-skill
-                       clawmacs::com-chat-toggle-package))
+                       clawmacs::com-chat-toggle-package
+                       clawmacs::com-chat-recurse))
       (is (clim:command-accessible-in-command-table-p
            command menu-table)))))
 
@@ -571,6 +578,16 @@
   "Return the submenu table named NAME from TABLE."
   (clim:command-menu-item-value
    (clim:find-menu-item name table :errorp t)))
+
+(test mcclim-chat-system-menu-exposes-recurse-command
+  "The McCLIM system menu exposes recurse as a frame command."
+  (let* ((menu-table (clawmacs::make-chat-menu-bar-command-table))
+         (system-table (test-chat-menu-submenu menu-table "System")))
+    (is (equal '("Recurse")
+               (test-command-table-menu-labels system-table)))
+    (is (eq 'clawmacs::com-chat-recurse
+            (clim:command-menu-item-value
+             (clim:find-menu-item "Recurse" system-table :errorp t))))))
 
 (test mcclim-chat-view-menu-shows-checkmarks-and-refreshes-frame-state
   "The McCLIM view menu shows checkmarks and refreshes after toggles."
@@ -706,6 +723,106 @@
                     :test #'string=)))
       (is-false (member "sexed" (buffer-enabled-packages buf)
                         :test #'string=)))))
+
+(test chat-recurse-launch-spec-uses-current-buffer-state
+  "Recurse launch specs inherit the current buffer agent and working directory."
+  (let* ((working-directory
+           (uiop:ensure-directory-pathname #P"/tmp/clawmacs-recurse-spec/"))
+         (buffer (make-buffer "spec-buffer"
+                              :agent-name "tester"
+                              :working-directory working-directory))
+         (spec (clawmacs::chat-recurse-launch-spec
+                buffer
+                :repo-root #P"/workspace/"
+                :quicklisp-setup #P"/tmp/fake-quicklisp/setup.lisp"
+                :session-name "recursive-session"
+                :window-title "Recursive Window")))
+    (is (equal #P"/workspace/" (getf spec :directory)))
+    (is (equal "recursive-session" (getf spec :session-name)))
+    (is (equal "Recursive Window" (getf spec :window-title)))
+    (is (equal working-directory (getf spec :working-directory)))
+    (is (equal "sbcl" (first (getf spec :argv))))
+    (is (member "(ql:quickload :clawmacs)" (getf spec :argv) :test #'string=))
+    (is (member "(asdf:load-system :clawmacs :force t)"
+                (getf spec :argv)
+                :test #'string=))
+    (let* ((argv (getf spec :argv))
+           (startup-form (nth (+ 2 (position "(asdf:load-system :clawmacs :force t)"
+                                            argv
+                                            :test #'string=
+                                            :from-end t))
+                              argv)))
+      (is (search ":session-name \"recursive-session\"" startup-form))
+      (is (search ":agent-name \"tester\"" startup-form))
+      (is (search ":window-title \"Recursive Window\"" startup-form))
+      (is (search ":working-directory \"/tmp/clawmacs-recurse-spec/\""
+                  startup-form)))))
+
+(test chat-recurse-command-records-child-launch-message
+  "Running recurse inserts a status message describing the child launch."
+  (let* ((working-directory
+           (uiop:ensure-directory-pathname #P"/tmp/clawmacs-recurse-command/"))
+         (buf (make-buffer "recurse-buffer"
+                           :agent-name "tester"
+                           :working-directory working-directory))
+         (launch-calls nil)
+         (original-launch (symbol-function 'clawmacs::launch-chat-recurse)))
+    (unwind-protect
+         (progn
+           (setf (symbol-function 'clawmacs::launch-chat-recurse)
+                 (lambda (buffer)
+                   (push buffer launch-calls)
+                   (list :window-title "Clawmacs Recurse - recurse-buffer"
+                         :session-name "recurse-session"
+                         :working-directory working-directory)))
+           (let ((frame (clim:make-application-frame
+                         'clawmacs::clawmacs-chat-frame
+                         :buffer buf)))
+             (clim:execute-frame-command frame '(clawmacs::com-chat-recurse)))
+           (is (equal (list buf) launch-calls))
+           (let ((status (message-prev (buffer-input-message buf))))
+             (is (eq :system (message-sender status)))
+             (is (search "Opened recurse frame Clawmacs Recurse - recurse-buffer"
+                         (message-text status)))
+             (is (search "session recurse-session"
+                         (message-text status)))
+             (is (search "/tmp/clawmacs-recurse-command/"
+                         (message-text status)))))
+      (setf (symbol-function 'clawmacs::launch-chat-recurse)
+            original-launch))))
+
+(test clawmacs-main-honors-working-directory-argument
+  "clawmacs-main seeds the initial chat buffer from the supplied working directory."
+  (let* ((working-directory
+           (uiop:ensure-directory-pathname #P"/tmp/clawmacs-main-working-directory/"))
+         (*sessions-dir* (temp-session-test-directory "main-working-directory"))
+         (clawmacs::*buffer-ring* nil)
+         (clawmacs::*buffer-counter* 0)
+         (clawmacs::*startup-hook* nil)
+         (clawmacs::*initial-buffer-hook* nil)
+         (original-parse (symbol-function 'clawmacs::parse-clawmacs-args))
+         (original-init (symbol-function 'clawmacs::initialize-clawmacs-runtime))
+         (original-scratch (symbol-function 'clawmacs::ensure-scratch-buffer)))
+    (unwind-protect
+         (progn
+           (setf (symbol-function 'clawmacs::parse-clawmacs-args)
+                 (lambda () nil)
+                 (symbol-function 'clawmacs::initialize-clawmacs-runtime)
+                 (lambda () nil)
+                 (symbol-function 'clawmacs::ensure-scratch-buffer)
+                 (lambda () nil))
+           (let ((buffer (clawmacs:clawmacs-main
+                          :session-name "main-working-directory"
+                          :agent-name "tester"
+                          :working-directory working-directory
+                          :run-frame nil)))
+             (is (equal working-directory
+                        (buffer-working-directory buffer)))
+             (is (equal "main-working-directory"
+                        (buffer-name buffer)))))
+      (setf (symbol-function 'clawmacs::parse-clawmacs-args) original-parse
+            (symbol-function 'clawmacs::initialize-clawmacs-runtime) original-init
+            (symbol-function 'clawmacs::ensure-scratch-buffer) original-scratch))))
 
 (test approval-policy-round-trips-sandbox-and-working-directory-settings
   "Guard policy JSON persists sandbox and working-directory defaults and overrides."

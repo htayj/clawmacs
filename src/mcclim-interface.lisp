@@ -104,6 +104,11 @@ When BUFFER is nil, use the default buffer visibility settings."
     ((typep context 'buffer) context)
     (t (chat-frame-buffer context))))
 
+(defun chat-system-menu-items ()
+  "Return dynamic menu items for system-level frame actions."
+  '(("Recurse" :command com-chat-recurse
+     :documentation "Open a fresh nested Clawmacs frame in a new process.")))
+
 (defun make-chat-menu-bar-command-table (&optional context)
   "Return a frame-local chat menu command table for CONTEXT."
   (let* ((buffer (chat-menu-context-buffer context))
@@ -121,7 +126,12 @@ When BUFFER is nil, use the default buffer visibility settings."
            (clim:make-command-table
             nil
             :inherit-from nil
-            :menu (chat-package-menu-items buffer))))
+            :menu (chat-package-menu-items buffer)))
+         (system-menu
+           (clim:make-command-table
+            nil
+            :inherit-from nil
+            :menu (chat-system-menu-items))))
     (clim:make-command-table
      nil
      :inherit-from '(clawmacs-chat-frame)
@@ -133,7 +143,9 @@ When BUFFER is nil, use the default buffer visibility settings."
              ("Skills" :menu ,skills-menu
               :documentation "Enable or disable skills.")
              ("Packages" :menu ,packages-menu
-              :documentation "Enable or disable packages for this chat.")))))
+              :documentation "Enable or disable packages for this chat.")
+             ("System" :menu ,system-menu
+              :documentation "Launch nested Clawmacs instances and other system actions.")))))
 
 (defun rebuild-chat-menu-bar-command-tables (&optional context)
   "Return a fresh chat menu command table for CONTEXT."
@@ -578,6 +590,128 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
              (if enabled-p "enabled" "disabled")))
     enabled-p))
 
+(defun chat-recurse-readable-form (form)
+  "Return FORM printed safely for a child Lisp process command line."
+  (let ((*print-readably* nil)
+        (*print-escape* t)
+        (*print-array* nil)
+        (*print-pretty* nil))
+    (prin1-to-string form)))
+
+(defun chat-recurse-source-root ()
+  "Return the Clawmacs source root used for recurse launches."
+  (uiop:ensure-directory-pathname
+   (or (ignore-errors (asdf:system-source-directory :clawmacs))
+       (truename "."))))
+
+(defun chat-recurse-quicklisp-setup ()
+  "Return the Quicklisp setup file used for recurse launches."
+  (or (let ((env (uiop:getenv "CLAWMACS_QUICKLISP_SETUP")))
+        (and env
+             (plusp (length env))
+             (probe-file env)))
+      (probe-file
+       (merge-pathnames #P"quicklisp/setup.lisp"
+                        (user-homedir-pathname)))
+      (error 'simple-error
+             :format-control
+             "Cannot recurse without Quicklisp setup. Set CLAWMACS_QUICKLISP_SETUP or install ~/quicklisp/setup.lisp."
+             :format-arguments nil)))
+
+(defun chat-recurse-session-name (buffer)
+  "Return a unique session name for BUFFER's recurse child."
+  (multiple-value-bind (second minute hour date month year)
+      (decode-universal-time (get-universal-time))
+    (format nil "~A recurse ~4,'0D~2,'0D~2,'0D-~2,'0D~2,'0D~2,'0D-~D"
+            (buffer-name buffer)
+            year
+            month
+            date
+            hour
+            minute
+            second
+            (get-internal-real-time))))
+
+(defun chat-recurse-window-title (buffer)
+  "Return the window title for BUFFER's recurse child."
+  (format nil "Clawmacs Recurse - ~A" (buffer-name buffer)))
+
+(defun chat-recurse-startup-form
+    (buffer &key session-name window-title working-directory)
+  "Return the child-process startup form for BUFFER's recurse launch."
+  (let ((session-name (or session-name (chat-recurse-session-name buffer)))
+        (window-title (or window-title (chat-recurse-window-title buffer)))
+        (working-directory
+          (normalize-buffer-working-directory
+           (or working-directory
+               (buffer-working-directory buffer)))))
+    (format nil
+            "(clawmacs:clawmacs-main :session-name ~A :agent-name ~A :window-title ~A :working-directory ~A)"
+            (chat-recurse-readable-form session-name)
+            (chat-recurse-readable-form (buffer-agent-name buffer))
+            (chat-recurse-readable-form window-title)
+            (chat-recurse-readable-form (namestring working-directory)))))
+
+(defun chat-recurse-launch-spec
+    (buffer &key repo-root quicklisp-setup session-name window-title
+                  working-directory)
+  "Return a launch plist for a fresh child Clawmacs process for BUFFER."
+  (let* ((source-root
+           (uiop:ensure-directory-pathname
+            (or repo-root (chat-recurse-source-root))))
+         (quicklisp-setup
+           (or quicklisp-setup (chat-recurse-quicklisp-setup)))
+         (session-name (or session-name (chat-recurse-session-name buffer)))
+         (window-title (or window-title (chat-recurse-window-title buffer)))
+         (working-directory
+           (normalize-buffer-working-directory
+            (or working-directory
+                (buffer-working-directory buffer))))
+         (build-cache-script
+           (merge-pathnames #P"scripts/build-cache.lisp" source-root))
+         (argv
+           (list "sbcl"
+                 "--noinform"
+                 "--eval" "(require :asdf)"
+                 "--load" (namestring build-cache-script)
+                 "--load" (namestring quicklisp-setup)
+                 "--eval"
+                 (format nil
+                         "(clawmacs/build-cache:maybe-clean-build-cache :environment-variable ~S)"
+                         "CLAWMACS_RUN_CLEAN_BUILD")
+                 "--eval"
+                 (format nil
+                         "(push (truename ~S) asdf:*central-registry*)"
+                         (namestring source-root))
+                 "--eval" "(ql:quickload :clawmacs)"
+                 "--eval" "(asdf:load-system :clawmacs :force t)"
+                 "--eval"
+                 (chat-recurse-startup-form
+                  buffer
+                  :session-name session-name
+                  :window-title window-title
+                  :working-directory working-directory)
+                 "--eval" "(uiop:quit)")))
+    (list :directory source-root
+          :argv argv
+          :session-name session-name
+          :window-title window-title
+          :working-directory working-directory)))
+
+(defun launch-chat-recurse (buffer)
+  "Spawn a fresh child Clawmacs process for BUFFER and return its launch plist."
+  (let* ((spec (chat-recurse-launch-spec buffer))
+         (process
+           (uiop:launch-program
+            (getf spec :argv)
+            :directory (getf spec :directory)
+            :input nil
+            :output :interactive
+            :error-output :interactive
+            :ignore-error-status t)))
+    (setf (getf spec :process) process)
+    spec))
+
 (define-clawmacs-chat-frame-command
     (com-show-message-metadata :name nil)
     ((msg 'chat-message))
@@ -649,6 +783,21 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
     (toggle-chat-package-for-buffer (chat-frame-buffer frame) package-name)
     (request-chat-frame-menu-refresh frame)
     (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-recurse :name "Recurse")
+    ()
+  (clim:with-application-frame (frame)
+    (let* ((buffer (chat-frame-buffer frame))
+           (spec (launch-chat-recurse buffer)))
+      (buffer-insert-system-message
+       buffer
+       (format nil
+               "[Opened recurse frame ~A for session ~A in ~A]"
+               (getf spec :window-title)
+               (getf spec :session-name)
+               (namestring (getf spec :working-directory))))
+      (request-chat-frame-redisplay frame))))
 
 (define-clawmacs-chat-frame-command
     (com-approve-tool :name "Approve Tool")

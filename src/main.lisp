@@ -3363,11 +3363,12 @@ Environment variables:
         *cc-pending* nil
         *ch-pending* nil))
 
-(defun make-initial-chat-buffer (session-name agent-name)
+(defun make-initial-chat-buffer (session-name agent-name
+                                   &key (working-directory (truename ".")))
   "Create and register the initial interactive chat buffer."
   (let ((buf (make-chat-buffer session-name
                                :agent-name agent-name
-                               :working-directory (truename ".")
+                               :working-directory working-directory
                                :session-persistence-mode :persistent
                                :add-to-ring-p t)))
     (setf *sandbox-root* (truename "."))
@@ -4003,13 +4004,15 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
 (defun clawmacs-main (&key (session-name "clawmacs:session-01")
                            (agent-name *default-agent-name*)
                            (window-title "Clawmacs")
+                           (working-directory (truename "."))
                            (run-frame t))
   "Entry point for clawmacs. Initializes state and starts the McCLIM frame."
   (parse-clawmacs-args)
   (initialize-clawmacs-runtime)
   ;; Create initial buffer and initialize global state
   (reset-interaction-state)
-  (let ((buf (make-initial-chat-buffer session-name agent-name)))
+  (let ((buf (make-initial-chat-buffer session-name agent-name
+                                       :working-directory working-directory)))
     (ensure-scratch-buffer)
     (when run-frame
       (funcall (symbol-function 'run-clawmacs-chat-frame)
