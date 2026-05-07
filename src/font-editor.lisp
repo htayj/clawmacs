@@ -52,7 +52,8 @@
                       (advance-width 8)
                       (x-offset 0)
                       (y-offset 0)
-                      bitmap)))
+                      bitmap))
+            (:copier nil))
   "One editable bitmap glyph in a font editor font."
   (code 0 :type integer)
   (name nil :type (or null string))
@@ -71,7 +72,8 @@
                       (blinker-width 8)
                       (blinker-height 12)
                       glyphs
-                      metadata)))
+                      metadata))
+            (:copier nil))
   "An editor-facing bitmap font model, close to BDF semantics."
   (name "UNTITLED" :type string)
   (line-spacing 12 :type integer)

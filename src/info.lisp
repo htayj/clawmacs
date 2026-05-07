@@ -18,7 +18,8 @@
 
 (defstruct (info-location
             (:constructor %make-info-location
-                (source-kind manual node &key file-path)))
+                (source-kind manual node &key file-path))
+            (:copier nil))
   "A resolved Info destination."
   (source-kind :system :type keyword)
   (manual "dir" :type string)
