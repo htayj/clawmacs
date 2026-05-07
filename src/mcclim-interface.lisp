@@ -97,6 +97,62 @@ When BUFFER is nil, use the default buffer visibility settings."
                   :documentation ,(package-display-description definition)))))
     (or items (no-chat-menu-items-label "No packages available"))))
 
+(defun chat-effort-menu-label (buffer)
+  "Return the top-level effort menu label for BUFFER."
+  (if (null buffer)
+      "Effort"
+      (handler-case
+          (let* ((entries (available-think-levels-for-selector buffer))
+                 (active (and entries
+                              (or (find-if (lambda (entry)
+                                             (getf entry :active-p))
+                                           entries)
+                                  (first entries))))
+                 (status (if active
+                             (getf active :display)
+                             "n/a")))
+            (format nil "Effort: ~A" status))
+        (error ()
+          "Effort: n/a"))))
+
+(defun chat-effort-unavailable-label (buffer)
+  "Return the disabled effort menu label for BUFFER."
+  (multiple-value-bind (provider model)
+      (handler-case (resolve-buffer-provider-and-model buffer)
+        (error () (values nil nil)))
+    (if (and provider model)
+        (format nil "Not available for ~A"
+                (model-selector-display provider model))
+        "Not available for the active model")))
+
+(defun chat-effort-menu-items (buffer)
+  "Return dynamic menu items for model effort selection."
+  (cond
+    ((null buffer)
+     (no-chat-menu-items-label "No active chat buffer"))
+    (t
+     (let ((entries (available-think-levels-for-selector buffer)))
+       (if entries
+           (mapcar
+            (lambda (entry)
+              (let* ((provider (getf entry :provider))
+                     (model (getf entry :model))
+                     (display (getf entry :display))
+                     (level (getf entry :level))
+                     (model-display (model-selector-display provider model)))
+                `(,(chat-menu-check-label (getf entry :active-p) display)
+                  :command (com-chat-select-effort ,(or level ""))
+                  :documentation
+                  ,(if level
+                       (format nil "Set reasoning effort to ~A for ~A."
+                               display
+                               model-display)
+                       (format nil "Use the model default reasoning effort for ~A."
+                               model-display)))))
+            entries)
+           (no-chat-menu-items-label
+            (chat-effort-unavailable-label buffer)))))))
+
 (defun chat-menu-context-buffer (context)
   "Return the chat buffer represented by CONTEXT."
   (cond
@@ -127,6 +183,11 @@ When BUFFER is nil, use the default buffer visibility settings."
             nil
             :inherit-from nil
             :menu (chat-package-menu-items buffer)))
+         (effort-menu
+           (clim:make-command-table
+            nil
+            :inherit-from nil
+            :menu (chat-effort-menu-items buffer)))
          (system-menu
            (clim:make-command-table
             nil
@@ -144,6 +205,8 @@ When BUFFER is nil, use the default buffer visibility settings."
               :documentation "Enable or disable skills.")
              ("Packages" :menu ,packages-menu
               :documentation "Enable or disable packages for this chat.")
+             (,(chat-effort-menu-label buffer) :menu ,effort-menu
+              :documentation "Select the model reasoning effort for this chat.")
              ("System" :menu ,system-menu
               :documentation "Launch nested Clawmacs instances and other system actions.")))))
 
@@ -541,6 +604,21 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
   (request-chat-frame-menu-refresh frame)
   (request-chat-frame-redisplay frame))
 
+(defun select-chat-effort-for-buffer (buffer level)
+  "Set BUFFER's reasoning effort LEVEL and report the new selection."
+  (let ((entries (available-think-levels-for-selector buffer)))
+    (unless entries
+      (error "Think levels are not available for the active model."))
+    (let ((entry (find level
+                       entries
+                       :key (lambda (item)
+                              (or (getf item :level) ""))
+                       :test #'string=)))
+      (unless entry
+        (error "Unknown think level selection: ~S" level))
+      (apply-buffer-think-level-selection buffer entry)
+      entry)))
+
 (defun toggle-chat-skill-for-buffer (buffer skill-key)
   "Toggle SKILL-KEY and record feedback in BUFFER."
   (let ((skill (find-skill-by-path skill-key :include-disabled t)))
@@ -785,6 +863,14 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
     (request-chat-frame-redisplay frame)))
 
 (define-clawmacs-chat-frame-command
+    (com-chat-select-effort :name nil)
+    ((level 'string))
+  (clim:with-application-frame (frame)
+    (select-chat-effort-for-buffer (chat-frame-buffer frame) level)
+    (request-chat-frame-menu-refresh frame)
+    (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
     (com-chat-recurse :name "Recurse")
     ()
   (clim:with-application-frame (frame)
@@ -825,8 +911,10 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
 (defmethod clim:run-frame-top-level :around ((frame clawmacs-chat-frame) &key)
   (refresh-chat-frame-menu-bar frame)
   (let ((hook (lambda (buf reason)
-                (declare (ignore reason))
                 (when (eq buf (chat-frame-buffer frame))
+                  (when (member reason '(:routing :system-prompt)
+                                :test #'eq)
+                    (request-chat-frame-menu-refresh frame))
                   (request-chat-frame-redisplay frame)))))
     (add-hook '*after-buffer-display-change-hook* hook :append t)
     (unwind-protect

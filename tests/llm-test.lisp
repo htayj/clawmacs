@@ -522,19 +522,23 @@
          (view-menu (clim:find-menu-item "View" menu-table :errorp nil))
          (skills-menu (clim:find-menu-item "Skills" menu-table :errorp nil))
          (packages-menu (clim:find-menu-item "Packages" menu-table :errorp nil))
+         (effort-menu (clim:find-menu-item "Effort" menu-table :errorp nil))
          (system-menu (clim:find-menu-item "System" menu-table :errorp nil)))
     (is (not (null chat-menu)))
     (is (not (null view-menu)))
     (is (not (null skills-menu)))
     (is (not (null packages-menu)))
+    (is (not (null effort-menu)))
     (is (not (null system-menu)))
     (is (eq :menu (clim:command-menu-item-type chat-menu)))
     (is (eq :menu (clim:command-menu-item-type view-menu)))
     (is (eq :menu (clim:command-menu-item-type skills-menu)))
     (is (eq :menu (clim:command-menu-item-type packages-menu)))
+    (is (eq :menu (clim:command-menu-item-type effort-menu)))
     (is (eq :menu (clim:command-menu-item-type system-menu)))
     (let ((chat-table (clim:command-menu-item-value chat-menu))
           (view-table (clim:command-menu-item-value view-menu))
+          (effort-table (clim:command-menu-item-value effort-menu))
           (system-table (clim:command-menu-item-value system-menu)))
       (flet ((menu-command (name table)
                (let ((item (clim:find-menu-item name table :errorp nil)))
@@ -549,6 +553,7 @@
                 (menu-command "  Metadata Output" view-table)))
         (is (eq 'clawmacs::com-chat-toggle-debug-mode
                 (menu-command "  Debug Mode" view-table)))
+        (is (null (menu-command "No active chat buffer" effort-table)))
         (is (eq 'clawmacs::com-chat-recurse
                 (menu-command "Recurse" system-table)))))
     (dolist (command '(clawmacs::com-chat-stop-response
@@ -559,6 +564,7 @@
                        clawmacs::com-chat-submit-compose
                        clawmacs::com-chat-toggle-skill
                        clawmacs::com-chat-toggle-package
+                       clawmacs::com-chat-select-effort
                        clawmacs::com-chat-recurse))
       (is (clim:command-accessible-in-command-table-p
            command menu-table)))))
