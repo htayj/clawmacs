@@ -18,6 +18,8 @@ import sys
 import termios
 import time
 
+from example_features import example_keystroke_events
+
 
 BAD_MARKERS = (
     "debugger invoked",
@@ -88,6 +90,7 @@ def run_one(
     process: subprocess.Popen[bytes] | None = None
     rendered = False
     sent_keyboard = False
+    sent_declared_keystrokes = False
     sent_mouse = False
     sent_wheel = False
     planned_stop = False
@@ -136,6 +139,12 @@ def run_one(
                 os.write(master_fd, b"z")
                 sent_keyboard = True
                 time.sleep(0.05)
+
+            if rendered and not sent_declared_keystrokes:
+                for _, encoded in example_keystroke_events(name):
+                    os.write(master_fd, encoded)
+                    time.sleep(0.03)
+                sent_declared_keystrokes = True
 
             if rendered and not sent_mouse:
                 os.write(master_fd, mouse_event(0, 12, 8))
@@ -190,6 +199,8 @@ def run_one(
         "pty": True,
         "rendered": rendered,
         "sent_keyboard": sent_keyboard,
+        "declared_keystrokes": [spec for spec, _ in example_keystroke_events(name)],
+        "sent_declared_keystrokes": sent_declared_keystrokes,
         "sent_mouse": sent_mouse,
         "sent_wheel": sent_wheel,
         "planned_stop": planned_stop,

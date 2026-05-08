@@ -11,6 +11,8 @@ import re
 import sys
 from dataclasses import dataclass, asdict
 
+from example_features import normalize_keystroke_spec
+
 
 EXAMPLE_ORDER = [
     "package",
@@ -129,7 +131,7 @@ def unique(items: list[str]) -> list[str]:
     result: list[str] = []
     for item in items:
         item = item.strip()
-        if item and item not in seen:
+        if item and "," not in item and item not in seen:
             seen.add(item)
             result.append(item)
     return result
@@ -137,6 +139,19 @@ def unique(items: list[str]) -> list[str]:
 
 def matches(pattern_name: str, source: str) -> list[str]:
     return unique([m.group(1).strip() for m in PATTERNS[pattern_name].finditer(source)])
+
+
+def source_commands(source: str) -> list[str]:
+    commands = unique(matches("commands", source) + matches("plain_commands", source))
+    if "define-transformation-command" in source:
+        expanded: list[str] = []
+        for command in commands:
+            if re.search(rf"\(\s*define-transformation-command\s+{re.escape(command)}\b", source, re.I):
+                expanded.extend([f"{command}-sheet", f"{command}-region"])
+            else:
+                expanded.append(command)
+        commands = unique(expanded)
+    return commands
 
 
 def interaction_intents(data: dict[str, object]) -> list[str]:
@@ -185,7 +200,7 @@ def result_checks(data: dict[str, object]) -> list[str]:
 def audit_example(root: pathlib.Path, name: str) -> ExampleCoverage:
     path = root / f"{name}.lisp"
     source = path.read_text(encoding="utf-8")
-    commands = unique(matches("commands", source) + matches("plain_commands", source))
+    commands = source_commands(source)
     data = {
         "frames": matches("frames", source),
         "commands": commands,
@@ -193,7 +208,7 @@ def audit_example(root: pathlib.Path, name: str) -> ExampleCoverage:
         "presentation_methods": matches("presentation_methods", source),
         "translators": matches("translators", source),
         "actions": matches("actions", source),
-        "keystrokes": matches("keystrokes", source),
+        "keystrokes": [normalize_keystroke_spec(spec) for spec in matches("keystrokes", source)],
         "menus": matches("menus", source),
         "has_gadgets": bool(PATTERNS["gadgets"].search(source)),
         "has_tracking_pointer": bool(PATTERNS["tracking_pointer"].search(source)),
