@@ -1,0 +1,5 @@
+This backend follows the repository license in ../../LICENSE.
+
+The backend-local NOTICE file records third-party implementation references and
+runtime dependencies used while developing the experimental McCLIM charms
+backend.
