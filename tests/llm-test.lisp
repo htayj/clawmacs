@@ -553,7 +553,9 @@
                 (menu-command "  Metadata Output" view-table)))
         (is (eq 'clawmacs::com-chat-toggle-debug-mode
                 (menu-command "  Debug Mode" view-table)))
-        (is (null (menu-command "No active chat buffer" effort-table)))
+        (is (member "No active chat buffer"
+                    (test-command-table-menu-labels effort-table)
+                    :test #'string=))
         (is (eq 'clawmacs::com-chat-recurse
                 (menu-command "Recurse" system-table)))))
     (dolist (command '(clawmacs::com-chat-stop-response
@@ -641,6 +643,46 @@
                     :test #'string=))
         (is (member "✓ Debug Mode"
                     (test-command-table-menu-labels view-menu)
+                    :test #'string=))))))
+
+(test mcclim-chat-effort-menu-shows-current-selection-and-updates
+  "The McCLIM effort menu shows the active effort and updates after selection."
+  (with-agent-definition-registry-override ()
+    (let* ((buf (make-buffer "effort-toolbar" :agent-name "agent"))
+           (frame (clim:make-application-frame
+                   'clawmacs::clawmacs-chat-frame
+                   :buffer buf)))
+      (set-buffer-provider-override buf :openai-codex)
+      (set-buffer-model-override buf "gpt-5.4")
+      (clawmacs::refresh-chat-frame-menu-bar frame)
+      (let* ((menu-table (clim:frame-command-table frame))
+             (effort-menu-item (clim:find-menu-item "Effort: default"
+                                                    menu-table
+                                                    :errorp nil))
+             (effort-menu (and effort-menu-item
+                               (clim:command-menu-item-value effort-menu-item))))
+        (is (not (null effort-menu-item)))
+        (is (member "✓ default"
+                    (test-command-table-menu-labels effort-menu)
+                    :test #'string=))
+        (is (member "  high"
+                    (test-command-table-menu-labels effort-menu)
+                    :test #'string=)))
+      (clawmacs::select-chat-effort-for-buffer buf "high")
+      (clawmacs::refresh-chat-frame-menu-bar frame)
+      (let* ((menu-table (clim:frame-command-table frame))
+             (effort-menu-item (clim:find-menu-item "Effort: high"
+                                                    menu-table
+                                                    :errorp nil))
+             (effort-menu (and effort-menu-item
+                               (clim:command-menu-item-value effort-menu-item))))
+        (is (string= "high" (buffer-think-level-override buf)))
+        (is (not (null effort-menu-item)))
+        (is (member "✓ high"
+                    (test-command-table-menu-labels effort-menu)
+                    :test #'string=))
+        (is (member "  default"
+                    (test-command-table-menu-labels effort-menu)
                     :test #'string=))))))
 
 (test mcclim-chat-skills-menu-toggles-enabled-state
