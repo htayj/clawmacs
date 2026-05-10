@@ -265,7 +265,7 @@ When BUFFER is nil, use the default buffer visibility settings."
 
 (defun chat-message-tool-use-blocks (msg)
   "Return tool_use blocks recorded in MSG's raw content."
-  (content-tool-use-blocks (or (message-raw-content msg) nil))
+  (content-tool-use-blocks (or (message-raw-content msg) nil)))
 
 (defun chat-message-tool-result-blocks (msg)
   "Return tool_result blocks recorded in MSG's raw content."
@@ -488,6 +488,33 @@ When BUFFER is nil, use the default buffer visibility settings."
      :name "clawmacs message metadata")
     frame))
 
+(defun configure-chat-compose-pane (pane)
+  "Enable CLIM stream soft wrapping for chat compose PANE when supported.
+Current McCLIM text-editor gadgets do not implement the stream
+end-of-line protocol; in that case leave the editor value untouched rather
+than inserting hard newlines at an approximate fill column."
+  (when pane
+    (ignore-errors
+      (setf (clim:stream-end-of-line-action pane) :wrap*)))
+  pane)
+
+(defun chat-compose-pane-p (pane)
+  "Return true when PANE is the compose pane of a Clawmacs chat frame."
+  (let ((frame (ignore-errors (clim:pane-frame pane))))
+    (and (typep frame 'clawmacs-chat-frame)
+         (eq pane (ignore-errors (clim:find-pane-named frame 'compose))))))
+
+(defun maybe-configure-chat-compose-pane (pane)
+  "Configure PANE when it is the chat compose pane."
+  (when (chat-compose-pane-p pane)
+    (configure-chat-compose-pane pane)))
+
+(defmethod clim:note-sheet-grafted :after ((pane clim:text-editor-pane))
+  (maybe-configure-chat-compose-pane pane))
+
+(defmethod clim:note-sheet-region-changed :after ((pane clim:text-editor-pane))
+  (maybe-configure-chat-compose-pane pane))
+
 (clim:define-application-frame clawmacs-chat-frame ()
   ((buffer :initarg :buffer
            :accessor chat-frame-buffer)
@@ -686,6 +713,7 @@ When BUFFER is nil, use the default buffer visibility settings."
 
 (defun submit-chat-compose-pane (frame compose-pane)
   "Submit COMPOSE-PANE through FRAME's chat command path."
+  (configure-chat-compose-pane compose-pane)
   (let ((text (clim:gadget-value compose-pane))
         (buf (chat-frame-buffer frame)))
     (when (handle-chat-compose-text buf text)
@@ -1098,6 +1126,7 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
 
 (defmethod clim:run-frame-top-level :around ((frame clawmacs-chat-frame) &key)
   (refresh-chat-frame-menu-bar frame)
+  (configure-chat-compose-pane (clim:find-pane-named frame 'compose))
   (let ((hook (lambda (buf reason)
                 (when (and (not *suppress-chat-redisplay-requests*)
                            (eq buf (chat-frame-buffer frame)))

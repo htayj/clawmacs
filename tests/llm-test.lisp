@@ -515,6 +515,29 @@
          (error () nil)))
       (is (string= "button " (clim:gadget-value compose))))))
 
+(defclass soft-wrap-test-pane ()
+  ((end-of-line-action :initform :scroll
+                       :accessor soft-wrap-test-pane-end-of-line-action)))
+
+(defmethod clim:stream-end-of-line-action ((pane soft-wrap-test-pane))
+  (soft-wrap-test-pane-end-of-line-action pane))
+
+(defmethod (setf clim:stream-end-of-line-action) (action (pane soft-wrap-test-pane))
+  (setf (soft-wrap-test-pane-end-of-line-action pane) action))
+
+(test mcclim-compose-pane-uses-mcclim-soft-wrap-when-supported
+  "The chat compose configuration uses CLIM stream soft wrapping when supported."
+  (let ((pane (make-instance 'soft-wrap-test-pane)))
+    (is (eq :scroll (clim:stream-end-of-line-action pane)))
+    (clawmacs::configure-chat-compose-pane pane)
+    (is (eq :wrap* (clim:stream-end-of-line-action pane)))))
+
+(test mcclim-compose-pane-does-not-hard-wrap-text-editor-value
+  "Current McCLIM text-editor gadgets do not get approximate hard newlines inserted."
+  (let ((pane (make-instance 'clim:text-editor-pane :value "hello world")))
+    (clawmacs::configure-chat-compose-pane pane)
+    (is (string= "hello world" (clim:gadget-value pane)))))
+
 (defclass transcript-scroll-test-region ()
   ((height :initarg :height
            :reader transcript-scroll-test-region-height)))
