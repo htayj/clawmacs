@@ -372,7 +372,7 @@ the live working tree.")
   "Polling interval in seconds while waiting for shell_exec to finish.")
 
 (defparameter *built-in-tool-names*
-  '("lisp_eval")
+  '("lisp_eval" "recovery_list")
   "Names reserved for core Clawmacs provider tools.
 INIT-TOOLS removes these entries before re-registering tagged tools, so
 user-added tools stored in *tool-table* are left intact.")
@@ -2252,6 +2252,117 @@ Returns a string or nil. Calls the tool's approval-display-fn if set."
 ;;; --------------------------------------------------------------------------
 ;;; Tool Registration
 ;;; --------------------------------------------------------------------------
+
+(defun recovery-event-value (event key)
+  "Return KEY's decoded JSON value from EVENT."
+  (cdr (assoc key event)))
+
+(defun recovery-event-kind-p (event kind)
+  "Return true when EVENT matches recovery event KIND."
+  (let ((event-name (recovery-event-value event :event)))
+    (or (string= kind "all")
+        (and (string= kind "tool")
+             (string= event-name "tool-execution"))
+        (and (string= kind "file")
+             (string= event-name "file-checkpoint"))
+        (and (string= kind "lisp-eval")
+             (string= event-name "lisp-eval-checkpoint")))))
+
+(defun recovery-event-key (event)
+  "Return a stable-enough pairing key for before/after recovery events."
+  (or (recovery-event-value event :tool-id)
+      (format nil "~A/~A/~A"
+              (recovery-event-value event :tool-name)
+              (recovery-event-value event :timestamp)
+              (recovery-event-value event :code))))
+
+(defun recovery-summarize-event (event index)
+  "Return a compact Lisp data summary for recovery EVENT."
+  (list :index index
+        :event (recovery-event-value event :event)
+        :phase (recovery-event-value event :phase)
+        :status (recovery-event-value event :status)
+        :tool-name (recovery-event-value event :tool-name)
+        :tool-id (recovery-event-value event :tool-id)
+        :timestamp (recovery-event-value event :timestamp)
+        :mode (recovery-event-value event :mode)
+        :package (recovery-event-value event :package)
+        :path (recovery-event-value event :path)
+        :code (recovery-event-value event :code)
+        :condition-message (recovery-event-value event :condition-message)
+        :diff (recovery-event-value event :diff)))
+
+(defun recovery-pending-lisp-evals (events)
+  "Return lisp_eval before checkpoints without a matching after checkpoint."
+  (let ((pending (make-hash-table :test #'equal)))
+    (dolist (event events)
+      (when (string= "lisp-eval-checkpoint"
+                     (or (recovery-event-value event :event) ""))
+        (let ((key (recovery-event-key event))
+              (phase (recovery-event-value event :phase)))
+          (cond
+            ((string= phase "before")
+             (setf (gethash key pending) event))
+            ((string= phase "after")
+             (remhash key pending))))))
+    (let ((result nil))
+      (maphash (lambda (_ event)
+                 (declare (ignore _))
+                 (push event result))
+               pending)
+      (sort result #'< :key (lambda (event)
+                              (or (recovery-event-value event :timestamp) 0))))))
+
+(defun recovery-relevant-events (events kind)
+  "Return transcript EVENTS relevant to recovery KIND."
+  (remove-if-not (lambda (event)
+                   (recovery-event-kind-p event kind))
+                 events))
+
+(defun execute-recovery-list (args)
+  "List recent recovery journal events for the current buffer session."
+  (let* ((buffer (or *current-tool-buffer*
+                     (ignore-errors (current-buffer))))
+         (limit (or (tool-arg args :limit "limit") 20))
+         (kind (string-downcase (or (tool-arg args :kind "kind") "all")))
+         (pending-only (tool-arg args :pending-only "pending-only")))
+    (unless buffer
+      (error "recovery_list requires an active buffer"))
+    (unless (member kind '("all" "tool" "file" "lisp-eval") :test #'string=)
+      (error "kind must be one of all, tool, file, or lisp-eval"))
+    (ensure-buffer-session buffer)
+    (let* ((events (session-transcript-events (buffer-session buffer)))
+           (pending (recovery-pending-lisp-evals events))
+           (relevant (if pending-only
+                         pending
+                         (recovery-relevant-events events kind)))
+           (recent (subseq (reverse relevant)
+                           0
+                           (min (max 0 limit) (length relevant)))))
+      (lisp-data-string
+       (list :session-id (session-id (buffer-session buffer))
+             :kind kind
+             :pending-lisp-evals
+             (mapcar #'recovery-event-key pending)
+             :event-count (length relevant)
+             :events (loop :for event :in recent
+                           :for index :from 0
+                           :collect (recovery-summarize-event event index)))))))
+
+(deftool execute-recovery-list
+  :name "recovery_list"
+  :description "List recent durable tool, file checkpoint, and lisp_eval recovery journal events for the current session. Use this after errors, crashes, interrupted live evals, or risky self-modification."
+  :permission :agent-allowed
+  :call-style :raw-args
+  :args ((kind :type "string"
+               :required nil
+               :description "Optional filter: all, tool, file, or lisp-eval. Default: all.")
+         (limit :type "integer"
+                :required nil
+                :description "Maximum number of recent events to return. Default: 20.")
+         (pending-only :type "boolean"
+                       :required nil
+                       :description "If true, return only lisp_eval before checkpoints without matching after checkpoints.")))
 
 (deftool execute-lisp-eval
   :name "lisp_eval"

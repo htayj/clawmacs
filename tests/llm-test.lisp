@@ -291,7 +291,7 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "write")
+      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names))
       (is (string= "CLAWMACS" clawmacs:*lisp-eval-default-package*))
       (dolist (name '("read" "find" "grep" "write" "edit" "lisp_eval"))
@@ -313,7 +313,7 @@
            (tool-names (mapcar (lambda (tool)
                                  (cdr (assoc :name tool)))
                                tools)))
-      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "write")
+      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names)))))
 
 (test approval-policy-round-trips-default-and-tool-overrides
@@ -1050,7 +1050,7 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("lisp_eval") tool-names))
+      (is (equal '("lisp_eval" "recovery_list") tool-names))
       (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*))))
       (is-false (member "read" tool-names :test #'string=)))))
 
@@ -1074,7 +1074,7 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("lisp_eval" "read") tool-names))
+      (is (equal '("lisp_eval" "read" "recovery_list") tool-names))
       (is (string= "user-read"
                    (clawmacs:execute-tool "read" nil))))))
 
@@ -1102,7 +1102,7 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("lisp_eval" "read") tool-names))
+      (is (equal '("lisp_eval" "read" "recovery_list") tool-names))
       (is (string= "user-read"
                    (clawmacs:execute-tool "read" nil))))))
 
@@ -1243,6 +1243,30 @@
       (is (search "Unknown tool"
                   (event-value (second events) :condition-message))))))
 
+(test recovery-list-reports-recent-session-checkpoints
+  "The recovery_list tool summarizes durable recovery events for agents."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let* ((buf (make-chat-buffer "recovery-list"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf))
+      (clawmacs::execute-tool-safely
+       "lisp_eval"
+       '(:code "(+ 3 4)" :package "CL-USER")
+       :buffer buf
+       :tool-id "toolu-recovery-eval")
+      (let* ((data (clawmacs::execute-tool-safely
+                    "recovery_list"
+                    '(:kind "lisp-eval" :limit 5)
+                    :buffer buf
+                    :tool-id "toolu-recovery-list"))
+             (decoded (clawmacs::lisp-data-read data))
+             (events (getf decoded :events)))
+        (is (string= "lisp-eval" (getf decoded :kind)))
+        (is (>= (getf decoded :event-count) 2))
+        (is (null (getf decoded :pending-lisp-evals)))
+        (is (search "(+ 3 4)" (getf (first events) :code)))))))
+
 (test execute-tool-safely-checkpoints-write-tools
   "Safe write execution records before and after file checkpoints."
   (with-tool-table-restored
@@ -1364,7 +1388,7 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("custom_probe" "edit" "find" "grep" "lisp_eval" "read" "write")
+      (is (equal '("custom_probe" "edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names))
       (is (not (null (gethash "custom_probe" clawmacs::*tool-table*))))
       (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*)))))))
