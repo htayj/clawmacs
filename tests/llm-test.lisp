@@ -481,12 +481,23 @@
          table))
     (is (equal '(clawmacs::com-chat-submit-compose)
                (test-command-table-key-command table #\Return)))
-    (is (equal '(clawmacs::com-chat-submit-compose)
-               (test-command-table-key-command table #\Newline)))
+    (is-false (equal '(clawmacs::com-chat-submit-compose)
+                     (test-command-table-key-command table #\Newline)))
     (is (equal '(clawmacs::com-chat-submit-compose)
                (test-command-table-key-command menu-table #\Return)))
     (is (equal '(clawmacs::com-chat-submit-compose)
-               (test-command-table-key-command drei-order-table #\Return)))))
+               (test-command-table-key-command drei-order-table #\Return)))
+    (is-false (equal '(clawmacs::com-chat-submit-compose)
+                     (test-command-table-key-command drei-order-table #\Newline)))))
+
+(test mcclim-compose-pane-is-drei-gadget
+  "The chat compose pane uses Drei's gadget editor again."
+  (let ((compose (make-instance 'drei:drei-gadget-pane)))
+    (is (typep compose 'drei:drei-gadget-pane))
+    (setf (clim:gadget-value compose) "hello")
+    (is (string= "hello" (clim:gadget-value compose)))
+    (clawmacs::configure-chat-compose-pane compose)
+    (is (eq :wrap* (clim:stream-end-of-line-action compose)))))
 
 (test mcclim-kill-items-vector-normalizes-list-kills
   "The McCLIM kill helper converts list kills into the vector form Edward expects."

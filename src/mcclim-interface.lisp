@@ -490,9 +490,9 @@ When BUFFER is nil, use the default buffer visibility settings."
 
 (defun configure-chat-compose-pane (pane)
   "Enable CLIM stream soft wrapping for chat compose PANE when supported.
-Current McCLIM text-editor gadgets do not implement the stream
-end-of-line protocol; in that case leave the editor value untouched rather
-than inserting hard newlines at an approximate fill column."
+Drei compose panes implement the stream end-of-line protocol; if a pane does
+not, leave the editor value untouched rather than inserting approximate hard
+newlines."
   (when pane
     (ignore-errors
       (setf (clim:stream-end-of-line-action pane) :wrap*)))
@@ -512,7 +512,13 @@ than inserting hard newlines at an approximate fill column."
 (defmethod clim:note-sheet-grafted :after ((pane clim:text-editor-pane))
   (maybe-configure-chat-compose-pane pane))
 
+(defmethod clim:note-sheet-grafted :after ((pane drei:drei-gadget-pane))
+  (maybe-configure-chat-compose-pane pane))
+
 (defmethod clim:note-sheet-region-changed :after ((pane clim:text-editor-pane))
+  (maybe-configure-chat-compose-pane pane))
+
+(defmethod clim:note-sheet-region-changed :after ((pane drei:drei-gadget-pane))
   (maybe-configure-chat-compose-pane pane))
 
 (clim:define-application-frame clawmacs-chat-frame ()
@@ -537,10 +543,13 @@ than inserting hard newlines at an approximate fill column."
                :end-of-page-action :allow
                :width 900
                :height 640)
-   (compose :text-editor
-            :value ""
+   (compose :drei
+            :initial-contents ""
             :ncolumns 90
             :nlines 6
+            :minibuffer nil
+            :scroll-bars nil
+            :border-width 0
             :activation-gestures '(:return)
             :activate-callback #'compose-pane-activated))
   (:layouts
@@ -1022,12 +1031,6 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
 (clim:add-keystroke-to-command-table
  'clawmacs-chat-frame
  '(#\Return)
- :command '(com-chat-submit-compose)
- :errorp nil)
-
-(clim:add-keystroke-to-command-table
- 'clawmacs-chat-frame
- '(#\Newline)
  :command '(com-chat-submit-compose)
  :errorp nil)
 
