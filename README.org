@@ -47,7 +47,8 @@ provider tools as the primary action surface:
 | =grep=       | agent-allowed          | Search file contents by literal text |
 | =write=      | agent-allowed          | Create or overwrite sandboxed files  |
 | =edit=       | agent-allowed          | Replace exact text in sandboxed files |
-| =lisp_eval=  | agent-allowed          | Evaluate Common Lisp in the running image |
+| =lisp_eval=  | agent-allowed          | Evaluate Common Lisp in the running image or an isolated worker |
+| =recovery_list= | agent-allowed       | Inspect recent durable tool/eval/checkpoint journal events |
 
 By default, agents use exposed provider tools for workspace search and text
 changes. Tool inputs and tool results are represented as Lisp data, for example
@@ -68,7 +69,14 @@ ASDF metadata, package exports, docstrings, and source/doc search helpers.
 Its tool result is a printed Lisp plist. Recent calls are available with
 =(eval-history-to-string)=, and the latest success/error are exposed through
 =*last-eval-result*= and
-=*last-eval-condition*=.
+=*last-eval-condition*=. Pass =:mode "isolated"= to evaluate in a fresh SBCL
+worker process when probing risky compile/load/eval behavior without mutating
+or crashing the live Clawmacs image.
+
+Agent tool calls are durably journaled in the session transcript. File mutation
+tools record before/after checkpoint metadata and diffs, and =lisp_eval= records
+before/after recovery checkpoints. If a turn is interrupted, =recovery_list=
+can summarize recent tool, file, and eval recovery events for repair.
 
 ** Skills
 
@@ -373,6 +381,17 @@ Checked in the working directory first, then =~/.config/clawmacs/=. Compatible w
 #+end_src
 
 This launches clawmacs in a Guix container with all dependencies (SBCL, McCLIM, OpenSSL, fonts) automatically provisioned. Quicklisp is bootstrapped on first run.
+
+A native, non-container launcher is also available for machines with local SBCL
+and GUI dependencies installed:
+
+#+begin_src sh
+./run-native.sh
+#+end_src
+
+The native launcher uses the Ultralisp Quicklisp-compatible distribution via
+=scripts/run-ultralisp.lisp=, so it can resolve newer Common Lisp dependencies
+without entering the Guix container.
 
 By default, =run.sh= reuses cached ASDF/FASL build artifacts for fast startup.
 Pass =--clean-build=, or its alias =--force-clean-build=, to clear the local
