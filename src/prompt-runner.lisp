@@ -75,10 +75,9 @@ When all tools are done, finalizes the results."
                  (let* ((*current-caller* agent-kw)
                         (*current-tool-buffer* buf)
                         (result-text
-                          (handler-case
-                              (execute-tool tool-name tool-input)
-                            (error (e)
-                              (tool-error-result-data e)))))
+                          (execute-tool-safely tool-name tool-input
+                                               :buffer buf
+                                               :tool-id tool-id)))
                    (push `((:result . ,result-text)
                            (:display . ,(format-tool-result-display tool-name result-text))
                            (:tool-id . ,tool-id))
@@ -109,10 +108,9 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
        (let* ((*current-caller* agent-kw)
               (*current-tool-buffer* buf)
               (result-text
-                (handler-case
-                    (execute-tool tool-name tool-input)
-                  (error (e)
-                    (tool-error-result-data e)))))
+                (execute-tool-safely tool-name tool-input
+                                     :buffer buf
+                                     :tool-id tool-id)))
          (push `((:result . ,result-text)
                  (:display . ,(format-tool-result-display tool-name result-text))
                  (:tool-id . ,tool-id))
@@ -125,11 +123,16 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
           :policy :interactive
           :reason (or reason "User denied this tool call")
           :entry tool-input)
-         (push `((:result . ,(tool-denied-result-data
-                              (or reason "User denied this tool call")))
-                 (:display . ,(format nil "[~A DENIED: ~A]" tool-name (or reason "denied")))
-                 (:tool-id . ,tool-id))
-               (buffer-tool-call-results buf))))
+         (let ((result-text
+                 (execute-tool-safely tool-name tool-input
+                                      :buffer buf
+                                      :tool-id tool-id
+                                      :denied-reason
+                                      (or reason "User denied this tool call"))))
+           (push `((:result . ,result-text)
+                   (:display . ,(format nil "[~A DENIED: ~A]" tool-name (or reason "denied")))
+                   (:tool-id . ,tool-id))
+                 (buffer-tool-call-results buf)))))
       ;; Denied (no message)
       (t
        (approval-policy-record-history-entry
@@ -137,10 +140,15 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
         :policy :interactive
         :reason "User denied"
         :entry tool-input)
-       (push `((:result . ,(tool-denied-result-data "User denied"))
-               (:display . ,(format nil "[~A DENIED]" tool-name))
-               (:tool-id . ,tool-id))
-             (buffer-tool-call-results buf))))
+       (let ((result-text
+               (execute-tool-safely tool-name tool-input
+                                    :buffer buf
+                                    :tool-id tool-id
+                                    :denied-reason "User denied")))
+         (push `((:result . ,result-text)
+                 (:display . ,(format nil "[~A DENIED]" tool-name))
+                 (:tool-id . ,tool-id))
+               (buffer-tool-call-results buf)))))
     ;; Move to next tool
     (pop (buffer-pending-tool-calls buf))
     ;; Restore stashed input
@@ -742,14 +750,17 @@ PROMPT-TOOL-EVENT for terminal/debug output."
                   :policy :prompt-mode
                   :reason "Prompt mode denied interactive approval"
                   :entry tool-input)
-                 (denied-tool-result-data
+                 (execute-tool-safely
+                  tool-name tool-input
+                  :buffer buf
+                  :tool-id tool-id
+                  :denied-reason
                   "Tool requires interactive approval; prompt mode denied it."))
                (let ((*current-caller* agent-kw)
                      (*current-tool-buffer* buf))
-                 (handler-case
-                     (execute-tool tool-name tool-input)
-                   (error (e)
-                     (tool-error-result-data e))))))
+                 (execute-tool-safely tool-name tool-input
+                                      :buffer buf
+                                      :tool-id tool-id))))
          (display (if denied-p
                       (format nil "[~A DENIED: non-interactive prompt mode]"
                               tool-name)

@@ -1629,6 +1629,120 @@ Only includes tools visible to the current *current-caller*."
          (eq :agent-with-permission
              (effective-tool-permission def :buffer buffer)))))
 
+(defvar *tool-execution-journal-max-chars* 20000
+  "Maximum result/error characters retained in durable tool execution events.")
+
+(defun bounded-tool-execution-string (value)
+  "Return VALUE as a bounded string for durable tool execution events."
+  (let ((text (cond
+                ((null value) "")
+                ((stringp value) value)
+                (t (lisp-data-string value)))))
+    (if (> (length text) *tool-execution-journal-max-chars*)
+        (concatenate 'string
+                     (subseq text 0 *tool-execution-journal-max-chars*)
+                     (format nil "~%[truncated at ~D characters]"
+                             *tool-execution-journal-max-chars*))
+        text)))
+
+(defun condition-type-name (condition)
+  "Return a readable type name for CONDITION."
+  (let ((type (type-of condition)))
+    (if (symbolp type)
+        (format nil "~A" type)
+        (prin1-to-string type))))
+
+(defun tool-execution-caller-name ()
+  "Return the current tool caller as a durable string."
+  (if (and (boundp '*current-caller*) *current-caller*)
+      (string-downcase (symbol-name *current-caller*))
+      "unknown"))
+
+(defun record-tool-execution-event (buffer event)
+  "Durably record one tool execution EVENT for BUFFER when possible.
+Failures while journaling are logged but never abort tool execution."
+  (handler-case
+      (progn
+        (when buffer
+          (ensure-buffer-session buffer)
+          (when (buffer-session buffer)
+            (append-session-event (buffer-session buffer) event)))
+        (file-debug-log "tool-execution"
+                        "~A"
+                        (bounded-tool-execution-string event))
+        event)
+    (error (condition)
+      (file-debug-log "tool-execution-journal-error"
+                      "failed to journal tool event: ~A"
+                      condition)
+      nil)))
+
+(defun tool-execution-event (phase tool-name args
+                             &key buffer tool-id status result condition reason)
+  "Return a durable event describing one tool execution PHASE."
+  (declare (ignore buffer))
+  `((:event . "tool-execution")
+    (:phase . ,phase)
+    (:tool-name . ,(normalize-tool-name tool-name))
+    ,@(when tool-id `((:tool-id . ,tool-id)))
+    (:caller . ,(tool-execution-caller-name))
+    (:timestamp . ,(get-universal-time))
+    (:input . ,(bounded-tool-execution-string args))
+    ,@(when status `((:status . ,status)))
+    ,@(when reason `((:reason . ,(bounded-tool-execution-string reason))))
+    ,@(when result `((:result . ,(bounded-tool-execution-string result))))
+    ,@(when condition
+        `((:condition-type . ,(condition-type-name condition))
+          (:condition-message . ,(bounded-tool-execution-string
+                                  (format nil "~A" condition)))))))
+
+(defun execute-tool-safely (name args &key buffer tool-id denied-reason)
+  "Execute tool NAME with ARGS and return a provider-compatible result string.
+All agent tool paths should use this wrapper so tool start/result/error events
+are journaled before control returns to the provider loop.  DENIED-REASON records
+a denied tool call without invoking the tool, preserving the same durable event
+shape as successful and failed executions."
+  (let ((buf (or buffer *current-tool-buffer*)))
+    (record-tool-execution-event
+     buf
+     (tool-execution-event "start" name args
+                           :buffer buf
+                           :tool-id tool-id))
+    (cond
+      (denied-reason
+       (let ((result (tool-denied-result-data denied-reason)))
+         (record-tool-execution-event
+          buf
+          (tool-execution-event "result" name args
+                                :buffer buf
+                                :tool-id tool-id
+                                :status "denied"
+                                :reason denied-reason
+                                :result result))
+         result))
+      (t
+       (handler-case
+           (let ((result (execute-tool name args)))
+             (record-tool-execution-event
+              buf
+              (tool-execution-event "result" name args
+                                    :buffer buf
+                                    :tool-id tool-id
+                                    :status "ok"
+                                    :result result))
+             result)
+         (error (condition)
+           (let ((result (tool-error-result-data condition)))
+             (record-tool-execution-event
+              buf
+              (tool-execution-event "result" name args
+                                    :buffer buf
+                                    :tool-id tool-id
+                                    :status "error"
+                                    :result result
+                                    :condition condition))
+             result)))))))
+
 (defun execute-tool (name args)
   "Execute tool NAME with ARGS (an alist of parameter values).
 Returns a string result or signals an error."

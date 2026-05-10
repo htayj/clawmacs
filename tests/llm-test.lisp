@@ -1106,6 +1106,90 @@
       (is (string= "user-read"
                    (clawmacs:execute-tool "read" nil))))))
 
+(defun tool-execution-test-events (buf)
+  "Return durable tool-execution events recorded for BUF."
+  (remove-if-not (lambda (event)
+                   (string= "tool-execution" (event-value event :event)))
+                 (session-current-events (buffer-session buf))))
+
+(test execute-tool-safely-journals-tool-errors
+  "Safe tool execution records start and error result events before returning."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs:register-tool
+     "journal_fail"
+     "Tool that fails for journaling tests."
+     '((:type . "object") (:properties . nil))
+     :agent-allowed
+     (lambda (args)
+       (declare (ignore args))
+       (error "boom from journal_fail")))
+    (let* ((buf (make-chat-buffer "tool-journal-error"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf)
+           (result (clawmacs::execute-tool-safely
+                    "journal_fail" '(:value "x")
+                    :buffer buf
+                    :tool-id "toolu-journal-1"))
+           (events (tool-execution-test-events buf)))
+      (is (search ":error" result))
+      (is (= 2 (length events)))
+      (is (string= "start" (event-value (first events) :phase)))
+      (is (string= "result" (event-value (second events) :phase)))
+      (is (string= "error" (event-value (second events) :status)))
+      (is (string= "journal_fail" (event-value (second events) :tool-name)))
+      (is (string= "toolu-journal-1" (event-value (second events) :tool-id)))
+      (is (search "boom from journal_fail"
+                  (event-value (second events) :condition-message))))))
+
+(test execute-prompt-tool-call-journals-tool-errors
+  "Prompt-mode tool execution uses the safe journaling wrapper."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs:register-tool
+     "prompt_journal_fail"
+     "Tool that fails in prompt-mode journaling tests."
+     '((:type . "object") (:properties . nil))
+     :agent-allowed
+     (lambda (args)
+       (declare (ignore args))
+       (error "prompt boom")))
+    (let* ((buf (make-chat-buffer "prompt-tool-journal-error"))
+           (tool-use '((:type . "tool_use")
+                       (:id . "toolu-prompt-journal-1")
+                       (:name . "prompt_journal_fail")
+                       (:input . ((:value . "x"))))))
+      (multiple-value-bind (result event)
+          (clawmacs::execute-prompt-tool-call buf tool-use :coder t)
+        (is (search ":error" (cdr (assoc :result result))))
+        (is (string= "prompt_journal_fail"
+                     (clawmacs:prompt-tool-event-name event))))
+      (let ((events (tool-execution-test-events buf)))
+        (is (= 2 (length events)))
+        (is (string= "start" (event-value (first events) :phase)))
+        (is (string= "error" (event-value (second events) :status)))
+        (is (search "prompt boom"
+                    (event-value (second events) :condition-message)))))))
+
+(test execute-tool-safely-journals-denied-tool-calls
+  "Denied tool calls are journaled without executing or requiring a definition."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (let* ((buf (make-chat-buffer "tool-journal-denied"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf)
+           (result (clawmacs::execute-tool-safely
+                    "not_registered" '(:value "x")
+                    :buffer buf
+                    :tool-id "toolu-denied-1"
+                    :denied-reason "test denied"))
+           (events (tool-execution-test-events buf)))
+      (is (search ":denied" result))
+      (is (= 2 (length events)))
+      (is (string= "denied" (event-value (second events) :status)))
+      (is (string= "test denied" (event-value (second events) :reason)))
+      (is (search "test denied" (event-value (second events) :result))))))
+
 (test tool-definitions->responses-tools-encodes-empty-properties-as-object
   "Zero-arg tool schemas encode JSON object properties as `{}`, not `null`."
   (let* ((tools (vector
@@ -1700,6 +1784,7 @@ same
 (test bundled-self-modify-pipeline-loops-and-injects-selected-packages-and-skills
   "The shipped self-modify pipeline reparses plans after failing tests and injects selected package/skill context."
   (let ((path (temp-agent-defaults-path))
+        (*sessions-dir* (temp-session-test-directory "self-modify-pipeline"))
         (responses nil)
         (test-reports nil)
         (captured-calls nil))
