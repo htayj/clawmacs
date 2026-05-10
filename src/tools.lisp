@@ -2197,7 +2197,13 @@ Returns a string or nil. Calls the tool's approval-display-fn if set."
                :description "Lisp data :code, one Common Lisp form to read and evaluate.")
          (package :type "string"
                   :required nil
-                  :description "Lisp data :package, the package name used while reading and evaluating :code. Default: CLAWMACS.")))
+                  :description "Lisp data :package, the package name used while reading and evaluating :code. Default: CLAWMACS.")
+         (mode :type "string"
+               :required nil
+               :description "Optional execution mode: live evaluates in the running Clawmacs image; isolated evaluates in a fresh SBCL worker process. Default: live.")
+         (timeout :type "integer"
+                  :required nil
+                  :description "Timeout in seconds for isolated mode. Default: 10.")))
 
 (defun init-tools ()
   "Register the default clawmacs built-in tools.

@@ -3333,6 +3333,38 @@ same
         (is (not (null clawmacs:*last-eval-condition*)))
         (is (search "boom" (clawmacs:eval-history-to-string)))))))
 
+(test execute-lisp-eval-isolated-mode-runs-in-worker
+  "Isolated lisp_eval evaluates in a worker process without mutating this image."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let ((symbol (find-symbol "*ISOLATED-EVAL-PROOF*" :cl-user)))
+      (when symbol
+        (unintern symbol :cl-user)))
+    (let* ((data (clawmacs:execute-tool
+                  "lisp_eval"
+                  '(:mode "isolated"
+                    :package "CL-USER"
+                    :code "(progn (defparameter *isolated-eval-proof* :worker) (values 8 9))")))
+           (decoded (clawmacs::lisp-data-read data)))
+      (is (eq :isolated (getf decoded :mode)))
+      (is (= 2 (getf decoded :values)))
+      (is (search "8" (getf decoded :result)))
+      (is (search "9" (getf decoded :result)))
+      (is-false (find-symbol "*ISOLATED-EVAL-PROOF*" :cl-user)))))
+
+(test execute-lisp-eval-isolated-mode-reports-errors
+  "Isolated lisp_eval reports worker conditions as tool data instead of crashing."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let* ((data (clawmacs:execute-tool
+                  "lisp_eval"
+                  '(:mode "isolated"
+                    :package "CL-USER"
+                    :code "(error \"isolated boom\")")))
+           (decoded (clawmacs::lisp-data-read data)))
+      (is (eq :isolated (getf decoded :mode)))
+      (is (search "isolated boom" (getf decoded :error))))))
+
 (test run-single-prompt-error-carries-partial-tool-events
   "Prompt loop failures retain tool events for diagnostics."
   (let ((path (temp-agent-defaults-path)))
