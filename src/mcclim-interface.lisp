@@ -27,6 +27,14 @@
 (defclass clawmacs-chat-menu-refresh-event (clim:window-event)
   ())
 
+(defvar *suppress-chat-redisplay-requests* nil
+  "When non-nil, buffer display hooks should not queue chat redisplay events.
+This is bound while a chat frame is already applying provider stream state to
+avoid recursive update→notify→redisplay loops in the CLIM event thread.")
+
+(defparameter *chat-transcript-follow-tail* t
+  "When non-nil, the chat transcript scrolls to the bottom after redisplay.")
+
 (clim:define-command-table clawmacs-chat-control-menu
   :menu (("Stop Response" :command com-chat-stop-response
           :documentation "Stop the active streaming response.")))
@@ -396,6 +404,8 @@ When BUFFER is nil, use the default buffer visibility settings."
                :display-function 'display-chat-transcript
                :display-time :command-loop
                :incremental-redisplay t
+               :scroll-bars :vertical
+               :end-of-page-action :allow
                :width 900
                :height 640)
    (compose :text-editor
@@ -498,6 +508,51 @@ When BUFFER is nil, use the default buffer visibility settings."
     (when (buffer-approval-pending buf)
       (display-chat-approval stream (buffer-approval-pending buf)))))
 
+(defun chat-transcript-pane (frame)
+  "Return FRAME's transcript pane, or NIL when unavailable."
+  (ignore-errors
+    (clim:find-pane-named frame 'transcript)))
+
+(defun chat-transcript-bottom-scroll-y-from-heights (content-height viewport-height)
+  "Return the Y displacement that places CONTENT-HEIGHT's bottom in view."
+  (max 0 (- (or content-height 0)
+            (or viewport-height 0))))
+
+(defun chat-transcript-output-height (pane)
+  "Return PANE's recorded output height, or NIL when unavailable."
+  (let ((history (ignore-errors (clim:stream-output-history pane))))
+    (and history
+         (ignore-errors
+           (clim:bounding-rectangle-height history)))))
+
+(defun chat-transcript-viewport-height (pane)
+  "Return PANE's visible viewport height, or NIL when unavailable."
+  (let ((viewport (or (ignore-errors (clim:pane-viewport pane)) pane)))
+    (and viewport
+         (ignore-errors
+           (clim:bounding-rectangle-height viewport)))))
+
+(defun chat-transcript-bottom-scroll-y (pane)
+  "Return the Y displacement for keeping PANE scrolled to transcript tail."
+  (let ((content-height (chat-transcript-output-height pane))
+        (viewport-height (chat-transcript-viewport-height pane)))
+    (and content-height
+         viewport-height
+         (chat-transcript-bottom-scroll-y-from-heights content-height viewport-height))))
+
+(defun chat-transcript-scroll-to-bottom (pane)
+  "Scroll transcript PANE to its bottom when McCLIM has viewport geometry."
+  (let ((bottom-y (and pane (chat-transcript-bottom-scroll-y pane))))
+    (when bottom-y
+      (ignore-errors
+        (clim:scroll-extent pane 0 bottom-y))
+      bottom-y)))
+
+(defun chat-frame-follow-transcript-tail (frame)
+  "Scroll FRAME's transcript to the newest visible output when enabled."
+  (when *chat-transcript-follow-tail*
+    (chat-transcript-scroll-to-bottom (chat-transcript-pane frame))))
+
 (defun submit-chat-compose-pane (frame compose-pane)
   "Submit COMPOSE-PANE through FRAME's chat command path."
   (let ((text (clim:gadget-value compose-pane))
@@ -571,8 +626,10 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
     (unwind-protect
          (let ((buf (chat-frame-buffer frame)))
            (when (and buf (buffer-pending-stream buf))
-             (update-streaming-response buf))
-           (clim:redisplay-frame-pane frame 'transcript :force-p nil))
+             (let ((*suppress-chat-redisplay-requests* t))
+               (update-streaming-response buf)))
+           (clim:redisplay-frame-pane frame 'transcript :force-p nil)
+           (chat-frame-follow-transcript-tail frame))
       (bt:with-lock-held ((chat-frame-redisplay-lock frame))
         (setf repeat-p (chat-frame-redisplay-repeat-p frame)
               (chat-frame-redisplay-handling-p frame) nil
@@ -911,7 +968,8 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
 (defmethod clim:run-frame-top-level :around ((frame clawmacs-chat-frame) &key)
   (refresh-chat-frame-menu-bar frame)
   (let ((hook (lambda (buf reason)
-                (when (eq buf (chat-frame-buffer frame))
+                (when (and (not *suppress-chat-redisplay-requests*)
+                           (eq buf (chat-frame-buffer frame)))
                   (when (member reason '(:routing :system-prompt)
                                 :test #'eq)
                     (request-chat-frame-menu-refresh frame))

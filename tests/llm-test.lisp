@@ -515,6 +515,48 @@
          (error () nil)))
       (is (string= "button " (clim:gadget-value compose))))))
 
+(defclass transcript-scroll-test-region ()
+  ((height :initarg :height
+           :reader transcript-scroll-test-region-height)))
+
+(defmethod clim:bounding-rectangle-height ((region transcript-scroll-test-region))
+  (transcript-scroll-test-region-height region))
+
+(defclass transcript-scroll-test-pane ()
+  ((history :initarg :history
+            :reader transcript-scroll-test-pane-history)
+   (viewport :initarg :viewport
+             :reader transcript-scroll-test-pane-viewport)
+   (scroll-x :initform nil
+             :accessor transcript-scroll-test-pane-scroll-x)
+   (scroll-y :initform nil
+             :accessor transcript-scroll-test-pane-scroll-y)))
+
+(defmethod clim:stream-output-history ((pane transcript-scroll-test-pane))
+  (transcript-scroll-test-pane-history pane))
+
+(defmethod clim:pane-viewport ((pane transcript-scroll-test-pane))
+  (transcript-scroll-test-pane-viewport pane))
+
+(defmethod clim:scroll-extent ((pane transcript-scroll-test-pane) x y)
+  (setf (transcript-scroll-test-pane-scroll-x pane) x
+        (transcript-scroll-test-pane-scroll-y pane) y))
+
+(test mcclim-transcript-bottom-scroll-uses-output-and-viewport-heights
+  "Transcript tail following computes Listener-style bottom scroll offsets."
+  (is (= 800
+         (clawmacs::chat-transcript-bottom-scroll-y-from-heights 1200 400)))
+  (is (= 0
+         (clawmacs::chat-transcript-bottom-scroll-y-from-heights 300 400)))
+  (let* ((history (make-instance 'transcript-scroll-test-region :height 1200))
+         (viewport (make-instance 'transcript-scroll-test-region :height 400))
+         (pane (make-instance 'transcript-scroll-test-pane
+                              :history history
+                              :viewport viewport)))
+    (is (= 800 (clawmacs::chat-transcript-scroll-to-bottom pane)))
+    (is (= 0 (transcript-scroll-test-pane-scroll-x pane)))
+    (is (= 800 (transcript-scroll-test-pane-scroll-y pane)))))
+
 (test mcclim-chat-menu-bar-exposes-toolbar-commands
   "The McCLIM chat frame exposes its MVP toolbar through command-table menus."
   (let* ((menu-table (clawmacs::make-chat-menu-bar-command-table))
