@@ -1801,6 +1801,52 @@ Failures while journaling are logged but never abort tool execution."
              (:condition-message . ,(bounded-tool-execution-string
                                      (format nil "~A" condition)))))))))
 
+(defun lisp-eval-tool-p (tool-name)
+  "Return true when TOOL-NAME is the live Lisp evaluation tool."
+  (string= "lisp_eval" (normalize-tool-name tool-name)))
+
+(defun lisp-eval-recovery-mode (args)
+  "Return the lisp_eval mode as a durable string."
+  (let ((mode (or (ignore-errors (tool-arg args :mode "mode")) "live")))
+    (cond
+      ((symbolp mode) (string-downcase (symbol-name mode)))
+      ((stringp mode) (string-downcase mode))
+      (t (bounded-tool-execution-string mode)))))
+
+(defun lisp-eval-recovery-context (tool-name args)
+  "Return semantic recovery context for lisp_eval ARGS, or NIL."
+  (when (lisp-eval-tool-p tool-name)
+    (list :mode (lisp-eval-recovery-mode args)
+          :package (or (ignore-errors (tool-arg args :package "package"))
+                       *lisp-eval-default-package*)
+          :code (or (ignore-errors (tool-arg args :code "code")) ""))))
+
+(defun record-lisp-eval-recovery-event
+    (buffer phase tool-name args context &key tool-id status result condition)
+  "Record semantic lisp_eval recovery events around live or worker evals.
+The before event is intentionally durable before evaluation starts, so startup
+recovery can detect an interrupted live eval without reducing eval capability."
+  (declare (ignore args))
+  (when context
+    (record-tool-execution-event
+     buffer
+     `((:event . "lisp-eval-checkpoint")
+       (:phase . ,phase)
+       (:tool-name . ,(normalize-tool-name tool-name))
+       ,@(when tool-id `((:tool-id . ,tool-id)))
+       (:caller . ,(tool-execution-caller-name))
+       (:timestamp . ,(get-universal-time))
+       (:mode . ,(getf context :mode))
+       (:package . ,(getf context :package))
+       (:code . ,(bounded-tool-execution-string (getf context :code)))
+       ,@(when status `((:status . ,status)))
+       ,@(when result
+           `((:result . ,(bounded-tool-execution-string result))))
+       ,@(when condition
+           `((:condition-type . ,(condition-type-name condition))
+             (:condition-message . ,(bounded-tool-execution-string
+                                     (format nil "~A" condition)))))))))
+
 (defun execute-tool-safely (name args &key buffer tool-id denied-reason)
   "Execute tool NAME with ARGS and return a provider-compatible result string.
 All agent tool paths should use this wrapper so tool start/result/error events
@@ -1808,6 +1854,8 @@ are journaled before control returns to the provider loop.  DENIED-REASON record
 a denied tool call without invoking the tool, preserving the same durable event
 shape as successful and failed executions."
   (let* ((buf (or buffer *current-tool-buffer*))
+         (eval-context (and (not denied-reason)
+                            (lisp-eval-recovery-context name args)))
          (checkpoint-context (and (not denied-reason)
                                   (file-checkpoint-context name args)))
          (checkpoint-before
@@ -1820,6 +1868,10 @@ shape as successful and failed executions."
      (tool-execution-event "start" name args
                            :buffer buf
                            :tool-id tool-id))
+    (when eval-context
+      (record-lisp-eval-recovery-event
+       buf "before" name args eval-context
+       :tool-id tool-id))
     (when checkpoint-context
       (record-file-checkpoint-event
        buf "before" name args checkpoint-context checkpoint-before
@@ -1839,6 +1891,12 @@ shape as successful and failed executions."
       (t
        (handler-case
            (let ((result (execute-tool name args)))
+             (when eval-context
+               (record-lisp-eval-recovery-event
+                buf "after" name args eval-context
+                :tool-id tool-id
+                :status "ok"
+                :result result))
              (when checkpoint-context
                (record-file-checkpoint-event
                 buf "after" name args checkpoint-context checkpoint-before
@@ -1858,6 +1916,13 @@ shape as successful and failed executions."
              result)
          (error (condition)
            (let ((result (tool-error-result-data condition)))
+             (when eval-context
+               (record-lisp-eval-recovery-event
+                buf "after" name args eval-context
+                :tool-id tool-id
+                :status "error"
+                :result result
+                :condition condition))
              (when checkpoint-context
                (record-file-checkpoint-event
                 buf "after" name args checkpoint-context checkpoint-before

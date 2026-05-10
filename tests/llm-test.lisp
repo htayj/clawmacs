@@ -1196,6 +1196,53 @@
                    (string= "file-checkpoint" (event-value event :event)))
                  (session-current-events (buffer-session buf))))
 
+(defun lisp-eval-checkpoint-test-events (buf)
+  "Return durable lisp-eval-checkpoint events recorded for BUF."
+  (remove-if-not (lambda (event)
+                   (string= "lisp-eval-checkpoint" (event-value event :event)))
+                 (session-current-events (buffer-session buf))))
+
+(test execute-tool-safely-checkpoints-live-lisp-eval
+  "Safe lisp_eval execution records before/after recovery checkpoints."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let* ((buf (make-chat-buffer "lisp-eval-checkpoint-live"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf)
+           (result (clawmacs::execute-tool-safely
+                    "lisp_eval"
+                    '(:code "(+ 20 22)" :package "CL-USER")
+                    :buffer buf
+                    :tool-id "toolu-eval-checkpoint"))
+           (events (lisp-eval-checkpoint-test-events buf)))
+      (is (search "42" result))
+      (is (= 2 (length events)))
+      (is (string= "before" (event-value (first events) :phase)))
+      (is (string= "after" (event-value (second events) :phase)))
+      (is (string= "live" (event-value (first events) :mode)))
+      (is (string= "CL-USER" (event-value (first events) :package)))
+      (is (string= "ok" (event-value (second events) :status)))
+      (is (search "42" (event-value (second events) :result))))))
+
+(test execute-tool-safely-checkpoints-lisp-eval-tool-errors
+  "lisp_eval recovery checkpoints retain tool wrapper errors for repair."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (let* ((buf (make-chat-buffer "lisp-eval-checkpoint-error"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf)
+           (result (clawmacs::execute-tool-safely
+                    "lisp_eval"
+                    '(:code "(+ 1 2)")
+                    :buffer buf
+                    :tool-id "toolu-eval-missing"))
+           (events (lisp-eval-checkpoint-test-events buf)))
+      (is (search ":error" result))
+      (is (= 2 (length events)))
+      (is (string= "error" (event-value (second events) :status)))
+      (is (search "Unknown tool"
+                  (event-value (second events) :condition-message))))))
+
 (test execute-tool-safely-checkpoints-write-tools
   "Safe write execution records before and after file checkpoints."
   (with-tool-table-restored
