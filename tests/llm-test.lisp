@@ -452,15 +452,17 @@
                           (search "the result is 2" text))
                         (mapcar #'message-text messages))))))))))
 
-(defun test-command-table-key-command (table key-character)
+(defun test-command-table-key-command
+    (table key-character &key key-name modifiers)
   "Return the inherited command bound to KEY-CHARACTER in command TABLE."
   (let ((event (make-instance 'clim:key-press-event
                               :sheet nil
                               :x 0
                               :y 0
-                              :key-name nil
+                              :key-name key-name
                               :key-character key-character
-                              :modifier-state (clim:make-modifier-state))))
+                              :modifier-state
+                              (apply #'clim:make-modifier-state modifiers))))
     (let ((item (esa::find-gestures-with-inheritance (list event) table)))
       (and item (clim:command-menu-item-value item)))))
 
@@ -498,6 +500,66 @@
     (is (string= "hello" (clim:gadget-value compose)))
     (clawmacs::configure-chat-compose-pane compose)
     (is (eq :wrap* (clim:stream-end-of-line-action compose)))))
+
+(test mcclim-compose-drei-control-editing-gestures
+  "The Drei compose pane handles C-j and C-Backspace as editor gestures."
+  (let* ((editor-table (clim:find-command-table 'drei:editor-table))
+         (compose (make-instance 'drei:drei-gadget-pane
+                                 :initial-contents "hello world"))
+         (control-j (make-instance 'clim:key-press-event
+                                   :sheet compose
+                                   :x 0
+                                   :y 0
+                                   :key-name nil
+                                   :key-character #\Newline
+                                   :modifier-state
+                                   (clim:make-modifier-state :control)))
+         (control-backspace (make-instance 'clim:key-press-event
+                                           :sheet compose
+                                           :x 0
+                                           :y 0
+                                           :key-name nil
+                                           :key-character #\Backspace
+                                           :modifier-state
+                                           (clim:make-modifier-state
+                                            :control)))
+         (control-named-backspace (make-instance 'clim:key-press-event
+                                                 :sheet compose
+                                                 :x 0
+                                                 :y 0
+                                                 :key-name :backspace
+                                                 :key-character nil
+                                                 :modifier-state
+                                                 (clim:make-modifier-state
+                                                  :control))))
+    (is (equal '(drei-commands::com-newline-and-indent)
+               (test-command-table-key-command editor-table #\j
+                                               :modifiers '(:control))))
+    (is (equal '(drei-commands::com-newline-and-indent)
+               (test-command-table-key-command editor-table #\Newline
+                                               :modifiers '(:control))))
+    (is (equal `(drei-commands::com-backward-kill-word
+                 ,clim:*numeric-argument-marker*)
+               (test-command-table-key-command editor-table #\Backspace
+                                               :modifiers '(:control))))
+    (is-true (clawmacs::chat-compose-drei-control-editing-event-p control-j))
+    (clawmacs::process-chat-compose-drei-event compose control-j)
+    (is (string= (format nil "~%hello world")
+                 (clim:gadget-value compose)))
+    (setf (clim:gadget-value compose) "hello world")
+    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
+          (length (clim:gadget-value compose)))
+    (is-true (clawmacs::chat-compose-drei-control-editing-event-p
+              control-backspace))
+    (clawmacs::process-chat-compose-drei-event compose control-backspace)
+    (is (string= "hello " (clim:gadget-value compose)))
+    (setf (clim:gadget-value compose) "hello world")
+    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
+          (length (clim:gadget-value compose)))
+    (is-true (clawmacs::chat-compose-drei-control-editing-event-p
+              control-named-backspace))
+    (clawmacs::process-chat-compose-drei-event compose control-named-backspace)
+    (is (string= "hello " (clim:gadget-value compose)))))
 
 (test mcclim-kill-items-vector-normalizes-list-kills
   "The McCLIM kill helper converts list kills into the vector form Edward expects."

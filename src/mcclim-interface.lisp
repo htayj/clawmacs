@@ -488,6 +488,23 @@ When BUFFER is nil, use the default buffer visibility settings."
      :name "clawmacs message metadata")
     frame))
 
+(defun install-chat-compose-drei-keybindings ()
+  "Install Clawmacs-specific Drei bindings expected by the compose pane.
+Drei already binds C-j to newline-and-indent, but its gadget event bridge
+ignores modifier key events by default. We also add the Clawmacs/Emacs-style
+C-Backspace binding for backward word deletion, matching the old input pane."
+  (esa:set-key 'drei-commands::com-newline-and-indent
+               'drei:indent-table
+               '((#\Newline :control)))
+  (dolist (gesture '((#\Backspace :control)
+                     (#\Rubout :control)))
+    (esa:set-key `(drei-commands::com-backward-kill-word
+                   ,clim:*numeric-argument-marker*)
+                 'drei:deletion-table
+                 (list gesture))))
+
+(install-chat-compose-drei-keybindings)
+
 (defun configure-chat-compose-pane (pane)
   "Enable CLIM stream soft wrapping for chat compose PANE when supported.
 Drei compose panes implement the stream end-of-line protocol; if a pane does
@@ -520,6 +537,65 @@ newlines."
 
 (defmethod clim:note-sheet-region-changed :after ((pane drei:drei-gadget-pane))
   (maybe-configure-chat-compose-pane pane))
+
+(defun chat-compose-drei-control-editing-event-p (event)
+  "Return true when EVENT is a control editing key Drei should handle here.
+ESA/Drei's gadget bridge currently converts only unmodified key events, so
+modified editor gestures such as C-j and C-Backspace must be forwarded as the
+original CLIM key event."
+  (let ((modifiers (clim:event-modifier-state event)))
+    (and (not (zerop (logand modifiers clim:+control-key+)))
+         (let ((key-name (clim:keyboard-event-key-name event))
+               (key-character (clim:keyboard-event-character event)))
+           (or (and (characterp key-character)
+                    (char-equal key-character #\j))
+               (eql key-character #\Newline)
+               (member key-name '(:newline :linefeed) :test #'eq)
+               (eql key-character #\Backspace)
+               (eql key-character #\Rubout)
+               (member key-name '(:backspace :delete :rubout)
+                       :test #'eq))))))
+
+(defun chat-compose-normalized-drei-event (pane event)
+  "Return EVENT, or a Drei-bindable equivalent for named control keys."
+  (let* ((key-name (clim:keyboard-event-key-name event))
+         (key-character (clim:keyboard-event-character event))
+         (replacement
+           (cond
+             ((and (null key-character)
+                   (member key-name '(:newline :linefeed) :test #'eq))
+              #\Newline)
+             ((and (null key-character)
+                   (member key-name '(:backspace :delete :rubout) :test #'eq))
+              #\Backspace))))
+    (if replacement
+        (make-instance 'clim:key-press-event
+                       :sheet pane
+                       :x 0
+                       :y 0
+                       :key-name nil
+                       :key-character replacement
+                       :modifier-state (clim:event-modifier-state event))
+        event)))
+
+(defun process-chat-compose-drei-event (pane event &key redisplay)
+  "Process EVENT through Drei for compose PANE.
+When REDISPLAY is nil, run just the command processor; this supports unit tests
+without a grafted port. Live event handling uses Drei's normal handler so the
+pane redraws and value callbacks propagate."
+  (let ((gesture (chat-compose-normalized-drei-event pane event)))
+    (drei::with-bound-drei-special-variables
+        (pane :prompt (format nil "~A " (drei::gesture-name gesture)))
+      (if redisplay
+          (drei::handle-gesture pane gesture)
+          (drei::process-gesture pane gesture)))))
+
+(defmethod clim:handle-event :around
+    ((pane drei:drei-gadget-pane) (event clim:key-press-event))
+  (if (and (chat-compose-pane-p pane)
+           (chat-compose-drei-control-editing-event-p event))
+      (process-chat-compose-drei-event pane event :redisplay t)
+      (call-next-method)))
 
 (clim:define-application-frame clawmacs-chat-frame ()
   ((buffer :initarg :buffer
