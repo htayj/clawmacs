@@ -1696,18 +1696,134 @@ Failures while journaling are logged but never abort tool execution."
           (:condition-message . ,(bounded-tool-execution-string
                                   (format nil "~A" condition)))))))
 
+(defun file-checkpoint-tool-p (tool-name)
+  "Return true when TOOL-NAME is a built-in file mutation tool."
+  (member (normalize-tool-name tool-name) '("write" "edit") :test #'string=))
+
+(defun file-checkpoint-path-argument (args)
+  "Return the path argument from ARGS, if any."
+  (ignore-errors
+    (tool-arg args :path "path")))
+
+(defun file-checkpoint-content-hash (content)
+  "Return a stable hexadecimal FNV-1a hash for CONTENT."
+  (let ((hash #xCBF29CE484222325)
+        (prime #x100000001B3))
+    (loop :for char :across (or content "")
+          :do (setf hash (logand #xffffffffffffffff
+                                 (* (logxor hash (char-code char)) prime))))
+    (format nil "~16,'0X" hash)))
+
+(defun file-checkpoint-snapshot (pathname)
+  "Return a compact text snapshot for PATHNAME."
+  (let ((exists-p (and pathname (probe-file pathname))))
+    (if exists-p
+        (handler-case
+            (let* ((content (uiop:read-file-string pathname))
+                   (size (length content)))
+              (list :exists-p t
+                    :size size
+                    :hash (file-checkpoint-content-hash content)
+                    :content content))
+          (error (condition)
+            (list :exists-p t
+                  :read-error (format nil "~A" condition))))
+        (list :exists-p nil))))
+
+(defun file-checkpoint-snapshot-public (snapshot)
+  "Return SNAPSHOT without full file content for durable events."
+  (list :exists-p (getf snapshot :exists-p)
+        :size (getf snapshot :size)
+        :hash (getf snapshot :hash)
+        :read-error (getf snapshot :read-error)))
+
+(defun file-checkpoint-snapshot-event-fields (prefix snapshot)
+  "Return flat durable event fields for SNAPSHOT under PREFIX."
+  (let ((name (string-downcase (symbol-name prefix))))
+    (flet ((key (suffix)
+             (intern (string-upcase (format nil "~A-~A" name suffix)) :keyword)))
+      `((,(key "exists-p") . ,(getf snapshot :exists-p))
+        (,(key "size") . ,(getf snapshot :size))
+        (,(key "hash") . ,(getf snapshot :hash))
+        (,(key "read-error") . ,(getf snapshot :read-error))))))
+
+(defun file-checkpoint-diff (before after)
+  "Return a bounded diff from BEFORE to AFTER snapshots when readable."
+  (let ((before-content (and (getf before :exists-p)
+                             (getf before :content)))
+        (after-content (and (getf after :exists-p)
+                            (getf after :content))))
+    (when (or before-content after-content)
+      (bounded-tool-execution-string
+       (compute-simple-diff before-content (or after-content ""))))))
+
+(defun file-checkpoint-context (tool-name args)
+  "Return checkpoint context for TOOL-NAME and ARGS, or NIL."
+  (when (file-checkpoint-tool-p tool-name)
+    (let ((path (file-checkpoint-path-argument args)))
+      (when path
+        (handler-case
+            (let ((resolved (validate-sandbox-path path)))
+              (list :path path
+                    :resolved-path (namestring resolved)))
+          (error (condition)
+            (list :path path
+                  :resolve-error (format nil "~A" condition))))))))
+
+(defun record-file-checkpoint-event
+    (buffer phase tool-name args context before
+            &key tool-id after status condition)
+  "Record one before/after file checkpoint event for a mutating tool."
+  (declare (ignore args))
+  (when context
+    (record-tool-execution-event
+     buffer
+     `((:event . "file-checkpoint")
+       (:phase . ,phase)
+       (:tool-name . ,(normalize-tool-name tool-name))
+       ,@(when tool-id `((:tool-id . ,tool-id)))
+       (:caller . ,(tool-execution-caller-name))
+       (:timestamp . ,(get-universal-time))
+       (:path . ,(getf context :path))
+       ,@(when (getf context :resolved-path)
+           `((:resolved-path . ,(getf context :resolved-path))))
+       ,@(when (getf context :resolve-error)
+           `((:resolve-error . ,(getf context :resolve-error))))
+       ,@(when status `((:status . ,status)))
+       ,@(when before
+           (file-checkpoint-snapshot-event-fields :before before))
+       ,@(when after
+           (file-checkpoint-snapshot-event-fields :after after))
+       ,@(when (and before after)
+           `((:diff . ,(file-checkpoint-diff before after))))
+       ,@(when condition
+           `((:condition-type . ,(condition-type-name condition))
+             (:condition-message . ,(bounded-tool-execution-string
+                                     (format nil "~A" condition)))))))))
+
 (defun execute-tool-safely (name args &key buffer tool-id denied-reason)
   "Execute tool NAME with ARGS and return a provider-compatible result string.
 All agent tool paths should use this wrapper so tool start/result/error events
 are journaled before control returns to the provider loop.  DENIED-REASON records
 a denied tool call without invoking the tool, preserving the same durable event
 shape as successful and failed executions."
-  (let ((buf (or buffer *current-tool-buffer*)))
+  (let* ((buf (or buffer *current-tool-buffer*))
+         (checkpoint-context (and (not denied-reason)
+                                  (file-checkpoint-context name args)))
+         (checkpoint-before
+           (and checkpoint-context
+                (getf checkpoint-context :resolved-path)
+                (file-checkpoint-snapshot
+                 (pathname (getf checkpoint-context :resolved-path))))))
     (record-tool-execution-event
      buf
      (tool-execution-event "start" name args
                            :buffer buf
                            :tool-id tool-id))
+    (when checkpoint-context
+      (record-file-checkpoint-event
+       buf "before" name args checkpoint-context checkpoint-before
+       :tool-id tool-id))
     (cond
       (denied-reason
        (let ((result (tool-denied-result-data denied-reason)))
@@ -1723,6 +1839,15 @@ shape as successful and failed executions."
       (t
        (handler-case
            (let ((result (execute-tool name args)))
+             (when checkpoint-context
+               (record-file-checkpoint-event
+                buf "after" name args checkpoint-context checkpoint-before
+                :tool-id tool-id
+                :status "ok"
+                :after (and (getf checkpoint-context :resolved-path)
+                            (file-checkpoint-snapshot
+                             (pathname (getf checkpoint-context
+                                             :resolved-path))))))
              (record-tool-execution-event
               buf
               (tool-execution-event "result" name args
@@ -1733,6 +1858,16 @@ shape as successful and failed executions."
              result)
          (error (condition)
            (let ((result (tool-error-result-data condition)))
+             (when checkpoint-context
+               (record-file-checkpoint-event
+                buf "after" name args checkpoint-context checkpoint-before
+                :tool-id tool-id
+                :status "error"
+                :after (and (getf checkpoint-context :resolved-path)
+                            (file-checkpoint-snapshot
+                             (pathname (getf checkpoint-context
+                                             :resolved-path))))
+                :condition condition))
              (record-tool-execution-event
               buf
               (tool-execution-event "result" name args

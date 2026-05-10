@@ -1190,6 +1190,66 @@
       (is (string= "test denied" (event-value (second events) :reason)))
       (is (search "test denied" (event-value (second events) :result))))))
 
+(defun file-checkpoint-test-events (buf)
+  "Return durable file-checkpoint events recorded for BUF."
+  (remove-if-not (lambda (event)
+                   (string= "file-checkpoint" (event-value event :event)))
+                 (session-current-events (buffer-session buf))))
+
+(test execute-tool-safely-checkpoints-write-tools
+  "Safe write execution records before and after file checkpoints."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let* ((root (temp-package-test-directory "checkpoint-write"))
+           (*sandbox-root* root)
+           (buf (make-chat-buffer "file-checkpoint-write"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf)
+           (result (clawmacs::execute-tool-safely
+                    "write"
+                    '((:path . "notes.txt")
+                      (:content . "hello\n"))
+                    :buffer buf
+                    :tool-id "toolu-write-checkpoint"))
+           (events (file-checkpoint-test-events buf)))
+      (is (search "Successfully wrote" result))
+      (is (= 2 (length events)))
+      (is (string= "before" (event-value (first events) :phase)))
+      (is (string= "after" (event-value (second events) :phase)))
+      (is (equal nil (event-value (first events) :before-exists-p)))
+      (is (equal t (event-value (second events) :after-exists-p)))
+      (is (string= "notes.txt" (event-value (second events) :path)))
+      (is (search "+hello" (event-value (second events) :diff))))))
+
+(test execute-tool-safely-checkpoints-edit-tools
+  "Safe edit execution records before/after hashes and diffs."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let* ((root (temp-package-test-directory "checkpoint-edit"))
+           (*sandbox-root* root)
+           (target (merge-pathnames "notes.txt" root))
+           (buf (make-chat-buffer "file-checkpoint-edit")))
+      (write-test-file target "hello\n")
+      (let* ((*current-caller* :coder)
+             (*current-tool-buffer* buf)
+             (result (clawmacs::execute-tool-safely
+                      "edit"
+                      '((:path . "notes.txt")
+                        (:old-text . "hello")
+                        (:new-text . "goodbye"))
+                      :buffer buf
+                      :tool-id "toolu-edit-checkpoint"))
+             (events (file-checkpoint-test-events buf))
+             (after-event (second events))
+             (before-hash (event-value after-event :before-hash))
+             (after-hash (event-value after-event :after-hash)))
+        (is (search "Successfully replaced" result))
+        (is (= 2 (length events)))
+        (is (string= "ok" (event-value after-event :status)))
+        (is-false (string= before-hash after-hash))
+        (is (search "-hello" (event-value after-event :diff)))
+        (is (search "+goodbye" (event-value after-event :diff)))))))
+
 (test tool-definitions->responses-tools-encodes-empty-properties-as-object
   "Zero-arg tool schemas encode JSON object properties as `{}`, not `null`."
   (let* ((tools (vector
