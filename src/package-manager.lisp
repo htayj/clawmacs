@@ -1972,12 +1972,6 @@ Returns the installed package definition on success, or NIL on warning/failure."
               (switch-to-buffer existing))
             (switch-to-buffer (make-help-buffer buf-name content)))))))
 
-(defun package-dashboard-render-buffer (pane buffer rows cols char-w char-h)
-  "Render BUFFER as a package dashboard with package presentations."
-  (mcclim-render-entry-buffer pane buffer rows cols char-w char-h
-                              (package-dashboard-display-entries buffer)
-                              :package-dashboard))
-
 (defun open-package-dashboard (&key buffer)
   "Open or refresh the package dashboard for BUFFER."
   (reload-package-channels)
@@ -2007,9 +2001,8 @@ Returns the installed package definition on success, or NIL on warning/failure."
 
 (register-buffer-type
  :package-dashboard
- :description "Presentation-driven installed package browser."
- :major-mode "package-dashboard"
- :presentation-function 'package-dashboard-render-buffer)
+ :description "Installed package browser."
+ :major-mode "package-dashboard")
 
 (defun remove-installed-package (package &key buffer project)
   "Delete PACKAGE's installed files and return its definition."

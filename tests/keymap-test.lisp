@@ -54,14 +54,6 @@
   (is (eq 'clawmacs::redraw-screen-command
           (keymap-lookup *default-keymap* (code-char 12)))))
 
-(test default-keymap-mcclim-debug-status-binding
-  "Default keymap binds C-h D and C-c D to McCLIM debug status."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::mcclim-debug-status-command
-          (keymap-lookup *default-keymap* '(:ctrl-h #\D))))
-  (is (eq 'clawmacs::mcclim-debug-status-command
-          (keymap-lookup *default-keymap* '(:ctrl-c #\D)))))
-
 (test default-keymap-escape-stop-llm-binding
   "Default keymap binds Escape to stopping the active LLM response."
   (clawmacs::init-default-keymap)
@@ -95,99 +87,6 @@
   (is (eq 'clawmacs::backward-kill-word-command
           (keymap-lookup *default-keymap* '(:ctrl :backspace)))))
 
-(defun mcclim-test-key-event (key-name key-character &optional (modifier-state 0))
-  "Build a McCLIM key event for key normalization tests."
-  (make-instance 'clim:key-press-event
-                 :key-name key-name
-                 :key-character key-character
-                 :modifier-state modifier-state
-                 :sheet nil))
-
-(test mcclim-normalize-alt-emulates-meta-by-default
-  "By default, physical Alt is normalized as Meta for Emacs-style bindings."
-  (let ((*alt-emulates-meta* t)
-        (clawmacs::*meta-pending* nil)
-        (clawmacs::*alt-pending* nil))
-    (is (null (clawmacs::mcclim-normalize-key
-               (mcclim-test-key-event :alt-left nil))))
-    (is (equal '(:meta #\x)
-               (clawmacs::mcclim-normalize-key
-                (mcclim-test-key-event :|x| #\x clim:+meta-key+))))))
-
-(test mcclim-normalize-alt-can-be-separate-from-meta
-  "When disabled, Alt and Meta produce distinct Clawmacs key prefixes."
-  (let ((*alt-emulates-meta* nil)
-        (clawmacs::*meta-pending* nil)
-        (clawmacs::*alt-pending* nil))
-    (is (null (clawmacs::mcclim-normalize-key
-               (mcclim-test-key-event :alt-left nil))))
-    (is (equal '(:alt #\x)
-               (clawmacs::mcclim-normalize-key
-                (mcclim-test-key-event :|x| #\x clim:+meta-key+))))
-    (is (null (clawmacs::mcclim-normalize-key
-               (mcclim-test-key-event :meta-left nil))))
-    (is (equal '(:meta #\x)
-               (clawmacs::mcclim-normalize-key
-                (mcclim-test-key-event :|x| #\x clim:+meta-key+))))))
-
-(test mcclim-normalize-ctrl-space
-  "Control-space normalizes to the file editor set-mark key."
-  (is (eql (code-char 0)
-           (clawmacs::mcclim-normalize-key
-            (mcclim-test-key-event :space #\Space clim:+control-key+)))))
-
-(test mcclim-normalize-escape-is-meta-prefix-when-not-streaming
-  "Escape remains the Meta prefix when no provider stream is active."
-  (let ((clawmacs::*meta-pending* nil)
-        (clawmacs::*alt-pending* nil)
-        (clawmacs::*skill-completion-active* nil))
-    (is (null (clawmacs::mcclim-normalize-key
-               (mcclim-test-key-event :escape #\Esc))))
-    (is-true clawmacs::*meta-pending*)
-    (is (null clawmacs::*alt-pending*))))
-
-(test mcclim-normalize-escape-passes-through-when-streaming
-  "Escape reaches the keymap as Esc while the visible buffer has an LLM run."
-  (let* ((buf (make-buffer "streaming-escape"))
-         (state (clawmacs::make-stream-state))
-         (clawmacs::*meta-pending* nil)
-         (clawmacs::*alt-pending* nil)
-         (clawmacs::*skill-completion-active* nil))
-    (setf (buffer-pending-stream buf) state)
-    (is (eql #\Esc
-             (clawmacs::mcclim-normalize-key
-              (mcclim-test-key-event :escape #\Esc)
-              buf)))
-    (is (null clawmacs::*meta-pending*))
-    (is (null clawmacs::*alt-pending*))))
-
-(test mcclim-ui-state-dynamically-binds-interaction-specials
-  "McCLIM frame-local UI state shadows and persists modal interaction specials."
-  (let ((clawmacs::*minibuffer-active* nil)
-        (clawmacs::*minibuffer-input* "global")
-        (clawmacs::*skill-completion-active* nil)
-        (clawmacs::*meta-pending* nil)
-        (clawmacs::*scroll-page-size* nil))
-    (let ((state (clawmacs::make-mcclim-ui-state)))
-      (clawmacs::with-mcclim-ui-state (state)
-        (setf clawmacs::*minibuffer-active* t
-              clawmacs::*minibuffer-input* "frame"
-              clawmacs::*skill-completion-active* t
-              clawmacs::*meta-pending* t
-              clawmacs::*scroll-page-size* 17)
-        (clawmacs::with-mcclim-ui-state (state)
-          (setf clawmacs::*minibuffer-input* "nested-frame")))
-      (is (null clawmacs::*minibuffer-active*))
-      (is (string= "global" clawmacs::*minibuffer-input*))
-      (is (null clawmacs::*skill-completion-active*))
-      (is (null clawmacs::*meta-pending*))
-      (is (null clawmacs::*scroll-page-size*))
-      (clawmacs::with-mcclim-ui-state (state)
-        (is (eq t clawmacs::*minibuffer-active*))
-        (is (string= "nested-frame" clawmacs::*minibuffer-input*))
-        (is (eq t clawmacs::*skill-completion-active*))
-        (is (eq t clawmacs::*meta-pending*))
-        (is (= 17 clawmacs::*scroll-page-size*))))))
 
 
 (test default-keymap-buffer-selector-binding
@@ -216,20 +115,6 @@ and C-x b to the old overlay buffer selector."
   (clawmacs::init-default-keymap)
   (is (eq 'clawmacs::new-listener-buffer-command
           (keymap-lookup *default-keymap* '(:ctrl-x #\l)))))
-
-(test default-keymap-window-bindings
-  "Default keymap binds Emacs-style logical window commands."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::split-window-below-command
-          (keymap-lookup *default-keymap* '(:ctrl-x #\2))))
-  (is (eq 'clawmacs::split-window-right-command
-          (keymap-lookup *default-keymap* '(:ctrl-x #\3))))
-  (is (eq 'clawmacs::delete-window-command
-          (keymap-lookup *default-keymap* '(:ctrl-x #\0))))
-  (is (eq 'clawmacs::delete-other-windows-command
-          (keymap-lookup *default-keymap* '(:ctrl-x #\1))))
-  (is (eq 'clawmacs::other-window-command
-          (keymap-lookup *default-keymap* '(:ctrl-x #\o)))))
 
 (test file-keymap-emacs-editor-bindings
   "File buffers have Emacs-style editor bindings over the global keymap."
@@ -353,9 +238,3 @@ and C-c R to the old overlay think selector."
   (clawmacs::init-default-keymap)
   (is (eq 'clawmacs::describe-type-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\T)))))
-
-(test default-keymap-customize-face-binding
-  "Default keymap binds C-c F (capital F) to customize-face-command."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::customize-face-command
-          (keymap-lookup *default-keymap* '(:ctrl-c #\F)))))

@@ -71,6 +71,15 @@
   (inhibit-user-init-p nil :type boolean)
   (help-p nil :type boolean))
 
+(defun default-prompt-working-directory ()
+  "Return the working directory for one-shot prompt buffers."
+  (normalize-buffer-working-directory
+   (cond
+     ((and (boundp '*current-tool-buffer*) *current-tool-buffer*)
+      (buffer-working-directory *current-tool-buffer*))
+     (t
+      (truename ".")))))
+
 (define-condition prompt-run-error (error)
   ((message :initarg :message :reader prompt-run-error-message)
    (tool-events :initarg :tool-events

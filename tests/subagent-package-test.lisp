@@ -106,7 +106,6 @@
             "end_turn"
             (list (clawmacs::canonical-text-block "delegated answer"))))
         (clawmacs::init-default-keymap)
-        (clawmacs::init-global-faces)
         (let* ((result (subagent-package-tool-result
                         "subagent_run"
                         '(:prompt "Research this"
@@ -140,7 +139,6 @@
               "end_turn"
               (list (clawmacs::canonical-text-block "custom answer"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (let* ((result (subagent-package-tool-result
                           "subagent_run"
                           '(:prompt "Use custom instructions"
@@ -171,7 +169,6 @@
           "end_turn"
           (list (clawmacs::canonical-text-block "async answer"))))
       (clawmacs::init-default-keymap)
-      (clawmacs::init-global-faces)
       (let* ((started (subagent-package-tool-result
                        "subagent_start"
                        '(:prompt "Do async work"

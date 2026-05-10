@@ -660,81 +660,6 @@ Returns true when the key was consumed."
               t)
              (t nil)))))))))
 
-(defun quaestor-render-request-buffer (pane buffer rows cols char-w char-h)
-  "Render BUFFER's active quaestor request overlay into PANE."
-  (declare (ignore rows cols char-w char-h))
-  (let* ((request (quaestor-current-request buffer))
-         (question (and request (quaestor-request-current-question request)))
-         (options (and question (quaestor-alist-value question :options)))
-         (selected (and question
-                        (quaestor-request-selected-options
-                         request
-                         (quaestor-alist-value question :id))))
-         (option-index (or (quaestor-alist-value request :option-index) 0)))
-    (mcclim-stream-render-buffer-title pane buffer)
-    (labels ((emit-line (text face-name &key object presentation-type)
-               (mcclim-call-with-global-face
-                pane
-                face-name
-                (lambda ()
-                  (if presentation-type
-                      (clim:with-output-as-presentation
-                          (pane object presentation-type :single-box t)
-                        (write-string text pane))
-                      (write-string text pane))))
-               (terpri pane)))
-      (when question
-        (emit-line
-         (format nil "-- INPUT REQUESTED: ~A [~D/~D]"
-                 (quaestor-alist-value question :header)
-                 (1+ (quaestor-request-current-index request))
-                 (length (quaestor-request-questions request)))
-         :approval-header)
-        (dolist (line (split-string-by-newline
-                       (quaestor-alist-value question :question)))
-          (emit-line line :approval-text))
-        (loop :for option :in options
-              :for index :from 0
-              :do
-          (let* ((label (quaestor-alist-value option :label))
-                 (description (quaestor-alist-value option :description))
-                 (selected-p (member label selected :test #'string=))
-                 (prefix (cond
-                           ((quaestor-alist-value question :multiple)
-                            (if selected-p "[x]" "[ ]"))
-                           ((and (= option-index index)
-                                 selected-p)
-                            "(*)")
-                           (selected-p "(x)")
-                           (t "( )")))
-                 (option-object (list :question-id
-                                      (quaestor-alist-value question :id)
-                                      :index index
-                                      :label label)))
-            (emit-line
-             (format nil "~A ~A - ~A" prefix label description)
-             (if (= option-index index)
-                 :selector-selected
-                 :approval-options)
-             :object option-object
-             :presentation-type 'quaestor-option-ref)))
-        (when (quaestor-request-allows-notes-p question)
-          (emit-line
-           (format nil "Notes: ~A"
-                   (or (quaestor-trimmed-string
-                        (message-text (buffer-input-message buffer)))
-                       ""))
-           (if (eq (quaestor-request-focus request) :notes)
-               :selector-selected
-               :approval-text)))
-        (emit-line
-         (if (quaestor-request-allows-notes-p question)
-             "TAB notes/options  RET next-or-submit  PgUp/PgDn question  SPC toggle"
-             "RET next-or-submit  PgUp/PgDn question  SPC toggle")
-         :approval-options)))))
-
-(clim:define-presentation-type quaestor-option-ref ())
-
 (defun quaestor-activate-option (buffer option)
   "Select OPTION in BUFFER's current request and toggle/choose it."
   (let* ((request (quaestor-current-request buffer))
@@ -751,43 +676,6 @@ Returns true when the key was consumed."
       (setf request (quaestor-alist-put request :option-index index))
       (quaestor-set-current-request buffer request)
       (quaestor-toggle-current-option buffer))))
-
-(clim:define-command (com-quaestor-select-option
-                      :command-table clawmacs-mcclim-command-table
-                      :name t)
-    ((option 'quaestor-option-ref))
-  (let ((buffer (current-buffer)))
-    (when (and buffer option (buffer-user-input-pending buffer))
-      (quaestor-activate-option buffer option))))
-
-(clim:define-presentation-to-command-translator click-quaestor-option
-    (quaestor-option-ref com-quaestor-select-option
-                         clawmacs-mcclim-command-table
-                         :gesture :select
-                         :priority 20
-                         :documentation "Choose this option"
-                         :pointer-documentation "Choose this option")
-    (object)
-  (list object))
-
-(defun quaestor-format-who-line (buffer width)
-  "Return who-line rows for BUFFER's quaestor state."
-  (declare (ignore width))
-  (cond
-    ((buffer-user-input-pending buffer)
-     (let* ((request (buffer-user-input-pending buffer))
-            (question (quaestor-request-current-question request)))
-       (values
-        (format nil " Answering: ~A"
-                (quaestor-alist-value question :header))
-        " TAB notes/options  RET next-or-submit  PgUp/PgDn question")))
-    ((buffer-has-queued-messages-p buffer)
-     (values
-      (format nil " ~D queued follow-up~:P"
-              (buffer-queued-message-count buffer))
-      " C-c q: inspect  C-c Q: recall  C-c j: steer  C-c J: cancel/restore"))
-    (t
-     (values nil nil))))
 
 (defun quaestor-request-user-input-tool (args)
   "Suspend the active agent turn and request structured user input."
@@ -894,24 +782,6 @@ Returns true when the key was consumed."
                            :denied-p t)))
           (values result event))
         (values-list outcome))))
-
-(defadvice mcclim-render-buffer quaestor-mcclim-render-buffer :around
-    (next pane buffer rows cols char-w char-h)
-  (if (and (quaestor-package-active-p buffer)
-           (buffer-user-input-pending buffer))
-      (quaestor-render-request-buffer pane buffer rows cols char-w char-h)
-      (funcall next pane buffer rows cols char-w char-h)))
-
-(defadvice format-who-line quaestor-format-who-line-advice :around
-    (next buffer width)
-  (multiple-value-bind (row1 row2)
-      (funcall next buffer width)
-    (multiple-value-bind (override1 override2)
-        (if (quaestor-package-active-p buffer)
-            (quaestor-format-who-line buffer width)
-            (values nil nil))
-      (values (or override1 row1)
-              (or override2 row2)))))
 
 (defadvice init-default-keymap quaestor-init-default-keymap :after (result)
   (declare (ignore result))

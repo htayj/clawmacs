@@ -85,7 +85,7 @@
   "memory n/a")
 
 (defun listener-wholine-text (buf)
-  "Return a McCLIM Listener-inspired status line for BUF."
+  "Return a listener status line for BUF."
   (let* ((state (listener-buffer-state buf))
          (user (or (uiop:getenv "USER") "user"))
          (host (machine-instance))
@@ -284,7 +284,7 @@
   "Return help for listener comma commands."
   (format nil
           "~{~A~%~}"
-          '("McCLIM Listener commands"
+          '("Common Lisp listener commands"
             ""
             "Type a Lisp form and press RET to evaluate it."
             "Prefix a line with comma to run a listener command."
@@ -302,14 +302,14 @@
             ",Background Run COMMAND  start a shell command asynchronously"
             ",Apropos STRING          search symbols visible to the listener"
             ",Describe OBJECT         describe a Lisp object read in the listener package"
-            ",Inspect FORM            inspect the first value of FORM with Clouseau when available"
+            ",Inspect FORM            evaluate FORM and print the first value"
             ",Load File PATH          load a Lisp file"
             ",Compile File PATH       compile a Lisp file"
             ",Compile And Load PATH   compile then load a Lisp file"
             ",Room                    show implementation memory information"
             ",Clear Output History    clear this listener buffer"
             ""
-            "This buffer models the McCLIM Listener inside Clawmacs buffers.")))
+            "This buffer provides Lisp evaluation inside Clawmacs buffers.")))
 
 (defparameter *listener-command-phrases*
   '(("help commands" . :help)
@@ -504,17 +504,9 @@
     (first values)))
 
 (defun listener-inspect-form (buf text)
-  "Inspect the first value of TEXT using Clouseau when available."
+  "Evaluate TEXT and return the first value in printable form."
   (let ((value (listener-eval-first-value buf text)))
-    (cond
-      ((fboundp 'mcclim-debug-inspect-target)
-       (funcall (symbol-function 'mcclim-debug-inspect-target)
-                value
-                :label "Listener Inspect")
-       (format nil "Inspecting: ~A" (listener-safe-value-string value)))
-      (t
-       (format nil "Inspector unavailable. Value: ~A"
-               (listener-safe-value-string value))))))
+    (format nil "Value: ~A" (listener-safe-value-string value))))
 
 (defun listener-room ()
   "Return implementation ROOM output."
@@ -640,10 +632,6 @@
       (push input-text
             (listener-state-command-history (listener-buffer-state buf)))
       (buffer-finalize-input buf)
-      (let ((user-message (message-prev (buffer-input-message buf))))
-        (when user-message
-          (setf (message-face-set user-message)
-                (gethash :user (buffer-face-registry buf)))))
       (handler-case
           (let ((output (listener-handle-input buf input-text)))
             (unless (blank-string-p output)

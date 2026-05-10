@@ -372,7 +372,7 @@ the live working tree.")
   "Polling interval in seconds while waiting for shell_exec to finish.")
 
 (defparameter *built-in-tool-names*
-  '("lisp_eval")
+  '("lisp_eval" "recovery_list")
   "Names reserved for core Clawmacs provider tools.
 INIT-TOOLS removes these entries before re-registering tagged tools, so
 user-added tools stored in *tool-table* are left intact.")
@@ -1629,6 +1629,320 @@ Only includes tools visible to the current *current-caller*."
          (eq :agent-with-permission
              (effective-tool-permission def :buffer buffer)))))
 
+(defvar *tool-execution-journal-max-chars* 20000
+  "Maximum result/error characters retained in durable tool execution events.")
+
+(defun bounded-tool-execution-string (value)
+  "Return VALUE as a bounded string for durable tool execution events."
+  (let ((text (cond
+                ((null value) "")
+                ((stringp value) value)
+                (t (lisp-data-string value)))))
+    (if (> (length text) *tool-execution-journal-max-chars*)
+        (concatenate 'string
+                     (subseq text 0 *tool-execution-journal-max-chars*)
+                     (format nil "~%[truncated at ~D characters]"
+                             *tool-execution-journal-max-chars*))
+        text)))
+
+(defun condition-type-name (condition)
+  "Return a readable type name for CONDITION."
+  (let ((type (type-of condition)))
+    (if (symbolp type)
+        (format nil "~A" type)
+        (prin1-to-string type))))
+
+(defun tool-execution-caller-name ()
+  "Return the current tool caller as a durable string."
+  (if (and (boundp '*current-caller*) *current-caller*)
+      (string-downcase (symbol-name *current-caller*))
+      "unknown"))
+
+(defun record-tool-execution-event (buffer event)
+  "Durably record one tool execution EVENT for BUFFER when possible.
+Failures while journaling are logged but never abort tool execution."
+  (handler-case
+      (progn
+        (when buffer
+          (ensure-buffer-session buffer)
+          (when (buffer-session buffer)
+            (append-session-event (buffer-session buffer) event)))
+        (file-debug-log "tool-execution"
+                        "~A"
+                        (bounded-tool-execution-string event))
+        event)
+    (error (condition)
+      (file-debug-log "tool-execution-journal-error"
+                      "failed to journal tool event: ~A"
+                      condition)
+      nil)))
+
+(defun tool-execution-event (phase tool-name args
+                             &key buffer tool-id status result condition reason)
+  "Return a durable event describing one tool execution PHASE."
+  (declare (ignore buffer))
+  `((:event . "tool-execution")
+    (:phase . ,phase)
+    (:tool-name . ,(normalize-tool-name tool-name))
+    ,@(when tool-id `((:tool-id . ,tool-id)))
+    (:caller . ,(tool-execution-caller-name))
+    (:timestamp . ,(get-universal-time))
+    (:input . ,(bounded-tool-execution-string args))
+    ,@(when status `((:status . ,status)))
+    ,@(when reason `((:reason . ,(bounded-tool-execution-string reason))))
+    ,@(when result `((:result . ,(bounded-tool-execution-string result))))
+    ,@(when condition
+        `((:condition-type . ,(condition-type-name condition))
+          (:condition-message . ,(bounded-tool-execution-string
+                                  (format nil "~A" condition)))))))
+
+(defun file-checkpoint-tool-p (tool-name)
+  "Return true when TOOL-NAME is a built-in file mutation tool."
+  (member (normalize-tool-name tool-name) '("write" "edit") :test #'string=))
+
+(defun file-checkpoint-path-argument (args)
+  "Return the path argument from ARGS, if any."
+  (ignore-errors
+    (tool-arg args :path "path")))
+
+(defun file-checkpoint-content-hash (content)
+  "Return a stable hexadecimal FNV-1a hash for CONTENT."
+  (let ((hash #xCBF29CE484222325)
+        (prime #x100000001B3))
+    (loop :for char :across (or content "")
+          :do (setf hash (logand #xffffffffffffffff
+                                 (* (logxor hash (char-code char)) prime))))
+    (format nil "~16,'0X" hash)))
+
+(defun file-checkpoint-snapshot (pathname)
+  "Return a compact text snapshot for PATHNAME."
+  (let ((exists-p (and pathname (probe-file pathname))))
+    (if exists-p
+        (handler-case
+            (let* ((content (uiop:read-file-string pathname))
+                   (size (length content)))
+              (list :exists-p t
+                    :size size
+                    :hash (file-checkpoint-content-hash content)
+                    :content content))
+          (error (condition)
+            (list :exists-p t
+                  :read-error (format nil "~A" condition))))
+        (list :exists-p nil))))
+
+(defun file-checkpoint-snapshot-public (snapshot)
+  "Return SNAPSHOT without full file content for durable events."
+  (list :exists-p (getf snapshot :exists-p)
+        :size (getf snapshot :size)
+        :hash (getf snapshot :hash)
+        :read-error (getf snapshot :read-error)))
+
+(defun file-checkpoint-snapshot-event-fields (prefix snapshot)
+  "Return flat durable event fields for SNAPSHOT under PREFIX."
+  (let ((name (string-downcase (symbol-name prefix))))
+    (flet ((key (suffix)
+             (intern (string-upcase (format nil "~A-~A" name suffix)) :keyword)))
+      `((,(key "exists-p") . ,(getf snapshot :exists-p))
+        (,(key "size") . ,(getf snapshot :size))
+        (,(key "hash") . ,(getf snapshot :hash))
+        (,(key "read-error") . ,(getf snapshot :read-error))))))
+
+(defun file-checkpoint-diff (before after)
+  "Return a bounded diff from BEFORE to AFTER snapshots when readable."
+  (let ((before-content (and (getf before :exists-p)
+                             (getf before :content)))
+        (after-content (and (getf after :exists-p)
+                            (getf after :content))))
+    (when (or before-content after-content)
+      (bounded-tool-execution-string
+       (compute-simple-diff before-content (or after-content ""))))))
+
+(defun file-checkpoint-context (tool-name args)
+  "Return checkpoint context for TOOL-NAME and ARGS, or NIL."
+  (when (file-checkpoint-tool-p tool-name)
+    (let ((path (file-checkpoint-path-argument args)))
+      (when path
+        (handler-case
+            (let ((resolved (validate-sandbox-path path)))
+              (list :path path
+                    :resolved-path (namestring resolved)))
+          (error (condition)
+            (list :path path
+                  :resolve-error (format nil "~A" condition))))))))
+
+(defun record-file-checkpoint-event
+    (buffer phase tool-name args context before
+            &key tool-id after status condition)
+  "Record one before/after file checkpoint event for a mutating tool."
+  (declare (ignore args))
+  (when context
+    (record-tool-execution-event
+     buffer
+     `((:event . "file-checkpoint")
+       (:phase . ,phase)
+       (:tool-name . ,(normalize-tool-name tool-name))
+       ,@(when tool-id `((:tool-id . ,tool-id)))
+       (:caller . ,(tool-execution-caller-name))
+       (:timestamp . ,(get-universal-time))
+       (:path . ,(getf context :path))
+       ,@(when (getf context :resolved-path)
+           `((:resolved-path . ,(getf context :resolved-path))))
+       ,@(when (getf context :resolve-error)
+           `((:resolve-error . ,(getf context :resolve-error))))
+       ,@(when status `((:status . ,status)))
+       ,@(when before
+           (file-checkpoint-snapshot-event-fields :before before))
+       ,@(when after
+           (file-checkpoint-snapshot-event-fields :after after))
+       ,@(when (and before after)
+           `((:diff . ,(file-checkpoint-diff before after))))
+       ,@(when condition
+           `((:condition-type . ,(condition-type-name condition))
+             (:condition-message . ,(bounded-tool-execution-string
+                                     (format nil "~A" condition)))))))))
+
+(defun lisp-eval-tool-p (tool-name)
+  "Return true when TOOL-NAME is the live Lisp evaluation tool."
+  (string= "lisp_eval" (normalize-tool-name tool-name)))
+
+(defun lisp-eval-recovery-mode (args)
+  "Return the lisp_eval mode as a durable string."
+  (let ((mode (or (ignore-errors (tool-arg args :mode "mode")) "live")))
+    (cond
+      ((symbolp mode) (string-downcase (symbol-name mode)))
+      ((stringp mode) (string-downcase mode))
+      (t (bounded-tool-execution-string mode)))))
+
+(defun lisp-eval-recovery-context (tool-name args)
+  "Return semantic recovery context for lisp_eval ARGS, or NIL."
+  (when (lisp-eval-tool-p tool-name)
+    (list :mode (lisp-eval-recovery-mode args)
+          :package (or (ignore-errors (tool-arg args :package "package"))
+                       *lisp-eval-default-package*)
+          :code (or (ignore-errors (tool-arg args :code "code")) ""))))
+
+(defun record-lisp-eval-recovery-event
+    (buffer phase tool-name args context &key tool-id status result condition)
+  "Record semantic lisp_eval recovery events around live or worker evals.
+The before event is intentionally durable before evaluation starts, so startup
+recovery can detect an interrupted live eval without reducing eval capability."
+  (declare (ignore args))
+  (when context
+    (record-tool-execution-event
+     buffer
+     `((:event . "lisp-eval-checkpoint")
+       (:phase . ,phase)
+       (:tool-name . ,(normalize-tool-name tool-name))
+       ,@(when tool-id `((:tool-id . ,tool-id)))
+       (:caller . ,(tool-execution-caller-name))
+       (:timestamp . ,(get-universal-time))
+       (:mode . ,(getf context :mode))
+       (:package . ,(getf context :package))
+       (:code . ,(bounded-tool-execution-string (getf context :code)))
+       ,@(when status `((:status . ,status)))
+       ,@(when result
+           `((:result . ,(bounded-tool-execution-string result))))
+       ,@(when condition
+           `((:condition-type . ,(condition-type-name condition))
+             (:condition-message . ,(bounded-tool-execution-string
+                                     (format nil "~A" condition)))))))))
+
+(defun execute-tool-safely (name args &key buffer tool-id denied-reason)
+  "Execute tool NAME with ARGS and return a provider-compatible result string.
+All agent tool paths should use this wrapper so tool start/result/error events
+are journaled before control returns to the provider loop.  DENIED-REASON records
+a denied tool call without invoking the tool, preserving the same durable event
+shape as successful and failed executions."
+  (let* ((buf (or buffer *current-tool-buffer*))
+         (eval-context (and (not denied-reason)
+                            (lisp-eval-recovery-context name args)))
+         (checkpoint-context (and (not denied-reason)
+                                  (file-checkpoint-context name args)))
+         (checkpoint-before
+           (and checkpoint-context
+                (getf checkpoint-context :resolved-path)
+                (file-checkpoint-snapshot
+                 (pathname (getf checkpoint-context :resolved-path))))))
+    (record-tool-execution-event
+     buf
+     (tool-execution-event "start" name args
+                           :buffer buf
+                           :tool-id tool-id))
+    (when eval-context
+      (record-lisp-eval-recovery-event
+       buf "before" name args eval-context
+       :tool-id tool-id))
+    (when checkpoint-context
+      (record-file-checkpoint-event
+       buf "before" name args checkpoint-context checkpoint-before
+       :tool-id tool-id))
+    (cond
+      (denied-reason
+       (let ((result (tool-denied-result-data denied-reason)))
+         (record-tool-execution-event
+          buf
+          (tool-execution-event "result" name args
+                                :buffer buf
+                                :tool-id tool-id
+                                :status "denied"
+                                :reason denied-reason
+                                :result result))
+         result))
+      (t
+       (handler-case
+           (let ((result (execute-tool name args)))
+             (when eval-context
+               (record-lisp-eval-recovery-event
+                buf "after" name args eval-context
+                :tool-id tool-id
+                :status "ok"
+                :result result))
+             (when checkpoint-context
+               (record-file-checkpoint-event
+                buf "after" name args checkpoint-context checkpoint-before
+                :tool-id tool-id
+                :status "ok"
+                :after (and (getf checkpoint-context :resolved-path)
+                            (file-checkpoint-snapshot
+                             (pathname (getf checkpoint-context
+                                             :resolved-path))))))
+             (record-tool-execution-event
+              buf
+              (tool-execution-event "result" name args
+                                    :buffer buf
+                                    :tool-id tool-id
+                                    :status "ok"
+                                    :result result))
+             result)
+         (error (condition)
+           (let ((result (tool-error-result-data condition)))
+             (when eval-context
+               (record-lisp-eval-recovery-event
+                buf "after" name args eval-context
+                :tool-id tool-id
+                :status "error"
+                :result result
+                :condition condition))
+             (when checkpoint-context
+               (record-file-checkpoint-event
+                buf "after" name args checkpoint-context checkpoint-before
+                :tool-id tool-id
+                :status "error"
+                :after (and (getf checkpoint-context :resolved-path)
+                            (file-checkpoint-snapshot
+                             (pathname (getf checkpoint-context
+                                             :resolved-path))))
+                :condition condition))
+             (record-tool-execution-event
+              buf
+              (tool-execution-event "result" name args
+                                    :buffer buf
+                                    :tool-id tool-id
+                                    :status "error"
+                                    :result result
+                                    :condition condition))
+             result)))))))
+
 (defun execute-tool (name args)
   "Execute tool NAME with ARGS (an alist of parameter values).
 Returns a string result or signals an error."
@@ -1939,6 +2253,117 @@ Returns a string or nil. Calls the tool's approval-display-fn if set."
 ;;; Tool Registration
 ;;; --------------------------------------------------------------------------
 
+(defun recovery-event-value (event key)
+  "Return KEY's decoded JSON value from EVENT."
+  (cdr (assoc key event)))
+
+(defun recovery-event-kind-p (event kind)
+  "Return true when EVENT matches recovery event KIND."
+  (let ((event-name (recovery-event-value event :event)))
+    (or (string= kind "all")
+        (and (string= kind "tool")
+             (string= event-name "tool-execution"))
+        (and (string= kind "file")
+             (string= event-name "file-checkpoint"))
+        (and (string= kind "lisp-eval")
+             (string= event-name "lisp-eval-checkpoint")))))
+
+(defun recovery-event-key (event)
+  "Return a stable-enough pairing key for before/after recovery events."
+  (or (recovery-event-value event :tool-id)
+      (format nil "~A/~A/~A"
+              (recovery-event-value event :tool-name)
+              (recovery-event-value event :timestamp)
+              (recovery-event-value event :code))))
+
+(defun recovery-summarize-event (event index)
+  "Return a compact Lisp data summary for recovery EVENT."
+  (list :index index
+        :event (recovery-event-value event :event)
+        :phase (recovery-event-value event :phase)
+        :status (recovery-event-value event :status)
+        :tool-name (recovery-event-value event :tool-name)
+        :tool-id (recovery-event-value event :tool-id)
+        :timestamp (recovery-event-value event :timestamp)
+        :mode (recovery-event-value event :mode)
+        :package (recovery-event-value event :package)
+        :path (recovery-event-value event :path)
+        :code (recovery-event-value event :code)
+        :condition-message (recovery-event-value event :condition-message)
+        :diff (recovery-event-value event :diff)))
+
+(defun recovery-pending-lisp-evals (events)
+  "Return lisp_eval before checkpoints without a matching after checkpoint."
+  (let ((pending (make-hash-table :test #'equal)))
+    (dolist (event events)
+      (when (string= "lisp-eval-checkpoint"
+                     (or (recovery-event-value event :event) ""))
+        (let ((key (recovery-event-key event))
+              (phase (recovery-event-value event :phase)))
+          (cond
+            ((string= phase "before")
+             (setf (gethash key pending) event))
+            ((string= phase "after")
+             (remhash key pending))))))
+    (let ((result nil))
+      (maphash (lambda (_ event)
+                 (declare (ignore _))
+                 (push event result))
+               pending)
+      (sort result #'< :key (lambda (event)
+                              (or (recovery-event-value event :timestamp) 0))))))
+
+(defun recovery-relevant-events (events kind)
+  "Return transcript EVENTS relevant to recovery KIND."
+  (remove-if-not (lambda (event)
+                   (recovery-event-kind-p event kind))
+                 events))
+
+(defun execute-recovery-list (args)
+  "List recent recovery journal events for the current buffer session."
+  (let* ((buffer (or *current-tool-buffer*
+                     (ignore-errors (current-buffer))))
+         (limit (or (tool-arg args :limit "limit") 20))
+         (kind (string-downcase (or (tool-arg args :kind "kind") "all")))
+         (pending-only (tool-arg args :pending-only "pending-only")))
+    (unless buffer
+      (error "recovery_list requires an active buffer"))
+    (unless (member kind '("all" "tool" "file" "lisp-eval") :test #'string=)
+      (error "kind must be one of all, tool, file, or lisp-eval"))
+    (ensure-buffer-session buffer)
+    (let* ((events (session-transcript-events (buffer-session buffer)))
+           (pending (recovery-pending-lisp-evals events))
+           (relevant (if pending-only
+                         pending
+                         (recovery-relevant-events events kind)))
+           (recent (subseq (reverse relevant)
+                           0
+                           (min (max 0 limit) (length relevant)))))
+      (lisp-data-string
+       (list :session-id (session-id (buffer-session buffer))
+             :kind kind
+             :pending-lisp-evals
+             (mapcar #'recovery-event-key pending)
+             :event-count (length relevant)
+             :events (loop :for event :in recent
+                           :for index :from 0
+                           :collect (recovery-summarize-event event index)))))))
+
+(deftool execute-recovery-list
+  :name "recovery_list"
+  :description "List recent durable tool, file checkpoint, and lisp_eval recovery journal events for the current session. Use this after errors, crashes, interrupted live evals, or risky self-modification."
+  :permission :agent-allowed
+  :call-style :raw-args
+  :args ((kind :type "string"
+               :required nil
+               :description "Optional filter: all, tool, file, or lisp-eval. Default: all.")
+         (limit :type "integer"
+                :required nil
+                :description "Maximum number of recent events to return. Default: 20.")
+         (pending-only :type "boolean"
+                       :required nil
+                       :description "If true, return only lisp_eval before checkpoints without matching after checkpoints.")))
+
 (deftool execute-lisp-eval
   :name "lisp_eval"
   :description "Evaluate one Common Lisp form in the running clawmacs process for testing, introspection, live system updates, or defining helper tools."
@@ -1948,7 +2373,13 @@ Returns a string or nil. Calls the tool's approval-display-fn if set."
                :description "Lisp data :code, one Common Lisp form to read and evaluate.")
          (package :type "string"
                   :required nil
-                  :description "Lisp data :package, the package name used while reading and evaluating :code. Default: CLAWMACS.")))
+                  :description "Lisp data :package, the package name used while reading and evaluating :code. Default: CLAWMACS.")
+         (mode :type "string"
+               :required nil
+               :description "Optional execution mode: live evaluates in the running Clawmacs image; isolated evaluates in a fresh SBCL worker process. Default: live.")
+         (timeout :type "integer"
+                  :required nil
+                  :description "Timeout in seconds for isolated mode. Default: 10.")))
 
 (defun init-tools ()
   "Register the default clawmacs built-in tools.

@@ -20,18 +20,6 @@
 (defvar *initial-buffer-hook-binding* nil
   "Captures a key binding observed from the initial buffer hook.")
 
-(defmacro with-mcclim-runner-override (&body body)
-  `(let ((original-runner (symbol-function 'clawmacs:run-clawmacs-mcclim)))
-     (unwind-protect
-          (progn
-            (setf (symbol-function 'clawmacs:run-clawmacs-mcclim)
-                  (lambda (buffer &rest _keys)
-                    (declare (ignore _keys))
-                    buffer))
-            ,@body)
-       (setf (symbol-function 'clawmacs:run-clawmacs-mcclim)
-             original-runner))))
-
 (defun temp-package-test-directory (label)
   (make-pathname :directory (list :absolute "tmp"
                                   (format nil "clawmacs-package-tests-~A-~36R-~36R-~A"
@@ -94,7 +82,8 @@
           (clawmacs::*package-prompt-sections* nil)
           (clawmacs::*buffer-type-registry*
            (clawmacs::make-buffer-type-registry))
-          (clawmacs::*enabled-builtin-packages* nil))
+          (clawmacs::*enabled-builtin-packages* nil)
+          (clawmacs::*advice-table* (make-hash-table :test #'eq)))
      ,@body))
 
 (defmacro with-packrat-resource-state (() &body body)
@@ -677,10 +666,7 @@ CUSTOM PACKAGE PROMPT\")"
                    (clawmacs:find-installed-package "dashboard-package")
                    nil)))
         (is (search "Buffer Types:" help))
-        (is (search "package-dashboard" help :test #'char-equal)))
-      (let ((buf (make-buffer "dashboard" :kind :package-dashboard)))
-        (clawmacs::mcclim-render-buffer nil buf 10 80 8 16)
-        (is (equal '(:rendered "dashboard") *package-buffer-rendered*))))))
+        (is (search "package-dashboard" help :test #'char-equal))))))
 
 (test package-dashboard-display-entries-include-installed-packages
   "The package dashboard exposes installed packages as presented entries."
@@ -1051,8 +1037,8 @@ CUSTOM PACKAGE PROMPT\")"
           (*startup-hook-ran* nil)
           (*initial-buffer-hook-ran* nil)
           (*initial-buffer-hook-binding* nil))
-      (let ((buf (with-mcclim-runner-override
-                   (clawmacs:clawmacs-main :session-name "init-customization"))))
+      (let ((buf (clawmacs:clawmacs-main :session-name "init-customization"
+                                          :run-frame nil)))
         (is (string= "Custom personality prompt from init file."
                      clawmacs:*default-personality-prompt*))
         (is (not (null *startup-hook-ran*)))

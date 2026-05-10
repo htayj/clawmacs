@@ -188,10 +188,14 @@ for direct user-facing replies and concise explanations after you have done the 
   "Default personality prompt inserted after the clawmacs core system prompt.
 Users may override this via *personality-prompt-path* or init.lisp.")
 
+(defvar *system-prompt-buffer* nil
+  "Buffer whose state is being used while building a system prompt.")
+
 (defvar *boot-file-names*
   '("AGENTS.md" "SOUL.md" "USER.md" "IDENTITY.md" "TOOLS.md")
-  "Boot markdown files to load, in order. Checked in the working directory
-and ~/.config/clawmacs/. Compatible with OpenClaw workspace conventions.")
+  "Boot markdown files to load, in order. Checked in the active working
+directory's ancestors and ~/.config/clawmacs/. Compatible with OpenClaw
+workspace conventions.")
 
 (defun load-personality-prompt-file (&optional (path *personality-prompt-path*))
   "Load PATH into the default personality prompt when the file exists.
@@ -203,23 +207,95 @@ Returns the trimmed prompt text on success, or NIL when PATH is NIL or missing."
         (setf *default-personality-prompt* prompt)
         prompt))))
 
-(defun load-boot-files ()
-  "Load boot MD files from the working directory and ~/.config/clawmacs/.
+(defun normalize-boot-directory (directory)
+  "Return DIRECTORY as a directory pathname for boot-file discovery."
+  (let* ((path (cond
+                 ((pathnamep directory) directory)
+                 ((stringp directory) (pathname directory))
+                 ((null directory) (truename "."))
+                 (t (error "Invalid boot directory: ~S" directory))))
+         (directory-path (uiop:ensure-directory-pathname path)))
+    (handler-case
+        (uiop:ensure-directory-pathname (truename directory-path))
+      (file-error ()
+        directory-path))))
+
+(defun boot-file-parent-directory (directory)
+  "Return DIRECTORY's parent directory, or NIL at the filesystem root."
+  (let* ((path (normalize-boot-directory directory))
+         (components (pathname-directory path)))
+    (when (and (consp components) (> (length components) 1))
+      (make-pathname :host (pathname-host path)
+                     :device (pathname-device path)
+                     :directory (butlast components)
+                     :name nil
+                     :type nil
+                     :version nil
+                     :defaults path))))
+
+(defun boot-file-ancestor-directories (directory)
+  "Return DIRECTORY and its ancestors in root-to-leaf order."
+  (let ((directories nil)
+        (current (normalize-boot-directory directory)))
+    (loop :while current
+          :do (push current directories)
+              (setf current (boot-file-parent-directory current)))
+    directories))
+
+(defun boot-file-paths-for-name (name directory global-directory)
+  "Return instruction file paths for NAME that apply to DIRECTORY."
+  (let ((local-paths
+          (loop :for ancestor :in (boot-file-ancestor-directories directory)
+                :for path := (probe-file (merge-pathnames name ancestor))
+                :when path
+                  :collect path)))
+    (or local-paths
+        (let ((global-path (probe-file (merge-pathnames name global-directory))))
+          (and global-path (list global-path))))))
+
+(defun boot-file-containing-directory (path)
+  "Return the directory containing boot file PATH."
+  (make-pathname :host (pathname-host path)
+                 :device (pathname-device path)
+                 :directory (pathname-directory path)
+                 :name nil
+                 :type nil
+                 :version nil
+                 :defaults path))
+
+(defun format-boot-file-instructions (path)
+  "Return PATH's contents wrapped as explicit agent instructions."
+  (let ((contents (string-trim '(#\Space #\Tab #\Newline #\Return)
+                               (uiop:read-file-string path))))
+    (unless (blank-string-p contents)
+      (format nil "# ~A instructions for ~A~%~%<INSTRUCTIONS>~%~A~%</INSTRUCTIONS>"
+              (file-namestring path)
+              (namestring (boot-file-containing-directory path))
+              contents))))
+
+(defun current-system-prompt-directory ()
+  "Return the active buffer working directory, or the process directory."
+  (normalize-boot-directory
+   (if *system-prompt-buffer*
+       (buffer-working-directory *system-prompt-buffer*)
+       (truename "."))))
+
+(defun load-boot-files (&key directory)
+  "Load boot MD instruction files for DIRECTORY and ~/.config/clawmacs/.
 Returns a concatenated string, or nil if no files found.
-Files are loaded in the order specified by *boot-file-names*.
-Project-local files take precedence over global ones."
+Files are loaded in the order specified by *boot-file-names*. For each name,
+project-local files are discovered from DIRECTORY's ancestors in root-to-leaf
+order. The global file is used only when no project-local file of that name
+applies."
   (let ((parts nil)
         (global-dir (merge-pathnames #P".config/clawmacs/" (user-homedir-pathname)))
-        (local-dir (truename ".")))
+        (local-dir (normalize-boot-directory
+                    (or directory (current-system-prompt-directory)))))
     (dolist (name *boot-file-names*)
-      (let ((local-path (merge-pathnames name local-dir))
-            (global-path (merge-pathnames name global-dir)))
-        ;; Project-local takes precedence
-        (cond
-          ((probe-file local-path)
-           (push (uiop:read-file-string local-path) parts))
-          ((probe-file global-path)
-           (push (uiop:read-file-string global-path) parts)))))
+      (dolist (path (boot-file-paths-for-name name local-dir global-dir))
+        (let ((instructions (format-boot-file-instructions path)))
+          (when instructions
+            (push instructions parts)))))
     (when parts
       (format nil "~{~A~^~%~%---~%~%~}" (nreverse parts)))))
 
@@ -260,7 +336,7 @@ Project-local files take precedence over global ones."
 
 (defun current-system-prompt-working-directory ()
   "Return the current working directory for the system prompt."
-  (namestring (truename ".")))
+  (namestring (current-system-prompt-directory)))
 
 (defun system-prompt-runtime-footer ()
   "Return dynamic runtime context appended to each system prompt."
@@ -288,6 +364,7 @@ tools section, skills section, personality prompt, then dynamic runtime footer."
   (load-active-packages :buffer buffer :agent-name agent-name)
   (let* ((agent-keyword (intern (string-upcase agent-name) :keyword))
          (*current-caller* agent-keyword)
+         (*system-prompt-buffer* buffer)
          (parts (remove-if #'null
                            (list (load-boot-files)
                                  (agent-definition-core-prompt-or-default agent-name)

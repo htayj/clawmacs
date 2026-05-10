@@ -26,9 +26,7 @@ Shows text parts and tool call summaries. Stores raw-content for round-trip."
                       agent-kw
                       (string-trim '(#\Space #\Tab #\Newline #\Return)
                                    display)
-                      :raw-content canonical-content
-                      :face-set (gethash agent-kw
-                                         (buffer-face-registry buf)))))
+                      :raw-content canonical-content)))
     agent-msg))
 
 (defun begin-tool-approval (buf tool-use-blocks)
@@ -77,10 +75,9 @@ When all tools are done, finalizes the results."
                  (let* ((*current-caller* agent-kw)
                         (*current-tool-buffer* buf)
                         (result-text
-                          (handler-case
-                              (execute-tool tool-name tool-input)
-                            (error (e)
-                              (tool-error-result-data e)))))
+                          (execute-tool-safely tool-name tool-input
+                                               :buffer buf
+                                               :tool-id tool-id)))
                    (push `((:result . ,result-text)
                            (:display . ,(format-tool-result-display tool-name result-text))
                            (:tool-id . ,tool-id))
@@ -111,10 +108,9 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
        (let* ((*current-caller* agent-kw)
               (*current-tool-buffer* buf)
               (result-text
-                (handler-case
-                    (execute-tool tool-name tool-input)
-                  (error (e)
-                    (tool-error-result-data e)))))
+                (execute-tool-safely tool-name tool-input
+                                     :buffer buf
+                                     :tool-id tool-id)))
          (push `((:result . ,result-text)
                  (:display . ,(format-tool-result-display tool-name result-text))
                  (:tool-id . ,tool-id))
@@ -127,11 +123,16 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
           :policy :interactive
           :reason (or reason "User denied this tool call")
           :entry tool-input)
-         (push `((:result . ,(tool-denied-result-data
-                              (or reason "User denied this tool call")))
-                 (:display . ,(format nil "[~A DENIED: ~A]" tool-name (or reason "denied")))
-                 (:tool-id . ,tool-id))
-               (buffer-tool-call-results buf))))
+         (let ((result-text
+                 (execute-tool-safely tool-name tool-input
+                                      :buffer buf
+                                      :tool-id tool-id
+                                      :denied-reason
+                                      (or reason "User denied this tool call"))))
+           (push `((:result . ,result-text)
+                   (:display . ,(format nil "[~A DENIED: ~A]" tool-name (or reason "denied")))
+                   (:tool-id . ,tool-id))
+                 (buffer-tool-call-results buf)))))
       ;; Denied (no message)
       (t
        (approval-policy-record-history-entry
@@ -139,10 +140,15 @@ RESPONSE is :approve, :deny, or (:deny-with-message . \"reason\")."
         :policy :interactive
         :reason "User denied"
         :entry tool-input)
-       (push `((:result . ,(tool-denied-result-data "User denied"))
-               (:display . ,(format nil "[~A DENIED]" tool-name))
-               (:tool-id . ,tool-id))
-             (buffer-tool-call-results buf))))
+       (let ((result-text
+               (execute-tool-safely tool-name tool-input
+                                    :buffer buf
+                                    :tool-id tool-id
+                                    :denied-reason "User denied")))
+         (push `((:result . ,result-text)
+                 (:display . ,(format nil "[~A DENIED]" tool-name))
+                 (:tool-id . ,tool-id))
+               (buffer-tool-call-results buf)))))
     ;; Move to next tool
     (pop (buffer-pending-tool-calls buf))
     ;; Restore stashed input
@@ -170,8 +176,7 @@ and :TOOL-ID entries. Returns the inserted message."
      buf
      :tool-result
      display-text
-     :raw-content canonical-result-blocks
-     :face-set (gethash agent-kw (buffer-face-registry buf)))))
+     :raw-content canonical-result-blocks)))
 
 (defun finalize-tool-results (buf)
   "Insert the accumulated tool results as a message and continue the conversation."
@@ -203,8 +208,6 @@ and :TOOL-ID entries. Returns the inserted message."
       (run-hook-with-args '*before-send-message-hook* buf text)
       (set-message-text (buffer-input-message buf) text)
       (buffer-finalize-input buf)
-      (setf (message-face-set (buffer-input-message buf))
-            (gethash :user (buffer-face-registry buf)))
       (let ((result (send-to-agent-with-context buf)))
         (run-hook-with-args '*after-send-message-hook* buf text result)
         result))))
@@ -296,8 +299,6 @@ threads notify the UI as deltas arrive."
                                 :reasoning-summary-mode
                                 (and (eq provider :openai-codex)
                                      *openai-codex-reasoning-summary*))
-          (setf (message-face-set agent-msg)
-                (gethash agent-kw (buffer-face-registry buf)))
           (setf (buffer-pending-stream buf) state
                 (buffer-streaming-message buf) agent-msg
                 (buffer-status buf) :thinking)
@@ -306,8 +307,7 @@ threads notify the UI as deltas arrive."
         (setf (buffer-status buf) :error)
         (let ((err-msg (buffer-insert-agent-message
                          buf (format nil "[Error: ~A]" e))))
-          (setf (message-face-set err-msg)
-                (gethash agent-kw (buffer-face-registry buf))))
+          (declare (ignore err-msg)))
         (notify-buffer-display-change buf :status)))))
 
 (defun latest-text-block-text (content-blocks)
@@ -316,6 +316,22 @@ threads notify the UI as deltas arrive."
     (dolist (block content-blocks latest)
       (when (string= "text" (content-block-type block))
         (setf latest (or (cdr (assoc :text block)) ""))))))
+
+(defun stream-reasoning-display-lines (reasoning-blocks &key visible-text)
+  "Return reasoning lines for in-progress stream display text."
+  (let ((visible (string-trim '(#\Space #\Tab #\Newline #\Return)
+                              (or visible-text "")))
+        (lines nil))
+    (dolist (reasoning reasoning-blocks)
+      (let ((text (or reasoning "")))
+        (unless (or (blank-string-p text)
+                    (string= visible
+                             (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                          text)))
+          (push ";; reasoning" lines)
+          (dolist (line (split-string-by-newline text))
+            (push line lines)))))
+    (nreverse lines)))
 
 (defun stream-state-display-text (state &key show-reasoning-p)
   "Return STATE's in-progress text without double-counting accumulators.
@@ -327,8 +343,8 @@ OpenAI-compatible providers also mirror it into CONTENT-BLOCKS on every delta."
            (content-text (content-text-blocks content-blocks))
            (reasoning-text
              (and show-reasoning-p
-                  (display-text-from-line-strings
-                   (reasoning-block-display-lines
+                  (join-lines-with-newlines
+                   (stream-reasoning-display-lines
                     (content-reasoning-blocks content-blocks)
                     :visible-text content-text))))
            (latest-text (latest-text-block-text content-blocks)))
@@ -352,8 +368,7 @@ OpenAI-compatible providers also mirror it into CONTENT-BLOCKS on every delta."
 
 (defun finalize-cancelled-streaming-response (buf state msg)
   "Finalize MSG after STATE is stopped by the user."
-  (let* ((agent-kw (intern (string-upcase (buffer-agent-name buf)) :keyword))
-         (content-blocks (cancelled-stream-content-blocks state))
+  (let* ((content-blocks (cancelled-stream-content-blocks state))
          (canonical-content
            (canonicalize-message-content "assistant" content-blocks))
          (final-text
@@ -377,14 +392,10 @@ OpenAI-compatible providers also mirror it into CONTENT-BLOCKS on every delta."
     (if (blank-string-p final-text)
         (progn
           (setf (message-sender msg) :system
-                (message-raw-content msg) nil
-                (message-face-set msg) (gethash :system
-                                                (buffer-face-registry buf)))
+                (message-raw-content msg) nil)
           (set-message-text msg "[Response stopped by user]"))
         (progn
-          (setf (message-face-set msg)
-                (gethash agent-kw (buffer-face-registry buf))
-                (message-raw-content msg) canonical-content)
+          (setf (message-raw-content msg) canonical-content)
           (set-message-text msg
                             (format nil "~A~%[Stopped by user]"
                                     final-text))))
@@ -559,13 +570,14 @@ provider reader threads surface updates asynchronously."
 
 (defun make-prompt-buffer
     (prompt agent-name &key
+                        (working-directory (default-prompt-working-directory))
                         (session-persistence-mode
                          *default-buffer-session-persistence-mode*))
   "Create a buffer seeded with PROMPT as the only finalized user message."
   (let* ((*buffer-system-prompt-display-enabled* nil)
          (buf (make-chat-buffer "clawmacs:prompt"
                                 :agent-name agent-name
-                                :working-directory (truename ".")
+                                :working-directory working-directory
                                 :session-persistence-mode
                                 session-persistence-mode)))
     (set-message-text (buffer-input-message buf) prompt)
@@ -738,14 +750,17 @@ PROMPT-TOOL-EVENT for terminal/debug output."
                   :policy :prompt-mode
                   :reason "Prompt mode denied interactive approval"
                   :entry tool-input)
-                 (denied-tool-result-data
+                 (execute-tool-safely
+                  tool-name tool-input
+                  :buffer buf
+                  :tool-id tool-id
+                  :denied-reason
                   "Tool requires interactive approval; prompt mode denied it."))
                (let ((*current-caller* agent-kw)
                      (*current-tool-buffer* buf))
-                 (handler-case
-                     (execute-tool tool-name tool-input)
-                   (error (e)
-                     (tool-error-result-data e))))))
+                 (execute-tool-safely tool-name tool-input
+                                      :buffer buf
+                                      :tool-id tool-id))))
          (display (if denied-p
                       (format nil "[~A DENIED: non-interactive prompt mode]"
                               tool-name)
@@ -906,6 +921,8 @@ PROMPT-TOOL-EVENT for terminal/debug output."
                                  provider model think-level
                                  model-role service-tier
                                  output-schema
+                                 (working-directory
+                                  (default-prompt-working-directory))
                                  (session-persistence-mode
                                   *default-buffer-session-persistence-mode*)
                                  (max-tool-iterations *prompt-max-tool-iterations*)
@@ -923,6 +940,7 @@ assistant response or MAX-TOOL-ITERATIONS is exceeded."
   (let* ((custom-tool-definitions (normalize-run-custom-tools custom-tools))
          (buf (make-prompt-buffer
                prompt agent-name
+               :working-directory working-directory
                :session-persistence-mode session-persistence-mode)))
     (maybe-apply-prompt-routing-overrides buf provider model think-level
                                           :model-role model-role

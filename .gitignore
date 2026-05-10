@@ -16,6 +16,7 @@ debug-prompt.log
 .\#*
 
 # Local agent/tool state
+.pi/
 .codex
 .codex/
 .claude/

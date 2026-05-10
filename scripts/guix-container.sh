@@ -333,19 +333,7 @@ e2e_invocation_requires_credential() {
     command_target="$2"
   fi
 
-  case "$command_name" in
-    test-mcclim-e2e.py|*/test-mcclim-e2e.py|scripts/mcclim-e2e-xvfb-run.sh|*/scripts/mcclim-e2e-xvfb-run.sh)
-      ;;
-    *)
-      case "$command_target" in
-        test-mcclim-e2e.py|*/test-mcclim-e2e.py|scripts/mcclim-e2e-xvfb-run.sh|*/scripts/mcclim-e2e-xvfb-run.sh)
-          ;;
-        *)
-          return 1
-          ;;
-      esac
-      ;;
-  esac
+  return 1
 
   while [ "$#" -gt 0 ]; do
     case "$1" in

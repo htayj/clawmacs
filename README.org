@@ -47,7 +47,8 @@ provider tools as the primary action surface:
 | =grep=       | agent-allowed          | Search file contents by literal text |
 | =write=      | agent-allowed          | Create or overwrite sandboxed files  |
 | =edit=       | agent-allowed          | Replace exact text in sandboxed files |
-| =lisp_eval=  | agent-allowed          | Evaluate Common Lisp in the running image |
+| =lisp_eval=  | agent-allowed          | Evaluate Common Lisp in the running image or an isolated worker |
+| =recovery_list= | agent-allowed       | Inspect recent durable tool/eval/checkpoint journal events |
 
 By default, agents use exposed provider tools for workspace search and text
 changes. Tool inputs and tool results are represented as Lisp data, for example
@@ -68,7 +69,14 @@ ASDF metadata, package exports, docstrings, and source/doc search helpers.
 Its tool result is a printed Lisp plist. Recent calls are available with
 =(eval-history-to-string)=, and the latest success/error are exposed through
 =*last-eval-result*= and
-=*last-eval-condition*=.
+=*last-eval-condition*=. Pass =:mode "isolated"= to evaluate in a fresh SBCL
+worker process when probing risky compile/load/eval behavior without mutating
+or crashing the live Clawmacs image.
+
+Agent tool calls are durably journaled in the session transcript. File mutation
+tools record before/after checkpoint metadata and diffs, and =lisp_eval= records
+before/after recovery checkpoints. If a turn is interrupted, =recovery_list=
+can summarize recent tool, file, and eval recovery events for repair.
 
 ** Skills
 
@@ -215,13 +223,12 @@ clawmacs messages.
 Insert helpers add separator whitespace when adjacent forms would otherwise
 touch.
 
-** Emacs-Style Interface
+** McCLIM Chat Interface
 
-The McCLIM interface follows a Lisp-machine style pane layout: transcript,
-compose header, editable input pane, modeline, who-line, and native pointer
-documentation. Object interaction is presentation-driven, so messages, package
-entries, TODOs, selectors, manuals, and other semantic objects can be used with
-the mouse as well as keys.
+The current McCLIM interface is a small presentation-based chat frame. It has
+a transcript pane and a Drei-backed compose pane. Transcript messages are CLIM
+presentations, and middle-clicking a message opens a one-pane metadata help
+window.
 
 *** Editing Keybindings
 
@@ -345,13 +352,11 @@ buffer placeholder or manual when one is installed.
 
 ** McCLIM Interface
 
-Clawmacs runs as a McCLIM application with an ESA-backed application frame. The
-layout has a presentation-rich transcript pane, a dedicated compose pane, a
-Drei-backed input pane, a who-line, a modeline, a native pointer
-documentation pane, and a hidden ESA minibuffer service pane. The interface
-uses CLIM panes, commands, presentations, pointer documentation, queued
-events, pulse polling, and redisplay for the interactive UI while Clawmacs
-keymaps continue to own editor keystrokes.
+Clawmacs runs as a McCLIM application frame with two visible panes: a
+presentation-rich transcript pane and a Drei-backed compose pane. The
+transcript uses CLIM output records, message presentations, and incremental
+redisplay. Async provider updates are bridged back into McCLIM by queueing a
+small frame event that calls =redisplay-frame-pane= for the transcript.
 
 ** Boot Files
 
@@ -376,6 +381,17 @@ Checked in the working directory first, then =~/.config/clawmacs/=. Compatible w
 #+end_src
 
 This launches clawmacs in a Guix container with all dependencies (SBCL, McCLIM, OpenSSL, fonts) automatically provisioned. Quicklisp is bootstrapped on first run.
+
+A native, non-container launcher is also available for machines with local SBCL
+and GUI dependencies installed:
+
+#+begin_src sh
+./run-native.sh
+#+end_src
+
+The native launcher uses the Ultralisp Quicklisp-compatible distribution via
+=scripts/run-ultralisp.lisp=, so it can resolve newer Common Lisp dependencies
+without entering the Guix container.
 
 By default, =run.sh= reuses cached ASDF/FASL build artifacts for fast startup.
 Pass =--clean-build=, or its alias =--force-clean-build=, to clear the local
@@ -535,16 +551,14 @@ src/
   listener.lisp        In-buffer Common Lisp listener state and commands
   prompt-core.lisp     Shared prompt harness option parsing and defaults
   prompt-runner.lisp   Non-interactive prompt/session execution path
-  render-core.lisp     Pure rendering geometry and formatting functions
-  mcclim-app.lisp      McCLIM application frame, panes, events, redisplay
-  debug.lisp           McCLIM debugger, Clouseau, and listener integration
+  session-export.lisp  HTML session export and share handlers
+  mcclim-interface.lisp Fresh presentation-based McCLIM chat frame
+  debug.lisp           Debug logging helpers
   main.lisp            Commands, key dispatch, startup, prompt entrypoints
   docs.lisp            Extended documentation entries
 #+end_example
 
-The core architecture follows Emacs patterns: buffers hold messages (not file lines), keymaps dispatch to commands, faces control rendering, and McCLIM owns the interactive display.
-
-The rendering layer is split: =render-core.lisp= contains pure geometry and formatting functions (line wrapping, modeline formatting, selector line layout), while =mcclim-app.lisp= translates that state into CLIM drawing, presentations, and redisplay.
+The core architecture follows Emacs patterns: buffers hold messages (not file lines), keymaps dispatch to commands, and commands operate on buffer state.
 
 * vs Emacs
 

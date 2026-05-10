@@ -875,68 +875,196 @@ Works for both existing and not-yet-existing files."
                              (lisp-eval-record-error-output record)))))
         (format out "No lisp_eval history captured.~%"))))
 
+(defun isolated-lisp-eval-marker ()
+  "Return the stdout marker used by isolated lisp_eval workers."
+  "CLAWMACS-ISOLATED-EVAL-RESULT ")
+
+(defun isolated-lisp-eval-script (code package-name)
+  "Return a standalone SBCL script evaluating CODE in PACKAGE-NAME."
+  (format nil "(require :asdf)~%
+(defun worker-lisp-data-string (object)~%
+  (with-output-to-string (stream)~%
+    (let ((*print-case* :downcase) (*print-circle* t) (*print-escape* t)~%
+          (*print-pretty* t) (*print-readably* nil))~%
+      (write object :stream stream))))~%
+(defun worker-safe-value-string (value)~%
+  (handler-case~%
+      (let ((*print-length* 100) (*print-level* 8) (*print-circle* t)~%
+            (*print-pretty* nil) (*print-readably* nil) (*print-escape* t))~%
+        (prin1-to-string value))~%
+    (error () \"#<unprintable value>\")))~%
+(defun worker-values-string (values)~%
+  (format nil \"~~{~~A~~^~~%~~}\" (mapcar #'worker-safe-value-string values)))~%
+(let* ((code ~S)~%
+       (package-name ~S)~%
+       (package (or (find-package (string-upcase package-name))~%
+                    (find-package :cl-user)))~%
+       (output-stream (make-string-output-stream))~%
+       (error-output-stream (make-string-output-stream))~%
+       (results nil)~%
+       (condition-text nil)~%
+       (condition-type nil))~%
+  (handler-case~%
+      (let ((*package* package)~%
+            (*standard-output* output-stream)~%
+            (*trace-output* error-output-stream)~%
+            (*error-output* error-output-stream))~%
+        (let ((*read-eval* nil))~%
+          (setf results (multiple-value-list (eval (read-from-string code))))))~%
+    (error (condition)~%
+      (setf condition-text (format nil \"~~A\" condition)~%
+            condition-type (format nil \"~~A\" (type-of condition)))))~%
+  (let ((payload (append~%
+                  (list :mode :isolated~%
+                        :code code~%
+                        :package (package-name package)~%
+                        :values (length results)~%
+                        :result (worker-values-string results)~%
+                        :output (get-output-stream-string output-stream)~%
+                        :error-output (get-output-stream-string error-output-stream)~%
+                        :truncated nil)~%
+                  (when condition-text~%
+                    (list :error condition-text~%
+                          :condition-type condition-type)))))~%
+    (format t \"~~&~A~~S~~%\" payload)))~%"
+          code
+          package-name
+          (isolated-lisp-eval-marker)))
+
+(defun isolated-lisp-eval-command (script-path timeout)
+  "Return the command list used to run SCRIPT-PATH with TIMEOUT seconds."
+  (list "timeout" (format nil "~D" timeout)
+        "sbcl" "--noinform" "--disable-debugger" "--script"
+        (namestring script-path)))
+
+(defun isolated-lisp-eval-result-from-output (stdout)
+  "Return the Lisp data payload printed by an isolated worker, or NIL."
+  (let* ((marker (isolated-lisp-eval-marker))
+         (position (search marker stdout :from-end t)))
+    (when position
+      (lisp-data-read (subseq stdout (+ position (length marker)))))))
+
+(defun isolated-lisp-eval-failure-payload (code package-name stdout stderr exit-code)
+  "Return a lisp_eval payload for worker process failure."
+  (lisp-data-string
+   (list :mode :isolated
+         :code code
+         :package package-name
+         :values 0
+         :result ""
+         :output stdout
+         :error-output stderr
+         :truncated nil
+         :exit-code exit-code
+         :error (format nil "isolated lisp_eval worker failed with exit code ~A"
+                        exit-code))))
+
+(defun execute-isolated-lisp-eval (code package-name timeout)
+  "Evaluate CODE in a fresh SBCL worker and return a Lisp data payload string."
+  (let* ((script-path (merge-pathnames
+                       (format nil "clawmacs-isolated-eval-~A.lisp" (gensym))
+                       (uiop:temporary-directory))))
+    (unwind-protect
+         (progn
+           (ensure-directories-exist script-path)
+           (with-open-file (stream script-path
+                                   :direction :output
+                                   :if-exists :supersede
+                                   :if-does-not-exist :create
+                                   :external-format :utf-8)
+             (write-string (isolated-lisp-eval-script code package-name) stream))
+           (multiple-value-bind (stdout stderr exit-code)
+               (uiop:run-program (isolated-lisp-eval-command script-path timeout)
+                                 :output :string
+                                 :error-output :string
+                                 :ignore-error-status t)
+             (let ((payload (and (zerop exit-code)
+                                 (isolated-lisp-eval-result-from-output stdout))))
+               (if payload
+                   (lisp-data-string payload)
+                   (isolated-lisp-eval-failure-payload
+                    code package-name stdout stderr exit-code)))))
+      (ignore-errors (delete-file script-path)))))
+
+(defun lisp-eval-mode (args)
+  "Return the requested lisp_eval execution mode."
+  (let ((mode (or (tool-arg args :mode "mode") "live")))
+    (etypecase mode
+      (string (string-downcase mode))
+      (symbol (string-downcase (symbol-name mode))))))
+
+(defun execute-live-lisp-eval (code package-name)
+  "Evaluate CODE in the current Lisp image and return a Lisp data payload."
+  (let ((package (or (find-package (string-upcase package-name))
+                     (find-package :cl-user)))
+        (output-stream (make-string-output-stream))
+        (error-output-stream (make-string-output-stream))
+        (results nil)
+        (result-output "")
+        (condition-text nil)
+        (truncated-fields nil))
+    (handler-case
+        (let ((*package* package)
+              (*standard-output* output-stream)
+              (*trace-output* error-output-stream)
+              (*error-output* error-output-stream))
+          (let ((form (read-from-string code)))
+            (setf results (multiple-value-list (eval form))
+                  *last-eval-result* results
+                  *last-eval-condition* nil
+                  result-output (lisp-eval-values-string results))))
+      (error (condition)
+        (setf *last-eval-result* nil
+              *last-eval-condition* condition
+              condition-text (safe-lisp-eval-condition-string condition))))
+    (let ((output (get-output-stream-string output-stream))
+          (error-output (get-output-stream-string error-output-stream)))
+      (multiple-value-bind (result-text result-truncated-p)
+          (truncate-lisp-eval-text result-output)
+        (multiple-value-bind (output-text output-truncated-p)
+            (truncate-lisp-eval-text output)
+          (multiple-value-bind (error-output-text error-output-truncated-p)
+              (truncate-lisp-eval-text error-output)
+            (setf truncated-fields
+                  (remove nil
+                          (list (when result-truncated-p "result")
+                                (when output-truncated-p "output")
+                                (when error-output-truncated-p "error-output"))))
+            (push-lisp-eval-record
+             (make-lisp-eval-record :code code
+                                    :package (package-name package)
+                                    :result results
+                                    :output output-text
+                                    :error-output error-output-text
+                                    :condition condition-text
+                                    :timestamp (get-universal-time)))
+            (lisp-data-string
+             (append (list :mode :live
+                           :code code
+                           :package (package-name package)
+                           :values (length results)
+                           :result result-text
+                           :output output-text
+                           :error-output error-output-text
+                           :truncated (mapcar (lambda (field)
+                                                (intern (string-upcase field)
+                                                        :keyword))
+                                              truncated-fields))
+                     (when condition-text
+                       (list :error condition-text))))))))))
+
 (defun execute-lisp-eval (args)
   "Evaluate arbitrary Common Lisp code and return a printed Lisp data payload."
   (let* ((code (tool-arg args :code))
          (package-name (or (tool-arg args :package) *lisp-eval-default-package*)))
     (unless code
       (error "code parameter is required"))
-    (let ((package (or (find-package (string-upcase package-name))
-                       (find-package :cl-user)))
-          (output-stream (make-string-output-stream))
-          (error-output-stream (make-string-output-stream))
-          (results nil)
-          (result-output "")
-          (condition-text nil)
-          (truncated-fields nil))
-      (handler-case
-          (let ((*package* package)
-                (*standard-output* output-stream)
-                (*trace-output* error-output-stream)
-                (*error-output* error-output-stream))
-            (let ((form (read-from-string code)))
-              (setf results (multiple-value-list (eval form))
-                    *last-eval-result* results
-                    *last-eval-condition* nil
-                    result-output (lisp-eval-values-string results))))
-        (error (condition)
-          (setf *last-eval-result* nil
-                *last-eval-condition* condition
-                condition-text (safe-lisp-eval-condition-string condition))))
-      (let ((output (get-output-stream-string output-stream))
-            (error-output (get-output-stream-string error-output-stream)))
-        (multiple-value-bind (result-text result-truncated-p)
-            (truncate-lisp-eval-text result-output)
-          (multiple-value-bind (output-text output-truncated-p)
-              (truncate-lisp-eval-text output)
-            (multiple-value-bind (error-output-text error-output-truncated-p)
-                (truncate-lisp-eval-text error-output)
-              (setf truncated-fields
-                    (remove nil
-                            (list (when result-truncated-p "result")
-                                  (when output-truncated-p "output")
-                                  (when error-output-truncated-p "error-output"))))
-              (push-lisp-eval-record
-               (make-lisp-eval-record :code code
-                                      :package (package-name package)
-                                      :result results
-                                      :output output-text
-                                      :error-output error-output-text
-                                      :condition condition-text
-                                      :timestamp (get-universal-time)))
-              (lisp-data-string
-               (append (list :code code
-                             :package (package-name package)
-                             :values (length results)
-                             :result result-text
-                             :output output-text
-                             :error-output error-output-text
-                             :truncated (mapcar (lambda (field)
-                                                  (intern (string-upcase field)
-                                                          :keyword))
-                                                truncated-fields))
-                       (when condition-text
-                         (list :error condition-text)))))))))))
+    (if (string= "isolated" (lisp-eval-mode args))
+        (execute-isolated-lisp-eval
+         code
+         package-name
+         (or (tool-arg args :timeout "timeout") 10))
+        (execute-live-lisp-eval code package-name))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Tool Specs

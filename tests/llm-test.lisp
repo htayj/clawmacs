@@ -291,7 +291,7 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "write")
+      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names))
       (is (string= "CLAWMACS" clawmacs:*lisp-eval-default-package*))
       (dolist (name '("read" "find" "grep" "write" "edit" "lisp_eval"))
@@ -313,7 +313,7 @@
            (tool-names (mapcar (lambda (tool)
                                  (cdr (assoc :name tool)))
                                tools)))
-      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "write")
+      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names)))))
 
 (test approval-policy-round-trips-default-and-tool-overrides
@@ -393,6 +393,549 @@
           (is (string= "write"
                        (cdr (assoc :tool-name
                                    (buffer-approval-pending buf))))))))))
+
+(test mcclim-compose-approval-continues-lisp-eval-tool-loop
+  "The McCLIM compose helper can approve a pending lisp_eval call and continue."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (clawmacs::set-approval-policy-tool-permission
+     "lisp_eval" :agent-with-permission)
+    (let ((request-count 0))
+      (with-function-override (clawmacs::resolve-buffer-provider-and-model
+                               (buffer)
+                               (declare (ignore buffer))
+                               (values :zai "glm-test" nil))
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                             reasoning-effort system-prompt
+                                             service-tier)
+                                 (declare (ignore provider messages callback
+                                                  model max-tokens tools
+                                                  reasoning-effort
+                                                  system-prompt service-tier))
+                                 (incf request-count)
+                                 (if (= request-count 1)
+                                     (make-completed-stream-state-response
+                                      "tool_use"
+                                      (list
+                                       (clawmacs::canonical-tool-use-block
+                                        "call-1"
+                                        "lisp_eval"
+                                        '((:code . "(+ 1 1)")
+                                          (:package . "CLAWMACS")))))
+                                     (make-completed-stream-state-response
+                                      "end_turn"
+                                      (list
+                                       (clawmacs::canonical-text-block
+                                        "the result is 2")))))
+          (let ((buf (make-buffer "mcclim-approval" :agent-name "agent")))
+            (clawmacs::start-streaming-response buf)
+            (is (= 1 request-count))
+            (is-true (clawmacs::update-streaming-response buf))
+            (is (eq :approval (buffer-status buf)))
+            (is (string= "lisp_eval"
+                         (cdr (assoc :tool-name
+                                     (buffer-approval-pending buf)))))
+            (is-true (clawmacs::handle-chat-compose-text buf ""))
+            (is (= 2 request-count))
+            (is (null (buffer-approval-pending buf)))
+            (is-false (clawmacs::update-streaming-response buf))
+            (let ((messages (test-buffer-history-messages buf)))
+              (is (member :tool-result
+                          (mapcar #'message-sender messages)))
+              (is (some (lambda (text)
+                          (and (search ";; lisp_eval" text)
+                               (search "2" text)))
+                        (mapcar #'message-text messages)))
+              (is (some (lambda (text)
+                          (search "the result is 2" text))
+                        (mapcar #'message-text messages))))))))))
+
+(defun test-command-table-key-command (table key-character)
+  "Return the inherited command bound to KEY-CHARACTER in command TABLE."
+  (let ((event (make-instance 'clim:key-press-event
+                              :sheet nil
+                              :x 0
+                              :y 0
+                              :key-name nil
+                              :key-character key-character
+                              :modifier-state (clim:make-modifier-state))))
+    (let ((item (esa::find-gestures-with-inheritance (list event) table)))
+      (and item (clim:command-menu-item-value item)))))
+
+(test mcclim-compose-return-keystrokes-submit-message
+  "The McCLIM chat frame binds Return/Newline to submit the message."
+  (let* ((buf (make-buffer "mcclim-ret-submit" :agent-name "agent"))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf))
+         (table (clim:find-command-table 'clawmacs::clawmacs-chat-frame))
+         (menu-table (clawmacs::make-chat-menu-bar-command-table frame))
+         (drei-order-table
+           (clim:make-command-table
+            nil
+            :inherit-from (list menu-table 'drei:editor-table))))
+    (is (clim:command-accessible-in-command-table-p
+         'clawmacs::com-chat-submit-compose
+         table))
+    (is (equal '(clawmacs::com-chat-submit-compose)
+               (test-command-table-key-command table #\Return)))
+    (is (equal '(clawmacs::com-chat-submit-compose)
+               (test-command-table-key-command table #\Newline)))
+    (is (equal '(clawmacs::com-chat-submit-compose)
+               (test-command-table-key-command menu-table #\Return)))
+    (is (equal '(clawmacs::com-chat-submit-compose)
+               (test-command-table-key-command drei-order-table #\Return)))))
+
+(test mcclim-kill-items-vector-normalizes-list-kills
+  "The McCLIM kill helper converts list kills into the vector form Edward expects."
+  (let ((items (clawmacs::mcclim-kill-items-vector
+                (list #\b #\u #\t #\t #\o #\n #\Space))))
+    (is (vectorp items))
+    (is (equal "button " (coerce items 'string)))))
+
+(test mcclim-compose-kill-commands-use-vector-kill-ring-items
+  "McCLIM compose word-kill entries can be yanked without list/AREF crashes."
+  (let* ((compose (make-instance 'clim:text-editor-pane :value "button "))
+         (buffer (climi::input-editor-buffer compose)))
+    (let ((climi::*killring-uses-clipboard* nil))
+      (is-true
+       (handler-case
+           (progn
+             (climi::ie-erase-word compose buffer nil 1)
+             t)
+         (error () nil)))
+      (is (string= "" (clim:gadget-value compose)))
+      (is-true
+       (handler-case
+           (progn
+             (climi::ie-yank-kill-ring compose buffer nil 1)
+             t)
+         (error () nil)))
+      (is (string= "button " (clim:gadget-value compose))))))
+
+(defclass soft-wrap-test-pane ()
+  ((end-of-line-action :initform :scroll
+                       :accessor soft-wrap-test-pane-end-of-line-action)))
+
+(defmethod clim:stream-end-of-line-action ((pane soft-wrap-test-pane))
+  (soft-wrap-test-pane-end-of-line-action pane))
+
+(defmethod (setf clim:stream-end-of-line-action) (action (pane soft-wrap-test-pane))
+  (setf (soft-wrap-test-pane-end-of-line-action pane) action))
+
+(test mcclim-compose-pane-uses-mcclim-soft-wrap-when-supported
+  "The chat compose configuration uses CLIM stream soft wrapping when supported."
+  (let ((pane (make-instance 'soft-wrap-test-pane)))
+    (is (eq :scroll (clim:stream-end-of-line-action pane)))
+    (clawmacs::configure-chat-compose-pane pane)
+    (is (eq :wrap* (clim:stream-end-of-line-action pane)))))
+
+(test mcclim-compose-pane-does-not-hard-wrap-text-editor-value
+  "Current McCLIM text-editor gadgets do not get approximate hard newlines inserted."
+  (let ((pane (make-instance 'clim:text-editor-pane :value "hello world")))
+    (clawmacs::configure-chat-compose-pane pane)
+    (is (string= "hello world" (clim:gadget-value pane)))))
+
+(defclass transcript-scroll-test-region ()
+  ((height :initarg :height
+           :reader transcript-scroll-test-region-height)))
+
+(defmethod clim:bounding-rectangle-height ((region transcript-scroll-test-region))
+  (transcript-scroll-test-region-height region))
+
+(defclass transcript-scroll-test-pane ()
+  ((history :initarg :history
+            :reader transcript-scroll-test-pane-history)
+   (viewport :initarg :viewport
+             :reader transcript-scroll-test-pane-viewport)
+   (scroll-x :initform nil
+             :accessor transcript-scroll-test-pane-scroll-x)
+   (scroll-y :initform nil
+             :accessor transcript-scroll-test-pane-scroll-y)))
+
+(defmethod clim:stream-output-history ((pane transcript-scroll-test-pane))
+  (transcript-scroll-test-pane-history pane))
+
+(defmethod clim:pane-viewport ((pane transcript-scroll-test-pane))
+  (transcript-scroll-test-pane-viewport pane))
+
+(defmethod clim:scroll-extent ((pane transcript-scroll-test-pane) x y)
+  (setf (transcript-scroll-test-pane-scroll-x pane) x
+        (transcript-scroll-test-pane-scroll-y pane) y))
+
+(test mcclim-transcript-bottom-scroll-uses-output-and-viewport-heights
+  "Transcript tail following computes Listener-style bottom scroll offsets."
+  (is (= 800
+         (clawmacs::chat-transcript-bottom-scroll-y-from-heights 1200 400)))
+  (is (= 0
+         (clawmacs::chat-transcript-bottom-scroll-y-from-heights 300 400)))
+  (let* ((history (make-instance 'transcript-scroll-test-region :height 1200))
+         (viewport (make-instance 'transcript-scroll-test-region :height 400))
+         (pane (make-instance 'transcript-scroll-test-pane
+                              :history history
+                              :viewport viewport)))
+    (is (= 800 (clawmacs::chat-transcript-scroll-to-bottom pane)))
+    (is (= 0 (transcript-scroll-test-pane-scroll-x pane)))
+    (is (= 800 (transcript-scroll-test-pane-scroll-y pane)))))
+
+(test mcclim-chat-menu-bar-exposes-toolbar-commands
+  "The McCLIM chat frame exposes its MVP toolbar through command-table menus."
+  (let* ((menu-table (clawmacs::make-chat-menu-bar-command-table))
+         (chat-menu (clim:find-menu-item "Chat" menu-table :errorp nil))
+         (view-menu (clim:find-menu-item "View" menu-table :errorp nil))
+         (skills-menu (clim:find-menu-item "Skills" menu-table :errorp nil))
+         (packages-menu (clim:find-menu-item "Packages" menu-table :errorp nil))
+         (effort-menu (clim:find-menu-item "Effort" menu-table :errorp nil))
+         (system-menu (clim:find-menu-item "System" menu-table :errorp nil)))
+    (is (not (null chat-menu)))
+    (is (not (null view-menu)))
+    (is (not (null skills-menu)))
+    (is (not (null packages-menu)))
+    (is (not (null effort-menu)))
+    (is (not (null system-menu)))
+    (is (eq :menu (clim:command-menu-item-type chat-menu)))
+    (is (eq :menu (clim:command-menu-item-type view-menu)))
+    (is (eq :menu (clim:command-menu-item-type skills-menu)))
+    (is (eq :menu (clim:command-menu-item-type packages-menu)))
+    (is (eq :menu (clim:command-menu-item-type effort-menu)))
+    (is (eq :menu (clim:command-menu-item-type system-menu)))
+    (let ((chat-table (clim:command-menu-item-value chat-menu))
+          (view-table (clim:command-menu-item-value view-menu))
+          (effort-table (clim:command-menu-item-value effort-menu))
+          (system-table (clim:command-menu-item-value system-menu)))
+      (flet ((menu-command (name table)
+               (let ((item (clim:find-menu-item name table :errorp nil)))
+                 (and item (clim:command-menu-item-value item)))))
+        (is (eq 'clawmacs::com-chat-stop-response
+                (menu-command "Stop Response" chat-table)))
+        (is (eq 'clawmacs::com-chat-toggle-tool-results
+                (menu-command "✓ Tool Results" view-table)))
+        (is (eq 'clawmacs::com-chat-toggle-reasoning-output
+                (menu-command "  Reasoning Output" view-table)))
+        (is (eq 'clawmacs::com-chat-toggle-metadata-output
+                (menu-command "  Metadata Output" view-table)))
+        (is (eq 'clawmacs::com-chat-toggle-debug-mode
+                (menu-command "  Debug Mode" view-table)))
+        (is (member "No active chat buffer"
+                    (test-command-table-menu-labels effort-table)
+                    :test #'string=))
+        (is (eq 'clawmacs::com-chat-recurse
+                (menu-command "Recurse" system-table)))))
+    (dolist (command '(clawmacs::com-chat-stop-response
+                       clawmacs::com-chat-toggle-tool-results
+                       clawmacs::com-chat-toggle-reasoning-output
+                       clawmacs::com-chat-toggle-metadata-output
+                       clawmacs::com-chat-toggle-debug-mode
+                       clawmacs::com-chat-submit-compose
+                       clawmacs::com-chat-toggle-skill
+                       clawmacs::com-chat-toggle-package
+                       clawmacs::com-chat-select-effort
+                       clawmacs::com-chat-recurse))
+      (is (clim:command-accessible-in-command-table-p
+           command menu-table)))))
+
+(defun test-command-table-menu-labels (table)
+  "Return menu labels from TABLE in display order."
+  (let ((labels nil))
+    (clim:map-over-command-table-menu-items
+     (lambda (name keystroke item)
+       (declare (ignore keystroke item))
+       (push name labels))
+     table
+     :inherited nil)
+    (nreverse labels)))
+
+(defun test-chat-menu-submenu (table name)
+  "Return the submenu table named NAME from TABLE."
+  (clim:command-menu-item-value
+   (clim:find-menu-item name table :errorp t)))
+
+(test mcclim-chat-system-menu-exposes-recurse-command
+  "The McCLIM system menu exposes recurse as a frame command."
+  (let* ((menu-table (clawmacs::make-chat-menu-bar-command-table))
+         (system-table (test-chat-menu-submenu menu-table "System")))
+    (is (equal '("Recurse")
+               (test-command-table-menu-labels system-table)))
+    (is (eq 'clawmacs::com-chat-recurse
+            (clim:command-menu-item-value
+             (clim:find-menu-item "Recurse" system-table :errorp t))))))
+
+(test mcclim-chat-view-menu-shows-checkmarks-and-refreshes-frame-state
+  "The McCLIM view menu shows checkmarks and refreshes after toggles."
+  (let* ((buf (make-buffer "view-toolbar" :agent-name "agent"))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf)))
+    (let ((*debug-mode* nil))
+      (clawmacs::refresh-chat-frame-menu-bar frame)
+      (let ((view-menu (test-chat-menu-submenu
+                        (clim:frame-command-table frame)
+                        "View")))
+        (is (member "✓ Tool Results"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "  Reasoning Output"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "  Metadata Output"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "  Debug Mode"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=)))
+      (clawmacs::run-chat-frame-buffer-command
+       frame
+       #'clawmacs::toggle-reasoning-output-command)
+      (clawmacs::run-chat-frame-buffer-command
+       frame
+       #'clawmacs::toggle-metadata-output-command)
+      (clawmacs::run-chat-frame-buffer-command
+       frame
+       #'clawmacs::toggle-debug-mode-command)
+      (let ((view-menu (test-chat-menu-submenu
+                        (clim:frame-command-table frame)
+                        "View")))
+        (is (member "✓ Tool Results"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "✓ Reasoning Output"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "✓ Metadata Output"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))
+        (is (member "✓ Debug Mode"
+                    (test-command-table-menu-labels view-menu)
+                    :test #'string=))))))
+
+(test mcclim-chat-effort-menu-shows-current-selection-and-updates
+  "The McCLIM effort menu shows the active effort and updates after selection."
+  (with-agent-definition-registry-override ()
+    (let* ((buf (make-buffer "effort-toolbar" :agent-name "agent"))
+           (frame (clim:make-application-frame
+                   'clawmacs::clawmacs-chat-frame
+                   :buffer buf)))
+      (set-buffer-provider-override buf :openai-codex)
+      (set-buffer-model-override buf "gpt-5.4")
+      (clawmacs::refresh-chat-frame-menu-bar frame)
+      (let* ((menu-table (clim:frame-command-table frame))
+             (effort-menu-item (clim:find-menu-item "Effort: default"
+                                                    menu-table
+                                                    :errorp nil))
+             (effort-menu (and effort-menu-item
+                               (clim:command-menu-item-value effort-menu-item))))
+        (is (not (null effort-menu-item)))
+        (is (member "✓ default"
+                    (test-command-table-menu-labels effort-menu)
+                    :test #'string=))
+        (is (member "  high"
+                    (test-command-table-menu-labels effort-menu)
+                    :test #'string=)))
+      (clawmacs::select-chat-effort-for-buffer buf "high")
+      (clawmacs::refresh-chat-frame-menu-bar frame)
+      (let* ((menu-table (clim:frame-command-table frame))
+             (effort-menu-item (clim:find-menu-item "Effort: high"
+                                                    menu-table
+                                                    :errorp nil))
+             (effort-menu (and effort-menu-item
+                               (clim:command-menu-item-value effort-menu-item))))
+        (is (string= "high" (buffer-think-level-override buf)))
+        (is (not (null effort-menu-item)))
+        (is (member "✓ high"
+                    (test-command-table-menu-labels effort-menu)
+                    :test #'string=))
+        (is (member "  default"
+                    (test-command-table-menu-labels effort-menu)
+                    :test #'string=))))))
+
+(test mcclim-chat-skills-menu-toggles-enabled-state
+  "The McCLIM skills menu shows checkmarks and toggles persisted skill state."
+  (with-isolated-skills (root)
+    (write-demo-skill root :name "demo")
+    (register-skill-root root)
+    (let* ((buf (make-buffer "skill-toolbar"))
+           (skill (first (list-skills :include-disabled t)))
+           (key (clawmacs::skill-path-key skill)))
+      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
+        (is (member "✓ demo"
+                    (test-command-table-menu-labels
+                     (test-chat-menu-submenu menu-table "Skills"))
+                    :test #'string=)))
+      (is-false (clawmacs::toggle-chat-skill-for-buffer buf key))
+      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
+        (is (member "  demo"
+                    (test-command-table-menu-labels
+                     (test-chat-menu-submenu menu-table "Skills"))
+                    :test #'string=)))
+      (is-false (skill-enabled-p
+                 (clawmacs::find-skill-by-path key :include-disabled t)))
+      (is (search "[Skill demo disabled]"
+                  (message-text (message-prev (buffer-input-message buf))))))))
+
+(test mcclim-chat-frame-menu-tables-are-frame-local
+  "Each McCLIM chat frame owns package menu state for its own buffer."
+  (with-package-state-override ((default-package-test-channels))
+    (let* ((enabled-buffer (make-buffer "enabled-package-toolbar"
+                                        :agent-name "agent"))
+           (default-buffer (make-buffer "default-package-toolbar"
+                                        :agent-name "agent"))
+           (enabled-frame (clim:make-application-frame
+                           'clawmacs::clawmacs-chat-frame
+                           :buffer enabled-buffer))
+           (default-frame (clim:make-application-frame
+                           'clawmacs::clawmacs-chat-frame
+                           :buffer default-buffer)))
+      (clawmacs::set-buffer-package-name-enabled enabled-buffer "sexed" t)
+      (clawmacs::refresh-chat-frame-menu-bar enabled-frame)
+      (clawmacs::refresh-chat-frame-menu-bar default-frame)
+      (is (not (eq (clim:frame-command-table enabled-frame)
+                   (clim:frame-command-table default-frame))))
+      (is (member "✓ sexed"
+                  (test-command-table-menu-labels
+                   (test-chat-menu-submenu
+                    (clim:frame-command-table enabled-frame)
+                    "Packages"))
+                  :test #'string=))
+      (is (member "  sexed"
+                  (test-command-table-menu-labels
+                   (test-chat-menu-submenu
+                    (clim:frame-command-table default-frame)
+                    "Packages"))
+                  :test #'string=))
+      (is (member "✓ sexed"
+                  (test-command-table-menu-labels
+                   (test-chat-menu-submenu
+                    (clim:frame-command-table enabled-frame)
+                    "Packages"))
+                  :test #'string=)))))
+
+(test mcclim-chat-packages-menu-toggles-buffer-package-state
+  "The McCLIM packages menu toggles current-buffer package enablement."
+  (with-package-state-override ((default-package-test-channels))
+    (let ((buf (make-buffer "package-toolbar" :agent-name "agent")))
+      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
+        (is (member "  sexed"
+                    (test-command-table-menu-labels
+                     (test-chat-menu-submenu menu-table "Packages"))
+                    :test #'string=)))
+      (is-true (clawmacs::toggle-chat-package-for-buffer buf "sexed"))
+      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
+        (is (member "✓ sexed"
+                    (test-command-table-menu-labels
+                     (test-chat-menu-submenu menu-table "Packages"))
+                    :test #'string=)))
+      (is (member "sexed" (buffer-enabled-packages buf) :test #'string=))
+      (is-false (clawmacs::package-enabled-globally-p "sexed"))
+      (is-false (clawmacs::toggle-chat-package-for-buffer buf "sexed"))
+      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
+        (is (member "  sexed"
+                    (test-command-table-menu-labels
+                     (test-chat-menu-submenu menu-table "Packages"))
+                    :test #'string=)))
+      (is-false (member "sexed" (buffer-enabled-packages buf)
+                        :test #'string=)))))
+
+(test chat-recurse-launch-spec-uses-current-buffer-state
+  "Recurse launch specs inherit the current buffer agent and working directory."
+  (let* ((working-directory
+           (uiop:ensure-directory-pathname #P"/tmp/clawmacs-recurse-spec/"))
+         (buffer (make-buffer "spec-buffer"
+                              :agent-name "tester"
+                              :working-directory working-directory))
+         (spec (clawmacs::chat-recurse-launch-spec
+                buffer
+                :repo-root #P"/workspace/"
+                :quicklisp-setup #P"/tmp/fake-quicklisp/setup.lisp"
+                :session-name "recursive-session"
+                :window-title "Recursive Window")))
+    (is (equal #P"/workspace/" (getf spec :directory)))
+    (is (equal "recursive-session" (getf spec :session-name)))
+    (is (equal "Recursive Window" (getf spec :window-title)))
+    (is (equal working-directory (getf spec :working-directory)))
+    (is (equal "sbcl" (first (getf spec :argv))))
+    (is (member "(ql:quickload :clawmacs)" (getf spec :argv) :test #'string=))
+    (is (member "(asdf:load-system :clawmacs :force t)"
+                (getf spec :argv)
+                :test #'string=))
+    (let* ((argv (getf spec :argv))
+           (startup-form (nth (+ 2 (position "(asdf:load-system :clawmacs :force t)"
+                                            argv
+                                            :test #'string=
+                                            :from-end t))
+                              argv)))
+      (is (search ":session-name \"recursive-session\"" startup-form))
+      (is (search ":agent-name \"tester\"" startup-form))
+      (is (search ":window-title \"Recursive Window\"" startup-form))
+      (is (search ":working-directory \"/tmp/clawmacs-recurse-spec/\""
+                  startup-form)))))
+
+(test chat-recurse-command-records-child-launch-message
+  "Running recurse inserts a status message describing the child launch."
+  (let* ((working-directory
+           (uiop:ensure-directory-pathname #P"/tmp/clawmacs-recurse-command/"))
+         (buf (make-buffer "recurse-buffer"
+                           :agent-name "tester"
+                           :working-directory working-directory))
+         (launch-calls nil)
+         (original-launch (symbol-function 'clawmacs::launch-chat-recurse)))
+    (unwind-protect
+         (progn
+           (setf (symbol-function 'clawmacs::launch-chat-recurse)
+                 (lambda (buffer)
+                   (push buffer launch-calls)
+                   (list :window-title "Clawmacs Recurse - recurse-buffer"
+                         :session-name "recurse-session"
+                         :working-directory working-directory)))
+           (let ((frame (clim:make-application-frame
+                         'clawmacs::clawmacs-chat-frame
+                         :buffer buf)))
+             (clim:execute-frame-command frame '(clawmacs::com-chat-recurse)))
+           (is (equal (list buf) launch-calls))
+           (let ((status (message-prev (buffer-input-message buf))))
+             (is (eq :system (message-sender status)))
+             (is (search "Opened recurse frame Clawmacs Recurse - recurse-buffer"
+                         (message-text status)))
+             (is (search "session recurse-session"
+                         (message-text status)))
+             (is (search "/tmp/clawmacs-recurse-command/"
+                         (message-text status)))))
+      (setf (symbol-function 'clawmacs::launch-chat-recurse)
+            original-launch))))
+
+(test clawmacs-main-honors-working-directory-argument
+  "clawmacs-main seeds the initial chat buffer from the supplied working directory."
+  (let* ((working-directory
+           (uiop:ensure-directory-pathname #P"/tmp/clawmacs-main-working-directory/"))
+         (*sessions-dir* (temp-session-test-directory "main-working-directory"))
+         (clawmacs::*buffer-ring* nil)
+         (clawmacs::*buffer-counter* 0)
+         (clawmacs::*startup-hook* nil)
+         (clawmacs::*initial-buffer-hook* nil)
+         (original-parse (symbol-function 'clawmacs::parse-clawmacs-args))
+         (original-init (symbol-function 'clawmacs::initialize-clawmacs-runtime))
+         (original-scratch (symbol-function 'clawmacs::ensure-scratch-buffer)))
+    (unwind-protect
+         (progn
+           (setf (symbol-function 'clawmacs::parse-clawmacs-args)
+                 (lambda () nil)
+                 (symbol-function 'clawmacs::initialize-clawmacs-runtime)
+                 (lambda () nil)
+                 (symbol-function 'clawmacs::ensure-scratch-buffer)
+                 (lambda () nil))
+           (let ((buffer (clawmacs:clawmacs-main
+                          :session-name "main-working-directory"
+                          :agent-name "tester"
+                          :working-directory working-directory
+                          :run-frame nil)))
+             (is (equal working-directory
+                        (buffer-working-directory buffer)))
+             (is (equal "main-working-directory"
+                        (buffer-name buffer)))))
+      (setf (symbol-function 'clawmacs::parse-clawmacs-args) original-parse
+            (symbol-function 'clawmacs::initialize-clawmacs-runtime) original-init
+            (symbol-function 'clawmacs::ensure-scratch-buffer) original-scratch))))
 
 (test approval-policy-round-trips-sandbox-and-working-directory-settings
   "Guard policy JSON persists sandbox and working-directory defaults and overrides."
@@ -507,7 +1050,7 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("lisp_eval") tool-names))
+      (is (equal '("lisp_eval" "recovery_list") tool-names))
       (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*))))
       (is-false (member "read" tool-names :test #'string=)))))
 
@@ -531,7 +1074,7 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("lisp_eval" "read") tool-names))
+      (is (equal '("lisp_eval" "read" "recovery_list") tool-names))
       (is (string= "user-read"
                    (clawmacs:execute-tool "read" nil))))))
 
@@ -559,9 +1102,224 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("lisp_eval" "read") tool-names))
+      (is (equal '("lisp_eval" "read" "recovery_list") tool-names))
       (is (string= "user-read"
                    (clawmacs:execute-tool "read" nil))))))
+
+(defun tool-execution-test-events (buf)
+  "Return durable tool-execution events recorded for BUF."
+  (remove-if-not (lambda (event)
+                   (string= "tool-execution" (event-value event :event)))
+                 (session-current-events (buffer-session buf))))
+
+(test execute-tool-safely-journals-tool-errors
+  "Safe tool execution records start and error result events before returning."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs:register-tool
+     "journal_fail"
+     "Tool that fails for journaling tests."
+     '((:type . "object") (:properties . nil))
+     :agent-allowed
+     (lambda (args)
+       (declare (ignore args))
+       (error "boom from journal_fail")))
+    (let* ((buf (make-chat-buffer "tool-journal-error"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf)
+           (result (clawmacs::execute-tool-safely
+                    "journal_fail" '(:value "x")
+                    :buffer buf
+                    :tool-id "toolu-journal-1"))
+           (events (tool-execution-test-events buf)))
+      (is (search ":error" result))
+      (is (= 2 (length events)))
+      (is (string= "start" (event-value (first events) :phase)))
+      (is (string= "result" (event-value (second events) :phase)))
+      (is (string= "error" (event-value (second events) :status)))
+      (is (string= "journal_fail" (event-value (second events) :tool-name)))
+      (is (string= "toolu-journal-1" (event-value (second events) :tool-id)))
+      (is (search "boom from journal_fail"
+                  (event-value (second events) :condition-message))))))
+
+(test execute-prompt-tool-call-journals-tool-errors
+  "Prompt-mode tool execution uses the safe journaling wrapper."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (clawmacs:register-tool
+     "prompt_journal_fail"
+     "Tool that fails in prompt-mode journaling tests."
+     '((:type . "object") (:properties . nil))
+     :agent-allowed
+     (lambda (args)
+       (declare (ignore args))
+       (error "prompt boom")))
+    (let* ((buf (make-chat-buffer "prompt-tool-journal-error"))
+           (tool-use '((:type . "tool_use")
+                       (:id . "toolu-prompt-journal-1")
+                       (:name . "prompt_journal_fail")
+                       (:input . ((:value . "x"))))))
+      (multiple-value-bind (result event)
+          (clawmacs::execute-prompt-tool-call buf tool-use :coder t)
+        (is (search ":error" (cdr (assoc :result result))))
+        (is (string= "prompt_journal_fail"
+                     (clawmacs:prompt-tool-event-name event))))
+      (let ((events (tool-execution-test-events buf)))
+        (is (= 2 (length events)))
+        (is (string= "start" (event-value (first events) :phase)))
+        (is (string= "error" (event-value (second events) :status)))
+        (is (search "prompt boom"
+                    (event-value (second events) :condition-message)))))))
+
+(test execute-tool-safely-journals-denied-tool-calls
+  "Denied tool calls are journaled without executing or requiring a definition."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (let* ((buf (make-chat-buffer "tool-journal-denied"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf)
+           (result (clawmacs::execute-tool-safely
+                    "not_registered" '(:value "x")
+                    :buffer buf
+                    :tool-id "toolu-denied-1"
+                    :denied-reason "test denied"))
+           (events (tool-execution-test-events buf)))
+      (is (search ":denied" result))
+      (is (= 2 (length events)))
+      (is (string= "denied" (event-value (second events) :status)))
+      (is (string= "test denied" (event-value (second events) :reason)))
+      (is (search "test denied" (event-value (second events) :result))))))
+
+(defun file-checkpoint-test-events (buf)
+  "Return durable file-checkpoint events recorded for BUF."
+  (remove-if-not (lambda (event)
+                   (string= "file-checkpoint" (event-value event :event)))
+                 (session-current-events (buffer-session buf))))
+
+(defun lisp-eval-checkpoint-test-events (buf)
+  "Return durable lisp-eval-checkpoint events recorded for BUF."
+  (remove-if-not (lambda (event)
+                   (string= "lisp-eval-checkpoint" (event-value event :event)))
+                 (session-current-events (buffer-session buf))))
+
+(test execute-tool-safely-checkpoints-live-lisp-eval
+  "Safe lisp_eval execution records before/after recovery checkpoints."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let* ((buf (make-chat-buffer "lisp-eval-checkpoint-live"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf)
+           (result (clawmacs::execute-tool-safely
+                    "lisp_eval"
+                    '(:code "(+ 20 22)" :package "CL-USER")
+                    :buffer buf
+                    :tool-id "toolu-eval-checkpoint"))
+           (events (lisp-eval-checkpoint-test-events buf)))
+      (is (search "42" result))
+      (is (= 2 (length events)))
+      (is (string= "before" (event-value (first events) :phase)))
+      (is (string= "after" (event-value (second events) :phase)))
+      (is (string= "live" (event-value (first events) :mode)))
+      (is (string= "CL-USER" (event-value (first events) :package)))
+      (is (string= "ok" (event-value (second events) :status)))
+      (is (search "42" (event-value (second events) :result))))))
+
+(test execute-tool-safely-checkpoints-lisp-eval-tool-errors
+  "lisp_eval recovery checkpoints retain tool wrapper errors for repair."
+  (with-tool-table-restored
+    (clrhash clawmacs::*tool-table*)
+    (let* ((buf (make-chat-buffer "lisp-eval-checkpoint-error"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf)
+           (result (clawmacs::execute-tool-safely
+                    "lisp_eval"
+                    '(:code "(+ 1 2)")
+                    :buffer buf
+                    :tool-id "toolu-eval-missing"))
+           (events (lisp-eval-checkpoint-test-events buf)))
+      (is (search ":error" result))
+      (is (= 2 (length events)))
+      (is (string= "error" (event-value (second events) :status)))
+      (is (search "Unknown tool"
+                  (event-value (second events) :condition-message))))))
+
+(test recovery-list-reports-recent-session-checkpoints
+  "The recovery_list tool summarizes durable recovery events for agents."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let* ((buf (make-chat-buffer "recovery-list"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf))
+      (clawmacs::execute-tool-safely
+       "lisp_eval"
+       '(:code "(+ 3 4)" :package "CL-USER")
+       :buffer buf
+       :tool-id "toolu-recovery-eval")
+      (let* ((data (clawmacs::execute-tool-safely
+                    "recovery_list"
+                    '(:kind "lisp-eval" :limit 5)
+                    :buffer buf
+                    :tool-id "toolu-recovery-list"))
+             (decoded (clawmacs::lisp-data-read data))
+             (events (getf decoded :events)))
+        (is (string= "lisp-eval" (getf decoded :kind)))
+        (is (>= (getf decoded :event-count) 2))
+        (is (null (getf decoded :pending-lisp-evals)))
+        (is (search "(+ 3 4)" (getf (first events) :code)))))))
+
+(test execute-tool-safely-checkpoints-write-tools
+  "Safe write execution records before and after file checkpoints."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let* ((root (temp-package-test-directory "checkpoint-write"))
+           (*sandbox-root* root)
+           (buf (make-chat-buffer "file-checkpoint-write"))
+           (*current-caller* :coder)
+           (*current-tool-buffer* buf)
+           (result (clawmacs::execute-tool-safely
+                    "write"
+                    '((:path . "notes.txt")
+                      (:content . "hello\n"))
+                    :buffer buf
+                    :tool-id "toolu-write-checkpoint"))
+           (events (file-checkpoint-test-events buf)))
+      (is (search "Successfully wrote" result))
+      (is (= 2 (length events)))
+      (is (string= "before" (event-value (first events) :phase)))
+      (is (string= "after" (event-value (second events) :phase)))
+      (is (equal nil (event-value (first events) :before-exists-p)))
+      (is (equal t (event-value (second events) :after-exists-p)))
+      (is (string= "notes.txt" (event-value (second events) :path)))
+      (is (search "+hello" (event-value (second events) :diff))))))
+
+(test execute-tool-safely-checkpoints-edit-tools
+  "Safe edit execution records before/after hashes and diffs."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let* ((root (temp-package-test-directory "checkpoint-edit"))
+           (*sandbox-root* root)
+           (target (merge-pathnames "notes.txt" root))
+           (buf (make-chat-buffer "file-checkpoint-edit")))
+      (write-test-file target "hello\n")
+      (let* ((*current-caller* :coder)
+             (*current-tool-buffer* buf)
+             (result (clawmacs::execute-tool-safely
+                      "edit"
+                      '((:path . "notes.txt")
+                        (:old-text . "hello")
+                        (:new-text . "goodbye"))
+                      :buffer buf
+                      :tool-id "toolu-edit-checkpoint"))
+             (events (file-checkpoint-test-events buf))
+             (after-event (second events))
+             (before-hash (event-value after-event :before-hash))
+             (after-hash (event-value after-event :after-hash)))
+        (is (search "Successfully replaced" result))
+        (is (= 2 (length events)))
+        (is (string= "ok" (event-value after-event :status)))
+        (is-false (string= before-hash after-hash))
+        (is (search "-hello" (event-value after-event :diff)))
+        (is (search "+goodbye" (event-value after-event :diff)))))))
 
 (test tool-definitions->responses-tools-encodes-empty-properties-as-object
   "Zero-arg tool schemas encode JSON object properties as `{}`, not `null`."
@@ -630,7 +1388,7 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("custom_probe" "edit" "find" "grep" "lisp_eval" "read" "write")
+      (is (equal '("custom_probe" "edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names))
       (is (not (null (gethash "custom_probe" clawmacs::*tool-table*))))
       (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*)))))))
@@ -1053,7 +1811,6 @@ same
                                                "PLAN OK"
                                                "BUILD OK")))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (initialize-test-tools)
             (let ((result (clawmacs:run-pipeline-prompt
                            "ship fizzbuzz"
@@ -1113,7 +1870,6 @@ same
                                       (list (clawmacs::canonical-text-block
                                              text)))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (initialize-test-tools)
             (let* ((buf (clawmacs::make-prompt-buffer "fix failing tests"
                                                        "agent"))
@@ -1159,6 +1915,7 @@ same
 (test bundled-self-modify-pipeline-loops-and-injects-selected-packages-and-skills
   "The shipped self-modify pipeline reparses plans after failing tests and injects selected package/skill context."
   (let ((path (temp-agent-defaults-path))
+        (*sessions-dir* (temp-session-test-directory "self-modify-pipeline"))
         (responses nil)
         (test-reports nil)
         (captured-calls nil))
@@ -1175,7 +1932,20 @@ same
                    "self-modify-approval-isolation")))
             (with-pipeline-definition-registry-override ()
               (let ((clawmacs::*agent-definition-registry*
-                      (make-hash-table :test #'equal)))
+                      (make-hash-table :test #'equal))
+                    (clawmacs::*tool-table*
+                      (make-hash-table :test #'equal))
+                    (clawmacs::*agent-tool-metadata-table*
+                      (make-hash-table :test #'eq))
+                    (clawmacs::*agent-tool-name-table*
+                      (make-hash-table :test #'equal))
+                    (clawmacs::*command-table*
+                      (make-hash-table :test #'eq))
+                    (clawmacs::*extended-docs*
+                      (make-hash-table :test #'eq))
+                    (clawmacs::*slash-command-table*
+                      (make-hash-table :test #'equal))
+                    (clawmacs::*compaction-point* nil))
                 (with-package-state-override ((default-package-test-channels))
               (setf responses
                     (list
@@ -1200,6 +1970,7 @@ same
                      (list :kind :text
                            :text "{\"passed\":true,\"summary\":\"unit passed\",\"feedback\":\"unit passed on second run\",\"tests\":[\"unit\"]}")
                      (list :kind :text :text "DOCS DONE")
+                     (list :kind :text :text "INIT DONE")
                      (list :kind :text :text "INIT DONE"))
                     test-reports
                     (list
@@ -1265,7 +2036,6 @@ same
                                   (getf response :name)
                                   (getf response :input))))))))
                   (clawmacs::init-default-keymap)
-                  (clawmacs::init-global-faces)
                   (initialize-test-tools)
                   (let* ((buf (clawmacs::make-prompt-buffer
                                "build a self-modifying workflow"
@@ -1282,7 +2052,7 @@ same
                          (first-implement (second calls))
                          (first-test (third calls))
                          (second-plan (fifth calls))
-                         (init-call (tenth calls)))
+                         (init-call (first (last calls))))
                     (is (equal '("plan" "implement" "test"
                                  "plan" "implement" "test"
                                  "docs" "init")
@@ -1294,6 +2064,12 @@ same
                                   result)))
                     (is (search "Structural editing with sexed"
                                 (getf first-implement :system-prompt)
+                                :test #'char-equal))
+                    (is (search "recovery_list"
+                                (getf first-implement :messages-json)
+                                :test #'char-equal))
+                    (is (search "isolated"
+                                (getf first-implement :messages-json)
                                 :test #'char-equal))
                     (is (search "<skill>"
                                 (getf first-implement :messages-json)
@@ -1337,7 +2113,6 @@ same
                                     (list (clawmacs::canonical-text-block
                                            "DONE"))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (initialize-test-tools)
             (let* ((buf (clawmacs::make-prompt-buffer "go" "agent"))
                    (result (clawmacs:run-pipeline-on-buffer
@@ -1380,11 +2155,9 @@ same
                                     (list (clawmacs::canonical-text-block
                                            "PIPELINE DONE"))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (initialize-test-tools)
             (let ((buf (make-buffer "pipeline-chat"
                                     :pipeline-name "one-stage")))
-              (clawmacs::init-face-registry buf)
               (clawmacs:set-buffer-provider-override buf :zai)
               (clawmacs:set-buffer-model-override buf "glm-5")
               (clawmacs::set-message-text (buffer-input-message buf)
@@ -1418,6 +2191,53 @@ same
           (is (not (null personality-pos)))
           (is (not (null date-pos)))
           (is (< boot-pos core-pos personality-pos date-pos)))))))
+
+(test load-boot-files-injects-ancestor-agents-md-instructions
+  "Boot-file loading discovers AGENTS.md from the active directory ancestry."
+  (let* ((root (temp-package-test-directory "agents-injection"))
+         (nested (merge-pathnames #P"src/ui/" root))
+         (root-agents (merge-pathnames "AGENTS.md" root))
+         (nested-agents (merge-pathnames "AGENTS.md" nested)))
+    (ensure-directories-exist (merge-pathnames #P".keep" nested))
+    (write-test-file root-agents "ROOT AGENTS MARKER")
+    (write-test-file nested-agents "NESTED AGENTS MARKER")
+    (let* ((clawmacs::*boot-file-names* '("AGENTS.md"))
+           (instructions (clawmacs:load-boot-files :directory nested))
+           (root-pos (search "ROOT AGENTS MARKER" instructions))
+           (nested-pos (search "NESTED AGENTS MARKER" instructions)))
+      (is (search "# AGENTS.md instructions for " instructions))
+      (is (search "<INSTRUCTIONS>" instructions))
+      (is (search "</INSTRUCTIONS>" instructions))
+      (is (not (null root-pos)))
+      (is (not (null nested-pos)))
+      (is (< root-pos nested-pos)))))
+
+(test build-agent-system-prompt-injects-buffer-working-directory-agents-md
+  "System prompts use the buffer working directory for AGENTS.md injection."
+  (with-tool-table-restored
+    (with-isolated-skills (skills-root)
+      skills-root
+      (with-package-state-override (nil)
+        (let* ((root (temp-package-test-directory "buffer-agents-injection"))
+               (nested (merge-pathnames #P"project/subdir/" root))
+               (agents-path (merge-pathnames "AGENTS.md" root)))
+          (ensure-directories-exist (merge-pathnames #P".keep" nested))
+          (write-test-file agents-path "BUFFER WORKING DIRECTORY AGENTS")
+          (let* ((clawmacs::*boot-file-names* '("AGENTS.md"))
+                 (clawmacs::*default-core-system-prompt* "CORE")
+                 (clawmacs::*default-personality-prompt* "PERSONALITY")
+                 (clawmacs::*buffer-system-prompt-display-enabled* nil)
+                 (buf (make-chat-buffer
+                       "agents-buffer"
+                       :working-directory nested
+                       :session-persistence-mode :ephemeral))
+                 (prompt (clawmacs:build-agent-system-prompt "agent"
+                                                             :buffer buf)))
+            (is (search "BUFFER WORKING DIRECTORY AGENTS" prompt))
+            (is (search (namestring nested) prompt))
+            (let ((clawmacs::*current-tool-buffer* buf))
+              (is (equal (buffer-working-directory buf)
+                         (clawmacs::default-prompt-working-directory))))))))))
 
 (test build-agent-system-prompt-falls-back-to-default-components
   "Missing agent prompt slots fall back to the default core and personality prompts."
@@ -1592,7 +2412,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "ephemeral answer"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let* ((options (clawmacs::parse-clawmacs-prompt-args
                            '("--ephemeral"
@@ -1817,8 +2636,6 @@ same
         (saw-input nil)
         (saw-read-only nil)
         (sent-p nil))
-    (clawmacs::init-global-faces)
-    (clawmacs::init-face-registry buf)
     (clawmacs::set-message-text (buffer-input-message buf)
                                 "current user request")
     (with-function-override (clawmacs::send-to-agent-with-context (buffer)
@@ -1912,7 +2729,6 @@ same
                                       (clawmacs::canonical-reasoning-block
                                        "provider reasoning summary"))))
         (clawmacs::init-default-keymap)
-        (clawmacs::init-global-faces)
         (initialize-test-tools)
         (let ((result (clawmacs:run-single-prompt
                        "Say hello"
@@ -1970,7 +2786,6 @@ same
                                           :uncached-input-tokens 40
                                           :cache-hit-rate 0.6666667)))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let* ((result (clawmacs:run-single-prompt
                           "Compute two plus three"
@@ -2039,7 +2854,6 @@ same
                                         (list (clawmacs::canonical-text-block
                                                "second answer"))))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let* ((first (clawmacs:run-session-prompt
                          "First prompt"
@@ -2102,7 +2916,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "cached"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let ((result (clawmacs:run-session-prompt
                          "Cache probe"
@@ -2144,7 +2957,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "delegated answer"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let ((result (clawmacs:run-subagent
                          "Research this"
@@ -2180,7 +2992,6 @@ same
                                     (list (clawmacs::canonical-text-block
                                            "custom answer"))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (initialize-test-tools)
             (let ((result (clawmacs:run-subagent
                            "Use a custom prompt"
@@ -2235,7 +3046,6 @@ same
                                     (list (clawmacs::canonical-text-block
                                            "done"))))
             (clawmacs::init-default-keymap)
-            (clawmacs::init-global-faces)
             (clawmacs:run-subagent "Find docs" :agent-name "docs")
             (is (equal '("doc_lookup") captured-tool-names))
             (setf captured-tool-names nil)
@@ -2280,7 +3090,6 @@ same
                                       (list (clawmacs::canonical-text-block
                                              "custom done")))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (let* ((tool (clawmacs:make-subagent-tool
                         :name "custom_echo"
                         :description "Echo a payload."
@@ -2336,7 +3145,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "done"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (clawmacs:run-subagent
            "Use available tools"
            :agent-name "custom-tool-agent"
@@ -2404,7 +3212,6 @@ same
                                         (list (clawmacs::canonical-text-block
                                                "handled denial"))))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (let* ((result (clawmacs:run-subagent
                           "Try the wrong tool"
                           :agent-name "docs"
@@ -2446,7 +3253,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "async answer"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let ((handle (clawmacs:run-subagent-async
                          "Do async work"
@@ -2486,7 +3292,6 @@ same
                                                   reasoning-effort system-prompt))
                                  (error "provider boom"))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let ((handle (clawmacs:run-subagent-async
                          "Fail async work"
@@ -2517,7 +3322,6 @@ same
                                   (list (clawmacs::canonical-text-block
                                          "late answer"))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (let ((handle (clawmacs:run-subagent-async
                          "Cancel async work"
@@ -2606,6 +3410,38 @@ same
         (is (not (null clawmacs:*last-eval-condition*)))
         (is (search "boom" (clawmacs:eval-history-to-string)))))))
 
+(test execute-lisp-eval-isolated-mode-runs-in-worker
+  "Isolated lisp_eval evaluates in a worker process without mutating this image."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let ((symbol (find-symbol "*ISOLATED-EVAL-PROOF*" :cl-user)))
+      (when symbol
+        (unintern symbol :cl-user)))
+    (let* ((data (clawmacs:execute-tool
+                  "lisp_eval"
+                  '(:mode "isolated"
+                    :package "CL-USER"
+                    :code "(progn (defparameter *isolated-eval-proof* :worker) (values 8 9))")))
+           (decoded (clawmacs::lisp-data-read data)))
+      (is (eq :isolated (getf decoded :mode)))
+      (is (= 2 (getf decoded :values)))
+      (is (search "8" (getf decoded :result)))
+      (is (search "9" (getf decoded :result)))
+      (is-false (find-symbol "*ISOLATED-EVAL-PROOF*" :cl-user)))))
+
+(test execute-lisp-eval-isolated-mode-reports-errors
+  "Isolated lisp_eval reports worker conditions as tool data instead of crashing."
+  (with-tool-table-restored
+    (initialize-test-tools)
+    (let* ((data (clawmacs:execute-tool
+                  "lisp_eval"
+                  '(:mode "isolated"
+                    :package "CL-USER"
+                    :code "(error \"isolated boom\")")))
+           (decoded (clawmacs::lisp-data-read data)))
+      (is (eq :isolated (getf decoded :mode)))
+      (is (search "isolated boom" (getf decoded :error))))))
+
 (test run-single-prompt-error-carries-partial-tool-events
   "Prompt loop failures retain tool events for diagnostics."
   (let ((path (temp-agent-defaults-path)))
@@ -2626,7 +3462,6 @@ same
                                     "lisp_eval"
                                     '((:code . "(+ 1 1)"))))))
           (clawmacs::init-default-keymap)
-          (clawmacs::init-global-faces)
           (initialize-test-tools)
           (handler-case
               (progn

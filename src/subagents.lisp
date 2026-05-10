@@ -175,6 +175,8 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
                                   provider model think-level
                                   model-role service-tier
                                   core-prompt personality-prompt
+                                  (working-directory
+                                   (default-prompt-working-directory))
                                   (tool-names nil tool-names-supplied-p)
                                   custom-tools
                                   (max-tool-iterations *prompt-max-tool-iterations*)
@@ -191,6 +193,7 @@ arguments override the registered definition for this run only."
                          :think-level think-level
                          :model-role model-role
                          :service-tier service-tier
+                         :working-directory working-directory
                          :max-tool-iterations max-tool-iterations
                          :auto-approve-tools-p auto-approve-tools-p
                          :custom-tools custom-tools)))
@@ -210,6 +213,8 @@ arguments override the registered definition for this run only."
                                         provider model think-level
                                         model-role service-tier
                                         core-prompt personality-prompt
+                                        (working-directory
+                                         (default-prompt-working-directory))
                                         (tool-names nil tool-names-supplied-p)
                                         custom-tools
                                         (max-tool-iterations
@@ -233,6 +238,7 @@ arguments override the registered definition for this run only."
                          :service-tier service-tier
                          :core-prompt core-prompt
                          :personality-prompt personality-prompt
+                         :working-directory working-directory
                          :custom-tools custom-tools
                          :max-tool-iterations max-tool-iterations
                          :auto-approve-tools-p auto-approve-tools-p)))

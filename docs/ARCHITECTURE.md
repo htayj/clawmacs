@@ -71,9 +71,11 @@ conversation encoding, auth, and agent/provider definitions.
 
 ### UI
 
-`src/mcclim-app.lisp`, `src/render-core.lisp`, `src/windows.lisp`, and
-`src/minibuffer.lisp` are the UI side. They should render and route input, not
-become the place where feature policy lives.
+`src/mcclim-interface.lisp` owns the fresh presentation-based chat frame. It
+should stay as a CLIM adapter over buffer state: display functions render
+messages, commands mutate buffers, and async updates request normal McCLIM pane
+redisplay. `src/windows.lisp` and `src/minibuffer.lisp` are legacy logical UI
+support and should not become feature-policy owners.
 
 ## Current Boundaries
 
@@ -84,7 +86,7 @@ The healthy layering is:
 3. `commands`, `tools`, `hooks`: interaction registries
 4. `llm`, `prompt-runner`, `pipelines`, `subagents`: execution runtime
 5. `package-manager` and package entrypoints: extensions
-6. `mcclim-app` and related UI modules: presentation and event routing
+6. UI modules: presentation and event routing
 
 When code crosses those layers, it should do so through ordinary functions and
 registries, not by reaching into unrelated globals.
@@ -106,10 +108,8 @@ logic should live with the selector/minibuffer subsystem.
 
 ### 2. Make UI state truly local
 
-`src/minibuffer.lisp` still defines a large amount of global selector state, and
-`src/mcclim-app.lisp` has to capture and dynamically rebind that state into each
-frame. That works, but it is transitional architecture. The more emacsy shape
-is:
+`src/minibuffer.lisp` still defines a large amount of global selector state.
+That is transitional architecture. The more emacsy shape is:
 
 - buffer-local state for editor behavior
 - frame-local state for transient UI overlays
@@ -177,7 +177,7 @@ When adding a new feature, prefer this order:
 2. expose ordinary functions over that data
 3. register commands or tools as thin entrypoints
 4. add hooks if users will reasonably want to alter it
-5. render it in McCLIM through presentations or buffer types
+5. render it through presentations or buffer types
 
-If a feature starts in `mcclim-app.lisp` or `main.lisp`, it is often being added
-too high in the stack.
+If a feature starts in `main.lisp`, it is often being added too high in the
+stack.

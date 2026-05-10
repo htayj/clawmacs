@@ -217,6 +217,13 @@ User request:~%~A~%~%
 Plan summary:~%~A~%~%
 Implementation instructions:~%~A~%~%
 Selected test methods that will run after this stage: ~{~A~^, ~}.~%~%
+Use the durable recovery primitives while changing code: file writes/edits and
+lisp_eval are checkpointed automatically, `recovery_list` can summarize recent
+checkpoints after failures, and risky compile/load/eval probes should use
+`lisp_eval` with :mode \"isolated\" unless you intentionally need to mutate the
+live Clawmacs image. Do not reduce Clawmacs self-modification capability; make
+changes recoverable and repairable.
+
 Do the code changes now. Do not update docs or init.lisp yet unless doing so is
 strictly necessary to make the code build or test."
             (pipeline-context-original-prompt context)
@@ -234,7 +241,10 @@ Plan summary:~%~A~%~%
 Selected deterministic test methods: ~{~A~^, ~}.~%~%
 Use `prove_run` to run those exact test methods in the current project. Use
 `prove_list_methods` first only if you need to confirm the available method
-names. After running the tests, return JSON only with these keys:~%
+names. If a previous live eval or tool call appears interrupted, report that
+clearly so the repair stage can inspect the durable recovery journal, but do
+not modify code in this stage. After running the tests, return JSON only with
+these keys:~%
 - \"passed\": boolean~%
 - \"summary\": short summary sentence~%
 - \"feedback\": concise high-signal feedback for a repair planner; include the
@@ -333,20 +343,6 @@ if you must modify that file from the running process."
    :command
    '("./scripts/guix-container.sh" "--mode" "run" "--" "sh" "-lc"
      "sbcl --noinform --load \"$CLAWMACS_QUICKLISP_SETUP\" --eval \"(push (truename \\\".\\\") asdf:*central-registry*)\" --eval \"(ql:quickload :clawmacs/tests)\" --eval \"(fiveam:run! (quote clawmacs/tests::clawmacs-suite))\" --eval \"(quit)\""))
-  (dolist (group '(("mcclim-offline" "offline" "Run the offline McCLIM e2e suite.")
-                   ("mcclim-smoke" "smoke" "Run the smoke McCLIM e2e suite.")
-                   ("mcclim-packages" "packages" "Run the package-focused McCLIM e2e suite.")
-                   ("mcclim-windows" "windows" "Run the logical-window McCLIM e2e suite.")
-                   ("mcclim-readline" "readline" "Run the readline-oriented McCLIM e2e suite.")
-                   ("mcclim-online" "online" "Run the live-provider McCLIM e2e suite.")
-                   ("mcclim-online-zai" "online-zai" "Run the live ZAI McCLIM e2e suite.")
-                   ("mcclim-online-openai-codex" "online-openai-codex"
-                    "Run the live OpenAI Codex McCLIM e2e suite.")))
-    (destructuring-bind (name only description) group
-      (register-pipeline-test-profile
-       name
-       :description description
-       :command (list "./scripts/mcclim-e2e.sh" "--only" only))))
   (register-pipeline-test-profile
    "prompt-probes"
    :description "Run the full live prompt.sh probe harness."
@@ -445,7 +441,7 @@ if you must modify that file from the running process."
 
 (defdoc register-pipeline-test-profile
   :category "pipelines"
-  :usage "(register-pipeline-test-profile \"unit\" :description \"Run unit tests\" :command '(\"./scripts/mcclim-e2e.sh\" \"--only\" \"smoke\"))"
+  :usage "(register-pipeline-test-profile \"unit\" :description \"Run unit tests\" :command '(\"./scripts/guix-container.sh\" \"--mode\" \"run\" ...))"
   :returns "pipeline-test-profile - The registered deterministic test profile."
   :side-effects "Updates the process-local test profile registry used by run-pipeline-test-profiles and shipped pipelines such as self-modify."
   :see-also (define-pipeline-test-profile list-pipeline-test-profiles run-pipeline-test-profiles))
@@ -464,7 +460,7 @@ if you must modify that file from the running process."
 
 (defdoc run-pipeline-test-profiles
   :category "pipelines"
-  :usage "(run-pipeline-test-profiles '(\"unit\" \"mcclim-offline\") :directory #P\"/path/to/repo/\")"
+  :usage "(run-pipeline-test-profiles '(\"unit\" \"prompt-probes\") :directory #P\"/path/to/repo/\")"
   :returns "plist - Structured test report with :passed-p, :summary, and per-profile command results."
   :side-effects "Runs registered shell command profiles sequentially in the given directory."
   :see-also (register-pipeline-test-profile list-pipeline-test-profiles define-pipeline))
