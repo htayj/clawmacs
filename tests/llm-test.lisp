@@ -2065,6 +2065,12 @@ same
                     (is (search "Structural editing with sexed"
                                 (getf first-implement :system-prompt)
                                 :test #'char-equal))
+                    (is (search "recovery_list"
+                                (getf first-implement :messages-json)
+                                :test #'char-equal))
+                    (is (search "isolated"
+                                (getf first-implement :messages-json)
+                                :test #'char-equal))
                     (is (search "<skill>"
                                 (getf first-implement :messages-json)
                                 :test #'char-equal))

@@ -217,6 +217,13 @@ User request:~%~A~%~%
 Plan summary:~%~A~%~%
 Implementation instructions:~%~A~%~%
 Selected test methods that will run after this stage: ~{~A~^, ~}.~%~%
+Use the durable recovery primitives while changing code: file writes/edits and
+lisp_eval are checkpointed automatically, `recovery_list` can summarize recent
+checkpoints after failures, and risky compile/load/eval probes should use
+`lisp_eval` with :mode \"isolated\" unless you intentionally need to mutate the
+live Clawmacs image. Do not reduce Clawmacs self-modification capability; make
+changes recoverable and repairable.
+
 Do the code changes now. Do not update docs or init.lisp yet unless doing so is
 strictly necessary to make the code build or test."
             (pipeline-context-original-prompt context)
@@ -234,7 +241,10 @@ Plan summary:~%~A~%~%
 Selected deterministic test methods: ~{~A~^, ~}.~%~%
 Use `prove_run` to run those exact test methods in the current project. Use
 `prove_list_methods` first only if you need to confirm the available method
-names. After running the tests, return JSON only with these keys:~%
+names. If a previous live eval or tool call appears interrupted, report that
+clearly so the repair stage can inspect the durable recovery journal, but do
+not modify code in this stage. After running the tests, return JSON only with
+these keys:~%
 - \"passed\": boolean~%
 - \"summary\": short summary sentence~%
 - \"feedback\": concise high-signal feedback for a repair planner; include the
