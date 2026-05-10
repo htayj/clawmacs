@@ -184,6 +184,7 @@
    #:*default-context-limit*
    #:*default-agent-name*
    #:*default-show-tool-results*
+   #:*default-collapse-tool-activity*
    #:*default-show-reasoning-output*
    #:*default-show-metadata-output*
    #:*default-pipeline-name*
@@ -255,6 +256,7 @@
    #:buffer-keymap
    #:buffer-scroll-offset
    #:buffer-show-tool-results-p
+   #:buffer-collapse-tool-activity-p
    #:buffer-show-reasoning-p
    #:buffer-show-metadata-p
    #:buffer-pending-stream

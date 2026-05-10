@@ -88,6 +88,7 @@
                               (:file "projects-test")
                               (:file "skills-test")
                               (:file "font-editor-test")
+                              (:file "mcclim-interface-test")
                               (:file "sexed-test")
                               (:file "slop-test")
                               (:file "llm-test")

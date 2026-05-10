@@ -13,6 +13,9 @@
 (defvar *default-show-tool-results* t
   "When nil, new buffers hide tool-result messages by default.")
 
+(defvar *default-collapse-tool-activity* t
+  "When non-nil, new buffers collapse consecutive tool calls/results in transcript display.")
+
 (defvar *default-show-reasoning-output* nil
   "When non-nil, new buffers show provider-supplied reasoning blocks by default.")
 
@@ -432,6 +435,11 @@ major-mode label, and optional McCLIM presentation functions."
                          :initform *default-show-tool-results*
                          :type boolean
                          :documentation "When nil, tool-result messages are hidden from display.")
+   (collapse-tool-activity-p :initarg :collapse-tool-activity-p
+                             :accessor buffer-collapse-tool-activity-p
+                             :initform *default-collapse-tool-activity*
+                             :type boolean
+                             :documentation "When non-nil, consecutive tool call/result messages are summarized in display.")
    (show-reasoning-p    :initarg :show-reasoning-p
                          :accessor buffer-show-reasoning-p
                          :initform *default-show-reasoning-output*

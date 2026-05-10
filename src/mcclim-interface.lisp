@@ -15,6 +15,7 @@
     :describe-presentation :pointer-button-press (:left :control :shift))
 
 (clim:define-presentation-type tool-approval ())
+(clim:define-presentation-type tool-activity-summary ())
 
 (clim:define-presentation-method clim:presentation-typep
     (object (type tool-approval))
@@ -252,6 +253,57 @@ When BUFFER is nil, use the default buffer visibility settings."
     (:tool "tool")
     (:system "system")))
 
+(defstruct (chat-tool-activity-summary
+            (:constructor make-chat-tool-activity-summary
+                (&key messages tool-counts result-count first-id last-id)))
+  "Display-only summary for one consecutive run of tool calls/results."
+  (messages nil :type list)
+  (tool-counts nil :type list)
+  (result-count 0 :type integer)
+  first-id
+  last-id)
+
+(defun chat-message-tool-use-blocks (msg)
+  "Return tool_use blocks recorded in MSG's raw content."
+  (content-tool-use-blocks (or (message-raw-content msg) nil))
+
+(defun chat-message-tool-result-blocks (msg)
+  "Return tool_result blocks recorded in MSG's raw content."
+  (remove-if-not (lambda (block)
+                   (string= "tool_result" (content-block-type block)))
+                 (or (message-raw-content msg) nil)))
+
+(defun chat-tool-activity-message-p (msg)
+  "Return true when MSG is a tool call/result display message."
+  (or (chat-message-tool-use-blocks msg)
+      (eq (message-sender msg) :tool-result)
+      (chat-message-tool-result-blocks msg)))
+
+(defun chat-increment-tool-count (name counts)
+  "Return COUNTS with NAME incremented once, preserving first-seen order."
+  (let ((cell (assoc name counts :test #'string=)))
+    (if cell
+        (progn
+          (incf (cdr cell))
+          counts)
+        (append counts (list (cons name 1))))))
+
+(defun chat-tool-activity-summary-from-run (messages)
+  "Return a collapsed tool activity summary for consecutive MESSAGES."
+  (let ((counts nil)
+        (result-count 0))
+    (dolist (msg messages)
+      (dolist (tool-use (chat-message-tool-use-blocks msg))
+        (let ((name (or (cdr (assoc :name tool-use)) "unknown")))
+          (setf counts (chat-increment-tool-count name counts))))
+      (incf result-count (length (chat-message-tool-result-blocks msg))))
+    (make-chat-tool-activity-summary
+     :messages messages
+     :tool-counts counts
+     :result-count result-count
+     :first-id (chat-message-output-id (first messages))
+     :last-id (chat-message-output-id (car (last messages))))))
+
 (defun chat-transcript-messages (buf)
   "Return finalized, non-ephemeral messages for BUF."
   (loop :for msg := (buffer-first-message buf) :then (message-next msg)
@@ -259,9 +311,46 @@ When BUFFER is nil, use the default buffer visibility settings."
         :unless (buffer-ephemeral-display-message-p msg)
           :collect msg))
 
+(defun chat-transcript-display-items (buf)
+  "Return transcript display items, collapsing consecutive tool activity by default."
+  (let ((messages (chat-transcript-messages buf)))
+    (if (not (buffer-collapse-tool-activity-p buf))
+        messages
+        (let ((items nil)
+              (tool-run nil))
+          (labels ((flush-tool-run ()
+                     (when tool-run
+                       (push (chat-tool-activity-summary-from-run
+                              (nreverse tool-run))
+                             items)
+                       (setf tool-run nil))))
+            (dolist (msg messages)
+              (cond
+                ((chat-tool-activity-message-p msg)
+                 (unless (and (eq (message-sender msg) :tool-result)
+                              (not (buffer-show-tool-results-p buf)))
+                   (push msg tool-run)))
+                (t
+                 (flush-tool-run)
+                 (push msg items))))
+            (flush-tool-run)
+            (nreverse items))))))
+
 (defun chat-message-output-id (msg)
   "Return a stable incremental-redisplay id for MSG."
   (or (message-entry-id msg) msg))
+
+(defun chat-tool-activity-summary-output-id (summary)
+  "Return a stable incremental-redisplay id for SUMMARY."
+  (list :tool-activity-summary
+        (chat-tool-activity-summary-first-id summary)
+        (chat-tool-activity-summary-last-id summary)))
+
+(defun chat-display-item-output-id (item)
+  "Return a stable incremental-redisplay id for ITEM."
+  (if (chat-tool-activity-summary-p item)
+      (chat-tool-activity-summary-output-id item)
+      (chat-message-output-id item)))
 
 (defun chat-message-cache-value (msg)
   "Return a cache value covering visible MSG state."
@@ -271,6 +360,19 @@ When BUFFER is nil, use the default buffer visibility settings."
         (message-metadata msg)
         (message-entry-id msg)
         (message-parent-entry-id msg)))
+
+(defun chat-tool-activity-summary-cache-value (summary)
+  "Return a cache value covering visible SUMMARY state."
+  (list (chat-tool-activity-summary-tool-counts summary)
+        (chat-tool-activity-summary-result-count summary)
+        (mapcar #'chat-message-cache-value
+                (chat-tool-activity-summary-messages summary))))
+
+(defun chat-display-item-cache-value (item)
+  "Return a cache value covering visible ITEM state."
+  (if (chat-tool-activity-summary-p item)
+      (chat-tool-activity-summary-cache-value item)
+      (chat-message-cache-value item)))
 
 (defun message-metadata-help-string (msg)
   "Return help-window text describing MSG metadata."
@@ -489,19 +591,48 @@ When BUFFER is nil, use the default buffer visibility settings."
     (terpri stream)
     (terpri stream)))
 
+(defun chat-tool-activity-summary-text (summary)
+  "Return the collapsed display text for SUMMARY."
+  (with-output-to-string (stream)
+    (format stream "tools> ~D tool message~:P collapsed"
+            (length (chat-tool-activity-summary-messages summary)))
+    (let ((counts (chat-tool-activity-summary-tool-counts summary)))
+      (if counts
+          (dolist (entry counts)
+            (format stream "~%  ~A × ~D" (car entry) (cdr entry)))
+          (format stream "~%  no tool calls recorded")))
+    (when (plusp (chat-tool-activity-summary-result-count summary))
+      (format stream "~%  ~D tool result~:P"
+              (chat-tool-activity-summary-result-count summary)))))
+
+(defun display-chat-tool-activity-summary (stream summary)
+  "Display SUMMARY as one collapsed tool-activity presentation."
+  (clim:with-output-as-presentation
+      (stream summary 'tool-activity-summary :single-box t)
+    (clim:with-drawing-options (stream :ink (clim:make-rgb-color 0.12 0.34 0.18))
+      (write-string (chat-tool-activity-summary-text summary) stream)))
+  (terpri stream)
+  (terpri stream))
+
+(defun display-chat-display-item (stream item)
+  "Display one transcript ITEM."
+  (if (chat-tool-activity-summary-p item)
+      (display-chat-tool-activity-summary stream item)
+      (display-chat-message stream item)))
+
 (defun display-chat-transcript (frame stream)
   "Display FRAME's transcript on STREAM."
   (let* ((buf (chat-frame-buffer frame))
-         (messages (chat-transcript-messages buf)))
-    (if messages
-        (dolist (msg messages)
+         (items (chat-transcript-display-items buf)))
+    (if items
+        (dolist (item items)
           (clim:updating-output
               (stream
-               :unique-id (chat-message-output-id msg)
+               :unique-id (chat-display-item-output-id item)
                :id-test #'equal
-               :cache-value (chat-message-cache-value msg)
+               :cache-value (chat-display-item-cache-value item)
                :cache-test #'equal)
-            (display-chat-message stream msg)))
+            (display-chat-display-item stream item)))
         (clim:with-drawing-options
             (stream :ink (clim:make-rgb-color 0.45 0.45 0.45))
           (format stream "No messages yet.~%")))
