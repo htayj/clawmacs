@@ -16,11 +16,17 @@
 
 (clim:define-presentation-type tool-approval ())
 (clim:define-presentation-type tool-activity-summary ())
+(clim:define-presentation-type minibuffer-command-candidate ())
 
 (clim:define-presentation-method clim:presentation-typep
     (object (type tool-approval))
   (and (listp object)
        (not (null (assoc :tool-name object)))))
+
+(clim:define-presentation-method clim:presentation-typep
+    (object (type minibuffer-command-candidate))
+  (and (listp object)
+       (not (null (getf object :command)))))
 
 (defclass clawmacs-chat-redisplay-event (clim:window-event)
   ())
@@ -668,6 +674,7 @@ pane redraws and value callbacks propagate."
   (case key-name
     ((:left :right :up :down :home :end :page-up :page-down :tab :backspace)
      key-name)
+    ((:backtab :shift-tab :iso-left-tab) :backtab)
     ((:prior) :page-up)
     ((:next) :page-down)
     ((:delete :rubout) :backspace)
@@ -694,9 +701,17 @@ pane redraws and value callbacks propagate."
          (key-character (clim:keyboard-event-character event))
          (encoded-control (and (chat-compose-encoded-control-character event)
                                key-character))
-         (base (or encoded-control
-                   key-character
-                   (and key-name (chat-key-name-keyword key-name))))
+         (shift-tab-p (and (not (zerop (logand modifiers clim:+shift-key+)))
+                           (or (eql key-character #\Tab)
+                               (eq key-name :tab))))
+         (base (cond
+                 (encoded-control encoded-control)
+                 (shift-tab-p :backtab)
+                 ((member key-name '(:backtab :shift-tab :iso-left-tab)
+                          :test #'eq)
+                  :backtab)
+                 (key-character key-character)
+                 (key-name (chat-key-name-keyword key-name))))
          (control-p (or encoded-control
                         (not (zerop (logand modifiers clim:+control-key+)))))
          (meta-p (not (zerop (logand modifiers clim:+meta-key+))))
@@ -726,6 +741,20 @@ pane redraws and value callbacks propagate."
          (characterp (second key))
          (char-equal (second key) #\x))))
 
+(defun sync-chat-frame-after-command-dispatch (frame &key focus-compose)
+  "Synchronize FRAME after a command mutates buffer/UI state."
+  (let ((current (current-buffer)))
+    (when current
+      (setf (chat-frame-buffer frame) current)))
+  (request-chat-frame-menu-refresh frame)
+  (request-chat-frame-redisplay frame)
+  (when focus-compose
+    (let ((compose (ignore-errors (clim:find-pane-named frame 'compose))))
+      (when compose
+        (ignore-errors
+          (clim:stream-set-input-focus compose)))))
+  frame)
+
 (defun dispatch-chat-compose-event-to-buffer (pane event)
   "Dispatch EVENT through Clawmacs' buffer key handler and refresh the frame."
   (let* ((frame (clim:pane-frame pane))
@@ -740,11 +769,7 @@ pane redraws and value callbacks propagate."
       (let ((result (handle-key-event buf key)))
         (when (eq result :quit)
           (clim:frame-exit frame))
-        (let ((current (current-buffer)))
-          (when current
-            (setf (chat-frame-buffer frame) current)))
-        (request-chat-frame-menu-refresh frame)
-        (request-chat-frame-redisplay frame)
+        (sync-chat-frame-after-command-dispatch frame)
         t))))
 
 (defmethod clim:handle-event :around
@@ -793,6 +818,14 @@ pane redraws and value callbacks propagate."
    :min-height 22
    :max-height 22))
 
+(defparameter *chat-minibuffer-line-height* 24
+  "Approximate pixel height of one chat minibuffer row.")
+
+(defparameter *chat-minibuffer-max-pixel-height* nil
+  "Maximum pixel height for the expanded chat minibuffer pane.
+When NIL, derive it from `*minibuffer-max-height*' and
+`*chat-minibuffer-line-height*' so logical rows and reserved space agree.")
+
 (defclass clawmacs-chat-minibuffer-pane (esa:minibuffer-pane)
   ()
   (:documentation "ESA minibuffer used for messages, command arguments, and M-x.")
@@ -819,17 +852,50 @@ pane redraws and value callbacks propagate."
         fallback
         "")))
 
+(defun minibuffer-selection-count-text ()
+  "Return a compact selected/total completion count string, or NIL."
+  (let ((count (length *minibuffer-filtered-items*)))
+    (when (plusp count)
+      (format nil "~D/~D" (1+ *minibuffer-selected-index*) count))))
+
+(defun chat-minibuffer-display-input ()
+  "Return minibuffer input with a visible point marker for display."
+  (let ((point (max 0 (min *minibuffer-point* (length *minibuffer-input*)))))
+    (concatenate 'string
+                 (subseq *minibuffer-input* 0 point)
+                 "|"
+                 (subseq *minibuffer-input* point))))
+
+(defun write-minibuffer-prompt-line (stream &key (display-cursor-p nil))
+  "Write the minibuffer prompt line to STREAM."
+  (format stream "~A: ~A"
+          *minibuffer-prompt*
+          (if display-cursor-p
+              (chat-minibuffer-display-input)
+              *minibuffer-input*))
+  (when (and (eq *minibuffer-mode* :completion)
+             *minibuffer-filtered-items*)
+    (let ((item (nth *minibuffer-selected-index*
+                     *minibuffer-filtered-items*))
+          (count-text (minibuffer-selection-count-text)))
+      (when item
+        (format stream "  [~A]" (minibuffer-item-display item)))
+      (when count-text
+        (format stream "  (~A)" count-text)))))
+
 (defun chat-frame-e2e-minibuffer-text ()
   "Return semantic minibuffer text for the current input state."
   (if *minibuffer-active*
       (with-output-to-string (stream)
-        (format stream "~A: ~A" *minibuffer-prompt* *minibuffer-input*)
-        (when (and (eq *minibuffer-mode* :completion)
-                   *minibuffer-filtered-items*)
-          (let ((item (nth *minibuffer-selected-index*
-                           *minibuffer-filtered-items*)))
-            (when item
-              (format stream "  [~A]" (minibuffer-item-display item))))))
+        (write-minibuffer-prompt-line stream)
+        (cond
+          (*minibuffer-filtered-items*
+           (dolist (row (minibuffer-visible-candidate-rows))
+             (format stream "~%~A ~A"
+                     (if (getf row :selected-p) ">" " ")
+                     (getf row :display))))
+          ((eq *minibuffer-mode* :completion)
+           (format stream "~%  No matches"))))
       ""))
 
 (defun chat-frame-e2e-info-line (frame)
@@ -920,16 +986,36 @@ pane redraws and value callbacks propagate."
                payload))
       (emit-chat-frame-e2e-snapshot frame :reason "pane-rendered" :pane pane-name))))
 
+(defun display-minibuffer-candidate-row (stream row)
+  "Display one minibuffer completion ROW on STREAM."
+  (let* ((item (getf row :item))
+         (display (getf row :display))
+         (selected-p (getf row :selected-p))
+         (marker (if selected-p ">" " ")))
+    (flet ((emit-row ()
+             (format stream " ~A " marker)
+             (if selected-p
+                 (clim:with-text-face (stream :bold)
+                   (format stream "~A" display))
+                 (format stream "~A" display))))
+      (if (and (listp item) (getf item :command))
+          (clim:with-output-as-presentation
+              (stream item 'minibuffer-command-candidate :single-box t)
+            (emit-row))
+          (emit-row)))))
+
 (defun display-chat-minibuffer-pane (frame stream)
   "Display Clawmacs' lightweight minibuffer state in STREAM."
   (when *minibuffer-active*
-    (format stream " ~A: ~A" *minibuffer-prompt* *minibuffer-input*)
-    (when (and (eq *minibuffer-mode* :completion)
-               *minibuffer-filtered-items*)
-      (let ((item (nth *minibuffer-selected-index*
-                       *minibuffer-filtered-items*)))
-        (when item
-          (format stream "  [~A]" (minibuffer-item-display item))))))
+    (write-char #\Space stream)
+    (write-minibuffer-prompt-line stream :display-cursor-p t)
+    (cond
+      (*minibuffer-filtered-items*
+       (dolist (row (minibuffer-visible-candidate-rows))
+         (terpri stream)
+         (display-minibuffer-candidate-row stream row)))
+      ((eq *minibuffer-mode* :completion)
+       (format stream "~%   No matches"))))
   (emit-chat-pane-rendered frame "minibuffer"
                            :active *minibuffer-active*
                            :text (chat-frame-e2e-minibuffer-text)))
@@ -1318,6 +1404,32 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
     (when queue-now-p
       (queue-chat-frame-redisplay-event frame))))
 
+(defun chat-minibuffer-desired-row-count ()
+  "Return the number of rows the chat minibuffer pane should reserve."
+  (cond
+    ((not *minibuffer-active*) 1)
+    ((eq *minibuffer-mode* :completion)
+     (+ 1 (max 1 (minibuffer-visible-item-count))))
+    (t 1)))
+
+(defun chat-minibuffer-max-pixel-height ()
+  "Return the maximum expanded minibuffer pane height in pixels."
+  (or *chat-minibuffer-max-pixel-height*
+      (* *chat-minibuffer-line-height* *minibuffer-max-height*)))
+
+(defun update-chat-minibuffer-space-requirements (frame)
+  "Resize FRAME's minibuffer pane for active completion rows."
+  (let* ((pane (ignore-errors (clim:find-pane-named frame 'minibuffer)))
+         (height (min (chat-minibuffer-max-pixel-height)
+                      (* *chat-minibuffer-line-height*
+                         (chat-minibuffer-desired-row-count)))))
+    (when pane
+      (ignore-errors
+        (clim:change-space-requirements pane
+                                        :height height
+                                        :min-height height
+                                        :max-height height)))))
+
 (defun handle-chat-frame-redisplay (frame)
   "Run the canonical redisplay step for FRAME's transcript pane."
   (let ((repeat-p nil))
@@ -1330,6 +1442,7 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
            (when (and buf (buffer-pending-stream buf))
              (let ((*suppress-chat-redisplay-requests* t))
                (update-streaming-response buf)))
+           (update-chat-minibuffer-space-requirements frame)
            (clim:redisplay-frame-pane frame 'transcript :force-p nil)
            (ignore-errors
              (clim:redisplay-frame-pane frame 'info :force-p t))
@@ -1570,6 +1683,16 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
      frame
      (clim:find-pane-named frame 'compose))))
 
+(define-clawmacs-chat-frame-command
+    (com-chat-select-minibuffer-command-candidate :name nil)
+    ((item 'minibuffer-command-candidate))
+  (clim:with-application-frame (frame)
+    (let ((command (and (listp item) (getf item :command))))
+      (when command
+        (minibuffer-deactivate)
+        (invoke-command (chat-frame-buffer frame) command)
+        (sync-chat-frame-after-command-dispatch frame :focus-compose t)))))
+
 (clim:add-keystroke-to-command-table
  'clawmacs-chat-frame
  '(#\Return)
@@ -1798,6 +1921,15 @@ compose pane while leaving text editing keys to Drei's editor tables."
     (chat-message com-show-message-metadata clawmacs-chat-frame
      :gesture :describe
      :documentation "View message metadata"
+     :menu nil)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator select-minibuffer-command-candidate
+    (minibuffer-command-candidate com-chat-select-minibuffer-command-candidate
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Run command"
      :menu nil)
     (object)
   (list object))

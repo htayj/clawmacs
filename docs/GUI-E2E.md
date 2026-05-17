@@ -75,9 +75,11 @@ flow from the compose pane:
 1. waits for `frame-ready` and focuses the Clawmacs window;
 2. sends `Escape` then `x` as the robust keyboard equivalent of `M-x`;
 3. waits for the minibuffer snapshot to show `M-x`;
-4. types `toggle-debug-mode-command`;
-5. presses Return;
-6. waits for the transcript snapshot to contain `[Debug mode ON...` and for the
+4. types the fuzzy abbreviation `tdbg`;
+5. waits for the semantic minibuffer snapshot to list
+   `toggle-debug-mode-command` as the selected candidate;
+6. presses Return;
+7. waits for the transcript snapshot to contain `[Debug mode ON...` and for the
    minibuffer to deactivate;
-7. captures screenshots for the initial, minibuffer-open, command-typed, and
+8. captures screenshots for the initial, minibuffer-open, command-typed, and
    final result states.

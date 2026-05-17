@@ -256,8 +256,26 @@ resets the scroll offset."
 (defun minibuffer-visible-item-count ()
   "Return the number of candidate rows visible in the minibuffer.
 This is the total minibuffer height minus 1 (for the prompt line)."
-  (1- (min *minibuffer-max-height*
-           (1+ (length *minibuffer-filtered-items*)))))
+  (max 0
+       (1- (min *minibuffer-max-height*
+                (1+ (length *minibuffer-filtered-items*))))))
+
+(defun minibuffer-visible-candidate-rows ()
+  "Return visible completion rows as plists for renderers and tests.
+Each row contains :INDEX, :ITEM, :DISPLAY, and :SELECTED-P.  Prompt-mode
+minibuffers do not expose completion rows."
+  (when (and (eq *minibuffer-mode* :completion)
+             *minibuffer-filtered-items*)
+    (let* ((visible (minibuffer-visible-item-count))
+           (count (length *minibuffer-filtered-items*))
+           (start (max 0 (min *minibuffer-scroll-offset* count)))
+           (end (min count (+ start visible))))
+      (loop :for item :in (subseq *minibuffer-filtered-items* start end)
+            :for index :from start
+            :collect (list :index index
+                           :item item
+                           :display (minibuffer-item-display item)
+                           :selected-p (= index *minibuffer-selected-index*))))))
 
 (defun minibuffer-ensure-visible ()
   "Adjust *minibuffer-scroll-offset* so that *minibuffer-selected-index*
@@ -274,33 +292,41 @@ is within the visible window of candidates."
               (1+ (- *minibuffer-selected-index* visible)))))))
 
 (defun minibuffer-next-item ()
-  "Move the selection to the next candidate in the filtered list."
-  (when (< *minibuffer-selected-index*
-           (1- (length *minibuffer-filtered-items*)))
-    (incf *minibuffer-selected-index*)
-    (minibuffer-ensure-visible)))
+  "Move the selection to the next candidate in the filtered list, wrapping."
+  (let ((count (length *minibuffer-filtered-items*)))
+    (when (plusp count)
+      (setf *minibuffer-selected-index*
+            (mod (1+ *minibuffer-selected-index*) count))
+      (minibuffer-ensure-visible))))
 
 (defun minibuffer-prev-item ()
-  "Move the selection to the previous candidate in the filtered list."
-  (when (plusp *minibuffer-selected-index*)
-    (decf *minibuffer-selected-index*)
-    (minibuffer-ensure-visible)))
+  "Move the selection to the previous candidate in the filtered list, wrapping."
+  (let ((count (length *minibuffer-filtered-items*)))
+    (when (plusp count)
+      (setf *minibuffer-selected-index*
+            (mod (1- *minibuffer-selected-index*) count))
+      (minibuffer-ensure-visible))))
 
 (defun minibuffer-confirm ()
-  "Confirm the current selection, invoke the callback, and deactivate."
+  "Confirm the current selection, invoke the callback, and deactivate.
+When completion mode has no selected item, keep the minibuffer open so the user
+can revise the query instead of losing it silently."
   (let ((item (when (plusp (length *minibuffer-filtered-items*))
                 (nth *minibuffer-selected-index* *minibuffer-filtered-items*)))
         (mode *minibuffer-mode*)
         (input *minibuffer-input*)
         (cb *minibuffer-callback*))
-    (minibuffer-deactivate)
-    (when cb
-      (case mode
-        (:prompt
-         (funcall cb input))
-        (t
-         (when item
-           (funcall cb item)))))))
+    (cond
+      ((and (eq mode :completion) (null item))
+       nil)
+      (t
+       (minibuffer-deactivate)
+       (when cb
+         (case mode
+           (:prompt
+            (funcall cb input))
+           (t
+            (funcall cb item))))))))
 
 (defun minibuffer-cancel ()
   "Cancel the minibuffer without invoking the callback."
@@ -747,14 +773,70 @@ are sorted with the current buffer first, then alphabetically."
        (session-tree-selector-insert-search-char base-key))
       (t nil))))
 
+(defun minibuffer-control-key-character (key)
+  "Return KEY encoded as the control character used by minibuffer commands."
+  (cond
+    ((null key) nil)
+    ((not (characterp key)) key)
+    ((char-equal key #\Space) (code-char 0))
+    ((alpha-char-p key)
+     (code-char (1+ (- (char-code (char-downcase key))
+                      (char-code #\a)))))
+    (t key)))
+
+(defun minibuffer-base-key (key)
+  "Return KEY stripped or encoded for minibuffer command dispatch."
+  (cond
+    ((and (listp key) (= (length key) 2)
+          (member (first key) '(:meta :alt :ctrl-x :ctrl-c)))
+     (second key))
+    ((and (listp key) (= (length key) 2)
+          (member (first key) '(:ctrl :control)))
+     (minibuffer-control-key-character (second key)))
+    (t key)))
+
+(defun minibuffer-tab-key-p (key)
+  "Return true when KEY denotes a plain Tab gesture."
+  (or (eq key :tab)
+      (and (characterp key) (char= key #\Tab))))
+
+(defun minibuffer-backtab-key-p (key)
+  "Return true when KEY denotes a Backtab/Shift-Tab gesture."
+  (member key '(:backtab :shift-tab :iso-left-tab) :test #'eq))
+
+(defun minibuffer-prefixed-tab-key-p (key prefixes)
+  "Return true when KEY is a prefixed Tab/Backtab gesture."
+  (and (listp key)
+       (= (length key) 2)
+       (member (first key) prefixes :test #'eq)
+       (or (minibuffer-tab-key-p (second key))
+           (minibuffer-backtab-key-p (second key)))))
+
+(defun minibuffer-completion-next-key-p (key base-key)
+  "Return true when KEY should move to the next completion candidate."
+  (and (eq *minibuffer-mode* :completion)
+       (not (minibuffer-prefixed-tab-key-p key '(:meta :alt :shift)))
+       (not (minibuffer-backtab-key-p base-key))
+       (or (eq base-key :down)
+           (minibuffer-tab-key-p base-key)
+           (and (characterp base-key)
+                (char= base-key (code-char 14))))))
+
+(defun minibuffer-completion-prev-key-p (key base-key)
+  "Return true when KEY should move to the previous completion candidate."
+  (and (eq *minibuffer-mode* :completion)
+       (or (eq base-key :up)
+           (minibuffer-backtab-key-p base-key)
+           (minibuffer-prefixed-tab-key-p key '(:meta :alt :shift))
+           (and (characterp base-key)
+                (char= base-key (code-char 16))))))
+
 (defun handle-minibuffer-key (key)
   "Handle a key event while the minibuffer is active.
-Supports: C-g (cancel), Return (confirm), C-n/Down and C-p/Up (navigate),
-Backspace (delete), C-a/C-e (move), C-u (kill all), and self-insert."
-  (let ((base-key (if (and (listp key) (= (length key) 2)
-                           (member (first key) '(:meta :alt :ctrl-x :ctrl-c)))
-                      (second key)
-                      key)))
+Supports: C-g (cancel), Return (confirm), completion navigation with
+C-n/Down/Tab and C-p/Up/M-Tab/Backtab, Backspace (delete), C-a/C-e (move),
+C-u (kill all), and self-insert."
+  (let ((base-key (minibuffer-base-key key)))
     (cond
       ;; C-g: cancel
       ((and (characterp base-key) (char= base-key (code-char 7)))
@@ -763,13 +845,11 @@ Backspace (delete), C-a/C-e (move), C-u (kill all), and self-insert."
       ((and (characterp base-key) (or (char= base-key #\Return)
                                        (char= base-key #\Newline)))
        (minibuffer-confirm))
-      ;; C-n or Down arrow: next item
-      ((or (eq base-key :down)
-           (and (characterp base-key) (char= base-key (code-char 14))))
+      ;; C-n, Down arrow, or Tab: next completion item
+      ((minibuffer-completion-next-key-p key base-key)
        (minibuffer-next-item))
-      ;; C-p or Up arrow: previous item
-      ((or (eq base-key :up)
-           (and (characterp base-key) (char= base-key (code-char 16))))
+      ;; C-p, Up arrow, M-Tab, or Backtab: previous completion item
+      ((minibuffer-completion-prev-key-p key base-key)
        (minibuffer-prev-item))
       ;; Backspace: delete character before point
       ((or (eq base-key :backspace)

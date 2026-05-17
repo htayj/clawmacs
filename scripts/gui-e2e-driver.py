@@ -242,10 +242,14 @@ def run_mx(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           timeout=10.0)
     screenshots.append(session.screenshot("02-mx-open"))
 
+    abbreviation = "tdbg"
     command = "toggle-debug-mode-command"
-    session.type_text(command)
-    session.wait_snapshot("M-x command typed",
-                          lambda snapshot: command in str(snapshot.get("minibuffer_text", "")),
+    session.type_text(abbreviation)
+    session.wait_snapshot("M-x fuzzy command candidate listed",
+                          lambda snapshot: (
+                              f"M-x: {abbreviation}" in str(snapshot.get("minibuffer_text", ""))
+                              and f"\n> {command}" in str(snapshot.get("minibuffer_text", ""))
+                          ),
                           timeout=10.0)
     screenshots.append(session.screenshot("03-mx-command"))
 

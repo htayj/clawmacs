@@ -974,6 +974,101 @@
       (is (eq :redraw
               (clawmacs::handle-key-event buf (code-char 12)))))))
 
+(test minibuffer-completion-navigation-wraps-with-tab-and-backtab
+  "Completion navigation accepts Emacs-style keys and wraps at both ends."
+  (let ((*minibuffer-active* nil)
+        (*minibuffer-mode* :completion)
+        (*minibuffer-prompt* "")
+        (*minibuffer-input* "")
+        (*minibuffer-point* 0)
+        (*minibuffer-items* nil)
+        (*minibuffer-filtered-items* nil)
+        (*minibuffer-match-positions* nil)
+        (*minibuffer-selected-index* 0)
+        (*minibuffer-scroll-offset* 0)
+        (*minibuffer-callback* nil)
+        (*minibuffer-max-height* 3))
+    (minibuffer-activate
+     "Pick"
+     (list (list :display "alpha")
+           (list :display "bravo")
+           (list :display "charlie"))
+     (lambda (item) (declare (ignore item))))
+    (is (= 0 *minibuffer-selected-index*))
+    (handle-minibuffer-key #\Tab)
+    (is (= 1 *minibuffer-selected-index*))
+    (handle-minibuffer-key :down)
+    (is (= 2 *minibuffer-selected-index*))
+    (handle-minibuffer-key (code-char 14))
+    (is (= 0 *minibuffer-selected-index*))
+    (handle-minibuffer-key '(:ctrl #\n))
+    (is (= 1 *minibuffer-selected-index*))
+    (handle-minibuffer-key '(:control #\n))
+    (is (= 2 *minibuffer-selected-index*))
+    (handle-minibuffer-key #\Tab)
+    (is (= 0 *minibuffer-selected-index*))
+    (is (= 0 *minibuffer-scroll-offset*))
+    (handle-minibuffer-key :backtab)
+    (is (= 2 *minibuffer-selected-index*))
+    (handle-minibuffer-key '(:control #\p))
+    (is (= 1 *minibuffer-selected-index*))
+    (handle-minibuffer-key '(:meta #\Tab))
+    (is (= 0 *minibuffer-selected-index*))
+    (handle-minibuffer-key '(:meta :tab))
+    (is (= 2 *minibuffer-selected-index*))
+    (handle-minibuffer-key :up)
+    (is (= 1 *minibuffer-selected-index*))))
+
+(test minibuffer-completion-return-with-no-match-keeps-query
+  "Return on an empty completion result keeps the minibuffer active."
+  (let ((submitted nil)
+        (*minibuffer-active* nil)
+        (*minibuffer-mode* :completion)
+        (*minibuffer-prompt* "")
+        (*minibuffer-input* "")
+        (*minibuffer-point* 0)
+        (*minibuffer-items* nil)
+        (*minibuffer-filtered-items* nil)
+        (*minibuffer-match-positions* nil)
+        (*minibuffer-selected-index* 0)
+        (*minibuffer-scroll-offset* 0)
+        (*minibuffer-callback* nil))
+    (minibuffer-activate
+     "Pick"
+     (list (list :display "alpha"))
+     (lambda (item) (setf submitted item)))
+    (handle-minibuffer-key #\z)
+    (is (null *minibuffer-filtered-items*))
+    (handle-minibuffer-key #\Return)
+    (is-true *minibuffer-active*)
+    (is (string= "z" *minibuffer-input*))
+    (is (null submitted))))
+
+(test minibuffer-prompt-mode-preserves-editing-keys
+  "Prompt mode still edits raw input instead of cycling completion candidates."
+  (let ((submitted nil)
+        (*minibuffer-active* nil)
+        (*minibuffer-mode* :completion)
+        (*minibuffer-prompt* "")
+        (*minibuffer-input* "")
+        (*minibuffer-point* 0)
+        (*minibuffer-items* nil)
+        (*minibuffer-filtered-items* nil)
+        (*minibuffer-match-positions* nil)
+        (*minibuffer-selected-index* 0)
+        (*minibuffer-scroll-offset* 0)
+        (*minibuffer-callback* nil))
+    (minibuffer-prompt "Raw" (lambda (input) (setf submitted input)))
+    (handle-minibuffer-key #\a)
+    (handle-minibuffer-key #\b)
+    (handle-minibuffer-key :down)
+    (handle-minibuffer-key :backtab)
+    (is (string= "ab" *minibuffer-input*))
+    (handle-minibuffer-key #\Backspace)
+    (is (string= "a" *minibuffer-input*))
+    (handle-minibuffer-key #\Return)
+    (is (string= "a" submitted))))
+
 ;;; --------------------------------------------------------------------------
 ;;; M-x Tests
 ;;; --------------------------------------------------------------------------
@@ -1004,6 +1099,19 @@
   (with-interactive-command-test-buffer (buf)
     (clawmacs::handle-key-event buf '(:meta #\x))
     (select-minibuffer-command 'mx-test-noarg-command)
+    (is (null *minibuffer-active*))
+    (is (equal '(:noarg) *mx-test-command-log*))))
+
+(test execute-extended-command-fuzzy-matches-and-runs-selection
+  "M-x filters command names by fuzzy abbreviation and Return runs the selection."
+  (with-interactive-command-test-buffer (buf)
+    (clawmacs::handle-key-event buf '(:meta #\x))
+    (dolist (char (coerce "mxno" 'list))
+      (clawmacs::handle-key-event buf char))
+    (is (string= "mxno" *minibuffer-input*))
+    (is (eq 'mx-test-noarg-command
+            (getf (first *minibuffer-filtered-items*) :command)))
+    (handle-minibuffer-key #\Return)
     (is (null *minibuffer-active*))
     (is (equal '(:noarg) *mx-test-command-log*))))
 

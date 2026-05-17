@@ -24,7 +24,7 @@ Clawmacs supports multiple LLM providers, switchable per buffer:
 - *OpenAI Codex* --- with shared Codex OAuth/API-key auth and the Responses API
 - *OpenRouter* --- access to hundreds of models with dynamic model discovery
 
-Switch agents on the fly with =C-c A=. Switch models on the fly with =C-c C-m= (fuzzy minibuffer selector) or =C-c M= (overlay selector). Run interactive commands with =M-x=, including minibuffer prompting for command arguments.
+Switch agents on the fly with =C-c A=. Switch models on the fly with =C-c C-m= (fuzzy minibuffer selector) or =C-c M= (overlay selector). Run interactive commands with =M-x= using fuzzy command-name completion, candidate rows, =Tab=/=Down= and =Backtab=/=Up= navigation, and minibuffer prompting for command arguments.
 
 ** OpenAI Codex Auth
 
@@ -226,7 +226,8 @@ touch.
 ** McCLIM Chat Interface
 
 The current McCLIM interface is a small presentation-based chat frame. It has
-a transcript pane and a Drei-backed compose pane. Transcript messages are CLIM
+a transcript pane, a Drei-backed compose pane, an info line, and a minibuffer
+pane for prompts and fuzzy completion rows. Transcript messages are CLIM
 presentations, and middle-clicking a message opens a one-pane metadata help
 window.
 
@@ -298,7 +299,7 @@ window.
 
 | Key           | Action                       |
 |---------------+------------------------------|
-| =M-x=          | Execute command              |
+| =M-x=          | Fuzzy execute command        |
 | =C-h b=        | Describe keybindings         |
 | =C-h f=        | Describe function            |
 | =C-h v=        | Describe variable            |
@@ -352,11 +353,12 @@ buffer placeholder or manual when one is installed.
 
 ** McCLIM Interface
 
-Clawmacs runs as a McCLIM application frame with two visible panes: a
-presentation-rich transcript pane and a Drei-backed compose pane. The
+Clawmacs runs as a McCLIM application frame with a presentation-rich transcript
+pane, a Drei-backed compose pane, an info line, and a minibuffer pane. The
 transcript uses CLIM output records, message presentations, and incremental
-redisplay. Async provider updates are bridged back into McCLIM by queueing a
-small frame event that calls =redisplay-frame-pane= for the transcript.
+redisplay; the minibuffer uses normal CLIM stream output for prompt and
+candidate rows. Async provider updates are bridged back into McCLIM by queueing
+a small frame event that calls =redisplay-frame-pane= for the transcript.
 
 ** Boot Files
 

@@ -2289,6 +2289,13 @@ documentation in *extended-docs*."
   :side-effects "Sets or clears the current chat session's display name, persists it, and inserts a confirmation system message."
   :see-also (set-session-display-name session-info-command save-session-command))
 
+(defdoc execute-extended-command
+  :category "command"
+  :usage "M-x, then type a fuzzy abbreviation such as tdbg and press RET"
+  :returns "nil — Opens a fuzzy command selector, or invokes the selected command."
+  :side-effects "Shows matching command rows in the minibuffer; RET dispatches the selected command through invoke-command, including command-argument minibuffer prompts when needed."
+  :see-also (invoke-command make-command-selector-items minibuffer-activate))
+
 (defdoc minibuffer-select-project-command
   :category "buffer-command"
   :usage "Bound to C-x p. Selects the active project for the current chat buffer."

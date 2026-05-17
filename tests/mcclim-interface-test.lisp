@@ -128,3 +128,73 @@
                                 (clawmacs::chat-compose-event-key event))
     (is (string= "a" clawmacs::*minibuffer-input*))
     (is (eql (code-char 7) (clawmacs::chat-compose-event-key control-event)))))
+
+(test mcclim-compose-normalizes-backtab-variants-for-modal-input
+  "Shift-Tab/Backtab backend variants route to the minibuffer previous item key."
+  (let ((shift-tab (make-instance 'clim:key-press-event
+                                  :sheet nil
+                                  :x 0
+                                  :y 0
+                                  :key-name :tab
+                                  :key-character nil
+                                  :modifier-state
+                                  (clim:make-modifier-state :shift)))
+        (shift-char-tab (make-instance 'clim:key-press-event
+                                       :sheet nil
+                                       :x 0
+                                       :y 0
+                                       :key-name nil
+                                       :key-character #\Tab
+                                       :modifier-state
+                                       (clim:make-modifier-state :shift)))
+        (backtab (make-instance 'clim:key-press-event
+                                :sheet nil
+                                :x 0
+                                :y 0
+                                :key-name :backtab
+                                :key-character nil
+                                :modifier-state (clim:make-modifier-state)))
+        (iso-left-tab (make-instance 'clim:key-press-event
+                                     :sheet nil
+                                     :x 0
+                                     :y 0
+                                     :key-name :iso-left-tab
+                                     :key-character nil
+                                     :modifier-state (clim:make-modifier-state)))
+        (meta-tab (make-instance 'clim:key-press-event
+                                 :sheet nil
+                                 :x 0
+                                 :y 0
+                                 :key-name nil
+                                 :key-character #\Tab
+                                 :modifier-state
+                                 (clim:make-modifier-state :meta))))
+    (is (eq :backtab (clawmacs::chat-compose-event-key shift-tab)))
+    (is (eq :backtab (clawmacs::chat-compose-event-key shift-char-tab)))
+    (is (eq :backtab (clawmacs::chat-compose-event-key backtab)))
+    (is (eq :backtab (clawmacs::chat-compose-event-key iso-left-tab)))
+    (is (equal '(:meta #\Tab)
+               (clawmacs::chat-compose-event-key meta-tab)))))
+
+(test mcclim-minibuffer-semantic-text-includes-visible-candidate-rows
+  "Semantic E2E minibuffer text keeps the prompt summary and lists visible rows."
+  (let ((clawmacs::*minibuffer-active* t)
+        (clawmacs::*minibuffer-mode* :completion)
+        (clawmacs::*minibuffer-prompt* "M-x")
+        (clawmacs::*minibuffer-input* "td")
+        (clawmacs::*minibuffer-point* 2)
+        (clawmacs::*minibuffer-items* nil)
+        (clawmacs::*minibuffer-filtered-items*
+          (list (list :display "toggle-debug-mode-command")
+                (list :display "toggle-tool-results-command")
+                (list :display "toggle-metadata-output-command")))
+        (clawmacs::*minibuffer-match-positions* nil)
+        (clawmacs::*minibuffer-selected-index* 1)
+        (clawmacs::*minibuffer-scroll-offset* 0)
+        (clawmacs::*minibuffer-max-height* 3)
+        (clawmacs::*minibuffer-callback* nil))
+    (let ((text (clawmacs::chat-frame-e2e-minibuffer-text)))
+      (is (search "M-x: td  [toggle-tool-results-command]  (2/3)" text))
+      (is (search "  toggle-debug-mode-command" text))
+      (is (search "> toggle-tool-results-command" text))
+      (is-false (search "toggle-metadata-output-command" text)))))

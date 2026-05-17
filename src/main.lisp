@@ -21,7 +21,7 @@
     (sort (mapcar #'format-key-binding bindings) #'string<)))
 
 (defun make-command-selector-items (&key buffer)
-  "Build minibuffer items for command selection."
+  "Build minibuffer items for fuzzy M-x command selection."
   (mapcar (lambda (command)
             (let* ((name (command-display-name command))
                    (keys (command-keybinding-hints command))
@@ -2380,7 +2380,7 @@ Blank input clears the stored display name."
   :prompts ((display-name :prompt "Session display name")))
 
 (defun execute-extended-command (buffer)
-  "Select and run a command via the minibuffer. Bound to M-x."
+  "Select and run a command via the fuzzy minibuffer. Bound to M-x."
   (let ((items (make-command-selector-items :buffer buffer)))
     (if (null items)
         (buffer-insert-system-message buffer "[No commands available]")
