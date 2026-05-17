@@ -427,6 +427,13 @@ scripts/prompt-probes.sh
 scripts/prompt-probes.sh --only transaction --keep-logs
 #+end_src
 
+GUI smoke E2E runs are opt-in and documented in [[file:docs/GUI-E2E.md][docs/GUI-E2E.md]]:
+
+#+begin_src sh
+./scripts/run-gui-e2e.sh --preflight-only
+./scripts/run-gui-e2e.sh --suite smoke
+#+end_src
+
 The probes run through =prompt.sh --isolated=, write logs under =/tmp=, and
 check real agent behavior for docs discovery, skill loading, transactional
 project edits, and scratch/file-buffer workflows. By default they use

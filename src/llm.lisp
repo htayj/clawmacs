@@ -16,6 +16,20 @@ Must be a keyword matching a known provider (:openai-codex, :zai, :openrouter)."
   "The default model to use when no agent-specific or provider-fallback model
 is configured. Should be a valid model name for *default-provider*.")
 
+(defvar *e2e-model* "e2e-model"
+  "Deterministic no-network model name used only by GUI E2E runs.")
+
+(defvar *e2e-provider-enabled-override* nil
+  "Test override for enabling the deterministic E2E provider.")
+
+(defparameter +e2e-hello-sentinel+ "CLAWMACS_E2E_HELLO_SENTINEL"
+  "Stable text that the deterministic E2E provider emits for hello prompts.")
+
+(defun e2e-provider-enabled-p ()
+  "Return true when the deterministic no-network E2E provider is enabled."
+  (or *e2e-provider-enabled-override*
+      (env-truthy-p "CLAWMACS_E2E_PROVIDER")))
+
 (defvar *default-max-tokens* 8192
   "Default maximum tokens for LLM responses across all providers.")
 
@@ -1048,13 +1062,17 @@ Precedence: clawmacs override token file, then shared ~/.codex/auth.json."
 
   :OPENROUTER    1) OPENROUTER_API_KEY env var
                  2) Static token file (~/.config/clawmacs/openrouter-api-key)"
-  (or (when (eq provider :zai)
-        (read-env-token *zai-env-var*))
-      (when (eq provider :openrouter)
-        (read-env-token *openrouter-env-var*))
-      (when (eq provider :openai-codex)
-        (getf (resolve-openai-codex-auth) :token))
-      (read-provider-file-token provider)))
+  (cond
+    ((eq provider :e2e)
+     nil)
+    (t
+     (or (when (eq provider :zai)
+           (read-env-token *zai-env-var*))
+         (when (eq provider :openrouter)
+           (read-env-token *openrouter-env-var*))
+         (when (eq provider :openai-codex)
+           (getf (resolve-openai-codex-auth) :token))
+         (read-provider-file-token provider)))))
 
 (defun generate-random-string (length)
   "Generate a random string of LENGTH alphanumeric characters.
@@ -1539,14 +1557,28 @@ Returns the access token on success."
 (defparameter *provider-fallback-models*
   '((:openai-codex . *openai-codex-model*)
     (:zai . *zai-model*)
-    (:openrouter . *openrouter-model*))
+    (:openrouter . *openrouter-model*)
+    (:e2e . *e2e-model*))
   "Alist mapping provider keywords to the variable holding their default model.
 Each cdr is a symbol naming a special variable; provider-fallback-model
 dereferences it at call time so that user customizations take effect.")
 
+(defun supported-provider-keywords ()
+  "Return provider keywords available in the current runtime."
+  (append '(:openai-codex :zai :openrouter)
+          (when (e2e-provider-enabled-p)
+            '(:e2e))))
+
+(defun supported-provider-message ()
+  "Return a human-readable provider list for validation errors."
+  (format nil "~{~A~^, ~}"
+          (mapcar (lambda (provider)
+                    (format nil ":~A" (symbol-name provider)))
+                  (supported-provider-keywords))))
+
 (defun known-provider-p (provider)
   "Return non-nil when PROVIDER is supported locally."
-  (member provider '(:openai-codex :zai :openrouter) :test #'eq))
+  (member provider (supported-provider-keywords) :test #'eq))
 
 (defun canonicalize-provider-name (provider-name)
   "Return a normalized comparison key for PROVIDER-NAME."
@@ -1561,22 +1593,22 @@ dereferences it at call time so that user customizations take effect.")
     ((keywordp provider)
      (if (known-provider-p provider)
          provider
-         (error "Unknown provider ~S. Supported providers: :OPENAI-CODEX, :ZAI, :OPENROUTER"
-                provider)))
+         (error "Unknown provider ~S. Supported providers: ~A"
+                provider (supported-provider-message))))
     ((stringp provider)
      (let ((normalized-name (canonicalize-provider-name provider)))
        (or (find normalized-name
-                 '(:openai-codex :zai :openrouter)
+                 (supported-provider-keywords)
                  :key (lambda (candidate)
                         (canonicalize-provider-name (symbol-name candidate)))
                  :test #'string=)
-           (error "Unknown provider ~S. Supported providers: :OPENAI-CODEX, :ZAI, :OPENROUTER"
-                  provider))))
+           (error "Unknown provider ~S. Supported providers: ~A"
+                  provider (supported-provider-message)))))
     ((symbolp provider)
      (normalize-provider (symbol-name provider)))
     (t
-     (error "Unknown provider ~S. Supported providers: :OPENAI-CODEX, :ZAI, :OPENROUTER"
-            provider))))
+     (error "Unknown provider ~S. Supported providers: ~A"
+            provider (supported-provider-message)))))
 
 (defun blank-string-p (value)
   "Return non-nil when VALUE is nil or all whitespace."
@@ -1724,7 +1756,9 @@ respected."
      "google/gemini-2.5-flash"
      "z-ai/glm-4.6"
      "deepseek/deepseek-r1"
-     "meta-llama/llama-4-maverick"))
+     "meta-llama/llama-4-maverick")
+    (:e2e
+     "e2e-model"))
   "Known model identifiers grouped by provider.
 The first model in each list is the provider's default.
 For :OPENROUTER, models are dynamically fetched by fetch-openrouter-models when
@@ -1792,13 +1826,17 @@ nil to force a refresh. Returns the static fallback list on any error."
 (defun provider-has-token-p (provider)
   "Return non-nil when PROVIDER has a usable API key or OAuth token configured."
   (handler-case
-      (if (eq provider :openai-codex)
-          (let ((auth (resolve-openai-codex-auth)))
-            (and auth
-                 (stringp (getf auth :token))
-                 (plusp (length (getf auth :token)))))
-          (let ((token (read-provider-token provider)))
-            (and token (stringp token) (plusp (length token)))))
+      (cond
+        ((eq provider :e2e)
+         (e2e-provider-enabled-p))
+        ((eq provider :openai-codex)
+         (let ((auth (resolve-openai-codex-auth)))
+           (and auth
+                (stringp (getf auth :token))
+                (plusp (length (getf auth :token))))))
+        (t
+         (let ((token (read-provider-token provider)))
+           (and token (stringp token) (plusp (length token))))))
     (error () nil)))
 
 (defun provider-model-supported-think-levels (provider model)
@@ -2802,6 +2840,109 @@ reasoning_content is present, falls back to reasoning_content."
          state
          (stream-state-reasoning-text state))))))
 
+(defun e2e-message-text (messages)
+  "Return a simple deterministic text view of provider MESSAGES."
+  (with-output-to-string (stream)
+    (dolist (message messages)
+      (princ message stream)
+      (terpri stream))))
+
+(defun e2e-response-text (messages)
+  "Return the deterministic no-network response for E2E MESSAGES."
+  (let ((prompt (string-downcase (e2e-message-text messages))))
+    (if (search "hello" prompt)
+        (format nil "~A: deterministic response for hello." +e2e-hello-sentinel+)
+        "CLAWMACS_E2E_SENTINEL: deterministic response.")))
+
+(defun e2e-token-usage (text)
+  "Return small deterministic usage metadata for E2E response TEXT."
+  (let ((output (max 1 (length (split-string-by-newline text)))))
+    (list :input-tokens 1
+          :output-tokens output
+          :total-tokens (1+ output))))
+
+(defun e2e-request (messages &key model max-tokens tools system-prompt
+                                  reasoning-effort service-tier)
+  "Return a deterministic no-network provider response for GUI E2E runs."
+  (declare (ignore model max-tokens tools system-prompt reasoning-effort service-tier))
+  (unless (e2e-provider-enabled-p)
+    (error "The deterministic E2E provider is disabled."))
+  (let ((text (e2e-response-text messages)))
+    (canonical-response "end_turn"
+                        (list (canonical-text-block text))
+                        :usage (e2e-token-usage text))))
+
+(defun e2e-response-chunks (text)
+  "Split deterministic E2E response TEXT into stable streaming chunks."
+  (let ((width 18))
+    (loop :for start :from 0 :below (length text) :by width
+          :collect (subseq text start (min (length text) (+ start width))))))
+
+(defun e2e-request-streaming (messages callback
+                              &key model max-tokens tools system-prompt
+                                   reasoning-effort service-tier)
+  "Stream a deterministic no-network response through the normal stream-state path."
+  (declare (ignore model max-tokens tools system-prompt reasoning-effort service-tier))
+  (unless (e2e-provider-enabled-p)
+    (error "The deterministic E2E provider is disabled."))
+  (let* ((state (make-stream-state))
+         (text (e2e-response-text messages))
+         (usage (e2e-token-usage text))
+         (chunks (e2e-response-chunks text)))
+    (file-debug-event "e2e-provider-start"
+                      :chunks (length chunks)
+                      :sentinel (if (search +e2e-hello-sentinel+ text)
+                                    +e2e-hello-sentinel+
+                                    "CLAWMACS_E2E_SENTINEL"))
+    (let ((thread
+            (bt:make-thread
+             (lambda ()
+               (handler-case
+                   (progn
+                     (dolist (chunk chunks)
+                       (when (stream-state-cancel-requested-p-safe state)
+                         (return))
+                       (bt:with-lock-held ((stream-state-lock state))
+                         (setf (stream-state-text state)
+                               (concatenate 'string
+                                            (stream-state-text state)
+                                            chunk))
+                         (set-stream-state-text-block state
+                                                      (stream-state-text state)))
+                       (maybe-call-streaming-callback callback state)
+                       (sleep 0.03))
+                     (unless (stream-state-cancel-requested-p-safe state)
+                       (bt:with-lock-held ((stream-state-lock state))
+                         (set-stream-state-text-block state text)
+                         (setf (stream-state-stop-reason state) "end_turn"
+                               (stream-state-usage state) usage
+                               (stream-state-done-p state) t))
+                       (file-debug-event "e2e-provider-complete"
+                                         :stop-reason "end_turn"
+                                         :sentinel (if (search +e2e-hello-sentinel+ text)
+                                                       +e2e-hello-sentinel+
+                                                       "CLAWMACS_E2E_SENTINEL"))
+                       (maybe-call-streaming-callback callback state)))
+                 (error (e)
+                   (bt:with-lock-held ((stream-state-lock state))
+                     (setf (stream-state-error-p state) (format nil "~A" e)
+                           (stream-state-done-p state) t))
+                   (maybe-call-streaming-callback callback state))))
+             :name "clawmacs-e2e-stream")))
+      (register-stream-state-reader state nil thread)
+      state)))
+
+(defun install-e2e-agent-definition ()
+  "Install the deterministic visible agent used by no-network GUI E2E runs."
+  (when (e2e-provider-enabled-p)
+    (register-agent-definition
+     "agent"
+     :provider :e2e
+     :model *e2e-model*
+     :core-prompt "Deterministic Clawmacs GUI E2E agent."
+     :personality-prompt "Return only deterministic E2E fixture text."
+     :tool-names nil)))
+
 (defun provider-request (provider messages
                          &key model
                               (max-tokens *default-max-tokens*)
@@ -2833,7 +2974,15 @@ reasoning_content is present, falls back to reasoning_content."
                          :model model
                          :max-tokens max-tokens
                          :tools tools
-                         :system-prompt system-prompt))))
+                         :system-prompt system-prompt))
+    (:e2e
+     (e2e-request messages
+                  :model model
+                  :max-tokens max-tokens
+                  :tools tools
+                  :reasoning-effort reasoning-effort
+                  :service-tier service-tier
+                  :system-prompt system-prompt))))
 
 (defun provider-request-streaming (provider messages callback
                                    &key model
@@ -2869,7 +3018,15 @@ reasoning_content is present, falls back to reasoning_content."
                                    :model model
                                    :max-tokens max-tokens
                                    :tools tools
-                                   :system-prompt system-prompt))))
+                                   :system-prompt system-prompt))
+    (:e2e
+     (e2e-request-streaming messages callback
+                            :model model
+                            :max-tokens max-tokens
+                            :tools tools
+                            :reasoning-effort reasoning-effort
+                            :service-tier service-tier
+                            :system-prompt system-prompt))))
 
 ;;; --------------------------------------------------------------------------
 ;;; API Call

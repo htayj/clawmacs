@@ -3326,6 +3326,7 @@ Environment variables:
   ;; may still override it directly or reload after changing the path.
   (load-personality-prompt-file)
   (load-user-init-file)
+  (install-e2e-agent-definition)
   (when (fboundp 'install-chat-frame-keybindings)
     (install-chat-frame-keybindings))
   (reload-package-channels)

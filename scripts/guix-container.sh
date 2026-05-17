@@ -543,13 +543,34 @@ binary_visible() {
   run_in_container 'set -eu; command -v "$1" >/dev/null 2>&1' "$binary"
 }
 
+screenshot_command_visible() {
+  if is_test_toggle_enabled CLAWMACS_TEST_HIDE_SCREENSHOT; then
+    return 1
+  fi
+  run_in_container 'set -eu; command -v import >/dev/null 2>&1 || command -v magick >/dev/null 2>&1 || command -v xwd >/dev/null 2>&1'
+}
+
 validate_mode_binaries() {
   if ! binary_visible sbcl CLAWMACS_TEST_HIDE_SBCL; then
     fail 113 "missing required binary: sbcl"
   fi
 
-  if [ "$MODE" = "e2e" ] && ! binary_visible python3 CLAWMACS_TEST_HIDE_PYTHON3; then
-    fail 114 "missing required binary: python3"
+  if [ "$MODE" = "e2e" ]; then
+    if ! binary_visible python3 CLAWMACS_TEST_HIDE_PYTHON3; then
+      fail 114 "missing required binary: python3"
+    fi
+    if ! binary_visible Xvfb CLAWMACS_TEST_HIDE_XVFB; then
+      fail 114 "missing required binary: Xvfb"
+    fi
+    if ! binary_visible xauth CLAWMACS_TEST_HIDE_XAUTH; then
+      fail 114 "missing required binary: xauth"
+    fi
+    if ! binary_visible xdotool CLAWMACS_TEST_HIDE_XDOTOOL; then
+      fail 114 "missing required binary: xdotool"
+    fi
+    if ! screenshot_command_visible; then
+      fail 114 "missing screenshot command: import, magick, or xwd"
+    fi
   fi
 }
 
@@ -616,7 +637,7 @@ launch_payload() {
 
   export RUNTIME_LD_LIBRARY_PATH
   # shellcheck disable=SC2086
-  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_DEBUG_LOG|CLAWMACS_PROMPT_PROJECT_ROOT|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|RUNTIME_LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}" CLAWMACS_PROMPT_PROJECT_ROOT="${CLAWMACS_PROMPT_PROJECT_ROOT:-/workspace}"; if [ -n "${RUNTIME_LD_LIBRARY_PATH:-}" ]; then export LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH"; else unset LD_LIBRARY_PATH; fi; exec "$@"' bash "$@"
+  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_DEBUG_LOG|CLAWMACS_PROMPT_PROJECT_ROOT|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|RUNTIME_LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export CLAWMACS_IN_GUIX_CONTAINER=1 HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}" CLAWMACS_PROMPT_PROJECT_ROOT="${CLAWMACS_PROMPT_PROJECT_ROOT:-/workspace}"; if [ -n "${RUNTIME_LD_LIBRARY_PATH:-}" ]; then export LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH"; else unset LD_LIBRARY_PATH; fi; exec "$@"' bash "$@"
 }
 
 main() {

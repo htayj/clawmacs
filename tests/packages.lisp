@@ -113,3 +113,7 @@
 (def-suite llm-suite
   :description "LLM helper tests"
   :in clawmacs-suite)
+
+(def-suite gui-e2e-suite
+  :description "GUI E2E primitive tests"
+  :in clawmacs-suite)

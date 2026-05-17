@@ -142,6 +142,30 @@ exit 0
 EOF
 chmod +x "$TMP_CONTAINER_BIN/python3"
 
+cat > "$TMP_CONTAINER_BIN/Xvfb" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$TMP_CONTAINER_BIN/Xvfb"
+
+cat > "$TMP_CONTAINER_BIN/xauth" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$TMP_CONTAINER_BIN/xauth"
+
+cat > "$TMP_CONTAINER_BIN/xdotool" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$TMP_CONTAINER_BIN/xdotool"
+
+cat > "$TMP_CONTAINER_BIN/import" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$TMP_CONTAINER_BIN/import"
+
 cat > "$TMP_BIN/guix" <<'EOF'
 #!/bin/sh
 share=''
@@ -391,6 +415,10 @@ run_case missing-mount-toggle 111 yes CLAWMACS_TEST_MISSING_MOUNT --mode run --p
 run_case hidden-sbcl-run 113 yes CLAWMACS_TEST_HIDE_SBCL --mode run --preflight-only
 run_case hidden-sbcl-e2e 113 yes CLAWMACS_TEST_HIDE_SBCL --mode e2e --preflight-only
 run_case hidden-python3-e2e 114 yes CLAWMACS_TEST_HIDE_PYTHON3 --mode e2e --preflight-only
+run_case hidden-xvfb-e2e 114 yes CLAWMACS_TEST_HIDE_XVFB --mode e2e --preflight-only
+run_case hidden-xauth-e2e 114 yes CLAWMACS_TEST_HIDE_XAUTH --mode e2e --preflight-only
+run_case hidden-xdotool-e2e 114 yes CLAWMACS_TEST_HIDE_XDOTOOL --mode e2e --preflight-only
+run_case hidden-screenshot-e2e 114 yes CLAWMACS_TEST_HIDE_SCREENSHOT --mode e2e --preflight-only
 run_case quicklisp-bootstrap-toggle 112 yes CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL --mode run --preflight-only
 run_case missing-provider-credential-toggle 116 yes CLAWMACS_TEST_MISSING_PROVIDER_CREDENTIAL --mode run --preflight-only
 run_case invalid-override-path-toggle 117 yes CLAWMACS_TEST_INVALID_OVERRIDE_PATH --mode run --preflight-only

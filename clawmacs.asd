@@ -92,6 +92,21 @@
                               (:file "sexed-test")
                               (:file "slop-test")
                               (:file "llm-test")
+                              (:file "gui-e2e-test")
                               (:file "guard-test")
                               (:file "keymap-test")
                               (:file "info-test")))))
+
+(defsystem "clawmacs/gui-e2e"
+  :description "Opt-in GUI E2E smoke tests for clawmacs"
+  :licence "AGPL-3.0-only"
+  :depends-on ("clawmacs")
+  :perform (test-op (op c)
+             (declare (ignore op))
+             (let ((script (merge-pathnames "scripts/run-gui-e2e.sh"
+                                            (asdf:system-source-directory c))))
+               (uiop:run-program
+                (list "sh" (namestring script) "--suite" "smoke")
+                :directory (asdf:system-source-directory c)
+                :output *standard-output*
+                :error-output *error-output*))))

@@ -714,17 +714,22 @@ pane redraws and value callbacks propagate."
 (defmethod clim:handle-event :around
     ((pane drei:drei-gadget-pane) (event clim:key-press-event))
   (if (chat-compose-pane-p pane)
-      (cond
-        ((chat-compose-application-input-active-p)
-         (dispatch-chat-compose-event-to-buffer pane event))
-        ((chat-compose-submit-event-p event)
-         (let ((frame (clim:pane-frame pane)))
-           (clim:execute-frame-command frame '(com-chat-submit-compose)))
-         t)
-        ((chat-compose-modified-key-event-p event)
-         (process-chat-compose-drei-event pane event :redisplay t))
-        (t
-         (call-next-method)))
+      (let ((result
+              (cond
+                ((chat-compose-application-input-active-p)
+                 (dispatch-chat-compose-event-to-buffer pane event))
+                ((chat-compose-submit-event-p event)
+                 (let ((frame (clim:pane-frame pane)))
+                   (clim:execute-frame-command frame '(com-chat-submit-compose)))
+                 t)
+                ((chat-compose-modified-key-event-p event)
+                 (process-chat-compose-drei-event pane event :redisplay t))
+                (t
+                 (call-next-method)))))
+        (emit-chat-frame-e2e-snapshot (clim:pane-frame pane)
+                                      :reason "compose-key"
+                                      :pane "compose")
+        result)
       (call-next-method)))
 
 (defclass clawmacs-transcript-pane (esa:esa-pane-mixin clim:application-pane)
@@ -747,9 +752,127 @@ pane redraws and value callbacks propagate."
    :min-height 24
    :max-height 24))
 
+(defun chat-frame-e2e-effective-frame (frame)
+  "Return FRAME when it is a chat frame, otherwise the current application frame."
+  (cond
+    ((typep frame 'clawmacs-chat-frame) frame)
+    ((typep clim:*application-frame* 'clawmacs-chat-frame)
+     clim:*application-frame*)
+    (t nil)))
+
+(defun chat-frame-e2e-compose-text (frame)
+  "Return semantic compose text for FRAME without inspecting pixels."
+  (let* ((compose (and frame (ignore-errors (clim:find-pane-named frame 'compose))))
+         (value (and compose (ignore-errors (clim:gadget-value compose))))
+         (buf (and frame (chat-frame-buffer frame)))
+         (fallback (and buf (message-text (buffer-input-message buf)))))
+    (or (and (stringp value) value)
+        fallback
+        "")))
+
+(defun chat-frame-e2e-minibuffer-text ()
+  "Return semantic minibuffer text for the current input state."
+  (if *minibuffer-active*
+      (with-output-to-string (stream)
+        (format stream "~A: ~A" *minibuffer-prompt* *minibuffer-input*)
+        (when (and (eq *minibuffer-mode* :completion)
+                   *minibuffer-filtered-items*)
+          (let ((item (nth *minibuffer-selected-index*
+                           *minibuffer-filtered-items*)))
+            (when item
+              (format stream "  [~A]" (minibuffer-item-display item))))))
+      ""))
+
+(defun chat-frame-e2e-info-line (frame)
+  "Return the status/model line represented by FRAME."
+  (let ((buf (and frame (chat-frame-buffer frame))))
+    (if buf
+        (multiple-value-bind (provider model)
+            (handler-case (resolve-buffer-provider-and-model buf)
+              (error () (values nil nil)))
+          (format nil "~A  ~A  ~A  agent ~A  ~A"
+                  (buffer-name buf)
+                  (buffer-major-mode buf)
+                  (string-downcase (symbol-name (buffer-status buf)))
+                  (buffer-agent-name buf)
+                  (if (and provider model)
+                      (model-selector-display provider model)
+                      "no model")))
+        "")))
+
+(defun chat-display-item-e2e-text (item)
+  "Return semantic transcript text for one displayed ITEM."
+  (if (chat-tool-activity-summary-p item)
+      (chat-tool-activity-summary-text item)
+      (format nil "~A>~%~A" (chat-message-label item) (message-text item))))
+
+(defun chat-frame-e2e-transcript-text (buf)
+  "Return semantic transcript text for BUF using the normal display item path."
+  (let ((items (and buf (chat-transcript-display-items buf))))
+    (if items
+        (format nil "~{~A~^~%~%~}" (mapcar #'chat-display-item-e2e-text items))
+        "No messages yet.")))
+
+(defun chat-frame-e2e-screen-text (frame)
+  "Return a semantic screen-text snapshot for FRAME."
+  (let* ((buf (and frame (chat-frame-buffer frame)))
+         (transcript (chat-frame-e2e-transcript-text buf))
+         (approval (and buf (buffer-approval-pending buf)
+                        (chat-approval-display-string
+                         (buffer-approval-pending buf))))
+         (info (chat-frame-e2e-info-line frame))
+         (minibuffer (chat-frame-e2e-minibuffer-text))
+         (parts (remove-if #'blank-string-p
+                           (list transcript
+                                 approval
+                                 info
+                                 minibuffer))))
+    (format nil "~{~A~%~}" parts)))
+
+(defun chat-frame-e2e-snapshot (frame)
+  "Return semantic GUI state for FRAME as a plist for tests and E2E logs."
+  (let* ((frame (chat-frame-e2e-effective-frame frame))
+         (buf (and frame (chat-frame-buffer frame))))
+    (multiple-value-bind (provider model)
+        (if buf
+            (handler-case (resolve-buffer-provider-and-model buf)
+              (error () (values nil nil)))
+            (values nil nil))
+      (list :buffer-name (and buf (buffer-name buf))
+            :agent (and buf (buffer-agent-name buf))
+            :status (and buf (string-downcase (symbol-name (buffer-status buf))))
+            :major-mode (and buf (buffer-major-mode buf))
+            :provider (and provider (string-downcase (symbol-name provider)))
+            :model model
+            :message-count (and buf (buffer-message-count buf))
+            :compose-text (chat-frame-e2e-compose-text frame)
+            :minibuffer-text (chat-frame-e2e-minibuffer-text)
+            :info-text (chat-frame-e2e-info-line frame)
+            :screen-text (chat-frame-e2e-screen-text frame)))))
+
+(defun emit-chat-frame-e2e-snapshot (frame &key reason pane)
+  "Emit a structured semantic GUI snapshot for FRAME when E2E logging is enabled."
+  (let ((frame (chat-frame-e2e-effective-frame frame)))
+    (when frame
+      (ignore-errors
+        (apply #'file-debug-event
+               "ui-snapshot"
+               (append (list :reason reason :pane pane)
+                       (chat-frame-e2e-snapshot frame)))))))
+
+(defun emit-chat-pane-rendered (frame pane-name &rest payload)
+  "Emit E2E pane render and snapshot events for FRAME."
+  (let ((frame (chat-frame-e2e-effective-frame frame)))
+    (when frame
+      (ignore-errors
+        (apply #'file-debug-event
+               "pane-rendered"
+               :pane pane-name
+               payload))
+      (emit-chat-frame-e2e-snapshot frame :reason "pane-rendered" :pane pane-name))))
+
 (defun display-chat-minibuffer-pane (frame stream)
   "Display Clawmacs' lightweight minibuffer state in STREAM."
-  (declare (ignore frame))
   (when *minibuffer-active*
     (format stream " ~A: ~A" *minibuffer-prompt* *minibuffer-input*)
     (when (and (eq *minibuffer-mode* :completion)
@@ -757,7 +880,10 @@ pane redraws and value callbacks propagate."
       (let ((item (nth *minibuffer-selected-index*
                        *minibuffer-filtered-items*)))
         (when item
-          (format stream "  [~A]" (minibuffer-item-display item)))))))
+          (format stream "  [~A]" (minibuffer-item-display item))))))
+  (emit-chat-pane-rendered frame "minibuffer"
+                           :active *minibuffer-active*
+                           :text (chat-frame-e2e-minibuffer-text)))
 
 (defun display-chat-info-pane (frame stream)
   "Display an Emacs-style status line for FRAME."
@@ -778,7 +904,9 @@ pane redraws and value callbacks propagate."
                 (string-downcase (symbol-name (buffer-status buf)))
                 (if (and provider model)
                     (model-selector-display provider model)
-                    "no model"))))))
+                    "no model")))
+      (emit-chat-pane-rendered frame "info"
+                               :text (chat-frame-e2e-info-line frame)))))
 
 (clim:define-application-frame clawmacs-chat-frame
     (esa:esa-frame-mixin clim:standard-application-frame)
@@ -895,8 +1023,15 @@ pane redraws and value callbacks propagate."
 (defun run-clawmacs-chat-top-level (frame)
   "Run FRAME with ESA command processing and compose focused initially."
   (unless (eq (clim:frame-state frame) :enabled)
-    (clim:enable-frame frame))
+    (clim:enable-frame frame)
+    (file-debug-event "frame-enabled"
+                      :buffer-name (buffer-name (chat-frame-buffer frame))
+                      :state (clim:frame-state frame)))
   (focus-chat-compose-pane frame)
+  (file-debug-event "frame-ready"
+                    :buffer-name (buffer-name (chat-frame-buffer frame))
+                    :state (clim:frame-state frame))
+  (emit-chat-frame-e2e-snapshot frame :reason "frame-ready")
   (esa:esa-top-level frame))
 
 (defun mcclim-kill-items-vector (items)
@@ -1014,7 +1149,10 @@ pane redraws and value callbacks propagate."
             (stream :ink (clim:make-rgb-color 0.45 0.45 0.45))
           (format stream "No messages yet.~%")))
     (when (buffer-approval-pending buf)
-      (display-chat-approval stream (buffer-approval-pending buf)))))
+      (display-chat-approval stream (buffer-approval-pending buf)))
+    (emit-chat-pane-rendered frame "transcript"
+                             :item-count (length items)
+                             :approval-pending (not (null (buffer-approval-pending buf))))))
 
 (defun chat-transcript-pane (frame)
   "Return FRAME's transcript pane, or NIL when unavailable."
@@ -1066,9 +1204,13 @@ pane redraws and value callbacks propagate."
   (configure-chat-compose-pane compose-pane)
   (let ((text (clim:gadget-value compose-pane))
         (buf (chat-frame-buffer frame)))
+    (file-debug-event "compose-submitted"
+                      :buffer-name (buffer-name buf)
+                      :text text)
     (when (handle-chat-compose-text buf text)
       (setf (clim:gadget-value compose-pane) "")
       (request-chat-frame-redisplay frame)
+      (emit-chat-frame-e2e-snapshot frame :reason "compose-submitted" :pane "compose")
       t)))
 
 (defun compose-pane-activated (gadget)
@@ -1114,6 +1256,8 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
 
 (defun request-chat-frame-redisplay (frame)
   "Request one coalesced transcript redisplay for FRAME."
+  (file-debug-event "redisplay-requested"
+                    :buffer-name (buffer-name (chat-frame-buffer frame)))
   (let ((queue-now-p nil))
     (bt:with-lock-held ((chat-frame-redisplay-lock frame))
       (cond
@@ -1147,6 +1291,10 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
         (setf repeat-p (chat-frame-redisplay-repeat-p frame)
               (chat-frame-redisplay-handling-p frame) nil
               (chat-frame-redisplay-repeat-p frame) nil)))
+    (file-debug-event "redisplay-handled"
+                      :buffer-name (buffer-name (chat-frame-buffer frame))
+                      :repeat repeat-p)
+    (emit-chat-frame-e2e-snapshot frame :reason "redisplay-handled")
     (when repeat-p
       (request-chat-frame-redisplay frame))))
 
@@ -1636,4 +1784,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
                 'clawmacs-chat-frame
                 :buffer buffer
                 :pretty-name (or window-title "Clawmacs"))))
+    (file-debug-event "frame-created"
+                      :buffer-name (buffer-name buffer)
+                      :window-title (or window-title "Clawmacs"))
     (clim:run-frame-top-level frame)))

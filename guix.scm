@@ -36,6 +36,7 @@
     "font-dejavu"
     "curl"
     "xorg-server"
+    "xauth"
     "xdotool"
     "imagemagick"))
  (list cl-mcclim-1.0.0))
