@@ -1083,8 +1083,8 @@ user-added tools stored in *tool-table* are left intact.")
             tool-user-permission
             default-project-permission
             default-user-permission
-            *default-tool-permission*
-            static-permission)
+            static-permission
+            *default-tool-permission*)
         nil)))
 
 (defun effective-tool-sandbox-permission (definition-or-name
