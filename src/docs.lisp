@@ -367,15 +367,15 @@ documentation in *extended-docs*."
 
 (defdoc register-buffer-type
   :category "buffer"
-  :usage "(register-buffer-type :dashboard :description \"...\" :major-mode \"dashboard\" :presentation-function 'render-dashboard-buffer)"
-  :returns "buffer-type — The registered metadata."
-  :side-effects "Adds or replaces a buffer type in *buffer-type-registry*."
+  :usage "(register-buffer-type :dashboard :description \"...\" :major-mode \"dashboard\" :presentation-function 'dashboard-entries)"
+  :returns "buffer-type — The registered metadata. Presentation hooks accept (BUFFER COLUMNS) and return entry plists with :TEXT plus optional :FACE, :OBJECT, :PRESENTATION-TYPE, :UNIQUE-ID, and :CACHE-VALUE."
+  :side-effects "Adds or replaces a buffer type in *buffer-type-registry*. Presentation hooks should be side-effect-free render models; commands and presentation translators own mutations."
   :see-also (define-buffer-type find-buffer-type buffer-presentation-function))
 
 (defdoc define-buffer-type
   :category "buffer"
-  :usage "(define-buffer-type :dashboard :major-mode \"dashboard\" :presentation-function 'render-dashboard-buffer)"
-  :returns "buffer-type — The registered metadata."
+  :usage "(define-buffer-type :dashboard :major-mode \"dashboard\" :presentation-function 'dashboard-entries)"
+  :returns "buffer-type — The registered metadata. Presentation hooks accept (BUFFER COLUMNS) and return generic entry plists. INPUT-PRESENTATION-FUNCTION appends an interactive overlay after normal transcript output."
   :side-effects "Package-facing macro wrapper around register-buffer-type; package ownership defaults to the currently loading Clawmacs package."
   :see-also (register-buffer-type package-owned-buffer-types))
 
@@ -394,13 +394,13 @@ documentation in *extended-docs*."
 (defdoc buffer-presentation-function
   :category "buffer"
   :usage "(buffer-presentation-function BUF)"
-  :returns "function designator or NIL — The registered presenter for BUF's type."
+  :returns "function designator or NIL — The registered whole-buffer presenter for BUF's type. The McCLIM UI calls it as (FUNCALL FUNCTION BUF COLUMNS) and renders the returned entry plists with CLIM presentations when :OBJECT and :PRESENTATION-TYPE are present."
   :see-also (buffer-input-presentation-function register-buffer-type))
 
 (defdoc buffer-input-presentation-function
   :category "buffer"
   :usage "(buffer-input-presentation-function BUF)"
-  :returns "function designator or NIL — The registered input presenter for BUF's type."
+  :returns "function designator or NIL — The registered input-overlay presenter for BUF's type, called as (FUNCALL FUNCTION BUF COLUMNS) after normal transcript content."
   :see-also (buffer-presentation-function register-buffer-type))
 
 (defdoc listener-state

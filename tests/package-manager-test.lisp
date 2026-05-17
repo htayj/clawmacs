@@ -641,10 +641,10 @@ CUSTOM PACKAGE PROMPT\")"
  :description \"Dashboard package\"
  :entrypoint \"entry.lisp\")"
             :entrypoint-content
-            "(defun package-dashboard-presenter (pane buffer rows cols char-w char-h)
-  (declare (ignore pane rows cols char-w char-h))
-  (setf clawmacs/tests::*package-buffer-rendered*
-        (list :rendered (buffer-name buffer))))
+            "(defun package-dashboard-presenter (buffer columns)
+  (list (list :text (format nil \"rendered ~A at ~D\"
+                            (buffer-name buffer)
+                            columns))))
 
 (define-buffer-type :package-dashboard
   :description \"Package dashboard buffer\"
@@ -659,7 +659,9 @@ CUSTOM PACKAGE PROMPT\")"
         (is (string= "dashboard-package"
                      (clawmacs:buffer-type-package type)))
         (is (string= "dashboard"
-                     (clawmacs:buffer-type-major-mode type))))
+                     (clawmacs:buffer-type-major-mode type)))
+        (is (eq 'clawmacs::package-dashboard-presenter
+                (clawmacs:buffer-type-presentation-function type))))
       (is (= 1 (length (clawmacs:package-owned-buffer-types
                         "dashboard-package"))))
       (let ((help (clawmacs:describe-installed-package-to-string

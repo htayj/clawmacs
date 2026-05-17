@@ -19,6 +19,9 @@
 (clim:define-presentation-type minibuffer-command-candidate ())
 (clim:define-presentation-type package-dashboard-entry-ref ())
 
+(defparameter *buffer-presentation-default-columns* 100
+  "Fallback display width passed to buffer presentation hooks.")
+
 (clim:define-presentation-method clim:presentation-typep
     (object (type tool-approval))
   (and (listp object)
@@ -928,27 +931,47 @@ When NIL, derive it from `*minibuffer-max-height*' and
       (chat-tool-activity-summary-text item)
       (format nil "~A>~%~A" (chat-message-label item) (message-text item))))
 
-(defun package-dashboard-entries-e2e-text (dashboard-buffer)
-  "Return semantic text for DASHBOARD-BUFFER's actual dashboard entries."
+(defun call-buffer-presentation-function (function buffer columns)
+  "Return entries from FUNCTION for BUFFER and COLUMNS."
+  (when function
+    (funcall function buffer columns)))
+
+(defun buffer-presentation-entries-e2e-text (entries)
+  "Return semantic text for generic presentation ENTRIES."
   (format nil "~{~A~^~%~}"
-          (mapcar (lambda (entry) (getf entry :text ""))
-                  (package-dashboard-display-entries dashboard-buffer))))
+          (mapcar (lambda (entry) (getf entry :text "")) entries)))
+
+(defun buffer-presentation-function-e2e-text (buffer function)
+  "Return semantic text produced by BUFFER's presentation FUNCTION."
+  (buffer-presentation-entries-e2e-text
+   (call-buffer-presentation-function
+    function
+    buffer
+    *buffer-presentation-default-columns*)))
 
 (defun chat-frame-e2e-transcript-text (buf)
   "Return semantic transcript text for BUF using the normal display item path."
-  (cond
-    ((and buf (package-dashboard-buffer-p buf))
-     (package-dashboard-entries-e2e-text buf))
-    (t
-     (let ((items (and buf (chat-transcript-display-items buf))))
-       (if items
-           (format nil "~{~A~^~%~%~}" (mapcar #'chat-display-item-e2e-text items))
-           "No messages yet.")))))
+  (let ((presentation-function (and buf (buffer-presentation-function buf))))
+    (cond
+      (presentation-function
+       (buffer-presentation-function-e2e-text buf presentation-function))
+      (t
+       (let ((items (and buf (chat-transcript-display-items buf))))
+         (if items
+             (format nil "~{~A~^~%~%~}" (mapcar #'chat-display-item-e2e-text items))
+             "No messages yet."))))))
+
+(defun chat-frame-e2e-input-presentation-text (buf)
+  "Return semantic text for BUF's input presentation overlay, if any."
+  (let ((input-function (and buf (buffer-input-presentation-function buf))))
+    (and input-function
+         (buffer-presentation-function-e2e-text buf input-function))))
 
 (defun chat-frame-e2e-screen-text (frame)
   "Return a semantic screen-text snapshot for FRAME."
   (let* ((buf (and frame (chat-frame-buffer frame)))
          (transcript (chat-frame-e2e-transcript-text buf))
+         (input-panel (chat-frame-e2e-input-presentation-text buf))
          (approval (and buf (buffer-approval-pending buf)
                         (chat-approval-display-string
                          (buffer-approval-pending buf))))
@@ -956,6 +979,7 @@ When NIL, derive it from `*minibuffer-max-height*' and
          (minibuffer (chat-frame-e2e-minibuffer-text))
          (parts (remove-if #'blank-string-p
                            (list transcript
+                                 input-panel
                                  approval
                                  info
                                  minibuffer))))
@@ -1284,25 +1308,28 @@ When NIL, derive it from `*minibuffer-max-height*' and
       (display-chat-tool-activity-summary stream item)
       (display-chat-message stream item)))
 
-(defun package-dashboard-entry-ink (entry)
-  "Return the ink for one package dashboard display ENTRY."
+(defun buffer-presentation-entry-ink (entry)
+  "Return the ink for one generic buffer presentation ENTRY."
   (case (getf entry :face)
     (:selector-title (clim:make-rgb-color 0.16 0.22 0.45))
     (:selector-header (clim:make-rgb-color 0.18 0.36 0.20))
     (:selector-footer (clim:make-rgb-color 0.35 0.35 0.35))
+    (:selector-selected (clim:make-rgb-color 0.10 0.38 0.65))
+    (:selector-entry (clim:make-rgb-color 0.20 0.20 0.20))
+    (:tool-result (clim:make-rgb-color 0.12 0.34 0.18))
     (:system (clim:make-rgb-color 0.45 0.45 0.45))
     (:disabled (clim:make-rgb-color 0.45 0.45 0.45))
     (:error (clim:make-rgb-color 0.60 0.12 0.12))
     (t clim:+foreground-ink+)))
 
-(defun display-package-dashboard-entry (stream entry)
-  "Display one package dashboard ENTRY on STREAM."
+(defun display-buffer-presentation-entry (stream entry)
+  "Display one generic buffer presentation ENTRY on STREAM."
   (let ((text (getf entry :text ""))
         (object (getf entry :object))
         (presentation-type (getf entry :presentation-type)))
     (flet ((emit ()
              (clim:with-drawing-options
-                 (stream :ink (package-dashboard-entry-ink entry))
+                 (stream :ink (buffer-presentation-entry-ink entry))
                (if (eq (getf entry :face) :selector-title)
                    (clim:with-text-face (stream :bold)
                      (write-string text stream))
@@ -1314,27 +1341,46 @@ When NIL, derive it from `*minibuffer-max-height*' and
           (emit))))
   (terpri stream))
 
-(defun display-package-dashboard-buffer (stream dashboard-buffer)
-  "Display DASHBOARD-BUFFER using its package-dashboard entry model."
-  (dolist (entry (package-dashboard-display-entries dashboard-buffer))
-    (clim:updating-output
-        (stream
-         :unique-id (list :package-dashboard-entry (getf entry :text ""))
-         :id-test #'equal
-         :cache-value entry
-         :cache-test #'equal)
-      (display-package-dashboard-entry stream entry))))
+(defun display-buffer-presentation-entries (stream entries &key (namespace :buffer))
+  "Display generic presentation ENTRIES on STREAM with incremental redisplay."
+  (loop :for entry :in entries
+        :for index :from 0
+        :do
+           (clim:updating-output
+               (stream
+                :unique-id (or (getf entry :unique-id)
+                               (list namespace index (getf entry :text "")))
+                :id-test #'equal
+                :cache-value entry
+                :cache-test #'equal)
+             (display-buffer-presentation-entry stream entry))))
+
+(defun display-buffer-presentation-function
+    (stream buffer function &key (namespace :buffer))
+  "Display BUFFER entries produced by FUNCTION and return the entry count."
+  (let ((entries (call-buffer-presentation-function
+                  function
+                  buffer
+                  *buffer-presentation-default-columns*)))
+    (display-buffer-presentation-entries stream entries :namespace namespace)
+    (length entries)))
 
 (defun display-chat-transcript (frame stream)
   "Display FRAME's transcript on STREAM."
   (let* ((buf (chat-frame-buffer frame))
-         (items (and (not (package-dashboard-buffer-p buf))
-                     (chat-transcript-display-items buf))))
+         (presentation-function (and buf (buffer-presentation-function buf)))
+         (input-function (and buf (buffer-input-presentation-function buf)))
+         (items (and (not presentation-function)
+                     (chat-transcript-display-items buf)))
+         (item-count 0))
     (cond
-      ((package-dashboard-buffer-p buf)
-       (display-package-dashboard-buffer stream buf))
+      (presentation-function
+       (incf item-count
+             (display-buffer-presentation-function
+              stream buf presentation-function :namespace :buffer-presentation)))
       (items
        (dolist (item items)
+         (incf item-count)
          (clim:updating-output
              (stream
               :unique-id (chat-display-item-output-id item)
@@ -1346,12 +1392,14 @@ When NIL, derive it from `*minibuffer-max-height*' and
        (clim:with-drawing-options
            (stream :ink (clim:make-rgb-color 0.45 0.45 0.45))
          (format stream "No messages yet.~%"))))
+    (when input-function
+      (incf item-count
+            (display-buffer-presentation-function
+             stream buf input-function :namespace :buffer-input-presentation)))
     (when (buffer-approval-pending buf)
       (display-chat-approval stream (buffer-approval-pending buf)))
     (emit-chat-pane-rendered frame "transcript"
-                             :item-count (if (package-dashboard-buffer-p buf)
-                                             (length (package-dashboard-display-entries buf))
-                                             (length items))
+                             :item-count item-count
                              :approval-pending (not (null (buffer-approval-pending buf))))))
 
 (defun chat-transcript-pane (frame)

@@ -1895,8 +1895,9 @@ Returns the installed package definition on success, or NIL on warning/failure."
         (format nil "  ~{~A~^ | ~}" parts)
         "  source: bundled")))
 
-(defun package-dashboard-display-entries (dashboard-buffer)
-  "Return styled entries for DASHBOARD-BUFFER."
+(defun package-dashboard-display-entries (dashboard-buffer &optional columns)
+  "Return styled generic presentation entries for DASHBOARD-BUFFER."
+  (declare (ignore columns))
   (let* ((origin (package-dashboard-origin-buffer dashboard-buffer))
          (items (package-doctor-report :buffer origin))
          (target-name (if origin
@@ -2002,7 +2003,8 @@ Returns the installed package definition on success, or NIL on warning/failure."
 (register-buffer-type
  :package-dashboard
  :description "Installed package browser."
- :major-mode "package-dashboard")
+ :major-mode "package-dashboard"
+ :presentation-function 'package-dashboard-display-entries)
 
 (defun remove-installed-package (package &key buffer project)
   "Delete PACKAGE's installed files and return its definition."

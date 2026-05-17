@@ -198,3 +198,45 @@
       (is (search "  toggle-debug-mode-command" text))
       (is (search "> toggle-tool-results-command" text))
       (is-false (search "toggle-metadata-output-command" text)))))
+
+(test mcclim-buffer-presentation-function-supplies-semantic-transcript
+  "Custom buffer presentation hooks feed the same semantic path GUI E2E reads."
+  (let ((clawmacs::*buffer-type-registry*
+          (clawmacs::make-buffer-type-registry)))
+    (flet ((semantic-entries (buffer columns)
+             (list (list :text (format nil "custom view for ~A" (buffer-name buffer))
+                         :face :selector-title
+                         :unique-id :header)
+                   (list :text (format nil "columns=~D" columns)
+                         :face :selector-footer))))
+      (register-buffer-type :semantic-view
+                            :major-mode "semantic"
+                            :presentation-function #'semantic-entries)
+      (let* ((buffer (make-buffer "semantic-buffer"
+                                  :kind :semantic-view
+                                  :session-persistence-mode :ephemeral))
+             (text (clawmacs::chat-frame-e2e-transcript-text buffer)))
+        (is (search "custom view for semantic-buffer" text))
+        (is (search "columns=100" text))))))
+
+(test mcclim-input-presentation-function-appends-semantic-overlay
+  "Input presentation hooks append package-owned overlays to screen snapshots."
+  (let ((clawmacs::*buffer-type-registry*
+          (clawmacs::make-buffer-type-registry)))
+    (flet ((input-entries (buffer columns)
+             (declare (ignore columns))
+             (list (list :text (format nil "input overlay for ~A"
+                                       (buffer-name buffer))
+                         :face :selector-header))))
+      (register-buffer-type :overlay-view
+                            :major-mode "overlay"
+                            :input-presentation-function #'input-entries)
+      (let* ((buffer (make-buffer "overlay-buffer"
+                                  :kind :overlay-view
+                                  :session-persistence-mode :ephemeral))
+             (frame (clim:make-application-frame
+                     'clawmacs::clawmacs-chat-frame
+                     :buffer buffer))
+             (text (clawmacs::chat-frame-e2e-screen-text frame)))
+        (is (search "No messages yet." text))
+        (is (search "input overlay for overlay-buffer" text))))))
