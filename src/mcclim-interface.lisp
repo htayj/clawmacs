@@ -22,6 +22,15 @@
 (defparameter *buffer-presentation-default-columns* 100
   "Fallback display width passed to buffer presentation hooks.")
 
+(defvar *buffer-input-presentation-text* nil
+  "Compose text dynamically visible while rendering input presentation hooks.")
+
+(defun buffer-input-presentation-text (buffer)
+  "Return current compose text for BUFFER while rendering an input presentation."
+  (or *buffer-input-presentation-text*
+      (and buffer (message-text (buffer-input-message buffer)))
+      ""))
+
 (clim:define-presentation-method clim:presentation-typep
     (object (type tool-approval))
   (and (listp object)
@@ -466,6 +475,10 @@ When BUFFER is nil, use the default buffer visibility settings."
   (cond
     ((buffer-approval-pending buf)
      (handle-approval-response buf (chat-approval-response-from-text text))
+     t)
+    ((buffer-user-input-pending buf)
+     (set-message-text (buffer-input-message buf) text)
+     (send-message buf)
      t)
     ((blank-string-p text)
      nil)
@@ -961,9 +974,10 @@ When NIL, derive it from `*minibuffer-max-height*' and
              (format nil "~{~A~^~%~%~}" (mapcar #'chat-display-item-e2e-text items))
              "No messages yet."))))))
 
-(defun chat-frame-e2e-input-presentation-text (buf)
+(defun chat-frame-e2e-input-presentation-text (buf &optional input-text)
   "Return semantic text for BUF's input presentation overlay, if any."
-  (let ((input-function (and buf (buffer-input-presentation-function buf))))
+  (let ((input-function (and buf (buffer-input-presentation-function buf)))
+        (*buffer-input-presentation-text* input-text))
     (and input-function
          (buffer-presentation-function-e2e-text buf input-function))))
 
@@ -971,7 +985,9 @@ When NIL, derive it from `*minibuffer-max-height*' and
   "Return a semantic screen-text snapshot for FRAME."
   (let* ((buf (and frame (chat-frame-buffer frame)))
          (transcript (chat-frame-e2e-transcript-text buf))
-         (input-panel (chat-frame-e2e-input-presentation-text buf))
+         (input-panel (chat-frame-e2e-input-presentation-text
+                       buf
+                       (chat-frame-e2e-compose-text frame)))
          (approval (and buf (buffer-approval-pending buf)
                         (chat-approval-display-string
                          (buffer-approval-pending buf))))
@@ -1393,9 +1409,10 @@ When NIL, derive it from `*minibuffer-max-height*' and
            (stream :ink (clim:make-rgb-color 0.45 0.45 0.45))
          (format stream "No messages yet.~%"))))
     (when input-function
-      (incf item-count
-            (display-buffer-presentation-function
-             stream buf input-function :namespace :buffer-input-presentation)))
+      (let ((*buffer-input-presentation-text* (chat-frame-e2e-compose-text frame)))
+        (incf item-count
+              (display-buffer-presentation-function
+               stream buf input-function :namespace :buffer-input-presentation))))
     (when (buffer-approval-pending buf)
       (display-chat-approval stream (buffer-approval-pending buf)))
     (emit-chat-pane-rendered frame "transcript"

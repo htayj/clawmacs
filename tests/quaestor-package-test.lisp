@@ -117,6 +117,9 @@
            (commands (list-available-commands)))
       (is (member "request_user_input" tool-names :test #'string=))
       (is-false (clawmacs::tool-requires-permission-p "request_user_input"))
+      (is (eq 'clawmacs::quaestor-input-presentation-entries
+              (clawmacs:buffer-type-input-presentation-function
+               (find-buffer-type :chat))))
       (is (search "Structured user questions with quaestor" prompt))
       (is (search "request_user_input" prompt))
       (is (member 'clawmacs::quaestor-show-queued-messages-command
@@ -143,6 +146,45 @@
       (is (eq 'clawmacs::quaestor-cancel-and-restore-command
               (clawmacs::keymap-lookup clawmacs::*default-keymap*
                                       '(:ctrl-c #\J)))))))
+
+(test quaestor-input-presentations-describe-active-request
+  "The package-owned input panel exposes options and submit affordances."
+  (with-quaestor-package-state
+    (load-test-quaestor-package)
+    (let ((buf (make-quaestor-test-buffer "quaestor-panel")))
+      (clawmacs::quaestor-request-user-input
+       buf
+       '((:header "Scope"
+          :id "scope"
+          :question "Pick a scope."
+          :options ((:label "Alpha" :description "Smaller change.")
+                    (:label "Beta" :description "Broader change."))
+          :freeform t)))
+      (is (eq 'clawmacs::quaestor-input-presentation-entries
+              (buffer-input-presentation-function buf)))
+      (let* ((entries (clawmacs::quaestor-input-presentation-entries buf 100))
+             (beta (find-if (lambda (entry)
+                              (search "Beta" (getf entry :text)))
+                            entries))
+             (submit (find 'clawmacs::quaestor-submit-ref entries
+                           :key (lambda (entry)
+                                  (getf entry :presentation-type)))))
+        (is (search "Quaestor request 1/1: Scope"
+                    (getf (second entries) :text)))
+        (is (not (null beta)))
+        (is (eq 'clawmacs::quaestor-option-ref
+                (getf beta :presentation-type)))
+        (is (clim:presentation-typep (getf beta :object)
+                                     'clawmacs::quaestor-option-ref))
+        (is (not (null submit)))
+        (is (clim:presentation-typep (getf submit :object)
+                                     'clawmacs::quaestor-submit-ref))
+        (clawmacs::quaestor-activate-option buf (getf beta :object))
+        (let ((updated (clawmacs::quaestor-input-presentation-entries buf 100)))
+          (is (find-if (lambda (entry)
+                         (and (search "[x] Beta" (getf entry :text))
+                              (eq :selector-selected (getf entry :face))))
+                       updated)))))))
 
 (test quaestor-tool-request-suspends-interactive-run-and-records-answer
   "Interactive request_user_input suspends tool execution, routes keys, and records the answer."

@@ -12,10 +12,11 @@ E2E events, and captures screenshots for every scripted suite step.
 ./scripts/run-gui-e2e.sh --suite mx
 ./scripts/run-gui-e2e.sh --suite features
 ./scripts/run-gui-e2e.sh --suite organa
+./scripts/run-gui-e2e.sh --suite quaestor
 ```
 
-ASDF integration is also opt-in and runs `smoke`, `mx`, `features`, and
-`organa`:
+ASDF integration is also opt-in and runs `smoke`, `mx`, `features`, `organa`,
+and `quaestor`:
 
 ```lisp
 (asdf:test-system :clawmacs/gui-e2e)
@@ -117,6 +118,18 @@ writing to the checkout:
 4. cycles the same buffer through kanban, dependency, and outline views with
    `M-x organa-cycle-view-command`;
 5. asserts semantic snapshots for each view and captures screenshots.
+
+## Quaestor package behavior
+
+The `quaestor` suite verifies the package-owned active request overlay:
+
+1. starts Clawmacs with the bundled `quaestor` package enabled;
+2. installs an E2E-only `*initial-buffer-hook*` that opens a deterministic
+   `quaestor-request-user-input` request in the first chat buffer;
+3. waits for the generic input-presentation overlay to show the question,
+   options, notes area, and submit affordance;
+4. answers via keyboard navigation and text entry; and
+5. verifies the answered summary appears and the overlay disappears.
 
 Credentialed and live-provider features are intentionally excluded from GUI E2E:
 OpenAI/OpenRouter/ZAI network requests, OpenAI Codex OAuth browser login, remote

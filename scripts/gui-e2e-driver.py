@@ -369,6 +369,33 @@ def run_organa(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     return screenshots
 
 
+def run_quaestor(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    """Exercise Quaestor's package-owned active request panel."""
+    screenshots = prepare_session(session)
+
+    session.wait_snapshot("Quaestor request panel shown",
+                          lambda snapshot: "Quaestor request 1/1: Scope" in str(snapshot.get("screen_text", ""))
+                          and "[x] Alpha" in str(snapshot.get("screen_text", ""))
+                          and "[ ] Beta" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("02-quaestor-panel"))
+
+    session.type_text("ship it")
+    session.wait_snapshot("Quaestor notes updated",
+                          lambda snapshot: "Notes: ship it" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("03-quaestor-answering"))
+
+    session.press("Return")
+    session.wait_snapshot("Quaestor request answered",
+                          lambda snapshot: "[request_user_input answered]" in str(snapshot.get("screen_text", ""))
+                          and "Scope: Alpha; ship it" in str(snapshot.get("screen_text", ""))
+                          and "Quaestor request 1/1" not in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("04-quaestor-answered"))
+    return screenshots
+
+
 def run_features(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     """Exercise broad no-network GUI feature coverage in one Clawmacs session."""
     screenshots = prepare_session(session)
@@ -585,6 +612,8 @@ def main(argv: list[str]) -> int:
             screenshots = run_features(session)
         elif args.suite == "organa":
             screenshots = run_organa(session)
+        elif args.suite == "quaestor":
+            screenshots = run_quaestor(session)
         else:
             raise DriverError(f"unsupported suite: {args.suite}")
         write_summary(summary_path, ok=True, suite=args.suite,

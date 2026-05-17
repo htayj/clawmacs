@@ -13,7 +13,7 @@ WINDOW_TITLE='Clawmacs E2E'
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|organa] [--artifact-dir DIR]
+Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|organa|quaestor] [--artifact-dir DIR]
 
 Runs an opt-in Clawmacs GUI E2E suite inside an isolated Xvfb display.
 EOF
@@ -109,7 +109,7 @@ if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
 fi
 
 case "$SUITE" in
-  smoke|mx|features|organa) ;;
+  smoke|mx|features|organa|quaestor) ;;
   *) fail "unsupported GUI E2E suite: $SUITE" ;;
 esac
 
@@ -227,7 +227,8 @@ sbcl --noinform \
   --eval '(push (truename ".") asdf:*central-registry*)' \
   --eval '(ql:quickload :clawmacs)' \
   --eval '(setf clawmacs:*inhibit-user-init* t)' \
-  --eval '(when (string= (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") "organa") (clawmacs:set-package-enablement-scope "organa" :global) (clawmacs:load-active-packages))' \
+  --eval '(let ((suite (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") ""))) (when (member suite (list "organa" "quaestor") :test (function string=)) (clawmacs:set-package-enablement-scope suite :global) (clawmacs:load-active-packages)))' \
+  --eval '(when (string= (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") "quaestor") (clawmacs:add-hook (quote clawmacs:*initial-buffer-hook*) (lambda (buffer) (clawmacs::quaestor-request-user-input buffer (quote ((:header "Scope" :id "scope" :question "Pick a scope." :options ((:label "Alpha" :description "Smaller change.") (:label "Beta" :description "Broader change.")) :freeform t))))) :append t))' \
   --eval '(clawmacs:clawmacs-main :session-name "clawmacs:e2e" :agent-name "agent" :window-title "Clawmacs E2E" :working-directory (truename "."))' \
   --eval '(uiop:quit)' \
   >"$APP_STDOUT" 2>"$APP_STDERR" &

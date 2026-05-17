@@ -18,6 +18,23 @@
   "Return true when the quaestor package is active for BUFFER."
   (package-active-p *quaestor-package-name* :buffer buffer))
 
+(clim:define-presentation-type quaestor-option-ref ())
+(clim:define-presentation-type quaestor-submit-ref ())
+
+(clim:define-presentation-method clim:presentation-typep
+    (object (type quaestor-option-ref))
+  (and (listp object)
+       (stringp (getf object :question-id))
+       (plusp (length (getf object :question-id)))
+       (stringp (getf object :label))
+       (plusp (length (getf object :label)))
+       (integerp (getf object :index))))
+
+(clim:define-presentation-method clim:presentation-typep
+    (object (type quaestor-submit-ref))
+  (and (listp object)
+       (getf object :quaestor-submit-p)))
+
 (defun quaestor-trimmed-string (value)
   "Return VALUE trimmed of ASCII surrounding whitespace."
   (string-trim '(#\Space #\Tab #\Newline #\Return)
@@ -677,6 +694,119 @@ Returns true when the key was consumed."
       (quaestor-set-current-request buffer request)
       (quaestor-toggle-current-option buffer))))
 
+(defun quaestor-option-presentation-object (question option index)
+  "Return a presentation object for OPTION in QUESTION."
+  (list :question-id (quaestor-alist-value question :id)
+        :label (quaestor-alist-value option :label)
+        :index index))
+
+(defun quaestor-submit-presentation-object (request)
+  "Return a presentation object for advancing or submitting REQUEST."
+  (list :quaestor-submit-p t
+        :question-id (and (quaestor-request-current-question request)
+                          (quaestor-alist-value
+                           (quaestor-request-current-question request)
+                           :id))))
+
+(defun quaestor-option-entry (question option index selected-labels active-index)
+  "Return one generic presentation entry for OPTION."
+  (let* ((label (quaestor-alist-value option :label))
+         (selected-p (member label selected-labels :test #'string=))
+         (active-p (= index active-index)))
+    (list :text (format nil "~A [~A] ~A — ~A"
+                        (if active-p ">" " ")
+                        (if selected-p "x" " ")
+                        label
+                        (quaestor-alist-value option :description))
+          :face (if selected-p :selector-selected :selector-entry)
+          :object (quaestor-option-presentation-object question option index)
+          :presentation-type 'quaestor-option-ref
+          :unique-id (list :quaestor-option
+                           (quaestor-alist-value question :id)
+                           label))))
+
+(defun quaestor-input-presentation-entries (buffer columns)
+  "Return generic McCLIM entries for BUFFER's active quaestor request."
+  (declare (ignore columns))
+  (let ((request (and (quaestor-package-active-p buffer)
+                      (quaestor-current-request buffer))))
+    (when request
+      (let* ((questions (quaestor-request-questions request))
+             (question (quaestor-request-current-question request))
+             (question-id (and question (quaestor-alist-value question :id)))
+             (index (quaestor-request-current-index request))
+             (options (and question (quaestor-alist-value question :options)))
+             (selected-labels (and question
+                                   (quaestor-request-selected-options
+                                    request question-id)))
+             (active-index (or (quaestor-alist-value request :option-index) 0))
+             (allow-notes-p (and question
+                                  (quaestor-request-allows-notes-p question)))
+             (notes (buffer-input-presentation-text buffer))
+             (next-label (if (< index (1- (length questions))) "Next" "Submit")))
+        (append
+         (list
+          (list :text "" :face :default-text)
+          (list :text (format nil "Quaestor request ~D/~D: ~A"
+                              (1+ index)
+                              (length questions)
+                              (quaestor-alist-value question :header))
+                :face :selector-title
+                :unique-id (list :quaestor-title question-id))
+          (list :text (quaestor-alist-value question :question)
+                :face :selector-header
+                :unique-id (list :quaestor-question question-id))
+          (list :text (format nil "Focus: ~(~A~). Tab switches focus; Return advances."
+                              (quaestor-request-focus request))
+                :face :selector-footer
+                :unique-id (list :quaestor-focus question-id)))
+         (loop :for option :in options
+               :for option-index :from 0
+               :collect (quaestor-option-entry question option option-index
+                                               selected-labels active-index))
+         (when allow-notes-p
+           (list (list :text (format nil "Notes: ~A" notes)
+                       :face (if (eq (quaestor-request-focus request) :notes)
+                                 :selector-selected
+                                 :selector-footer)
+                       :unique-id (list :quaestor-notes question-id))))
+         (list (list :text (format nil "[~A request]" next-label)
+                     :face :selector-footer
+                     :object (quaestor-submit-presentation-object request)
+                     :presentation-type 'quaestor-submit-ref
+                     :unique-id (list :quaestor-submit question-id))))))))
+
+(define-clawmacs-chat-frame-command
+    (com-quaestor-select-option :name nil)
+    ((option 'quaestor-option-ref))
+  (clim:with-application-frame (frame)
+    (quaestor-activate-option (chat-frame-buffer frame) option)))
+
+(define-clawmacs-chat-frame-command
+    (com-quaestor-submit-request :name nil)
+    ((submit 'quaestor-submit-ref))
+  (declare (ignore submit))
+  (clim:with-application-frame (frame)
+    (quaestor-next-question-or-submit (chat-frame-buffer frame))))
+
+(clim:define-presentation-to-command-translator select-quaestor-option
+    (quaestor-option-ref com-quaestor-select-option
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Select answer option"
+     :menu t)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator select-quaestor-submit
+    (quaestor-submit-ref com-quaestor-submit-request
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Advance request"
+     :menu t)
+    (object)
+  (list object))
+
 (defun quaestor-request-user-input-tool (args)
   "Suspend the active agent turn and request structured user input."
   (unless *quaestor-request-user-input-catch-active*
@@ -715,15 +845,18 @@ Returns true when the key was consumed."
           (listener-buffer-p buffer))
       (funcall next buffer)
       (let ((input-text (message-text (buffer-input-message buffer))))
-        (if (and (buffer-agent-busy-p buffer)
-                 (quaestor-nonblank-string-p input-text))
-            (progn
-              (queue-buffer-message buffer :follow-up input-text)
-              (set-message-text (buffer-input-message buffer) "")
-              (mark-buffer-dirty buffer)
-              (notify-buffer-display-change buffer :queued-message)
-              (buffer-insert-system-message buffer "[Queued follow-up message.]"))
-            (funcall next buffer)))))
+        (cond
+          ((buffer-user-input-pending buffer)
+           (quaestor-submit-current-request buffer))
+          ((and (buffer-agent-busy-p buffer)
+                (quaestor-nonblank-string-p input-text))
+           (queue-buffer-message buffer :follow-up input-text)
+           (set-message-text (buffer-input-message buffer) "")
+           (mark-buffer-dirty buffer)
+           (notify-buffer-display-change buffer :queued-message)
+           (buffer-insert-system-message buffer "[Queued follow-up message.]"))
+          (t
+           (funcall next buffer))))))
 
 (defadvice handle-key-event quaestor-handle-key-event :around (next buffer key)
   (if (and (quaestor-package-active-p buffer)
@@ -786,6 +919,11 @@ Returns true when the key was consumed."
 (defadvice init-default-keymap quaestor-init-default-keymap :after (result)
   (declare (ignore result))
   (quaestor-install-keybindings))
+
+(register-buffer-type :chat
+                      :input-presentation-function
+                      'quaestor-input-presentation-entries
+                      :package nil)
 
 (register-package-prompt-section
  "quaestor"
