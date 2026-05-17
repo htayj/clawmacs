@@ -24,6 +24,11 @@
 (defvar *agent-tool-name-table* (make-hash-table :test #'equal)
   "Global table mapping provider tool names to owning Lisp symbols.")
 
+(defvar *default-tool-permission* :agent-allowed
+  "Fallback permission for tools without an explicit guard-policy override.
+This makes newly installed tools agent-callable by default while still allowing
+user or project guard policies to set :agent-with-permission or :user-only.")
+
 (defun agent-tool-blank-string-p (value)
   "Return true when VALUE is NIL or contains only ASCII whitespace."
   (or (null value)
@@ -1078,6 +1083,7 @@ user-added tools stored in *tool-table* are left intact.")
             tool-user-permission
             default-project-permission
             default-user-permission
+            *default-tool-permission*
             static-permission)
         nil)))
 

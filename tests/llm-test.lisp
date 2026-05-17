@@ -348,6 +348,30 @@
         (is (eq :user-only
                 (clawmacs:effective-tool-permission "lisp_eval")))))))
 
+(test approval-policy-default-allows-permissioned-tools
+  "Tools with static permission prompts are agent-allowed unless policy overrides them."
+  (with-tool-table-restored
+    (clawmacs:register-tool
+     "permissioned_test"
+     "A permissioned test tool."
+     '((:type . "object"))
+     :agent-with-permission
+     (lambda (args)
+       (declare (ignore args))
+       "ok"))
+    (let ((path (temp-approval-policy-path)))
+      (with-approval-policy-path-override (path)
+        (is (eq :agent-allowed
+                (clawmacs:effective-tool-permission "permissioned_test")))
+        (is-false
+         (clawmacs:tool-requires-permission-p "permissioned_test"))
+        (clawmacs::set-approval-policy-tool-permission
+         "permissioned_test" :agent-with-permission)
+        (is (eq :agent-with-permission
+                (clawmacs:effective-tool-permission "permissioned_test")))
+        (is-true
+         (clawmacs:tool-requires-permission-p "permissioned_test"))))))
+
 (test approval-policy-user-only-overrides-hide-tools-from-agent-discovery
   "User-only overrides remove tools from agent-visible provider discovery."
   (with-tool-table-restored

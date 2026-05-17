@@ -717,7 +717,7 @@ pane redraws and value callbacks propagate."
       compose
       info
       minibuffer)))
-  (:top-level (esa:esa-top-level)))
+  (:top-level (run-clawmacs-chat-top-level)))
 
 (defmethod initialize-instance :after ((frame clawmacs-chat-frame) &key)
   "Keep ESA frame slots safely initialized before panes are generated."
@@ -760,6 +760,21 @@ pane redraws and value callbacks propagate."
 (defmethod esa:find-applicable-command-table ((frame clawmacs-chat-frame))
   "Use the frame-local command table so ESA M-x sees dynamic Clawmacs menus."
   (clim:frame-command-table frame))
+
+(defun focus-chat-compose-pane (frame)
+  "Give keyboard focus to FRAME's compose pane when it is available."
+  (let ((compose (ignore-errors (clim:find-pane-named frame 'compose))))
+    (when compose
+      (ignore-errors
+        (clim:stream-set-input-focus compose))
+      compose)))
+
+(defun run-clawmacs-chat-top-level (frame)
+  "Run FRAME with ESA command processing and compose focused initially."
+  (unless (eq (clim:frame-state frame) :enabled)
+    (clim:enable-frame frame))
+  (focus-chat-compose-pane frame)
+  (esa:esa-top-level frame))
 
 (defun mcclim-kill-items-vector (items)
   "Return ITEMS in the vector representation McCLIM's kill history expects."
