@@ -1432,6 +1432,7 @@ Returns a normalized plist or NIL on failure."
       (remhash (slash-command-name command) *slash-command-table*))
     (dolist (type (package-owned-buffer-types name))
       (remhash (buffer-type-name type) *buffer-type-registry*))
+    (remove-buffer-input-presentation-providers-for-package name)
     (dolist (entry (package-owned-extended-docs name))
       (remhash (car entry) *extended-docs*))
     (remhash (package-install-key (package-definition-root definition))

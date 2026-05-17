@@ -82,6 +82,7 @@
           (clawmacs::*package-prompt-sections* nil)
           (clawmacs::*buffer-type-registry*
            (clawmacs::make-buffer-type-registry))
+          (clawmacs::*buffer-input-presentation-providers* nil)
           (clawmacs::*enabled-builtin-packages* nil)
           (clawmacs::*advice-table* (make-hash-table :test #'eq)))
      ,@body))
@@ -96,6 +97,7 @@
          (clawmacs::*slash-command-table* (make-hash-table :test #'equal))
          (clawmacs::*buffer-type-registry*
           (clawmacs::make-buffer-type-registry))
+         (clawmacs::*buffer-input-presentation-providers* nil)
          (clawmacs::*package-prompt-sections* nil)
          (clawmacs::*current-package-resource-types* nil))
      ,@body))

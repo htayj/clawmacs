@@ -240,3 +240,38 @@
              (text (clawmacs::chat-frame-e2e-screen-text frame)))
         (is (search "No messages yet." text))
         (is (search "input overlay for overlay-buffer" text))))))
+
+(test mcclim-custom-presentation-buffers-append-system-feedback
+  "Whole-buffer custom presenters still surface system feedback messages."
+  (let ((clawmacs::*buffer-type-registry*
+          (clawmacs::make-buffer-type-registry)))
+    (flet ((entries (buffer columns)
+             (declare (ignore buffer columns))
+             (list (list :text "custom dashboard" :face :selector-title))))
+      (register-buffer-type :feedback-view
+                            :major-mode "feedback"
+                            :presentation-function #'entries)
+      (let ((buffer (make-buffer "feedback-buffer"
+                                 :kind :feedback-view
+                                 :session-persistence-mode :ephemeral)))
+        (buffer-insert-system-message buffer "[custom feedback]")
+        (let ((text (clawmacs::chat-frame-e2e-transcript-text buffer)))
+          (is (search "custom dashboard" text))
+          (is (search "[custom feedback]" text)))))))
+
+(test mcclim-presentation-hook-errors-render-as-feedback
+  "Presentation hook failures become visible error entries instead of aborting redisplay."
+  (let ((clawmacs::*buffer-type-registry*
+          (clawmacs::make-buffer-type-registry)))
+    (flet ((broken-entries (buffer columns)
+             (declare (ignore buffer columns))
+             (error "broken presenter")))
+      (register-buffer-type :broken-view
+                            :major-mode "broken"
+                            :presentation-function #'broken-entries)
+      (let* ((buffer (make-buffer "broken-buffer"
+                                  :kind :broken-view
+                                  :session-persistence-mode :ephemeral))
+             (text (clawmacs::chat-frame-e2e-transcript-text buffer)))
+        (is (search "Presentation error" text))
+        (is (search "broken presenter" text))))))

@@ -401,7 +401,20 @@ documentation in *extended-docs*."
   :category "buffer"
   :usage "(buffer-input-presentation-function BUF)"
   :returns "function designator or NIL — The registered input-overlay presenter for BUF's type, called as (FUNCALL FUNCTION BUF COLUMNS) after normal transcript content."
-  :see-also (buffer-presentation-function register-buffer-type))
+  :see-also (buffer-presentation-function register-buffer-type buffer-input-presentation-functions))
+
+(defdoc register-buffer-input-presentation-provider
+  :category "buffer"
+  :usage "(register-buffer-input-presentation-provider :chat 'package-input-panel)"
+  :returns "buffer-input-presentation-provider — A package-owned input-overlay provider for an existing buffer kind."
+  :side-effects "Adds a provider removed automatically when the owning Clawmacs package is reset or reloaded."
+  :see-also (buffer-input-presentation-functions remove-buffer-input-presentation-providers-for-package))
+
+(defdoc buffer-input-presentation-functions
+  :category "buffer"
+  :usage "(buffer-input-presentation-functions BUF)"
+  :returns "list — Active direct and package-owned input presentation functions for BUF."
+  :see-also (buffer-input-presentation-function register-buffer-input-presentation-provider))
 
 (defdoc listener-state
   :category "buffer"

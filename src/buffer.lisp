@@ -154,6 +154,57 @@ Packages may add entries with REGISTER-BUFFER-TYPE or DEFINE-BUFFER-TYPE.
 Registered presentation functions are retained as metadata for future
 interfaces.")
 
+(defstruct buffer-input-presentation-provider
+  "Package-owned input overlay presenter for an existing buffer kind."
+  kind
+  function
+  package)
+
+(defvar *buffer-input-presentation-providers* nil
+  "Package-owned input presentation providers for existing buffer kinds.")
+
+(defun register-buffer-input-presentation-provider
+    (kind function &key (package nil package-supplied-p))
+  "Register FUNCTION as a package-owned input overlay for buffer KIND."
+  (when (and *current-clawmacs-package*
+             (not (package-resource-type-allowed-p :buffer-type)))
+    (return-from register-buffer-input-presentation-provider nil))
+  (let* ((normalized-kind (normalize-buffer-kind kind))
+         (normalized-function
+           (normalize-buffer-type-function function :input-presentation-provider))
+         (owner (normalize-buffer-type-package-name
+                 (cond
+                   (package-supplied-p package)
+                   (*current-clawmacs-package*)
+                   (t nil))))
+         (provider (make-buffer-input-presentation-provider
+                    :kind normalized-kind
+                    :function normalized-function
+                    :package owner)))
+    (setf *buffer-input-presentation-providers*
+          (remove-if (lambda (existing)
+                       (and (eq normalized-kind
+                                (buffer-input-presentation-provider-kind existing))
+                            (equal owner
+                                   (buffer-input-presentation-provider-package
+                                    existing))
+                            (eq normalized-function
+                                (buffer-input-presentation-provider-function
+                                 existing))))
+                     *buffer-input-presentation-providers*))
+    (push provider *buffer-input-presentation-providers*)
+    provider))
+
+(defun remove-buffer-input-presentation-providers-for-package (package-name)
+  "Remove input presentation providers owned by PACKAGE-NAME."
+  (let ((name (normalize-buffer-type-package-name package-name)))
+    (setf *buffer-input-presentation-providers*
+          (remove-if (lambda (provider)
+                       (equal name
+                              (buffer-input-presentation-provider-package
+                               provider)))
+                     *buffer-input-presentation-providers*))))
+
 (defun register-buffer-type
     (name
      &key
@@ -269,6 +320,25 @@ major-mode label, and optional McCLIM presentation functions."
   "Return BUF's registered input presentation function, if any."
   (let ((type (buffer-type-for-buffer buf)))
     (and type (buffer-type-input-presentation-function type))))
+
+(defun buffer-input-presentation-provider-active-p (provider buf)
+  "Return true when PROVIDER should render for BUF."
+  (let ((package (buffer-input-presentation-provider-package provider)))
+    (and (eq (buffer-kind buf)
+             (buffer-input-presentation-provider-kind provider))
+         (or (null package)
+             (package-active-p package :buffer buf)))))
+
+(defun buffer-input-presentation-functions (buf)
+  "Return input presentation functions active for BUF."
+  (remove nil
+          (append
+           (list (buffer-input-presentation-function buf))
+           (mapcar #'buffer-input-presentation-provider-function
+                   (remove-if-not
+                    (lambda (provider)
+                      (buffer-input-presentation-provider-active-p provider buf))
+                    (reverse *buffer-input-presentation-providers*))))))
 
 (defun buffer-state-serializer (buf)
   "Return BUF's optional persistence serializer function."

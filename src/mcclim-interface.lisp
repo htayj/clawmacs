@@ -947,7 +947,12 @@ When NIL, derive it from `*minibuffer-max-height*' and
 (defun call-buffer-presentation-function (function buffer columns)
   "Return entries from FUNCTION for BUFFER and COLUMNS."
   (when function
-    (funcall function buffer columns)))
+    (handler-case
+        (or (funcall function buffer columns) nil)
+      (error (condition)
+        (list (list :text (format nil "[Presentation error: ~A]" condition)
+                    :face :error
+                    :unique-id (list :presentation-error function)))))))
 
 (defun buffer-presentation-entries-e2e-text (entries)
   "Return semantic text for generic presentation ENTRIES."
@@ -962,12 +967,31 @@ When NIL, derive it from `*minibuffer-max-height*' and
     buffer
     *buffer-presentation-default-columns*)))
 
+(defun buffer-presentation-feedback-items (buffer)
+  "Return transcript feedback messages to append after custom presentations."
+  (remove-if-not (lambda (item)
+                   (and (typep item 'message)
+                        (eq (message-sender item) :system)
+                        (not (buffer-system-prompt-display-message-p item))))
+                 (chat-transcript-display-items buffer)))
+
+(defun buffer-presentation-feedback-e2e-text (buffer)
+  "Return semantic text for BUFFER feedback messages."
+  (let ((items (and buffer (buffer-presentation-feedback-items buffer))))
+    (and items
+         (format nil "~{~A~^~%~%~}"
+                 (mapcar #'chat-display-item-e2e-text items)))))
+
 (defun chat-frame-e2e-transcript-text (buf)
   "Return semantic transcript text for BUF using the normal display item path."
   (let ((presentation-function (and buf (buffer-presentation-function buf))))
     (cond
       (presentation-function
-       (buffer-presentation-function-e2e-text buf presentation-function))
+       (format nil "~{~A~^~%~%~}"
+               (remove-if #'blank-string-p
+                          (list (buffer-presentation-function-e2e-text
+                                 buf presentation-function)
+                                (buffer-presentation-feedback-e2e-text buf)))))
       (t
        (let ((items (and buf (chat-transcript-display-items buf))))
          (if items
@@ -976,10 +1000,13 @@ When NIL, derive it from `*minibuffer-max-height*' and
 
 (defun chat-frame-e2e-input-presentation-text (buf &optional input-text)
   "Return semantic text for BUF's input presentation overlay, if any."
-  (let ((input-function (and buf (buffer-input-presentation-function buf)))
+  (let ((input-functions (and buf (buffer-input-presentation-functions buf)))
         (*buffer-input-presentation-text* input-text))
-    (and input-function
-         (buffer-presentation-function-e2e-text buf input-function))))
+    (and input-functions
+         (format nil "~{~A~^~%~}"
+                 (mapcar (lambda (function)
+                           (buffer-presentation-function-e2e-text buf function))
+                         input-functions)))))
 
 (defun chat-frame-e2e-screen-text (frame)
   "Return a semantic screen-text snapshot for FRAME."
@@ -1371,21 +1398,48 @@ When NIL, derive it from `*minibuffer-max-height*' and
                 :cache-test #'equal)
              (display-buffer-presentation-entry stream entry))))
 
+(defun stream-buffer-presentation-columns (stream)
+  "Return an approximate text column count available on STREAM."
+  (or (ignore-errors
+        (let* ((width (clim:bounding-rectangle-width stream))
+               (char-width (max 1 (or (ignore-errors
+                                         (clim:text-style-width
+                                          (clim:medium-text-style stream)
+                                          stream))
+                                       8))))
+          (max 20 (floor width char-width))))
+      *buffer-presentation-default-columns*))
+
 (defun display-buffer-presentation-function
-    (stream buffer function &key (namespace :buffer))
+    (stream buffer function &key (namespace :buffer) columns)
   "Display BUFFER entries produced by FUNCTION and return the entry count."
   (let ((entries (call-buffer-presentation-function
                   function
                   buffer
-                  *buffer-presentation-default-columns*)))
+                  (or columns *buffer-presentation-default-columns*))))
     (display-buffer-presentation-entries stream entries :namespace namespace)
     (length entries)))
+
+(defun display-chat-transcript-feedback (stream buffer)
+  "Display presentation-buffer feedback messages and return count."
+  (let ((items (buffer-presentation-feedback-items buffer))
+        (count 0))
+    (dolist (item items count)
+      (incf count)
+      (clim:updating-output
+          (stream
+           :unique-id (chat-display-item-output-id item)
+           :id-test #'equal
+           :cache-value (chat-display-item-cache-value item)
+           :cache-test #'equal)
+        (display-chat-display-item stream item)))))
 
 (defun display-chat-transcript (frame stream)
   "Display FRAME's transcript on STREAM."
   (let* ((buf (chat-frame-buffer frame))
+         (columns (stream-buffer-presentation-columns stream))
          (presentation-function (and buf (buffer-presentation-function buf)))
-         (input-function (and buf (buffer-input-presentation-function buf)))
+         (input-functions (and buf (buffer-input-presentation-functions buf)))
          (items (and (not presentation-function)
                      (chat-transcript-display-items buf)))
          (item-count 0))
@@ -1393,7 +1447,10 @@ When NIL, derive it from `*minibuffer-max-height*' and
       (presentation-function
        (incf item-count
              (display-buffer-presentation-function
-              stream buf presentation-function :namespace :buffer-presentation)))
+              stream buf presentation-function
+              :namespace :buffer-presentation
+              :columns columns))
+       (incf item-count (display-chat-transcript-feedback stream buf)))
       (items
        (dolist (item items)
          (incf item-count)
@@ -1408,11 +1465,14 @@ When NIL, derive it from `*minibuffer-max-height*' and
        (clim:with-drawing-options
            (stream :ink (clim:make-rgb-color 0.45 0.45 0.45))
          (format stream "No messages yet.~%"))))
-    (when input-function
+    (when input-functions
       (let ((*buffer-input-presentation-text* (chat-frame-e2e-compose-text frame)))
-        (incf item-count
-              (display-buffer-presentation-function
-               stream buf input-function :namespace :buffer-input-presentation))))
+        (dolist (input-function input-functions)
+          (incf item-count
+                (display-buffer-presentation-function
+                 stream buf input-function
+                 :namespace :buffer-input-presentation
+                 :columns columns)))))
     (when (buffer-approval-pending buf)
       (display-chat-approval stream (buffer-approval-pending buf)))
     (emit-chat-pane-rendered frame "transcript"

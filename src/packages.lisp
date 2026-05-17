@@ -212,6 +212,9 @@
    #:buffer-type-for-buffer
    #:buffer-presentation-function
    #:buffer-input-presentation-function
+   #:register-buffer-input-presentation-provider
+   #:remove-buffer-input-presentation-providers-for-package
+   #:buffer-input-presentation-functions
    #:buffer-name
    #:buffer-first-message
    #:buffer-last-message
