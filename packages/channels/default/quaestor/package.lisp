@@ -708,16 +708,29 @@ Returns true when the key was consumed."
                            (quaestor-request-current-question request)
                            :id))))
 
-(defun quaestor-option-entry (question option index selected-labels active-index)
+(defun quaestor-fit (text columns)
+  "Fit TEXT to COLUMNS with a visible truncation marker."
+  (let* ((string (or text ""))
+         (width (max 0 (or columns 100))))
+    (cond
+      ((zerop width) "")
+      ((<= (length string) width) string)
+      ((<= width 1) (subseq string 0 width))
+      (t (concatenate 'string (subseq string 0 (1- width)) ">")))))
+
+(defun quaestor-option-entry (question option index selected-labels active-index
+                              columns)
   "Return one generic presentation entry for OPTION."
   (let* ((label (quaestor-alist-value option :label))
          (selected-p (member label selected-labels :test #'string=))
          (active-p (= index active-index)))
-    (list :text (format nil "~A [~A] ~A — ~A"
-                        (if active-p ">" " ")
-                        (if selected-p "x" " ")
-                        label
-                        (quaestor-alist-value option :description))
+    (list :text (quaestor-fit
+                 (format nil "~A [~A] ~A — ~A"
+                         (if active-p ">" " ")
+                         (if selected-p "x" " ")
+                         label
+                         (quaestor-alist-value option :description))
+                 columns)
           :face (if selected-p :selector-selected :selector-entry)
           :object (quaestor-option-presentation-object question option index)
           :presentation-type 'quaestor-option-ref
@@ -727,7 +740,6 @@ Returns true when the key was consumed."
 
 (defun quaestor-input-presentation-entries (buffer columns)
   "Return generic McCLIM entries for BUFFER's active quaestor request."
-  (declare (ignore columns))
   (let ((request (and (quaestor-package-active-p buffer)
                       (quaestor-current-request buffer))))
     (when request
@@ -747,25 +759,33 @@ Returns true when the key was consumed."
         (append
          (list
           (list :text "" :face :default-text)
-          (list :text (format nil "Quaestor request ~D/~D: ~A"
-                              (1+ index)
-                              (length questions)
-                              (quaestor-alist-value question :header))
+          (list :text (quaestor-fit
+                       (format nil "Quaestor request ~D/~D: ~A"
+                               (1+ index)
+                               (length questions)
+                               (quaestor-alist-value question :header))
+                       columns)
                 :face :selector-title
                 :unique-id (list :quaestor-title question-id))
-          (list :text (quaestor-alist-value question :question)
+          (list :text (quaestor-fit
+                       (quaestor-alist-value question :question)
+                       columns)
                 :face :selector-header
                 :unique-id (list :quaestor-question question-id))
-          (list :text (format nil "Focus: ~(~A~). Tab switches focus; Return advances."
-                              (quaestor-request-focus request))
+          (list :text (quaestor-fit
+                       (format nil "Focus: ~(~A~). Tab switches focus; Return advances."
+                               (quaestor-request-focus request))
+                       columns)
                 :face :selector-footer
                 :unique-id (list :quaestor-focus question-id)))
          (loop :for option :in options
                :for option-index :from 0
                :collect (quaestor-option-entry question option option-index
-                                               selected-labels active-index))
+                                               selected-labels active-index
+                                               columns))
          (when allow-notes-p
-           (list (list :text (format nil "Notes: ~A" notes)
+           (list (list :text (quaestor-fit (format nil "Notes: ~A" notes)
+                                           columns)
                        :face (if (eq (quaestor-request-focus request) :notes)
                                  :selector-selected
                                  :selector-footer)
@@ -787,7 +807,17 @@ Returns true when the key was consumed."
     ((submit 'quaestor-submit-ref))
   (declare (ignore submit))
   (clim:with-application-frame (frame)
-    (quaestor-next-question-or-submit (chat-frame-buffer frame))))
+    (let* ((buffer (chat-frame-buffer frame))
+           (compose (ignore-errors (clim:find-pane-named frame 'compose)))
+           (text (and compose (ignore-errors (clim:gadget-value compose)))))
+      (when (stringp text)
+        (set-message-text (buffer-input-message buffer) text)
+        (mark-buffer-dirty buffer))
+      (quaestor-next-question-or-submit buffer)
+      (when compose
+        (setf (clim:gadget-value compose)
+              (message-text (buffer-input-message buffer))))
+      (request-chat-frame-redisplay frame))))
 
 (clim:define-presentation-to-command-translator select-quaestor-option
     (quaestor-option-ref com-quaestor-select-option
@@ -920,10 +950,9 @@ Returns true when the key was consumed."
   (declare (ignore result))
   (quaestor-install-keybindings))
 
-(register-buffer-type :chat
-                      :input-presentation-function
-                      'quaestor-input-presentation-entries
-                      :package nil)
+(register-buffer-input-presentation-provider
+ :chat
+ 'quaestor-input-presentation-entries)
 
 (register-package-prompt-section
  "quaestor"

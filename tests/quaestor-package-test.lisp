@@ -47,6 +47,7 @@
           (clawmacs::*slash-command-table* (make-hash-table :test #'equal))
           (clawmacs::*buffer-type-registry*
            (clawmacs::make-buffer-type-registry))
+          (clawmacs::*buffer-input-presentation-providers* nil)
           (clawmacs::*buffer-ring* nil)
           (clawmacs::*buffer-counter* 0)
           (clawmacs::*default-keymap* nil)
@@ -117,9 +118,10 @@
            (commands (list-available-commands)))
       (is (member "request_user_input" tool-names :test #'string=))
       (is-false (clawmacs::tool-requires-permission-p "request_user_input"))
-      (is (eq 'clawmacs::quaestor-input-presentation-entries
-              (clawmacs:buffer-type-input-presentation-function
-               (find-buffer-type :chat))))
+      (let ((buf (make-quaestor-test-buffer "quaestor-provider-check")))
+        (is (member 'clawmacs::quaestor-input-presentation-entries
+                    (clawmacs::buffer-input-presentation-functions buf)
+                    :test #'eq)))
       (is (search "Structured user questions with quaestor" prompt))
       (is (search "request_user_input" prompt))
       (is (member 'clawmacs::quaestor-show-queued-messages-command
@@ -145,7 +147,15 @@
                                       '(:ctrl-c #\j))))
       (is (eq 'clawmacs::quaestor-cancel-and-restore-command
               (clawmacs::keymap-lookup clawmacs::*default-keymap*
-                                      '(:ctrl-c #\J)))))))
+                                      '(:ctrl-c #\J))))
+      (let ((buf (make-quaestor-test-buffer "quaestor-provider-reset")))
+        (is (member 'clawmacs::quaestor-input-presentation-entries
+                    (clawmacs::buffer-input-presentation-functions buf)
+                    :test #'eq))
+        (clawmacs::reset-package-runtime-state "quaestor")
+        (is-false (member 'clawmacs::quaestor-input-presentation-entries
+                          (clawmacs::buffer-input-presentation-functions buf)
+                          :test #'eq))))))
 
 (test quaestor-input-presentations-describe-active-request
   "The package-owned input panel exposes options and submit affordances."
@@ -160,8 +170,9 @@
           :options ((:label "Alpha" :description "Smaller change.")
                     (:label "Beta" :description "Broader change."))
           :freeform t)))
-      (is (eq 'clawmacs::quaestor-input-presentation-entries
-              (buffer-input-presentation-function buf)))
+      (is (member 'clawmacs::quaestor-input-presentation-entries
+                  (clawmacs::buffer-input-presentation-functions buf)
+                  :test #'eq))
       (let* ((entries (clawmacs::quaestor-input-presentation-entries buf 100))
              (beta (find-if (lambda (entry)
                               (search "Beta" (getf entry :text)))
