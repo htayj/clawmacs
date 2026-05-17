@@ -9,9 +9,10 @@ E2E events, and captures screenshots for every smoke step.
 ```sh
 ./scripts/run-gui-e2e.sh --preflight-only
 ./scripts/run-gui-e2e.sh --suite smoke
+./scripts/run-gui-e2e.sh --suite mx
 ```
 
-ASDF integration is also opt-in:
+ASDF integration is also opt-in and runs both `smoke` and `mx`:
 
 ```lisp
 (asdf:test-system :clawmacs/gui-e2e)
@@ -54,7 +55,7 @@ minibuffer text), not OCR.
 
 ## Smoke behavior
 
-The current smoke suite:
+The current `smoke` suite:
 
 1. waits for `frame-ready` and a visible `Clawmacs E2E` X window;
 2. captures an initial screenshot;
@@ -65,3 +66,18 @@ The current smoke suite:
    `CLAWMACS_E2E_HELLO_SENTINEL`, provider completion, and a final idle
    `ui-snapshot` containing the response;
 7. captures a final screenshot after the rendered idle state.
+
+## M-x behavior
+
+The `mx` suite opens a fresh GUI and exercises the Emacs-style extended command
+flow from the compose pane:
+
+1. waits for `frame-ready` and focuses the Clawmacs window;
+2. sends `Escape` then `x` as the robust keyboard equivalent of `M-x`;
+3. waits for the minibuffer snapshot to show `M-x`;
+4. types `toggle-debug-mode-command`;
+5. presses Return;
+6. waits for the transcript snapshot to contain `[Debug mode ON...` and for the
+   minibuffer to deactivate;
+7. captures screenshots for the initial, minibuffer-open, command-typed, and
+   final result states.

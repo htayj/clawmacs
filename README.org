@@ -432,6 +432,7 @@ GUI smoke E2E runs are opt-in and documented in [[file:docs/GUI-E2E.md][docs/GUI
 #+begin_src sh
 ./scripts/run-gui-e2e.sh --preflight-only
 ./scripts/run-gui-e2e.sh --suite smoke
+./scripts/run-gui-e2e.sh --suite mx
 #+end_src
 
 The probes run through =prompt.sh --isolated=, write logs under =/tmp=, and

@@ -198,12 +198,18 @@ class McCLIMGuiSession:
         return "\n".join(data[-lines:])
 
 
-def run_smoke(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+def prepare_session(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    """Wait for the frame, focus it, and capture the initial state."""
     screenshots: list[dict[str, Any]] = []
     session.wait_event("frame-ready", timeout=20.0)
     session.wait_event("ui-snapshot", timeout=10.0)
     session.focus()
     screenshots.append(session.screenshot("01-initial"))
+    return screenshots
+
+
+def run_smoke(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    screenshots = prepare_session(session)
 
     session.type_text("hello")
     session.wait_snapshot("compose contains hello",
@@ -221,6 +227,34 @@ def run_smoke(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           and HELLO_SENTINEL in str(snapshot.get("screen_text", "")),
                           timeout=20.0)
     screenshots.append(session.screenshot("03-agent-response"))
+    return screenshots
+
+
+def run_mx(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    screenshots = prepare_session(session)
+
+    # Use the Emacs-compatible ESC prefix for M-x because it is more robust
+    # across Xvfb/window-manager modifier handling than synthesizing Alt+x.
+    session.press("Escape")
+    session.press("x")
+    session.wait_snapshot("M-x minibuffer opened",
+                          lambda snapshot: "M-x" in str(snapshot.get("minibuffer_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("02-mx-open"))
+
+    command = "toggle-debug-mode-command"
+    session.type_text(command)
+    session.wait_snapshot("M-x command typed",
+                          lambda snapshot: command in str(snapshot.get("minibuffer_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("03-mx-command"))
+
+    session.press("Return")
+    session.wait_snapshot("M-x command executed",
+                          lambda snapshot: "[Debug mode ON" in str(snapshot.get("screen_text", ""))
+                          and not snapshot.get("minibuffer_text"),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("04-mx-result"))
     return screenshots
 
 
@@ -273,9 +307,12 @@ def main(argv: list[str]) -> int:
                                debug_log=Path(args.debug_log),
                                artifact_dir=artifact_dir)
     try:
-        if args.suite != "smoke":
+        if args.suite == "smoke":
+            screenshots = run_smoke(session)
+        elif args.suite == "mx":
+            screenshots = run_mx(session)
+        else:
             raise DriverError(f"unsupported suite: {args.suite}")
-        screenshots = run_smoke(session)
         write_summary(summary_path, ok=True, suite=args.suite,
                       artifact_dir=artifact_dir, steps=session.steps,
                       screenshots=screenshots,

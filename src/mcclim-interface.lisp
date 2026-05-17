@@ -695,11 +695,34 @@ pane redraws and value callbacks propagate."
       (base-key base-key)
       (t nil))))
 
+(defun chat-compose-escape-event-p (event)
+  "Return true when EVENT is a plain Escape key press."
+  (let ((modifiers (clim:event-modifier-state event))
+        (key-name (clim:keyboard-event-key-name event))
+        (key-character (clim:keyboard-event-character event)))
+    (and (zerop (logand modifiers clim:+control-key+))
+         (zerop (logand modifiers clim:+meta-key+))
+         (or (eql key-character #\Esc)
+             (eq key-name :escape)))))
+
+(defun chat-compose-m-x-event-p (event)
+  "Return true when EVENT is a direct Meta-x / Alt-x extended-command key."
+  (let ((key (chat-compose-event-key event)))
+    (and (consp key)
+         (eq (first key) :meta)
+         (characterp (second key))
+         (char-equal (second key) #\x))))
+
 (defun dispatch-chat-compose-event-to-buffer (pane event)
   "Dispatch EVENT through Clawmacs' buffer key handler and refresh the frame."
   (let* ((frame (clim:pane-frame pane))
          (buf (chat-frame-buffer frame))
-         (key (chat-compose-event-key event)))
+         (raw-key (chat-compose-event-key event))
+         (key (cond
+                ((and raw-key *meta-pending*)
+                 (setf *meta-pending* nil)
+                 (list :meta raw-key))
+                (t raw-key))))
     (when key
       (let ((result (handle-key-event buf key)))
         (when (eq result :quit)
@@ -717,6 +740,19 @@ pane redraws and value callbacks propagate."
       (let ((result
               (cond
                 ((chat-compose-application-input-active-p)
+                 (dispatch-chat-compose-event-to-buffer pane event))
+                ((and *meta-pending*
+                      (not (chat-compose-escape-event-p event)))
+                 (dispatch-chat-compose-event-to-buffer pane event))
+                ((chat-compose-escape-event-p event)
+                 (let ((frame (clim:pane-frame pane)))
+                   (if (buffer-llm-running-p (chat-frame-buffer frame))
+                       (dispatch-chat-compose-event-to-buffer pane event)
+                       (progn
+                         (setf *meta-pending* t)
+                         (file-debug-event "compose-meta-prefix")
+                         t))))
+                ((chat-compose-m-x-event-p event)
                  (dispatch-chat-compose-event-to-buffer pane event))
                 ((chat-compose-submit-event-p event)
                  (let ((frame (clim:pane-frame pane)))
