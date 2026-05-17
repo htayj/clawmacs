@@ -538,6 +538,21 @@ newlines."
 (defmethod clim:note-sheet-region-changed :after ((pane drei:drei-gadget-pane))
   (maybe-configure-chat-compose-pane pane))
 
+(defun chat-compose-submit-event-p (event)
+  "Return true when EVENT should submit the compose pane.
+Drei may report the Enter key as either Return or Newline depending on the
+backend.  Control-modified newline remains an editor gesture for inserting a
+line break."
+  (let ((modifiers (clim:event-modifier-state event)))
+    (and (zerop (logand modifiers clim:+control-key+))
+         (zerop (logand modifiers clim:+meta-key+))
+         (let ((key-name (clim:keyboard-event-key-name event))
+               (key-character (clim:keyboard-event-character event)))
+           (or (eql key-character #\Return)
+               (eql key-character #\Newline)
+               (member key-name '(:return :newline :linefeed)
+                       :test #'eq))))))
+
 (defun chat-compose-drei-control-editing-event-p (event)
   "Return true when EVENT is a control editing key Drei should handle here.
 ESA/Drei's gadget bridge currently converts only unmodified key events, so
@@ -592,12 +607,61 @@ pane redraws and value callbacks propagate."
 
 (defmethod clim:handle-event :around
     ((pane drei:drei-gadget-pane) (event clim:key-press-event))
-  (if (and (chat-compose-pane-p pane)
-           (chat-compose-drei-control-editing-event-p event))
-      (process-chat-compose-drei-event pane event :redisplay t)
+  (if (chat-compose-pane-p pane)
+      (cond
+        ((chat-compose-submit-event-p event)
+         (let ((frame (clim:pane-frame pane)))
+           (clim:execute-frame-command frame '(com-chat-submit-compose)))
+         t)
+        ((chat-compose-drei-control-editing-event-p event)
+         (process-chat-compose-drei-event pane event :redisplay t))
+        (t
+         (call-next-method)))
       (call-next-method)))
 
-(clim:define-application-frame clawmacs-chat-frame ()
+(defclass clawmacs-transcript-pane (esa:esa-pane-mixin clim:application-pane)
+  ()
+  (:documentation "ESA window pane that displays the current chat transcript."))
+
+(defclass clawmacs-chat-info-pane (esa:info-pane)
+  ()
+  (:documentation "Emacs-style status line for the Clawmacs chat frame.")
+  (:default-initargs
+   :height 22
+   :min-height 22
+   :max-height 22))
+
+(defclass clawmacs-chat-minibuffer-pane (esa:minibuffer-pane)
+  ()
+  (:documentation "ESA minibuffer used for messages, command arguments, and M-x.")
+  (:default-initargs
+   :height 24
+   :min-height 24
+   :max-height 24))
+
+(defun display-chat-info-pane (frame stream)
+  "Display an Emacs-style status line for FRAME."
+  (declare (ignore frame))
+  (let* ((pane (and (typep stream 'esa:info-pane) stream))
+         (master (and pane (ignore-errors (esa:master-pane pane))))
+         (frame (or (and master (ignore-errors (clim:pane-frame master)))
+                    clim:*application-frame*))
+         (buf (and (typep frame 'clawmacs-chat-frame)
+                   (chat-frame-buffer frame))))
+    (when buf
+      (multiple-value-bind (provider model)
+          (handler-case (resolve-buffer-provider-and-model buf)
+            (error () (values nil nil)))
+        (format stream " ~A  ~A  ~A  ~A"
+                (buffer-name buf)
+                (buffer-major-mode buf)
+                (string-downcase (symbol-name (buffer-status buf)))
+                (if (and provider model)
+                    (model-selector-display provider model)
+                    "no model"))))))
+
+(clim:define-application-frame clawmacs-chat-frame
+    (esa:esa-frame-mixin clim:standard-application-frame)
   ((buffer :initarg :buffer
            :accessor chat-frame-buffer)
    (redisplay-lock :initform (bt:make-lock "clawmacs chat redisplay")
@@ -608,31 +672,94 @@ pane redraws and value callbacks propagate."
                          :accessor chat-frame-redisplay-handling-p)
    (redisplay-repeat-p :initform nil
                        :accessor chat-frame-redisplay-repeat-p))
+  (:command-table (clawmacs-chat-frame
+                   :inherit-from (esa:global-esa-table
+                                  esa:keyboard-macro-table)))
   (:pointer-documentation t)
   (:menu-bar t)
   (:panes
-   (transcript :application
-               :display-function 'display-chat-transcript
-               :display-time :command-loop
-               :incremental-redisplay t
-               :scroll-bars :vertical
-               :end-of-page-action :allow
-               :width 900
-               :height 640)
-   (compose :drei
-            :initial-contents ""
-            :ncolumns 90
-            :nlines 6
-            :minibuffer nil
-            :scroll-bars nil
-            :border-width 0
-            :activation-gestures '(:return)
-            :activate-callback #'compose-pane-activated))
+   (transcript
+    (let ((pane (clim:make-pane
+                 'clawmacs-transcript-pane
+                 :display-function 'display-chat-transcript
+                 :display-time :command-loop
+                 :incremental-redisplay t
+                 :end-of-page-action :allow
+                 :width 900
+                 :height 640
+                 :command-table 'clawmacs-chat-frame)))
+      (setf (esa:windows clim:*application-frame*) (list pane))
+      pane))
+   (info
+    (clim:make-pane
+     'clawmacs-chat-info-pane
+     :master-pane nil
+     :display-function 'display-chat-info-pane
+     :width 900))
+   (compose
+    (clim:make-pane
+     'drei:drei-gadget-pane
+     :initial-contents ""
+     :ncolumns 90
+     :nlines 6
+     :minibuffer nil
+     :scroll-bars nil
+     :border-width 0
+     :activation-gestures '(:return)
+     :activate-callback #'compose-pane-activated))
+   (minibuffer
+    (clim:make-pane 'clawmacs-chat-minibuffer-pane :width 900)))
   (:layouts
    (default
     (clim:vertically ()
-      transcript
-      compose))))
+      (clim:scrolling ()
+        transcript)
+      compose
+      info
+      minibuffer)))
+  (:top-level (esa:esa-top-level)))
+
+(defmethod initialize-instance :after ((frame clawmacs-chat-frame) &key)
+  "Keep ESA frame slots safely initialized before panes are generated."
+  (unless (slot-boundp frame 'esa:windows)
+    (setf (esa:windows frame) nil)))
+
+(defmethod clim:frame-standard-input ((frame clawmacs-chat-frame))
+  "Use the ESA minibuffer as FRAME's standard input stream when it exists."
+  (or (ignore-errors (clim:find-pane-named frame 'minibuffer))
+      (call-next-method)))
+
+(defmethod esa:buffers ((frame clawmacs-chat-frame))
+  "Return the Clawmacs buffers visible to the ESA command processor."
+  (remove-duplicates
+   (remove nil (cons (chat-frame-buffer frame) *buffer-ring*))
+   :test #'eq))
+
+(defmethod esa:esa-current-buffer ((frame clawmacs-chat-frame))
+  "Return FRAME's current Clawmacs buffer."
+  (chat-frame-buffer frame))
+
+(defmethod (setf esa:esa-current-buffer) ((new-buffer buffer)
+                                          (frame clawmacs-chat-frame))
+  "Switch FRAME to NEW-BUFFER using Clawmacs buffer-ring semantics."
+  (setf (chat-frame-buffer frame) new-buffer)
+  (when (member new-buffer *buffer-ring* :test #'eq)
+    (switch-to-buffer new-buffer))
+  new-buffer)
+
+(defmethod esa:esa-current-window ((frame clawmacs-chat-frame))
+  "Return the current ESA window, falling back to FRAME before panes exist."
+  (or (first (ignore-errors (esa:windows frame)))
+      (ignore-errors (clim:find-pane-named frame 'transcript))
+      frame))
+
+(defmethod (setf esa:previous-command) (command (frame clawmacs-chat-frame))
+  "Accept ESA's previous-command update before concrete window panes exist."
+  command)
+
+(defmethod esa:find-applicable-command-table ((frame clawmacs-chat-frame))
+  "Use the frame-local command table so ESA M-x sees dynamic Clawmacs menus."
+  (clim:frame-command-table frame))
 
 (defun mcclim-kill-items-vector (items)
   "Return ITEMS in the vector representation McCLIM's kill history expects."
@@ -1205,6 +1332,8 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
 
 (defmethod clim:run-frame-top-level :around ((frame clawmacs-chat-frame) &key)
   (refresh-chat-frame-menu-bar frame)
+  (let ((transcript (clim:find-pane-named frame 'transcript)))
+    (setf (esa:windows frame) (and transcript (list transcript))))
   (configure-chat-compose-pane (clim:find-pane-named frame 'compose))
   (let ((hook (lambda (buf reason)
                 (when (and (not *suppress-chat-redisplay-requests*)

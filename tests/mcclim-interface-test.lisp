@@ -79,3 +79,16 @@
       (is (equal '(("read" . 1) ("grep" . 1))
                  (clawmacs::chat-tool-activity-summary-tool-counts (first items))))
       (is (= 0 (clawmacs::chat-tool-activity-summary-result-count (first items)))))))
+
+(test chat-frame-is-esa-application
+  "The chat frame exposes the ESA frame and buffer protocol."
+  (let* ((buf (make-buffer "esa-frame" :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
+                                             :buffer buf)))
+    (is (typep frame 'esa:esa-frame-mixin))
+    (is (eq buf (esa:esa-current-buffer frame)))
+    (is (member buf (esa:buffers frame) :test #'eq))
+    (is (null (esa:windows frame)))
+    (is (eq frame (esa:esa-current-window frame)))
+    (is (eq (esa:find-applicable-command-table frame)
+            (clim:frame-command-table frame)))))

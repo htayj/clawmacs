@@ -490,7 +490,25 @@
     (is (equal '(clawmacs::com-chat-submit-compose)
                (test-command-table-key-command drei-order-table #\Return)))
     (is-false (equal '(clawmacs::com-chat-submit-compose)
-                     (test-command-table-key-command drei-order-table #\Newline)))))
+                     (test-command-table-key-command drei-order-table #\Newline)))
+    (is-true
+     (clawmacs::chat-compose-submit-event-p
+      (make-instance 'clim:key-press-event
+                     :sheet nil
+                     :x 0
+                     :y 0
+                     :key-name nil
+                     :key-character #\Newline
+                     :modifier-state (clim:make-modifier-state))))
+    (is-false
+     (clawmacs::chat-compose-submit-event-p
+      (make-instance 'clim:key-press-event
+                     :sheet nil
+                     :x 0
+                     :y 0
+                     :key-name nil
+                     :key-character #\Newline
+                     :modifier-state (clim:make-modifier-state :control))))))
 
 (test mcclim-compose-pane-is-drei-gadget
   "The chat compose pane uses Drei's gadget editor again."
