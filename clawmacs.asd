@@ -98,14 +98,14 @@
                               (:file "info-test")))))
 
 (defsystem "clawmacs/gui-e2e"
-  :description "Opt-in GUI E2E smoke tests for clawmacs"
+  :description "Opt-in GUI E2E suites for clawmacs"
   :licence "AGPL-3.0-only"
   :depends-on ("clawmacs")
   :perform (test-op (op c)
              (declare (ignore op))
              (let ((script (merge-pathnames "scripts/run-gui-e2e.sh"
                                             (asdf:system-source-directory c))))
-               (dolist (suite '("smoke" "mx"))
+               (dolist (suite '("smoke" "mx" "features"))
                  (uiop:run-program
                   (list "sh" (namestring script) "--suite" suite)
                   :directory (asdf:system-source-directory c)

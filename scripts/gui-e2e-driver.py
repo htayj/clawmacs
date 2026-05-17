@@ -230,16 +230,56 @@ def run_smoke(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     return screenshots
 
 
-def run_mx(session: McCLIMGuiSession) -> list[dict[str, Any]]:
-    screenshots = prepare_session(session)
-
-    # Use the Emacs-compatible ESC prefix for M-x because it is more robust
-    # across Xvfb/window-manager modifier handling than synthesizing Alt+x.
+def open_mx(session: McCLIMGuiSession) -> None:
+    """Open the M-x fuzzy command selector."""
+    # Use the Emacs-compatible ESC prefix because it is more robust across
+    # Xvfb/window-manager modifier handling than synthesizing Alt+x.
     session.press("Escape")
     session.press("x")
     session.wait_snapshot("M-x minibuffer opened",
                           lambda snapshot: "M-x" in str(snapshot.get("minibuffer_text", "")),
                           timeout=10.0)
+
+
+def selected_candidate_contains(snapshot: dict[str, Any], text: str) -> bool:
+    minibuffer = str(snapshot.get("minibuffer_text", ""))
+    return any(line.lstrip().startswith(">") and text in line
+               for line in minibuffer.splitlines())
+
+
+def run_mx_selection(session: McCLIMGuiSession, query: str,
+                     *, selected: str | None = None,
+                     timeout: float = 10.0) -> None:
+    """Open M-x, type QUERY, wait for SELECTED, and press Return."""
+    open_mx(session)
+    session.type_text(query)
+    expected = selected or query
+    session.wait_snapshot(f"M-x candidate {expected!r} selected",
+                          lambda snapshot: selected_candidate_contains(snapshot, expected),
+                          timeout=timeout)
+    session.press("Return")
+
+
+def wait_minibuffer_text(session: McCLIMGuiSession, description: str,
+                         predicate: Callable[[str], bool],
+                         *, timeout: float = 10.0) -> dict[str, Any]:
+    return session.wait_snapshot(description,
+                                 lambda snapshot: predicate(
+                                     str(snapshot.get("minibuffer_text", ""))),
+                                 timeout=timeout)
+
+
+def wait_compose_text(session: McCLIMGuiSession, expected: str,
+                      *, timeout: float = 10.0) -> dict[str, Any]:
+    return session.wait_snapshot(f"compose text is {expected!r}",
+                                 lambda snapshot: snapshot.get("compose_text") == expected,
+                                 timeout=timeout)
+
+
+def run_mx(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    screenshots = prepare_session(session)
+
+    open_mx(session)
     screenshots.append(session.screenshot("02-mx-open"))
 
     abbreviation = "tdbg"
@@ -248,7 +288,7 @@ def run_mx(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     session.wait_snapshot("M-x fuzzy command candidate listed",
                           lambda snapshot: (
                               f"M-x: {abbreviation}" in str(snapshot.get("minibuffer_text", ""))
-                              and f"\n> {command}" in str(snapshot.get("minibuffer_text", ""))
+                              and selected_candidate_contains(snapshot, command)
                           ),
                           timeout=10.0)
     screenshots.append(session.screenshot("03-mx-command"))
@@ -259,6 +299,165 @@ def run_mx(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           and not snapshot.get("minibuffer_text"),
                           timeout=10.0)
     screenshots.append(session.screenshot("04-mx-result"))
+    return screenshots
+
+
+def run_features(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    """Exercise broad no-network GUI feature coverage in one Clawmacs session."""
+    screenshots = prepare_session(session)
+
+    # Compose-pane editing: ordinary typing, C-a/C-e movement, C-b movement,
+    # and C-k killing all text from the beginning of the line.
+    session.type_text("abc")
+    wait_compose_text(session, "abc")
+    session.press("ctrl+a")
+    session.type_text("X")
+    wait_compose_text(session, "Xabc")
+    session.press("ctrl+e")
+    session.type_text("Y")
+    wait_compose_text(session, "XabcY")
+    session.press("ctrl+b")
+    session.type_text("Z")
+    wait_compose_text(session, "XabcZY")
+    session.press("ctrl+a")
+    session.press("ctrl+k")
+    wait_compose_text(session, "")
+    screenshots.append(session.screenshot("02-compose-editing"))
+
+    # Minibuffer editing while M-x is active, including C-b and ESC-b (M-b).
+    open_mx(session)
+    session.type_text("foo bar")
+    wait_minibuffer_text(session, "M-x text typed",
+                         lambda text: "M-x: foo bar" in text)
+    session.press("ctrl+b")
+    session.press("ctrl+b")
+    session.type_text("Z")
+    wait_minibuffer_text(session, "C-b moved minibuffer point",
+                         lambda text: "M-x: foo bZar" in text)
+    session.press("Escape")
+    session.press("b")
+    session.type_text("X")
+    wait_minibuffer_text(session, "M-b moved minibuffer point",
+                         lambda text: "M-x: foo XbZar" in text)
+    session.press("ctrl+a")
+    session.type_text("S")
+    session.press("ctrl+e")
+    session.type_text("E")
+    wait_minibuffer_text(session, "C-a/C-e moved minibuffer point",
+                         lambda text: "M-x: Sfoo XbZarE" in text)
+    session.press("ctrl+u")
+    wait_minibuffer_text(session, "C-u cleared M-x input",
+                         lambda text: "M-x: " in text and "No matches" not in text)
+    session.type_text("tdbg")
+    session.wait_snapshot("M-x fuzzy debug command selected",
+                          lambda snapshot: selected_candidate_contains(
+                              snapshot, "toggle-debug-mode-command"),
+                          timeout=10.0)
+    session.press("Return")
+    session.wait_snapshot("debug mode toggled by edited M-x",
+                          lambda snapshot: "[Debug mode ON" in str(snapshot.get("screen_text", ""))
+                          and not snapshot.get("minibuffer_text"),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("03-minibuffer-editing"))
+
+    # Help/introspection through the fuzzy command selector.
+    run_mx_selection(session, "describe-bindings-command")
+    session.wait_snapshot("keybindings help buffer shown",
+                          lambda snapshot: snapshot.get("buffer_name") == "*help:keybindings*"
+                          and "execute-extended-command" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("04-help-bindings"))
+
+    # Buffer management and fuzzy buffer selector.
+    run_mx_selection(session, "new-buffer-command")
+    session.wait_snapshot("new buffer selected",
+                          lambda snapshot: snapshot.get("buffer_name") == "session-1"
+                          and snapshot.get("major_mode") == "chat",
+                          timeout=10.0)
+    run_mx_selection(session, "minibuffer-select-buffer-command")
+    wait_minibuffer_text(session, "buffer selector opened",
+                         lambda text: "Switch Buffer" in text)
+    session.type_text("clawmacs")
+    session.wait_snapshot("original e2e buffer candidate selected",
+                          lambda snapshot: selected_candidate_contains(snapshot, "clawmacs:e2e"),
+                          timeout=10.0)
+    session.press("Return")
+    session.wait_snapshot("original e2e buffer restored",
+                          lambda snapshot: snapshot.get("buffer_name") == "clawmacs:e2e",
+                          timeout=10.0)
+    screenshots.append(session.screenshot("05-buffer-selector"))
+
+    # Agent/model/think selectors without real provider credentials.
+    run_mx_selection(session, "minibuffer-select-agent-command")
+    wait_minibuffer_text(session, "agent selector opened",
+                         lambda text: "Select Agent" in text)
+    session.type_text("agent")
+    session.wait_snapshot("agent candidate selected",
+                          lambda snapshot: selected_candidate_contains(snapshot, "agent"),
+                          timeout=10.0)
+    session.press("Return")
+    session.wait_snapshot("agent selector closed",
+                          lambda snapshot: not snapshot.get("minibuffer_text")
+                          and "agent agent" in str(snapshot.get("info_text", "")),
+                          timeout=10.0)
+
+    run_mx_selection(session, "minibuffer-select-model-command")
+    wait_minibuffer_text(session, "model selector opened",
+                         lambda text: "Select Model" in text)
+    session.type_text("e2e")
+    session.wait_snapshot("e2e model candidate selected",
+                          lambda snapshot: selected_candidate_contains(snapshot, "e2e/e2e-model"),
+                          timeout=10.0)
+    session.press("Return")
+    session.wait_snapshot("e2e model selected",
+                          lambda snapshot: "[Model changed to e2e/e2e-model" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+
+    run_mx_selection(session, "minibuffer-select-think-level-command")
+    session.wait_snapshot("think-level unavailable message shown",
+                          lambda snapshot: "Think levels not available" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("06-agent-model-think"))
+
+    # Prompted commands and session persistence feedback.
+    run_mx_selection(session, "set-session-display-name-command")
+    wait_minibuffer_text(session, "display-name prompt opened",
+                         lambda text: "Session display name" in text)
+    session.type_text("E2E Label")
+    session.press("Return")
+    session.wait_snapshot("display name set",
+                          lambda snapshot: "[Session display name: E2E Label]" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    run_mx_selection(session, "save-session-command")
+    session.wait_snapshot("session saved under isolated artifact home",
+                          lambda snapshot: (
+                              "[Session saved to" in str(snapshot.get("screen_text", ""))
+                              and ".artifacts/gui-e2e" in str(snapshot.get("screen_text", ""))
+                              and "/home/" in str(snapshot.get("screen_text", ""))
+                          ),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("07-session-commands"))
+
+    # Offline help/dashboard features that do not require credentials.
+    run_mx_selection(session, "list-skills-command")
+    session.wait_snapshot("skills help buffer shown",
+                          lambda snapshot: snapshot.get("buffer_name") == "*help:skills*"
+                          and "Skills" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    run_mx_selection(session, "package-dashboard-command")
+    session.wait_snapshot("package dashboard shown",
+                          lambda snapshot: snapshot.get("buffer_name") == "*Packages*"
+                          and snapshot.get("major_mode") == "package-dashboard"
+                          and "Packages for" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    run_mx_selection(session, "describe-guard-policy-command")
+    session.wait_snapshot("guard policy help buffer shown",
+                          lambda snapshot: snapshot.get("buffer_name") == "*help:guard-policy*"
+                          and "Guard Policy" in str(snapshot.get("screen_text", ""))
+                          and "Working directory" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("08-offline-help-dashboards"))
+
     return screenshots
 
 
@@ -315,6 +514,8 @@ def main(argv: list[str]) -> int:
             screenshots = run_smoke(session)
         elif args.suite == "mx":
             screenshots = run_mx(session)
+        elif args.suite == "features":
+            screenshots = run_features(session)
         else:
             raise DriverError(f"unsupported suite: {args.suite}")
         write_summary(summary_path, ok=True, suite=args.suite,

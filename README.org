@@ -429,12 +429,13 @@ scripts/prompt-probes.sh
 scripts/prompt-probes.sh --only transaction --keep-logs
 #+end_src
 
-GUI smoke E2E runs are opt-in and documented in [[file:docs/GUI-E2E.md][docs/GUI-E2E.md]]:
+GUI E2E runs are opt-in and documented in [[file:docs/GUI-E2E.md][docs/GUI-E2E.md]]:
 
 #+begin_src sh
 ./scripts/run-gui-e2e.sh --preflight-only
 ./scripts/run-gui-e2e.sh --suite smoke
 ./scripts/run-gui-e2e.sh --suite mx
+./scripts/run-gui-e2e.sh --suite features
 #+end_src
 
 The probes run through =prompt.sh --isolated=, write logs under =/tmp=, and

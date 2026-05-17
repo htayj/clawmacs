@@ -2,7 +2,7 @@
 
 The GUI E2E framework is opt-in and runs the real McCLIM Clawmacs frame inside
 Xvfb. It drives the window with `xdotool`, observes structured `CLAWMACS_DEBUG_LOG`
-E2E events, and captures screenshots for every smoke step.
+E2E events, and captures screenshots for every scripted suite step.
 
 ## Commands
 
@@ -10,9 +10,10 @@ E2E events, and captures screenshots for every smoke step.
 ./scripts/run-gui-e2e.sh --preflight-only
 ./scripts/run-gui-e2e.sh --suite smoke
 ./scripts/run-gui-e2e.sh --suite mx
+./scripts/run-gui-e2e.sh --suite features
 ```
 
-ASDF integration is also opt-in and runs both `smoke` and `mx`:
+ASDF integration is also opt-in and runs `smoke`, `mx`, and `features`:
 
 ```lisp
 (asdf:test-system :clawmacs/gui-e2e)
@@ -34,7 +35,7 @@ The harness:
 - unsets provider credential environment variables before launching SBCL;
 - sets `clawmacs:*inhibit-user-init*` before `clawmacs-main`.
 
-No real provider network call or user secret is required for the smoke suite.
+No real provider network call or user secret is required for the GUI E2E suites.
 
 ## Artifacts
 
@@ -83,3 +84,28 @@ flow from the compose pane:
    minibuffer to deactivate;
 8. captures screenshots for the initial, minibuffer-open, command-typed, and
    final result states.
+
+## Broad feature behavior
+
+The `features` suite is the broad deterministic no-provider-network coverage
+pass for user-facing Clawmacs features that can be driven safely inside the
+isolated Xvfb session. It preserves `smoke` and `mx` as focused suites and adds
+coverage for:
+
+1. compose-pane text editing: typing, `C-a`, `C-e`, `C-b`, and `C-k`;
+2. minibuffer text editing during `M-x`: `C-b`, `M-b` via `Escape b`, `C-a`,
+   `C-e`, and `C-u`;
+3. fuzzy `M-x` execution of a command after editing the minibuffer query;
+4. help/introspection via `describe-bindings-command`;
+5. buffer creation and fuzzy buffer switching;
+6. agent/model selectors using the deterministic `e2e/e2e-model` provider;
+7. unavailable think-level feedback for models without think levels;
+8. prompted command entry through `set-session-display-name-command`;
+9. session save feedback;
+10. offline skills help, package dashboard, and guard-policy help buffers.
+
+Credentialed and live-provider features are intentionally excluded from GUI E2E:
+OpenAI/OpenRouter/ZAI network requests, OpenAI Codex OAuth browser login, remote
+model discovery against real provider APIs, external MCP/API credentials, and
+project file writes into the checkout. Those paths remain covered by unit tests,
+prompt harness tests, or manual credentialed checks.

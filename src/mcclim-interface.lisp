@@ -17,6 +17,7 @@
 (clim:define-presentation-type tool-approval ())
 (clim:define-presentation-type tool-activity-summary ())
 (clim:define-presentation-type minibuffer-command-candidate ())
+(clim:define-presentation-type package-dashboard-entry-ref ())
 
 (clim:define-presentation-method clim:presentation-typep
     (object (type tool-approval))
@@ -27,6 +28,12 @@
     (object (type minibuffer-command-candidate))
   (and (listp object)
        (not (null (getf object :command)))))
+
+(clim:define-presentation-method clim:presentation-typep
+    (object (type package-dashboard-entry-ref))
+  (and (listp object)
+       (getf object :dashboard-buffer)
+       (getf object :entry)))
 
 (defclass clawmacs-chat-redisplay-event (clim:window-event)
   ())
@@ -777,8 +784,6 @@ pane redraws and value callbacks propagate."
   (if (chat-compose-pane-p pane)
       (let ((result
               (cond
-                ((chat-compose-application-input-active-p)
-                 (dispatch-chat-compose-event-to-buffer pane event))
                 ((and *meta-pending*
                       (not (chat-compose-escape-event-p event)))
                  (dispatch-chat-compose-event-to-buffer pane event))
@@ -790,6 +795,8 @@ pane redraws and value callbacks propagate."
                          (setf *meta-pending* t)
                          (file-debug-event "compose-meta-prefix")
                          t))))
+                ((chat-compose-application-input-active-p)
+                 (dispatch-chat-compose-event-to-buffer pane event))
                 ((chat-compose-m-x-event-p event)
                  (dispatch-chat-compose-event-to-buffer pane event))
                 ((chat-compose-submit-event-p event)
@@ -921,12 +928,22 @@ When NIL, derive it from `*minibuffer-max-height*' and
       (chat-tool-activity-summary-text item)
       (format nil "~A>~%~A" (chat-message-label item) (message-text item))))
 
+(defun package-dashboard-entries-e2e-text (dashboard-buffer)
+  "Return semantic text for DASHBOARD-BUFFER's actual dashboard entries."
+  (format nil "~{~A~^~%~}"
+          (mapcar (lambda (entry) (getf entry :text ""))
+                  (package-dashboard-display-entries dashboard-buffer))))
+
 (defun chat-frame-e2e-transcript-text (buf)
   "Return semantic transcript text for BUF using the normal display item path."
-  (let ((items (and buf (chat-transcript-display-items buf))))
-    (if items
-        (format nil "~{~A~^~%~%~}" (mapcar #'chat-display-item-e2e-text items))
-        "No messages yet.")))
+  (cond
+    ((and buf (package-dashboard-buffer-p buf))
+     (package-dashboard-entries-e2e-text buf))
+    (t
+     (let ((items (and buf (chat-transcript-display-items buf))))
+       (if items
+           (format nil "~{~A~^~%~%~}" (mapcar #'chat-display-item-e2e-text items))
+           "No messages yet.")))))
 
 (defun chat-frame-e2e-screen-text (frame)
   "Return a semantic screen-text snapshot for FRAME."
@@ -1267,26 +1284,74 @@ When NIL, derive it from `*minibuffer-max-height*' and
       (display-chat-tool-activity-summary stream item)
       (display-chat-message stream item)))
 
+(defun package-dashboard-entry-ink (entry)
+  "Return the ink for one package dashboard display ENTRY."
+  (case (getf entry :face)
+    (:selector-title (clim:make-rgb-color 0.16 0.22 0.45))
+    (:selector-header (clim:make-rgb-color 0.18 0.36 0.20))
+    (:selector-footer (clim:make-rgb-color 0.35 0.35 0.35))
+    (:system (clim:make-rgb-color 0.45 0.45 0.45))
+    (:disabled (clim:make-rgb-color 0.45 0.45 0.45))
+    (:error (clim:make-rgb-color 0.60 0.12 0.12))
+    (t clim:+foreground-ink+)))
+
+(defun display-package-dashboard-entry (stream entry)
+  "Display one package dashboard ENTRY on STREAM."
+  (let ((text (getf entry :text ""))
+        (object (getf entry :object))
+        (presentation-type (getf entry :presentation-type)))
+    (flet ((emit ()
+             (clim:with-drawing-options
+                 (stream :ink (package-dashboard-entry-ink entry))
+               (if (eq (getf entry :face) :selector-title)
+                   (clim:with-text-face (stream :bold)
+                     (write-string text stream))
+                   (write-string text stream)))))
+      (if (and object presentation-type)
+          (clim:with-output-as-presentation
+              (stream object presentation-type :single-box t)
+            (emit))
+          (emit))))
+  (terpri stream))
+
+(defun display-package-dashboard-buffer (stream dashboard-buffer)
+  "Display DASHBOARD-BUFFER using its package-dashboard entry model."
+  (dolist (entry (package-dashboard-display-entries dashboard-buffer))
+    (clim:updating-output
+        (stream
+         :unique-id (list :package-dashboard-entry (getf entry :text ""))
+         :id-test #'equal
+         :cache-value entry
+         :cache-test #'equal)
+      (display-package-dashboard-entry stream entry))))
+
 (defun display-chat-transcript (frame stream)
   "Display FRAME's transcript on STREAM."
   (let* ((buf (chat-frame-buffer frame))
-         (items (chat-transcript-display-items buf)))
-    (if items
-        (dolist (item items)
-          (clim:updating-output
-              (stream
-               :unique-id (chat-display-item-output-id item)
-               :id-test #'equal
-               :cache-value (chat-display-item-cache-value item)
-               :cache-test #'equal)
-            (display-chat-display-item stream item)))
-        (clim:with-drawing-options
-            (stream :ink (clim:make-rgb-color 0.45 0.45 0.45))
-          (format stream "No messages yet.~%")))
+         (items (and (not (package-dashboard-buffer-p buf))
+                     (chat-transcript-display-items buf))))
+    (cond
+      ((package-dashboard-buffer-p buf)
+       (display-package-dashboard-buffer stream buf))
+      (items
+       (dolist (item items)
+         (clim:updating-output
+             (stream
+              :unique-id (chat-display-item-output-id item)
+              :id-test #'equal
+              :cache-value (chat-display-item-cache-value item)
+              :cache-test #'equal)
+           (display-chat-display-item stream item))))
+      (t
+       (clim:with-drawing-options
+           (stream :ink (clim:make-rgb-color 0.45 0.45 0.45))
+         (format stream "No messages yet.~%"))))
     (when (buffer-approval-pending buf)
       (display-chat-approval stream (buffer-approval-pending buf)))
     (emit-chat-pane-rendered frame "transcript"
-                             :item-count (length items)
+                             :item-count (if (package-dashboard-buffer-p buf)
+                                             (length (package-dashboard-display-entries buf))
+                                             (length items))
                              :approval-pending (not (null (buffer-approval-pending buf))))))
 
 (defun chat-transcript-pane (frame)
@@ -1917,6 +1982,15 @@ compose pane while leaving text editing keys to Drei's editor tables."
   (clim:with-application-frame (frame)
     (respond-to-chat-approval frame :approve)))
 
+(define-clawmacs-chat-frame-command
+    (com-toggle-package-dashboard-entry :name nil)
+    ((ref 'package-dashboard-entry-ref))
+  (let ((dashboard (getf ref :dashboard-buffer))
+        (origin (getf ref :origin-buffer))
+        (entry (getf ref :entry)))
+    (when (and dashboard entry)
+      (package-dashboard-toggle-entry dashboard entry :origin-buffer origin))))
+
 (clim:define-presentation-to-command-translator describe-chat-message
     (chat-message com-show-message-metadata clawmacs-chat-frame
      :gesture :describe
@@ -1931,6 +2005,15 @@ compose pane while leaving text editing keys to Drei's editor tables."
      :gesture :select
      :documentation "Run command"
      :menu nil)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator select-package-dashboard-entry
+    (package-dashboard-entry-ref com-toggle-package-dashboard-entry
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Toggle package scope"
+     :menu t)
     (object)
   (list object))
 

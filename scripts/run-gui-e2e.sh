@@ -13,9 +13,9 @@ WINDOW_TITLE='Clawmacs E2E'
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx] [--artifact-dir DIR]
+Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features] [--artifact-dir DIR]
 
-Runs the opt-in Clawmacs GUI E2E smoke suite inside an isolated Xvfb display.
+Runs an opt-in Clawmacs GUI E2E suite inside an isolated Xvfb display.
 EOF
 }
 
@@ -109,7 +109,7 @@ if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
 fi
 
 case "$SUITE" in
-  smoke|mx) ;;
+  smoke|mx|features) ;;
   *) fail "unsupported GUI E2E suite: $SUITE" ;;
 esac
 
@@ -154,10 +154,11 @@ write_failure_artifacts() {
   [ -f "$DRIVER_STDERR" ] && tail -200 "$DRIVER_STDERR" > "$ARTIFACT_DIR/driver.stderr.tail" || true
   if [ ! -f "$ARTIFACT_DIR/summary.json" ]; then
     python3 - "$ARTIFACT_DIR/summary.json" "$reason" "$ARTIFACT_DIR" <<'PY' || true
-import json, sys
+import json, os, sys
 summary_path, reason, artifact_dir = sys.argv[1:]
 with open(summary_path, 'w', encoding='utf-8') as f:
-    json.dump({'suite': 'smoke', 'ok': False, 'failure': reason,
+    suite = os.environ.get('CLAWMACS_GUI_E2E_SUITE', 'unknown')
+    json.dump({'suite': suite, 'ok': False, 'failure': reason,
                'artifact_dir': artifact_dir}, f, indent=2, sort_keys=True)
 PY
   fi
@@ -189,6 +190,7 @@ export CLAWMACS_E2E_EVENTS=1
 export CLAWMACS_E2E_PROVIDER=1
 export CLAWMACS_CONTAINER_DISABLE_HOST_X=1
 export CLAWMACS_PROMPT_PROJECT_ROOT=/workspace
+export CLAWMACS_GUI_E2E_SUITE="$SUITE"
 
 DISPLAY_NUM=$((90 + ($$ % 100)))
 XVFB_DISPLAY=":$DISPLAY_NUM"
