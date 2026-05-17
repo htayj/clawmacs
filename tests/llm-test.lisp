@@ -631,7 +631,31 @@
                                                  :key-character nil
                                                  :modifier-state
                                                  (clim:make-modifier-state
-                                                  :control))))
+                                                  :control)))
+         (plain-backspace (make-instance 'clim:key-press-event
+                                         :sheet compose
+                                         :x 0
+                                         :y 0
+                                         :key-name nil
+                                         :key-character #\Backspace
+                                         :modifier-state
+                                         (clim:make-modifier-state)))
+         (named-plain-backspace (make-instance 'clim:key-press-event
+                                               :sheet compose
+                                               :x 0
+                                               :y 0
+                                               :key-name :backspace
+                                               :key-character #\Backspace
+                                               :modifier-state
+                                               (clim:make-modifier-state)))
+         (modifier-only (make-instance 'clim:key-press-event
+                                       :sheet compose
+                                       :x 0
+                                       :y 0
+                                       :key-name :control
+                                       :key-character nil
+                                       :modifier-state
+                                       (clim:make-modifier-state :control))))
     (is (equal '(drei-commands::com-newline-and-indent)
                (test-command-table-key-command editor-table #\j
                                                :modifiers '(:control))))
@@ -650,7 +674,17 @@
                  ,clim:*numeric-argument-marker*)
                (test-command-table-key-command editor-table #\Backspace
                                                :modifiers '(:control))))
+    (is (equal `(drei-commands::com-backward-delete-object
+                 ,clim:*numeric-argument-marker*
+                 ,clim:*numeric-argument-marker*)
+               (test-command-table-key-command editor-table #\Backspace)))
     (is-true (clawmacs::chat-compose-drei-control-editing-event-p control-j))
+    (is-false (clawmacs::chat-compose-encoded-control-character
+               plain-backspace))
+    (is-false (clawmacs::chat-compose-encoded-control-character
+               named-plain-backspace))
+    (is-false (clawmacs::chat-compose-modified-key-event-p plain-backspace))
+    (is-false (clawmacs::chat-compose-modified-key-event-p modifier-only))
     (clawmacs::process-chat-compose-drei-event compose control-j)
     (is (string= (format nil "~%hello world")
                  (clim:gadget-value compose)))
@@ -673,6 +707,11 @@
     (is-true (clawmacs::chat-compose-modified-key-event-p meta-f))
     (clawmacs::process-chat-compose-drei-event compose meta-f)
     (is (= 5 (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))))
+    (setf (clim:gadget-value compose) "hello world")
+    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
+          (length (clim:gadget-value compose)))
+    (clawmacs::process-chat-compose-drei-event compose plain-backspace)
+    (is (string= "hello worl" (clim:gadget-value compose)))
     (setf (clim:gadget-value compose) "hello world")
     (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
           (length (clim:gadget-value compose)))

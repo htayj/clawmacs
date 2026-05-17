@@ -553,23 +553,40 @@ line break."
                (member key-name '(:return :newline :linefeed)
                        :test #'eq))))))
 
+(defun chat-compose-modifier-key-name-p (key-name)
+  "Return true when KEY-NAME names a modifier key by itself."
+  (member key-name
+          '(:shift :control :ctrl :meta :alt :super :hyper
+            :lshift :lctrl :lmeta :lalt :lsuper :lhyper
+            :rshift :rctrl :rmeta :ralt :rsuper :rhyper
+            :caps-lock :num-lock :scroll-lock :mode-switch :iso-level3-shift)
+          :test #'eq))
+
 (defun chat-compose-encoded-control-character (event)
   "Return EVENT's control-encoded character, or NIL.
 
 Some CLIM backends report C-b as character code 2 with no modifier state
 instead of reporting #\\b plus the Control modifier.  Drei's command tables are
 bound to the latter representation, so compose input normalizes these encoded
-control characters before command lookup."
-  (let ((char (clim:keyboard-event-character event)))
+control characters before command lookup.  Editing keys that are commonly also
+represented as ASCII control characters, such as Backspace and Tab, are left as
+their normal key events so Drei can handle them directly."
+  (let ((char (clim:keyboard-event-character event))
+        (key-name (clim:keyboard-event-key-name event)))
     (and (characterp char)
+         (not (member key-name '(:backspace :delete :rubout :tab
+                                 :return :newline :linefeed)
+                      :test #'eq))
          (zerop (clim:event-modifier-state event))
          (let ((code (char-code char)))
            (and (<= 1 code 26)
                 ;; Leave Return/Newline activation alone.  When a backend sends
                 ;; plain Enter as LF/CR, submit handling has already consumed it;
                 ;; when it cannot distinguish C-j from Enter, there is no safe
-                ;; way to infer the user's intent here.
-                (not (member char '(#\Return #\Newline) :test #'eql))
+                ;; way to infer the user's intent here.  Likewise preserve
+                ;; plain Backspace and Tab as editing keys.
+                (not (member char '(#\Backspace #\Tab #\Return #\Newline)
+                             :test #'eql))
                 (code-char (+ (char-code #\a) code -1)))))))
 
 (defun chat-compose-modified-key-event-p (event)
@@ -583,17 +600,13 @@ that lossy conversion for both forms and feeds a CLIM key event to Drei, where
 the inherited frame command table and editor tables can resolve bindings such
 as M-x, C-b, C-a, and C-x b."
   (or (chat-compose-encoded-control-character event)
-      (let ((modifiers (clim:event-modifier-state event)))
-        (and (not (zerop modifiers))
+      (let ((modifiers (clim:event-modifier-state event))
+            (key-name (clim:keyboard-event-key-name event)))
+        (and (not (chat-compose-modifier-key-name-p key-name))
+             (not (zerop modifiers))
              (not (eql modifiers clim:+shift-key+))
-             (let ((key-name (clim:keyboard-event-key-name event))
-                   (key-character (clim:keyboard-event-character event)))
-               (or key-character
-                   (and key-name
-                        (not (member key-name
-                                     '(:lshift :lctrl :lmeta :lalt :lsuper :lhyper
-                                       :rshift :rctrl :rmeta :ralt :rsuper :rhyper)
-                                     :test #'eq)))))))))
+             (let ((key-character (clim:keyboard-event-character event)))
+               (or key-character key-name))))))
 
 (defun chat-compose-drei-control-editing-event-p (event)
   "Return true when EVENT is a modified key Drei should handle here.
