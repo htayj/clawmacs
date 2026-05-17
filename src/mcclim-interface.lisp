@@ -683,14 +683,15 @@ pane redraws and value callbacks propagate."
           (drei::handle-gesture pane gesture)
           (drei::process-gesture pane gesture)))))
 
-(defun chat-compose-application-input-active-p ()
+(defun chat-compose-application-input-active-p (&optional buffer)
   "Return true when Clawmacs modal input should receive compose keystrokes."
   (or *minibuffer-active*
       *session-tree-selector-active*
       *buffer-selector-active*
       *model-selector-active*
       *think-selector-active*
-      *openai-oauth-pending*))
+      *openai-oauth-pending*
+      (and buffer (buffer-user-input-pending buffer))))
 
 (defun chat-key-name-keyword (key-name)
   "Return the Clawmacs key keyword corresponding to CLIM KEY-NAME."
@@ -778,10 +779,17 @@ pane redraws and value callbacks propagate."
           (clim:stream-set-input-focus compose)))))
   frame)
 
+(defun sync-chat-compose-pane-from-buffer (pane buffer)
+  "Reflect BUFFER's input editor text in compose PANE."
+  (when (and pane buffer)
+    (setf (clim:gadget-value pane)
+          (message-text (buffer-input-message buffer)))))
+
 (defun dispatch-chat-compose-event-to-buffer (pane event)
   "Dispatch EVENT through Clawmacs' buffer key handler and refresh the frame."
   (let* ((frame (clim:pane-frame pane))
          (buf (chat-frame-buffer frame))
+         (pending-input-p (and buf (buffer-user-input-pending buf)))
          (raw-key (chat-compose-event-key event))
          (key (cond
                 ((and raw-key *meta-pending*)
@@ -790,6 +798,8 @@ pane redraws and value callbacks propagate."
                 (t raw-key))))
     (when key
       (let ((result (handle-key-event buf key)))
+        (when pending-input-p
+          (sync-chat-compose-pane-from-buffer pane buf))
         (when (eq result :quit)
           (clim:frame-exit frame))
         (sync-chat-frame-after-command-dispatch frame)
@@ -811,7 +821,8 @@ pane redraws and value callbacks propagate."
                          (setf *meta-pending* t)
                          (file-debug-event "compose-meta-prefix")
                          t))))
-                ((chat-compose-application-input-active-p)
+                ((chat-compose-application-input-active-p
+                  (chat-frame-buffer (clim:pane-frame pane)))
                  (dispatch-chat-compose-event-to-buffer pane event))
                 ((chat-compose-m-x-event-p event)
                  (dispatch-chat-compose-event-to-buffer pane event))

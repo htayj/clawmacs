@@ -380,6 +380,11 @@ def run_quaestor(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           timeout=10.0)
     screenshots.append(session.screenshot("02-quaestor-panel"))
 
+    session.press("Down")
+    session.wait_snapshot("Quaestor option changed",
+                          lambda snapshot: "[x] Beta" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    session.press("Tab")
     session.type_text("ship it")
     session.wait_snapshot("Quaestor notes updated",
                           lambda snapshot: "Notes: ship it" in str(snapshot.get("screen_text", "")),
@@ -389,7 +394,7 @@ def run_quaestor(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     session.press("Return")
     session.wait_snapshot("Quaestor request answered",
                           lambda snapshot: "[request_user_input answered]" in str(snapshot.get("screen_text", ""))
-                          and "Scope: Alpha; ship it" in str(snapshot.get("screen_text", ""))
+                          and "Scope: Beta; ship it" in str(snapshot.get("screen_text", ""))
                           and "Quaestor request 1/1" not in str(snapshot.get("screen_text", "")),
                           timeout=10.0)
     screenshots.append(session.screenshot("04-quaestor-answered"))

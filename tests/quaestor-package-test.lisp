@@ -274,6 +274,33 @@
                      (getf (second events) :event)))
         (is-true (getf (second events) :denied-p)))))))
 
+(test quaestor-compose-submit-advances-multi-question-requests
+  "Compose submit advances active requests instead of prematurely completing them."
+  (with-quaestor-package-state
+    (load-test-quaestor-package)
+    (let ((buf (make-quaestor-test-buffer "quaestor-multi-question")))
+      (clawmacs::quaestor-request-user-input
+       buf
+       '((:header "First"
+          :id "first"
+          :question "First answer?")
+         (:header "Second"
+          :id "second"
+          :question "Second answer?"))
+       :resume-function 'quaestor-test-resume-handler)
+      (set-message-text (buffer-input-message buf) "one")
+      (clawmacs::send-message buf)
+      (is (clawmacs::buffer-user-input-pending buf))
+      (is (= 1 (clawmacs::quaestor-request-current-index
+                (clawmacs::buffer-user-input-pending buf))))
+      (is (string= "" (message-text (buffer-input-message buf))))
+      (set-message-text (buffer-input-message buf) "two")
+      (clawmacs::send-message buf)
+      (is-false (clawmacs::buffer-user-input-pending buf))
+      (is (equalp '(:answers (("first" :answers #("one"))
+                              ("second" :answers #("two"))))
+                  (getf *quaestor-test-resume-record* :payload))))))
+
 (test quaestor-lisp-api-resumes-with-structured-payload
   "The Lisp API can suspend for user input and resume with normalized answers."
   (with-quaestor-package-state

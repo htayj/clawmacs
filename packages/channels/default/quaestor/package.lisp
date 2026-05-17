@@ -877,7 +877,7 @@ Returns true when the key was consumed."
       (let ((input-text (message-text (buffer-input-message buffer))))
         (cond
           ((buffer-user-input-pending buffer)
-           (quaestor-submit-current-request buffer))
+           (quaestor-next-question-or-submit buffer))
           ((and (buffer-agent-busy-p buffer)
                 (quaestor-nonblank-string-p input-text))
            (queue-buffer-message buffer :follow-up input-text)
