@@ -47,6 +47,17 @@
   pathname
   text)
 
+(clim:define-presentation-type organa-todo-ref ())
+(clim:define-presentation-type organa-dependency-ref ())
+
+(clim:define-presentation-method clim:presentation-typep
+    (object (type organa-todo-ref))
+  (organa-todo-p object))
+
+(clim:define-presentation-method clim:presentation-typep
+    (object (type organa-dependency-ref))
+  (stringp object))
+
 (defun organa-blank-string-p (value)
   "Return true when VALUE is NIL or only ASCII whitespace."
   (or (null value)
@@ -974,7 +985,8 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
 (define-buffer-type :organa
   :description "Org-mode TODO project management buffer."
   :major-mode "organa"
-  :document-p t)
+  :document-p t
+  :presentation-function 'organa-display-entries)
 
 ;;; --------------------------------------------------------------------------
 ;;; User commands
@@ -1098,6 +1110,53 @@ Blank AFTER moves the TODO before the first headline."
 
 (defcommand organa-cycle-view-command
   :docstring "Cycle the current Organa buffer view.")
+
+(define-clawmacs-chat-frame-command
+    (com-organa-cycle-todo-status :name nil)
+    ((todo 'organa-todo-ref))
+  (clim:with-application-frame (frame)
+    (organa-cycle-todo-status (chat-frame-buffer frame) todo)))
+
+(define-clawmacs-chat-frame-command
+    (com-organa-focus-dependency :name nil)
+    ((dependency 'organa-dependency-ref))
+  (clim:with-application-frame (frame)
+    (organa-focus-todo-by-id (chat-frame-buffer frame) dependency)))
+
+(define-clawmacs-chat-frame-command
+    (com-organa-describe-todo :name nil)
+    ((todo 'organa-todo-ref))
+  (switch-to-buffer
+   (make-help-buffer
+    (format nil "*help:organa:~A*" (organa-todo-id todo))
+    (organa-todo-description todo))))
+
+(clim:define-presentation-to-command-translator select-organa-todo
+    (organa-todo-ref com-organa-cycle-todo-status
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Cycle TODO status"
+     :menu t)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator describe-organa-todo
+    (organa-todo-ref com-organa-describe-todo
+     clawmacs-chat-frame
+     :gesture :describe
+     :documentation "Describe TODO"
+     :menu t)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator select-organa-dependency
+    (organa-dependency-ref com-organa-focus-dependency
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Focus dependency target"
+     :menu t)
+    (object)
+  (list object))
 
 ;;; --------------------------------------------------------------------------
 ;;; Tool result helpers

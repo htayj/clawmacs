@@ -302,6 +302,73 @@ def run_mx(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     return screenshots
 
 
+def write_organa_fixture(session: McCLIMGuiSession) -> Path:
+    """Create a deterministic organa TODO file under the artifact directory."""
+    path = session.artifact_dir / "organa-tasks.org"
+    path.write_text(
+        """#+TITLE: E2E Project
+
+* NEXT Implement package UI
+:PROPERTIES:
+:ID: implement-package-ui
+:END:
+* TODO Test package UI
+:PROPERTIES:
+:ID: test-package-ui
+:ORGANA_DEPENDS: implement-package-ui
+:END:
+* DONE Document package UI
+""",
+        encoding="utf-8",
+    )
+    session.log_action("write_organa_fixture", path=str(path))
+    return path
+
+
+def run_organa(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    """Exercise Organa's package-owned McCLIM presentation views."""
+    screenshots = prepare_session(session)
+    org_path = write_organa_fixture(session)
+
+    run_mx_selection(session, "organa-open-todo-file-command")
+    wait_minibuffer_text(session, "Organa path prompt opened",
+                         lambda text: "Org TODO file path" in text)
+    session.type_text(str(org_path))
+    session.press("Return")
+    session.wait_snapshot("Organa dashboard shown",
+                          lambda snapshot: snapshot.get("buffer_name") == "organa:organa-tasks.org"
+                          and snapshot.get("major_mode") == "organa"
+                          and "Organa dashboard" in str(snapshot.get("screen_text", ""))
+                          and "Ready next" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("02-organa-dashboard"))
+
+    run_mx_selection(session, "organa-cycle-view-command")
+    session.wait_snapshot("Organa kanban shown",
+                          lambda snapshot: "Organa kanban" in str(snapshot.get("screen_text", ""))
+                          and "TODO" in str(snapshot.get("screen_text", ""))
+                          and "NEXT" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("03-organa-kanban"))
+
+    run_mx_selection(session, "organa-cycle-view-command")
+    session.wait_snapshot("Organa dependency view shown",
+                          lambda snapshot: "Organa dependency" in str(snapshot.get("screen_text", ""))
+                          and "Test package UI" in str(snapshot.get("screen_text", ""))
+                          and "Implement package UI" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("04-organa-dependency"))
+
+    run_mx_selection(session, "organa-cycle-view-command")
+    session.wait_snapshot("Organa outline view shown",
+                          lambda snapshot: "Organa outline" in str(snapshot.get("screen_text", ""))
+                          and "Implement package UI" in str(snapshot.get("screen_text", ""))
+                          and "Test package UI" in str(snapshot.get("screen_text", "")),
+                          timeout=10.0)
+    screenshots.append(session.screenshot("05-organa-outline"))
+    return screenshots
+
+
 def run_features(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     """Exercise broad no-network GUI feature coverage in one Clawmacs session."""
     screenshots = prepare_session(session)
@@ -516,6 +583,8 @@ def main(argv: list[str]) -> int:
             screenshots = run_mx(session)
         elif args.suite == "features":
             screenshots = run_features(session)
+        elif args.suite == "organa":
+            screenshots = run_organa(session)
         else:
             raise DriverError(f"unsupported suite: {args.suite}")
         write_summary(summary_path, ok=True, suite=args.suite,

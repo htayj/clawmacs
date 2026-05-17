@@ -11,9 +11,11 @@ E2E events, and captures screenshots for every scripted suite step.
 ./scripts/run-gui-e2e.sh --suite smoke
 ./scripts/run-gui-e2e.sh --suite mx
 ./scripts/run-gui-e2e.sh --suite features
+./scripts/run-gui-e2e.sh --suite organa
 ```
 
-ASDF integration is also opt-in and runs `smoke`, `mx`, and `features`:
+ASDF integration is also opt-in and runs `smoke`, `mx`, `features`, and
+`organa`:
 
 ```lisp
 (asdf:test-system :clawmacs/gui-e2e)
@@ -103,6 +105,18 @@ coverage for:
 8. prompted command entry through `set-session-display-name-command`;
 9. session save feedback;
 10. offline skills help, package dashboard, and guard-policy help buffers.
+
+## Organa package behavior
+
+The `organa` suite verifies package-owned McCLIM presentation hooks without
+writing to the checkout:
+
+1. creates a deterministic `.org` fixture under the run artifact directory;
+2. opens it through `M-x organa-open-todo-file-command`;
+3. waits for the custom `:organa` buffer presentation to render the dashboard;
+4. cycles the same buffer through kanban, dependency, and outline views with
+   `M-x organa-cycle-view-command`;
+5. asserts semantic snapshots for each view and captures screenshots.
 
 Credentialed and live-provider features are intentionally excluded from GUI E2E:
 OpenAI/OpenRouter/ZAI network requests, OpenAI Codex OAuth browser login, remote

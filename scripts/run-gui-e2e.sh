@@ -13,7 +13,7 @@ WINDOW_TITLE='Clawmacs E2E'
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features] [--artifact-dir DIR]
+Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|organa] [--artifact-dir DIR]
 
 Runs an opt-in Clawmacs GUI E2E suite inside an isolated Xvfb display.
 EOF
@@ -109,7 +109,7 @@ if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
 fi
 
 case "$SUITE" in
-  smoke|mx|features) ;;
+  smoke|mx|features|organa) ;;
   *) fail "unsupported GUI E2E suite: $SUITE" ;;
 esac
 
@@ -227,6 +227,7 @@ sbcl --noinform \
   --eval '(push (truename ".") asdf:*central-registry*)' \
   --eval '(ql:quickload :clawmacs)' \
   --eval '(setf clawmacs:*inhibit-user-init* t)' \
+  --eval '(when (string= (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") "organa") (clawmacs:set-package-enablement-scope "organa" :global) (clawmacs:load-active-packages))' \
   --eval '(clawmacs:clawmacs-main :session-name "clawmacs:e2e" :agent-name "agent" :window-title "Clawmacs E2E" :working-directory (truename "."))' \
   --eval '(uiop:quit)' \
   >"$APP_STDOUT" 2>"$APP_STDERR" &

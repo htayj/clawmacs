@@ -82,6 +82,8 @@
       (is (not (null buffer-type)))
       (is (string= "organa"
                    (clawmacs::buffer-type-major-mode buffer-type)))
+      (is (eq 'clawmacs::organa-display-entries
+              (clawmacs:buffer-type-presentation-function buffer-type)))
       (dolist (name '("organa_todo_add"
                       "organa_todo_link_dependency"
                       "organa_todo_move"
@@ -202,6 +204,16 @@
                    (clawmacs::organa-read-buffer-location buffer)))
            (todo (first (clawmacs::organa-model-todos model))))
       (is (string= "TODO" (clawmacs::organa-todo-status todo)))
+      (is (clim:presentation-typep todo 'clawmacs::organa-todo-ref))
+      (let ((entry (find-if
+                    (lambda (row)
+                      (and (eq 'clawmacs::organa-todo-ref
+                               (getf row :presentation-type))
+                           (search "First task" (getf row :text))))
+                    (clawmacs::organa-display-entries buffer 100))))
+        (is (not (null entry)))
+        (is (clim:presentation-typep (getf entry :object)
+                                     'clawmacs::organa-todo-ref)))
       (is (string= "NEXT"
                    (clawmacs::organa-cycle-todo-status buffer todo)))
       (is (search "* NEXT First task"
@@ -233,6 +245,8 @@
       (is (eq 'clawmacs::organa-dependency-ref
               (getf row :presentation-type)))
       (is (string= "implement-package" (getf row :object)))
+      (is (clim:presentation-typep (getf row :object)
+                                   'clawmacs::organa-dependency-ref))
       (is (string= "implement-package"
                    (clawmacs::organa-focus-todo-by-id
                     buffer
