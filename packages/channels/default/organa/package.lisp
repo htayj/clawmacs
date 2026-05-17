@@ -794,32 +794,25 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
       (make-string width :initial-element #\Space)))
 
 (defun organa-kanban-rows (model cols)
-  "Return kanban rows for MODEL."
-  (let* ((lanes '("TODO" "NEXT" "WAITING" "BLOCKED" "DONE"))
-         (lane-width (max 10 (floor (- cols (1- (length lanes))) (length lanes))))
-         (lane-items
-           (mapcar (lambda (status)
-                     (remove-if-not
-                      (lambda (todo)
-                        (string= status (organa-todo-status todo)))
-                      (organa-model-todos model)))
-                   lanes))
-         (max-len (reduce #'max lane-items :key #'length :initial-value 0)))
-    (append
-     (list (organa-render-row
-            (format nil "~{~A~^|~}"
-                    (mapcar (lambda (lane) (organa-fit lane lane-width))
-                            lanes))))
-     (loop :for row :from 0 :below max-len
-           :collect
-           (organa-render-row
-            (format nil "~{~A~^|~}"
-                    (loop :for items :in lane-items
-                          :for todo := (nth row items)
-                          :collect (organa-column-cell todo lane-width)))
-            :todo (loop :for items :in lane-items
-                        :for todo := (nth row items)
-                        :when todo :return todo))))))
+  "Return kanban rows for MODEL with one TODO presentation per row."
+  (declare (ignore cols))
+  (loop :for lane :in '("TODO" "NEXT" "WAITING" "BLOCKED" "DONE")
+        :for todos := (remove-if-not
+                       (lambda (todo)
+                         (string= lane (organa-todo-status todo)))
+                       (organa-model-todos model))
+        :append
+        (append
+         (list (organa-render-row lane :face :dependency))
+         (if todos
+             (loop :for todo :in todos
+                   :collect (organa-render-row
+                             (format nil "  ~A" (organa-todo-label todo
+                                                                      :include-id-p t))
+                             :todo todo
+                             :face :outline))
+             (list (organa-render-row "  (none)")))
+         (list (organa-render-row "")))))
 
 (defun organa-dependency-title (id by-id)
   "Return display title for dependency ID."
@@ -830,19 +823,17 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
         (format nil "~A (missing)" id))))
 
 (defun organa-dependency-rows (model &key compact-p)
-  "Return dependency chain rows for MODEL."
+  "Return dependency chain rows for MODEL with one dependency per row."
   (let ((by-id (organa-todo-by-id-table model))
         (rows nil))
     (dolist (todo (organa-model-todos model))
-      (when (organa-todo-depends-on todo)
+      (dolist (dependency-id (organa-todo-depends-on todo))
         (push
          (organa-render-row
-          (format nil "~A <- ~{~A~^ <- ~}"
+          (format nil "~A <- ~A"
                   (organa-todo-label todo)
-                 (mapcar (lambda (id)
-                            (organa-dependency-title id by-id))
-                          (organa-todo-depends-on todo)))
-          :object (first (organa-todo-depends-on todo))
+                  (organa-dependency-title dependency-id by-id))
+          :object dependency-id
           :presentation-type 'organa-dependency-ref
           :face :dependency)
          rows)))
@@ -1126,10 +1117,15 @@ Blank AFTER moves the TODO before the first headline."
 (define-clawmacs-chat-frame-command
     (com-organa-describe-todo :name nil)
     ((todo 'organa-todo-ref))
-  (switch-to-buffer
-   (make-help-buffer
-    (format nil "*help:organa:~A*" (organa-todo-id todo))
-    (organa-todo-description todo))))
+  (clim:with-application-frame (frame)
+    (let ((buffer (make-help-buffer
+                   (format nil "*help:organa:~A*" (organa-todo-id todo))
+                   (organa-todo-description todo))))
+      (switch-to-buffer buffer)
+      (setf (chat-frame-buffer frame) buffer)
+      (request-chat-frame-menu-refresh frame)
+      (request-chat-frame-redisplay frame)
+      buffer)))
 
 (clim:define-presentation-to-command-translator select-organa-todo
     (organa-todo-ref com-organa-cycle-todo-status
