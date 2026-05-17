@@ -1044,6 +1044,79 @@
     (is (string= "z" *minibuffer-input*))
     (is (null submitted))))
 
+(test minibuffer-completion-mode-supports-emacs-motion-keys
+  "Completion minibuffers support compose-like C-b/C-f/M-b/M-f editing motions."
+  (let ((*minibuffer-active* nil)
+        (*minibuffer-mode* :completion)
+        (*minibuffer-prompt* "")
+        (*minibuffer-input* "")
+        (*minibuffer-point* 0)
+        (*minibuffer-items* nil)
+        (*minibuffer-filtered-items* nil)
+        (*minibuffer-match-positions* nil)
+        (*minibuffer-selected-index* 0)
+        (*minibuffer-scroll-offset* 0)
+        (*minibuffer-callback* nil))
+    (minibuffer-activate
+     "Edit"
+     (list (list :display "foo bar baz"))
+     (lambda (item) (declare (ignore item)))
+     :initial-input "foo bar")
+    (is (= 7 *minibuffer-point*))
+    (handle-minibuffer-key '(:meta #\b))
+    (is (= 4 *minibuffer-point*))
+    (handle-minibuffer-key (code-char 2))
+    (is (= 3 *minibuffer-point*))
+    (handle-minibuffer-key '(:control #\f))
+    (is (= 4 *minibuffer-point*))
+    (handle-minibuffer-key '(:meta #\f))
+    (is (= 7 *minibuffer-point*))
+    (is (string= "foo bar" *minibuffer-input*))))
+
+(test minibuffer-completion-mode-supports-emacs-kill-and-yank-keys
+  "Completion minibuffers support C-d/M-d/M-Backspace/C-k/C-y editing."
+  (let ((*minibuffer-active* nil)
+        (*minibuffer-mode* :completion)
+        (*minibuffer-prompt* "")
+        (*minibuffer-input* "")
+        (*minibuffer-point* 0)
+        (*minibuffer-items* nil)
+        (*minibuffer-filtered-items* nil)
+        (*minibuffer-match-positions* nil)
+        (*minibuffer-selected-index* 0)
+        (*minibuffer-scroll-offset* 0)
+        (*minibuffer-callback* nil)
+        (clawmacs::*kill-ring* nil))
+    (minibuffer-activate
+     "Edit"
+     (list (list :display "foo bar baz"))
+     (lambda (item) (declare (ignore item)))
+     :initial-input "foo bar baz")
+    (setf *minibuffer-point* 4)
+    (handle-minibuffer-key (code-char 4))
+    (is (string= "foo ar baz" *minibuffer-input*))
+    (setf *minibuffer-input* "foo bar baz"
+          *minibuffer-point* 4)
+    (minibuffer-update-filter)
+    (handle-minibuffer-key '(:meta #\d))
+    (is (string= "foo  baz" *minibuffer-input*))
+    (is (= 4 *minibuffer-point*))
+    (is (string= "bar" (first clawmacs::*kill-ring*)))
+    (handle-minibuffer-key '(:control #\y))
+    (is (string= "foo bar baz" *minibuffer-input*))
+    (setf *minibuffer-point* 8)
+    (handle-minibuffer-key '(:meta :backspace))
+    (is (string= "foo baz" *minibuffer-input*))
+    (is (= 4 *minibuffer-point*))
+    (handle-minibuffer-key (code-char 11))
+    (is (string= "foo " *minibuffer-input*))
+    (setf *minibuffer-input* "foo bar"
+          *minibuffer-point* 7)
+    (minibuffer-update-filter)
+    (handle-minibuffer-key (code-char 23))
+    (is (string= "foo " *minibuffer-input*))
+    (is (= 4 *minibuffer-point*))))
+
 (test minibuffer-prompt-mode-preserves-editing-keys
   "Prompt mode still edits raw input instead of cycling completion candidates."
   (let ((submitted nil)

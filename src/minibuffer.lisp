@@ -253,6 +253,95 @@ resets the scroll offset."
     (decf *minibuffer-point*)
     (minibuffer-update-filter)))
 
+(defun minibuffer-delete-forward ()
+  "Delete the character at point in the minibuffer input and re-filter."
+  (when (< *minibuffer-point* (length *minibuffer-input*))
+    (setf *minibuffer-input*
+          (concatenate 'string
+                       (subseq *minibuffer-input* 0 *minibuffer-point*)
+                       (subseq *minibuffer-input* (1+ *minibuffer-point*))))
+    (minibuffer-update-filter)))
+
+(defun minibuffer-backward-char ()
+  "Move the minibuffer point one character backward."
+  (when (plusp *minibuffer-point*)
+    (decf *minibuffer-point*)))
+
+(defun minibuffer-forward-char ()
+  "Move the minibuffer point one character forward."
+  (when (< *minibuffer-point* (length *minibuffer-input*))
+    (incf *minibuffer-point*)))
+
+(defun minibuffer-forward-word-position (&optional (point *minibuffer-point*))
+  "Return the position at the end of the word after POINT."
+  (let ((pos point)
+        (len (length *minibuffer-input*)))
+    (loop :while (and (< pos len)
+                      (not (word-char-p (char *minibuffer-input* pos))))
+          :do (incf pos))
+    (loop :while (and (< pos len)
+                      (word-char-p (char *minibuffer-input* pos)))
+          :do (incf pos))
+    pos))
+
+(defun minibuffer-backward-word-position (&optional (point *minibuffer-point*))
+  "Return the position at the beginning of the word before POINT."
+  (let ((pos point))
+    (loop :while (and (> pos 0)
+                      (not (word-char-p (char *minibuffer-input* (1- pos)))))
+          :do (decf pos))
+    (loop :while (and (> pos 0)
+                      (word-char-p (char *minibuffer-input* (1- pos))))
+          :do (decf pos))
+    pos))
+
+(defun minibuffer-forward-word ()
+  "Move the minibuffer point forward by one word."
+  (setf *minibuffer-point* (minibuffer-forward-word-position)))
+
+(defun minibuffer-backward-word ()
+  "Move the minibuffer point backward by one word."
+  (setf *minibuffer-point* (minibuffer-backward-word-position)))
+
+(defun minibuffer-kill-region (start end)
+  "Kill minibuffer input between START and END and re-filter."
+  (let ((start (max 0 (min start (length *minibuffer-input*))))
+        (end (max 0 (min end (length *minibuffer-input*)))))
+    (when (< start end)
+      (kill-ring-push (subseq *minibuffer-input* start end))
+      (setf *minibuffer-input*
+            (concatenate 'string
+                         (subseq *minibuffer-input* 0 start)
+                         (subseq *minibuffer-input* end))
+            *minibuffer-point* start)
+      (minibuffer-update-filter))))
+
+(defun minibuffer-kill-line ()
+  "Kill from minibuffer point to the end of input."
+  (minibuffer-kill-region *minibuffer-point* (length *minibuffer-input*)))
+
+(defun minibuffer-kill-word ()
+  "Kill from minibuffer point to the end of the next word."
+  (minibuffer-kill-region *minibuffer-point*
+                          (minibuffer-forward-word-position)))
+
+(defun minibuffer-backward-kill-word ()
+  "Kill from the beginning of the previous word to minibuffer point."
+  (minibuffer-kill-region (minibuffer-backward-word-position)
+                          *minibuffer-point*))
+
+(defun minibuffer-yank ()
+  "Insert the current kill-ring head at minibuffer point and re-filter."
+  (let ((text (kill-ring-top)))
+    (when text
+      (setf *minibuffer-input*
+            (concatenate 'string
+                         (subseq *minibuffer-input* 0 *minibuffer-point*)
+                         text
+                         (subseq *minibuffer-input* *minibuffer-point*))
+            *minibuffer-point* (+ *minibuffer-point* (length text)))
+      (minibuffer-update-filter))))
+
 (defun minibuffer-visible-item-count ()
   "Return the number of candidate rows visible in the minibuffer.
 This is the total minibuffer height minus 1 (for the prompt line)."
@@ -812,6 +901,32 @@ are sorted with the current buffer first, then alphabetically."
        (or (minibuffer-tab-key-p (second key))
            (minibuffer-backtab-key-p (second key)))))
 
+(defun minibuffer-prefixed-key-p (key prefixes candidates)
+  "Return true when KEY has one of PREFIXES and one of CANDIDATES."
+  (and (listp key)
+       (= (length key) 2)
+       (member (first key) prefixes :test #'eq)
+       (some (lambda (candidate)
+               (let ((actual (second key)))
+                 (cond
+                   ((and (characterp actual) (characterp candidate))
+                    (char-equal actual candidate))
+                   (t (eql actual candidate)))))
+             candidates)))
+
+(defun minibuffer-meta-key-p (key &rest candidates)
+  "Return true when KEY is a Meta/Alt key for one of CANDIDATES."
+  (minibuffer-prefixed-key-p key '(:meta :alt) candidates))
+
+(defun minibuffer-control-key-p (key &rest candidates)
+  "Return true when KEY is a Control key for one of CANDIDATES."
+  (minibuffer-prefixed-key-p key '(:ctrl :control) candidates))
+
+(defun minibuffer-prefixed-backspace-key-p (key prefixes)
+  "Return true when KEY is a prefixed Backspace/Rubout gesture."
+  (minibuffer-prefixed-key-p key prefixes
+                             '(#\Backspace #\Rubout :backspace :delete :rubout)))
+
 (defun minibuffer-completion-next-key-p (key base-key)
   "Return true when KEY should move to the next completion candidate."
   (and (eq *minibuffer-mode* :completion)
@@ -834,8 +949,9 @@ are sorted with the current buffer first, then alphabetically."
 (defun handle-minibuffer-key (key)
   "Handle a key event while the minibuffer is active.
 Supports: C-g (cancel), Return (confirm), completion navigation with
-C-n/Down/Tab and C-p/Up/M-Tab/Backtab, Backspace (delete), C-a/C-e (move),
-C-u (kill all), and self-insert."
+C-n/Down/Tab and C-p/Up/M-Tab/Backtab, Emacs-style text editing keys
+(C-a/C-e/C-b/C-f/M-b/M-f/C-d/M-d/C-k/C-u/C-w/C-y), Backspace, and
+self-insert."
   (let ((base-key (minibuffer-base-key key)))
     (cond
       ;; C-g: cancel
@@ -851,6 +967,19 @@ C-u (kill all), and self-insert."
       ;; C-p, Up arrow, M-Tab, or Backtab: previous completion item
       ((minibuffer-completion-prev-key-p key base-key)
        (minibuffer-prev-item))
+      ;; M-b: backward word
+      ((minibuffer-meta-key-p key #\b)
+       (minibuffer-backward-word))
+      ;; M-f: forward word
+      ((minibuffer-meta-key-p key #\f)
+       (minibuffer-forward-word))
+      ;; M-d: kill word
+      ((minibuffer-meta-key-p key #\d)
+       (minibuffer-kill-word))
+      ;; M-Backspace/C-Backspace/C-w: backward kill word
+      ((or (minibuffer-prefixed-backspace-key-p key '(:meta :alt :ctrl :control))
+           (and (characterp base-key) (char= base-key (code-char 23))))
+       (minibuffer-backward-kill-word))
       ;; Backspace: delete character before point
       ((or (eq base-key :backspace)
            (and (characterp base-key) (or (char= base-key #\Backspace)
@@ -862,11 +991,31 @@ C-u (kill all), and self-insert."
       ;; C-e: end of input
       ((and (characterp base-key) (char= base-key #\Enq))
        (setf *minibuffer-point* (length *minibuffer-input*)))
+      ;; C-b: backward char
+      ((or (and (characterp base-key) (char= base-key (code-char 2)))
+           (minibuffer-control-key-p key #\b))
+       (minibuffer-backward-char))
+      ;; C-f: forward char
+      ((or (and (characterp base-key) (char= base-key (code-char 6)))
+           (minibuffer-control-key-p key #\f))
+       (minibuffer-forward-char))
+      ;; C-d: delete char at point
+      ((or (and (characterp base-key) (char= base-key (code-char 4)))
+           (minibuffer-control-key-p key #\d))
+       (minibuffer-delete-forward))
+      ;; C-k: kill to end of input
+      ((or (and (characterp base-key) (char= base-key (code-char 11)))
+           (minibuffer-control-key-p key #\k))
+       (minibuffer-kill-line))
       ;; C-u: kill all input
       ((and (characterp base-key) (char= base-key (code-char 21)))
        (setf *minibuffer-input* ""
              *minibuffer-point* 0)
        (minibuffer-update-filter))
+      ;; C-y: yank
+      ((or (and (characterp base-key) (char= base-key (code-char 25)))
+           (minibuffer-control-key-p key #\y))
+       (minibuffer-yank))
       ;; Self-insert: printable characters
       ((and (characterp base-key) (graphic-char-p base-key))
        (minibuffer-insert-char base-key))
