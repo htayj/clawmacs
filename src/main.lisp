@@ -3319,11 +3319,15 @@ Environment variables:
 (defun initialize-clawmacs-runtime ()
   "Initialize shared runtime state before either UI or prompt execution."
   (init-default-keymap)
+  (when (fboundp 'install-chat-frame-keybindings)
+    (install-chat-frame-keybindings))
   (init-tools)
   ;; Load the configured personality prompt file before init.lisp so user init
   ;; may still override it directly or reload after changing the path.
   (load-personality-prompt-file)
   (load-user-init-file)
+  (when (fboundp 'install-chat-frame-keybindings)
+    (install-chat-frame-keybindings))
   (reload-package-channels)
   (load-autoload-packages)
   (load-project-definitions)

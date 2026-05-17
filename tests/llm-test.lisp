@@ -476,19 +476,35 @@
                           (search "the result is 2" text))
                         (mapcar #'message-text messages))))))))))
 
+(defun test-command-table-key-event (key-character &key key-name modifiers)
+  "Return a synthetic key event for command-table lookup tests."
+  (make-instance 'clim:key-press-event
+                 :sheet nil
+                 :x 0
+                 :y 0
+                 :key-name key-name
+                 :key-character key-character
+                 :modifier-state
+                 (apply #'clim:make-modifier-state modifiers)))
+
 (defun test-command-table-key-command
     (table key-character &key key-name modifiers)
   "Return the inherited command bound to KEY-CHARACTER in command TABLE."
-  (let ((event (make-instance 'clim:key-press-event
-                              :sheet nil
-                              :x 0
-                              :y 0
-                              :key-name key-name
-                              :key-character key-character
-                              :modifier-state
-                              (apply #'clim:make-modifier-state modifiers))))
-    (let ((item (esa::find-gestures-with-inheritance (list event) table)))
-      (and item (clim:command-menu-item-value item)))))
+  (let ((item (esa::find-gestures-with-inheritance
+               (list (test-command-table-key-event key-character
+                                                   :key-name key-name
+                                                   :modifiers modifiers))
+               table)))
+    (and item (clim:command-menu-item-value item))))
+
+(defun test-command-table-key-sequence-command (table event-specs)
+  "Return the inherited command bound to EVENT-SPECS in command TABLE."
+  (let ((item (esa::find-gestures-with-inheritance
+               (mapcar (lambda (spec)
+                         (apply #'test-command-table-key-event spec))
+                       event-specs)
+               table)))
+    (and item (clim:command-menu-item-value item))))
 
 (test mcclim-compose-return-keystrokes-submit-message
   "The McCLIM chat frame binds Return/Newline to submit the message."
@@ -515,6 +531,24 @@
                (test-command-table-key-command drei-order-table #\Return)))
     (is-false (equal '(clawmacs::com-chat-submit-compose)
                      (test-command-table-key-command drei-order-table #\Newline)))
+    (clawmacs::init-default-keymap)
+    (clawmacs::install-chat-frame-keybindings)
+    (is (equal '(clawmacs::com-chat-dispatch-key (:meta #\x))
+               (test-command-table-key-command table #\x
+                                               :modifiers '(:meta))))
+    (is (equal '(clawmacs::com-chat-dispatch-key (:ctrl-x #\b))
+               (test-command-table-key-sequence-command
+                table
+                `((#\x :modifiers (:control))
+                  (#\b)))))
+    (is (equal '(clawmacs::com-chat-dispatch-key (:ctrl-h #\b))
+               (test-command-table-key-sequence-command
+                drei-order-table
+                `((#\h :modifiers (:control))
+                  (#\b)))))
+    (is-false (equal '(clawmacs::com-chat-dispatch-key #\Soh)
+                     (test-command-table-key-command table #\a
+                                                     :modifiers '(:control))))
     (is-true
      (clawmacs::chat-compose-submit-event-p
       (make-instance 'clim:key-press-event
@@ -556,6 +590,30 @@
                                    :key-character #\Newline
                                    :modifier-state
                                    (clim:make-modifier-state :control)))
+         (control-b (make-instance 'clim:key-press-event
+                                    :sheet compose
+                                    :x 0
+                                    :y 0
+                                    :key-name nil
+                                    :key-character #\b
+                                    :modifier-state
+                                    (clim:make-modifier-state :control)))
+         (encoded-control-b (make-instance 'clim:key-press-event
+                                            :sheet compose
+                                            :x 0
+                                            :y 0
+                                            :key-name nil
+                                            :key-character (code-char 2)
+                                            :modifier-state
+                                            (clim:make-modifier-state)))
+         (meta-f (make-instance 'clim:key-press-event
+                                :sheet compose
+                                :x 0
+                                :y 0
+                                :key-name nil
+                                :key-character #\f
+                                :modifier-state
+                                (clim:make-modifier-state :meta)))
          (control-backspace (make-instance 'clim:key-press-event
                                            :sheet compose
                                            :x 0
@@ -580,6 +638,14 @@
     (is (equal '(drei-commands::com-newline-and-indent)
                (test-command-table-key-command editor-table #\Newline
                                                :modifiers '(:control))))
+    (is (equal `(drei-commands::com-backward-object
+                 ,clim:*numeric-argument-marker*)
+               (test-command-table-key-command editor-table #\b
+                                               :modifiers '(:control))))
+    (is (equal `(drei-commands::com-forward-word
+                 ,clim:*numeric-argument-marker*)
+               (test-command-table-key-command editor-table #\f
+                                               :modifiers '(:meta))))
     (is (equal `(drei-commands::com-backward-kill-word
                  ,clim:*numeric-argument-marker*)
                (test-command-table-key-command editor-table #\Backspace
@@ -588,6 +654,25 @@
     (clawmacs::process-chat-compose-drei-event compose control-j)
     (is (string= (format nil "~%hello world")
                  (clim:gadget-value compose)))
+    (setf (clim:gadget-value compose) "hello world")
+    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
+          (length (clim:gadget-value compose)))
+    (is-true (clawmacs::chat-compose-modified-key-event-p control-b))
+    (clawmacs::process-chat-compose-drei-event compose control-b)
+    (is (= (1- (length (clim:gadget-value compose)))
+           (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))))
+    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
+          (length (clim:gadget-value compose)))
+    (is (eql #\b (clawmacs::chat-compose-encoded-control-character
+                  encoded-control-b)))
+    (is-true (clawmacs::chat-compose-modified-key-event-p encoded-control-b))
+    (clawmacs::process-chat-compose-drei-event compose encoded-control-b)
+    (is (= (1- (length (clim:gadget-value compose)))
+           (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))))
+    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view))) 0)
+    (is-true (clawmacs::chat-compose-modified-key-event-p meta-f))
+    (clawmacs::process-chat-compose-drei-event compose meta-f)
+    (is (= 5 (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))))
     (setf (clim:gadget-value compose) "hello world")
     (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
           (length (clim:gadget-value compose)))

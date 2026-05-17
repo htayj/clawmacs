@@ -553,30 +553,64 @@ line break."
                (member key-name '(:return :newline :linefeed)
                        :test #'eq))))))
 
+(defun chat-compose-encoded-control-character (event)
+  "Return EVENT's control-encoded character, or NIL.
+
+Some CLIM backends report C-b as character code 2 with no modifier state
+instead of reporting #\\b plus the Control modifier.  Drei's command tables are
+bound to the latter representation, so compose input normalizes these encoded
+control characters before command lookup."
+  (let ((char (clim:keyboard-event-character event)))
+    (and (characterp char)
+         (zerop (clim:event-modifier-state event))
+         (let ((code (char-code char)))
+           (and (<= 1 code 26)
+                ;; Leave Return/Newline activation alone.  When a backend sends
+                ;; plain Enter as LF/CR, submit handling has already consumed it;
+                ;; when it cannot distinguish C-j from Enter, there is no safe
+                ;; way to infer the user's intent here.
+                (not (member char '(#\Return #\Newline) :test #'eql))
+                (code-char (+ (char-code #\a) code -1)))))))
+
+(defun chat-compose-modified-key-event-p (event)
+  "Return true when EVENT is a key Drei should process directly.
+
+ESA/Drei's gadget event bridge converts only unmodified and Shift-only key
+presses into gestures.  Control and Meta events therefore become NIL before
+Drei's command processor can see them, and some backends encode Control keys as
+ASCII control characters with no modifier state.  The compose pane bypasses
+that lossy conversion for both forms and feeds a CLIM key event to Drei, where
+the inherited frame command table and editor tables can resolve bindings such
+as M-x, C-b, C-a, and C-x b."
+  (or (chat-compose-encoded-control-character event)
+      (let ((modifiers (clim:event-modifier-state event)))
+        (and (not (zerop modifiers))
+             (not (eql modifiers clim:+shift-key+))
+             (let ((key-name (clim:keyboard-event-key-name event))
+                   (key-character (clim:keyboard-event-character event)))
+               (or key-character
+                   (and key-name
+                        (not (member key-name
+                                     '(:lshift :lctrl :lmeta :lalt :lsuper :lhyper
+                                       :rshift :rctrl :rmeta :ralt :rsuper :rhyper)
+                                     :test #'eq)))))))))
+
 (defun chat-compose-drei-control-editing-event-p (event)
-  "Return true when EVENT is a control editing key Drei should handle here.
-ESA/Drei's gadget bridge currently converts only unmodified key events, so
-modified editor gestures such as C-j and C-Backspace must be forwarded as the
-original CLIM key event."
-  (let ((modifiers (clim:event-modifier-state event)))
-    (and (not (zerop (logand modifiers clim:+control-key+)))
-         (let ((key-name (clim:keyboard-event-key-name event))
-               (key-character (clim:keyboard-event-character event)))
-           (or (and (characterp key-character)
-                    (char-equal key-character #\j))
-               (eql key-character #\Newline)
-               (member key-name '(:newline :linefeed) :test #'eq)
-               (eql key-character #\Backspace)
-               (eql key-character #\Rubout)
-               (member key-name '(:backspace :delete :rubout)
-                       :test #'eq))))))
+  "Return true when EVENT is a modified key Drei should handle here.
+
+This compatibility wrapper keeps older tests and callers meaningful after the
+compose pane fix was broadened from a few control editing keys to every
+modified key event."
+  (chat-compose-modified-key-event-p event))
 
 (defun chat-compose-normalized-drei-event (pane event)
-  "Return EVENT, or a Drei-bindable equivalent for named control keys."
+  "Return EVENT, or a Drei-bindable equivalent for backend-specific key forms."
   (let* ((key-name (clim:keyboard-event-key-name event))
          (key-character (clim:keyboard-event-character event))
+         (encoded-control (chat-compose-encoded-control-character event))
          (replacement
            (cond
+             (encoded-control encoded-control)
              ((and (null key-character)
                    (member key-name '(:newline :linefeed) :test #'eq))
               #\Newline)
@@ -590,7 +624,9 @@ original CLIM key event."
                        :y 0
                        :key-name nil
                        :key-character replacement
-                       :modifier-state (clim:event-modifier-state event))
+                       :modifier-state (if encoded-control
+                                           clim:+control-key+
+                                           (clim:event-modifier-state event)))
         event)))
 
 (defun process-chat-compose-drei-event (pane event &key redisplay)
@@ -605,15 +641,87 @@ pane redraws and value callbacks propagate."
           (drei::handle-gesture pane gesture)
           (drei::process-gesture pane gesture)))))
 
+(defun chat-compose-application-input-active-p ()
+  "Return true when Clawmacs modal input should receive compose keystrokes."
+  (or *minibuffer-active*
+      *session-tree-selector-active*
+      *buffer-selector-active*
+      *model-selector-active*
+      *think-selector-active*
+      *openai-oauth-pending*))
+
+(defun chat-key-name-keyword (key-name)
+  "Return the Clawmacs key keyword corresponding to CLIM KEY-NAME."
+  (case key-name
+    ((:left :right :up :down :home :end :page-up :page-down :tab :backspace)
+     key-name)
+    ((:prior) :page-up)
+    ((:next) :page-down)
+    ((:delete :rubout) :backspace)
+    ((:return) #\Return)
+    ((:newline :linefeed) #\Newline)
+    (t key-name)))
+
+(defun chat-control-key-character (char)
+  "Return CHAR encoded as the control character expected by Clawmacs keymaps."
+  (cond
+    ((null char) nil)
+    ((char-equal char #\Space) (code-char 0))
+    ((alpha-char-p char)
+     (code-char (1+ (- (char-code (char-downcase char))
+                      (char-code #\a)))))
+    ((eql char #\Return) #\Return)
+    ((eql char #\Newline) #\Newline)
+    (t char)))
+
+(defun chat-compose-event-key (event)
+  "Return EVENT in the normalized key syntax used by `handle-key-event'."
+  (let* ((modifiers (clim:event-modifier-state event))
+         (key-name (clim:keyboard-event-key-name event))
+         (key-character (clim:keyboard-event-character event))
+         (encoded-control (and (chat-compose-encoded-control-character event)
+                               key-character))
+         (base (or encoded-control
+                   key-character
+                   (and key-name (chat-key-name-keyword key-name))))
+         (control-p (or encoded-control
+                        (not (zerop (logand modifiers clim:+control-key+)))))
+         (meta-p (not (zerop (logand modifiers clim:+meta-key+))))
+         (base-key (if (and control-p (characterp base))
+                       (chat-control-key-character base)
+                       base)))
+    (cond
+      ((and meta-p base-key) (list :meta base-key))
+      (base-key base-key)
+      (t nil))))
+
+(defun dispatch-chat-compose-event-to-buffer (pane event)
+  "Dispatch EVENT through Clawmacs' buffer key handler and refresh the frame."
+  (let* ((frame (clim:pane-frame pane))
+         (buf (chat-frame-buffer frame))
+         (key (chat-compose-event-key event)))
+    (when key
+      (let ((result (handle-key-event buf key)))
+        (when (eq result :quit)
+          (clim:frame-exit frame))
+        (let ((current (current-buffer)))
+          (when current
+            (setf (chat-frame-buffer frame) current)))
+        (request-chat-frame-menu-refresh frame)
+        (request-chat-frame-redisplay frame)
+        t))))
+
 (defmethod clim:handle-event :around
     ((pane drei:drei-gadget-pane) (event clim:key-press-event))
   (if (chat-compose-pane-p pane)
       (cond
+        ((chat-compose-application-input-active-p)
+         (dispatch-chat-compose-event-to-buffer pane event))
         ((chat-compose-submit-event-p event)
          (let ((frame (clim:pane-frame pane)))
            (clim:execute-frame-command frame '(com-chat-submit-compose)))
          t)
-        ((chat-compose-drei-control-editing-event-p event)
+        ((chat-compose-modified-key-event-p event)
          (process-chat-compose-drei-event pane event :redisplay t))
         (t
          (call-next-method)))
@@ -638,6 +746,18 @@ pane redraws and value callbacks propagate."
    :height 24
    :min-height 24
    :max-height 24))
+
+(defun display-chat-minibuffer-pane (frame stream)
+  "Display Clawmacs' lightweight minibuffer state in STREAM."
+  (declare (ignore frame))
+  (when *minibuffer-active*
+    (format stream " ~A: ~A" *minibuffer-prompt* *minibuffer-input*)
+    (when (and (eq *minibuffer-mode* :completion)
+               *minibuffer-filtered-items*)
+      (let ((item (nth *minibuffer-selected-index*
+                       *minibuffer-filtered-items*)))
+        (when item
+          (format stream "  [~A]" (minibuffer-item-display item)))))))
 
 (defun display-chat-info-pane (frame stream)
   "Display an Emacs-style status line for FRAME."
@@ -708,7 +828,10 @@ pane redraws and value callbacks propagate."
      :activation-gestures '(:return)
      :activate-callback #'compose-pane-activated))
    (minibuffer
-    (clim:make-pane 'clawmacs-chat-minibuffer-pane :width 900)))
+    (clim:make-pane 'clawmacs-chat-minibuffer-pane
+                    :display-function 'display-chat-minibuffer-pane
+                    :display-time :command-loop
+                    :width 900)))
   (:layouts
    (default
     (clim:vertically ()
@@ -1015,6 +1138,10 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
              (let ((*suppress-chat-redisplay-requests* t))
                (update-streaming-response buf)))
            (clim:redisplay-frame-pane frame 'transcript :force-p nil)
+           (ignore-errors
+             (clim:redisplay-frame-pane frame 'info :force-p t))
+           (ignore-errors
+             (clim:redisplay-frame-pane frame 'minibuffer :force-p t))
            (chat-frame-follow-transcript-tail frame))
       (bt:with-lock-held ((chat-frame-redisplay-lock frame))
         (setf repeat-p (chat-frame-redisplay-repeat-p frame)
@@ -1251,6 +1378,147 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
  '(#\Return)
  :command '(com-chat-submit-compose)
  :errorp nil)
+
+(defparameter *chat-compose-drei-owned-commands*
+  '(send-message
+    self-insert-command
+    insert-newline-command
+    insert-tab-command
+    beginning-of-line-command
+    end-of-line-command
+    forward-char-command
+    backward-char-command
+    forward-word-command
+    backward-word-command
+    beginning-of-buffer-command
+    end-of-buffer-command
+    previous-line-command
+    next-line-command
+    set-mark-command
+    exchange-point-and-mark-command
+    mark-whole-buffer-command
+    kill-region-command
+    copy-region-command
+    kill-line-command
+    kill-backward-line-command
+    kill-word-command
+    backward-kill-word-command
+    yank-command
+    yank-pop-command
+    yank-previous-command-first-arg-command
+    yank-previous-command-last-arg-command
+    delete-char-backward-command
+    delete-char-forward-command
+    search-forward-command
+    search-backward-command)
+  "Clawmacs keymap commands that the Drei compose editor should handle itself.
+
+The compose pane inherits the chat frame command table before Drei's editor
+command tables, so binding these in the frame table would steal ordinary text
+editing gestures such as C-a, C-k, and M-f from Drei.  Application-level
+bindings such as M-x, C-x b, C-h b, C-c t, and scrolling commands are installed
+in the frame table and remain available while focus is in compose.")
+
+(defun chat-compose-application-command-p (command)
+  "Return true when COMMAND should be dispatched by the chat frame in compose."
+  (and command
+       (not (member command *chat-compose-drei-owned-commands* :test #'eq))))
+
+(defun chat-control-character-gesture (char)
+  "Return the CLIM gesture for Clawmacs control character CHAR."
+  (let ((code (char-code char)))
+    (cond
+      ((= code 0) '(#\Space :control))
+      ((or (eql char #\Return) (eql char #\Newline)) (list char :control))
+      ((and (>= code 1) (<= code 26))
+       (list (code-char (+ (char-code #\a) code -1)) :control))
+      ((= code 27) '(#\Esc))
+      ((= code 127) '(#\Rubout))
+      (t (list char)))))
+
+(defun chat-key-component-gesture (component &optional modifier)
+  "Return a one-gesture CLIM key spec for one Clawmacs key COMPONENT."
+  (let ((gesture
+          (cond
+            ((characterp component)
+             (if (< (char-code component) 32)
+                 (chat-control-character-gesture component)
+                 (list component)))
+            ((keywordp component)
+             (list component))
+            (t
+             (list component)))))
+    (if modifier
+        (append gesture (list modifier))
+        gesture)))
+
+(defun chat-keyspec-gestures (key)
+  "Translate one Clawmacs keymap KEY into ESA/CLIM gesture sequence syntax."
+  (cond
+    ((characterp key)
+     (list (chat-key-component-gesture key)))
+    ((keywordp key)
+     (list (chat-key-component-gesture key)))
+    ((and (consp key) (eq (first key) :meta))
+     (list (chat-key-component-gesture (second key) :meta)))
+    ((and (consp key) (eq (first key) :alt))
+     (list (chat-key-component-gesture (second key) :meta)))
+    ((and (consp key) (eq (first key) :ctrl))
+     (list (chat-key-component-gesture (second key) :control)))
+    ((and (consp key) (eq (first key) :ctrl-x))
+     (list (chat-key-component-gesture #\x :control)
+           (chat-key-component-gesture (second key))))
+    ((and (consp key) (eq (first key) :ctrl-c))
+     (list (chat-key-component-gesture #\c :control)
+           (chat-key-component-gesture (second key))))
+    ((and (consp key) (eq (first key) :ctrl-h))
+     (list (chat-key-component-gesture #\h :control)
+           (chat-key-component-gesture (second key))))
+    (t nil)))
+
+(defun install-chat-frame-keybindings (&optional (keymap *default-keymap*))
+  "Install application-level Clawmacs key bindings into the chat command table.
+
+Drei gadgets already inherit the frame command table.  Installing only
+application-level bindings there lets global Clawmacs/ESA keys work from the
+compose pane while leaving text editing keys to Drei's editor tables."
+  (when keymap
+    (maphash
+     (lambda (key command)
+       (when (chat-compose-application-command-p command)
+         (let ((gestures (chat-keyspec-gestures key)))
+           (when gestures
+             (handler-case
+                 (esa:set-key (list 'com-chat-dispatch-key key)
+                              'clawmacs-chat-frame
+                              gestures)
+               (clim:command-already-present () nil))))))
+     (keymap-bindings keymap)))
+  (clim:add-keystroke-to-command-table
+   'clawmacs-chat-frame
+   '(#\Return)
+   :command '(com-chat-submit-compose)
+   :errorp nil))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-dispatch-key :name nil)
+    ((key 't))
+  (clim:with-application-frame (frame)
+    (let ((buf (chat-frame-buffer frame)))
+      (unless (member buf *buffer-ring* :test #'eq)
+        (add-buffer-to-ring buf))
+      (unless (eq (current-buffer) buf)
+        (switch-to-buffer buf))
+      (let ((result (handle-key-event buf key)))
+        (when (eq result :quit)
+          (clim:frame-exit frame))
+        (let ((current (current-buffer)))
+          (when current
+            (setf (chat-frame-buffer frame) current)))
+        (request-chat-frame-menu-refresh frame)
+        (request-chat-frame-redisplay frame)))))
+
+(install-chat-frame-keybindings)
 
 (define-clawmacs-chat-frame-command
     (com-chat-stop-response :name "Stop Response")

@@ -92,3 +92,39 @@
     (is (eq frame (esa:esa-current-window frame)))
     (is (eq (esa:find-applicable-command-table frame)
             (clim:frame-command-table frame)))))
+
+(test mcclim-compose-routes-modal-input-to-minibuffer
+  "When M-x or another selector is active, compose keys are normalized for Clawmacs."
+  (let* ((event (make-instance 'clim:key-press-event
+                               :sheet nil
+                               :x 0
+                               :y 0
+                               :key-name nil
+                               :key-character #\a
+                               :modifier-state (clim:make-modifier-state)))
+         (control-event (make-instance 'clim:key-press-event
+                                       :sheet nil
+                                       :x 0
+                                       :y 0
+                                       :key-name nil
+                                       :key-character #\g
+                                       :modifier-state
+                                       (clim:make-modifier-state :control)))
+         (clawmacs::*minibuffer-active* t)
+         (clawmacs::*minibuffer-mode* :prompt)
+         (clawmacs::*minibuffer-prompt* "M-x")
+         (clawmacs::*minibuffer-input* "")
+         (clawmacs::*minibuffer-point* 0)
+         (clawmacs::*minibuffer-items* nil)
+         (clawmacs::*minibuffer-filtered-items* nil)
+         (clawmacs::*minibuffer-match-positions* nil)
+         (clawmacs::*minibuffer-selected-index* 0)
+         (clawmacs::*minibuffer-scroll-offset* 0)
+         (clawmacs::*minibuffer-callback* nil))
+    (is-true (clawmacs::chat-compose-application-input-active-p))
+    (is (eql #\a (clawmacs::chat-compose-event-key event)))
+    (clawmacs::handle-key-event (make-buffer "modal-compose"
+                                             :session-persistence-mode :ephemeral)
+                                (clawmacs::chat-compose-event-key event))
+    (is (string= "a" clawmacs::*minibuffer-input*))
+    (is (eql (code-char 7) (clawmacs::chat-compose-event-key control-event)))))
