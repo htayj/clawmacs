@@ -205,9 +205,10 @@
     (keymap-bind km (list :ctrl-x (code-char 18)) 'load-session-command) ; C-x C-r
     (keymap-bind km '(:ctrl-x #\t) 'session-tree-command) ; C-x t
     (keymap-bind km '(:ctrl-x #\T) 'fork-session-command) ; C-x T
-    ;; C-x b = old overlay buffer selector (table view)
-    (keymap-bind km '(:ctrl-x #\b) 'list-buffers-command)
-    ;; C-x C-b = minibuffer buffer selector (helm/ivy/vertico style)
+    ;; C-x b / C-x C-b = minibuffer buffer selector (helm/ivy/vertico style).
+    ;; The old overlay selector remains available as `list-buffers-command', but
+    ;; the standard switch-buffer chord uses the ESA minibuffer path.
+    (keymap-bind km '(:ctrl-x #\b) 'minibuffer-select-buffer-command)
     (keymap-bind km (list :ctrl-x (code-char 2)) 'minibuffer-select-buffer-command)
     (setf *default-keymap* km)
     (init-scratch-keymap)

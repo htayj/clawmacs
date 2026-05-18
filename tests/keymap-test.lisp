@@ -90,14 +90,11 @@
 
 
 (test default-keymap-buffer-selector-binding
-  "Default keymap binds C-x C-b to the minibuffer buffer selector,
-and C-x b to the old overlay buffer selector."
+  "Default keymap binds C-x b and C-x C-b to the minibuffer buffer selector."
   (clawmacs::init-default-keymap)
-  ;; C-x C-b -> minibuffer buffer selector (new)
   (is (eq 'clawmacs::minibuffer-select-buffer-command
           (keymap-lookup *default-keymap* (list :ctrl-x (code-char 2)))))
-  ;; C-x b -> old overlay buffer selector
-  (is (eq 'clawmacs::list-buffers-command
+  (is (eq 'clawmacs::minibuffer-select-buffer-command
           (keymap-lookup *default-keymap* '(:ctrl-x #\b)))))
 
 (test default-keymap-project-bindings

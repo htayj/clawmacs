@@ -105,7 +105,7 @@
              (declare (ignore op))
              (let ((script (merge-pathnames "scripts/run-gui-e2e.sh"
                                             (asdf:system-source-directory c))))
-               (dolist (suite '("smoke" "mx" "features" "organa" "quaestor"))
+               (dolist (suite '("smoke" "mx" "features" "keybinds" "organa" "quaestor"))
                  (uiop:run-program
                   (list "sh" (namestring script) "--suite" suite)
                   :directory (asdf:system-source-directory c)

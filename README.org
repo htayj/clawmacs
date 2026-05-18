@@ -257,7 +257,7 @@ window.
 | =C-x n=        | New buffer                   |
 | =C-x l=        | New listener buffer          |
 | =C-x k=        | Kill buffer                  |
-| =C-x b=        | Buffer selector (overlay)    |
+| =C-x b=        | Buffer selector (minibuffer) |
 | =C-x C-b=      | Buffer selector (minibuffer) |
 | =C-x C-s=      | Save session                 |
 | =C-x C-r=      | Load session                 |
@@ -436,6 +436,7 @@ GUI E2E runs are opt-in and documented in [[file:docs/GUI-E2E.md][docs/GUI-E2E.m
 ./scripts/run-gui-e2e.sh --suite smoke
 ./scripts/run-gui-e2e.sh --suite mx
 ./scripts/run-gui-e2e.sh --suite features
+./scripts/run-gui-e2e.sh --suite keybinds
 #+end_src
 
 The probes run through =prompt.sh --isolated=, write logs under =/tmp=, and

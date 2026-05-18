@@ -11,12 +11,13 @@ E2E events, and captures screenshots for every scripted suite step.
 ./scripts/run-gui-e2e.sh --suite smoke
 ./scripts/run-gui-e2e.sh --suite mx
 ./scripts/run-gui-e2e.sh --suite features
+./scripts/run-gui-e2e.sh --suite keybinds
 ./scripts/run-gui-e2e.sh --suite organa
 ./scripts/run-gui-e2e.sh --suite quaestor
 ```
 
-ASDF integration is also opt-in and runs `smoke`, `mx`, `features`, `organa`,
-and `quaestor`:
+ASDF integration is also opt-in and runs `smoke`, `mx`, `features`,
+`keybinds`, `organa`, and `quaestor`:
 
 ```lisp
 (asdf:test-system :clawmacs/gui-e2e)
@@ -54,8 +55,8 @@ Each run writes under `.artifacts/gui-e2e/<timestamp-pid>/` by default:
   per-screenshot snapshot sequence/status, and the last snapshot.
 
 The driver correlates every screenshot with the latest `ui-snapshot` event. The
-snapshot is semantic state (transcript, compose text, status/model line, and
-minibuffer text), not OCR.
+snapshot is semantic state (transcript, compose text, status/model line,
+selector/toggle state, and minibuffer text), not OCR.
 
 ## Smoke behavior
 
@@ -106,6 +107,16 @@ coverage for:
 8. prompted command entry through `set-session-display-name-command`;
 9. session save feedback;
 10. offline skills help, package dashboard, and guard-policy help buffers.
+
+## Keybinding behavior
+
+The `keybinds` suite drives the real compose pane and ESA command table with
+physical key chords. It asserts that Drei-owned editing keys still mutate the
+compose text, that application keybindings emit the expected normalized command
+event, and that modal selectors/prompts can be cancelled. The suite covers the
+main default `M-x`, `C-c`, `C-h`, and `C-x` bindings, including the `C-x b`
+regression path: `C-x b` and `C-x C-b` must open the minibuffer buffer selector
+without crashing the frame.
 
 ## Organa package behavior
 

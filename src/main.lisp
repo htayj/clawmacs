@@ -3119,10 +3119,16 @@ KEY is already normalized by the interface before calling this."
     (cond
       ;; C-x C-c always quits (Emacs standard quit chord)
       ((equal key (list :ctrl-x #\Etx))
+       (file-debug-event "key-command"
+                         :key (format nil "~S" key)
+                         :command 'quit-command)
        :quit)
 
       ;; C-l requests a full redraw in every mode.
       ((redraw-key-p key)
+       (file-debug-event "key-command"
+                         :key (format nil "~S" key)
+                         :command 'redraw-screen-command)
        (redraw-screen-command buf))
 
       ;; Esc stops an active provider stream before any modal UI consumes it.
@@ -3174,9 +3180,11 @@ KEY is already normalized by the interface before calling this."
        nil)
 
       ;; === FONT EDITOR MODE ===
-      ;; CADR-style bitmap font editor buffers own their keyboard interaction.
-      ((and buf (font-editor-buffer-p buf))
-       (or (font-editor-handle-key buf key) nil))
+      ;; CADR-style bitmap font editor buffers own their keyboard interaction,
+      ;; but unhandled global prefixes still fall through to the default keymap.
+      ((and buf (font-editor-buffer-p buf)
+            (font-editor-handle-key buf key))
+       :redraw)
 
       ;; === OPENAI OAUTH MODE ===
       ;; OAuth is pending in a background localhost callback server; only C-g cancels.
@@ -3241,6 +3249,9 @@ KEY is already normalized by the interface before calling this."
       ;; Keymap lookup
       ((let ((command (keymap-lookup (buffer-keymap buf) key)))
          (when command
+           (file-debug-event "key-command"
+                             :key (format nil "~S" key)
+                             :command command)
            (let ((result (invoke-command buf command)))
              (when (eq result :redraw)
                (return-from handle-key-event :redraw)))

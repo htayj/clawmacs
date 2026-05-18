@@ -522,25 +522,25 @@
          table))
     (is (equal '(clawmacs::com-chat-submit-compose)
                (test-command-table-key-command table #\Return)))
-    (is-false (equal '(clawmacs::com-chat-submit-compose)
-                     (test-command-table-key-command table #\Newline)))
+    (is (equal '(clawmacs::com-chat-submit-compose)
+               (test-command-table-key-command table #\Newline)))
     (is (equal '(clawmacs::com-chat-submit-compose)
                (test-command-table-key-command menu-table #\Return)))
     (is (equal '(clawmacs::com-chat-submit-compose)
                (test-command-table-key-command drei-order-table #\Return)))
-    (is-false (equal '(clawmacs::com-chat-submit-compose)
-                     (test-command-table-key-command drei-order-table #\Newline)))
+    (is (equal '(clawmacs::com-chat-submit-compose)
+               (test-command-table-key-command drei-order-table #\Newline)))
     (clawmacs::init-default-keymap)
     (clawmacs::install-chat-frame-keybindings)
-    (is (equal '(clawmacs::com-chat-dispatch-key (:meta #\x))
+    (is (equal '(clawmacs::com-chat-dispatch-key '(:meta #\x))
                (test-command-table-key-command table #\x
                                                :modifiers '(:meta))))
-    (is (equal '(clawmacs::com-chat-dispatch-key (:ctrl-x #\b))
+    (is (equal '(clawmacs::com-chat-dispatch-key '(:ctrl-x #\b))
                (test-command-table-key-sequence-command
                 table
                 `((#\x :modifiers (:control))
                   (#\b)))))
-    (is (equal '(clawmacs::com-chat-dispatch-key (:ctrl-h #\b))
+    (is (equal '(clawmacs::com-chat-dispatch-key '(:ctrl-h #\b))
                (test-command-table-key-sequence-command
                 drei-order-table
                 `((#\h :modifiers (:control))
@@ -568,9 +568,10 @@
                      :modifier-state (clim:make-modifier-state :control))))))
 
 (test mcclim-compose-pane-is-drei-gadget
-  "The chat compose pane uses Drei's gadget editor again."
-  (let ((compose (make-instance 'drei:drei-gadget-pane)))
+  "The chat compose pane uses a Drei gadget editor with Clawmacs command tables."
+  (let ((compose (make-instance 'clawmacs::clawmacs-chat-compose-pane)))
     (is (typep compose 'drei:drei-gadget-pane))
+    (is (typep compose 'clawmacs::clawmacs-chat-compose-pane))
     (setf (clim:gadget-value compose) "hello")
     (is (string= "hello" (clim:gadget-value compose)))
     (clawmacs::configure-chat-compose-pane compose)
@@ -2070,7 +2071,7 @@ same
 (test run-pipeline-on-buffer-supports-decision-loops
   "A stage :next function can deterministically route back to an earlier stage."
   (let ((path (temp-agent-defaults-path))
-        (responses '("PLAN 1" "FAIL tests" "PLAN 2" "PASS tests"))
+        (plan-count 0)
         (stage-order nil))
     (with-agent-defaults-path-override (path)
       (with-pipeline-definition-registry-override ()
@@ -2098,11 +2099,30 @@ same
                                    (provider messages callback
                                              &key model max-tokens tools
                                              reasoning-effort system-prompt)
-                                   (declare (ignore provider messages callback
+                                   (declare (ignore provider callback
                                                     model max-tokens tools
                                                     reasoning-effort
                                                     system-prompt))
-                                   (let ((text (pop responses)))
+                                   (let* ((payload (clawmacs::api-json-encode messages))
+                                          (last-plan
+                                            (search "[pipeline stage: plan]" payload
+                                                    :from-end t))
+                                          (last-test
+                                            (search "[pipeline stage: test]" payload
+                                                    :from-end t))
+                                          (text
+                                            (cond
+                                              ((and last-test
+                                                    (or (null last-plan)
+                                                        (> last-test last-plan)))
+                                               (if (= plan-count 1)
+                                                   "FAIL tests"
+                                                   "PASS tests"))
+                                              ((and last-plan
+                                                    (or (null last-test)
+                                                        (> last-plan last-test)))
+                                               (format nil "PLAN ~D" (incf plan-count)))
+                                              (t "PASS tests"))))
                                      (make-completed-stream-state-response
                                       "end_turn"
                                       (list (clawmacs::canonical-text-block
