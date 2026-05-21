@@ -40,6 +40,7 @@
                              (:file "llm")
                              (:file "session-export")
                              (:file "tools")
+                             (:file "safe-reload")
                              (:file "prompt-core")
                              (:file "interop-core")
                              (:file "mcp-bridge-core")
@@ -84,6 +85,7 @@
                               (:file "buffer-test")
                               (:file "windows-test")
                               (:file "commands-test")
+                              (:file "safe-reload-test")
                               (:file "matching-test")
                               (:file "projects-test")
                               (:file "skills-test")
@@ -105,7 +107,7 @@
              (declare (ignore op))
              (let ((script (merge-pathnames "scripts/run-gui-e2e.sh"
                                             (asdf:system-source-directory c))))
-               (dolist (suite '("smoke" "mx" "features" "keybinds" "organa" "quaestor"))
+               (dolist (suite '("smoke" "mx" "features" "keybinds" "organa" "quaestor" "reload"))
                  (uiop:run-program
                   (list "sh" (namestring script) "--suite" suite)
                   :directory (asdf:system-source-directory c)

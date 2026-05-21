@@ -14,10 +14,11 @@ E2E events, and captures screenshots for every scripted suite step.
 ./scripts/run-gui-e2e.sh --suite keybinds
 ./scripts/run-gui-e2e.sh --suite organa
 ./scripts/run-gui-e2e.sh --suite quaestor
+./scripts/run-gui-e2e.sh --suite reload
 ```
 
 ASDF integration is also opt-in and runs `smoke`, `mx`, `features`,
-`keybinds`, `organa`, and `quaestor`:
+`keybinds`, `organa`, `quaestor`, and `reload`:
 
 ```lisp
 (asdf:test-system :clawmacs/gui-e2e)
@@ -117,6 +118,14 @@ event, and that modal selectors/prompts can be cancelled. The suite covers the
 main default `M-x`, `C-c`, `C-h`, and `C-x` bindings, including the `C-x b`
 regression path: `C-x b` and `C-x C-b` must open the minibuffer buffer selector
 without crashing the frame.
+
+## Safe reload behavior
+
+The `reload` suite exercises the real safe in-place reload flow from the GUI. It
+keeps a compose draft visible, invokes `safe-reload-clawmacs-command` through
+`M-x`, waits for the `safe-reload-result` debug event from the isolated
+preflight plus live reload, and asserts the semantic snapshot still shows the
+same buffer and compose draft along with the success notification.
 
 ## Organa package behavior
 

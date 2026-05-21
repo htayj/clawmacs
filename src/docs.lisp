@@ -2117,6 +2117,43 @@ documentation in *extended-docs*."
   :see-also (*tool-table* deftool register-tool))
 
 ;;; ==========================================================================
+;;; Category: safe-reload — Safe in-place source reload
+;;; ==========================================================================
+
+(defdoc clawmacs-safe-reload
+  :category "safe-reload"
+  :usage "(clawmacs-safe-reload :buffer BUF)"
+  :returns "safe-reload-result — :OK, :BUSY, :PREFLIGHT-FAILED, or :LIVE-FAILED."
+  :side-effects "Uses a nonblocking reload lock, runs an isolated worker preflight, and only then reloads :clawmacs in the live image. Inserts a visible system notification when :BUFFER is supplied; does not reset buffers, sessions, or start a new frame."
+  :see-also (clawmacs-safe-reload-preflight clawmacs-reload-result-ok-p safe-reload-clawmacs-command))
+
+(defdoc clawmacs-safe-reload-preflight
+  :category "safe-reload"
+  :usage "(clawmacs-safe-reload-preflight)"
+  :returns "safe-reload-result — An isolated worker preflight result."
+  :side-effects "Starts a fresh SBCL worker process to load Clawmacs source without mutating the current image."
+  :see-also (clawmacs-safe-reload clawmacs-reload-result-summary))
+
+(defdoc clawmacs-reload-result-ok-p
+  :category "safe-reload"
+  :usage "(clawmacs-reload-result-ok-p RESULT)"
+  :returns "boolean — T only for a completed :OK safe reload result."
+  :see-also (clawmacs-safe-reload clawmacs-reload-result-summary))
+
+(defdoc clawmacs-reload-result-summary
+  :category "safe-reload"
+  :usage "(clawmacs-reload-result-summary RESULT)"
+  :returns "string — Human-readable reload result summary."
+  :see-also (clawmacs-safe-reload clawmacs-reload-result-ok-p))
+
+(defdoc safe-reload-clawmacs-command
+  :category "safe-reload"
+  :usage "M-x safe-reload-clawmacs-command"
+  :returns "safe-reload-result — The command result."
+  :side-effects "Delegates to CLAWMACS-SAFE-RELOAD for the current buffer and leaves the visible session/buffer state intact except for the system notification."
+  :see-also (clawmacs-safe-reload))
+
+;;; ==========================================================================
 ;;; Category: approval — Tool approval state
 ;;; ==========================================================================
 

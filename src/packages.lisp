@@ -810,6 +810,13 @@
    #:eval-history-to-string
    #:init-tools
 
+   ;; Safe in-place reload
+   #:clawmacs-safe-reload
+   #:clawmacs-safe-reload-preflight
+   #:clawmacs-reload-result-ok-p
+   #:clawmacs-reload-result-summary
+   #:safe-reload-clawmacs-command
+
    ;; Standard reference / library discovery
    #:*common-lisp-spec-root*
    #:common-lisp-spec-available-p

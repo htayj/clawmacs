@@ -13,7 +13,7 @@ WINDOW_TITLE='Clawmacs E2E'
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|keybinds|organa|quaestor] [--artifact-dir DIR]
+Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|keybinds|organa|quaestor|reload] [--artifact-dir DIR]
 
 Runs an opt-in Clawmacs GUI E2E suite inside an isolated Xvfb display.
 EOF
@@ -109,7 +109,7 @@ if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
 fi
 
 case "$SUITE" in
-  smoke|mx|features|keybinds|organa|quaestor) ;;
+  smoke|mx|features|keybinds|organa|quaestor|reload) ;;
   *) fail "unsupported GUI E2E suite: $SUITE" ;;
 esac
 

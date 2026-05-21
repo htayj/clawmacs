@@ -26,6 +26,10 @@
   :description "Command system tests"
   :in clawmacs-suite)
 
+(def-suite safe-reload-suite
+  :description "Safe in-place reload tests"
+  :in clawmacs-suite)
+
 (def-suite matching-suite
   :description "Minibuffer matching tests"
   :in clawmacs-suite)

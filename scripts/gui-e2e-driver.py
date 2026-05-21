@@ -896,6 +896,47 @@ def run_features(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     return screenshots
 
 
+def run_reload(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    """Exercise safe in-place reload through the semantic GUI harness."""
+    screenshots = prepare_session(session)
+
+    session.type_text("reload draft remains visible")
+    wait_compose_text(session, "reload draft remains visible")
+    screenshots.append(session.screenshot("02-before-safe-reload"))
+
+    after_sequence = session.latest_sequence()
+    run_mx_selection(session, "safe-reload-clawmacs-command", timeout=20.0)
+    session.wait_event_after(
+        "ui-snapshot", after_sequence,
+        lambda snapshot: (
+            snapshot.get("buffer_name") == "clawmacs:e2e"
+            and snapshot.get("status") == "reloading"
+            and snapshot.get("compose_text") == "reload draft remains visible"
+            and " reloading " in str(snapshot.get("info_text", ""))
+            and "Clawmacs safe reload started" in str(snapshot.get("screen_text", ""))
+        ),
+        timeout=15.0,
+    )
+    screenshots.append(session.screenshot("03-safe-reload-started"))
+    session.wait_event_after(
+        "safe-reload-result", after_sequence,
+        lambda event: event.get("status") == "ok",
+        timeout=90.0,
+    )
+    session.wait_snapshot(
+        "safe reload success notification visible",
+        lambda snapshot: (
+            snapshot.get("buffer_name") == "clawmacs:e2e"
+            and snapshot.get("status") == "idle"
+            and snapshot.get("compose_text") == "reload draft remains visible"
+            and "Clawmacs safe reload succeeded" in str(snapshot.get("screen_text", ""))
+        ),
+        timeout=30.0,
+    )
+    screenshots.append(session.screenshot("04-after-safe-reload"))
+    return screenshots
+
+
 def write_summary(path: Path, *, ok: bool, suite: str, artifact_dir: Path,
                   steps: list[dict[str, Any]], screenshots: list[dict[str, Any]],
                   failure: str | None = None,
@@ -957,6 +998,8 @@ def main(argv: list[str]) -> int:
             screenshots = run_organa(session)
         elif args.suite == "quaestor":
             screenshots = run_quaestor(session)
+        elif args.suite == "reload":
+            screenshots = run_reload(session)
         else:
             raise DriverError(f"unsupported suite: {args.suite}")
         write_summary(summary_path, ok=True, suite=args.suite,

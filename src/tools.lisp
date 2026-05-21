@@ -377,7 +377,7 @@ the live working tree.")
   "Polling interval in seconds while waiting for shell_exec to finish.")
 
 (defparameter *built-in-tool-names*
-  '("lisp_eval" "recovery_list")
+  '("lisp_eval" "recovery_list" "clawmacs_reload")
   "Names reserved for core Clawmacs provider tools.
 INIT-TOOLS removes these entries before re-registering tagged tools, so
 user-added tools stored in *tool-table* are left intact.")

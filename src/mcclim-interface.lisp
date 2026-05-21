@@ -196,7 +196,9 @@ When BUFFER is nil, use the default buffer visibility settings."
 
 (defun chat-system-menu-items ()
   "Return dynamic menu items for system-level frame actions."
-  '(("Recurse" :command com-chat-recurse
+  '(("Safe Reload" :command com-chat-safe-reload
+     :documentation "Safely reload updated Clawmacs source in place.")
+    ("Recurse" :command com-chat-recurse
      :documentation "Open a fresh nested Clawmacs frame in a new process.")))
 
 (defun make-chat-menu-bar-command-table (&optional context)
@@ -1041,6 +1043,13 @@ When NIL, derive it from `*minibuffer-max-height*' and
            (format stream "~%  No matches"))))
       ""))
 
+(defun chat-frame-buffer-status-label (buffer)
+  "Return BUFFER's visible status label for the chat info line."
+  (cond
+    (*safe-reload-running-p* "reloading")
+    (buffer (string-downcase (symbol-name (buffer-status buffer))))
+    (t "")))
+
 (defun chat-frame-e2e-info-line (frame)
   "Return the status/model line represented by FRAME."
   (let ((buf (and frame (chat-frame-buffer frame))))
@@ -1051,7 +1060,7 @@ When NIL, derive it from `*minibuffer-max-height*' and
           (format nil "~A  ~A  ~A  agent ~A  ~A"
                   (buffer-name buf)
                   (buffer-major-mode buf)
-                  (string-downcase (symbol-name (buffer-status buf)))
+                  (chat-frame-buffer-status-label buf)
                   (buffer-agent-name buf)
                   (if (and provider model)
                       (model-selector-display provider model)
@@ -1159,7 +1168,7 @@ When NIL, derive it from `*minibuffer-max-height*' and
             (values nil nil))
       (list :buffer-name (and buf (buffer-name buf))
             :agent (and buf (buffer-agent-name buf))
-            :status (and buf (string-downcase (symbol-name (buffer-status buf))))
+            :status (and buf (chat-frame-buffer-status-label buf))
             :major-mode (and buf (buffer-major-mode buf))
             :provider (and provider (string-downcase (symbol-name provider)))
             :model model
@@ -1249,7 +1258,7 @@ When NIL, derive it from `*minibuffer-max-height*' and
         (format stream " ~A  ~A  ~A  ~A"
                 (buffer-name buf)
                 (buffer-major-mode buf)
-                (string-downcase (symbol-name (buffer-status buf)))
+                (chat-frame-buffer-status-label buf)
                 (if (and provider model)
                     (model-selector-display provider model)
                     "no model")))
@@ -2254,6 +2263,14 @@ compose pane while leaving text editing keys to Drei's editor tables."
     ((level 'string))
   (clim:with-application-frame (frame)
     (select-chat-effort-for-buffer (chat-frame-buffer frame) level)
+    (request-chat-frame-menu-refresh frame)
+    (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-safe-reload :name "Safe Reload")
+    ()
+  (clim:with-application-frame (frame)
+    (safe-reload-clawmacs-command (chat-frame-buffer frame))
     (request-chat-frame-menu-refresh frame)
     (request-chat-frame-redisplay frame)))
 

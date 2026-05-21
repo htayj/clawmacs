@@ -283,7 +283,7 @@
     (clawmacs::provider-token-path :unknown-provider)))
 
 (test init-tools-registers-pi-style-tools-by-default
-  "Enabling the bundled lispi package exposes file tools beside lisp_eval."
+  "Enabling the bundled lispi package exposes file tools beside core tools."
   (with-tool-table-restored
     (clrhash clawmacs::*tool-table*)
     (initialize-test-tools)
@@ -291,7 +291,7 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
+      (is (equal '("clawmacs_reload" "edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names))
       (is (string= "CLAWMACS" clawmacs:*lisp-eval-default-package*))
       (dolist (name '("read" "find" "grep" "write" "edit" "lisp_eval"))
@@ -313,7 +313,7 @@
            (tool-names (mapcar (lambda (tool)
                                  (cdr (assoc :name tool)))
                                tools)))
-      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
+      (is (equal '("clawmacs_reload" "edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names)))))
 
 (test approval-policy-round-trips-default-and-tool-overrides
@@ -860,6 +860,8 @@
         (is (member "No active chat buffer"
                     (test-command-table-menu-labels effort-table)
                     :test #'string=))
+        (is (eq 'clawmacs::com-chat-safe-reload
+                (menu-command "Safe Reload" system-table)))
         (is (eq 'clawmacs::com-chat-recurse
                 (menu-command "Recurse" system-table)))))
     (dolist (command '(clawmacs::com-chat-stop-response
@@ -871,6 +873,7 @@
                        clawmacs::com-chat-toggle-skill
                        clawmacs::com-chat-toggle-package
                        clawmacs::com-chat-select-effort
+                       clawmacs::com-chat-safe-reload
                        clawmacs::com-chat-recurse))
       (is (clim:command-accessible-in-command-table-p
            command menu-table)))))
@@ -892,11 +895,14 @@
    (clim:find-menu-item name table :errorp t)))
 
 (test mcclim-chat-system-menu-exposes-recurse-command
-  "The McCLIM system menu exposes recurse as a frame command."
+  "The McCLIM system menu exposes safe reload and recurse frame commands."
   (let* ((menu-table (clawmacs::make-chat-menu-bar-command-table))
          (system-table (test-chat-menu-submenu menu-table "System")))
-    (is (equal '("Recurse")
+    (is (equal '("Safe Reload" "Recurse")
                (test-command-table-menu-labels system-table)))
+    (is (eq 'clawmacs::com-chat-safe-reload
+            (clim:command-menu-item-value
+             (clim:find-menu-item "Safe Reload" system-table :errorp t))))
     (is (eq 'clawmacs::com-chat-recurse
             (clim:command-menu-item-value
              (clim:find-menu-item "Recurse" system-table :errorp t))))))
@@ -1279,7 +1285,7 @@
         (is (equal "write" (getf (first hook-calls) :tool)))))))
 
 (test init-tools-hides-lispi-tools-until-package-enabled
-  "init-tools exposes built-in lisp_eval without lispi package tools."
+  "init-tools exposes built-in core tools without lispi package tools."
   (with-tool-table-restored
     (clrhash clawmacs::*tool-table*)
     (clawmacs::init-tools)
@@ -1289,11 +1295,11 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("lisp_eval" "recovery_list") tool-names))
+      (is (equal '("clawmacs_reload" "lisp_eval" "recovery_list") tool-names))
       (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*))))
       (is-false (member "read" tool-names :test #'string=)))))
 
-(test init-tools-only-reserves-lisp-eval
+(test init-tools-only-reserves-core-tools
   "User tools may use Lispi names when Lispi is not active."
   (with-tool-table-restored
     (clrhash clawmacs::*tool-table*)
@@ -1313,7 +1319,7 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("lisp_eval" "read" "recovery_list") tool-names))
+      (is (equal '("clawmacs_reload" "lisp_eval" "read" "recovery_list") tool-names))
       (is (string= "user-read"
                    (clawmacs:execute-tool "read" nil))))))
 
@@ -1341,7 +1347,7 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("lisp_eval" "read" "recovery_list") tool-names))
+      (is (equal '("clawmacs_reload" "lisp_eval" "read" "recovery_list") tool-names))
       (is (string= "user-read"
                    (clawmacs:execute-tool "read" nil))))))
 
@@ -1627,7 +1633,7 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("custom_probe" "edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
+      (is (equal '("clawmacs_reload" "custom_probe" "edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names))
       (is (not (null (gethash "custom_probe" clawmacs::*tool-table*))))
       (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*)))))))
