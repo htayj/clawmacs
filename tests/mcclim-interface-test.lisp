@@ -2,6 +2,15 @@
 
 (in-suite clawmacs-suite)
 
+(defclass menu-unmanaged-top-level-sheet-pane-test ()
+  ())
+
+(defun test-menu-sheet-not-grafted-condition (&optional (object (make-instance 'menu-unmanaged-top-level-sheet-pane-test)))
+  (handler-case
+      (error "Sheet ~s is not grafted." object)
+    (simple-error (condition)
+      condition)))
+
 (defun test-tool-use-block (id name)
   `((:type . "tool_use")
     (:id . ,id)
@@ -79,6 +88,54 @@
       (is (equal '(("read" . 1) ("grep" . 1))
                  (clawmacs::chat-tool-activity-summary-tool-counts (first items))))
       (is (= 0 (clawmacs::chat-tool-activity-summary-result-count (first items)))))))
+
+(test menu-sheet-not-grafted-error-classification-is-narrow
+  "Only transient McCLIM menu top-level-sheet graft errors are recoverable."
+  (is-true
+   (clawmacs::transient-menu-sheet-not-grafted-error-p
+    (test-menu-sheet-not-grafted-condition)))
+  (is-false
+   (clawmacs::transient-menu-sheet-not-grafted-error-p
+    (test-menu-sheet-not-grafted-condition 'ordinary-pane)))
+  (is-false
+   (clawmacs::transient-menu-sheet-not-grafted-error-p
+    (handler-case
+        (error "Different menu problem: ~s"
+               (make-instance 'menu-unmanaged-top-level-sheet-pane-test))
+      (simple-error (condition)
+        condition)))))
+
+(test chat-top-level-recovers-from-transient-menu-graft-errors
+  "The chat frame top-level can resume after McCLIM menu sheet graft races."
+  (let* ((buf (make-buffer "menu-recovery" :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
+                                             :buffer buf))
+         (attempts 0))
+    (is (eq :resumed
+            (clawmacs::call-chat-top-level-with-menu-error-recovery
+             frame
+             (lambda ()
+               (incf attempts)
+               (when (= attempts 1)
+                 (error (test-menu-sheet-not-grafted-condition)))
+               :resumed))))
+    (is (= 2 attempts))))
+
+(test chat-top-level-does-not-intercept-non-menu-errors
+  "Non-menu top-level errors are left for the normal debugger/context path."
+  (let* ((buf (make-buffer "menu-recovery-non-menu" :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
+                                             :buffer buf))
+         (condition (make-condition 'simple-error
+                                    :format-control "Ordinary top-level failure"
+                                    :format-arguments nil)))
+    (handler-case
+        (clawmacs::call-chat-top-level-with-menu-error-recovery
+         frame
+         (lambda ()
+           (error condition)))
+      (simple-error (caught)
+        (is (eq condition caught))))))
 
 (test chat-frame-is-esa-application
   "The chat frame exposes the ESA frame and buffer protocol."

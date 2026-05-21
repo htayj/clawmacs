@@ -2339,6 +2339,58 @@ compose pane while leaving text editing keys to Drei's editor tables."
     (object)
   (list object))
 
+(defun menu-sheet-type-name (object)
+  "Return OBJECT's type name for transient menu error classification."
+  (let ((type (type-of object)))
+    (if (symbolp type)
+        (symbol-name type)
+        (prin1-to-string type))))
+
+(defun transient-menu-sheet-not-grafted-error-p (condition)
+  "Return true for McCLIM CLX menu-sheet graft races during menu tracking.
+
+The CLX menu bar is implemented with temporary unmanaged menu frames.  In rare
+pointer/menu timing paths McCLIM may signal a SIMPLE-ERROR for one of those
+already-disowned menu sheets.  Treat only that narrow menu/top-level-sheet
+condition as recoverable; ordinary application-pane graft errors still escape."
+  (and (typep condition 'simple-error)
+       (equal (simple-condition-format-control condition)
+              "Sheet ~s is not grafted.")
+       (let* ((sheet (first (simple-condition-format-arguments condition)))
+              (type-name (menu-sheet-type-name sheet)))
+         (and (search "MENU" type-name :test #'char-equal)
+              (search "TOP-LEVEL-SHEET" type-name :test #'char-equal)))))
+
+(defun recover-from-transient-menu-error (frame condition)
+  "Recover FRAME from a transient McCLIM menu sheet graft error."
+  (file-debug-event "menu-bar-error-recovered"
+                    :condition (format nil "~A" condition))
+  ;; Rebuild the frame-local command table and ask the normal redisplay path to
+  ;; repaint panes.  Do not touch menu sheets or mediums directly; this keeps the
+  ;; workaround at the application-frame level while McCLIM cleans up the stale
+  ;; transient menu frame during unwinding.
+  (ignore-errors
+    (refresh-chat-frame-menu-bar frame))
+  (ignore-errors
+    (request-chat-frame-redisplay frame))
+  (sleep 0.05)
+  t)
+
+(defun call-chat-top-level-with-menu-error-recovery (frame continuation)
+  "Call CONTINUATION, resuming FRAME after recoverable menu graft errors."
+  (loop
+    (let ((condition
+            (block retry-top-level
+              (handler-bind
+                  ((error (lambda (condition)
+                            (when (transient-menu-sheet-not-grafted-error-p condition)
+                              (return-from retry-top-level condition)))))
+                (return (funcall continuation))))))
+      ;; Recover only after the menu tracking stack has unwound.  Non-matching
+      ;; errors are not handled here, so they keep their original signal site and
+      ;; debugger context.
+      (recover-from-transient-menu-error frame condition))))
+
 (defmethod clim:run-frame-top-level :around ((frame clawmacs-chat-frame) &key)
   (refresh-chat-frame-menu-bar frame)
   (let ((transcript (clim:find-pane-named frame 'transcript)))
@@ -2353,7 +2405,9 @@ compose pane while leaving text editing keys to Drei's editor tables."
                   (request-chat-frame-redisplay frame)))))
     (add-hook '*after-buffer-display-change-hook* hook :append t)
     (unwind-protect
-         (call-next-method)
+         (call-chat-top-level-with-menu-error-recovery
+          frame
+          (lambda () (call-next-method)))
       (remove-hook '*after-buffer-display-change-hook* hook))))
 
 (defun run-clawmacs-chat-frame (buffer &key window-title)
