@@ -536,14 +536,40 @@ C-Backspace binding for backward word deletion, matching the old input pane."
 
 (install-chat-compose-drei-keybindings)
 
+(defparameter *chat-compose-visible-rows* 5
+  "Desired visible compose rows in the chat frame.")
+
+(defparameter *chat-compose-line-height* 24
+  "Approximate pixel height of one chat compose row.")
+
+(defun chat-compose-desired-pixel-height ()
+  "Return the preferred fixed pixel height for the chat compose pane."
+  (* *chat-compose-visible-rows* *chat-compose-line-height*))
+
 (defun configure-chat-compose-pane (pane)
-  "Enable CLIM stream soft wrapping for chat compose PANE when supported.
-Drei compose panes implement the stream end-of-line protocol; if a pane does
-not, leave the editor value untouched rather than inserting approximate hard
-newlines."
+  "Enable soft wrapping and keep chat compose PANE compact."
   (when pane
     (ignore-errors
-      (setf (clim:stream-end-of-line-action pane) :wrap*)))
+      (setf (clim:stream-end-of-line-action pane) :wrap*))
+    (let* ((height (chat-compose-desired-pixel-height))
+           (space (ignore-errors (clim:compose-space pane)))
+           (current-height (and space
+                                (ignore-errors
+                                  (clim:space-requirement-height space))))
+           (current-min-height (and space
+                                    (ignore-errors
+                                      (clim:space-requirement-min-height space))))
+           (current-max-height (and space
+                                    (ignore-errors
+                                      (clim:space-requirement-max-height space)))))
+      (unless (and (eql current-height height)
+                   (eql current-min-height height)
+                   (eql current-max-height height))
+        (ignore-errors
+          (clim:change-space-requirements pane
+                                          :height height
+                                          :min-height height
+                                          :max-height height)))))
   pane)
 
 (defun chat-compose-pane-p (pane)
@@ -1306,7 +1332,7 @@ When NIL, derive it from `*minibuffer-max-height*' and
      'clawmacs-chat-compose-pane
      :initial-contents ""
      :ncolumns 90
-     :nlines 6
+     :nlines 5
      :minibuffer nil
      :scroll-bars nil
      :border-width 0

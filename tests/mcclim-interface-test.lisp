@@ -298,6 +298,28 @@
         (is (search "No messages yet." text))
         (is (search "input overlay for overlay-buffer" text))))))
 
+(test mcclim-compose-pane-prefers-five-visible-rows
+  "The compose pane prefers a compact fixed height of five visible rows."
+  (let ((clawmacs::*chat-compose-visible-rows* 5)
+        (clawmacs::*chat-compose-line-height* 24))
+    (let* ((pane (clim:make-pane 'clawmacs::clawmacs-chat-compose-pane
+                                 :initial-contents ""
+                                 :ncolumns 90
+                                 :nlines 5
+                                 :minibuffer nil
+                                 :scroll-bars nil
+                                 :border-width 0
+                                 :activation-gestures '(:return)
+                                 :activate-callback #'clawmacs::compose-pane-activated))
+           (expected (clawmacs::chat-compose-desired-pixel-height))
+           (space-before (clim:compose-space pane)))
+      (is (= 100 (clim:space-requirement-height space-before)))
+      (clawmacs::configure-chat-compose-pane pane)
+      (let ((space-after (clim:compose-space pane)))
+        (is (= expected (clim:space-requirement-height space-after)))
+        (is (= expected (clim:space-requirement-min-height space-after)))
+        (is (= expected (clim:space-requirement-max-height space-after)))))))
+
 (test mcclim-custom-presentation-buffers-append-system-feedback
   "Whole-buffer custom presenters still surface system feedback messages."
   (let ((clawmacs::*buffer-type-registry*
