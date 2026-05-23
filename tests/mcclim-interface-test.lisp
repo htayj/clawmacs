@@ -302,7 +302,7 @@
   "The compose pane prefers a compact fixed height of five visible rows."
   (let ((clawmacs::*chat-compose-visible-rows* 5)
         (clawmacs::*chat-compose-line-height* 24))
-    (let* ((pane (clim:make-pane 'clawmacs::clawmacs-chat-compose-pane
+    (let* ((pane (make-instance 'clawmacs::clawmacs-chat-compose-pane
                                  :initial-contents ""
                                  :ncolumns 90
                                  :nlines 5
@@ -319,6 +319,20 @@
         (is (= expected (clim:space-requirement-height space-after)))
         (is (= expected (clim:space-requirement-min-height space-after)))
         (is (= expected (clim:space-requirement-max-height space-after)))))))
+
+(test mcclim-minibuffer-pane-compose-space-is-fixed-height
+  "The chat minibuffer pane computes space without backend font metrics."
+  (let* ((pane (make-instance 'clawmacs::clawmacs-chat-minibuffer-pane
+                               :display-function 'clawmacs::display-chat-minibuffer-pane
+                               :display-time :command-loop
+                               :width 900))
+         (space (clim:compose-space pane)))
+    (is (= clawmacs::*chat-minibuffer-line-height*
+           (clim:space-requirement-height space)))
+    (is (= clawmacs::*chat-minibuffer-line-height*
+           (clim:space-requirement-min-height space)))
+    (is (= clawmacs::*chat-minibuffer-line-height*
+           (clim:space-requirement-max-height space)))))
 
 (test mcclim-custom-presentation-buffers-append-system-feedback
   "Whole-buffer custom presenters still surface system feedback messages."

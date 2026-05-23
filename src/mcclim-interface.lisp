@@ -997,13 +997,94 @@ Drei/ESA command tables."
 When NIL, derive it from `*minibuffer-max-height*' and
 `*chat-minibuffer-line-height*' so logical rows and reserved space agree.")
 
+(defun basic-medium-fallback-text-size (text-style)
+  "Return an approximate pixel size for TEXT-STYLE during output replay.
+
+Native Quicklisp/Ultralisp McCLIM can ask a temporary `clim:basic-medium' for
+text metrics while replaying output records before a backend medium is bound.
+Backend-specific mediums still provide real font metrics; this fallback only
+keeps backend-independent replay/layout paths from failing during startup."
+  (let ((size (ignore-errors (clim:text-style-size text-style))))
+    (cond
+      ((realp size) (max 2 (round size)))
+      ((eq size :tiny) 8)
+      ((eq size :very-small) 10)
+      ((eq size :small) 12)
+      ((eq size :large) 18)
+      ((eq size :very-large) 20)
+      ((eq size :huge) 24)
+      (t 14))))
+
+(defun basic-medium-fallback-ascent (text-style)
+  "Return an approximate text ascent for a temporary basic medium."
+  (round (* 0.8 (basic-medium-fallback-text-size text-style))))
+
+(defun basic-medium-fallback-descent (text-style)
+  "Return an approximate text descent for a temporary basic medium."
+  (max 1 (- (basic-medium-fallback-text-size text-style)
+            (basic-medium-fallback-ascent text-style))))
+
+(defmethod clim:text-style-ascent (text-style (medium clim:basic-medium))
+  "Fallback ascent for temporary basic mediums in native McCLIM output replay."
+  (declare (ignore medium))
+  (basic-medium-fallback-ascent text-style))
+
+(defmethod clim:text-style-descent (text-style (medium clim:basic-medium))
+  "Fallback descent for temporary basic mediums in native McCLIM output replay."
+  (declare (ignore medium))
+  (basic-medium-fallback-descent text-style))
+
+(defmethod climi::text-style-character-width
+    (text-style (medium clim:basic-medium) char)
+  "Fallback character width for temporary basic mediums."
+  (declare (ignore medium char))
+  (round (* 0.6 (basic-medium-fallback-text-size text-style))))
+
+(defmethod clim:text-size ((medium clim:basic-medium) text
+                           &key text-style (start 0) end)
+  "Fallback text extent for temporary basic mediums in output replay."
+  (let* ((string (string text))
+         (end (or end (length string)))
+         (count (max 0 (- end start)))
+         (width (* count
+                   (climi::text-style-character-width text-style medium #\M)))
+         (height (+ (clim:text-style-ascent text-style medium)
+                    (clim:text-style-descent text-style medium)))
+         (baseline (clim:text-style-ascent text-style medium)))
+    (values width height width 0 baseline)))
+
 (defclass clawmacs-chat-minibuffer-pane (esa:minibuffer-pane)
   ()
   (:documentation "ESA minibuffer used for messages, command arguments, and M-x.")
   (:default-initargs
    :height 24
    :min-height 24
-   :max-height 24))
+   :max-height 24
+   :incremental-redisplay nil))
+
+(defmethod clim:handle-repaint ((pane clawmacs-chat-minibuffer-pane) region)
+  "Replay the chat minibuffer without ESA's recursive repaint trampoline.
+
+Some native McCLIM builds inherit ESA's default minibuffer repaint path, whose
+fallback display function calls `dispatch-repaint' while McCLIM already holds
+the output-history repaint lock.  Clawmacs drives minibuffer updates via frame
+redisplay, so expose events only need to replay the existing output history."
+  (clim:stream-replay pane region))
+
+(defmethod clim:compose-space ((pane clawmacs-chat-minibuffer-pane)
+                               &key width height)
+  "Return a compact minibuffer space requirement without probing a basic medium.
+
+Some native McCLIM builds compute `esa:minibuffer-pane' height by asking a
+fresh `clim:basic-medium' for font metrics before the pane has a backend
+medium.  Quicklisp/Ultralisp McCLIM may not define those metric methods, so
+native startup fails before the frame is adopted.  Clawmacs owns the chat
+minibuffer height explicitly, so this pane-specific method keeps layout stable
+and avoids the backend-independent metric probe."
+  (declare (ignore pane height))
+  (clim:make-space-requirement
+   :width (or width 900)
+   :height *chat-minibuffer-line-height*))
 
 (defun chat-frame-e2e-effective-frame (frame)
   "Return FRAME when it is a chat frame, otherwise the current application frame."

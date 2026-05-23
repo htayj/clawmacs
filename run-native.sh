@@ -87,8 +87,20 @@ export CLAWMACS_ULTRALISP_SETUP
 export CLAWMACS_SESSION_NAME=${CLAWMACS_SESSION_NAME:-"clawmacs:native-session-01"}
 export CLAWMACS_DEBUG_LOG=${CLAWMACS_DEBUG_LOG:-"$SCRIPT_DIR/debug.log"}
 
+sbcl_dynamic_space_size=${CLAWMACS_SBCL_DYNAMIC_SPACE_SIZE:-2048}
+case "$sbcl_dynamic_space_size" in
+  ''|*[!0-9]*)
+    printf '%s\n' "run-native.sh: CLAWMACS_SBCL_DYNAMIC_SPACE_SIZE must be a positive integer number of MiB" >&2
+    exit 1
+    ;;
+esac
+if [ "$sbcl_dynamic_space_size" -le 0 ]; then
+  printf '%s\n' "run-native.sh: CLAWMACS_SBCL_DYNAMIC_SPACE_SIZE must be a positive integer number of MiB" >&2
+  exit 1
+fi
+
 clean_build=${CLAWMACS_RUN_CLEAN_BUILD:-0}
 export CLAWMACS_RUN_CLEAN_BUILD="$clean_build"
 
 cd "$SCRIPT_DIR"
-exec sbcl --noinform --script scripts/run-ultralisp.lisp "$clean_build" "$@"
+exec sbcl --dynamic-space-size "$sbcl_dynamic_space_size" --noinform --script scripts/run-ultralisp.lisp "$clean_build" "$@"

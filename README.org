@@ -400,9 +400,15 @@ and GUI dependencies installed:
 ./run-native.sh
 #+end_src
 
+Native runs need SBCL, a Quicklisp-compatible setup file, OpenSSL, X11 client
+libraries, fontconfig/freetype/Xft-style font libraries, and TrueType fonts.
 The native launcher uses the Ultralisp Quicklisp-compatible distribution via
 =scripts/run-ultralisp.lisp=, so it can resolve newer Common Lisp dependencies
-without entering the Guix container.
+without entering the Guix container. It also constrains McCLIM's native
+TrueType scan to the DejaVu font bundle by default; set
+=CLAWMACS_TRUETYPE_FONT_PATH= to a compact font directory if you need an
+override. Set =CLAWMACS_SBCL_DYNAMIC_SPACE_SIZE= to adjust SBCL's heap size in
+MiB; the default is =2048=.
 
 By default, =run.sh= reuses cached ASDF/FASL build artifacts for fast startup.
 Pass =--clean-build=, or its alias =--force-clean-build=, to clear the local
