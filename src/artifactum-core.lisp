@@ -6,6 +6,7 @@
 (defvar *artifactum-index-file-name* "index.json"
   "Artifact metadata index file stored under the artifact root.")
 
+(declaim (type integer *artifactum-preview-character-limit*))
 (defvar *artifactum-preview-character-limit* 2000
   "Maximum preview text length stored in artifact metadata and context messages.")
 
@@ -24,6 +25,36 @@
     "text/csv"
     "application/json")
   "MIME types accepted by artifactum attachment ingestion.")
+
+(declaim (ftype (function (t) boolean) artifactum-blank-string-p
+                artifactum-image-mime-type-p
+                artifactum-textual-mime-type-p
+                artifactum-supported-attachment-mime-type-p)
+         (ftype (function (t) (or null string)) artifactum-normalize-string
+                artifactum-file-extension
+                artifactum-strip-xml-markup
+                artifactum-run-program-string
+                artifactum-preview-text)
+         (ftype (function (t) string) artifactum-path-string
+                artifactum-guess-mime-type
+                artifactum-sanitize-file-name
+                artifactum-collapse-whitespace)
+         (ftype (function ((or string symbol)) string) artifactum-json-key)
+         (ftype (function (list (or string symbol)) t) artifactum-json-value)
+         (ftype (function (string string string) string) artifactum-string-replace-all)
+         (ftype (function (t string) (or null string)) artifactum-zip-entry-output)
+         (ftype (function (t) list) artifactum-zip-entry-list
+                normalize-artifactum-record
+                artifactum-record-json
+                artifactum-read-index
+                artifactum-session-records)
+         (ftype (function (t list) (or null string)) artifactum-office-xml-text)
+         (ftype (function (t) integer) artifactum-file-size)
+         (ftype (function (t t) (or null list)) artifactum-find-record)
+         (ftype (function (t string) string) artifactum-generate-id)
+         (ftype (function (t string string) pathname) artifactum-store-path)
+         (ftype (function (t list) list) artifactum-upsert-record)
+         (ftype (function (t list) t) artifactum-write-index))
 
 (defun artifactum-blank-string-p (value)
   "Return true when VALUE is NIL or ASCII whitespace only."
@@ -118,23 +149,23 @@
 
 (defun artifactum-image-mime-type-p (mime-type)
   "Return true when MIME-TYPE is an image artifact."
-  (and mime-type
-       (or (alexandria:starts-with-subseq "image/" mime-type)
-           (string= mime-type "image/svg+xml"))))
+  (not (null (and mime-type
+                  (or (alexandria:starts-with-subseq "image/" mime-type)
+                      (string= mime-type "image/svg+xml"))))))
 
 (defun artifactum-textual-mime-type-p (mime-type)
   "Return true when MIME-TYPE should be read as plain text."
-  (and mime-type
-       (or (alexandria:starts-with-subseq "text/" mime-type)
-           (member mime-type
-                   '("application/json"
-                     "image/svg+xml")
-                   :test #'string=))))
+  (not (null (and mime-type
+                  (or (alexandria:starts-with-subseq "text/" mime-type)
+                      (member mime-type
+                              '("application/json"
+                                "image/svg+xml")
+                              :test #'string=))))))
 
 (defun artifactum-supported-attachment-mime-type-p (mime-type)
   "Return true when MIME-TYPE is supported by artifactum attachments."
-  (member mime-type +artifactum-supported-attachment-mime-types+
-          :test #'string=))
+  (not (null (member mime-type +artifactum-supported-attachment-mime-types+
+                     :test #'string=))))
 
 (defun artifactum-sanitize-file-name (name)
   "Return NAME as a filesystem-safe basename."

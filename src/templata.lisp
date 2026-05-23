@@ -6,20 +6,20 @@
 
 (defstruct prompt-template
   "A prompt template resource loaded from disk or registered programmatically."
-  name
-  description
-  body
+  (name nil :type (or null string))
+  (description nil :type (or null string))
+  (body nil :type (or null string))
   path
-  scope
-  package)
+  (scope nil :type (or null keyword))
+  (package nil :type (or null string)))
 
 (defstruct slash-command
   "A composer-level slash command."
-  name
-  description
-  argument-hint
+  (name nil :type (or null string))
+  (description nil :type (or null string))
+  (argument-hint nil :type (or null string))
   handler
-  package)
+  (package nil :type (or null string)))
 
 (defvar *slash-command-table* (make-hash-table :test #'equal)
   "Registry mapping normalized slash command names to SLASH-COMMAND entries.")
@@ -34,9 +34,28 @@
 (defvar *prompt-template-package-directory-name* "prompts/"
   "Package-relative prompt-template directory name.")
 
+(declaim (ftype (function (character) boolean) slash-command-whitespace-char-p)
+         (ftype (function (t) string) normalize-slash-command-name)
+         (ftype (function (string) list) parse-shellish-arguments)
+         (ftype (function (string) (values (or null string) list))
+                parse-slash-command-line)
+         (ftype (function (string string) string)
+                prompt-template-fallback-description)
+         (ftype (function (list integer &optional (or null integer)) list)
+                template-argument-slice)
+         (ftype (function (string integer list)
+                          (values (or null string) (or null integer)))
+                prompt-template-placeholder-expansion)
+         (ftype (function (string list) string) expand-prompt-template-body)
+         (ftype (function ((or null prompt-template)) string)
+                template-argument-summary)
+         (ftype (function (string (or null string) (or null string)) string)
+                slash-command-display-text))
+
 (defun slash-command-whitespace-char-p (char)
   "Return true when CHAR separates slash command tokens."
-  (member char '(#\Space #\Tab #\Newline #\Return) :test #'char=))
+  (declare (type character char))
+  (not (null (member char '(#\Space #\Tab #\Newline #\Return) :test #'char=))))
 
 (defun normalize-slash-command-name (name)
   "Normalize slash command NAME to a lowercase string without the leading slash."

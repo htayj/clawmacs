@@ -4,9 +4,11 @@
 ;;; Logical Windows
 ;;; --------------------------------------------------------------------------
 
+(declaim (type integer *clawmacs-window-counter*))
 (defvar *clawmacs-window-counter* 0
   "Counter used to assign process-local logical window ids.")
 
+(declaim (ftype (function () integer) next-clawmacs-window-id))
 (defun next-clawmacs-window-id ()
   "Return a fresh process-local logical window id."
   (incf *clawmacs-window-counter*))
@@ -28,8 +30,12 @@ pane and renders these logical windows into sub-regions of that pane, keeping
 CLIM pane layout simple while exposing Emacs-like split/delete/window cycling
 semantics."))
 
+(declaim (ftype (function (&key (:buffer t) (:id (or null integer)))
+                          clawmacs-window)
+                make-clawmacs-window))
 (defun make-clawmacs-window (&key buffer id)
   "Return a logical window displaying BUFFER."
+  (declare (type (or null integer) id))
   (make-instance 'clawmacs-window
     :id (or id (next-clawmacs-window-id))
     :buffer buffer))
@@ -43,11 +49,35 @@ KIND is :LEAF or :SPLIT.  Leaf nodes hold WINDOW.  Split nodes hold
 ORIENTATION plus FIRST and SECOND child nodes.  ORIENTATION is :VERTICAL for a
 top/bottom split and :HORIZONTAL for a left/right split, matching CLIM's
 VERTICALLY/HORIZONTALLY layout terminology."
-  kind
-  window
-  orientation
-  first
-  second)
+  (kind nil :type (or null keyword))
+  (window nil :type (or null clawmacs-window))
+  (orientation nil :type (or null keyword))
+  (first nil :type (or null clawmacs-window-node))
+  (second nil :type (or null clawmacs-window-node)))
+
+(declaim
+ (ftype (function (clawmacs-window) clawmacs-window-node)
+        make-clawmacs-window-leaf)
+ (ftype (function (keyword clawmacs-window-node clawmacs-window-node)
+                  clawmacs-window-node)
+        make-clawmacs-window-split)
+ (ftype (function (t) clawmacs-window-node) make-clawmacs-window-tree)
+ (ftype (function (t) boolean) clawmacs-window-node-leaf-p
+        clawmacs-window-node-split-p)
+ (ftype (function (t) list) clawmacs-window-tree-windows)
+ (ftype (function (t) integer) clawmacs-window-tree-count)
+ (ftype (function (t integer) (or null clawmacs-window))
+        clawmacs-window-tree-find-window)
+ (ftype (function (t integer) (or null clawmacs-window-node))
+        clawmacs-window-tree-find-node)
+ (ftype (function (t integer keyword) (or null clawmacs-window))
+        split-clawmacs-window-tree)
+ (ftype (function (t integer &key (:reverse t)) (or null clawmacs-window))
+        clawmacs-window-tree-next-window)
+ (ftype (function (t integer) (values t (or null clawmacs-window) boolean))
+        delete-clawmacs-window-from-tree
+        delete-other-clawmacs-windows)
+ (ftype (function (t list t) boolean) clawmacs-window-tree-replace-dead-buffers))
 
 (defun make-clawmacs-window-leaf (window)
   "Return a leaf node for WINDOW."
@@ -217,22 +247,28 @@ Returns true when any window buffer was changed."
 
 (defstruct clawmacs-window-layout-entry
   "A rendered grid rectangle for one logical window."
-  window
-  row
-  col
-  rows
-  cols)
+  (window nil :type (or null clawmacs-window))
+  (row nil :type (or null integer))
+  (col nil :type (or null integer))
+  (rows nil :type (or null integer))
+  (cols nil :type (or null integer)))
 
 (defstruct clawmacs-window-separator
   "A grid rectangle used as visual separation between logical windows."
-  orientation
-  row
-  col
-  rows
-  cols)
+  (orientation nil :type (or null keyword))
+  (row nil :type (or null integer))
+  (col nil :type (or null integer))
+  (rows nil :type (or null integer))
+  (cols nil :type (or null integer)))
+
+(declaim (ftype (function (integer) (values integer integer integer))
+                split-window-space)
+         (ftype (function (t integer integer) (values list list))
+                clawmacs-window-tree-layout))
 
 (defun split-window-space (size)
   "Return FIRST, SEPARATOR, and SECOND sizes for splitting SIZE cells."
+  (declare (type integer size))
   (cond
     ((<= size 1)
      (values size 0 0))
@@ -246,6 +282,7 @@ Returns true when any window buffer was changed."
 
 (defun clawmacs-window-tree-layout (tree rows cols)
   "Return layout entries and separators for TREE over ROWS by COLS cells."
+  (declare (type integer rows cols))
   (labels ((walk (node row col height width)
              (cond
                ((or (null node) (<= height 0) (<= width 0))

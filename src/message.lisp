@@ -127,12 +127,18 @@ identity, and links to adjacent messages in the buffer."))
                 :read-only-p read-only-p)))
     msg))
 
+(declaim (ftype (function (list keyword) t) message-metadata-value)
+         (ftype (function (message &rest t) message) put-message-metadata))
 (defun message-metadata-value (metadata key)
   "Return KEY's value from a message metadata alist."
+  (declare (type list metadata)
+           (type keyword key))
   (cdr (assoc key metadata :test #'eq)))
 
 (defun put-message-metadata (msg &rest pairs)
   "Set metadata PAIRS on MSG and return MSG."
+  (declare (type message msg)
+           (type list pairs))
   (let ((metadata (copy-list (message-metadata msg))))
     (loop :for (key value) :on pairs :by #'cddr
           :do (setf metadata
@@ -158,8 +164,11 @@ identity, and links to adjacent messages in the buffer."))
         :while current
         :count t))
 
+(declaim (ftype (function (message string) message) set-message-text))
 (defun set-message-text (msg text)
   "Replace MSG's lines with lines split from TEXT on newlines."
+  (declare (type message msg)
+           (type string text))
   (let* ((parts (loop :for start := 0 :then (1+ pos)
                       :for pos := (position #\Newline text :start start)
                       :collect (subseq text start (or pos (length text)))
@@ -249,9 +258,12 @@ identity, and links to adjacent messages in the buffer."))
         (message-mark-offset msg) nil)
   msg)
 
+(declaim (ftype (function (message) (values integer integer))
+                message-region-bounds))
 (defun message-region-bounds (msg)
   "Return MSG region bounds as START and END absolute offsets.
 Signals an error when no mark is active."
+  (declare (type message msg))
   (let ((mark (message-mark-absolute-offset msg)))
     (unless mark
       (error "No active region."))
@@ -338,6 +350,8 @@ Signals an error when no mark is active."
 ;;; Kill Ring
 ;;; --------------------------------------------------------------------------
 
+(declaim (type list *kill-ring*)
+         (type (integer 1 *) *kill-ring-max*))
 (defvar *kill-ring* nil
   "The global kill ring. A list of strings, most recent first.")
 
@@ -497,9 +511,11 @@ Signals an error when no mark is active."
              (length (line-content (line-prev pl)))))))
   msg)
 
+(declaim (ftype (function (character) boolean) word-char-p))
 (defun word-char-p (char)
   "Return T if CHAR is a word constituent (alphanumeric or underscore)."
-  (or (alphanumericp char) (char= char #\_)))
+  (declare (type character char))
+  (not (null (or (alphanumericp char) (char= char #\_)))))
 
 (declaim (ftype (function (message) message) message-forward-word))
 (defun message-forward-word (msg)
@@ -687,6 +703,7 @@ Killed text is pushed to the kill ring."
                     (message-insert-char msg char)))))
   msg)
 
+(declaim (type fixnum *yank-index*))
 (defvar *yank-index* 0
   "Current position in the kill ring for yank-pop cycling.")
 

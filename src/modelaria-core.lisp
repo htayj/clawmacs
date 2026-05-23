@@ -18,9 +18,25 @@
     ("gpt-5.1-codex-max" :input 1.25d0 :cached-input 0.125d0 :output 10.00d0))
   "Approximate OpenAI token prices per 1M tokens for usage reporting.")
 
+(declaim (ftype (function (&optional t) boolean) modelaria-package-active-p)
+         (ftype (function (t) boolean) modelaria-blank-string-p)
+         (ftype (function (t) (or null string)) normalize-modelaria-role-name
+                normalize-modelaria-service-tier)
+         (ftype (function (t) list) normalize-modelaria-role-set
+                normalize-modelaria-scope-config)
+         (ftype (function ((or string symbol)) string) modelaria-json-string-key)
+         (ftype (function (list string) t) modelaria-json-value)
+         (ftype (function (string) string) modelaria-role-description)
+         (ftype (function (t t t t) (values t t t)) modelaria-role-routing)
+         (ftype (function (t) double-float) service-tier-cost-multiplier)
+         (ftype (function (t t) list) modelaria-price-spec)
+         (ftype (function (list t t &key (:service-tier t))
+                          (or null double-float))
+                modelaria-estimated-usage-cost))
+
 (defun modelaria-package-active-p (&optional buffer)
   "Return true when the modelaria package is active for BUFFER."
-  (package-active-p "modelaria" :buffer buffer))
+  (not (null (package-active-p "modelaria" :buffer buffer))))
 
 (defun modelaria-blank-string-p (value)
   "Return true when VALUE is NIL or ASCII-whitespace only."

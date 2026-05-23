@@ -54,15 +54,26 @@
 
 (defstruct buffer-type
   "A registered buffer kind and its optional UI presentation hooks."
-  name
-  description
-  major-mode
-  document-p
+  (name nil :type (or null keyword))
+  (description nil :type (or null string))
+  (major-mode nil :type (or null string))
+  (document-p nil :type boolean)
   presentation-function
   input-presentation-function
   serialize-state-function
   restore-state-function
-  package)
+  (package nil :type (or null string)))
+
+(declaim (ftype (function (t) keyword) normalize-buffer-kind)
+         (ftype (function (t) string) buffer-kind-default-major-mode)
+         (ftype (function (t t) string) normalize-buffer-major-mode)
+         (ftype (function (t) (or null string)) normalize-buffer-type-package-name)
+         (ftype (function (t t) (or null function symbol))
+                normalize-buffer-type-function)
+         (ftype (function (t) (or null function symbol))
+                buffer-type-state-serializer
+                buffer-type-state-restorer)
+         (ftype (function () hash-table) make-buffer-type-registry))
 
 (defun normalize-buffer-kind (kind)
   "Normalize KIND into the keyword stored in BUFFER-KIND."
@@ -156,9 +167,9 @@ interfaces.")
 
 (defstruct buffer-input-presentation-provider
   "Package-owned input overlay presenter for an existing buffer kind."
-  kind
+  (kind nil :type (or null keyword))
   function
-  package)
+  (package nil :type (or null string)))
 
 (defvar *buffer-input-presentation-providers* nil
   "Package-owned input presentation providers for existing buffer kinds.")
@@ -644,6 +655,23 @@ Enforces the invariant that it is not read-only."
                 :major-mode resolved-major-mode)))
     (maybe-run-hook-with-args '*after-buffer-create-hook* buf)
     buf))
+
+(declaim (ftype (function (t) keyword) normalize-buffer-session-persistence-mode)
+         (ftype (function (buffer) boolean) buffer-persistent-session-p
+                buffer-ephemeral-p)
+         (ftype (function (t) keyword) normalize-buffer-queued-message-kind)
+         (ftype (function (t string &key (:timestamp t)) list)
+                make-buffer-queued-message)
+         (ftype (function (buffer) list) buffer-queued-messages
+                clear-buffer-queued-messages
+                restore-buffer-queued-messages-to-input)
+         (ftype (function (buffer) integer) buffer-queued-message-count)
+         (ftype (function (buffer) boolean) buffer-has-queued-messages-p)
+         (ftype (function (buffer t string &key (:timestamp t)) list)
+                queue-buffer-message)
+         (ftype (function (buffer) (or null list))
+                dequeue-buffer-steering-message
+                dequeue-buffer-follow-up-message))
 
 (defun normalize-buffer-session-persistence-mode (value)
   "Normalize VALUE to a supported buffer session persistence mode."

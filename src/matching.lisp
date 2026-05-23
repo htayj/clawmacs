@@ -4,10 +4,11 @@
 ;;; Minibuffer Matching
 ;;; --------------------------------------------------------------------------
 
+(declaim (ftype (function () boolean) matching-core-available-p))
 (defun matching-core-available-p ()
   "Return T when the minibuffer matching core is loaded."
-  (and (find-package '#:clawmacs/matching-core)
-       (fboundp 'clawmacs/matching-core:fuzzy-match-p)))
+  (not (null (and (find-package '#:clawmacs/matching-core)
+                  (fboundp 'clawmacs/matching-core:fuzzy-match-p)))))
 
 (declaim (ftype (function (string) list) split-query-tokens))
 (defun split-query-tokens (query)

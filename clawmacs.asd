@@ -14,7 +14,7 @@
   :version "0.1.0"
   :licence "AGPL-3.0-only"
   :depends-on ("lispi" "mcclim" "esa-mcclim" "drei-mcclim"
-               "alexandria" "drakma" "cl-json" "bordeaux-threads"
+               "coalton" "alexandria" "drakma" "cl-json" "bordeaux-threads"
                "chipz")
   :serial t
   :components ((:module "src"

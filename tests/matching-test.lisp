@@ -24,6 +24,19 @@
   (is (null (fuzzy-match-positions "" "glm-5")))
   (is (null (fuzzy-match-positions "zz" "glm-5"))))
 
+(test matching-core-exported-contracts-are-stable
+  "Direct matching-core calls preserve CL-facing sentinel and list contracts."
+  (is (equal '(0 2)
+             (clawmacs/matching-core:fuzzy-token-positions "gm" "glm-5")))
+  (is (null (clawmacs/matching-core:fuzzy-token-positions "zz" "glm-5")))
+  (is-true (clawmacs/matching-core:fuzzy-token-match-p "" "glm-5"))
+  (is-false (clawmacs/matching-core:fuzzy-token-match-p "zz" "glm-5"))
+  (is (= -1 (clawmacs/matching-core:fuzzy-token-score-or-negative-one
+             "zz" "glm-5")))
+  (is (= -1 (clawmacs/matching-core:fuzzy-score-or-negative-one
+             "zz" "glm-5")))
+  (is (= 0 (fuzzy-score "" "glm-5"))))
+
 (test fuzzy-score-preserves-ranking-contract
   "Exact, prefix, substring, early, consecutive, and boundary matches score higher."
   (is (= 0 (fuzzy-score "" "glm-5")))

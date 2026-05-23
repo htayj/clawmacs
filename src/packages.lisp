@@ -1,5 +1,5 @@
 (defpackage #:clawmacs/matching-core
-  (:use #:cl)
+  (:use #:coalton #:coalton-prelude)
   (:export
    #:split-query-tokens
    #:fuzzy-token-match-p
