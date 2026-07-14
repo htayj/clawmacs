@@ -12,12 +12,15 @@ WORKSPACE_QUICKLISP_SETUP=/workspace/.cache/home/quicklisp/setup.lisp
 WORKSPACE_XDG_CACHE=/workspace/.cache
 HOST_HOME=''
 HOST_QUICKLISP_SETUP=''
+HOST_CACHE_ROOT=''
 HOST_CONFIG_DIR=''
 RESOLVED_SSL_LIB_PATH=''
 RUNTIME_LD_LIBRARY_PATH=''
 CONTAINER_LAUNCH_DIR=/tmp
 GUIX_MANIFEST_PATH=''
 HOST_USER_HOME=${HOME:-}
+QUICKLISP_CACHE_LOCK_TIMEOUT_SECS=600
+PRESERVED_ENV_PATTERN='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_DEBUG_LOG|CLAWMACS_PROMPT_PROJECT_ROOT|CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS|CLAWMACS_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS|CLAWMACS_GUI_E2E_STABILITY_MENU_ITERATIONS|CLAWMACS_GUI_E2E_STABILITY_EXPOSE_ITERATIONS|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|RUNTIME_LD_LIBRARY_PATH'
 
 stderr() {
   printf '%s %s\n' "$LAUNCHER_PREFIX" "$*" >&2
@@ -170,6 +173,16 @@ load_quicklisp_bootstrap_env() {
   QUICKLISP_BOOTSTRAP_RETRIES='2'
 
   env_path="$SCRIPT_DIR/quicklisp-bootstrap.env"
+  if is_test_toggle_enabled CLAWMACS_TEST_QUICKLISP_ENV_PATH_SET; then
+    env_path=${CLAWMACS_TEST_QUICKLISP_ENV_PATH:-}
+    case "$env_path" in
+      "$REPO_ROOT"/.cache/launcher-test-*/quicklisp-bootstrap.env)
+        ;;
+      *)
+        fail 115 "quicklisp bootstrap pin values missing"
+        ;;
+    esac
+  fi
   if [ ! -f "$env_path" ]; then
     fail 115 "quicklisp bootstrap pin values missing"
   fi
@@ -204,8 +217,30 @@ validate_quicklisp_pin_values() {
 }
 
 set_quicklisp_runtime_env() {
-  HOST_HOME="$REPO_ROOT/.cache/home"
+  cache_relative='.cache'
+  if is_test_toggle_enabled CLAWMACS_TEST_CACHE_ROOT_SET; then
+    cache_relative=${CLAWMACS_TEST_CACHE_RELATIVE:-}
+    case "$cache_relative" in
+      .cache/launcher-test-*)
+        cache_suffix=${cache_relative#.cache/launcher-test-}
+        case "$cache_suffix" in
+          ''|*[!A-Za-z0-9._-]*)
+            fail 123 "quicklisp cache preparation failed: invalid test cache root"
+            ;;
+        esac
+        ;;
+      *)
+        fail 123 "quicklisp cache preparation failed: invalid test cache root"
+        ;;
+    esac
+  fi
+
+  HOST_CACHE_ROOT="$REPO_ROOT/$cache_relative"
+  HOST_HOME="$HOST_CACHE_ROOT/home"
   HOST_QUICKLISP_SETUP="$HOST_HOME/quicklisp/setup.lisp"
+  WORKSPACE_HOME="/workspace/$cache_relative/home"
+  WORKSPACE_QUICKLISP_SETUP="$WORKSPACE_HOME/quicklisp/setup.lisp"
+  WORKSPACE_XDG_CACHE="/workspace/$cache_relative"
   HOST_CONFIG_DIR=''
 
   mkdir -p "$HOST_HOME"
@@ -225,7 +260,7 @@ run_in_container() {
   container_script="$1"
   shift
 
-  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --share="$REPO_ROOT=/workspace" -- bash -lc "$container_script" bash "$@"
+  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --no-cwd --network --share="$REPO_ROOT=/workspace" -- bash -lc "$container_script" bash "$@"
 }
 
 probe_quicklisp_setup() {
@@ -310,6 +345,50 @@ validate_quicklisp_bootstrap() {
   if [ ! -f "$HOST_QUICKLISP_SETUP" ]; then
     fail 112 "quicklisp bootstrap failed"
   fi
+}
+
+validate_quicklisp_cache_lock_tool() {
+  if is_test_toggle_enabled CLAWMACS_TEST_MISSING_FLOCK; then
+    fail 123 "quicklisp cache preparation failed: missing flock"
+  fi
+
+  if ! command -v flock >/dev/null 2>&1; then
+    fail 123 "quicklisp cache preparation failed: missing flock"
+  fi
+}
+
+warm_quicklisp_for_payload() {
+  if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
+    return 0
+  fi
+
+  host_warmup_log="$HOST_CACHE_ROOT/quicklisp-warmup.log"
+  container_warmup_log="$WORKSPACE_XDG_CACHE/quicklisp-warmup.log"
+  rm -f "$host_warmup_log"
+  if ! run_in_container 'set -eu; cd /workspace; HOME="$1" XDG_CACHE_HOME="$2"; CL_SOURCE_REGISTRY="${GUIX_ENVIRONMENT:?missing Guix environment}/share/common-lisp/systems/"; export HOME XDG_CACHE_HOME CL_SOURCE_REGISTRY; if [ -n "$4" ]; then LD_LIBRARY_PATH="$4"; export LD_LIBRARY_PATH; else unset LD_LIBRARY_PATH; fi; sbcl --noinform --non-interactive --disable-debugger --load "$3" --load "/workspace/scripts/assert-mcclim-provenance.lisp" --eval "(push (truename \".\") asdf:*central-registry*)" --eval "(ql:quickload :clawmacs)" --eval "(quit)" >"$5" 2>&1' "$WORKSPACE_HOME" "$WORKSPACE_XDG_CACHE" "$WORKSPACE_QUICKLISP_SETUP" "$RUNTIME_LD_LIBRARY_PATH" "$container_warmup_log"; then
+    [ -f "$host_warmup_log" ] && tail -80 "$host_warmup_log" >&2
+    fail 123 "quicklisp cache preparation failed: clawmacs warmup"
+  fi
+}
+
+prepare_quicklisp_cache() {
+  validate_quicklisp_cache_lock_tool
+  # These exported runtime paths must survive the lock-owning subshell for the
+  # eventual payload launch.
+  set_quicklisp_runtime_env
+  mkdir -p "$HOST_CACHE_ROOT"
+
+  # Quicklisp installs releases through shared temporary names and is not safe
+  # for concurrent writers.  Hold one host-side advisory lock across cache
+  # validation/bootstrap and the payload dependency warmup.  Later isolated
+  # ASDF compilations can then read Quicklisp without installing releases.
+  (
+    if ! flock -x -w "$QUICKLISP_CACHE_LOCK_TIMEOUT_SECS" 9; then
+      fail 123 "quicklisp cache preparation failed: lock timeout"
+    fi
+    validate_quicklisp_bootstrap
+    warm_quicklisp_for_payload
+  ) 9>"$HOST_CACHE_ROOT/quicklisp.lock"
 }
 
 e2e_invocation_requires_credential() {
@@ -483,10 +562,10 @@ validate_runtime_openssl_path() {
   fi
 
   if [ -z "$RESOLVED_SSL_LIB_PATH" ]; then
-    resolved_ssl_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --share="$REPO_ROOT=/workspace" -- bash -lc 'ldconfig -p 2>/dev/null | while IFS= read -r line; do case "$line" in *" => "*) lib=${line%% *}; case "$lib" in libssl.so*|libcrypto.so*) printf "%s\n" "${line##* => }"; break ;; esac ;; esac; done' 2>/dev/null || true)
+    resolved_ssl_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --no-cwd --network --share="$REPO_ROOT=/workspace" -- bash -lc 'ldconfig -p 2>/dev/null | while IFS= read -r line; do case "$line" in *" => "*) lib=${line%% *}; case "$lib" in libssl.so*|libcrypto.so*) printf "%s\n" "${line##* => }"; break ;; esac ;; esac; done' 2>/dev/null || true)
 
     if [ -z "$resolved_ssl_file" ]; then
-      resolved_ssl_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --share="$REPO_ROOT=/workspace" -- bash -lc 'for lib in /run/current-system/profile/lib/libssl.so* /run/current-system/profile/lib/libcrypto.so* /run/current-system/profile/lib64/libssl.so* /run/current-system/profile/lib64/libcrypto.so* /gnu/store/*/lib/libssl.so* /gnu/store/*/lib/libcrypto.so* /gnu/store/*/lib64/libssl.so* /gnu/store/*/lib64/libcrypto.so* /lib/libssl.so* /lib/libcrypto.so* /lib64/libssl.so* /lib64/libcrypto.so* /usr/lib/libssl.so* /usr/lib/libcrypto.so* /usr/lib64/libssl.so* /usr/lib64/libcrypto.so*; do if [ -e "$lib" ]; then printf "%s\n" "$lib"; break; fi; done' 2>/dev/null || true)
+      resolved_ssl_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --no-cwd --network --share="$REPO_ROOT=/workspace" -- bash -lc 'for lib in /run/current-system/profile/lib/libssl.so* /run/current-system/profile/lib/libcrypto.so* /run/current-system/profile/lib64/libssl.so* /run/current-system/profile/lib64/libcrypto.so* /gnu/store/*/lib/libssl.so* /gnu/store/*/lib/libcrypto.so* /gnu/store/*/lib64/libssl.so* /gnu/store/*/lib64/libcrypto.so* /lib/libssl.so* /lib/libcrypto.so* /lib64/libssl.so* /lib64/libcrypto.so* /usr/lib/libssl.so* /usr/lib/libcrypto.so* /usr/lib64/libssl.so* /usr/lib64/libcrypto.so*; do if [ -e "$lib" ]; then printf "%s\n" "$lib"; break; fi; done' 2>/dev/null || true)
     fi
 
     if [ -n "$resolved_ssl_file" ]; then
@@ -508,10 +587,10 @@ validate_runtime_openssl_path() {
 resolve_runtime_libgcc_path() {
   resolved_libgcc_file=''
 
-  resolved_libgcc_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --share="$REPO_ROOT=/workspace" -- bash -lc 'ldconfig -p 2>/dev/null | while IFS= read -r line; do case "$line" in *" => "*) lib=${line%% *}; case "$lib" in libgcc_s.so*) printf "%s\n" "${line##* => }"; break ;; esac ;; esac; done' 2>/dev/null || true)
+  resolved_libgcc_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --no-cwd --network --share="$REPO_ROOT=/workspace" -- bash -lc 'ldconfig -p 2>/dev/null | while IFS= read -r line; do case "$line" in *" => "*) lib=${line%% *}; case "$lib" in libgcc_s.so*) printf "%s\n" "${line##* => }"; break ;; esac ;; esac; done' 2>/dev/null || true)
 
   if [ -z "$resolved_libgcc_file" ]; then
-    resolved_libgcc_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --share="$REPO_ROOT=/workspace" -- bash -lc 'for lib in /run/current-system/profile/lib/libgcc_s.so* /run/current-system/profile/lib64/libgcc_s.so* /gnu/store/*/lib/libgcc_s.so* /gnu/store/*/lib64/libgcc_s.so* /lib/libgcc_s.so* /lib64/libgcc_s.so* /usr/lib/libgcc_s.so* /usr/lib64/libgcc_s.so*; do if [ -e "$lib" ]; then printf "%s\n" "$lib"; break; fi; done' 2>/dev/null || true)
+    resolved_libgcc_file=$(cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --no-cwd --network --share="$REPO_ROOT=/workspace" -- bash -lc 'for lib in /run/current-system/profile/lib/libgcc_s.so* /run/current-system/profile/lib64/libgcc_s.so* /gnu/store/*/lib/libgcc_s.so* /gnu/store/*/lib64/libgcc_s.so* /lib/libgcc_s.so* /lib64/libgcc_s.so* /usr/lib/libgcc_s.so* /usr/lib64/libgcc_s.so*; do if [ -e "$lib" ]; then printf "%s\n" "$lib"; break; fi; done' 2>/dev/null || true)
   fi
 
   if [ -n "$resolved_libgcc_file" ]; then
@@ -562,11 +641,11 @@ validate_mode_binaries() {
     if ! binary_visible Xvfb CLAWMACS_TEST_HIDE_XVFB; then
       fail 114 "missing required binary: Xvfb"
     fi
-    if ! binary_visible xauth CLAWMACS_TEST_HIDE_XAUTH; then
-      fail 114 "missing required binary: xauth"
-    fi
     if ! binary_visible xdotool CLAWMACS_TEST_HIDE_XDOTOOL; then
       fail 114 "missing required binary: xdotool"
+    fi
+    if ! binary_visible setsid CLAWMACS_TEST_HIDE_SETSID; then
+      fail 114 "missing required binary: setsid"
     fi
     if ! screenshot_command_visible; then
       fail 114 "missing screenshot command: import, magick, or xwd"
@@ -586,7 +665,7 @@ run_preflight() {
   validate_override_path
   validate_runtime_openssl_path
   resolve_runtime_libgcc_path
-  validate_quicklisp_bootstrap
+  prepare_quicklisp_cache
 }
 
 clear_test_toggles() {
@@ -637,7 +716,7 @@ launch_payload() {
 
   export RUNTIME_LD_LIBRARY_PATH
   # shellcheck disable=SC2086
-  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --network --preserve='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_DEBUG_LOG|CLAWMACS_PROMPT_PROJECT_ROOT|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|RUNTIME_LD_LIBRARY_PATH' --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export CLAWMACS_IN_GUIX_CONTAINER=1 HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}" CLAWMACS_PROMPT_PROJECT_ROOT="${CLAWMACS_PROMPT_PROJECT_ROOT:-/workspace}"; if [ -n "${RUNTIME_LD_LIBRARY_PATH:-}" ]; then export LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH"; else unset LD_LIBRARY_PATH; fi; exec "$@"' bash "$@"
+  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --no-cwd --network --preserve="$PRESERVED_ENV_PATTERN" --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export CLAWMACS_IN_GUIX_CONTAINER=1 HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}" CLAWMACS_PROMPT_PROJECT_ROOT="${CLAWMACS_PROMPT_PROJECT_ROOT:-/workspace}" CL_SOURCE_REGISTRY="${GUIX_ENVIRONMENT:?missing Guix environment}/share/common-lisp/systems/"; if [ -n "${RUNTIME_LD_LIBRARY_PATH:-}" ]; then export LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH"; else unset LD_LIBRARY_PATH; fi; exec "$@"' bash "$@"
 }
 
 main() {

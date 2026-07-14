@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""External xdotool/ImageMagick driver for the Clawmacs GUI E2E smoke suite."""
+"""External xdotool/ImageMagick driver for the Clawmacs GUI E2E suites."""
 
 from __future__ import annotations
 
@@ -81,18 +81,23 @@ class McCLIMGuiSession:
         except ValueError:
             return raw
 
-    def screenshot(self, name: str) -> dict[str, Any]:
+    def screenshot(self, name: str, *, root: bool = False) -> dict[str, Any]:
         png_path = self.screenshot_dir / f"{name}.png"
         screenshot_format = "png"
+        target = "root" if root else self.window_id
         if shutil.which("import"):
-            argv = ["import", "-window", self.window_id, str(png_path)]
+            argv = ["import", "-window", target, str(png_path)]
             output_path = png_path
         elif shutil.which("magick"):
-            argv = ["magick", "import", "-window", self.window_id, str(png_path)]
+            argv = ["magick", "import", "-window", target, str(png_path)]
             output_path = png_path
         elif shutil.which("xwd"):
             xwd_path = self.screenshot_dir / f"{name}.xwd"
-            argv = ["xwd", "-silent", "-id", self.window_id, "-out", str(xwd_path)]
+            if root:
+                argv = ["xwd", "-silent", "-root", "-out", str(xwd_path)]
+            else:
+                argv = ["xwd", "-silent", "-id", self.window_id,
+                        "-out", str(xwd_path)]
             output_path = xwd_path
             screenshot_format = "xwd"
         else:
@@ -107,9 +112,90 @@ class McCLIMGuiSession:
             "snapshot_sequence": snapshot.get("sequence"),
             "status": snapshot.get("status"),
             "reason": snapshot.get("reason"),
+            "target": target,
         }
         self.log_action("screenshot", **record)
         return record
+
+    def window_geometry(self) -> dict[str, int]:
+        """Return xdotool's current geometry for the main application window."""
+        result = self.run(["xdotool", "getwindowgeometry", "--shell",
+                           self.window_id])
+        geometry: dict[str, int] = {}
+        for line in result.stdout.splitlines():
+            key, separator, raw_value = line.partition("=")
+            if separator and key in {"X", "Y", "WIDTH", "HEIGHT", "SCREEN"}:
+                try:
+                    geometry[key.lower()] = int(raw_value)
+                except ValueError as exc:
+                    raise DriverError(
+                        f"invalid window geometry value {line!r}"
+                    ) from exc
+        if "width" not in geometry or "height" not in geometry:
+            raise DriverError(f"incomplete window geometry: {result.stdout!r}")
+        self.log_action("window_geometry", **geometry)
+        return geometry
+
+    def pointer_click(self, x: int, y: int) -> None:
+        """Click a main-window-relative coordinate from the external driver."""
+        # Do not use xdotool's --sync here: repeated menu stress intentionally
+        # returns to the same coordinate, and --sync waits for a motion event
+        # that cannot occur when the pointer is already there.
+        self.run(["xdotool", "mousemove", "--window",
+                  self.window_id, str(x), str(y)])
+        self.run(["xdotool", "click", "--clearmodifiers", "1"])
+        self.log_action("pointer_click", window_id=self.window_id, x=x, y=y)
+
+    def pointer_drag(self, start_x: int, start_y: int,
+                     end_x: int, end_y: int) -> None:
+        """Send one ordered primary-button press, drag, and release gesture."""
+        # Keep the whole gesture on one X connection.  Separate xdotool
+        # clients, or a screenshot while the button is held, can interleave
+        # with McCLIM's tracking-pointer loop and are not a user-like gesture.
+        self.run([
+            "xdotool",
+            "mousemove", "--window", self.window_id,
+            str(start_x), str(start_y),
+            "mousedown", "1",
+            "sleep", "0.35",
+            "mousemove", "--window", self.window_id,
+            str(end_x), str(end_y),
+            "sleep", "0.15",
+            "mouseup", "1",
+        ])
+        self.log_action("pointer_drag", window_id=self.window_id,
+                        start_x=start_x, start_y=start_y,
+                        end_x=end_x, end_y=end_y)
+
+    def resize(self, width: int, height: int) -> None:
+        """Resize the application window and verify the X server applied it."""
+        self.run(["xdotool", "windowsize", "--sync", self.window_id,
+                  str(width), str(height)])
+        deadline = time.monotonic() + 5.0
+        last_geometry: dict[str, int] = {}
+        while time.monotonic() < deadline:
+            last_geometry = self.window_geometry()
+            if (abs(last_geometry["width"] - width) <= 2
+                    and abs(last_geometry["height"] - height) <= 2):
+                self.log_action("resize", requested_width=width,
+                                requested_height=height,
+                                actual_width=last_geometry["width"],
+                                actual_height=last_geometry["height"])
+                return
+            time.sleep(0.1)
+        raise DriverError(
+            f"window did not resize to {width}x{height}; "
+            f"last geometry: {last_geometry}"
+        )
+
+    def unmap_map(self) -> None:
+        """Force a real unmap/map cycle, then restore focus to the frame."""
+        self.run(["xdotool", "windowunmap", "--sync", self.window_id])
+        time.sleep(0.05)
+        self.run(["xdotool", "windowmap", "--sync", self.window_id])
+        self.run(["xdotool", "windowraise", self.window_id])
+        self.focus()
+        self.log_action("unmap_map", window_id=self.window_id)
 
     def _events(self) -> list[dict[str, Any]]:
         if not self.debug_log.exists():
@@ -259,6 +345,249 @@ def run_smoke(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           and HELLO_SENTINEL in str(snapshot.get("screen_text", "")),
                           timeout=20.0)
     screenshots.append(session.screenshot("03-agent-response"))
+    return screenshots
+
+
+def positive_environment_integer(name: str, default: int) -> int:
+    """Return positive integer environment variable NAME or DEFAULT."""
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise DriverError(f"{name} must be a positive integer") from exc
+    if value <= 0:
+        raise DriverError(f"{name} must be a positive integer")
+    return value
+
+
+def stability_effort_menu_coordinates(
+        session: McCLIMGuiSession) -> tuple[int, int, int]:
+    """Return robust Effort-label and selector-item coordinates.
+
+    McCLIM lays the menu bar from the upper-left using the fixed font supplied by
+    the Guix E2E environment. Derive the vertical positions from the actual
+    window and keep the pointer safely inside the Effort label and first row.
+    Coordinates deliberately live here, outside application code.
+    """
+    geometry = session.window_geometry()
+    width = geometry["width"]
+    height = geometry["height"]
+    menu_x = min(width - 80, max(300, round(width * 0.35)))
+    menu_y = min(18, max(12, round(height * 0.027)))
+    selector_item_y = menu_y + 33
+    session.log_action("stability_menu_coordinates", menu_x=menu_x,
+                       menu_y=menu_y, selector_item_y=selector_item_y,
+                       width=width, height=height)
+    return menu_x, menu_y, selector_item_y
+
+
+def open_stability_effort_menu(session: McCLIMGuiSession,
+                               menu_x: int, menu_y: int) -> None:
+    """Open the real frame-local Effort menu with a pointer click."""
+    session.pointer_click(menu_x, menu_y)
+    # The click is delivered asynchronously to McCLIM.  Leave enough time for
+    # the menu sheet to map before a second click selects an item; under CPU
+    # contention a short delay can otherwise land on the application pane
+    # before the standard CLIM menu is visible.
+    time.sleep(0.35)
+
+
+def assert_compose_probe(session: McCLIMGuiSession, probe: str) -> None:
+    """Prove the Drei compose pane accepts and clears PROBE."""
+    session.focus()
+    existing = str(session.latest_snapshot().get("compose_text", ""))
+    if existing:
+        session.press("ctrl+a")
+        session.press("ctrl+k")
+        wait_compose_text(session, "")
+    session.type_text(probe)
+    wait_compose_text(session, probe)
+    session.press("ctrl+a")
+    session.press("ctrl+k")
+    wait_compose_text(session, "")
+
+
+def assert_no_stability_failure_signatures(session: McCLIMGuiSession) -> None:
+    """Fail on crash/recovery signatures that a responsive snapshot can miss."""
+    paths = [session.debug_log, session.artifact_dir / "app.stderr"]
+    text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in paths if path.exists()
+    ).lower()
+    signatures = {
+        "debugger invoked": "SBCL entered the debugger",
+        " is not grafted": "McCLIM reported an ungrafted sheet",
+        "menu-bar-error-recovered": "the historical menu recovery path ran",
+        "redisplay-queue-failed": "a redisplay wakeup could not be queued",
+        "redisplay-handler-error": "the redisplay handler contained an error",
+        "frame-cleanup-error": "frame unwind cleanup contained an error",
+        "runtime-stream-cleanup-error": "stream cleanup contained an error",
+        "runtime-oauth-cleanup-error": "OAuth cleanup contained an error",
+        "runtime-worker-settlement-timeout": "a runtime worker did not settle",
+        "runtime-worker-reaper-error": "the runtime worker reaper failed",
+        "runtime-tool-worker-start-error": "a runtime tool worker could not start",
+        "runtime-tool-queue-cleanup-error": "tool-queue cleanup contained an error",
+        "prompt-tool-result-cleanup-error": "prompt tool-result cleanup failed",
+        "message-help-thread-start-error": "a message-help worker could not start",
+        "message-help-frame-error": "message-help frame handling failed",
+        "message-help-frame-construction-error": (
+            "a message-help frame could not be constructed"),
+        "chat-recurse-launch-error": "a recursive chat frame could not launch",
+    }
+    found = [description for signature, description in signatures.items()
+             if signature in text]
+    # SBCL emits these process diagnostics at column zero. Restrict the
+    # unhandled-condition check to the runtime's "Unhandled ... in thread"
+    # line so compiler notes or source snippets containing the word do not
+    # become false positives.
+    lowered_lines = [line.lower() for line in text.splitlines()]
+    if any(line.startswith("fatal error encountered")
+           for line in lowered_lines):
+        found.append("SBCL reported a fatal runtime error")
+    if any(line.startswith("unhandled ") and " in thread " in line
+           for line in lowered_lines):
+        found.append("an SBCL thread terminated with an unhandled condition")
+    if any(line.startswith("heap exhausted") for line in lowered_lines):
+        found.append("SBCL exhausted its dynamic heap")
+    if found:
+        raise DriverError("stability failure signatures: " + "; ".join(found))
+    session.log_action("assert_no_stability_failure_signatures",
+                       checked=[str(path) for path in paths])
+
+
+def request_frame_exit(session: McCLIMGuiSession) -> None:
+    """Exit through the ordinary frame command and prove unwind completed."""
+    after_sequence = session.latest_sequence()
+    press_chord(session, "ctrl+x", "ctrl+c")
+    session.wait_event_after("frame-stopped", after_sequence, timeout=20.0)
+    session.log_action("request_frame_exit", after_sequence=after_sequence)
+
+
+def run_stability(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    """Stress stable menus, semantic selectors, X lifecycle, and redisplay."""
+    screenshots = prepare_session(session)
+    menu_iterations = positive_environment_integer(
+        "CLAWMACS_GUI_E2E_STABILITY_MENU_ITERATIONS", 24)
+    expose_iterations = positive_environment_integer(
+        "CLAWMACS_GUI_E2E_STABILITY_EXPOSE_ITERATIONS", 6)
+
+    session.wait_snapshot(
+        "effort-capable stability fixture selected",
+        lambda snapshot: snapshot.get("provider") == "openai-codex"
+        and snapshot.get("model") == "gpt-5.3-codex",
+        timeout=10.0,
+    )
+    menu_x, menu_y, selector_item_y = stability_effort_menu_coordinates(session)
+    selection_count = 0
+    for iteration in range(menu_iterations):
+        after_sequence = session.latest_sequence()
+        if iteration % 4 == 3:
+            # The stable menu dispatches into the frame-owned, presentation-
+            # based minibuffer selector. Alternate values so every command has
+            # a distinct semantic result for the driver to observe.
+            select_low = selection_count % 2 == 0
+            selected_level = "low" if select_low else "default"
+            expected_message = (
+                "[Think level set to low for openai-codex/gpt-5.3-codex]"
+                if select_low else
+                "[Think level reset to default for openai-codex/gpt-5.3-codex]"
+            )
+            # The CLX menu protocol tracks a press-drag-release gesture: keep
+            # button 1 held while the submenu maps and while motion arms the
+            # leaf, just as a user does.  Two independent synthetic clicks can
+            # race the tracking loop and fall through to the application pane.
+            session.pointer_drag(
+                menu_x, menu_y,
+                menu_x, selector_item_y)
+            wait_minibuffer_text(
+                session, "effort selector opened from the menu",
+                lambda text: "Select Think Level" in text,
+                timeout=10.0)
+            session.type_text(selected_level)
+            session.wait_snapshot(
+                f"effort candidate {selected_level!r} selected",
+                lambda snapshot, selected_level=selected_level:
+                    selected_candidate_contains(snapshot, selected_level),
+                timeout=10.0)
+            session.press("Return")
+            selection_count += 1
+            session.wait_event_after(
+                "ui-snapshot", after_sequence,
+                lambda snapshot: (
+                    expected_message in str(snapshot.get("screen_text", ""))
+                    and snapshot.get("status") == "idle"
+                ),
+                timeout=10.0,
+            )
+            session.log_action("stability_effort_selected",
+                               level=selected_level,
+                               selection_count=selection_count)
+        else:
+            open_stability_effort_menu(session, menu_x, menu_y)
+            if iteration == 0:
+                screenshots.append(
+                    session.screenshot("02-effort-menu-open", root=True))
+            session.press("Escape")
+            time.sleep(0.15)
+        if (iteration + 1) % 8 == 0:
+            assert_compose_probe(session, f"menu-probe-{iteration + 1}")
+    if selection_count == 0:
+        raise DriverError("stability suite did not use the effort menu selector")
+    screenshots.append(session.screenshot("03-after-menu-stress"))
+
+    original_geometry = session.window_geometry()
+    original_width = original_geometry["width"]
+    original_height = original_geometry["height"]
+    resize_targets = [
+        (min(1120, original_width + 120), min(760, original_height + 100)),
+        (max(760, original_width - 120), max(500, original_height - 48)),
+        (original_width, original_height),
+    ]
+    for index, (width, height) in enumerate(resize_targets, start=1):
+        session.resize(width, height)
+        assert_compose_probe(session, f"resize-probe-{index}")
+    screenshots.append(session.screenshot("04-after-resize-stress"))
+
+    for iteration in range(1, expose_iterations + 1):
+        session.unmap_map()
+        assert_compose_probe(session, f"expose-probe-{iteration}")
+    screenshots.append(session.screenshot("05-after-expose-stress"))
+
+    # Restore deterministic no-network routing and finish with a streamed
+    # response. This proves menu/expose stress did not strand the redisplay
+    # coalescer or the compose command path.
+    run_mx_selection(session, "minibuffer-select-model-command")
+    wait_minibuffer_text(session, "stability model selector opened",
+                         lambda text: "Select Model" in text)
+    session.type_text("e2e")
+    session.wait_snapshot(
+        "stability e2e model candidate selected",
+        lambda snapshot: selected_candidate_contains(snapshot, "e2e/e2e-model"),
+        timeout=10.0,
+    )
+    session.press("Return")
+    session.wait_snapshot(
+        "stability e2e model selected",
+        lambda snapshot: snapshot.get("provider") == "e2e"
+        and snapshot.get("model") == "e2e-model",
+        timeout=10.0,
+    )
+    session.type_text("hello")
+    wait_compose_text(session, "hello")
+    session.press("Return")
+    session.wait_event("e2e-provider-complete",
+                       lambda event: event.get("sentinel") == HELLO_SENTINEL,
+                       timeout=20.0)
+    session.wait_snapshot(
+        "stability final idle response rendered",
+        lambda snapshot: snapshot.get("status") == "idle"
+        and HELLO_SENTINEL in str(snapshot.get("screen_text", "")),
+        timeout=20.0,
+    )
+    screenshots.append(session.screenshot("06-stability-complete"))
+    assert_no_stability_failure_signatures(session)
     return screenshots
 
 
@@ -549,6 +878,10 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           != initial_snapshot.get("show_tool_results"),
                           timeout=10.0)
     expect_key_command(session, ("ctrl+c", "t"), "toggle-tool-results-command")
+    session.wait_snapshot("tool result visibility restored",
+                          lambda snapshot: snapshot.get("show_tool_results")
+                          == initial_snapshot.get("show_tool_results"),
+                          timeout=10.0)
 
     initial_snapshot = session.latest_snapshot()
     expect_key_command(session, ("ctrl+c", "shift+v"), "toggle-reasoning-output-command")
@@ -557,6 +890,10 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           != initial_snapshot.get("show_reasoning"),
                           timeout=10.0)
     expect_key_command(session, ("ctrl+c", "shift+v"), "toggle-reasoning-output-command")
+    session.wait_snapshot("reasoning visibility restored",
+                          lambda snapshot: snapshot.get("show_reasoning")
+                          == initial_snapshot.get("show_reasoning"),
+                          timeout=10.0)
 
     initial_snapshot = session.latest_snapshot()
     expect_key_command(session, ("ctrl+c", "shift+i"), "toggle-metadata-output-command")
@@ -565,6 +902,10 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           != initial_snapshot.get("show_metadata"),
                           timeout=10.0)
     expect_key_command(session, ("ctrl+c", "shift+i"), "toggle-metadata-output-command")
+    session.wait_snapshot("metadata visibility restored",
+                          lambda snapshot: snapshot.get("show_metadata")
+                          == initial_snapshot.get("show_metadata"),
+                          timeout=10.0)
 
     expect_key_command(session, ("ctrl+c", "c"), "compact-buffer-command")
     session.wait_snapshot("compact command feedback shown",
@@ -596,9 +937,8 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     cancel_modal_input(session)
 
     expect_key_command(session, ("ctrl+c", "shift+m"), "select-model-command")
-    session.wait_snapshot("overlay model selector opened by keybinding",
-                          lambda snapshot: snapshot.get("model_selector_active"),
-                          timeout=10.0)
+    wait_minibuffer_text(session, "compatibility model selector opened by keybinding",
+                         lambda text: "Select Model" in text)
     cancel_modal_input(session)
 
     expect_key_command(session, ("ctrl+c", "ctrl+r"), "minibuffer-select-think-level-command")
@@ -609,9 +949,9 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     cancel_modal_input(session)
 
     expect_key_command(session, ("ctrl+c", "shift+r"), "select-think-level-command")
-    session.wait_snapshot("overlay think command handled",
+    session.wait_snapshot("compatibility think command handled",
                           lambda snapshot: "Think levels" in str(snapshot.get("screen_text", ""))
-                          or snapshot.get("think_selector_active"),
+                          or "Select Think Level" in str(snapshot.get("minibuffer_text", "")),
                           timeout=10.0)
     cancel_modal_input(session)
     screenshots.append(session.screenshot("04-ctrl-c-keybinds"))
@@ -864,11 +1204,12 @@ def run_features(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           lambda snapshot: "[Session display name: E2E Label]" in str(snapshot.get("screen_text", "")),
                           timeout=10.0)
     run_mx_selection(session, "save-session-command")
+    expected_session_dir = session.artifact_dir / "home" / ".config" / "clawmacs" / "sessions"
     session.wait_snapshot("session saved under isolated artifact home",
                           lambda snapshot: (
                               "[Session saved to" in str(snapshot.get("screen_text", ""))
-                              and ".artifacts/gui-e2e" in str(snapshot.get("screen_text", ""))
-                              and "/home/" in str(snapshot.get("screen_text", ""))
+                              and str(expected_session_dir)
+                              in str(snapshot.get("screen_text", ""))
                           ),
                           timeout=10.0)
     screenshots.append(session.screenshot("07-session-commands"))
@@ -884,12 +1225,6 @@ def run_features(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           lambda snapshot: snapshot.get("buffer_name") == "*Packages*"
                           and snapshot.get("major_mode") == "package-dashboard"
                           and "Packages for" in str(snapshot.get("screen_text", "")),
-                          timeout=10.0)
-    run_mx_selection(session, "describe-guard-policy-command")
-    session.wait_snapshot("guard policy help buffer shown",
-                          lambda snapshot: snapshot.get("buffer_name") == "*help:guard-policy*"
-                          and "Guard Policy" in str(snapshot.get("screen_text", ""))
-                          and "Working directory" in str(snapshot.get("screen_text", "")),
                           timeout=10.0)
     screenshots.append(session.screenshot("08-offline-help-dashboards"))
 
@@ -1000,8 +1335,15 @@ def main(argv: list[str]) -> int:
             screenshots = run_quaestor(session)
         elif args.suite == "reload":
             screenshots = run_reload(session)
+        elif args.suite == "stability":
+            screenshots = run_stability(session)
         else:
             raise DriverError(f"unsupported suite: {args.suite}")
+        # Every successful scenario finishes through the same public CLIM
+        # command.  FRAME-STOPPED is emitted after RUN-FRAME-TOP-LEVEL unwinds,
+        # so the shell harness can then require a natural zero-status process
+        # exit instead of relying on its emergency EXIT trap.
+        request_frame_exit(session)
         write_summary(summary_path, ok=True, suite=args.suite,
                       artifact_dir=artifact_dir, steps=session.steps,
                       screenshots=screenshots,

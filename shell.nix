@@ -8,6 +8,7 @@ pkgs.mkShell {
     cacert
     bash
     coreutils
+    util-linux
     findutils
     gnugrep
     dejavu_fonts

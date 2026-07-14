@@ -30,6 +30,7 @@
     "nss-certs"
     "bash"
     "coreutils"
+    "util-linux"
     "findutils"
     "grep"
     "git"

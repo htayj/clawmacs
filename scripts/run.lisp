@@ -8,6 +8,7 @@
     (unless (and setup (plusp (length setup)))
       (error "Missing CLAWMACS_QUICKLISP_SETUP"))
     (load setup))
+  (load "scripts/assert-mcclim-provenance.lisp" :verbose nil :print nil)
   (clawmacs/build-cache:maybe-clean-build-cache
    :environment-variable "CLAWMACS_RUN_CLEAN_BUILD")
   (push (truename ".") asdf:*central-registry*)
