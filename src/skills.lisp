@@ -901,7 +901,7 @@ Each entry is a SKILL-ROOT.")
       (format s "- If the user names a skill with `$SkillName` or the task clearly matches a skill description, use that skill for the turn.~%")
       (format s "- Do not carry skills across turns unless re-mentioned.~%")
       (format s "- Read only the needed parts of `SKILL.md` and referenced files. Resolve relative paths from the skill directory.~%")
-      (format s "- Prefer skill scripts and assets as references; do not assume they grant new permissions.~%")
+      (format s "- Prefer skill scripts and assets as references; do not assume they expose or execute new tools.~%")
       (format s "- If a skill cannot be read or applied cleanly, say so briefly and continue with the best fallback.~%")
       (format s "</skills_instructions>"))))
 

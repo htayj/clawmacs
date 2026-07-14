@@ -4,8 +4,12 @@
 ;;; Configuration
 ;;; --------------------------------------------------------------------------
 
-(defvar *sandbox-root* nil
-  "When non-nil, restricts file operations to this directory subtree.")
+(defvar *tool-working-directory* nil
+  "Default directory used to resolve relative tool paths.
+
+This is a convenience base, not a security boundary.  Absolute paths, parent
+components, and symlink traversal retain the authority of the surrounding
+process.  Applications should bind this special per tool invocation.")
 
 (defvar *file-read-default-limit* 2000
   "Default maximum lines returned by the read tool.")
@@ -28,7 +32,7 @@
   "Directory names skipped by find and grep traversal.")
 
 (defvar *diff-display-max-lines* 40
-  "Maximum diff lines shown in approval displays.")
+  "Maximum diff lines shown in compact edit summaries.")
 
 (defvar *lisp-eval-default-package* "CL-USER"
   "Default package used by lisp_eval when :package is omitted.")
@@ -55,11 +59,6 @@
 (defun tool-error-result-data (condition)
   "Return a Lisp data payload string for a failed tool execution."
   (lisp-data-string (list :error (format nil "~A" condition))))
-
-(defun tool-denied-result-data (reason)
-  "Return a Lisp data payload string for a denied tool execution."
-  (lisp-data-string (list :denied t
-                          :reason (or reason "User denied"))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Tool Argument Helpers
@@ -320,25 +319,19 @@
              (getf diagnostic :position))))
   text)
 
-(defun validate-sandbox-path (path)
-  "Validate that PATH is within *SANDBOX-ROOT*. Returns the resolved pathname.
-Signals an error if the path escapes the sandbox.
-Works for both existing and not-yet-existing files."
-  (let* ((sandbox (or *sandbox-root* (truename ".")))
-         (resolved (merge-pathnames (pathname path) sandbox))
-         (dir (make-pathname :directory (pathname-directory resolved)
-                             :device (pathname-device resolved)))
-         (dir-str (namestring (if (probe-file dir)
-                                  (truename dir)
-                                  dir)))
-         (sandbox-str (namestring sandbox)))
-    (unless (string-prefix-p sandbox-str dir-str)
-      (error "Path ~A is outside the sandbox (~A)" path sandbox-str))
-    resolved))
+(defun tool-working-directory-pathname ()
+  "Return the directory used to resolve relative tool paths."
+  (uiop:ensure-directory-pathname
+   (or *tool-working-directory* (truename "."))))
 
-(defun sandbox-root-pathname ()
-  "Return the effective sandbox root as a directory pathname."
-  (uiop:ensure-directory-pathname (or *sandbox-root* (truename "."))))
+(defun resolve-tool-path (path)
+  "Resolve PATH against *TOOL-WORKING-DIRECTORY* without containment checks.
+
+Absolute paths remain absolute.  Relative paths may contain parent components,
+and both existing and not-yet-existing targets are accepted."
+  (unless path
+    (error "path is required"))
+  (merge-pathnames (pathname path) (tool-working-directory-pathname)))
 
 (defun sort-pathnames (pathnames)
   "Return PATHNAMES sorted by namestring."
@@ -351,26 +344,24 @@ Works for both existing and not-yet-existing files."
     (member name *search-ignored-directory-names* :test #'string=)))
 
 (defun resolve-search-root (path)
-  "Resolve PATH to an existing file or directory inside the sandbox."
+  "Resolve PATH to an existing file or directory."
   (let* ((resolved (if (or (null path)
                            (and (stringp path)
                                 (or (string= path "")
                                     (string= path "."))))
-                       (sandbox-root-pathname)
-                       (validate-sandbox-path path)))
+                       (tool-working-directory-pathname)
+                       (resolve-tool-path path)))
          (directory (uiop:directory-exists-p resolved))
          (file (and (null directory) (probe-file resolved))))
     (or directory
         file
         (error "Path not found: ~A" (or path ".")))))
 
-(defun sandbox-relative-namestring (pathname)
-  "Return PATHNAME relative to the effective sandbox root when possible."
-  (let* ((root (namestring (sandbox-root-pathname)))
-         (full (namestring pathname)))
-    (if (string-prefix-p root full)
-        (subseq full (length root))
-        full)))
+(defun tool-relative-namestring (pathname)
+  "Return a display name relative to the tool working directory when possible."
+  (handler-case
+      (enough-namestring pathname (tool-working-directory-pathname))
+    (error () (namestring pathname))))
 
 (defun pathname-file-name (pathname)
   "Return PATHNAME's filename component as a string."
@@ -431,7 +422,7 @@ Works for both existing and not-yet-existing files."
 
 (defun file-pattern-match-p (pattern pathname &key ignore-case)
   "Return true when PATTERN matches PATHNAME's relative path or filename."
-  (let ((relative (sandbox-relative-namestring pathname))
+  (let ((relative (tool-relative-namestring pathname))
         (name (pathname-file-name pathname)))
     (or (pattern-match-p pattern relative :ignore-case ignore-case)
         (pattern-match-p pattern name :ignore-case ignore-case))))
@@ -530,7 +521,7 @@ Works for both existing and not-yet-existing files."
 ;;; --------------------------------------------------------------------------
 
 (defun execute-read (args)
-  "Read a file within the sandbox and return plain text contents."
+  "Read a file and return plain text contents."
   (let* ((path (tool-arg args :path))
          (offset (or (tool-arg args :offset) 1))
          (limit (or (tool-arg args :limit) *file-read-default-limit*)))
@@ -540,7 +531,7 @@ Works for both existing and not-yet-existing files."
       (error "offset must be a positive 1-indexed line number"))
     (unless (and (integerp limit) (plusp limit))
       (error "limit must be a positive number of lines"))
-    (let ((resolved (validate-sandbox-path path)))
+    (let ((resolved (resolve-tool-path path)))
       (unless (probe-file resolved)
         (error "File not found: ~A" path))
       (let* ((content (uiop:read-file-string resolved))
@@ -563,7 +554,7 @@ Works for both existing and not-yet-existing files."
               result))))))
 
 (defun execute-find (args)
-  "Search for files by name or glob pattern within the sandbox."
+  "Search for files by name or glob pattern."
   (let* ((pattern (tool-arg args :pattern :query))
          (path (tool-arg args :path))
          (limit (or (tool-arg args :limit) *find-default-limit*))
@@ -579,7 +570,7 @@ Works for both existing and not-yet-existing files."
        root
        (lambda (file)
          (when (file-pattern-match-p pattern file :ignore-case ignore-case)
-           (push (sandbox-relative-namestring file) matches)
+           (push (tool-relative-namestring file) matches)
            (when (>= (length matches) limit)
              (setf truncated t)
              :stop))))
@@ -597,7 +588,7 @@ Works for both existing and not-yet-existing files."
          (format nil "~{~A~^~%~}" matches))))))
 
 (defun execute-grep (args)
-  "Search file contents for a literal pattern within the sandbox."
+  "Search file contents for a literal pattern."
   (let* ((pattern (tool-arg args :pattern :query))
          (path (tool-arg args :path))
          (glob (tool-arg args :glob))
@@ -625,7 +616,7 @@ Works for both existing and not-yet-existing files."
                                              #'char-equal
                                              #'char=))
                        :do (push (format nil "~A:~D:~A"
-                                         (sandbox-relative-namestring file)
+                                         (tool-relative-namestring file)
                                          line-number
                                          (truncate-grep-line line))
                                  matches)
@@ -646,7 +637,7 @@ Works for both existing and not-yet-existing files."
          (format nil "~{~A~^~%~}" matches))))))
 
 (defun execute-write (args)
-  "Create or overwrite a file within the sandbox and return plain text."
+  "Create or overwrite a file and return plain text."
   (let ((path (tool-arg args :path))
         (content (tool-arg args :content)))
     (unless path
@@ -654,7 +645,7 @@ Works for both existing and not-yet-existing files."
     (when (null content)
       (error "content parameter is required"))
     (assert-balanced-parentheses content "write")
-    (let ((resolved (validate-sandbox-path path)))
+    (let ((resolved (resolve-tool-path path)))
       (ensure-directories-exist resolved)
       (with-open-file (s resolved
                          :direction :output
@@ -665,22 +656,6 @@ Works for both existing and not-yet-existing files."
       (format nil "Successfully wrote ~D bytes to ~A"
               (utf-8-byte-length content)
               path))))
-
-(defun file-write-approval-display (args)
-  "Approval display for write: shows what will be created or overwritten."
-  (handler-case
-      (let* ((path (tool-arg args :path))
-             (new-content (tool-arg args :content))
-             (sandbox (or *sandbox-root* (truename ".")))
-             (resolved (merge-pathnames (pathname path) sandbox)))
-        (when path
-          (if (probe-file resolved)
-              (compute-simple-diff (uiop:read-file-string resolved)
-                                   (or new-content ""))
-              (format nil "--- CREATING new file: ~A ---~%~{+~A~^~%~}"
-                      path
-                      (split-lines (or new-content ""))))))
-    (error () nil)))
 
 (defun execute-edit (args)
   "Edit a file by replacing one exact occurrence of :old-text with :new-text."
@@ -694,7 +669,7 @@ Works for both existing and not-yet-existing files."
       (error ":old-text parameter is required and must not be empty"))
     (when (null new-text)
       (error ":new-text parameter is required (use empty string to delete)"))
-    (let ((resolved (validate-sandbox-path path)))
+    (let ((resolved (resolve-tool-path path)))
       (unless (probe-file resolved)
         (error "File not found: ~A" path))
       (let* ((content (uiop:read-file-string resolved))
@@ -722,26 +697,6 @@ Works for both existing and not-yet-existing files."
                   path
                   diff))))))
 
-(defun file-edit-approval-display (args)
-  "Approval display for edit: shows diff of the replacement."
-  (handler-case
-      (let* ((path (tool-arg args :path))
-             (old-text (tool-arg args :old-text :oldtext :old--text))
-             (new-text (tool-arg args :new-text :newtext :new--text))
-             (sandbox (or *sandbox-root* (truename ".")))
-             (resolved (merge-pathnames (pathname path) sandbox)))
-        (when (and path old-text new-text (probe-file resolved))
-          (let* ((content (uiop:read-file-string resolved))
-                 (pos (search old-text content)))
-            (when pos
-              (let ((new-content (concatenate 'string
-                                              (subseq content 0 pos)
-                                              new-text
-                                              (subseq content (+ pos (length old-text))))))
-                (compute-simple-diff content new-content))))))
-    (error () nil)))
-
-;;; --------------------------------------------------------------------------
 ;;; Lisp Eval Tool
 ;;; --------------------------------------------------------------------------
 
@@ -1076,48 +1031,46 @@ Works for both existing and not-yet-existing files."
    (list
     :name "read"
     :description
-    "Read the contents of a text file within the sandbox. Output is truncated to 2000 lines by default; use offset and limit to continue through large files."
+    "Read the contents of a text file. Relative paths use the tool working directory. Output is truncated to 2000 lines by default; use offset and limit to continue through large files."
     :schema
     `((:type . "object")
       (:properties
        . (("path" . ((:type . "string")
-                     (:description . "Lisp data :path, relative to the sandbox or absolute within it.")))
+                     (:description . "Lisp data :path, relative to the tool working directory or absolute.")))
           ("offset" . ((:type . "integer")
                        (:description . "Lisp data :offset, the 1-indexed line number to start reading from.")))
           ("limit" . ((:type . "integer")
                       (:description . "Lisp data :limit, the maximum number of lines to read.")))))
       (:required . #("path")))
-   :permission :agent-allowed
    :execute-fn #'execute-read)
    (list
     :name "find"
     :description
-    "Search for files by name or glob pattern within the sandbox. Returns matching file paths relative to the sandbox."
+    "Search for files by name or glob pattern. Returns paths relative to the tool working directory when possible."
     :schema
     `((:type . "object")
       (:properties
        . (("pattern" . ((:type . "string")
                         (:description . "Lisp data :pattern, a filename substring or wildcard pattern such as *.lisp or src/*.lisp.")))
           ("path" . ((:type . "string")
-                     (:description . "Lisp data :path, the directory or file to search. Default: sandbox root.")))
+                     (:description . "Lisp data :path, the directory or file to search. Default: tool working directory.")))
           ("limit" . ((:type . "integer")
                       (:description . "Lisp data :limit, the maximum number of file paths to return.")))
           ("ignore-case" . ((:type . "boolean")
                             (:description . "Lisp data :ignore-case, true for case-insensitive matching.")))))
       (:required . #("pattern")))
-    :permission :agent-allowed
     :execute-fn #'execute-find)
    (list
     :name "grep"
     :description
-    "Search file contents for a literal pattern within the sandbox. Returns matching lines with file paths and line numbers."
+    "Search file contents for a literal pattern. Returns matching lines with file paths and line numbers."
     :schema
     `((:type . "object")
       (:properties
        . (("pattern" . ((:type . "string")
                         (:description . "Lisp data :pattern, the literal text to search for.")))
           ("path" . ((:type . "string")
-                     (:description . "Lisp data :path, the directory or file to search. Default: sandbox root.")))
+                     (:description . "Lisp data :path, the directory or file to search. Default: tool working directory.")))
           ("glob" . ((:type . "string")
                      (:description . "Lisp data :glob, optional wildcard pattern limiting searched files, such as *.lisp.")))
           ("ignore-case" . ((:type . "boolean")
@@ -1125,37 +1078,32 @@ Works for both existing and not-yet-existing files."
           ("limit" . ((:type . "integer")
                       (:description . "Lisp data :limit, the maximum number of matching lines to return.")))))
       (:required . #("pattern")))
-    :permission :agent-allowed
     :execute-fn #'execute-grep)
    (list
     :name "write"
     :description
-    "Create or overwrite a text file within the sandbox. Parent directories are created automatically."
+    "Create or overwrite a text file. Relative paths use the tool working directory. Parent directories are created automatically."
     :schema
     `((:type . "object")
       (:properties
        . (("path" . ((:type . "string")
-                     (:description . "Lisp data :path, relative to the sandbox or absolute within it.")))
+                     (:description . "Lisp data :path, relative to the tool working directory or absolute.")))
           ("content" . ((:type . "string")
                         (:description . "Lisp data :content, the complete file content to write. Parentheses must be balanced.")))))
       (:required . #("path" "content")))
-    :permission :agent-allowed
-    :execute-fn #'execute-write
-    :approval-display-fn #'file-write-approval-display)
+    :execute-fn #'execute-write)
    (list
     :name "edit"
     :description
-    "Edit a text file within the sandbox by replacing one exact :old-text occurrence with :new-text."
+    "Edit a text file by replacing one exact :old-text occurrence with :new-text."
     :schema
     `((:type . "object")
       (:properties
        . (("path" . ((:type . "string")
-                     (:description . "Lisp data :path, relative to the sandbox or absolute within it.")))
+                     (:description . "Lisp data :path, relative to the tool working directory or absolute.")))
           ("old-text" . ((:type . "string")
                          (:description . "Lisp data :old-text, the exact text to find and replace. Must occur exactly once.")))
           ("new-text" . ((:type . "string")
                          (:description . "Lisp data :new-text, the replacement text. Use an empty string to delete :old-text. The resulting file's parentheses must be balanced.")))))
       (:required . #("path" "old-text" "new-text")))
-    :permission :agent-allowed
-    :execute-fn #'execute-edit
-    :approval-display-fn #'file-edit-approval-display)))
+    :execute-fn #'execute-edit)))

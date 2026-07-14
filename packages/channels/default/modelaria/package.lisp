@@ -243,7 +243,6 @@
 (deftool modelaria-role-status-tool
   :name "modelaria_role_status"
   :description "Return the current buffer's effective model role, role set, routing, service tier, and usage summary."
-  :permission :agent-allowed
   :args ())
 
 (defun modelaria-session-usage-tool (_args)
@@ -258,7 +257,6 @@
 (deftool modelaria-session-usage-tool
   :name "modelaria_session_usage"
   :description "Return the current buffer's aggregate token and cache usage."
-  :permission :agent-allowed
   :args ())
 
 (defun modelaria-clear-next-turn-role-after-send (_buffer _input _result)

@@ -38,6 +38,25 @@
   target-old-text
   applied-p)
 
+(defstruct (project-buffer-effect
+            (:constructor make-project-buffer-effect
+                (operation project-name path
+                 &key new-path text dirty-p original-text)))
+  "Immutable frame-process synchronization after a project file mutation."
+  (operation :synchronize :type keyword :read-only t)
+  (project-name "" :type string :read-only t)
+  (path "" :type string :read-only t)
+  (new-path nil :type (or null string) :read-only t)
+  (text nil :type (or null string) :read-only t)
+  (dirty-p nil :type boolean :read-only t)
+  (original-text nil :type (or null string) :read-only t))
+
+;; TOOLS.LISP initializes the process value later in serial ASDF order.
+(defvar *tool-effect-recorder*)
+
+(defvar *project-buffer-effect-collector* nil
+  "Transaction-local callback collecting project buffer effects until commit.")
+
 (defvar *project-definitions-directory*
   (merge-pathnames #P".clawmacs.projects.d/" (user-homedir-pathname))
   "Directory containing inert project definition manifests.")
@@ -45,11 +64,95 @@
 (defvar *project-registry* (make-hash-table :test #'equal)
   "Project registry keyed by normalized project name.")
 
+(defvar *process-project-registry* *project-registry*
+  "Process-global project registry, distinct from dynamic test bindings.")
+
+(defvar *project-registry-lock*
+  (bt:make-lock "clawmacs project registry")
+  "Lock guarding bounded access to the process-global project registry.")
+
+(defun call-with-project-registry-lock
+    (function &optional (table *project-registry*))
+  "Call FUNCTION under the project lock when TABLE is process-global.
+
+Manifest I/O, package installation, filesystem traversal, and project callback
+execution must happen after the lock has been released."
+  (if (eq table *process-project-registry*)
+      (bt:with-lock-held (*project-registry-lock*)
+        (funcall function))
+      (funcall function)))
+
+(defun project-registry-snapshot (&optional (table *project-registry*))
+  "Return a stable alist snapshot of project TABLE."
+  (call-with-project-registry-lock
+   (lambda ()
+     (let ((entries nil))
+       (maphash (lambda (name project)
+                  (push (cons name project) entries))
+                table)
+       entries))
+   table))
+
 (defvar *project-definitions-loaded-p* nil
   "True after project manifests have been loaded for this process.")
 
+(defun project-definitions-loaded-p ()
+  "Return a synchronized snapshot of project-definition load state."
+  (call-with-project-registry-lock
+   (lambda () *project-definitions-loaded-p*)
+   *project-registry*))
+
+(defun set-project-definitions-loaded-p (value)
+  "Publish project-definition load state VALUE."
+  (call-with-project-registry-lock
+   (lambda ()
+     (setf *project-definitions-loaded-p* (not (null value))))
+   *project-registry*))
+
 (defvar *project-manifest-extension* "project"
   "Extension used for inert project definition manifests.")
+
+(defvar *project-manifest-serialization-lock*
+  (bt:make-lock "clawmacs project manifest serialization")
+  "Lock guarding bounded ownership changes for manifest writers.")
+
+(defvar *project-manifest-serialization-condition*
+  (bt:make-condition-variable :name "clawmacs project manifest serialization")
+  "Condition signaled when the logical manifest writer releases ownership.")
+
+(defvar *project-manifest-serialization-owner* nil
+  "Exact token for the active logical manifest writer.")
+
+(defvar *project-manifest-serialization-token* nil
+  "Dynamically bound token permitting reentrant manifest helper calls.")
+
+(defvar *project-manifest-write-function* nil
+  "Optional test override called with a temporary path and manifest plist.")
+
+(defun call-with-project-manifest-serialization (function)
+  "Serialize manifest replacement without holding a mutex across file I/O."
+  (if *project-manifest-serialization-token*
+      (funcall function)
+      (let ((token (list :project-manifest-writer)))
+        (bt:with-lock-held (*project-manifest-serialization-lock*)
+          (loop :while *project-manifest-serialization-owner*
+                :do (bt:condition-wait
+                     *project-manifest-serialization-condition*
+                     *project-manifest-serialization-lock*
+                     :timeout 0.1))
+          (setf *project-manifest-serialization-owner* token))
+        (let ((*project-manifest-serialization-token* token))
+          (unwind-protect
+               (funcall function)
+            (bt:with-lock-held (*project-manifest-serialization-lock*)
+              (when (eq token *project-manifest-serialization-owner*)
+                (setf *project-manifest-serialization-owner* nil)
+                #+sbcl
+                (sb-thread:condition-broadcast
+                 *project-manifest-serialization-condition*)
+                #-sbcl
+                (bt:condition-notify
+                 *project-manifest-serialization-condition*))))))))
 
 (defvar *project-ignored-directory-names*
   '(".git" ".hg" ".svn" ".cache" ".direnv" "node_modules" "target")
@@ -63,6 +166,106 @@
 
 (defvar *change-set-registry* (make-hash-table :test #'equal)
   "Registry of staged project change sets keyed by id.")
+
+(defvar *process-change-set-registry* *change-set-registry*
+  "Process-global change-set registry, distinct from dynamic test bindings.")
+
+(defvar *change-set-registry-lock*
+  (bt:make-lock "clawmacs change set registry")
+  "Lock guarding change-set registration and mutable change-set state.")
+
+(defstruct (change-set-transaction-state
+            (:constructor make-change-set-transaction-state
+                (&key owner condition)))
+  "Logical filesystem transaction state protected by the registry lock."
+  owner
+  (condition (bt:make-condition-variable
+              :name "clawmacs change set transaction")))
+
+(defvar *change-set-transaction-state*
+  (make-change-set-transaction-state)
+  "Logical owner state serializing process-global change-set file operations.")
+
+(defvar *process-change-set-transaction-state* *change-set-transaction-state*
+  "Process-global transaction state, distinct from dynamic test bindings.")
+
+(defvar *change-set-transaction-token* nil
+  "Dynamically bound exact owner token for a change-set transaction.")
+
+(defvar *change-set-entry-apply-function* nil
+  "Optional test override for applying one detached change-set entry.")
+
+(defvar *change-set-entry-revert-function* nil
+  "Optional test override for reverting one detached change-set entry.")
+
+(defun call-with-change-set-registry-lock
+    (function &optional (table *change-set-registry*))
+  "Call FUNCTION under the change-set lock when TABLE is process-global.
+
+Filesystem reads, writes, project callbacks, and buffer synchronization must
+run after this lock is released."
+  (if (eq table *process-change-set-registry*)
+      (bt:with-lock-held (*change-set-registry-lock*)
+        (funcall function))
+      (funcall function)))
+
+(defun process-change-set-transaction-p ()
+  "Return true when the active registry and transaction state are global."
+  (and (eq *change-set-registry* *process-change-set-registry*)
+       (eq *change-set-transaction-state*
+           *process-change-set-transaction-state*)))
+
+(defun call-with-change-set-transaction (function)
+  "Serialize process-global apply/revert transactions without locking over I/O."
+  (cond
+    ((not (process-change-set-transaction-p))
+     (funcall function))
+    (*change-set-transaction-token*
+     (funcall function))
+    (t
+     (let ((token (list :change-set-transaction))
+           (state *change-set-transaction-state*))
+       (bt:with-lock-held (*change-set-registry-lock*)
+         (loop :while (change-set-transaction-state-owner state)
+               :do (bt:condition-wait
+                    (change-set-transaction-state-condition state)
+                    *change-set-registry-lock*
+                    :timeout 0.1))
+         (setf (change-set-transaction-state-owner state) token))
+       (let ((*change-set-transaction-token* token))
+         (unwind-protect
+              (funcall function)
+           (bt:with-lock-held (*change-set-registry-lock*)
+             (when (eq token (change-set-transaction-state-owner state))
+               (setf (change-set-transaction-state-owner state) nil)
+               #+sbcl
+               (sb-thread:condition-broadcast
+                (change-set-transaction-state-condition state))
+               #-sbcl
+               (bt:condition-notify
+                (change-set-transaction-state-condition state))))))))))
+
+(defun copy-change-set-snapshot (change-set)
+  "Return a detached snapshot of mutable CHANGE-SET metadata."
+  (make-change-set
+   :id (change-set-id change-set)
+   :name (change-set-name change-set)
+   :description (change-set-description change-set)
+   :entries (mapcar #'copy-change-set-entry (change-set-entries change-set))
+   :status (change-set-status change-set)
+   :created-at (change-set-created-at change-set)
+   :applied-at (change-set-applied-at change-set)))
+
+(defun change-set-registry-snapshot (&optional (table *change-set-registry*))
+  "Return a stable alist snapshot of change-set TABLE."
+  (call-with-change-set-registry-lock
+   (lambda ()
+     (let ((entries nil))
+       (maphash (lambda (id change-set)
+                  (push (cons id (copy-change-set-snapshot change-set)) entries))
+                table)
+       entries))
+   table))
 
 (defvar *current-change-set* nil
   "The current change set used by staging helpers when none is supplied.")
@@ -201,34 +404,69 @@
                  path))
         manifest))))
 
+(defun project-manifest-temporary-path (path)
+  "Return a fresh same-directory temporary pathname for manifest PATH."
+  (let ((directory (uiop:pathname-directory-pathname path)))
+    (loop
+      :for candidate =
+        (merge-pathnames
+         (make-pathname
+          :name (format nil ".~A-~36R"
+                        (or (pathname-name path) "project")
+                        (random (expt 36 10)))
+          :type "tmp")
+         directory)
+      :unless (probe-file candidate)
+        :return candidate)))
+
+(defun write-project-manifest-generation (path manifest)
+  "Write detached MANIFEST data to temporary PATH."
+  (with-open-file (stream path
+                          :direction :output
+                          :if-exists :error
+                          :if-does-not-exist :create)
+    (write manifest
+           :stream stream
+           :pretty t
+           :case :downcase)
+    (terpri stream))
+  path)
+
 (defun write-project-manifest (project &optional
                                        (directory *project-definitions-directory*))
-  "Persist PROJECT as an inert manifest and return the manifest path."
-  (let ((path (project-manifest-path (project-name project) directory)))
-    (ensure-directories-exist path)
-    (with-open-file (stream path
-                            :direction :output
-                            :if-exists :supersede
-                            :if-does-not-exist :create)
-      (write (project->manifest-plist project)
-             :stream stream
-             :pretty t
-             :case :downcase)
-      (terpri stream))
-    path))
+  "Atomically persist PROJECT as an inert manifest and return its path."
+  ;; Snapshot the mutable project before entering the logical file transaction.
+  (let ((path (project-manifest-path (project-name project) directory))
+        (manifest (copy-tree (project->manifest-plist project))))
+    (call-with-project-manifest-serialization
+     (lambda ()
+       (ensure-directories-exist path)
+       (let ((temporary (project-manifest-temporary-path path)))
+         (unwind-protect
+              (progn
+                (funcall (or *project-manifest-write-function*
+                             #'write-project-manifest-generation)
+                         temporary manifest)
+                (uiop:rename-file-overwriting-target temporary path)
+                path)
+           (when (probe-file temporary)
+             (ignore-errors (delete-file temporary)))))))))
 
 (defun register-project (project &key (replace t))
   "Register PROJECT and return it.
 When REPLACE is NIL, an existing project with the same name is preserved."
   (let ((key (normalize-project-name (project-name project))))
-    (cond
-      ((and (not replace) (gethash key *project-registry*))
-       (gethash key *project-registry*))
-      (t
-       (setf (project-name project) (project-display-name (project-name project))
-             (project-root project) (normalize-project-root
-                                     (project-root project)))
-       (setf (gethash key *project-registry*) project)))))
+    ;; Root normalization may touch the filesystem and therefore precedes the
+    ;; bounded publication critical section.
+    (setf (project-name project) (project-display-name (project-name project))
+          (project-root project) (normalize-project-root (project-root project)))
+    (call-with-project-registry-lock
+     (lambda ()
+       (let ((existing (gethash key *project-registry*)))
+         (if (and existing (not replace))
+             existing
+             (setf (gethash key *project-registry*) project))))
+     *project-registry*)))
 
 (defun define-project (name &key root description systems check-functions
                               packages
@@ -278,7 +516,10 @@ When ROOT is omitted, create a directory under *PROJECT-DEFINITIONS-DIRECTORY*."
 
 (defun find-project (name)
   "Return the project named NAME, or NIL."
-  (gethash (normalize-project-name name) *project-registry*))
+  (let ((key (normalize-project-name name)))
+    (call-with-project-registry-lock
+     (lambda () (gethash key *project-registry*))
+     *project-registry*)))
 
 (defun ensure-project (project-designator)
   "Resolve PROJECT-DESIGNATOR to a project object."
@@ -290,12 +531,8 @@ When ROOT is omitted, create a directory under *PROJECT-DEFINITIONS-DIRECTORY*."
 
 (defun list-projects ()
   "Return registered projects sorted by name."
-  (let (projects)
-    (maphash (lambda (key project)
-               (declare (ignore key))
-               (push project projects))
-             *project-registry*)
-    (sort projects #'string< :key #'project-name)))
+  (sort (mapcar #'cdr (project-registry-snapshot))
+        #'string< :key #'project-name))
 
 (defun load-project-manifest (path &key (replace nil))
   "Load one inert project manifest from PATH."
@@ -410,20 +647,26 @@ Existing projects, usually from init.lisp, are not overwritten."
                 "~&;; Warning: error loading project manifest ~A:~%;; ~A~%"
                 path e))))
   (load-project-declared-packages)
-  (setf *project-definitions-loaded-p* t)
+  (set-project-definitions-loaded-p t)
   (list-projects))
 
 (defun remove-projects-by-source (sources)
   "Remove projects whose source is a member of SOURCES."
-  (maphash (lambda (key project)
-             (when (member (project-source project) sources :test #'eq)
-               (remhash key *project-registry*)))
-           *project-registry*))
+  (call-with-project-registry-lock
+   (lambda ()
+     (let ((keys nil))
+       (maphash (lambda (key project)
+                  (when (member (project-source project) sources :test #'eq)
+                    (push key keys)))
+                *project-registry*)
+       (dolist (key keys)
+         (remhash key *project-registry*))))
+   *project-registry*))
 
 (defun reload-projects ()
   "Reload built-in and manifest-backed projects, preserving programmatic ones."
   (remove-projects-by-source '(:manifest :builtin))
-  (setf *project-definitions-loaded-p* nil)
+  (set-project-definitions-loaded-p nil)
   (load-project-definitions))
 
 (defun project-relative-pathname (path &key allow-directory)
@@ -527,90 +770,208 @@ Existing projects, usually from init.lisp, are not overwritten."
   (uiop:read-file-string
    (project-resolve-path project-designator path :require-exists t)))
 
+(defun publish-project-buffer-effect (effect)
+  "Collect, defer, or immediately apply immutable project buffer EFFECT."
+  (cond
+    (*project-buffer-effect-collector*
+     (funcall *project-buffer-effect-collector* effect))
+    ((and (boundp '*tool-effect-recorder*) *tool-effect-recorder*)
+     (funcall *tool-effect-recorder* :project-buffer effect))
+    (t
+     (apply-project-buffer-effect effect)))
+  effect)
+
+(defun call-with-project-buffer-effect-transaction (function)
+  "Publish project buffer effects only after FUNCTION commits successfully."
+  (if *project-buffer-effect-collector*
+      (funcall function)
+      (let ((effects nil)
+            (values nil)
+            (committed-p nil))
+        (unwind-protect
+             (let ((*project-buffer-effect-collector*
+                     (lambda (effect) (push effect effects))))
+               (setf values (multiple-value-list (funcall function))
+                     committed-p t))
+          (when committed-p
+            (dolist (effect (nreverse effects))
+              ;; Filesystem state is authoritative; UI sync failure cannot
+              ;; invalidate an already committed project transaction.
+              (handler-case
+                  (let ((*project-buffer-effect-collector* nil))
+                    (publish-project-buffer-effect effect))
+                (error (condition)
+                  (file-debug-event
+                   "project-buffer-effect-error"
+                   :operation (project-buffer-effect-operation effect)
+                   :project (project-buffer-effect-project-name effect)
+                   :path (project-buffer-effect-path effect)
+                   :condition (format nil "~A" condition)))))))
+        (values-list values))))
+
 (defun synchronize-open-project-file-buffer (project-designator path text
                                              &key (dirty-p nil)
                                                   (original-text text))
   "Update an already-open file buffer after a direct project resource write."
   (let* ((project (ensure-project project-designator))
          (resource-path (project-resource-name path))
-         (buffer
-           (find-if (lambda (candidate)
-                      (and (file-buffer-p candidate)
-                           (string= (or (buffer-project-name candidate) "")
-                                    (project-name project))
-                           (string= (or (buffer-resource-path candidate) "")
-                                    resource-path)))
-                    *buffer-ring*)))
-    (when buffer
-      (set-message-text (buffer-input-message buffer) text)
-      (setf (buffer-original-text buffer) original-text
-            (buffer-dirty-p buffer) dirty-p)
-      buffer)))
+         (effect (make-project-buffer-effect
+                  :synchronize (copy-seq (project-name project))
+                  (copy-seq resource-path)
+                  :text (copy-seq text)
+                  :dirty-p (not (null dirty-p))
+                  :original-text (copy-seq original-text))))
+    (when (or *project-buffer-effect-collector*
+              (and (boundp '*tool-effect-recorder*) *tool-effect-recorder*))
+      (return-from synchronize-open-project-file-buffer
+        (publish-project-buffer-effect effect)))
+    (let ((buffer
+            (find-if (lambda (candidate)
+                       (and (file-buffer-p candidate)
+                            (string= (or (buffer-project-name candidate) "")
+                                     (project-name project))
+                            (string= (or (buffer-resource-path candidate) "")
+                                     resource-path)))
+                     *buffer-ring*)))
+      (when buffer
+        (set-message-text (buffer-input-message buffer) text)
+        (setf (buffer-original-text buffer) original-text
+              (buffer-dirty-p buffer) dirty-p)
+        buffer))))
 
 (defun remove-open-project-file-buffer (project-designator path)
   "Close an open file buffer for PROJECT-DESIGNATOR/PATH, if one exists."
   (let* ((project (ensure-project project-designator))
          (resource-path (project-resource-name path))
-         (buffer
-           (find-if (lambda (candidate)
-                      (and (file-buffer-p candidate)
-                           (string= (or (buffer-project-name candidate) "")
-                                    (project-name project))
-                           (string= (or (buffer-resource-path candidate) "")
-                                    resource-path)))
-                    *buffer-ring*)))
-    (when buffer
-      (kill-buffer-from-ring buffer)
-      buffer)))
+         (effect (make-project-buffer-effect
+                  :remove (copy-seq (project-name project))
+                  (copy-seq resource-path))))
+    (when (or *project-buffer-effect-collector*
+              (and (boundp '*tool-effect-recorder*) *tool-effect-recorder*))
+      (return-from remove-open-project-file-buffer
+        (publish-project-buffer-effect effect)))
+    (let ((buffer
+            (find-if (lambda (candidate)
+                       (and (file-buffer-p candidate)
+                            (string= (or (buffer-project-name candidate) "")
+                                     (project-name project))
+                            (string= (or (buffer-resource-path candidate) "")
+                                     resource-path)))
+                     *buffer-ring*)))
+      (when buffer
+        (kill-buffer-from-ring buffer)
+        buffer))))
 
 (defun retarget-open-project-file-buffer (project-designator old-path new-path text)
   "Retarget an open file buffer from OLD-PATH to NEW-PATH after a rename."
   (let* ((project (ensure-project project-designator))
          (old-resource-path (project-resource-name old-path))
          (new-resource-path (project-resource-name new-path))
-         (buffer
-           (find-if (lambda (candidate)
-                      (and (file-buffer-p candidate)
-                           (string= (or (buffer-project-name candidate) "")
-                                    (project-name project))
-                           (string= (or (buffer-resource-path candidate) "")
-                                    old-resource-path)))
-                    *buffer-ring*)))
-    (when buffer
-      (set-message-text (buffer-input-message buffer) text)
-      (setf (buffer-name buffer) (format nil "~A:~A"
-                                         (project-name project)
-                                         new-resource-path)
-            (buffer-resource-path buffer) new-resource-path
-            (buffer-original-text buffer) text
-            (buffer-dirty-p buffer) nil
-            (buffer-major-mode buffer)
-            (let ((type (pathname-type (pathname new-resource-path))))
-              (cond
-                ((and type (member (string-downcase type) '("lisp" "asd")
-                                   :test #'string=))
-                 "lisp")
-                (type (string-downcase type))
-                (t "text"))))
-      buffer)))
+         (effect (make-project-buffer-effect
+                  :retarget (copy-seq (project-name project))
+                  (copy-seq old-resource-path)
+                  :new-path (copy-seq new-resource-path)
+                  :text (copy-seq text))))
+    (when (or *project-buffer-effect-collector*
+              (and (boundp '*tool-effect-recorder*) *tool-effect-recorder*))
+      (return-from retarget-open-project-file-buffer
+        (publish-project-buffer-effect effect)))
+    (let ((buffer
+            (find-if (lambda (candidate)
+                       (and (file-buffer-p candidate)
+                            (string= (or (buffer-project-name candidate) "")
+                                     (project-name project))
+                            (string= (or (buffer-resource-path candidate) "")
+                                     old-resource-path)))
+                     *buffer-ring*)))
+      (when buffer
+        (set-message-text (buffer-input-message buffer) text)
+        (setf (buffer-name buffer) (format nil "~A:~A"
+                                           (project-name project)
+                                           new-resource-path)
+              (buffer-resource-path buffer) new-resource-path
+              (buffer-original-text buffer) text
+              (buffer-dirty-p buffer) nil
+              (buffer-major-mode buffer)
+              (let ((type (pathname-type (pathname new-resource-path))))
+                (cond
+                  ((and type (member (string-downcase type) '("lisp" "asd")
+                                     :test #'string=))
+                   "lisp")
+                  (type (string-downcase type))
+                  (t "text"))))
+        buffer))))
+
+(defun apply-project-buffer-effect (effect)
+  "Apply immutable project buffer EFFECT on the current frame process."
+  (let ((*project-buffer-effect-collector* nil)
+        (*tool-effect-recorder* nil))
+    (ecase (project-buffer-effect-operation effect)
+      (:synchronize
+       (synchronize-open-project-file-buffer
+        (project-buffer-effect-project-name effect)
+        (project-buffer-effect-path effect)
+        (project-buffer-effect-text effect)
+        :dirty-p (project-buffer-effect-dirty-p effect)
+        :original-text (project-buffer-effect-original-text effect)))
+      (:remove
+       (remove-open-project-file-buffer
+        (project-buffer-effect-project-name effect)
+        (project-buffer-effect-path effect)))
+      (:retarget
+       (retarget-open-project-file-buffer
+        (project-buffer-effect-project-name effect)
+        (project-buffer-effect-path effect)
+        (project-buffer-effect-new-path effect)
+        (project-buffer-effect-text effect))))))
 
 (defun project-write-file (project-designator path text
                             &key (if-exists :supersede))
-  "Write TEXT to project resource PATH and return a summary plist."
+  "Atomically write TEXT to project resource PATH and return a summary plist."
   (let* ((project (ensure-project project-designator))
          (resource-path (project-resource-name path))
          (resolved (project-resolve-path project resource-path)))
-    (ensure-directories-exist resolved)
-    (with-open-file (stream resolved
-                            :direction :output
-                            :if-exists if-exists
-                            :if-does-not-exist :create)
-      (write-string text stream))
-    (synchronize-open-project-file-buffer project resource-path text)
-    (list :status :ok
-          :project (project-name project)
-          :path resource-path
-          :bytes-written (length text))))
+    (unless (member if-exists '(:error :supersede) :test #'eq)
+      (error "PROJECT-WRITE-FILE supports only :ERROR or :SUPERSEDE, got ~S."
+             if-exists))
+    (call-with-change-set-transaction
+     (lambda ()
+       (when (and (eq if-exists :error) (probe-file resolved))
+         (error "Project file already exists: ~A:~A"
+                (project-name project) resource-path))
+       (ensure-directories-exist resolved)
+       (let ((temporary (project-manifest-temporary-path resolved)))
+         (unwind-protect
+              (progn
+                (with-open-file (stream temporary
+                                        :direction :output
+                                        :if-exists :error
+                                        :if-does-not-exist :create)
+                  (write-string text stream))
+                ;; Recheck :ERROR immediately before publication.  Atomic
+                ;; no-clobber against another OS process remains platform-
+                ;; dependent and is documented as a residual limitation.
+                (when (and (eq if-exists :error) (probe-file resolved))
+                  (error "Project file appeared while writing: ~A:~A"
+                         (project-name project) resource-path))
+                (if (eq if-exists :supersede)
+                    (uiop:rename-file-overwriting-target temporary resolved)
+                    (rename-file temporary resolved)))
+           (when (probe-file temporary)
+             (ignore-errors (delete-file temporary)))))
+       (handler-case
+           (synchronize-open-project-file-buffer project resource-path text)
+         (error (condition)
+           (file-debug-event
+            "project-buffer-effect-error"
+            :operation :synchronize
+            :project (project-name project)
+            :path resource-path
+            :condition (format nil "~A" condition))))
+       (list :status :ok
+             :project (project-name project)
+             :path resource-path
+             :bytes-written (length text))))))
 
 (defun project-save-file (project-designator path text)
   "Save TEXT to project resource PATH, replacing any existing contents."
@@ -627,40 +988,63 @@ Existing projects, usually from init.lisp, are not overwritten."
 
 (defun next-change-set-id ()
   "Return a fresh human-readable change set id."
-  (format nil "change-~D" (incf *change-set-counter*)))
+  (call-with-change-set-registry-lock
+   (lambda ()
+     (format nil "change-~D" (incf *change-set-counter*)))
+   *change-set-registry*))
 
-(defun begin-change-set (&key name description)
-  "Create and select a new staged project change set."
-  (let* ((id (next-change-set-id))
+(defun begin-change-set-locked (name description created-at)
+  "Create and select a change set while the registry lock is held."
+  (let* ((id (format nil "change-~D" (incf *change-set-counter*)))
          (change-set (make-change-set :id id
                                       :name (or name id)
                                       :description description
                                       :entries nil
                                       :status :open
-                                      :created-at (get-universal-time))))
+                                      :created-at created-at)))
     (setf (gethash id *change-set-registry*) change-set
           *current-change-set* change-set)
     change-set))
 
+(defun begin-change-set (&key name description)
+  "Create and select a new staged project change set."
+  (let ((created-at (get-universal-time)))
+    (call-with-change-set-registry-lock
+     (lambda ()
+       (begin-change-set-locked name description created-at))
+     *change-set-registry*)))
+
 (defun current-change-set ()
   "Return the current staged project change set, or NIL."
-  *current-change-set*)
+  (call-with-change-set-registry-lock
+   (lambda () *current-change-set*)
+   *change-set-registry*))
 
 (defun find-change-set (designator)
   "Return the change set named by DESIGNATOR, or NIL."
   (etypecase designator
     (change-set designator)
-    (string (gethash designator *change-set-registry*))
-    (symbol (gethash (string-downcase (symbol-name designator))
-                     *change-set-registry*))))
+    (string
+     (call-with-change-set-registry-lock
+      (lambda () (gethash designator *change-set-registry*))
+      *change-set-registry*))
+    (symbol
+     (let ((key (string-downcase (symbol-name designator))))
+       (call-with-change-set-registry-lock
+        (lambda () (gethash key *change-set-registry*))
+        *change-set-registry*)))))
 
 (defun ensure-change-set (&optional change-set-designator)
   "Return CHANGE-SET-DESIGNATOR, the current change set, or a new change set."
-  (or (and change-set-designator
-           (or (find-change-set change-set-designator)
-               (error "Unknown change set: ~A" change-set-designator)))
-      *current-change-set*
-      (begin-change-set)))
+  (if change-set-designator
+      (or (find-change-set change-set-designator)
+          (error "Unknown change set: ~A" change-set-designator))
+      (let ((created-at (get-universal-time)))
+        (call-with-change-set-registry-lock
+         (lambda ()
+           (or *current-change-set*
+               (begin-change-set-locked nil nil created-at)))
+         *change-set-registry*))))
 
 (defun change-set-open-p (change-set)
   "Return true when CHANGE-SET can still accept staged entries."
@@ -676,13 +1060,9 @@ Existing projects, usually from init.lisp, are not overwritten."
 
 (defun list-change-sets ()
   "Return known change sets sorted by creation time."
-  (let (change-sets)
-    (maphash (lambda (key change-set)
-               (declare (ignore key))
-               (push change-set change-sets))
-             *change-set-registry*)
-    (sort change-sets #'< :key (lambda (change-set)
-                                 (or (change-set-created-at change-set) 0)))))
+  (sort (mapcar #'cdr (change-set-registry-snapshot))
+        #'< :key (lambda (change-set)
+                   (or (change-set-created-at change-set) 0))))
 
 (defun project-file-snapshot (project-designator path)
   "Return values EXISTS-P and TEXT for PROJECT-DESIGNATOR/PATH."
@@ -706,9 +1086,12 @@ Existing projects, usually from init.lisp, are not overwritten."
 
 (defun append-change-set-entry (change-set entry)
   "Append ENTRY to CHANGE-SET and return ENTRY."
-  (ensure-open-change-set change-set)
-  (setf (change-set-entries change-set)
-        (append (change-set-entries change-set) (list entry)))
+  (call-with-change-set-registry-lock
+   (lambda ()
+     (ensure-open-change-set change-set)
+     (setf (change-set-entries change-set)
+           (append (change-set-entries change-set) (list entry))))
+   *change-set-registry*)
   entry)
 
 (defun stage-project-file (project-designator path text
@@ -770,7 +1153,11 @@ Existing projects, usually from init.lisp, are not overwritten."
   "Return the latest staged entry affecting PROJECT-DESIGNATOR/PATH."
   (let* ((project (ensure-project project-designator))
          (project-key (normalize-project-name (project-name project)))
-         (resource-path (project-resource-name path)))
+         (resource-path (project-resource-name path))
+         (entries
+           (call-with-change-set-registry-lock
+            (lambda () (copy-list (change-set-entries change-set)))
+            *change-set-registry*)))
     (find-if
      (lambda (entry)
        (and (string= project-key
@@ -780,14 +1167,14 @@ Existing projects, usually from init.lisp, are not overwritten."
                 (and (change-set-entry-new-path entry)
                      (string= resource-path
                               (change-set-entry-new-path entry))))))
-     (reverse (change-set-entries change-set)))))
+     (reverse entries))))
 
 (defun change-set-project-file-text (project-designator path
                                       &optional change-set-designator)
   "Return PROJECT-DESIGNATOR/PATH text including the latest staged write."
   (let ((change-set (or (and change-set-designator
                              (find-change-set change-set-designator))
-                        *current-change-set*)))
+                        (current-change-set))))
     (when change-set
       (let ((entry (latest-staged-file-entry change-set project-designator path)))
         (when entry
@@ -869,14 +1256,18 @@ Existing projects, usually from init.lisp, are not overwritten."
 
 (defun change-set-diff-to-string (&optional change-set-designator)
   "Return an agent-readable diff for CHANGE-SET-DESIGNATOR."
-  (let ((change-set (ensure-change-set change-set-designator)))
+  (let* ((change-set (ensure-change-set change-set-designator))
+         (snapshot
+           (call-with-change-set-registry-lock
+            (lambda () (copy-change-set-snapshot change-set))
+            *change-set-registry*)))
     (with-output-to-string (out)
       (format out "Change Set: ~A  Status: ~(~A~)~@[  Name: ~A~]~%~%"
-              (change-set-id change-set)
-              (change-set-status change-set)
-              (change-set-name change-set))
-      (if (change-set-entries change-set)
-          (dolist (entry (change-set-entries change-set))
+              (change-set-id snapshot)
+              (change-set-status snapshot)
+              (change-set-name snapshot))
+      (if (change-set-entries snapshot)
+          (dolist (entry (change-set-entries snapshot))
             (write-string (change-set-entry-diff-to-string entry) out)
             (terpri out))
           (format out "No staged changes.~%")))))
@@ -947,61 +1338,182 @@ Existing projects, usually from init.lisp, are not overwritten."
   (setf (change-set-entry-applied-p entry) nil)
   entry)
 
+(defun invoke-change-set-entry-apply (entry)
+  "Apply detached ENTRY, restoring its stored snapshot on any failure."
+  (handler-case
+      (funcall (or *change-set-entry-apply-function*
+                   #'apply-change-set-entry)
+               entry)
+    (error (condition)
+      (handler-case
+          (revert-change-set-entry entry)
+        (error (compensation-condition)
+          (error "Entry apply failed (~A) and compensation failed (~A)."
+                 condition compensation-condition)))
+      (error condition))))
+
+(defun invoke-change-set-entry-revert (entry)
+  "Revert detached ENTRY, restoring its applied state on any failure."
+  (handler-case
+      (funcall (or *change-set-entry-revert-function*
+                   #'revert-change-set-entry)
+               entry)
+    (error (condition)
+      (handler-case
+          (apply-change-set-entry entry)
+        (error (compensation-condition)
+          (error "Entry revert failed (~A) and compensation failed (~A)."
+                 condition compensation-condition)))
+      (error condition))))
+
+(defun merge-change-set-entry-applied-state-locked (change-set entries)
+  "Merge detached ENTRIES' applied flags into CHANGE-SET while locked."
+  (let ((actual (change-set-entries change-set)))
+    (unless (= (length actual) (length entries))
+      (error "Change set ~A entries changed during its transaction."
+             (change-set-id change-set)))
+    (mapc (lambda (actual-entry detached-entry)
+            (setf (change-set-entry-applied-p actual-entry)
+                  (change-set-entry-applied-p detached-entry)))
+          actual entries))
+  change-set)
+
 (defun apply-change-set (&optional change-set-designator)
   "Apply CHANGE-SET-DESIGNATOR, rolling back already applied entries on error."
-  (let ((change-set (ensure-change-set change-set-designator))
-        (applied nil))
-    (ensure-open-change-set change-set)
-    (handler-case
-        (progn
-          (dolist (entry (change-set-entries change-set))
-            (apply-change-set-entry entry)
-            (push entry applied))
-          (setf (change-set-status change-set) :applied
-                (change-set-applied-at change-set) (get-universal-time))
-          change-set)
-      (error (condition)
-        (dolist (entry applied)
-          (ignore-errors (revert-change-set-entry entry)))
-        (setf (change-set-status change-set) :failed)
-        (error "Failed applying change set ~A; rolled back applied entries: ~A"
-               (change-set-id change-set)
-               condition)))))
+  (let ((change-set (ensure-change-set change-set-designator)))
+    (call-with-project-buffer-effect-transaction
+     (lambda ()
+       (call-with-change-set-transaction
+        (lambda ()
+          (let ((entries nil)
+                (applied nil))
+            ;; Only detached entries cross the bounded registry section.
+            (call-with-change-set-registry-lock
+             (lambda ()
+               (ensure-open-change-set change-set)
+               (setf (change-set-status change-set) :applying
+                     entries
+                     (mapcar #'copy-change-set-entry
+                             (change-set-entries change-set))))
+             *change-set-registry*)
+            (handler-case
+                (progn
+                  (dolist (entry entries)
+                    (invoke-change-set-entry-apply entry)
+                    (push entry applied))
+                  (call-with-change-set-registry-lock
+                   (lambda ()
+                     (merge-change-set-entry-applied-state-locked
+                      change-set entries)
+                     (setf (change-set-status change-set) :applied
+                           (change-set-applied-at change-set)
+                           (get-universal-time)))
+                   *change-set-registry*)
+                  change-set)
+              (error (condition)
+                (let ((rollback-errors nil))
+                  ;; APPLIED is already in reverse application order.
+                  (dolist (entry applied)
+                    (handler-case
+                        (invoke-change-set-entry-revert entry)
+                      (error (rollback-condition)
+                        (push rollback-condition rollback-errors))))
+                  (call-with-change-set-registry-lock
+                   (lambda ()
+                     (merge-change-set-entry-applied-state-locked
+                      change-set entries)
+                     (setf (change-set-status change-set)
+                           (if rollback-errors :rollback-failed :failed)
+                           (change-set-applied-at change-set) nil))
+                   *change-set-registry*)
+                  (error
+                   "Failed applying change set ~A; rollback errors: ~D; cause: ~A"
+                   (change-set-id change-set)
+                   (length rollback-errors)
+                   condition)))))))))))
 
 (defun discard-change-set (&optional change-set-designator)
   "Discard an unapplied staged change set."
   (let ((change-set (ensure-change-set change-set-designator)))
-    (when (eq :applied (change-set-status change-set))
-      (error "Cannot discard applied change set ~A; use REVERT-CHANGE-SET."
-             (change-set-id change-set)))
-    (setf (change-set-status change-set) :discarded)
-    (when (eq change-set *current-change-set*)
-      (setf *current-change-set* nil))
+    (call-with-change-set-registry-lock
+     (lambda ()
+       (unless (eq :open (change-set-status change-set))
+         (error "Cannot discard change set ~A with status ~A."
+                (change-set-id change-set)
+                (change-set-status change-set)))
+       (setf (change-set-status change-set) :discarded)
+       (when (eq change-set *current-change-set*)
+         (setf *current-change-set* nil)))
+     *change-set-registry*)
     change-set))
 
 (defun revert-change-set (&optional change-set-designator)
   "Revert an applied CHANGE-SET-DESIGNATOR using stored snapshots."
   (let ((change-set (ensure-change-set change-set-designator)))
-    (unless (eq :applied (change-set-status change-set))
-      (error "Change set ~A is not applied; status is ~A."
-             (change-set-id change-set)
-             (change-set-status change-set)))
-    (dolist (entry (reverse (change-set-entries change-set)))
-      (revert-change-set-entry entry))
-    (setf (change-set-status change-set) :reverted)
-    (when (eq change-set *current-change-set*)
-      (setf *current-change-set* nil))
-    change-set))
+    (call-with-project-buffer-effect-transaction
+     (lambda ()
+       (call-with-change-set-transaction
+        (lambda ()
+          (let ((entries nil)
+                (reverted nil))
+            (call-with-change-set-registry-lock
+             (lambda ()
+               (unless (eq :applied (change-set-status change-set))
+                 (error "Change set ~A is not applied; status is ~A."
+                        (change-set-id change-set)
+                        (change-set-status change-set)))
+               (setf (change-set-status change-set) :reverting
+                     entries
+                     (mapcar #'copy-change-set-entry
+                             (change-set-entries change-set))))
+             *change-set-registry*)
+            (handler-case
+                (progn
+                  (dolist (entry (reverse (copy-list entries)))
+                    (invoke-change-set-entry-revert entry)
+                    (push entry reverted))
+                  (call-with-change-set-registry-lock
+                   (lambda ()
+                     (merge-change-set-entry-applied-state-locked
+                      change-set entries)
+                     (setf (change-set-status change-set) :reverted)
+                     (when (eq change-set *current-change-set*)
+                       (setf *current-change-set* nil)))
+                   *change-set-registry*)
+                  change-set)
+              (error (condition)
+                (let ((restore-errors nil))
+                  ;; REVERTED is already in original application order.
+                  (dolist (entry reverted)
+                    (handler-case
+                        (invoke-change-set-entry-apply entry)
+                      (error (restore-condition)
+                        (push restore-condition restore-errors))))
+                  (call-with-change-set-registry-lock
+                   (lambda ()
+                     (merge-change-set-entry-applied-state-locked
+                      change-set entries)
+                     (setf (change-set-status change-set) :revert-failed))
+                   *change-set-registry*)
+                  (error
+                   "Failed reverting change set ~A; restore errors: ~D; cause: ~A"
+                   (change-set-id change-set)
+                   (length restore-errors)
+                   condition)))))))))))
 
 (defun change-set-summary-to-string (&optional change-set-designator)
   "Return a compact summary of staged entries in CHANGE-SET-DESIGNATOR."
-  (let ((change-set (ensure-change-set change-set-designator)))
+  (let* ((change-set (ensure-change-set change-set-designator))
+         (snapshot
+           (call-with-change-set-registry-lock
+            (lambda () (copy-change-set-snapshot change-set))
+            *change-set-registry*)))
     (with-output-to-string (out)
       (format out "~A (~(~A~)): ~D entr~:@P~%"
-              (change-set-id change-set)
-              (change-set-status change-set)
-              (length (change-set-entries change-set)))
-      (dolist (entry (change-set-entries change-set))
+              (change-set-id snapshot)
+              (change-set-status snapshot)
+              (length (change-set-entries snapshot)))
+      (dolist (entry (change-set-entries snapshot))
         (ecase (change-set-entry-kind entry)
           (:write
            (format out "  write ~A:~A~%"

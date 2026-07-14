@@ -1030,18 +1030,18 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
         (sexed-ensure-balanced result "Edited text")))))
 
 (defun sexed-resolve-path (path)
-  "Resolve PATH using the clawmacs sandbox path policy."
-  (validate-sandbox-path path))
+  "Resolve PATH against the current tool working directory."
+  (lispi:resolve-tool-path path))
 
 (defun sexed-read-file-text (path)
-  "Read PATH as a string after sandbox validation."
+  "Read resolved PATH as a string."
   (let ((resolved (sexed-resolve-path path)))
     (unless (probe-file resolved)
       (error "File not found: ~A" path))
     (uiop:read-file-string resolved)))
 
 (defun sexed-write-file-text (path text)
-  "Write TEXT to PATH after sandbox validation and return an edit summary."
+  "Write TEXT to resolved PATH and return an edit summary."
   (let ((resolved (sexed-resolve-path path))
         (balanced-text (sexed-ensure-balanced text "Written file text")))
     (ensure-directories-exist resolved)
@@ -1541,30 +1541,30 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
           :balanced t)))
 
 (defun sexed-tool-file-read (args)
-  "Read a sandbox-local Lisp source file."
+  "Read a Lisp source file."
   (apply #'sexed-read-file-text-with-safety
          (sexed-tool-required-string args :path)
          (sexed-tool-read-options args)))
 
 (defun sexed-tool-file-write (args)
-  "Write a sandbox-local Lisp source file."
+  "Write a Lisp source file."
   (sexed-write-file-text
    (sexed-tool-required-string args :path)
    (sexed-tool-required-string args :content)))
 
 (defun sexed-tool-file-outline (args)
-  "Return a structural outline for a sandbox-local file."
+  "Return a structural outline for a Lisp source file."
   (apply #'sexed-file-outline-to-string
          (sexed-tool-required-string args :path)
          (sexed-tool-options args)))
 
 (defun sexed-tool-file-form-text (args)
-  "Return selected source form text from a sandbox-local file."
+  "Return selected source form text from a Lisp source file."
   (sexed-file-form-text (sexed-tool-required-string args :path)
                         (sexed-tool-required-selector args)))
 
 (defun sexed-tool-file-edit (args)
-  "Structurally edit a sandbox-local file."
+  "Structurally edit a Lisp source file."
   (let* ((path (sexed-tool-required-string args :path))
          (selector (sexed-tool-required-selector args)))
     (ecase (sexed-tool-edit-operation args)
@@ -1599,7 +1599,7 @@ Returns three values: all nodes in source order, diagnostics, and root nodes."
                                      :count (sexed-tool-count args))))))
 
 (defun sexed-tool-file-edits (args)
-  "Apply a batch of structural edits to a sandbox-local file."
+  "Apply a batch of structural edits to a Lisp source file."
   (let* ((path (sexed-tool-required-string args :path))
          (old-text (sexed-read-file-text path)))
     (multiple-value-bind (new-text count)

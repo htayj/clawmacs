@@ -40,15 +40,30 @@
 (defvar *current-clawmacs-package* nil
   "Package name dynamically bound while loading a package entrypoint.")
 
+(defvar *buffer-display-wakeup-hook* nil
+  "Internal UI wakeups for buffer display changes.
+
+Unlike `*after-buffer-display-change-hook*', this is not an extension point.
+Its functions may be called by managed workers and therefore may only enqueue
+an application event for the owning frame; they must not inspect or mutate
+application state on the caller's thread.")
+
 (defun maybe-run-hook-with-args (hook-var &rest args)
   "Run HOOK-VAR with ARGS when the hooks system has been loaded."
   (when (and (boundp hook-var)
              (fboundp 'run-hook-with-args))
     (apply (symbol-function 'run-hook-with-args) hook-var args)))
 
-(defun notify-buffer-display-change (buf reason)
-  "Notify UI observers that BUF needs redisplay for REASON."
+(defun wake-buffer-display-change (buf reason)
+  "Queue internal UI wakeups for BUF without invoking extension observers."
   (when buf
+    (maybe-run-hook-with-args '*buffer-display-wakeup-hook* buf reason))
+  buf)
+
+(defun notify-buffer-display-change (buf reason)
+  "Queue BUF redisplay and notify application observers of REASON."
+  (when buf
+    (wake-buffer-display-change buf reason)
     (maybe-run-hook-with-args '*after-buffer-display-change-hook* buf reason))
   buf)
 
@@ -165,6 +180,51 @@ Packages may add entries with REGISTER-BUFFER-TYPE or DEFINE-BUFFER-TYPE.
 Registered presentation functions are retained as metadata for future
 interfaces.")
 
+(defvar *process-buffer-type-registry* *buffer-type-registry*
+  "Process-global buffer type registry, distinct from dynamic test bindings.")
+
+(defvar *buffer-type-registry-lock*
+  (bt:make-lock "clawmacs buffer type registry")
+  "Lock guarding process-global buffer types and presentation providers.")
+
+(defun call-with-buffer-type-registry-lock
+    (function &optional (table *buffer-type-registry*))
+  "Call FUNCTION under the buffer registry lock when TABLE is process-global.
+
+FUNCTION must do bounded registry or provider-list access only.  Presentation
+functions and package visibility checks must run after this lock is released."
+  (if (eq table *process-buffer-type-registry*)
+      (bt:with-lock-held (*buffer-type-registry-lock*)
+        (funcall function))
+      (funcall function)))
+
+(defun buffer-type-registry-snapshot (&optional (table *buffer-type-registry*))
+  "Return a stable alist snapshot of buffer type TABLE."
+  (call-with-buffer-type-registry-lock
+   (lambda ()
+     (let ((entries nil))
+       (maphash (lambda (name type)
+                  (push (cons name type) entries))
+                table)
+       entries))
+   table))
+
+(defun remove-buffer-types-for-package (package-name)
+  "Atomically remove buffer types owned by PACKAGE-NAME."
+  (let ((name (normalize-buffer-type-package-name package-name)))
+    (when name
+      (call-with-buffer-type-registry-lock
+       (lambda ()
+         (let ((removed nil))
+           (maphash
+            (lambda (kind type)
+              (when (string= name (or (buffer-type-package type) ""))
+                (push type removed)
+                (remhash kind *buffer-type-registry*)))
+            *buffer-type-registry*)
+           (nreverse removed)))
+       *buffer-type-registry*))))
+
 (defstruct buffer-input-presentation-provider
   "Package-owned input overlay presenter for an existing buffer kind."
   (kind nil :type (or null keyword))
@@ -173,6 +233,12 @@ interfaces.")
 
 (defvar *buffer-input-presentation-providers* nil
   "Package-owned input presentation providers for existing buffer kinds.")
+
+(defun buffer-input-presentation-provider-snapshot ()
+  "Return a stable copy of the current input presentation provider list."
+  (call-with-buffer-type-registry-lock
+   (lambda () (copy-list *buffer-input-presentation-providers*))
+   *buffer-type-registry*))
 
 (defun register-buffer-input-presentation-provider
     (kind function &key (package nil package-supplied-p))
@@ -192,29 +258,36 @@ interfaces.")
                     :kind normalized-kind
                     :function normalized-function
                     :package owner)))
-    (setf *buffer-input-presentation-providers*
-          (remove-if (lambda (existing)
-                       (and (eq normalized-kind
-                                (buffer-input-presentation-provider-kind existing))
-                            (equal owner
-                                   (buffer-input-presentation-provider-package
-                                    existing))
-                            (eq normalized-function
-                                (buffer-input-presentation-provider-function
-                                 existing))))
-                     *buffer-input-presentation-providers*))
-    (push provider *buffer-input-presentation-providers*)
+    (call-with-buffer-type-registry-lock
+     (lambda ()
+       (setf *buffer-input-presentation-providers*
+             (cons
+              provider
+              (remove-if
+               (lambda (existing)
+                 (and
+                  (eq normalized-kind
+                      (buffer-input-presentation-provider-kind existing))
+                  (equal owner
+                         (buffer-input-presentation-provider-package existing))
+                  (eq normalized-function
+                      (buffer-input-presentation-provider-function existing))))
+               *buffer-input-presentation-providers*))))
+     *buffer-type-registry*)
     provider))
 
 (defun remove-buffer-input-presentation-providers-for-package (package-name)
   "Remove input presentation providers owned by PACKAGE-NAME."
   (let ((name (normalize-buffer-type-package-name package-name)))
-    (setf *buffer-input-presentation-providers*
-          (remove-if (lambda (provider)
-                       (equal name
-                              (buffer-input-presentation-provider-package
-                               provider)))
-                     *buffer-input-presentation-providers*))))
+    (call-with-buffer-type-registry-lock
+     (lambda ()
+       (setf *buffer-input-presentation-providers*
+             (remove-if
+              (lambda (provider)
+                (equal name
+                       (buffer-input-presentation-provider-package provider)))
+              *buffer-input-presentation-providers*)))
+     *buffer-type-registry*)))
 
 (defun register-buffer-type
     (name
@@ -236,7 +309,10 @@ defaults to the package currently being loaded by the Clawmacs package manager."
              (not (package-resource-type-allowed-p :buffer-type)))
     (return-from register-buffer-type nil))
   (let* ((kind (normalize-buffer-kind name))
-         (existing (gethash kind *buffer-type-registry*))
+         (existing
+           (call-with-buffer-type-registry-lock
+            (lambda () (gethash kind *buffer-type-registry*))
+            *buffer-type-registry*))
          (current-owner
            (normalize-buffer-type-package-name *current-clawmacs-package*))
          (owner (normalize-buffer-type-package-name
@@ -293,7 +369,10 @@ defaults to the package currently being loaded by the Clawmacs package manager."
                    (t nil))
                  :restore-state-function)
                 :package owner)))
-    (setf (gethash kind *buffer-type-registry*) type)
+    (call-with-buffer-type-registry-lock
+     (lambda ()
+       (setf (gethash kind *buffer-type-registry*) type))
+     *buffer-type-registry*)
     type))
 
 (defmacro define-buffer-type (name &rest options)
@@ -305,18 +384,17 @@ major-mode label, and optional McCLIM presentation functions."
 
 (defun find-buffer-type (name)
   "Return the registered BUFFER-TYPE for NAME, or NIL."
-  (gethash (normalize-buffer-kind name) *buffer-type-registry*))
+  (let ((kind (normalize-buffer-kind name)))
+    (call-with-buffer-type-registry-lock
+     (lambda () (gethash kind *buffer-type-registry*))
+     *buffer-type-registry*)))
 
 (defun list-buffer-types ()
   "Return registered buffer types sorted by kind name."
-  (let ((types nil))
-    (maphash (lambda (_name type)
-               (declare (ignore _name))
-               (push type types))
-             *buffer-type-registry*)
-    (sort types #'string<
-          :key (lambda (type)
-                 (symbol-name (buffer-type-name type))))))
+  (sort (mapcar #'cdr (buffer-type-registry-snapshot))
+        #'string<
+        :key (lambda (type)
+               (symbol-name (buffer-type-name type)))))
 
 (defun buffer-type-for-buffer (buf)
   "Return the registered BUFFER-TYPE for BUF, or NIL."
@@ -349,7 +427,8 @@ major-mode label, and optional McCLIM presentation functions."
                    (remove-if-not
                     (lambda (provider)
                       (buffer-input-presentation-provider-active-p provider buf))
-                    (reverse *buffer-input-presentation-providers*))))))
+                    (reverse
+                     (buffer-input-presentation-provider-snapshot)))))))
 
 (defun buffer-state-serializer (buf)
   "Return BUF's optional persistence serializer function."
@@ -445,7 +524,7 @@ major-mode label, and optional McCLIM presentation functions."
                        :accessor buffer-status
                        :initform :idle
                        :type keyword
-                       :documentation "Current buffer state: :idle, :thinking, :streaming, :error, :approval, :question, or :oauth.")
+                       :documentation "Current buffer state: :idle, :thinking, :streaming, :error, :question, or :oauth.")
    (provider-override :initarg :provider-override
                       :accessor buffer-provider-override
                       :initform nil
@@ -535,34 +614,80 @@ major-mode label, and optional McCLIM presentation functions."
                          :accessor buffer-pending-stream
                          :initform nil
                          :documentation "When non-nil, holds a stream-state for an in-progress streaming response.")
+   (pending-tool-execution :initarg :pending-tool-execution
+                           :accessor buffer-pending-tool-execution
+                           :initform nil
+                           :documentation "Managed worker state for one interactive tool call. Only the frame process applies its result to this buffer.")
+   (pending-interactive-operation
+    :initarg :pending-interactive-operation
+    :accessor buffer-pending-interactive-operation
+    :initform nil
+    :documentation "Managed worker state for one shell, pipeline, or compaction action. Only the frame process applies its result to this buffer.")
+   (runtime-lock :reader buffer-runtime-lock
+                 :initform (bt:make-lock "clawmacs buffer runtime")
+                 :documentation "Lock serializing provider/tool ownership and teardown transitions for this buffer.")
+   (runtime-condition :reader buffer-runtime-condition
+                      :initform (bt:make-condition-variable
+                                 :name "clawmacs buffer runtime condition")
+                      :documentation "Condition variable for application/teardown phase changes protected by RUNTIME-LOCK.")
+   (runtime-application :accessor buffer-runtime-application
+                        :initform nil
+                        :documentation "Unique terminal-completion context while the frame process applies a stream or tool result.")
+   (runtime-teardown :accessor buffer-runtime-teardown
+                     :initform nil
+                     :documentation "Single-flight teardown context retained until appliers and owned workers settle.")
+   (runtime-generation :initarg :runtime-generation
+                       :accessor buffer-runtime-generation
+                       :initform 0
+                       :type integer
+                       :documentation "Generation token invalidating late provider and tool callbacks after teardown.")
+   (runtime-start-generation :accessor buffer-runtime-start-generation
+                             :initform nil
+                             :type (or null integer)
+                             :documentation "Generation reserved while a provider stream or OAuth flow is being prepared but has not yet published its state.")
+   (runtime-start-owner :accessor buffer-runtime-start-owner
+                        :initform nil
+                        :documentation "Thread holding RUNTIME-START-GENERATION until publication or cancellation cleanup.")
+   (runtime-tool-cancellation-p :accessor buffer-runtime-tool-cancellation-p
+                                :initform nil
+                                :type boolean
+                                :documentation "True while Stop owns the pending tool queue and is recording protocol-completing cancellation results.")
+   (runtime-stopping-p :accessor buffer-runtime-stopping-p
+                       :initform nil
+                       :type boolean
+                       :documentation "True while owned runtime operations are being detached and cancelled.")
+   (runtime-stopped-notification-p
+    :accessor buffer-runtime-stopped-notification-p
+    :initform nil
+    :type boolean
+    :documentation "True when teardown completion awaits delivery on the owning CLIM frame process.")
+   (disposing-p        :accessor buffer-disposing-p
+                       :initform nil
+                       :type boolean
+                       :documentation "True while permanent buffer disposal is in progress.")
+   (disposed-p         :initarg :disposed-p
+                       :accessor buffer-disposed-p
+                       :initform nil
+                       :type boolean
+                       :documentation "True after the buffer has been removed permanently from the buffer ring.")
     (streaming-message   :initarg :streaming-message
                          :accessor buffer-streaming-message
                          :initform nil
                          :type (or null message)
                          :documentation "The message being updated by streaming. Updated in-place as tokens arrive.")
-   ;; Permission approval state
-   (approval-pending    :initarg :approval-pending
-                         :accessor buffer-approval-pending
-                         :initform nil
-                         :documentation "When non-nil, an alist describing the tool call awaiting approval:
-(:tool-name :tool-id :tool-input :display-raw :display-expanded :tool-use-block)")
-   (approval-result     :initarg :approval-result
-                         :accessor buffer-approval-result
-                         :initform nil
-                         :documentation "Set by the approval UI: :approve, :deny, or (:deny-with-message . \"reason\")")
    (stashed-input       :initarg :stashed-input
                          :accessor buffer-stashed-input
                          :initform nil
                          :type (or null string)
-                         :documentation "User's input text stashed during approval prompt.")
+                         :documentation "User input temporarily stashed while a tool-call sequence runs.")
    (pending-tool-calls  :initarg :pending-tool-calls
                          :accessor buffer-pending-tool-calls
                          :initform nil
-                         :documentation "List of tool_use blocks awaiting sequential approval.")
+                         :documentation "List of tool_use blocks awaiting sequential execution.")
    (tool-call-results   :initarg :tool-call-results
                          :accessor buffer-tool-call-results
                          :initform nil
-                         :documentation "Accumulated results from approved/denied tool calls.")
+                         :documentation "Accumulated results from tool calls in the current sequence.")
    (user-input-pending  :initarg :user-input-pending
                         :accessor buffer-user-input-pending
                         :initform nil
@@ -718,15 +843,25 @@ Enforces the invariant that it is not read-only."
 
 (declaim (ftype (function (buffer) boolean) buffer-llm-running-p))
 (defun buffer-llm-running-p (buf)
-  "Return true when BUF has an active provider stream."
-  (not (null (and buf (buffer-pending-stream buf)))))
+  "Return true while BUF owns or is settling an agent runtime turn."
+  (not (null (and buf
+                  (bt:with-lock-held ((buffer-runtime-lock buf))
+                    (or (buffer-pending-stream buf)
+                        (buffer-pending-tool-execution buf)
+                        (buffer-pending-interactive-operation buf)
+                        (buffer-runtime-application buf)
+                        (buffer-runtime-teardown buf)
+                        (buffer-runtime-start-generation buf)
+                        (buffer-runtime-start-owner buf)
+                        (buffer-runtime-stopping-p buf)
+                        (buffer-runtime-stopped-notification-p buf)
+                        (buffer-disposing-p buf)))))))
 
 (declaim (ftype (function (buffer) boolean) buffer-interaction-pending-p))
 (defun buffer-interaction-pending-p (buf)
   "Return true when BUF is waiting on user interaction before continuing."
   (not (null (and buf
-                  (or (buffer-approval-pending buf)
-                      (buffer-user-input-pending buf))))))
+                  (buffer-user-input-pending buf)))))
 
 (declaim (ftype (function (buffer) boolean) buffer-agent-busy-p))
 (defun buffer-agent-busy-p (buf)
@@ -823,6 +958,55 @@ Returns the restored messages."
 
 (defvar *suppress-session-autosave* nil
   "When non-nil, buffer message helpers do not refresh session snapshots.")
+
+(defun copy-runtime-owned-data (value)
+  "Recursively copy mutable provider/tool data into a new runtime owner.
+
+Conses, strings, vectors, and hash tables are copied.  Symbols, numbers,
+pathnames, functions, and other conventionally immutable leaf objects may be
+shared.  Provider payloads are acyclic data, so cycle preservation is not
+required here."
+  (typecase value
+    (string (copy-seq value))
+    (cons
+     (cons (copy-runtime-owned-data (car value))
+           (copy-runtime-owned-data (cdr value))))
+    (vector
+     (let ((copy (make-array (length value))))
+       (loop :for index :below (length value)
+             :do (setf (aref copy index)
+                       (copy-runtime-owned-data (aref value index))))
+       copy))
+    (hash-table
+     (let ((copy (make-hash-table
+                  :test (hash-table-test value)
+                  :size (hash-table-size value)
+                  :rehash-size (hash-table-rehash-size value)
+                  :rehash-threshold (hash-table-rehash-threshold value))))
+       (maphash (lambda (key item)
+                  (setf (gethash (copy-runtime-owned-data key) copy)
+                        (copy-runtime-owned-data item)))
+                value)
+       copy))
+    (t value)))
+
+(defstruct (buffer-message-insertion-effect
+            (:constructor make-buffer-message-insertion-effect
+                (sender text raw-content metadata timestamp record-p run-hook-p)))
+  "Immutable description of one worker-requested buffer message insertion."
+  (sender :system :type keyword :read-only t)
+  (text "" :type string :read-only t)
+  (raw-content nil :type list :read-only t)
+  (metadata nil :type list :read-only t)
+  (timestamp nil :type (or null integer) :read-only t)
+  (record-p t :type boolean :read-only t)
+  (run-hook-p t :type boolean :read-only t))
+
+(defvar *buffer-message-effect-recorder* nil
+  "Dynamically bound worker callback for deferred buffer message effects.
+When bound, BUFFER-INSERT-READ-ONLY-MESSAGE mutates only its detached buffer and
+records an immutable insertion effect.  Transcript writes, hooks, autosave, and
+display notification are deferred until the frame process applies the effect.")
 
 (defun attach-buffer-session (buf session)
   "Attach SESSION to BUF and return BUF."
@@ -1054,9 +1238,49 @@ Returns the restored messages."
   (setf *buffer-ring* (cons buf (remove buf *buffer-ring*)))
   buf)
 
+(defgeneric cancel-buffer-runtime-operations (buf)
+  (:documentation
+   "Cancel provider/tool/OAuth operations owned by BUF and invalidate callbacks."))
+
+(defun dispose-buffer (buf)
+  "Permanently dispose BUF and cancel all runtime resources it owns."
+  (let ((already-disposing-p nil))
+    (bt:with-lock-held ((buffer-runtime-lock buf))
+      (when (buffer-disposed-p buf)
+        (return-from dispose-buffer buf))
+      (if (buffer-disposing-p buf)
+          (setf already-disposing-p t)
+          (setf (buffer-disposing-p buf) t)))
+    ;; Disposal is single-flight.  A concurrent or reentrant caller observes
+    ;; the existing transition; its owner (or terminal applier) completes it.
+    (when already-disposing-p
+      (return-from dispose-buffer buf)))
+  (let ((returned-p nil)
+        (settled-p nil))
+    (unwind-protect
+         (multiple-value-bind (ignored settled)
+             (cancel-buffer-runtime-operations buf)
+           (declare (ignore ignored))
+           (setf returned-p t
+                 settled-p settled))
+      (bt:with-lock-held ((buffer-runtime-lock buf))
+        (cond
+          (settled-p
+           (setf (buffer-disposing-p buf) nil
+                 (buffer-disposed-p buf) t)
+           (bt:condition-notify (buffer-runtime-condition buf)))
+          ((not returned-p)
+           ;; A failed cancellation did not transfer finalization ownership.
+           ;; Preserve the buffer for a later retry.
+           (setf (buffer-disposing-p buf) nil)
+           (bt:condition-notify (buffer-runtime-condition buf)))))))
+  buf)
+
 (defun kill-buffer-from-ring (buf)
   "Remove BUF from the buffer ring. Returns the new current buffer or nil."
   (unless (and buf (scratch-buffer-p buf))
+    (when buf
+      (dispose-buffer buf))
     (setf *buffer-ring* (remove buf *buffer-ring*)))
   (first *buffer-ring*))
 
@@ -1240,22 +1464,144 @@ The input message is never removed."
 
 (defun buffer-insert-read-only-message
     (buf sender text &key raw-content metadata timestamp
-                      (record-p t) (run-hook-p t))
+                      (record-p t) (run-hook-p t) (notify-p t))
   "Create a read-only SENDER message with TEXT before BUF's input message."
-  (let ((msg (make-message sender :read-only-p t)))
+  (let* ((deferred-p (not (null *buffer-message-effect-recorder*)))
+         (msg (make-message sender :read-only-p t)))
     (set-message-text msg text)
     (setf (message-timestamp msg) (or timestamp (get-universal-time)))
     (when raw-content
-      (setf (message-raw-content msg) raw-content))
+      (setf (message-raw-content msg) (copy-runtime-owned-data raw-content)))
     (when metadata
-      (setf (message-metadata msg) metadata))
+      (setf (message-metadata msg) (copy-runtime-owned-data metadata)))
     (insert-message-before-input buf msg)
-    (when run-hook-p
-      (maybe-run-hook-with-args '*after-message-insert-hook* buf msg))
-    (when record-p
-      (record-buffer-message buf msg))
-    (notify-buffer-display-change buf :message)
+    (if deferred-p
+        (funcall
+         *buffer-message-effect-recorder*
+         (make-buffer-message-insertion-effect
+          sender
+          (copy-seq (or text ""))
+          (copy-runtime-owned-data raw-content)
+          (copy-runtime-owned-data metadata)
+          (message-timestamp msg)
+          record-p
+          run-hook-p))
+        (progn
+          (when run-hook-p
+            (maybe-run-hook-with-args '*after-message-insert-hook* buf msg))
+          (when record-p
+            (record-buffer-message buf msg))
+          (when notify-p
+            (notify-buffer-display-change buf :message))))
     msg))
+
+(defun apply-buffer-message-insertion-effect (buf effect)
+  "Apply deferred message insertion EFFECT to live BUF in the frame process."
+  (check-type effect buffer-message-insertion-effect)
+  (buffer-insert-read-only-message
+   buf
+   (buffer-message-insertion-effect-sender effect)
+   (buffer-message-insertion-effect-text effect)
+   :raw-content (copy-runtime-owned-data
+                 (buffer-message-insertion-effect-raw-content effect))
+   :metadata (copy-runtime-owned-data
+              (buffer-message-insertion-effect-metadata effect))
+   :timestamp (buffer-message-insertion-effect-timestamp effect)
+   :record-p (buffer-message-insertion-effect-record-p effect)
+   :run-hook-p (buffer-message-insertion-effect-run-hook-p effect)))
+
+(defun copy-session-for-tool-execution (session)
+  "Return detached SESSION metadata with its own synchronization lock."
+  (when session
+    (%make-session
+     (copy-seq (session-name session))
+     (copy-seq (session-id session))
+     (session-directory session)
+     (session-manifest-path session)
+     (session-transcript-directory session)
+     (session-current-transcript-index session)
+     (session-current-transcript-path session)
+     (session-created-at session)
+     :updated-at (session-updated-at session)
+     :current-leaf-id (and (session-current-leaf-id session)
+                           (copy-seq (session-current-leaf-id session)))
+     :parent-session (and (session-parent-session session)
+                          (copy-seq (session-parent-session session)))
+     :working-directory (session-working-directory session)
+     :display-name (and (session-display-name session)
+                        (copy-seq (session-display-name session))))))
+
+(defun clone-message-into-tool-buffer (snapshot message)
+  "Copy finalized MESSAGE into detached tool SNAPSHOT without side effects."
+  (let ((copy (make-message (message-sender message) :read-only-p t)))
+    (set-message-text copy (message-text message))
+    (setf (message-timestamp copy) (message-timestamp message)
+          (message-raw-content copy)
+          (copy-runtime-owned-data (message-raw-content message))
+          (message-metadata copy)
+          (copy-runtime-owned-data (message-metadata message))
+          (message-entry-id copy) (and (message-entry-id message)
+                                       (copy-seq (message-entry-id message)))
+          (message-parent-entry-id copy)
+          (and (message-parent-entry-id message)
+               (copy-seq (message-parent-entry-id message))))
+    (insert-message-before-input snapshot copy)))
+
+(defun make-tool-execution-buffer-snapshot (buf)
+  "Return a detached snapshot suitable for one background tool invocation.
+
+The snapshot shares no message, session lock, or mutable queue/runtime state
+with BUF.  Background tools may inspect and mutate it freely; only explicitly
+recorded immutable effects can later cross back to the live frame buffer."
+  (let* ((input (make-message :user))
+         (snapshot
+           (make-instance
+            'buffer
+            :name (copy-seq (buffer-name buf))
+            :first-message input
+            :last-message input
+            :agent-name (copy-seq (buffer-agent-name buf))
+            :kind (buffer-kind buf)
+            :working-directory (buffer-working-directory buf)
+            :project-name (and (buffer-project-name buf)
+                               (copy-seq (buffer-project-name buf)))
+            :resource-path (and (buffer-resource-path buf)
+                                (copy-seq (buffer-resource-path buf)))
+            :original-text (copy-seq (buffer-original-text buf))
+            :dirty-p (buffer-dirty-p buf)
+            :context-limit (buffer-context-limit buf)
+            :pipeline-name (and (buffer-pipeline-name buf)
+                                (copy-seq (buffer-pipeline-name buf)))
+            :enabled-packages (copy-list (buffer-enabled-packages buf))
+            :session (copy-session-for-tool-execution (buffer-session buf))
+            :session-persistence-mode :ephemeral
+            :major-mode (copy-seq (buffer-major-mode buf)))))
+    (loop :for message := (buffer-first-message buf)
+            :then (message-next message)
+          :while (and message (not (eq message (buffer-input-message buf))))
+          :do (clone-message-into-tool-buffer snapshot message))
+    (set-message-text (buffer-input-message snapshot)
+                      (message-text (buffer-input-message buf)))
+    (setf (buffer-token-count snapshot) (buffer-token-count buf)
+          (buffer-status snapshot) (buffer-status buf)
+          (buffer-provider-override snapshot) (buffer-provider-override buf)
+          (buffer-model-override snapshot) (buffer-model-override buf)
+          (buffer-think-level-override snapshot)
+          (buffer-think-level-override buf)
+          (buffer-model-role-override snapshot)
+          (buffer-model-role-override buf)
+          (buffer-model-role-set-override snapshot)
+          (copy-list (buffer-model-role-set-override buf))
+          (buffer-next-turn-model-role-override snapshot)
+          (buffer-next-turn-model-role-override buf)
+          (buffer-service-tier-override snapshot)
+          (buffer-service-tier-override buf)
+          (buffer-show-tool-results-p snapshot) (buffer-show-tool-results-p buf)
+          (buffer-collapse-tool-activity-p snapshot)
+          (buffer-collapse-tool-activity-p buf)
+          (buffer-show-reasoning-p snapshot) (buffer-show-reasoning-p buf)
+          (buffer-show-metadata-p snapshot) (buffer-show-metadata-p buf))
+    snapshot))
 
 (defun buffer-insert-agent-message
     (buf text &key (record-p t) raw-content metadata (run-hook-p t))

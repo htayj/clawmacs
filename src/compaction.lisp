@@ -35,6 +35,15 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
 (defvar *compaction-preserved-user-message-token-limit* 20000
   "Approximate token budget for exact recent user messages kept after compaction.")
 
+(defvar *compaction-stream-state-callback* nil
+  "Dynamic observer for a synchronous/headless compaction provider stream.")
+
+(defvar *compaction-cancel-requested-p* nil
+  "Dynamic cooperative cancellation predicate for synchronous compaction.")
+
+(defvar *suppress-prompt-compaction* nil
+  "True when an outer interactive operation already handled compaction.")
+
 (defun compaction-token-estimate-for-string (text)
   "Return a deterministic rough token estimate for TEXT."
   (let ((length (length (or text ""))))
@@ -199,11 +208,15 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
      (or (stream-state-stop-reason state) "end_turn")
      (nreverse (copy-list (stream-state-content-blocks state))))))
 
-(defun wait-for-compaction-stream-state (state)
+(defun wait-for-compaction-stream-state (state &key cancel-requested-p)
   "Block until streaming STATE completes and return its canonical response."
   (loop
+    (when (and cancel-requested-p (funcall cancel-requested-p))
+      (cancel-stream-state state :stop-reason "cancelled")
+      (error 'prompt-run-cancelled))
     (when (bt:with-lock-held ((stream-state-lock state))
             (stream-state-done-p state))
+      (settle-stream-state-reader state)
       (return (compaction-stream-state-response state)))
     (sleep 0.02)))
 
@@ -237,23 +250,167 @@ TRIMMED-MESSAGES and TRIMMED-COUNT."
          (max 1 (buffer-context-limit buf)))
       (values trimmed trimmed-count system-prompt))))
 
-(defun generate-compaction-summary (buf)
+(defun generate-compaction-summary
+    (buf &key stream-state-callback cancel-requested-p)
   "Ask BUF's active provider to summarize current conversation history."
   (multiple-value-bind (messages trimmed-count system-prompt)
       (compaction-request-messages buf)
     (multiple-value-bind (provider model think-level)
         (resolve-buffer-provider-and-model buf)
-      (let* ((state (provider-request-streaming
-                     provider
-                     messages
-                     (lambda (state) (declare (ignore state)))
-                     :model model
-                     :tools #()
-                     :system-prompt system-prompt
-                     :reasoning-effort think-level))
-             (response (wait-for-compaction-stream-state state))
-             (summary (content-text-blocks (response-content response))))
-        (values summary provider model think-level trimmed-count)))))
+      (let ((state nil)
+            (completed-p nil))
+        (unwind-protect
+             (progn
+               (setf state
+                     (provider-request-streaming
+                      provider
+                      messages
+                      (lambda (state) (declare (ignore state)))
+                      :model model
+                      :tools #()
+                      :system-prompt system-prompt
+                      :reasoning-effort think-level))
+               (when stream-state-callback
+                 (funcall stream-state-callback state))
+               (let* ((response
+                        (wait-for-compaction-stream-state
+                         state :cancel-requested-p cancel-requested-p))
+                      (summary
+                        (content-text-blocks (response-content response))))
+                 (setf completed-p t)
+                 (values summary provider model think-level trimmed-count)))
+          (when stream-state-callback
+            (funcall stream-state-callback nil))
+          (when (and state (not completed-p))
+            (cancel-stream-state state :stop-reason "cancelled")
+            (settle-stream-state-reader state)))))))
+
+(defun make-interactive-compaction-result (buf reason)
+  "Generate detached compaction data for later frame-process application."
+  (let ((recent-users
+          (collect-recent-user-message-snapshots
+           buf *compaction-preserved-user-message-token-limit*)))
+    (multiple-value-bind (summary provider model think-level trimmed-count)
+        (generate-compaction-summary
+         buf
+         :stream-state-callback
+         *interactive-operation-stream-state-callback*
+         :cancel-requested-p
+         *interactive-operation-cancel-requested-p*)
+      (declare (ignore think-level))
+      (when (blank-string-p summary)
+        (error "Compaction provider returned an empty summary"))
+      (list :reason reason
+            :summary-text (compaction-summary-with-prefix summary)
+            :provider provider
+            :model model
+            :trimmed-count trimmed-count
+            :recent-users recent-users))))
+
+(defun apply-interactive-compaction-result (buf result)
+  "Apply detached compaction RESULT to live BUF on the CLIM frame process."
+  (let* ((reason (getf result :reason))
+         (summary-text (getf result :summary-text))
+         (recent-users (getf result :recent-users))
+         (provider (getf result :provider))
+         (model (getf result :model))
+         (trimmed-count (or (getf result :trimmed-count) 0)))
+    (when (buffer-session buf)
+      (let ((tokens-before (buffer-conversation-token-estimate buf)))
+        (rotate-session-transcript (buffer-session buf) :reason reason)
+        (record-session-compaction
+         (buffer-session buf)
+         :reason reason
+         :summary summary-text
+         :tokens-before tokens-before)))
+    (replace-buffer-with-compacted-history buf summary-text recent-users)
+    (let ((estimate (buffer-conversation-token-estimate buf)))
+      (setf (buffer-token-count buf) estimate)
+      (buffer-insert-system-message
+       buf
+       (format nil
+               "[Conversation compacted via ~(~A~)/~A: summary plus ~D recent user message~:P, estimate ~D/~D tokens~A.]"
+               provider
+               model
+               (length recent-users)
+               estimate
+               (buffer-context-limit buf)
+               (if (plusp trimmed-count)
+                   (format nil
+                           "; trimmed ~D old message~:P before summarizing"
+                           trimmed-count)
+                   "")))))
+  buf)
+
+(defun buffer-has-compaction-history-p (buf)
+  "Return true when BUF has provider-visible finalized history to summarize."
+  (loop :for msg := (buffer-first-message buf) :then (message-next msg)
+        :while (and msg (not (eq msg (buffer-input-message buf))))
+        :thereis (compaction-message-visible-p msg)))
+
+(defun default-compaction-function-p (function)
+  "Return true when FUNCTION is the built-in compactor, including after reload."
+  (or (eq function #'default-compact-buffer)
+      (eq (nth-value 2 (function-lambda-expression function))
+          'default-compact-buffer)))
+
+(defun start-interactive-compaction
+    (buf &key (reason :auto) force-p continuation)
+  "Start compaction off the CLIM process and optionally CONTINUATION afterward.
+
+Returns values OPERATION, NEEDED-P, ESTIMATE, and THRESHOLD.  Custom compaction
+functions are refused interactively because their arbitrary snapshot mutations
+cannot be serialized safely back into the live frame buffer."
+  (multiple-value-bind (needed-p estimate threshold)
+      (if force-p
+          (values t (buffer-conversation-token-estimate buf) nil)
+          (compaction-needed-p buf))
+    (setf (buffer-token-count buf) estimate)
+    (unless (buffer-has-compaction-history-p buf)
+      (return-from start-interactive-compaction
+        (values nil nil estimate threshold)))
+    (unless (and needed-p *compaction-function*)
+      (return-from start-interactive-compaction
+        (values nil needed-p estimate threshold)))
+    (let ((compaction-function *compaction-function*))
+      (unless (default-compaction-function-p compaction-function)
+        (buffer-insert-system-message
+         buf
+         "[Interactive custom compaction is not supported: custom snapshot mutations cannot be applied safely. Use the built-in compactor or call the custom compactor from a trusted non-UI context.]")
+        (return-from start-interactive-compaction
+          (values nil needed-p estimate threshold)))
+      (multiple-value-bind (operation refusal)
+          (start-interactive-buffer-operation
+           buf
+           :compaction
+           (lambda (snapshot operation)
+             (declare (ignore operation))
+             (make-interactive-compaction-result snapshot reason))
+           (lambda (live-buffer operation result error-text)
+             (declare (ignore operation))
+             (cond
+               (error-text
+                (buffer-insert-system-message
+                 live-buffer
+                 (format nil "[Compaction failed: ~A]" error-text)))
+               (result
+                (apply-interactive-compaction-result live-buffer result))
+               (t
+                (buffer-insert-system-message
+                 live-buffer "[Nothing compacted.]")))
+             (setf (buffer-status live-buffer) :idle)
+             ;; This call is last: any earlier application error unwinds before
+             ;; a provider/pipeline continuation can be started accidentally.
+             (when (and continuation
+                        (buffer-runtime-continuation-valid-p live-buffer))
+               (funcall continuation live-buffer)))
+           :payload (list :reason reason)
+           :status :compacting)
+        (when refusal
+          (setf (buffer-status buf) :idle)
+          (buffer-insert-system-message
+           buf (format nil "[Compaction start refused: ~A]" refusal)))
+        (values operation needed-p estimate threshold)))))
 
 (defun default-compact-buffer (buf &key (reason :auto))
   "Compact BUF using the active provider and return BUF on success."
@@ -266,7 +423,10 @@ TRIMMED-MESSAGES and TRIMMED-COUNT."
                        buf
                        *compaction-preserved-user-message-token-limit*)))
     (multiple-value-bind (summary provider model think-level trimmed-count)
-        (generate-compaction-summary buf)
+        (generate-compaction-summary
+         buf
+         :stream-state-callback *compaction-stream-state-callback*
+         :cancel-requested-p *compaction-cancel-requested-p*)
       (declare (ignore think-level))
       (when (blank-string-p summary)
         (error "Compaction provider returned an empty summary"))
@@ -336,9 +496,10 @@ Returns values COMPACTED-P, ESTIMATE, and THRESHOLD."
       buffer
       "[Compaction is only available for chat buffers.]"))
     (t
-     (multiple-value-bind (compacted-p estimate threshold)
-         (maybe-compact-buffer buffer :reason :manual :force-p t)
-       (unless compacted-p
+     (multiple-value-bind (operation needed-p estimate threshold)
+         (start-interactive-compaction buffer :reason :manual :force-p t)
+       (declare (ignore needed-p))
+       (unless operation
          (buffer-insert-system-message
           buffer
           (format nil

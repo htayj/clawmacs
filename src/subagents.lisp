@@ -13,8 +13,21 @@
 (defvar *subagent-handles* (make-hash-table :test #'equal)
   "Process-local registry mapping subagent ids to SUBAGENT-HANDLE objects.")
 
+(defparameter *subagent-terminal-history-limit* 64
+  "Maximum number of settled subagent handles retained for status queries.")
+
+(defvar *subagent-terminal-sequence-counter* 0
+  "Monotonic sequence used to retain the most recently settled subagents.")
+
+(defvar *synchronous-subagent-runs* (make-hash-table :test #'eq)
+  "Exact reservations for direct synchronous RUN-SUBAGENT calls.")
+
 (defvar *subagent-registry-lock* (bt:make-lock "subagent-registry")
   "Lock protecting subagent id generation and registry updates.")
+
+(define-condition prompt-run-cancelled (condition)
+  ()
+  (:documentation "Internal control condition for cooperative prompt cancellation."))
 
 (defstruct subagent-handle
   "Handle for a background subagent run."
@@ -28,6 +41,10 @@
   finished-at
   thread
   (cancel-requested-p nil :type boolean)
+  current-stream-state
+  (worker-finished-p nil :type boolean)
+  terminal-sequence
+  (retained-resources-released-p nil :type boolean)
   (lock (bt:make-lock "subagent-handle")))
 
 (defun next-subagent-id ()
@@ -35,10 +52,101 @@
   (bt:with-lock-held (*subagent-registry-lock*)
     (format nil "subagent-~D" (incf *subagent-handle-counter*))))
 
+(defun active-synchronous-subagent-run-count ()
+  "Return the number of direct subagent runs visible to safe reload."
+  (bt:with-lock-held (*subagent-registry-lock*)
+    (hash-table-count *synchronous-subagent-runs*)))
+
+(defun settle-synchronous-subagent-run (token)
+  "Remove TOKEN only after its direct run has stopped executing project code."
+  (when (bt:with-lock-held (*subagent-registry-lock*)
+          (gethash token *synchronous-subagent-runs*))
+    (call-with-runtime-settlement-admission
+     (lambda ()
+       (bt:with-lock-held (*subagent-registry-lock*)
+         (remhash token *synchronous-subagent-runs*)))
+     :operation "synchronous subagent settlement"))
+  token)
+
+(defun call-with-synchronous-subagent-run-reservation (function)
+  "Call FUNCTION with one exact process-visible synchronous run reservation."
+  (let ((token (cons :synchronous-subagent (gensym "RUN-"))))
+    (unwind-protect
+         (progn
+           (call-with-runtime-admission
+            (lambda ()
+              (bt:with-lock-held (*subagent-registry-lock*)
+                (setf (gethash token *synchronous-subagent-runs*) t)))
+           :operation "a synchronous subagent run")
+           (funcall function))
+      (settle-synchronous-subagent-run token))))
+
+(defun settled-subagent-handle-p (handle)
+  "Return true when HANDLE is terminal and its worker has exited."
+  (and (subagent-handle-worker-finished-p handle)
+       (member (subagent-handle-status handle)
+               '(:succeeded :failed :cancelled)
+               :test #'eq)))
+
+(defun note-subagent-terminal-sequence-locked (handle)
+  "Assign HANDLE's terminal sequence with the registry lock already held."
+  (bt:with-lock-held ((subagent-handle-lock handle))
+    (when (and (settled-subagent-handle-p handle)
+               (null (subagent-handle-terminal-sequence handle)))
+      (setf (subagent-handle-terminal-sequence handle)
+            (incf *subagent-terminal-sequence-counter*)))))
+
+(defun release-subagent-retained-resources (handle)
+  "Release heavy resources from an evicted, settled HANDLE."
+  (bt:with-lock-held ((subagent-handle-lock handle))
+    (when (settled-subagent-handle-p handle)
+      (setf (subagent-handle-prompt handle) nil
+            (subagent-handle-result handle) nil
+            (subagent-handle-error handle) nil
+            (subagent-handle-thread handle) nil
+            (subagent-handle-current-stream-state handle) nil
+            (subagent-handle-retained-resources-released-p handle) t)))
+  handle)
+
+(defun prune-subagent-terminal-history ()
+  "Bound settled handle history and release resources held by evictions.
+
+Running and cancelling handles are never candidates.  Registry removal is
+atomic under the registry lock; resource release happens afterward so it does
+not lengthen the registry critical section."
+  (let ((evicted nil)
+        (limit (max 0 *subagent-terminal-history-limit*)))
+    (bt:with-lock-held (*subagent-registry-lock*)
+      (let ((terminal-handles nil))
+        (maphash
+         (lambda (_id handle)
+           (declare (ignore _id))
+           (note-subagent-terminal-sequence-locked handle)
+           (bt:with-lock-held ((subagent-handle-lock handle))
+             (when (settled-subagent-handle-p handle)
+               (push handle terminal-handles))))
+         *subagent-handles*)
+        (setf terminal-handles
+              (sort terminal-handles #'>
+                    :key (lambda (handle)
+                           (or (subagent-handle-terminal-sequence handle) 0))))
+        (dolist (handle (nthcdr limit terminal-handles))
+          (when (eq handle
+                    (gethash (subagent-handle-id handle) *subagent-handles*))
+            (remhash (subagent-handle-id handle) *subagent-handles*)
+            (push handle evicted)))))
+    ;; No cancellation, stream close, or other external work runs under the
+    ;; registry lock.
+    (dolist (handle evicted)
+      (release-subagent-retained-resources handle))
+    (length evicted)))
+
 (defun register-subagent-handle (handle)
   "Store HANDLE in the process-local subagent registry."
   (bt:with-lock-held (*subagent-registry-lock*)
-    (setf (gethash (subagent-handle-id handle) *subagent-handles*) handle))
+    (setf (gethash (subagent-handle-id handle) *subagent-handles*) handle)
+    (note-subagent-terminal-sequence-locked handle))
+  (prune-subagent-terminal-history)
   handle)
 
 (defun find-subagent (handle-or-id)
@@ -68,9 +176,13 @@
       (subagent-handle-status handle))))
 
 (defun subagent-done-p (handle)
-  "Return true when HANDLE has reached a terminal status."
-  (not (null (member (subagent-status handle)
-                     '(:succeeded :failed :cancelled)))))
+  "Return true when HANDLE has reached a terminal status and its worker exited."
+  (let ((handle (or (find-subagent handle)
+                    (error "Unknown subagent handle: ~S" handle))))
+    (bt:with-lock-held ((subagent-handle-lock handle))
+      (and (subagent-handle-worker-finished-p handle)
+           (not (null (member (subagent-handle-status handle)
+                              '(:succeeded :failed :cancelled))))))))
 
 (defun subagent-result (handle)
   "Return HANDLE's prompt result when available."
@@ -95,12 +207,14 @@
             :prompt (subagent-handle-prompt handle)
             :agent-name (subagent-handle-agent-name handle)
             :status (subagent-handle-status handle)
-            :done-p (not (null (member (subagent-handle-status handle)
-                                       '(:succeeded :failed :cancelled))))
+            :done-p (and (subagent-handle-worker-finished-p handle)
+                         (not (null (member (subagent-handle-status handle)
+                                            '(:succeeded :failed :cancelled)))))
             :result (subagent-handle-result handle)
             :error (subagent-handle-error handle)
             :started-at (subagent-handle-started-at handle)
             :finished-at (subagent-handle-finished-at handle)
+            :worker-finished-p (subagent-handle-worker-finished-p handle)
             :cancel-requested-p
             (subagent-handle-cancel-requested-p handle)))))
 
@@ -114,18 +228,64 @@
             (subagent-handle-finished-at handle) (get-universal-time))))
   handle)
 
+(defun update-subagent-stream-state (handle state)
+  "Record STATE as HANDLE's active provider stream and honor early cancel."
+  (let ((cancel-now-p nil))
+    (bt:with-lock-held ((subagent-handle-lock handle))
+      (setf (subagent-handle-current-stream-state handle) state
+            cancel-now-p (subagent-handle-cancel-requested-p handle)))
+    (when (and cancel-now-p state)
+      (cancel-stream-state state :stop-reason "cancelled")))
+  state)
+
+(defun finish-subagent-worker-under-admission (handle)
+  "Settle HANDLE while runtime settlement admission is already held."
+  (bt:with-lock-held ((subagent-handle-lock handle))
+    (setf (subagent-handle-current-stream-state handle) nil
+          (subagent-handle-worker-finished-p handle) t)
+    (when (subagent-handle-cancel-requested-p handle)
+      (setf (subagent-handle-status handle) :cancelled
+            (subagent-handle-result handle) nil
+            (subagent-handle-error handle) nil
+            (subagent-handle-finished-at handle) (get-universal-time)))
+    (unless (subagent-handle-finished-at handle)
+      (setf (subagent-handle-finished-at handle) (get-universal-time))))
+  (bt:with-lock-held (*subagent-registry-lock*)
+    (when (eq handle
+              (gethash (subagent-handle-id handle) *subagent-handles*))
+      (note-subagent-terminal-sequence-locked handle)))
+  (prune-subagent-terminal-history)
+  handle)
+
+(defun finish-subagent-worker (handle)
+  "Publish HANDLE's final worker settlement exactly once."
+  (call-with-runtime-settlement-admission
+   (lambda ()
+     (finish-subagent-worker-under-admission handle))
+   :operation "subagent worker settlement"))
+
+(defun make-subagent-worker-thread (function name)
+  "Create the background thread for one subagent run.
+
+This small boundary keeps thread-creation failure deterministic in lifecycle
+tests without replacing Bordeaux Threads process-wide."
+  (bt:make-thread function :name name))
+
 (defun cancel-subagent (handle)
   "Cooperatively cancel HANDLE.
-The provider request may continue in the background, but late completion will
-not overwrite the public cancelled status or result."
+The active provider stream is closed when available.  The handle remains
+:CANCELLING until its worker has stopped, then settles as :CANCELLED."
   (let ((handle (or (find-subagent handle)
-                    (error "Unknown subagent handle: ~S" handle))))
+                    (error "Unknown subagent handle: ~S" handle)))
+        (stream-state nil))
     (bt:with-lock-held ((subagent-handle-lock handle))
       (unless (member (subagent-handle-status handle)
                       '(:succeeded :failed :cancelled))
         (setf (subagent-handle-cancel-requested-p handle) t
-              (subagent-handle-status handle) :cancelled
-              (subagent-handle-finished-at handle) (get-universal-time))))
+              (subagent-handle-status handle) :cancelling
+              stream-state (subagent-handle-current-stream-state handle))))
+    (when stream-state
+      (cancel-stream-state stream-state :stop-reason "cancelled"))
     handle))
 
 (defun wait-subagent (handle &key timeout (poll-interval 0.05))
@@ -139,9 +299,11 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
                         (round (* timeout internal-time-units-per-second)))))
          (sleep-interval (max 0.001 poll-interval)))
     (loop
-      (let ((status (subagent-status handle)))
-        (when (member status '(:succeeded :failed :cancelled))
-          (return (values (subagent-result handle) status handle))))
+      (let ((snapshot (subagent-snapshot handle)))
+        (when (getf snapshot :done-p)
+          (return (values (getf snapshot :result)
+                          (getf snapshot :status)
+                          handle))))
       (when (and deadline
                  (>= (get-internal-real-time) deadline))
         (return (values nil :timeout handle)))
@@ -180,34 +342,39 @@ completion, returns NIL, :TIMEOUT, and HANDLE."
                                   (tool-names nil tool-names-supplied-p)
                                   custom-tools
                                   (max-tool-iterations *prompt-max-tool-iterations*)
-                                  auto-approve-tools-p)
+                                  stream-state-callback
+                                  cancel-requested-p)
   "Run PROMPT through a synchronous subagent and return a PROMPT-RUN-RESULT.
 AGENT-NAME may name a registered agent. Explicit routing, prompt, and tool
 arguments override the registered definition for this run only."
-  (let* ((effective-agent-name (or agent-name *default-subagent-name*))
-         (name-key (normalize-agent-name-key effective-agent-name))
-         (prompt-override nil)
-         (run-args (list :agent-name effective-agent-name
-                         :provider provider
-                         :model model
-                         :think-level think-level
-                         :model-role model-role
-                         :service-tier service-tier
-                         :working-directory working-directory
-                         :max-tool-iterations max-tool-iterations
-                         :auto-approve-tools-p auto-approve-tools-p
-                         :custom-tools custom-tools)))
-    (when core-prompt
-      (setf (getf prompt-override :core-prompt) core-prompt))
-    (when personality-prompt
-      (setf (getf prompt-override :personality-prompt) personality-prompt))
-    (when tool-names-supplied-p
-      (setf run-args (append run-args (list :tool-names tool-names))))
-    (let ((*agent-prompt-overrides*
-            (if prompt-override
-                (acons name-key prompt-override *agent-prompt-overrides*)
-                *agent-prompt-overrides*)))
-      (apply #'run-single-prompt prompt run-args))))
+  (call-with-synchronous-subagent-run-reservation
+   (lambda ()
+     (let* ((effective-agent-name (or agent-name *default-subagent-name*))
+            (name-key (normalize-agent-name-key effective-agent-name))
+            (prompt-override nil)
+            (run-args (list :agent-name effective-agent-name
+                            :provider provider
+                            :model model
+                            :think-level think-level
+                            :model-role model-role
+                            :service-tier service-tier
+                            :working-directory working-directory
+                            :max-tool-iterations max-tool-iterations
+                            :custom-tools custom-tools
+                            :stream-state-callback stream-state-callback
+                            :cancel-requested-p cancel-requested-p)))
+       (when core-prompt
+         (setf (getf prompt-override :core-prompt) core-prompt))
+       (when personality-prompt
+         (setf (getf prompt-override :personality-prompt)
+               personality-prompt))
+       (when tool-names-supplied-p
+         (setf run-args (append run-args (list :tool-names tool-names))))
+       (let ((*agent-prompt-overrides*
+               (if prompt-override
+                   (acons name-key prompt-override *agent-prompt-overrides*)
+                   *agent-prompt-overrides*)))
+         (apply #'run-single-prompt prompt run-args))))))
 
 (defun run-subagent-async (prompt &key (agent-name *default-subagent-name*)
                                         provider model think-level
@@ -218,45 +385,78 @@ arguments override the registered definition for this run only."
                                         (tool-names nil tool-names-supplied-p)
                                         custom-tools
                                         (max-tool-iterations
-                                         *prompt-max-tool-iterations*)
-                                        auto-approve-tools-p)
+                                         *prompt-max-tool-iterations*))
   "Run PROMPT in a background subagent and return a SUBAGENT-HANDLE."
   (when (blank-string-p prompt)
     (error "Prompt must be non-empty"))
-  (let* ((effective-agent-name (or agent-name *default-subagent-name*))
-         (handle (make-subagent-handle
-                  :id (next-subagent-id)
-                  :prompt prompt
-                  :agent-name effective-agent-name
-                  :status :running
-                  :started-at (get-universal-time)))
-         (run-args (list :agent-name effective-agent-name
-                         :provider provider
-                         :model model
-                         :think-level think-level
-                         :model-role model-role
-                         :service-tier service-tier
-                         :core-prompt core-prompt
-                         :personality-prompt personality-prompt
-                         :working-directory working-directory
-                         :custom-tools custom-tools
-                         :max-tool-iterations max-tool-iterations
-                         :auto-approve-tools-p auto-approve-tools-p)))
-    (when tool-names-supplied-p
-      (setf run-args (append run-args (list :tool-names tool-names))))
-    (register-subagent-handle handle)
-    (setf (subagent-handle-thread handle)
-          (bt:make-thread
-           (lambda ()
-             (handler-case
-                 (let ((result (apply #'run-subagent prompt run-args)))
-                   (complete-subagent-handle handle :succeeded
-                                             :result result))
-               (error (condition)
-                 (complete-subagent-handle
-                  handle
-                  :failed
-                  :error (format nil "~A" condition)))))
-           :name (format nil "clawmacs-~A"
-                         (subagent-handle-id handle))))
+  (let ((effective-agent-name (or agent-name *default-subagent-name*))
+        (handle nil))
+    ;; Publish package-contributed agent/tools before the async handle or its
+    ;; worker becomes visible.  RUN-SINGLE-PROMPT keeps its worker-side load as
+    ;; an idempotent warm-path check.
+    (load-active-packages :agent-name effective-agent-name)
+    (call-with-runtime-admission
+     (lambda ()
+       (setf handle
+             (make-subagent-handle
+              :id (next-subagent-id)
+              :prompt prompt
+              :agent-name effective-agent-name
+              :status :running
+              :started-at (get-universal-time)))
+       (let ((run-args
+               (list :agent-name effective-agent-name
+                     :provider provider
+                     :model model
+                     :think-level think-level
+                     :model-role model-role
+                     :service-tier service-tier
+                     :core-prompt core-prompt
+                     :personality-prompt personality-prompt
+                     :working-directory working-directory
+                     :custom-tools custom-tools
+                     :max-tool-iterations max-tool-iterations
+                     :stream-state-callback
+                     (lambda (state)
+                       (update-subagent-stream-state handle state))
+                     :cancel-requested-p
+                     (lambda ()
+                       (bt:with-lock-held ((subagent-handle-lock handle))
+                         (subagent-handle-cancel-requested-p handle))))))
+         (when tool-names-supplied-p
+           (setf run-args (append run-args (list :tool-names tool-names))))
+         (register-subagent-handle handle)
+         (handler-case
+             (let ((thread
+                     (make-subagent-worker-thread
+                      (lambda ()
+                        (unwind-protect
+                             (handler-case
+                                 (let ((result
+                                         (apply #'run-subagent prompt run-args)))
+                                   (complete-subagent-handle
+                                    handle :succeeded :result result))
+                               (prompt-run-cancelled () nil)
+                               (error (condition)
+                                 (complete-subagent-handle
+                                  handle
+                                  :failed
+                                  :error (format nil "~A" condition))))
+                          (finish-subagent-worker handle)))
+                      (format nil "clawmacs-~A"
+                              (subagent-handle-id handle)))))
+               ;; A very short worker can settle before MAKE-THREAD returns.
+               ;; Do not reinstall its thread after history eviction.
+               (bt:with-lock-held ((subagent-handle-lock handle))
+                 (unless
+                     (subagent-handle-retained-resources-released-p handle)
+                   (setf (subagent-handle-thread handle) thread))))
+           (error (condition)
+             ;; The handle was made visible before thread creation.  Settle it
+             ;; so status/list operations never observe :RUNNING forever.
+             (complete-subagent-handle handle :failed
+                                       :error (format nil "~A" condition))
+             (finish-subagent-worker-under-admission handle)
+             (error condition)))))
+     :operation "an asynchronous subagent run")
     handle))

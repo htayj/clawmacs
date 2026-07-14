@@ -220,8 +220,9 @@ Selected test methods that will run after this stage: ~{~A~^, ~}.~%~%
 Use the durable recovery primitives while changing code: file writes/edits and
 lisp_eval are checkpointed automatically, `recovery_list` can summarize recent
 checkpoints after failures, and risky compile/load/eval probes should use
-`lisp_eval` with :mode \"isolated\" unless you intentionally need to mutate the
-live Clawmacs image. Do not reduce Clawmacs self-modification capability; make
+`lisp_eval` with :mode \"isolated\". Provider-driven live evaluation is refused
+because it can block or terminate the CLIM frame process. Do not reduce
+Clawmacs self-modification capability; make
 changes recoverable and repairable.
 
 Do the code changes now. Do not update docs or init.lisp yet unless doing so is
@@ -312,8 +313,9 @@ change, state that clearly and make no unrelated edits."
 User request:~%~A~%~%
 Plan summary:~%~A~%~%
 init.lisp instructions:~%~A~%~%
-The init file path is ~A. Workspace file tools may not reach it; use lisp_eval
-if you must modify that file from the running process."
+The init file path is ~A. Workspace file tools may not reach it. Do not use
+provider-driven live lisp_eval; if policy prevents the edit, report the exact
+manual change for the user instead."
             (pipeline-context-original-prompt context)
             (getf plan :plan)
             (or (getf plan :init) "No init change should be made unless required.")
@@ -428,7 +430,7 @@ if you must modify that file from the running process."
 
 (defdoc run-pipeline-prompt
   :category "pipelines"
-  :usage "(run-pipeline-prompt PROMPT PIPELINE-NAME &key :session-name :agent-name :provider :model :think-level :max-tool-iterations :auto-approve-tools-p :package-names)"
+  :usage "(run-pipeline-prompt PROMPT PIPELINE-NAME &key :session-name :agent-name :provider :model :think-level :max-tool-iterations :package-names)"
   :returns "prompt-run-result - The final pipeline stage summarized as prompt-mode output."
   :side-effects "Loads or creates a prompt buffer, records each pipeline stage as context, runs provider requests, executes allowed tools, and persists session snapshots when SESSION-NAME is supplied."
   :see-also (define-pipeline run-pipeline-on-buffer pipeline-stage-result-final-text))

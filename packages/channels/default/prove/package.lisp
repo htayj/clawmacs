@@ -51,10 +51,10 @@
   "Return the root directory for PROJECT-DESIGNATOR."
   (project-root (ensure-project project-designator)))
 
-(defun prove-directory-from-sandbox (directory)
-  "Return DIRECTORY as an existing sandbox-local directory."
+(defun prove-directory-from-path (directory)
+  "Resolve DIRECTORY and return it as an existing directory."
   (prove-existing-directory
-   (validate-sandbox-path directory)
+   (lispi:resolve-tool-path directory)
    "Test directory"))
 
 (defun prove-buffer-working-directory ()
@@ -66,9 +66,9 @@
      (uiop:ensure-directory-pathname
       (buffer-working-directory *current-tool-buffer*)))))
 
-(defun prove-sandbox-root ()
-  "Return the effective sandbox root as a directory pathname."
-  (uiop:ensure-directory-pathname (or *sandbox-root* (truename "."))))
+(defun prove-tool-working-directory ()
+  "Return the effective tool working directory."
+  (lispi:tool-working-directory-pathname))
 
 (defun prove-resolve-directory (args)
   "Resolve ARGS to the directory where test methods should run."
@@ -78,10 +78,10 @@
       ((not (prove-blank-string-p project))
        (prove-directory-from-project project))
       ((not (prove-blank-string-p directory))
-       (prove-directory-from-sandbox directory))
+       (prove-directory-from-path directory))
       ((prove-buffer-working-directory))
       (t
-       (prove-existing-directory (prove-sandbox-root)
+       (prove-existing-directory (prove-tool-working-directory)
                                  "Test directory")))))
 
 (defun prove-method-names (args)
@@ -174,7 +174,7 @@
  "## Self-testing with prove
 
 - Use `prove_list_methods` to inspect the deterministic test methods available
-  in the current project, a named project, or a sandbox-local directory.
+  in the current project, a named project, or an explicit directory path.
 - Use `prove_run` to run one or more named test methods and get a structured
   report with truncated stdout and stderr suitable for agent use.
 - The bundled `tester` agent is configured to use only these tools for
@@ -186,18 +186,16 @@
 
 (deftool prove-list-methods-tool
   :name "prove_list_methods"
-  :description "List the deterministic self-test methods available for the current project, a named project, or a sandbox-local directory."
-  :permission :agent-allowed
+  :description "List deterministic self-test methods for the current project, a named project, or an explicit directory path."
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. Takes precedence over directory.")
          (directory :type "string" :required nil
-                    :description "Optional sandbox-local working directory.")))
+                    :description "Optional working directory path.")))
 
 (deftool prove-run-tool
   :name "prove_run"
   :description "Run one or more deterministic self-test methods and return a structured, agent-readable report."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((methods :type "array"
                   :items ((:type . "string"))
@@ -205,7 +203,7 @@
          (project :type "string" :required nil
                   :description "Optional Clawmacs project name. Takes precedence over directory.")
          (directory :type "string" :required nil
-                    :description "Optional sandbox-local working directory.")
+                    :description "Optional working directory path.")
          (max-chars :type "integer" :required nil
                     :description "Maximum stdout/stderr characters returned per method. Defaults to 4000.")))
 

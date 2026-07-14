@@ -48,7 +48,6 @@
 (deftool slop-tool-list-projects
   :name "slop_list_projects"
   :description "List SLOP-visible projects and the default current project for Common Lisp source analysis."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((include-default :type "boolean" :required nil
                           :description "When true or omitted, ensure the current workspace project is registered and included.")))
@@ -56,7 +55,6 @@
 (deftool slop-tool-current-project
   :name "slop_current_project"
   :description "Return the current/default SLOP project; accepts project, '.', 'workspace', '/workspace', or a source root path."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root alias. Omit for the current workspace.")))
@@ -64,7 +62,6 @@
 (deftool slop-tool-project-symbols
   :name "slop_project_symbols"
   :description "Search Common Lisp definitions in a project by name, package, kind, or path."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
@@ -86,7 +83,6 @@
 (deftool slop-tool-symbol-at
   :name "slop_symbol_at"
   :description "Return the symbol, binding, and enclosing definition at a Common Lisp source location."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
@@ -102,7 +98,6 @@
 (deftool slop-tool-find-definitions
   :name "slop_find_definitions"
   :description "Find Common Lisp definitions for a symbol in a project."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
@@ -124,7 +119,6 @@
 (deftool slop-tool-find-definitions-batch
   :name "slop_find_definitions_batch"
   :description "Find Common Lisp definitions for multiple symbols in one project index pass."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
@@ -146,7 +140,6 @@
 (deftool slop-tool-find-references
   :name "slop_find_references"
   :description "Find Common Lisp references for a symbol or slop definition id; stale ids fall back to symbol lookup when supplied."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
@@ -170,7 +163,6 @@
 (deftool slop-tool-find-callers
   :name "slop_find_callers"
   :description "Find functions or top-level forms that call a selected Common Lisp function definition."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
@@ -186,7 +178,6 @@
 (deftool slop-tool-find-callees
   :name "slop_find_callees"
   :description "List function calls made from a selected Common Lisp definition."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
@@ -202,7 +193,6 @@
 (deftool slop-tool-trace-calls
   :name "slop_trace_calls"
   :description "Trace Common Lisp call flow from an entrypoint/function to helpers or callers; pass definition-id when available to avoid ambiguity."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
@@ -224,7 +214,6 @@
 (deftool slop-tool-find-mentions
   :name "slop_find_mentions"
   :description "Find text mentions of a symbol or phrase across project source, docs, tests, and config."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
@@ -242,7 +231,6 @@
 (deftool slop-tool-definition-context
   :name "slop_definition_context"
   :description "Read a Common Lisp definition body with nearby top-level forms and package context."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
@@ -266,7 +254,6 @@
 (deftool slop-tool-find-variable-uses
   :name "slop_find_variable_uses"
   :description "Find the binding, accesses, and sets for one lexical Common Lisp variable."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
@@ -286,7 +273,6 @@
 (deftool slop-tool-rename-variable
   :name "slop_rename_variable"
   :description "Safely rename one lexical Common Lisp variable and its known references directly on disk."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")

@@ -1,7 +1,7 @@
 (defpackage :lispi
   (:use :cl)
   (:export
-   #:*sandbox-root*
+   #:*tool-working-directory*
    #:*file-read-default-limit*
    #:*find-default-limit*
    #:*grep-default-limit*
@@ -26,21 +26,19 @@
    #:lisp-data-string
    #:lisp-data-read
    #:tool-error-result-data
-   #:tool-denied-result-data
    #:tool-key-name
    #:tool-key=
    #:tool-plist-p
    #:tool-args-alist
    #:tool-arg
    #:compute-simple-diff
-   #:validate-sandbox-path
+   #:tool-working-directory-pathname
+   #:resolve-tool-path
    #:execute-read
    #:execute-find
    #:execute-grep
    #:execute-write
    #:execute-edit
    #:execute-lisp-eval
-   #:file-write-approval-display
-   #:file-edit-approval-display
    #:eval-history-to-string
    #:default-tool-specs))

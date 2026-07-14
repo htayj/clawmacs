@@ -50,9 +50,18 @@ framework inside a macro".
 
 ### Tools
 
-`src/tools.lisp` owns agent-callable function metadata, schemas, permissions,
-and execution. Tools are not commands with extra flags. They are a separate
-surface with different contracts and different safety rules.
+`src/tools.lisp` owns agent-callable function metadata, schemas, exposure, and
+execution. Tools are not commands with extra flags. They are a separate
+surface with different invocation contracts. Tool exposure, agent tool lists,
+package enablement, and immutable per-run snapshots compose a workflow; none is
+an authorization or containment boundary.
+
+Clawmacs is intentionally full-trust. Init files, packages, tools, shell
+commands, and live Lisp run with the authority of the Clawmacs process. Users
+who need containment should place the whole process inside an external sandbox,
+container, VM, or restricted account. Isolated evaluator workers and managed
+background operations protect frame liveness and process stability, not data or
+network access.
 
 ### Packages
 

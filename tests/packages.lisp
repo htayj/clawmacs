@@ -106,16 +106,16 @@
   :description "Package loader tests"
   :in clawmacs-suite)
 
-(def-suite guard-suite
-  :description "Approval policy and sandbox preset tests"
-  :in clawmacs-suite)
-
 (def-suite reference-suite
   :description "Common Lisp spec and local library discovery tests"
   :in clawmacs-suite)
 
 (def-suite llm-suite
   :description "LLM helper tests"
+  :in clawmacs-suite)
+
+(def-suite interactive-operation-suite
+  :description "Managed CLIM-frame operation lifecycle tests"
   :in clawmacs-suite)
 
 (def-suite gui-e2e-suite

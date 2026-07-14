@@ -24,6 +24,56 @@ or an agent keyword (e.g., :CODER) during agent tool dispatch.")
 (defvar *command-table* (make-hash-table :test #'eq)
   "Global table mapping command symbols to command-metadata.")
 
+(defvar *process-command-table* *command-table*
+  "Process-global command table, distinct from dynamic test bindings.")
+
+(defvar *command-registry-lock*
+  (bt:make-lock "clawmacs command registry")
+  "Lock guarding bounded access to the process-global command table.")
+
+(defun call-with-command-registry-lock (function &optional
+                                                   (table *command-table*))
+  "Call FUNCTION under the command lock when TABLE is process-global.
+
+FUNCTION must only perform bounded table access.  Package visibility checks,
+UI work, and extension callbacks belong after the lock has been released."
+  (if (eq table *process-command-table*)
+      (bt:with-lock-held (*command-registry-lock*)
+        (funcall function))
+      (funcall function)))
+
+(defun command-registry-snapshot (&optional (table *command-table*))
+  "Return a stable alist snapshot of command TABLE."
+  (call-with-command-registry-lock
+   (lambda ()
+     (let ((entries nil))
+       (maphash (lambda (name metadata)
+                  (push (cons name metadata) entries))
+                table)
+       entries))
+   table))
+
+(defun find-command-metadata (name)
+  "Return command metadata registered for NAME, or NIL."
+  (call-with-command-registry-lock
+   (lambda () (gethash name *command-table*))
+   *command-table*))
+
+(defun remove-command-metadata-for-package (package-name)
+  "Atomically remove command metadata owned by PACKAGE-NAME."
+  (call-with-command-registry-lock
+   (lambda ()
+     (let ((removed nil))
+       (maphash
+        (lambda (name metadata)
+          (when (string= package-name
+                         (or (command-metadata-package metadata) ""))
+            (push metadata removed)
+            (remhash name *command-table*)))
+        *command-table*)
+       (nreverse removed)))
+   *command-table*))
+
 ;;; --------------------------------------------------------------------------
 ;;; Command Validation Helpers
 ;;; --------------------------------------------------------------------------
@@ -135,21 +185,18 @@ or an agent keyword (e.g., :CODER) during agent tool dispatch.")
 
 (defun list-available-commands (&key buffer agent-name include-inactive)
   "Return registered command symbols visible in the package context."
-  (let ((result nil))
-    (maphash (lambda (name metadata)
-               (when (command-metadata-visible-p
-                      metadata
-                      :buffer buffer
-                      :agent-name agent-name
-                      :include-inactive include-inactive)
-                 (push name result)))
-             *command-table*)
-    result))
+  (loop :for (name . metadata) :in (command-registry-snapshot)
+        :when (command-metadata-visible-p
+               metadata
+               :buffer buffer
+               :agent-name agent-name
+               :include-inactive include-inactive)
+          :collect name))
 
 (declaim (ftype (function (symbol) list) command-required-arguments))
 (defun command-required-arguments (command-name)
   "Return the required non-buffer arguments for COMMAND-NAME."
-  (let ((metadata (gethash command-name *command-table*)))
+  (let ((metadata (find-command-metadata command-name)))
     (when metadata
       (rest (command-metadata-lambda-list metadata)))))
 
@@ -193,7 +240,10 @@ or an agent keyword (e.g., :CODER) during agent tool dispatch.")
                     :lambda-list lambda-list
                     :prompts prompts
                     :package *current-clawmacs-package*)))
-    (setf (gethash name *command-table*) metadata)
+    (call-with-command-registry-lock
+     (lambda ()
+       (setf (gethash name *command-table*) metadata))
+     *command-table*)
     metadata))
 
 (defmacro defcommand (name &rest command-spec)
@@ -231,6 +281,54 @@ Each entry is a plist with optional keys:
   :category     — category string for grouping
   :side-effects — description of mutations, I/O, or global state changes")
 
+(defvar *process-extended-docs* *extended-docs*
+  "Process-global extended-doc table, distinct from dynamic test bindings.")
+
+(defvar *extended-doc-registry-lock*
+  (bt:make-lock "clawmacs extended documentation registry")
+  "Lock guarding bounded access to the process-global extended-doc table.")
+
+(defun call-with-extended-doc-registry-lock
+    (function &optional (table *extended-docs*))
+  "Call FUNCTION under the extended-doc lock when TABLE is process-global."
+  (if (eq table *process-extended-docs*)
+      (bt:with-lock-held (*extended-doc-registry-lock*)
+        (funcall function))
+      (funcall function)))
+
+(defun extended-doc-registry-snapshot (&optional (table *extended-docs*))
+  "Return a stable alist snapshot of extended documentation TABLE."
+  (call-with-extended-doc-registry-lock
+   (lambda ()
+     (let ((entries nil))
+       (maphash (lambda (symbol doc)
+                  (push (cons symbol doc) entries))
+                table)
+       entries))
+   table))
+
+(defun register-extended-doc (symbol doc)
+  "Publish DOC for SYMBOL in the current extended-doc registry."
+  (call-with-extended-doc-registry-lock
+   (lambda ()
+     (setf (gethash symbol *extended-docs*) doc))
+   *extended-docs*)
+  doc)
+
+(defun remove-extended-docs-for-package (package-name)
+  "Atomically remove extended docs owned by PACKAGE-NAME."
+  (call-with-extended-doc-registry-lock
+   (lambda ()
+     (let ((removed nil))
+       (maphash
+        (lambda (symbol doc)
+          (when (string= package-name (or (getf doc :package) ""))
+            (push (cons symbol doc) removed)
+            (remhash symbol *extended-docs*)))
+        *extended-docs*)
+       (nreverse removed)))
+   *extended-docs*))
+
 (defmacro defdoc (name &key category usage returns see-also side-effects)
   "Define extended documentation for SYMBOL.
 Stores a plist in *extended-docs* keyed by the symbol.
@@ -245,22 +343,25 @@ Example:
   `(let ((doc
            (when (or (null *current-clawmacs-package*)
                      (package-resource-type-allowed-p :doc))
-             (setf (gethash ',name *extended-docs*)
-                   (append
-                    (list ,@(when category `(:category ,category))
-                          ,@(when usage `(:usage ,usage))
-                          ,@(when returns `(:returns ,returns))
-                          ,@(when see-also `(:see-also ',see-also))
-                          ,@(when side-effects `(:side-effects ,side-effects)))
-                    (when *current-clawmacs-package*
-                      (list :package *current-clawmacs-package*)))))))
+             (register-extended-doc
+              ',name
+              (append
+               (list ,@(when category `(:category ,category))
+                     ,@(when usage `(:usage ,usage))
+                     ,@(when returns `(:returns ,returns))
+                     ,@(when see-also `(:see-also ',see-also))
+                     ,@(when side-effects `(:side-effects ,side-effects)))
+               (when *current-clawmacs-package*
+                 (list :package *current-clawmacs-package*)))))))
      doc))
 
 (defun extended-doc (symbol &optional key)
   "Return the extended documentation for SYMBOL.
 If KEY is provided (e.g. :usage, :returns), return just that property value.
 Without KEY, returns the full plist or NIL if no extended doc exists."
-  (let ((doc (gethash symbol *extended-docs*)))
+  (let ((doc (call-with-extended-doc-registry-lock
+              (lambda () (gethash symbol *extended-docs*))
+              *extended-docs*)))
     (if key
         (getf doc key)
         doc)))

@@ -72,7 +72,7 @@
 
 (defun invoke-command (buffer command)
   "Invoke COMMAND from the UI, prompting for command arguments when needed."
-  (let* ((metadata (gethash command *command-table*))
+  (let* ((metadata (find-command-metadata command))
          (required-args (and metadata (command-required-arguments command)))
          (prompts (and metadata
                        (command-metadata-prompts metadata))))
@@ -93,6 +93,33 @@
 ;;; --------------------------------------------------------------------------
 ;;; Commands
 ;;; --------------------------------------------------------------------------
+
+(defun dispatch-finalized-chat-input (buffer input-text)
+  "Dispatch finalized INPUT-TEXT and run its after-send hook exactly once.
+
+Managed shell/pipeline operations defer the hook to their frame-process apply
+callback.  Provider streaming and ordinary extension prefixes retain the
+historical immediate hook boundary."
+  (multiple-value-bind (prefix-handled-p prefix-result)
+      (process-prefix-command buffer input-text)
+    (let ((result
+            (cond
+              ((and prefix-handled-p
+                    (interactive-buffer-operation-p prefix-result))
+               prefix-result)
+              (prefix-handled-p
+               ;; Preserve the historical ordinary-prefix contract while
+               ;; still retaining the exact handler value above to recognize
+               ;; managed operations.
+               t)
+              ((buffer-pipeline-name buffer)
+               (start-interactive-pipeline-for-buffer buffer input-text))
+              (t
+               (send-to-agent-with-context buffer)))))
+      (unless (interactive-buffer-operation-p result)
+        (run-hook-with-args '*after-send-message-hook*
+                            buffer input-text result))
+      result)))
 
 (defun send-message (buffer)
   "Send the current input message to the agent."
@@ -118,20 +145,22 @@
            (when template-expansion
              (setf input-text template-expansion)
              (set-message-text (buffer-input-message buffer) input-text)))
-         (unless (find-prefix-handler input-text)
-           (maybe-compact-buffer buffer
-                                 :reason :pre-user-message
-                                 :include-current-input-p t))
          (buffer-finalize-input buffer)
-         (let ((result
-                 ;; Check for prefix commands before sending to the LLM
-                 (or (process-prefix-command buffer input-text)
-                     (if (buffer-pipeline-name buffer)
-                         (run-pipeline-for-buffer buffer input-text)
-                         (send-to-agent-with-context buffer)))))
-           (run-hook-with-args '*after-send-message-hook*
-                               buffer input-text result)
-           result))))))
+         ;; Prefix commands are not provider context and never trigger
+         ;; conversation compaction.  Normal sends compact asynchronously,
+         ;; then continue the exact intended provider/pipeline dispatch once.
+         (if (find-prefix-handler input-text)
+             (dispatch-finalized-chat-input buffer input-text)
+             (multiple-value-bind (operation needed-p)
+                 (start-interactive-compaction
+                  buffer
+                  :reason :pre-user-message
+                  :continuation
+                  (lambda (live-buffer)
+                    (dispatch-finalized-chat-input live-buffer input-text)))
+               (declare (ignore needed-p))
+               (or operation
+                   (dispatch-finalized-chat-input buffer input-text)))))))))
 (defcommand send-message :keys (#\Return))
 
 (defun stop-llm-command (buffer)
@@ -524,25 +553,77 @@
 
 (defun openai-codex-oauth-command (buffer)
   "Start the OpenAI Codex OAuth login flow using a localhost browser callback."
-  (handler-case
-      (progn
-        (when *openai-oauth-pending*
-          (error "An OpenAI Codex OAuth login is already in progress"))
-        (setf *openai-oauth-pending*
-              (start-openai-codex-oauth-login :buffer buffer))
-        (let* ((snapshot (openai-oauth-flow-snapshot *openai-oauth-pending*))
-               (auth-url (getf snapshot :auth-url))
-               (redirect-uri (getf snapshot :redirect-uri)))
-          (buffer-insert-system-message
-           buffer
-           (format nil "[OpenAI Codex OAuth]~%~%A browser login was started for shared Codex auth.~%If the browser did not open, use this URL:~%~%  ~A~%~%The callback server is listening at:~%  ~A~%~%Press C-g to cancel."
-                   auth-url redirect-uri))
-          (setf (buffer-status buffer) :oauth)
-          (notify-buffer-display-change buffer :status)))
-    (error (e)
-      (buffer-insert-system-message
-       buffer
-       (format nil "[OAuth error: ~A]" e)))))
+  (let ((flow nil)
+        (start-generation nil)
+        (published-p nil)
+        (retired-p nil))
+    (handler-case
+        (unwind-protect
+             (handler-case
+                 (progn
+                   (call-with-runtime-admission
+                    (lambda ()
+                      ;; Admission is the outer lock.  The per-buffer reservation
+                      ;; then closes the construction-to-publication gap with Stop
+                      ;; and disposal, while the registry remains the innermost
+                      ;; lock during exact publication.
+                      (setf start-generation
+                            (reserve-buffer-stream-start buffer))
+                      (unless start-generation
+                        (error
+                         "Buffer ~A cannot start OAuth while its runtime is stopping"
+                         (buffer-name buffer)))
+                      (when (openai-oauth-login-pending-p)
+                        (error
+                         "An OpenAI Codex OAuth login is already in progress"))
+                      (setf flow
+                            (start-openai-codex-oauth-login :buffer buffer))
+                      (unless
+                          (publish-reserved-openai-oauth-pending-flow
+                           buffer flow start-generation)
+                        (error
+                         "OAuth start lost ownership before publication"))
+                      (setf published-p t))
+                    :operation "OpenAI Codex OAuth login")
+                   ;; Keep the start reservation through visible frame mutation.
+                   ;; A teardown that claimed the published flow therefore cannot
+                   ;; finish and expose :IDLE before this command unwinds.
+                   (let* ((snapshot (openai-oauth-flow-snapshot flow))
+                          (auth-url (getf snapshot :auth-url))
+                          (redirect-uri (getf snapshot :redirect-uri)))
+                     (buffer-insert-system-message
+                      buffer
+                      (format nil "[OpenAI Codex OAuth]~%~%A browser login was started for shared Codex auth.~%If the browser did not open, use this URL:~%~%  ~A~%~%The callback server is listening at:~%  ~A~%~%Press C-g to cancel."
+                              auth-url redirect-uri))
+                     (setf (buffer-status buffer) :oauth)
+                     (notify-buffer-display-change buffer :status)))
+               (error (condition)
+                 ;; Runtime admission has unwound here, but the exact buffer
+                 ;; reservation still makes this unregistered worker observable.
+                 ;; Join under settlement admission before releasing it below.
+                 (when (and flow (not published-p))
+                   (unwind-protect
+                        (ignore-errors
+                          (cancel-openai-codex-oauth-login flow))
+                     (join-openai-oauth-flow-worker flow))
+                   (setf flow nil))
+                 (error condition)))
+          (when start-generation
+            (release-buffer-stream-start buffer start-generation)))
+      (error (e)
+        (when published-p
+          ;; Pending publication remains the reload-visible reservation until
+          ;; the cancelled listener/client worker has completely unwound.
+          (ignore-errors (cancel-openai-codex-oauth-login flow))
+          (if (openai-oauth-flow-worker-settled-p-safe flow)
+              (when (claim-openai-oauth-pending-flow flow)
+                (setf retired-p t))
+              (setf retired-p nil)))
+        (when (and retired-p (eq (buffer-status buffer) :oauth))
+          (setf (buffer-status buffer) :idle))
+        (buffer-insert-system-message
+         buffer
+         (format nil "[OAuth error: ~A]" e))))))
 (defcommand openai-codex-oauth-command)
 
 ;;; --------------------------------------------------------------------------
@@ -550,11 +631,9 @@
 ;;; --------------------------------------------------------------------------
 
 (defun list-buffers-command (buffer)
-  "Open the buffer selector to switch between agent sessions."
-  (declare (ignore buffer))
-  (setf *buffer-selector-active* t
-        *buffer-selector-index* 0
-        *buffer-selector-scroll* 0))
+  "Open the visible minibuffer selector to switch between agent sessions."
+  (setf *buffer-selector-active* nil)
+  (minibuffer-select-buffer-command buffer))
 (defcommand list-buffers-command)
 
 ;;; --------------------------------------------------------------------------
@@ -563,7 +642,7 @@
 
 (defun ensure-projects-for-ui ()
   "Ensure project definitions are loaded before project UI commands run."
-  (unless *project-definitions-loaded-p*
+  (unless (project-definitions-loaded-p)
     (load-project-definitions))
   (list-projects))
 
@@ -752,42 +831,6 @@
 (defvar *slash-completion-max-height* 12
   "Maximum rows used by automatic slash completion, including the prompt row.")
 
-(defvar *slash-completion-active* nil
-  "When non-nil, slash completion candidates are visible.")
-
-(defvar *slash-completion-buffer* nil
-  "Buffer whose input currently owns slash completion state.")
-
-(defvar *slash-completion-query* ""
-  "Current query text after the / prefix.")
-
-(defvar *slash-completion-token-start* 0
-  "Start offset of the active /command token on the current input line.")
-
-(defvar *slash-completion-token-end* 0
-  "End offset of the active /command token on the current input line.")
-
-(defvar *slash-completion-token-text* nil
-  "Exact active /command token text, including the leading slash.")
-
-(defvar *slash-completion-dismissed-token* nil
-  "Exact slash token dismissed by the user. Reopens after the token changes.")
-
-(defvar *slash-completion-items* nil
-  "All slash completion candidate items.")
-
-(defvar *slash-completion-filtered-items* nil
-  "Slash completion candidates matching *SLASH-COMPLETION-QUERY*.")
-
-(defvar *slash-completion-match-positions* nil
-  "Fuzzy match positions parallel to *SLASH-COMPLETION-FILTERED-ITEMS*.")
-
-(defvar *slash-completion-selected-index* 0
-  "Index of the selected slash completion candidate.")
-
-(defvar *slash-completion-scroll-offset* 0
-  "First visible slash completion candidate index.")
-
 (defun slash-completion-buffer-kind-enabled-p (kind)
   "Return true when KIND is configured for automatic slash completion."
   (or (eq *slash-completion-enabled-buffer-kinds* t)
@@ -799,12 +842,7 @@
        buffer
        (slash-completion-buffer-kind-enabled-p (buffer-kind buffer))
        (not *minibuffer-active*)
-       (not *buffer-selector-active*)
-       (not *model-selector-active*)
-       (not *think-selector-active*)
-       (not *openai-oauth-pending*)
-       (not *deny-message-mode*)
-       (not (buffer-approval-pending buffer))))
+       (not (openai-oauth-login-pending-p))))
 
 (defun slash-completion-token-char-p (char)
   "Return true when CHAR can occur after / in an automatic slash token."
@@ -872,7 +910,8 @@ first input line."
         (max 0 (min *slash-completion-selected-index*
                     (1- (max 1 (length *slash-completion-filtered-items*))))))
   (setf *slash-completion-scroll-offset* 0)
-  (slash-completion-ensure-visible))
+  (slash-completion-ensure-visible)
+  (touch-chat-interaction-state))
 
 (defun slash-completion-visible-item-count ()
   "Return candidate rows visible in the automatic slash completion popup."
@@ -898,16 +937,19 @@ first input line."
   (when (< *slash-completion-selected-index*
            (1- (length *slash-completion-filtered-items*)))
     (incf *slash-completion-selected-index*)
-    (slash-completion-ensure-visible)))
+    (slash-completion-ensure-visible)
+    (touch-chat-interaction-state)))
 
 (defun slash-completion-prev-item ()
   "Move automatic slash completion selection up one candidate."
   (when (plusp *slash-completion-selected-index*)
     (decf *slash-completion-selected-index*)
-    (slash-completion-ensure-visible)))
+    (slash-completion-ensure-visible)
+    (touch-chat-interaction-state)))
 
 (defun deactivate-slash-completion (&key dismissed-token)
   "Hide automatic slash completion and optionally remember DISMISSED-TOKEN."
+  (touch-chat-interaction-state)
   (setf *slash-completion-active* nil
         *slash-completion-buffer* nil
         *slash-completion-query* ""
@@ -961,8 +1003,11 @@ first input line."
       (return-from insert-selected-slash-completion nil))
     (multiple-value-bind (query start end token)
         (current-slash-command-token (buffer-input-message buffer))
-      (declare (ignore query token))
-      (if (null start)
+      (declare (ignore query))
+      (if (or (null start)
+              (not (eq buffer *slash-completion-buffer*))
+              (null *slash-completion-token-text*)
+              (not (string= token *slash-completion-token-text*)))
           (deactivate-slash-completion)
           (let* ((message (buffer-input-message buffer))
                  (line (message-point-line message))
@@ -1026,42 +1071,6 @@ to disable it without changing *AUTOMATIC-SKILL-COMPLETION-ENABLED*.")
 (defvar *skill-completion-max-height* 12
   "Maximum rows used by automatic skill completion, including the prompt row.")
 
-(defvar *skill-completion-active* nil
-  "When non-nil, automatic skill completion candidates are visible.")
-
-(defvar *skill-completion-buffer* nil
-  "Buffer whose input currently owns automatic skill completion state.")
-
-(defvar *skill-completion-query* ""
-  "Current query text after the $ prefix.")
-
-(defvar *skill-completion-token-start* 0
-  "Start offset of the active $skill token on the current input line.")
-
-(defvar *skill-completion-token-end* 0
-  "End offset of the active $skill token on the current input line.")
-
-(defvar *skill-completion-token-text* nil
-  "Exact active $skill token text, including the leading $.")
-
-(defvar *skill-completion-dismissed-token* nil
-  "Exact token text dismissed by the user. Reopens after the token changes.")
-
-(defvar *skill-completion-items* nil
-  "All automatic skill completion candidate items.")
-
-(defvar *skill-completion-filtered-items* nil
-  "Automatic skill completion candidates matching *SKILL-COMPLETION-QUERY*.")
-
-(defvar *skill-completion-match-positions* nil
-  "Fuzzy match positions parallel to *SKILL-COMPLETION-FILTERED-ITEMS*.")
-
-(defvar *skill-completion-selected-index* 0
-  "Index of the selected automatic skill completion candidate.")
-
-(defvar *skill-completion-scroll-offset* 0
-  "First visible automatic skill completion candidate index.")
-
 (defun skill-completion-buffer-kind-enabled-p (kind)
   "Return true when KIND is configured for automatic skill completion."
   (or (eq *skill-completion-enabled-buffer-kinds* t)
@@ -1073,12 +1082,7 @@ to disable it without changing *AUTOMATIC-SKILL-COMPLETION-ENABLED*.")
        buffer
        (skill-completion-buffer-kind-enabled-p (buffer-kind buffer))
        (not *minibuffer-active*)
-       (not *buffer-selector-active*)
-       (not *model-selector-active*)
-       (not *think-selector-active*)
-       (not *openai-oauth-pending*)
-       (not *deny-message-mode*)
-       (not (buffer-approval-pending buffer))))
+       (not (openai-oauth-login-pending-p))))
 
 (defun skill-completion-whitespace-char-p (char)
   "Return true when CHAR separates input tokens for automatic completion."
@@ -1152,7 +1156,8 @@ starts with $ and contains only skill mention characters after it."
         (max 0 (min *skill-completion-selected-index*
                     (1- (max 1 (length *skill-completion-filtered-items*))))))
   (setf *skill-completion-scroll-offset* 0)
-  (skill-completion-ensure-visible))
+  (skill-completion-ensure-visible)
+  (touch-chat-interaction-state))
 
 (defun skill-completion-visible-item-count ()
   "Return candidate rows visible in the automatic skill completion popup."
@@ -1178,16 +1183,19 @@ starts with $ and contains only skill mention characters after it."
   (when (< *skill-completion-selected-index*
            (1- (length *skill-completion-filtered-items*)))
     (incf *skill-completion-selected-index*)
-    (skill-completion-ensure-visible)))
+    (skill-completion-ensure-visible)
+    (touch-chat-interaction-state)))
 
 (defun skill-completion-prev-item ()
   "Move automatic skill completion selection up one candidate."
   (when (plusp *skill-completion-selected-index*)
     (decf *skill-completion-selected-index*)
-    (skill-completion-ensure-visible)))
+    (skill-completion-ensure-visible)
+    (touch-chat-interaction-state)))
 
 (defun deactivate-skill-completion (&key dismissed-token)
   "Hide automatic skill completion and optionally remember DISMISSED-TOKEN."
+  (touch-chat-interaction-state)
   (setf *skill-completion-active* nil
         *skill-completion-buffer* nil
         *skill-completion-query* ""
@@ -1239,8 +1247,11 @@ starts with $ and contains only skill mention characters after it."
       (return-from insert-selected-skill-completion nil))
     (multiple-value-bind (query start end token)
         (current-skill-mention-token (buffer-input-message buffer))
-      (declare (ignore query token))
-      (if (null start)
+      (declare (ignore query))
+      (if (or (null start)
+              (not (eq buffer *skill-completion-buffer*))
+              (null *skill-completion-token-text*)
+              (not (string= token *skill-completion-token-text*)))
           (deactivate-skill-completion)
           (let* ((message (buffer-input-message buffer))
                  (line (message-point-line message))
@@ -1447,135 +1458,6 @@ Returns true when KEY was consumed by completion."
   (open-package-dashboard :buffer buffer))
 (defcommand package-dashboard-command)
 
-(defun guard-policy-value-string (value)
-  "Return VALUE as a user-facing guard policy string."
-  (if value
-      (string-downcase (symbol-name value))
-      "inherit"))
-
-(defun guard-policy-table-lines (table)
-  "Return sorted display lines for guard policy hash TABLE."
-  (let ((lines nil))
-    (maphash (lambda (name value)
-               (push (format nil "~A -> ~A"
-                             name
-                             (guard-policy-value-string value))
-                     lines))
-             table)
-    (sort lines #'string<)))
-
-(defun guard-policy-scope-report (title registry path)
-  "Return a formatted report string for one guard policy REGISTRY."
-  (with-output-to-string (stream)
-    (format stream "~A~%  path: ~A~%  default permission: ~A~%  default sandbox: ~A~%  default network: ~A~%  default working-directory: ~A~%"
-            title
-            (namestring path)
-            (guard-policy-value-string (getf registry :default))
-            (guard-policy-value-string
-             (approval-policy-sandbox-default registry))
-            (guard-policy-value-string
-             (approval-policy-network-default registry))
-            (guard-policy-value-string
-             (approval-policy-working-directory-default registry)))
-    (let ((tool-lines (guard-policy-table-lines
-                       (approval-policy-tools registry)))
-          (sandbox-lines (guard-policy-table-lines
-                          (approval-policy-sandbox-tools registry)))
-          (network-lines (guard-policy-table-lines
-                          (approval-policy-network-tools registry)))
-          (working-lines (guard-policy-table-lines
-                          (approval-policy-working-directory-tools registry))))
-      (format stream "~%  tool overrides:~%")
-      (if tool-lines
-          (dolist (line tool-lines)
-            (format stream "    ~A~%" line))
-          (format stream "    (none)~%"))
-      (format stream "~%  sandbox overrides:~%")
-      (if sandbox-lines
-          (dolist (line sandbox-lines)
-            (format stream "    ~A~%" line))
-          (format stream "    (none)~%"))
-      (format stream "~%  network overrides:~%")
-      (if network-lines
-          (dolist (line network-lines)
-            (format stream "    ~A~%" line))
-          (format stream "    (none)~%"))
-      (format stream "~%  working-directory overrides:~%")
-      (if working-lines
-          (dolist (line working-lines)
-            (format stream "    ~A~%" line))
-          (format stream "    (none)~%")))))
-
-(defun guard-policy-report-to-string (buffer)
-  "Return a help-buffer report for BUFFER's effective guard policy scopes."
-  (let* ((user-path *approval-policy-path*)
-         (project-path (approval-policy-path-for-buffer buffer))
-         (user-registry (approval-policy-registry-for-path user-path))
-         (project-registry (approval-policy-registry-for-path project-path)))
-    (with-output-to-string (stream)
-      (format stream "Guard Policy~%~%")
-      (format stream "Buffer: ~A~%Working directory: ~A~%~%"
-              (buffer-name buffer)
-              (namestring (buffer-working-directory buffer)))
-      (write-string
-       (guard-policy-scope-report "Project Policy" project-registry project-path)
-       stream)
-      (format stream "~%~%")
-      (write-string
-       (guard-policy-scope-report "User Policy" user-registry user-path)
-       stream))))
-
-(defun guard-history-report-to-string (buffer)
-  "Return a help-buffer report for BUFFER's guard audit history."
-  (let ((history (approval-policy-history-entries :buffer buffer)))
-    (with-output-to-string (stream)
-      (format stream "Guard History~%~%")
-      (format stream "Buffer: ~A~%Working directory: ~A~%~%"
-              (buffer-name buffer)
-              (namestring (buffer-working-directory buffer)))
-      (if history
-          (dolist (entry history)
-            (format stream "~A  tool=~A  decision=~A  policy=~A~%"
-                    (or (cdr (assoc :timestamp entry)) 0)
-                    (or (cdr (assoc :tool-name entry)) "")
-                    (or (cdr (assoc :decision entry)) "")
-                    (or (cdr (assoc :policy entry)) ""))
-            (when (cdr (assoc :reason entry))
-              (format stream "  reason: ~A~%" (cdr (assoc :reason entry))))
-            (when (cdr (assoc :entry entry))
-              (format stream "  entry: ~A~%" (cdr (assoc :entry entry))))
-            (when (cdr (assoc :working-directory entry))
-              (format stream "  working-directory: ~A~%"
-                      (cdr (assoc :working-directory entry))))
-            (format stream "~%"))
-          (format stream "No approval decisions have been recorded.~%")))))
-
-(defun describe-guard-policy-command (buffer)
-  "Open a help buffer describing BUFFER's effective guard policy scopes."
-  (let* ((content (guard-policy-report-to-string buffer))
-         (buf-name "*help:guard-policy*")
-         (existing (find-buffer-by-name buf-name)))
-    (if existing
-        (progn
-          (set-message-text (message-prev (buffer-input-message existing))
-                            content)
-          (switch-to-buffer existing))
-        (switch-to-buffer (make-help-buffer buf-name content)))))
-(defcommand describe-guard-policy-command)
-
-(defun describe-guard-history-command (buffer)
-  "Open a help buffer showing BUFFER's recorded guard approval history."
-  (let* ((content (guard-history-report-to-string buffer))
-         (buf-name "*help:guard-history*")
-         (existing (find-buffer-by-name buf-name)))
-    (if existing
-        (progn
-          (set-message-text (message-prev (buffer-input-message existing))
-                            content)
-          (switch-to-buffer existing))
-        (switch-to-buffer (make-help-buffer buf-name content)))))
-(defcommand describe-guard-history-command)
-
 ;;; --------------------------------------------------------------------------
 ;;; Model Selection Commands
 ;;; --------------------------------------------------------------------------
@@ -1770,20 +1652,9 @@ Returns true when KEY was consumed by completion."
 (defcommand minibuffer-select-agent-command)
 
 (defun select-model-command (buffer)
-  "Open the model selector to change the LLM model for this session.
-Builds the available model list based on configured API keys."
-  (let ((entries (available-models-for-selector buffer)))
-    (cond
-      ((null entries)
-       (buffer-insert-system-message
-        buffer "[No API keys configured. Cannot list models.]"))
-      (t
-       ;; Pre-select the currently active model (if found)
-       (let ((active-idx (position-if (lambda (e) (getf e :active-p)) entries)))
-         (setf *model-selector-entries* entries
-               *model-selector-active* t
-               *model-selector-index* (or active-idx 0)
-               *model-selector-scroll* 0))))))
+  "Open the standard visible minibuffer model selector."
+  (setf *model-selector-active* nil)
+  (minibuffer-select-model-command buffer))
 (defcommand select-model-command)
 
 (defun minibuffer-select-model-command (buffer)
@@ -1816,26 +1687,9 @@ to navigate."
 (defcommand minibuffer-select-model-command)
 
 (defun select-think-level-command (buffer)
-  "Open the think-level selector for the active model."
-  (let ((entries (available-think-levels-for-selector buffer)))
-    (cond
-      ((null entries)
-       (multiple-value-bind (provider model)
-           (handler-case (resolve-buffer-provider-and-model buffer)
-             (error () (values nil nil)))
-         (buffer-insert-system-message
-          buffer
-          (if (and provider model)
-              (format nil "[Think levels not available for ~A.]"
-                      (model-selector-display provider model))
-              "[Think levels are not available for the active model.]"))))
-      (t
-       (let ((active-idx (position-if (lambda (entry) (getf entry :active-p))
-                                      entries)))
-         (setf *think-selector-entries* entries
-               *think-selector-active* t
-               *think-selector-index* (or active-idx 0)
-               *think-selector-scroll* 0))))))
+  "Open the standard visible minibuffer think-level selector."
+  (setf *think-selector-active* nil)
+  (minibuffer-select-think-level-command buffer))
 (defcommand select-think-level-command)
 
 (defun minibuffer-select-think-level-command (buffer)
@@ -2505,7 +2359,7 @@ Includes: name, type, lambda list, docstring, and keybindings."
             (make-string (min 60 (length (symbol-name fn-symbol)))
                          :initial-element #\-))
     ;; Type
-    (let* ((cmd-meta (gethash fn-symbol *command-table*))
+    (let* ((cmd-meta (find-command-metadata fn-symbol))
            (fn-obj (fdefinition fn-symbol))
            (type-str (cond
                        ((macro-function fn-symbol) "Macro")
@@ -2562,7 +2416,7 @@ Bound to C-h f."
   (let* ((fn-list (list-functions))
          (items (mapcar (lambda (sym)
                           (let* ((name (string-downcase (symbol-name sym)))
-                                 (cmd-meta (gethash sym *command-table*))
+                                 (cmd-meta (find-command-metadata sym))
                                  (fn-obj (fdefinition sym))
                                  (type-str (cond
                                              ((macro-function sym) "macro")
@@ -2901,7 +2755,7 @@ accessors, and documentation. Also shows class-level and extended documentation.
 Useful for finding types that still need extended documentation."
   (let ((missing nil))
     (dolist (sym (list-types))
-      (unless (gethash sym *extended-docs*)
+      (unless (extended-doc sym)
         (push sym missing)))
     (nreverse missing)))
 
@@ -3062,31 +2916,10 @@ Bound to C-h b."
 ;;; Event Loop
 ;;; --------------------------------------------------------------------------
 
-(defvar *meta-pending* nil
-  "When non-nil, the next key event is combined with Meta (ESC prefix).")
-
-(defvar *alt-pending* nil
-  "When non-nil, the next key event is combined with physical Alt.")
-
 (defvar *alt-emulates-meta* t
   "When non-nil, physical Alt key events are treated as Meta in McCLIM.
 Set this to NIL in user init to keep Alt and Meta separate when the backend
 reports standalone Alt/Meta key events.")
-
-(defvar *cx-pending* nil
-  "When non-nil, the next key event is combined with C-x prefix.")
-
-(defvar *cc-pending* nil
-  "When non-nil, the next key event is combined with C-c prefix.
-C-c is reserved for buffer-mode-specific commands (e.g. C-c t).
-Quit is C-x C-c (global command, uses C-x prefix).")
-
-(defvar *ch-pending* nil
-  "When non-nil, the next key event is combined with C-h prefix.
-C-h is the help prefix (e.g. C-h b = describe bindings).")
-
-(defvar *deny-message-mode* nil
-  "When non-nil, the input area is being used to type a denial message.")
 
 ;;; --------------------------------------------------------------------------
 ;;; Event Loop Dispatch
@@ -3095,7 +2928,6 @@ C-h is the help prefix (e.g. C-h b = describe bindings).")
 (defun handle-key-event (buf key)
   "Dispatch a normalized key through the buffer's keymap.
 Returns :QUIT if the application should exit, or nil otherwise.
-Handles approval mode, deny-message mode, and normal dispatch.
 KEY is already normalized by the interface before calling this."
   (flet ((redraw-key-p (candidate)
            (or (and (characterp candidate)
@@ -3149,24 +2981,6 @@ KEY is already normalized by the interface before calling this."
        (handle-session-tree-selector-key key)
        nil)
 
-      ;; === BUFFER SELECTOR MODE ===
-      ;; Navigation and selection within the buffer list overlay
-      (*buffer-selector-active*
-       (handle-buffer-selector-key key)
-       nil)
-
-      ;; === MODEL SELECTOR MODE ===
-      ;; Navigation and selection within the model list overlay
-      (*model-selector-active*
-       (handle-model-selector-key key buf)
-       nil)
-
-      ;; === THINK SELECTOR MODE ===
-      ;; Navigation and selection within the think-level overlay
-      (*think-selector-active*
-       (handle-think-selector-key key buf)
-       nil)
-
       ;; === HELP MODE ===
       ;; Help buffers are read-only views with a dedicated presentation.
       ((and buf (info-buffer-p buf))
@@ -3188,49 +3002,16 @@ KEY is already normalized by the interface before calling this."
 
       ;; === OPENAI OAUTH MODE ===
       ;; OAuth is pending in a background localhost callback server; only C-g cancels.
-      (*openai-oauth-pending*
-       (cond
-         ;; C-g: cancel OAuth flow
-         ((and (characterp key) (char= key (code-char 7)))
-          (cancel-openai-codex-oauth-login *openai-oauth-pending*)
-          (setf *openai-oauth-pending* nil
-                (buffer-status buf) :idle)
-          (buffer-insert-system-message buf "[OAuth cancelled]"))
-         ;; Ignore other input while the browser flow is pending.
-         (t nil))
-       nil)
-
-      ;; === DENY MESSAGE MODE ===
-      ;; User is typing a denial reason; Enter submits, normal editing works
-      (*deny-message-mode*
-       (cond
-         ((and (characterp key) (char= key #\Newline))
-         ;; Submit denial message
-          (let ((reason (message-text (buffer-input-message buf))))
-            (setf *deny-message-mode* nil)
-            (handle-approval-response buf (cons :deny-with-message reason))))
-         ;; Normal editing in the input area
-         ((let ((cmd (keymap-lookup (buffer-keymap buf) key)))
-            (when cmd
-              (unless (eq cmd 'send-message)
-                (invoke-command buf cmd))
-              t)))
-         ((and (characterp key) (graphic-char-p key))
-          (let ((*self-insert-char* key))
-            (self-insert-command buf))))
-       nil)
-
-      ;; === APPROVAL MODE ===
-      ;; Waiting for a/d/m keypress
-      ((buffer-approval-pending buf)
-       (when (characterp key)
-         (case key
-           (#\a (handle-approval-response buf :approve))
-           (#\d (handle-approval-response buf :deny))
-           (#\m
-            ;; Switch to deny-message mode: clear input for typing reason
-            (set-message-text (buffer-input-message buf) "")
-            (setf *deny-message-mode* t))))
+      ((openai-oauth-login-pending-p)
+       (let ((flow (openai-oauth-pending-flow)))
+         (cond
+           ;; C-g: record cancellation; the frame process then claims and
+           ;; applies that exact flow through the normal OAuth update path.
+           ((and flow (characterp key) (char= key (code-char 7)))
+            (cancel-openai-codex-oauth-login flow)
+            (update-openai-oauth-login (openai-oauth-flow-buffer flow)))
+           ;; Ignore other input while the browser flow is pending.
+           (t nil)))
        nil)
 
       ;; === AUTOMATIC SLASH COMPLETION ===
@@ -3359,25 +3140,17 @@ Environment variables:
         *think-selector-index* 0
         *think-selector-scroll* 0
         *think-selector-entries* nil)
-  (session-tree-selector-deactivate)
-  (setf *minibuffer-active* nil
-        *minibuffer-mode* :completion
-        *minibuffer-prompt* ""
-        *minibuffer-input* ""
-        *minibuffer-point* 0
-        *minibuffer-items* nil
-        *minibuffer-filtered-items* nil
-        *minibuffer-match-positions* nil
-        *minibuffer-selected-index* 0
-        *minibuffer-scroll-offset* 0
-        *minibuffer-callback* nil)
-  (deactivate-skill-completion)
-  (setf *openai-oauth-pending* nil)
-  (setf *meta-pending* nil
-        *alt-pending* nil
-        *cx-pending* nil
-        *cc-pending* nil
-        *ch-pending* nil))
+  (clear-chat-interaction-state)
+  (let ((flow (openai-oauth-pending-flow)))
+    (when flow
+      (unwind-protect
+           (ignore-errors (cancel-openai-codex-oauth-login flow))
+        (join-openai-oauth-flow-worker flow))
+      (when (claim-openai-oauth-pending-flow flow)
+        (let ((buffer (openai-oauth-flow-buffer flow)))
+          (when buffer
+            (setf (buffer-status buffer) :idle))))))
+  nil)
 
 (defun make-initial-chat-buffer (session-name agent-name
                                    &key (working-directory (truename ".")))
@@ -3387,7 +3160,6 @@ Environment variables:
                                :working-directory working-directory
                                :session-persistence-mode :persistent
                                :add-to-ring-p t)))
-    (setf *sandbox-root* (truename "."))
     (run-hook-with-args '*initial-buffer-hook* buf)
     (sync-buffer-system-prompt-display buf)
     (autosave-session-snapshot buf)
@@ -3413,7 +3185,6 @@ Options:
   --jsonl                   Stream JSONL turn events to stdout.
   --output-schema SPEC      Validate the final response JSON against SPEC.
                             SPEC may be inline JSON or a path to a JSON file.
-  --auto-approve-tools      Allow permission-gated tools without an interactive prompt.
   --max-tool-iterations N   Stop after N tool-call turns (default: 20).
   --package NAME            Enable an installed package for this prompt run. May repeat.
   --skill-root PATH         Add a skill root for this prompt run. May repeat.
@@ -3572,8 +3343,6 @@ Example:
                      (require-option-value arg remaining)
                    (setf (prompt-options-output-schema options) value
                          remaining rest)))
-                ((string= arg "--auto-approve-tools")
-                 (setf (prompt-options-auto-approve-tools-p options) t))
                 ((string= arg "--max-tool-iterations")
                  (multiple-value-bind (value rest)
                      (require-option-value arg remaining)
@@ -3671,13 +3440,6 @@ Example:
           (merge-pathnames #P"projects.d/" root)
           *sessions-dir*
           (merge-pathnames #P"sessions/" root)
-          *approval-policy-path*
-          (merge-pathnames #P"guard.json" config-dir)
-          *approval-policy-registry* nil
-          *approval-policy-project-registry-cache*
-          (make-hash-table :test #'equal)
-          *approval-policy-isolation-root*
-          root
           *agent-defaults-path*
           (merge-pathnames #P"agent-defaults.json" root)
           *packages-directory*
@@ -3897,8 +3659,6 @@ Example:
          :output-schema (prompt-options-output-schema options)
          :max-tool-iterations
          (prompt-options-max-tool-iterations options)
-         :auto-approve-tools-p
-         (prompt-options-auto-approve-tools-p options)
          :package-names
          (prompt-options-packages options)
          :event-callback event-callback)
@@ -3915,8 +3675,6 @@ Example:
              :output-schema (prompt-options-output-schema options)
              :max-tool-iterations
              (prompt-options-max-tool-iterations options)
-             :auto-approve-tools-p
-             (prompt-options-auto-approve-tools-p options)
              :package-names
              (prompt-options-packages options)
              :event-callback event-callback)
@@ -3933,8 +3691,6 @@ Example:
              :output-schema (prompt-options-output-schema options)
              :max-tool-iterations
              (prompt-options-max-tool-iterations options)
-             :auto-approve-tools-p
-             (prompt-options-auto-approve-tools-p options)
              :package-names
              (prompt-options-packages options)
              :event-callback event-callback)))))
@@ -3968,7 +3724,6 @@ Example:
                                         options))))
           (initialize-clawmacs-runtime)
           (reset-interaction-state)
-          (setf *sandbox-root* (truename "."))
           (ensure-prompt-workspace-project)
           (let* ((jsonl-lock (and (prompt-options-jsonl-p options)
                                   (bt:make-lock "prompt-jsonl-output")))

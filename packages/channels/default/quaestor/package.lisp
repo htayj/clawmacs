@@ -437,7 +437,7 @@
     (when (buffer-pending-tool-calls buffer)
       (pop (buffer-pending-tool-calls buffer)))
     (quaestor-clear-request buffer)
-    (advance-tool-approval buffer)))
+    (advance-tool-calls buffer)))
 
 (defun quaestor-complete-lisp-request (buffer request)
   "Finish a Lisp-sourced REQUEST on BUFFER and invoke its resume hook."
@@ -852,7 +852,6 @@ Returns true when the key was consumed."
 (deftool quaestor-request-user-input-tool
   :name "request_user_input"
   :description "Pause the interactive agent turn and ask the user one or more structured questions with optional choices and freeform notes."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((questions :type "array"
                     :items ((:type . "object"))
@@ -895,7 +894,7 @@ Returns true when the key was consumed."
       nil
       (funcall next buffer key)))
 
-(defadvice advance-tool-approval quaestor-advance-tool-approval :around (next buffer)
+(defadvice advance-tool-calls quaestor-advance-tool-calls :around (next buffer)
   (let* ((*quaestor-request-user-input-catch-active* t)
          (outcome (catch 'quaestor-suspend
                     (multiple-value-list (funcall next buffer)))))
@@ -906,14 +905,14 @@ Returns true when the key was consumed."
         (values-list outcome))))
 
 (defadvice execute-prompt-tool-call quaestor-prompt-tool-call :around
-    (next buffer tool-use-block agent-kw auto-approve-tools-p
-          &key event-callback &allow-other-keys)
+    (next buffer tool-use-block agent-kw
+          &key event-callback cancel-requested-p &allow-other-keys)
   (let* ((*quaestor-request-user-input-catch-active* t)
          (outcome (catch 'quaestor-suspend
                     (multiple-value-list
                      (funcall next buffer tool-use-block agent-kw
-                              auto-approve-tools-p
-                              :event-callback event-callback)))))
+                              :event-callback event-callback
+                              :cancel-requested-p cancel-requested-p)))))
     (if (quaestor-request-tool-suspension-p outcome)
         (let* ((tool-id (cdr (assoc :id tool-use-block)))
                (tool-input (cdr (assoc :input tool-use-block)))

@@ -563,7 +563,6 @@
 (deftool netcons-tool-run
   :name "netcons_run"
   :description "Run Codex-style web search/open/find operations. Input mirrors web.run: search_query, open, find, and response_length."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((search-query :type "array" :required nil
                        :items ((:type . "object"))
@@ -580,7 +579,6 @@
 (deftool netcons-tool-search
   :name "netcons_search"
   :description "Search the web and return URL/title/snippet results with netcons ref ids."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((q :type "string"
             :description "Search query.")
@@ -597,7 +595,6 @@
 (deftool netcons-tool-open
   :name "netcons_open"
   :description "Fetch a URL or netcons ref id and return line-numbered page text."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((ref-id :type "string" :required nil
                  :description "Ref id returned by netcons_search/netcons_run.")
@@ -613,7 +610,6 @@
 (deftool netcons-tool-find
   :name "netcons_find"
   :description "Find text in a fetched page by netcons ref id or direct URL."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((ref-id :type "string" :required nil
                  :description "Ref id returned by netcons_search/netcons_run.")

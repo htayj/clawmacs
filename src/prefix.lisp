@@ -12,32 +12,75 @@ Handlers should insert their results as system messages in the buffer.
 
 Example entry: (\"!\" . shell-prefix-handler)")
 
+(defun interactive-shell-result-text (command result)
+  "Return a bounded visible transcript message for shell RESULT."
+  (let ((parts nil))
+    (when (plusp (length (or (getf result :stderr) "")))
+      (push (getf result :stderr) parts))
+    (when (plusp (length (or (getf result :stdout) "")))
+      (push (getf result :stdout) parts))
+    (when (getf result :stderr-truncated-p)
+      (push "[stderr truncated]" parts))
+    (when (getf result :stdout-truncated-p)
+      (push "[stdout truncated]" parts))
+    (let ((combined (and parts
+                         (format nil "~{~A~^~%~}" (nreverse parts)))))
+      (cond
+        ((getf result :cancelled-p)
+         (format nil "$ ~A  [cancelled]~@[~%~A~]" command combined))
+        ((getf result :timed-out-p)
+         (format nil "$ ~A  [timed out]~@[~%~A~]" command combined))
+        ((zerop (or (getf result :exit-code) 1))
+         (format nil "$ ~A~@[~%~A~]" command combined))
+        (t
+         (format nil "$ ~A  [exit ~A]~@[~%~A~]"
+                 command (or (getf result :exit-code) "unknown") combined))))))
+
 (defun shell-prefix-handler (buf command-text)
-  "Execute COMMAND-TEXT as a shell command and insert the output as a system message.
-The command runs in the buffer's working directory."
+  "Start COMMAND-TEXT off the CLIM frame and return its managed operation."
   (let* ((trimmed (string-trim '(#\Space #\Tab) command-text))
-         (working-dir (or (buffer-working-directory buf) "/workspace"))
-         (output (handler-case
-                     (multiple-value-bind (stdout stderr exit-code)
-                         (uiop:run-program
-                          (list "/bin/sh" "-c" trimmed)
-                          :output '(:string :stripped t)
-                          :error-output '(:string :stripped t)
-                          :ignore-error-status t
-                          :directory working-dir)
-                       (let ((parts nil))
-                         (when (and stderr (plusp (length stderr)))
-                           (push stderr parts))
-                         (when (and stdout (plusp (length stdout)))
-                           (push stdout parts))
-                         (let ((combined (format nil "~{~A~^~%~}" (nreverse parts))))
-                           (if (zerop exit-code)
-                               (format nil "$ ~A~%~A" trimmed combined)
-                               (format nil "$ ~A  [exit ~D]~%~A"
-                                       trimmed exit-code combined)))))
-                   (error (e)
-                     (format nil "$ ~A~%[Shell error: ~A]" trimmed e)))))
-    (buffer-insert-system-message buf output)))
+         (full-input (concatenate 'string "!" command-text))
+         (working-dir (or (buffer-working-directory buf) (truename "."))))
+    (when (blank-string-p trimmed)
+      (buffer-insert-system-message buf "[Shell command is empty.]")
+      (return-from shell-prefix-handler nil))
+    (multiple-value-bind (operation refusal)
+        (start-interactive-buffer-operation
+         buf
+         :shell
+         (lambda (snapshot operation)
+           (declare (ignore snapshot operation))
+           (run-interactive-subprocess trimmed :directory working-dir))
+         (lambda (buffer operation result error-text)
+           (declare (ignore operation))
+           (cond
+             (error-text
+              (setf (buffer-status buffer) :error)
+              (buffer-insert-system-message
+               buffer
+               (format nil "$ ~A~%[Shell error: ~A]" trimmed error-text)))
+             (t
+              (setf (buffer-status buffer) :idle)
+              (buffer-insert-system-message
+               buffer (interactive-shell-result-text trimmed result))))
+           (run-hook-with-args '*after-send-message-hook*
+                               buffer full-input result))
+         :cancel-function
+         (lambda (buffer operation)
+           (declare (ignore operation))
+           (buffer-insert-system-message
+            buffer
+            (interactive-shell-result-text
+             trimmed (list :cancelled-p t)))
+           (run-hook-with-args '*after-send-message-hook*
+                               buffer full-input :cancelled))
+         :payload (list :command trimmed :input full-input)
+         :status :shell-running)
+      (when refusal
+        (setf (buffer-status buf) :idle)
+        (buffer-insert-system-message
+         buf (format nil "[Shell command refused: ~A]" refusal)))
+      operation)))
 
 (defun find-prefix-handler (text)
   "Return (prefix . handler) if TEXT starts with a registered prefix, or NIL.
@@ -52,14 +95,13 @@ Longer prefixes are checked first to support prefix hierarchies."
 
 (defun process-prefix-command (buf input-text)
   "Check if INPUT-TEXT starts with a registered prefix.
-If so, call the handler and return T. Otherwise return NIL."
+Return values HANDLED-P and the exact handler result."
   (let ((entry (find-prefix-handler input-text)))
     (when entry
       (let* ((prefix (car entry))
              (handler (cdr entry))
              (remaining (subseq input-text (length prefix))))
-        (funcall handler buf remaining)
-        t))))
+        (values t (funcall handler buf remaining))))))
 
 (setf *prefix-handlers*
       (acons "!" #'shell-prefix-handler

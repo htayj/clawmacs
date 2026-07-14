@@ -156,17 +156,18 @@
       (with-modelaria-function-override
           (clawmacs::run-prompt-with-buffer
            (buffer prompt custom-tool-definitions
-                   max-tool-iterations auto-approve-tools-p
+                   max-tool-iterations
                    tool-names tool-names-supplied-p
-                   &key output-schema event-callback stream-state-callback)
+                   &key output-schema event-callback stream-state-callback
+                     cancel-requested-p)
            (declare (ignore prompt custom-tool-definitions
                             max-tool-iterations
-                            auto-approve-tools-p
                             tool-names
                             tool-names-supplied-p
                             output-schema
                             event-callback
-                            stream-state-callback))
+                            stream-state-callback
+                            cancel-requested-p))
            (setf prompt-capture
                  (list :role (clawmacs::buffer-model-role-override buffer)
                        :tier (clawmacs::buffer-service-tier-override buffer)))
@@ -211,17 +212,18 @@
       (with-modelaria-function-override
           (clawmacs::run-prompt-with-buffer
            (buffer prompt custom-tool-definitions
-                   max-tool-iterations auto-approve-tools-p
+                   max-tool-iterations
                    tool-names tool-names-supplied-p
-                   &key output-schema event-callback stream-state-callback)
+                   &key output-schema event-callback stream-state-callback
+                     cancel-requested-p)
            (declare (ignore prompt custom-tool-definitions
                             max-tool-iterations
-                            auto-approve-tools-p
                             tool-names
                             tool-names-supplied-p
                             output-schema
                             event-callback
-                            stream-state-callback))
+                            stream-state-callback
+                            cancel-requested-p))
            (setf pipeline-capture
                  (list :role (clawmacs::buffer-model-role-override buffer)
                        :tier (clawmacs::buffer-service-tier-override buffer)))

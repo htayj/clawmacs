@@ -24,6 +24,46 @@
 (defvar *slash-command-table* (make-hash-table :test #'equal)
   "Registry mapping normalized slash command names to SLASH-COMMAND entries.")
 
+(defvar *process-slash-command-table* *slash-command-table*
+  "Process-global slash command table, distinct from dynamic test bindings.")
+
+(defvar *slash-command-registry-lock*
+  (bt:make-lock "clawmacs slash command registry")
+  "Lock guarding bounded access to the process-global slash command table.")
+
+(defun call-with-slash-command-registry-lock
+    (function &optional (table *slash-command-table*))
+  "Call FUNCTION under the slash-command lock when TABLE is process-global."
+  (if (eq table *process-slash-command-table*)
+      (bt:with-lock-held (*slash-command-registry-lock*)
+        (funcall function))
+      (funcall function)))
+
+(defun slash-command-registry-snapshot (&optional (table *slash-command-table*))
+  "Return a stable alist snapshot of slash command TABLE."
+  (call-with-slash-command-registry-lock
+   (lambda ()
+     (let ((entries nil))
+       (maphash (lambda (name command)
+                  (push (cons name command) entries))
+                table)
+       entries))
+   table))
+
+(defun remove-slash-commands-for-package (package-name)
+  "Atomically remove slash commands owned by PACKAGE-NAME."
+  (call-with-slash-command-registry-lock
+   (lambda ()
+     (let ((removed nil))
+       (maphash
+        (lambda (name command)
+          (when (string= package-name (or (slash-command-package command) ""))
+            (push command removed)
+            (remhash name *slash-command-table*)))
+        *slash-command-table*)
+       (nreverse removed)))
+   *slash-command-table*))
+
 (defvar *prompt-template-user-directory*
   (merge-pathnames #P".clawmacs.d/prompts/" (user-homedir-pathname))
   "Global prompt-template directory.")
@@ -338,25 +378,29 @@ Supports $1, $2, $@, $ARGUMENTS, ${@:N}, and ${@:N:M}."
                                         argument-hint))
                    :handler handler
                    :package owner)))
-    (setf (gethash normalized-name *slash-command-table*) command)
+    (call-with-slash-command-registry-lock
+     (lambda ()
+       (setf (gethash normalized-name *slash-command-table*) command))
+     *slash-command-table*)
     command))
 
 (defun list-slash-commands (&key buffer agent-name)
   "Return active slash commands sorted by name."
-  (let ((commands nil))
-    (maphash (lambda (_name command)
-               (declare (ignore _name))
-               (when (slash-command-active-p command
-                                             :buffer buffer
-                                             :agent-name agent-name)
-                 (push command commands)))
-             *slash-command-table*)
-    (sort commands #'string< :key #'slash-command-name)))
+  (sort
+   (loop :for (_name . command) :in (slash-command-registry-snapshot)
+         :when (slash-command-active-p command
+                                       :buffer buffer
+                                       :agent-name agent-name)
+           :collect command)
+   #'string< :key #'slash-command-name))
 
 (defun find-slash-command (name &key buffer agent-name)
   "Return the active slash command named NAME, or NIL."
   (let* ((normalized-name (normalize-slash-command-name name))
-         (command (gethash normalized-name *slash-command-table*)))
+         (command
+           (call-with-slash-command-registry-lock
+            (lambda () (gethash normalized-name *slash-command-table*))
+            *slash-command-table*)))
     (when (and command
                (slash-command-active-p command
                                        :buffer buffer

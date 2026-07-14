@@ -3,7 +3,7 @@
 (in-suite mcp-bridge-package-suite)
 
 (defmacro with-mcp-bridge-package-state (&body body)
-  "Run BODY with isolated MCP bridge, package, tool, and approval state."
+  "Run BODY with isolated MCP bridge, package, and tool state."
   `(let* ((root (temp-package-test-directory "mcp-bridge-config"))
           (clawmacs::*agent-tool-metadata-table*
            (make-hash-table :test #'eq))
@@ -27,15 +27,7 @@
           (clawmacs::*mcp-server-configuration-path*
            (merge-pathnames "mcp-servers.json" root))
           (clawmacs::*mcp-server-registry* nil)
-          (clawmacs::*mcp-external-tool-table* (make-hash-table :test #'equal))
-          (clawmacs::*approval-policy-path*
-           (merge-pathnames "guard.json" root))
-          (clawmacs::*approval-policy-registry* nil)
-          (clawmacs::*approval-policy-project-registry-cache*
-           (make-hash-table :test #'equal))
-          (clawmacs::*approval-policy-network-dependent-tools*
-           '("http_fetch" "netcons_run" "netcons_search" "netcons_open"
-             "netcons_find")))
+          (clawmacs::*mcp-external-tool-table* (make-hash-table :test #'equal)))
      ,@body))
 
 (defun load-test-mcp-bridge-package ()
@@ -214,8 +206,7 @@ for raw in sys.stdin:
        "demo"
        :transport :stdio
        :command "python3"
-       :args (list (namestring script))
-       :default-tool-permission :agent-allowed)
+       :args (list (namestring script)))
       (load-test-mcp-bridge-package)
       (is (member "mcp_demo_echo" (mcp-bridge-tool-names) :test #'string=))
       (let ((result (mcp-bridge-tool-result "mcp_demo_echo"
@@ -235,21 +226,37 @@ for raw in sys.stdin:
         (is (string= "Demo resource body" (string-trim '(#\Newline)
                                                        (getf resource :text))))))))
 
-(test mcp-bridge-http-configuration-applies-per-tool-permissions
-  "HTTP-backed MCP discovery honors server and per-tool default permissions."
+(test mcp-bridge-legacy-permission-json-is-warned-ignored-and-stripped
+  "Legacy permission fields warn, do not constrain tools, and vanish on save."
   (with-mcp-bridge-package-state
-    (clawmacs::register-mcp-server-config
-     "httpdemo"
-     :transport :http
-     :url "http://example.test/mcp"
-     :default-tool-permission :agent-with-permission
-     :tool-permissions '(("echo" . :agent-allowed)))
+    (write-test-file
+     clawmacs::*mcp-server-configuration-path*
+     "{\"servers\":[{\"name\":\"httpdemo\",\"description\":\"legacy config\",\"transport\":\"http\",\"url\":\"http://example.test/mcp\",\"enabled\":true,\"default_permission\":\"user-only\",\"tool_permissions\":{\"echo\":\"agent-with-permission\"}}]}")
+    (let ((warnings nil))
+      (handler-bind
+          ((warning
+             (lambda (condition)
+               (push (princ-to-string condition) warnings)
+               (muffle-warning condition))))
+        (clawmacs::load-mcp-server-configurations))
+      (is-true
+       (some (lambda (message)
+               (search "obsolete MCP permission fields" message
+                       :test #'char-equal))
+             warnings)))
+    (let ((config (clawmacs::find-mcp-server-config "httpdemo")))
+      (is-true config)
+      (is (eq :http (clawmacs::mcp-server-config-transport config)))
+      (is (string= "http://example.test/mcp"
+                   (clawmacs::mcp-server-config-url config))))
     (with-mcp-http-stubs
       (load-test-mcp-bridge-package)
       (is (member "mcp_httpdemo_echo" (mcp-bridge-tool-names) :test #'string=))
-      (is (member "mcp_httpdemo_admin" (mcp-bridge-tool-names) :test #'string=))
-      (is-false (tool-requires-permission-p "mcp_httpdemo_echo"))
-      (is (tool-requires-permission-p "mcp_httpdemo_admin")))))
+      (is (member "mcp_httpdemo_admin" (mcp-bridge-tool-names) :test #'string=)))
+    (clawmacs::save-mcp-server-configurations)
+    (let ((saved (uiop:read-file-string
+                  clawmacs::*mcp-server-configuration-path*)))
+      (is-false (search "permission" saved :test #'char-equal)))))
 
 (test mcp-bridge-resource-mentions-inject-provider-context
   "Linked MCP resource mentions inject resource content before the user message."
@@ -260,8 +267,7 @@ for raw in sys.stdin:
        "demo"
        :transport :stdio
        :command "python3"
-       :args (list (namestring script))
-       :default-tool-permission :agent-allowed)
+       :args (list (namestring script)))
       (load-test-mcp-bridge-package)
       (set-message-text
        (buffer-input-message buffer)
@@ -285,8 +291,7 @@ for raw in sys.stdin:
     (clawmacs::register-mcp-server-config
      "broken"
      :transport :stdio
-     :command "/definitely/missing/mcp-server"
-     :default-tool-permission :agent-allowed)
+     :command "/definitely/missing/mcp-server")
     (load-test-mcp-bridge-package)
     (let* ((report (clawmacs::mcp-bridge-doctor-report))
            (entry (first report)))

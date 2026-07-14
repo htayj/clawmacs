@@ -165,9 +165,13 @@
 (defun templata-slash-reload (buffer args input-text)
   "Handle /reload slash commands."
   (declare (ignore args input-text))
-  (reload-skills)
-  (reload-package-channels)
-  (reload-active-packages :buffer buffer)
+  (call-with-package-runtime-maintenance
+   (lambda ()
+     (reload-skills)
+     (reload-package-channels)
+     (reload-active-packages :buffer buffer))
+   :operation "reload skills and active packages"
+   :buffer buffer)
   (buffer-insert-system-message
    buffer
    "[Reloaded skills, package manifests, and on-disk prompt templates.]"))

@@ -90,21 +90,18 @@
 (deftool mcp-bridge-list-servers-tool
   :name "mcp_list_servers"
   :description "List configured MCP servers plus currently mapped external tools."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ())
 
 (deftool mcp-bridge-list-tools-tool
   :name "mcp_list_tools"
-  :description "List currently mapped external MCP tools and their permissions."
-  :permission :agent-allowed
+  :description "List currently mapped external MCP tools."
   :call-style :raw-args
   :args ())
 
 (deftool mcp-bridge-list-resources-tool
   :name "mcp_list_resources"
   :description "List advertised resources from one enabled MCP server or all enabled MCP servers."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((server :type "string" :required nil
                  :description "Optional MCP server name. Defaults to all enabled servers.")))
@@ -112,7 +109,6 @@
 (deftool mcp-bridge-read-resource-tool
   :name "mcp_read_resource"
   :description "Read one resource from a configured MCP server."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((server :type "string"
                  :description "Configured MCP server name.")
@@ -122,14 +118,13 @@
 (deftool mcp-bridge-refresh-tools-tool
   :name "mcp_refresh_tools"
   :description "Refresh mapped external MCP tools from the currently enabled MCP servers."
-  :permission :agent-allowed
   :call-style :raw-args
+  :execution :frame
   :args ())
 
 (deftool mcp-bridge-doctor-tool
   :name "mcp_doctor"
   :description "Inspect the health of configured MCP servers."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ())
 
@@ -236,35 +231,6 @@
               (format nil "[Disabled MCP server ~A]" server-name)))))
         (buffer-insert-system-message buffer "[No enabled MCP servers.]"))))
 (defcommand mcp-bridge-disable-server-command)
-
-(defun mcp-bridge-set-server-permission-command (buffer server permission)
-  "Set SERVER's default bridge-level permission."
-  (let ((normalized (set-mcp-server-default-permission server permission)))
-    (mcp-bridge-refresh-runtime)
-    (buffer-insert-system-message
-     buffer
-     (format nil "[MCP server ~A default permission -> ~A]"
-             server
-             (guard-policy-value-string normalized)))))
-(defcommand mcp-bridge-set-server-permission-command
-  :prompts ((server :prompt "MCP server")
-            (permission :prompt "Permission (agent-allowed, agent-with-permission, user-only, inherit)")))
-
-(defun mcp-bridge-set-tool-permission-command (buffer server tool-name permission)
-  "Set TOOL-NAME's default bridge-level permission on SERVER."
-  (set-mcp-server-tool-permission server tool-name permission)
-  (mcp-bridge-refresh-runtime)
-  (buffer-insert-system-message
-   buffer
-   (format nil "[MCP tool ~A/~A permission -> ~A]"
-           server
-           tool-name
-           (guard-policy-value-string
-            (mcp-server-tool-permission server tool-name)))))
-(defcommand mcp-bridge-set-tool-permission-command
-  :prompts ((server :prompt "MCP server")
-            (tool-name :prompt "Original MCP tool name")
-            (permission :prompt "Permission (agent-allowed, agent-with-permission, user-only, inherit)")))
 
 (defun mcp-resource-selector-items (&optional buffer)
   "Return minibuffer selector items for advertised MCP resources."

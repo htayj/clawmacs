@@ -291,6 +291,311 @@ beta" (project-read-file "keys" "notes.txt"))))))
         (project-read-file "moves" "new.lisp")))
     (is (not (null definitions)))))
 
+(test change-set-transactions-serialize-and-publish-entry-flags-at-commit
+  "Independent applies serialize file I/O and publish detached flags atomically."
+  (with-project-test-state (root definitions)
+    (is (pathnamep definitions))
+    (define-project "serialized" :root root)
+    (project-create-file "serialized" "first.txt" :content "old-first")
+    (project-create-file "serialized" "second.txt" :content "old-second")
+    (let* ((project-table *project-registry*)
+           (first-change-set (begin-change-set :name "first-transaction"))
+           (second-change-set (begin-change-set :name "second-transaction"))
+           (first-entered
+             (bt:make-semaphore :name "first change-set entry applied"))
+           (second-entered
+             (bt:make-semaphore :name "second change-set entry applied"))
+           (release-first
+             (bt:make-semaphore :name "release first change-set entry"))
+           (counter-lock (bt:make-lock "change-set apply counter"))
+           (active 0)
+           (maximum-active 0)
+           (first-error nil)
+           (second-error nil)
+           (first-thread nil)
+           (second-thread nil))
+      (stage-project-file "serialized" "first.txt" "new-first"
+                          :change-set first-change-set)
+      (stage-project-file "serialized" "second.txt" "new-second"
+                          :change-set second-change-set)
+      (labels ((apply-with-pause (entry)
+                 (bt:with-lock-held (counter-lock)
+                   (incf active)
+                   (setf maximum-active (max maximum-active active)))
+                 (unwind-protect
+                      (progn
+                        ;; The production helper mutates only this detached copy.
+                        (clawmacs::apply-change-set-entry entry)
+                        (cond
+                          ((string= "new-first"
+                                    (clawmacs::change-set-entry-new-text entry))
+                           (bt:signal-semaphore first-entered)
+                           (unless (bt:wait-on-semaphore release-first
+                                                         :timeout 5.0)
+                             (error "Timed out releasing first apply.")))
+                          (t
+                           (bt:signal-semaphore second-entered)))
+                        entry)
+                   (bt:with-lock-held (counter-lock)
+                     (decf active)))))
+        (unwind-protect
+             (progn
+               (setf first-thread
+                     (bt:make-thread
+                      (lambda ()
+                        (let ((*project-registry* project-table)
+                              (clawmacs::*buffer-ring* nil)
+                              (clawmacs::*change-set-entry-apply-function*
+                                #'apply-with-pause))
+                          (handler-case
+                              (apply-change-set first-change-set)
+                            (error (condition)
+                              (setf first-error condition)))))
+                      :name "first serialized change set"))
+               (is-true (bt:wait-on-semaphore first-entered :timeout 2.0))
+               ;; The detached entry has completed its write and set its flag,
+               ;; but registry readers still see the last committed generation.
+               (let* ((snapshot
+                        (cdr (assoc (change-set-id first-change-set)
+                                    (clawmacs::change-set-registry-snapshot)
+                                    :test #'string=)))
+                      (entry (first (change-set-entries snapshot))))
+                 (is (eq :applying (change-set-status snapshot)))
+                 (is-false (clawmacs::change-set-entry-applied-p entry)))
+               (setf second-thread
+                     (bt:make-thread
+                      (lambda ()
+                        (let ((*project-registry* project-table)
+                              (clawmacs::*buffer-ring* nil)
+                              (clawmacs::*change-set-entry-apply-function*
+                                #'apply-with-pause))
+                          (handler-case
+                              (apply-change-set second-change-set)
+                            (error (condition)
+                              (setf second-error condition)))))
+                      :name "second serialized change set"))
+               (is-false
+                (bt:wait-on-semaphore second-entered :timeout 0.25))
+               (bt:signal-semaphore release-first)
+               (is-true
+                (bt:wait-on-semaphore second-entered :timeout 2.0))
+               (bt:join-thread first-thread)
+               (setf first-thread nil)
+               (bt:join-thread second-thread)
+               (setf second-thread nil)
+               (is (null first-error))
+               (is (null second-error))
+               (is (= 1 maximum-active))
+               (is (eq :applied (change-set-status first-change-set)))
+               (is (eq :applied (change-set-status second-change-set)))
+               (is-true
+                (clawmacs::change-set-entry-applied-p
+                 (first (change-set-entries first-change-set))))
+               (is (string= "new-first"
+                            (project-read-file "serialized" "first.txt")))
+               (is (string= "new-second"
+                            (project-read-file "serialized" "second.txt"))))
+          (bt:signal-semaphore release-first)
+          (when (and first-thread (bt:thread-alive-p first-thread))
+            (bt:join-thread first-thread))
+          (when (and second-thread (bt:thread-alive-p second-thread))
+            (bt:join-thread second-thread)))))))
+
+(test project-manifest-writes-serialize-and-atomically-replace
+  "Manifest writers never overlap, and failed temp writes preserve the target."
+  (with-project-test-state (root definitions)
+    (let* ((first-project (create-project "atomic" :root root
+                                          :description "original"))
+           (second-project (clawmacs::copy-project first-project))
+           (first-entered
+             (bt:make-semaphore :name "first manifest writer entered"))
+           (second-entered
+             (bt:make-semaphore :name "second manifest writer entered"))
+           (release-first
+             (bt:make-semaphore :name "release first manifest writer"))
+           (counter-lock (bt:make-lock "manifest writer counter"))
+           (active 0)
+           (maximum-active 0)
+           (first-error nil)
+           (second-error nil)
+           (first-thread nil)
+           (second-thread nil))
+      (setf (project-description first-project) "first"
+            (project-description second-project) "second")
+      (labels ((write-with-pause (path manifest)
+                 (bt:with-lock-held (counter-lock)
+                   (incf active)
+                   (setf maximum-active (max maximum-active active)))
+                 (unwind-protect
+                      (progn
+                        (if (string= "first" (getf manifest :description))
+                            (progn
+                              (bt:signal-semaphore first-entered)
+                              (unless (bt:wait-on-semaphore release-first
+                                                            :timeout 5.0)
+                                (error "Timed out releasing manifest writer.")))
+                            (bt:signal-semaphore second-entered))
+                        (clawmacs::write-project-manifest-generation
+                         path manifest))
+                   (bt:with-lock-held (counter-lock)
+                     (decf active)))))
+        (unwind-protect
+             (progn
+               (setf first-thread
+                     (bt:make-thread
+                      (lambda ()
+                        (let ((clawmacs::*project-manifest-write-function*
+                                #'write-with-pause))
+                          (handler-case
+                              (clawmacs::write-project-manifest
+                               first-project definitions)
+                            (error (condition)
+                              (setf first-error condition)))))
+                      :name "first serialized manifest"))
+               (is-true (bt:wait-on-semaphore first-entered :timeout 2.0))
+               (setf second-thread
+                     (bt:make-thread
+                      (lambda ()
+                        (let ((clawmacs::*project-manifest-write-function*
+                                #'write-with-pause))
+                          (handler-case
+                              (clawmacs::write-project-manifest
+                               second-project definitions)
+                            (error (condition)
+                              (setf second-error condition)))))
+                      :name "second serialized manifest"))
+               (is-false
+                (bt:wait-on-semaphore second-entered :timeout 0.25))
+               (bt:signal-semaphore release-first)
+               (is-true
+                (bt:wait-on-semaphore second-entered :timeout 2.0))
+               (bt:join-thread first-thread)
+               (setf first-thread nil)
+               (bt:join-thread second-thread)
+               (setf second-thread nil)
+               (is (null first-error))
+               (is (null second-error))
+               (is (= 1 maximum-active))
+               (is (string= "second"
+                            (getf (clawmacs::read-project-manifest
+                                   (clawmacs::project-manifest-path
+                                    "atomic" definitions))
+                                  :description))))
+          (bt:signal-semaphore release-first)
+          (when (and first-thread (bt:thread-alive-p first-thread))
+            (bt:join-thread first-thread))
+          (when (and second-thread (bt:thread-alive-p second-thread))
+            (bt:join-thread second-thread))))
+      ;; A failed temporary generation cannot truncate the committed target.
+      (let ((clawmacs::*project-manifest-write-function*
+              (lambda (path manifest)
+                (declare (ignore manifest))
+                (with-open-file (stream path
+                                        :direction :output
+                                        :if-exists :error
+                                        :if-does-not-exist :create)
+                  (write-string "(:name \"atomic\"" stream))
+                (error "Injected manifest write failure."))))
+        (setf (project-description first-project) "must-not-publish")
+        (signals error
+          (clawmacs::write-project-manifest first-project definitions)))
+      (is (string= "second"
+                   (getf (clawmacs::read-project-manifest
+                          (clawmacs::project-manifest-path
+                           "atomic" definitions))
+                         :description)))
+      (is (null (directory
+                 (merge-pathnames
+                  (make-pathname :name :wild :type "tmp")
+                  definitions)))))))
+
+(test change-set-entry-failure-after-mutation-is-compensated
+  "A failing apply or revert entry restores the authoritative file snapshot."
+  (with-project-test-state (root definitions)
+    (is (pathnamep definitions))
+    (define-project "compensate" :root root)
+    (project-create-file "compensate" "state.txt" :content "old")
+    (let ((failed-apply (begin-change-set :name "failed-apply")))
+      (stage-project-file "compensate" "state.txt" "new"
+                          :change-set failed-apply)
+      (let ((clawmacs::*change-set-entry-apply-function*
+              (lambda (entry)
+                (clawmacs::apply-change-set-entry entry)
+                (error "Injected failure after apply mutation."))))
+        (signals error (apply-change-set failed-apply)))
+      (is (eq :failed (change-set-status failed-apply)))
+      (is-false
+       (clawmacs::change-set-entry-applied-p
+        (first (change-set-entries failed-apply))))
+      (is (string= "old" (project-read-file "compensate" "state.txt"))))
+    (let ((failed-revert (begin-change-set :name "failed-revert")))
+      (stage-project-file "compensate" "state.txt" "new"
+                          :change-set failed-revert)
+      (apply-change-set failed-revert)
+      (let ((clawmacs::*change-set-entry-revert-function*
+              (lambda (entry)
+                (clawmacs::revert-change-set-entry entry)
+                (error "Injected failure after revert mutation."))))
+        (signals error (revert-change-set failed-revert)))
+      (is (eq :revert-failed (change-set-status failed-revert)))
+      (is-true
+       (clawmacs::change-set-entry-applied-p
+        (first (change-set-entries failed-revert))))
+      (is (string= "new"
+                   (project-read-file "compensate" "state.txt"))))))
+
+(test background-project-write-defers-buffer-sync-to-frame-effect
+  "Worker file writes publish an immutable effect; frame replay mutates UI state."
+  (with-project-test-state (root definitions)
+    (is (pathnamep definitions))
+    (define-project "effect" :root root)
+    (project-create-file "effect" "notes.txt" :content "old")
+    (let* ((buffer (project-open-file "effect" "notes.txt"))
+           (project-table *project-registry*)
+           (effects nil)
+           (worker-thread nil)
+           (worker-error nil)
+           (worker
+             (bt:make-thread
+              (lambda ()
+                (let ((*project-registry* project-table)
+                      (clawmacs::*tool-effect-recorder*
+                        (lambda (kind effect)
+                          (push (cons kind effect) effects))))
+                  (setf worker-thread (bt:current-thread))
+                  (handler-case
+                      (project-save-file "effect" "notes.txt" "new")
+                    (error (condition)
+                      (setf worker-error condition)))))
+              :name "background project writer")))
+      (bt:join-thread worker)
+      (is (null worker-error))
+      (is (not (eq worker-thread (bt:current-thread))))
+      (is (string= "new" (project-read-file "effect" "notes.txt")))
+      (is (string= "old" (file-buffer-text buffer)))
+      (is (= 1 (length effects)))
+      (is (eq :project-buffer (caar effects)))
+      (clawmacs::apply-interactive-tool-effects buffer (nreverse effects))
+      (is (string= "new" (file-buffer-text buffer)))
+      (is-false (buffer-dirty-p buffer)))))
+
+(test direct-project-write-failure-preserves-target-and-cleans-temp
+  "A pre-rename write failure leaves the prior file and no temp generation."
+  (with-project-test-state (root definitions)
+    (is (pathnamep definitions))
+    (define-project "atomic-write" :root root)
+    (project-create-file "atomic-write" "state.txt" :content "stable")
+    ;; WRITE-STRING rejects this value only after the same-directory temporary
+    ;; file has been opened, deterministically exercising unwind cleanup.
+    (signals error
+      (project-save-file "atomic-write" "state.txt" 42))
+    (is (string= "stable"
+                 (project-read-file "atomic-write" "state.txt")))
+    (is (null (directory
+               (merge-pathnames
+                (make-pathname :name :wild :type "tmp")
+                root))))))
+
 (test project-code-intelligence-finds-definitions-and-packages
   "Project intelligence helpers summarize Lisp files without direct file tools."
   (with-project-test-state (root definitions)

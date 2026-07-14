@@ -34,7 +34,7 @@
     (&key (args (uiop:command-line-arguments))
           (flag-options '("--show-tools" "--show-tool-calls"
                           "--show-reasoning" "--show-metadata"
-                          "--json" "--auto-approve-tools"
+                          "--json"
                           "--no-init" "--help" "-h"))
           (value-options '("--agent" "--provider" "--model" "--think"
                            "--reasoning-effort" "--prompt" "-p"

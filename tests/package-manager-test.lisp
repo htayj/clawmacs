@@ -20,6 +20,47 @@
 (defvar *initial-buffer-hook-binding* nil
   "Captures a key binding observed from the initial buffer hook.")
 
+(defstruct concurrent-package-load-state
+  lock
+  entered
+  release
+  (count 0)
+  (active 0)
+  (max-active 0)
+  (failures-left 0))
+
+(defvar *concurrent-package-load-state* nil)
+
+(defun concurrent-package-entrypoint (&optional label)
+  "Barrier-controlled package entrypoint body for lifecycle race tests."
+  (declare (ignore label))
+  (let ((state *concurrent-package-load-state*))
+    (unless state
+      (error "Concurrent package load state is not installed."))
+    (bt:with-lock-held ((concurrent-package-load-state-lock state))
+      (incf (concurrent-package-load-state-count state))
+      (incf (concurrent-package-load-state-active state))
+      (setf (concurrent-package-load-state-max-active state)
+            (max (concurrent-package-load-state-max-active state)
+                 (concurrent-package-load-state-active state))))
+    (unwind-protect
+         (progn
+           (bt:signal-semaphore (concurrent-package-load-state-entered state))
+           (unless (bt:wait-on-semaphore
+                    (concurrent-package-load-state-release state)
+                    :timeout 5.0)
+             (error "Timed out waiting for package lifecycle test release."))
+           (let ((fail-p nil))
+             (bt:with-lock-held ((concurrent-package-load-state-lock state))
+               (when (plusp
+                      (concurrent-package-load-state-failures-left state))
+                 (decf (concurrent-package-load-state-failures-left state))
+                 (setf fail-p t)))
+             (when fail-p
+               (error "Intentional package lifecycle test failure."))))
+      (bt:with-lock-held ((concurrent-package-load-state-lock state))
+        (decf (concurrent-package-load-state-active state))))))
+
 (defun temp-package-test-directory (label)
   (make-pathname :directory (list :absolute "tmp"
                                   (format nil "clawmacs-package-tests-~A-~36R-~36R-~A"
@@ -110,6 +151,82 @@
                           :if-does-not-exist :create)
     (write-string contents stream)))
 
+(defun make-concurrent-package-definition (label)
+  "Create a temporary package whose entrypoint waits on the lifecycle barrier."
+  (let* ((root (uiop:ensure-directory-pathname
+                (temp-package-test-directory label)))
+         (entrypoint (merge-pathnames "entrypoint.lisp" root)))
+    (write-test-file
+     entrypoint
+     (format nil
+             "(clawmacs/tests::concurrent-package-entrypoint ~S)~%"
+             label))
+    (clawmacs:make-package-definition
+     :name label
+     :description "Concurrent lifecycle test package."
+     :root root
+     :entrypoint entrypoint
+     :dependencies nil
+     :autoload nil)))
+
+(defmacro with-concurrent-package-load-state (() &body body)
+  "Install fresh process-visible synchronization state for lifecycle tests."
+  `(let ((old-state *concurrent-package-load-state*)
+         (state
+           (make-concurrent-package-load-state
+            :lock (bt:make-lock "concurrent package load state")
+            :entered (bt:make-semaphore
+                      :name "concurrent package load entered")
+            :release (bt:make-semaphore
+                      :name "concurrent package load release"))))
+     (unwind-protect
+          (progn
+            (setf *concurrent-package-load-state* state)
+            ,@body)
+       (setf *concurrent-package-load-state* old-state))))
+
+(defun make-concurrent-package-loader-thread
+    (definition loaded-table start ready results-cell result-lock name)
+  "Create one synchronized direct package entrypoint loader."
+  (bt:make-thread
+   (lambda ()
+     (bt:signal-semaphore ready)
+     (unless (bt:wait-on-semaphore start :timeout 5.0)
+       (error "Timed out waiting for package loader start."))
+     (let ((clawmacs::*loaded-packages* loaded-table))
+       (let ((result
+               (clawmacs::load-package-definition-entrypoint definition)))
+         (bt:with-lock-held (result-lock)
+           (push result (car results-cell))))))
+   :name name))
+
+(defmacro with-process-package-configuration ((path-var) &body body)
+  "Install and restore actual process globals so worker threads share COW state."
+  `(let* ((old-path clawmacs::*package-configuration-path*)
+          (old-write-function clawmacs::*package-configuration-write-function*)
+          (old-configuration
+            (bt:with-lock-held (clawmacs::*package-configuration-lock*)
+              clawmacs::*package-configuration*))
+          (root (uiop:ensure-directory-pathname
+                 (temp-package-test-directory "concurrent-config")))
+          (,path-var (merge-pathnames "packages.json" root)))
+     (unwind-protect
+          (progn
+            (setf clawmacs::*package-configuration-path* ,path-var
+                  clawmacs::*package-configuration-write-function* nil)
+            (bt:with-lock-held (clawmacs::*package-configuration-lock*)
+              (setf clawmacs::*package-configuration* nil))
+            ,@body)
+       (bt:with-lock-held (clawmacs::*package-configuration-lock*)
+         (setf clawmacs::*package-configuration* old-configuration))
+       (setf clawmacs::*package-configuration-path* old-path
+             clawmacs::*package-configuration-write-function*
+             old-write-function)
+       (when (probe-file root)
+         (uiop:delete-directory-tree root
+                                     :validate t
+                                     :if-does-not-exist :ignore)))))
+
 (test count-occurrences-counts-non-overlapping-substrings
   "COUNT-OCCURRENCES gives agents a small string-counting helper."
   (is (= 2 (count-occurrences "needle" "needle haystack needle")))
@@ -183,7 +300,6 @@
 (deftool packrat-resource-tool
   :name \"packrat_resource_tool\"
   :description \"Packrat resource tool.\"
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((value :type \"string\" :description \"value\")))
 
@@ -327,6 +443,234 @@ Resource prompt body.")
       (is (= 1 *package-entrypoint-load-count*))
       (is (= 1 (length (clawmacs:load-active-packages))))
       (is (= 1 *package-entrypoint-load-count*)))))
+
+(test concurrent-cold-load-is-exact-once-and-wakes-three-contenders
+  "Three simultaneous callers execute one package entrypoint exactly once."
+  (with-concurrent-package-load-state ()
+    (let* ((definition (make-concurrent-package-definition "same-package"))
+           (loaded-table (make-hash-table :test #'equal))
+           (start (bt:make-semaphore :name "same package start"))
+           (ready (bt:make-semaphore :name "same package ready"))
+           (result-lock (bt:make-lock "same package results"))
+           (results-cell (list nil))
+           (threads
+             (loop :for index :below 3
+                   :collect
+                   (make-concurrent-package-loader-thread
+                    definition loaded-table start ready results-cell result-lock
+                    (format nil "same-package-loader-~D" index)))))
+      (unwind-protect
+           (progn
+             (dotimes (_ 3)
+               (declare (ignore _))
+               (is-true (bt:wait-on-semaphore ready :timeout 2.0)))
+             (bt:signal-semaphore start :count 3)
+             (is-true
+              (bt:wait-on-semaphore
+               (concurrent-package-load-state-entered
+                *concurrent-package-load-state*)
+               :timeout 2.0))
+             (is-false
+              (bt:wait-on-semaphore
+               (concurrent-package-load-state-entered
+                *concurrent-package-load-state*)
+               :timeout 0.05))
+             (bt:signal-semaphore
+              (concurrent-package-load-state-release
+               *concurrent-package-load-state*))
+             (dolist (thread threads)
+               (bt:join-thread thread))
+             (is (= 1 (concurrent-package-load-state-count
+                       *concurrent-package-load-state*)))
+             (is (= 1 (concurrent-package-load-state-max-active
+                       *concurrent-package-load-state*)))
+             (is (= 3 (length (car results-cell))))
+             (is (every (lambda (result) (eq result definition))
+                        (car results-cell))))
+        (bt:signal-semaphore
+         (concurrent-package-load-state-release
+          *concurrent-package-load-state*)
+         :count 3)
+        (dolist (thread threads)
+          (when (bt:thread-alive-p thread)
+            (bt:join-thread thread)))))))
+
+(test concurrent-different-package-loads-are-serialized
+  "Different entrypoints never execute concurrently in the shared Lisp image."
+  (with-concurrent-package-load-state ()
+    (let* ((first (make-concurrent-package-definition "different-first"))
+           (second (make-concurrent-package-definition "different-second"))
+           (loaded-table (make-hash-table :test #'equal))
+           (start (bt:make-semaphore :name "different package start"))
+           (ready (bt:make-semaphore :name "different package ready"))
+           (result-lock (bt:make-lock "different package results"))
+           (results-cell (list nil))
+           (threads
+             (list
+              (make-concurrent-package-loader-thread
+               first loaded-table start ready results-cell result-lock
+               "different-package-loader-first")
+              (make-concurrent-package-loader-thread
+               second loaded-table start ready results-cell result-lock
+               "different-package-loader-second"))))
+      (unwind-protect
+           (progn
+             (dotimes (_ 2)
+               (declare (ignore _))
+               (is-true (bt:wait-on-semaphore ready :timeout 2.0)))
+             (bt:signal-semaphore start :count 2)
+             (is-true
+              (bt:wait-on-semaphore
+               (concurrent-package-load-state-entered
+                *concurrent-package-load-state*)
+               :timeout 2.0))
+             (is-false
+              (bt:wait-on-semaphore
+               (concurrent-package-load-state-entered
+                *concurrent-package-load-state*)
+               :timeout 0.05))
+             (bt:signal-semaphore
+              (concurrent-package-load-state-release
+               *concurrent-package-load-state*))
+             (is-true
+              (bt:wait-on-semaphore
+               (concurrent-package-load-state-entered
+                *concurrent-package-load-state*)
+               :timeout 2.0))
+             (bt:signal-semaphore
+              (concurrent-package-load-state-release
+               *concurrent-package-load-state*))
+             (dolist (thread threads)
+               (bt:join-thread thread))
+             (is (= 2 (concurrent-package-load-state-count
+                       *concurrent-package-load-state*)))
+             (is (= 1 (concurrent-package-load-state-max-active
+                       *concurrent-package-load-state*)))
+             (is (= 2 (hash-table-count loaded-table))))
+        (bt:signal-semaphore
+         (concurrent-package-load-state-release
+          *concurrent-package-load-state*)
+         :count 2)
+        (dolist (thread threads)
+          (when (bt:thread-alive-p thread)
+            (bt:join-thread thread)))))))
+
+(test failed-cold-load-releases-owner-for-one-serialized-retry
+  "An entrypoint error clears ownership and lets one waiter retry safely."
+  (with-concurrent-package-load-state ()
+    (setf (concurrent-package-load-state-failures-left
+           *concurrent-package-load-state*)
+          1)
+    (let* ((definition (make-concurrent-package-definition "failure-release"))
+           (loaded-table (make-hash-table :test #'equal))
+           (start (bt:make-semaphore :name "failure release start"))
+           (ready (bt:make-semaphore :name "failure release ready"))
+           (result-lock (bt:make-lock "failure release results"))
+           (results-cell (list nil))
+           (threads
+             (loop :for index :below 2
+                   :collect
+                   (make-concurrent-package-loader-thread
+                    definition loaded-table start ready results-cell result-lock
+                    (format nil "failure-release-loader-~D" index)))))
+      (unwind-protect
+           (progn
+             (dotimes (_ 2)
+               (declare (ignore _))
+               (is-true (bt:wait-on-semaphore ready :timeout 2.0)))
+             (bt:signal-semaphore start :count 2)
+             (is-true
+              (bt:wait-on-semaphore
+               (concurrent-package-load-state-entered
+                *concurrent-package-load-state*)
+               :timeout 2.0))
+             (bt:signal-semaphore
+              (concurrent-package-load-state-release
+               *concurrent-package-load-state*))
+             (is-true
+              (bt:wait-on-semaphore
+               (concurrent-package-load-state-entered
+                *concurrent-package-load-state*)
+               :timeout 2.0))
+             (bt:signal-semaphore
+              (concurrent-package-load-state-release
+               *concurrent-package-load-state*))
+             (dolist (thread threads)
+               (bt:join-thread thread))
+             (is (= 2 (concurrent-package-load-state-count
+                       *concurrent-package-load-state*)))
+             (is (= 1 (concurrent-package-load-state-max-active
+                       *concurrent-package-load-state*)))
+             (is (= 1 (count nil (car results-cell))))
+             (is (= 1 (count definition (car results-cell) :test #'eq)))
+             (is (= 1 (hash-table-count loaded-table)))
+             (is-false (clawmacs::package-lifecycle-operation-active-p)))
+        (bt:signal-semaphore
+         (concurrent-package-load-state-release
+          *concurrent-package-load-state*)
+         :count 2)
+        (dolist (thread threads)
+          (when (bt:thread-alive-p thread)
+            (bt:join-thread thread)))))))
+
+(test busy-package-remove-refuses-before-deleting-files
+  "Destructive package maintenance signals before changing an install tree."
+  (let* ((source (make-packrat-resource-package-source
+                  :label "busy-remove"
+                  :version "v1"))
+         (packages-root (temp-package-test-directory "busy-remove-root")))
+    (unwind-protect
+         (with-packages-directory-override (packages-root)
+           (let* ((definition
+                    (clawmacs:clawmacs-use-package
+                     :src-type :path
+                     :repo (namestring source)))
+                  (root (clawmacs:package-definition-root definition))
+                  (buffer (make-buffer "busy-package-remove")))
+             (let ((clawmacs::*buffer-ring* (list buffer)))
+               (setf (buffer-status buffer) :oauth)
+               (signals clawmacs::package-runtime-maintenance-refused
+                 (clawmacs:remove-installed-package
+                  definition :buffer buffer))
+               (is (probe-file root))
+               (setf (buffer-status buffer) :idle)
+               (is (clawmacs:remove-installed-package
+                    definition :buffer buffer))
+               (is-false (probe-file root)))))
+      (when (probe-file source)
+        (uiop:delete-directory-tree source
+                                    :validate t
+                                    :if-does-not-exist :ignore)))))
+
+(test busy-package-reload-preserves-committed-registrations
+  "Reload refusal happens before reset removes the committed package surface."
+  (let* ((*package-entrypoint-load-count* 0)
+         (definition (make-concurrent-package-definition "busy-reload"))
+         (loaded-table (make-hash-table :test #'equal))
+         (section
+           (clawmacs::make-package-prompt-section
+            :name "busy-reload"
+            :package "busy-reload"
+            :body "committed"))
+         (buffer (make-buffer "busy-package-reload")))
+    ;; Replace the barrier entrypoint with a nonblocking committed load.
+    (write-test-file
+     (clawmacs:package-definition-entrypoint definition)
+     "(incf clawmacs/tests::*package-entrypoint-load-count*)")
+    (let ((clawmacs::*loaded-packages* loaded-table)
+          (clawmacs::*package-prompt-sections* (list section))
+          (clawmacs::*buffer-ring* (list buffer)))
+      (is (clawmacs::load-package-definition-entrypoint definition))
+      (is (= 1 *package-entrypoint-load-count*))
+      (setf (buffer-status buffer) :oauth)
+      (signals clawmacs::package-runtime-maintenance-refused
+        (clawmacs::reload-clawmacs-package definition))
+      (is (= 1 *package-entrypoint-load-count*))
+      (is (eq section (first clawmacs::*package-prompt-sections*)))
+      (is (gethash
+           (clawmacs::package-install-key
+            (clawmacs:package-definition-root definition))
+           loaded-table)))))
 
 (test default-package-channel-discovers-bundled-packages
   "The bundled default channel advertises the built-in packages."
@@ -556,8 +900,70 @@ Resource prompt body.")
       (is (equal '("lispi" "sexed")
                  (sort (copy-list
                         (clawmacs:active-package-names
-                         :agent-name "coder"))
+                        :agent-name "coder"))
                        #'string<))))))
+
+(test concurrent-package-enablement-cow-commits-do-not-lose-updates
+  "Concurrent writers serialize snapshots, commits, and atomic file replacement."
+  (with-process-package-configuration (path)
+    (let ((ready (bt:make-semaphore :name "package config writers ready"))
+          (start (bt:make-semaphore :name "package config writers start"))
+          (errors-cell (list nil))
+          (errors-lock (bt:make-lock "package config writer errors"))
+          (names (loop :for index :below 8
+                       :collect (format nil "race-package-~D" index))))
+      (let ((threads
+              (mapcar
+               (lambda (name)
+                 (bt:make-thread
+                  (lambda ()
+                    (bt:signal-semaphore ready)
+                    (unless (bt:wait-on-semaphore start :timeout 5.0)
+                      (error "Timed out waiting for package config start."))
+                    (handler-case
+                        (clawmacs:set-package-enablement-scope name :global)
+                      (error (condition)
+                        (bt:with-lock-held (errors-lock)
+                          (push condition (car errors-cell))))))
+                  :name (format nil "package-config-writer-~A" name)))
+               names)))
+        (unwind-protect
+             (progn
+               (dotimes (_ (length names))
+                 (declare (ignore _))
+                 (is-true (bt:wait-on-semaphore ready :timeout 2.0)))
+               (bt:signal-semaphore start :count (length names))
+               (dolist (thread threads)
+                 (bt:join-thread thread))
+               (is (null (car errors-cell)))
+               (let ((active (clawmacs:active-package-names)))
+                 (dolist (name names)
+                   (is (member name active :test #'string=))))
+               (is (probe-file path))
+               (is (listp
+                    (cl-json:decode-json-from-string
+                     (uiop:read-file-string path)))))
+          (bt:signal-semaphore start :count (length names))
+          (dolist (thread threads)
+            (when (bt:thread-alive-p thread)
+              (bt:join-thread thread))))))))
+
+(test failed-package-configuration-write-does-not-publish-memory
+  "A failed atomic write leaves the prior in-memory generation unchanged."
+  (with-process-package-configuration (path)
+    (clawmacs:set-package-enablement-scope "stable-package" :global)
+    (let ((before (uiop:read-file-string path)))
+      (let ((clawmacs::*package-configuration-write-function*
+              (lambda (json target)
+                (declare (ignore json target))
+                (error "Injected package configuration write failure."))))
+        (signals error
+          (clawmacs:set-package-enablement-scope "uncommitted-package"
+                                                :global)))
+      (is (clawmacs::package-enabled-globally-p "stable-package"))
+      (is-false
+       (clawmacs::package-enabled-globally-p "uncommitted-package"))
+      (is (string= before (uiop:read-file-string path))))))
 
 (test cycle-package-enablement-scope-uses-simple-cycle
   "Package scope cycling avoids explicit disable chains."

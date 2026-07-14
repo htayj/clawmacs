@@ -592,7 +592,7 @@ Blank AFTER-SELECTOR moves the TODO before the first headline."
     (when (organa-blank-string-p path-string)
       (error "path must not be blank."))
     (if (organa-blank-string-p project)
-        (let* ((pathname (validate-sandbox-path path-string))
+        (let* ((pathname (lispi:resolve-tool-path path-string))
                (text (organa-read-file-text pathname
                                             :allow-missing allow-missing)))
           (make-organa-location :path path-string
@@ -1123,7 +1123,6 @@ Blank AFTER moves the TODO before the first headline."
                    (organa-todo-description todo))))
       (switch-to-buffer buffer)
       (setf (chat-frame-buffer frame) buffer)
-      (request-chat-frame-menu-refresh frame)
       (request-chat-frame-redisplay frame)
       buffer)))
 
@@ -1284,18 +1283,6 @@ Blank AFTER moves the TODO before the first headline."
            :removed remove-p
            :summary (organa-model-summary-plist model)))))
 
-(defun organa-tool-approval-display (args)
-  "Return approval context for Organa file mutations."
-  (let ((project (tool-arg args :project "project"))
-        (path (tool-arg args :path "path"))
-        (todo (tool-arg args :todo "todo"))
-        (title (tool-arg args :title "title")))
-    (format nil "Organa TODO file: ~@[~A:~]~A~@[~%TODO: ~A~]~@[~%Title: ~A~]"
-            project
-            path
-            todo
-            title)))
-
 ;;; --------------------------------------------------------------------------
 ;;; Package surface
 ;;; --------------------------------------------------------------------------
@@ -1323,25 +1310,22 @@ Blank AFTER moves the TODO before the first headline."
 (deftool organa-tool-overview
   :name "organa_todo_overview"
   :description "Read an org-mode TODO file and return TODOs, status counts, ready work, and dependency-blocked work."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. When supplied, path is project-relative.")
          (path :type "string"
-               :description "Sandbox-local org file path, or project-relative path when project is supplied.")
+               :description "Org file path, or project-relative path when project is supplied.")
          (view :type "string" :required nil
                :description "Optional intended view: dashboard, kanban, dependency, or outline.")))
 
 (deftool organa-tool-add-todo
   :name "organa_todo_add"
   :description "Add a TODO heading to an org-mode TODO file. Creates an ID property for the new TODO."
-  :permission :agent-with-permission
   :call-style :raw-args
-  :approval-display-fn organa-tool-approval-display
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. When supplied, path is project-relative.")
          (path :type "string"
-               :description "Sandbox-local org file path, or project-relative path when project is supplied.")
+               :description "Org file path, or project-relative path when project is supplied.")
          (title :type "string"
                 :description "New TODO title.")
          (status :type "string" :required nil
@@ -1352,13 +1336,11 @@ Blank AFTER moves the TODO before the first headline."
 (deftool organa-tool-set-status
   :name "organa_todo_set_status"
   :description "Set an org TODO status by ID or exact title."
-  :permission :agent-with-permission
   :call-style :raw-args
-  :approval-display-fn organa-tool-approval-display
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. When supplied, path is project-relative.")
          (path :type "string"
-               :description "Sandbox-local org file path, or project-relative path when project is supplied.")
+               :description "Org file path, or project-relative path when project is supplied.")
          (todo :type "string"
                :description "TODO ID, transient line id from overview, or exact title.")
          (status :type "string"
@@ -1367,13 +1349,11 @@ Blank AFTER moves the TODO before the first headline."
 (deftool organa-tool-move-todo
   :name "organa_todo_move"
   :description "Move a TODO subtree before the first headline or after another TODO subtree."
-  :permission :agent-with-permission
   :call-style :raw-args
-  :approval-display-fn organa-tool-approval-display
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. When supplied, path is project-relative.")
          (path :type "string"
-               :description "Sandbox-local org file path, or project-relative path when project is supplied.")
+               :description "Org file path, or project-relative path when project is supplied.")
          (todo :type "string"
                :description "TODO ID, transient line id from overview, or exact title to move.")
          (after :type "string" :required nil
@@ -1382,13 +1362,11 @@ Blank AFTER moves the TODO before the first headline."
 (deftool organa-tool-link-dependency
   :name "organa_todo_link_dependency"
   :description "Persist or remove a dependency relation between two org TODOs using ID and ORGANA_DEPENDS properties."
-  :permission :agent-with-permission
   :call-style :raw-args
-  :approval-display-fn organa-tool-approval-display
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. When supplied, path is project-relative.")
          (path :type "string"
-               :description "Sandbox-local org file path, or project-relative path when project is supplied.")
+               :description "Org file path, or project-relative path when project is supplied.")
          (todo :type "string"
                :description "TODO ID, transient line id from overview, or exact title that should be blocked.")
          (depends-on :type "string"

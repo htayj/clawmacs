@@ -96,6 +96,15 @@ Populated on first call to fetch-openrouter-models.  Set to nil to force refresh
 (defvar *provider-http-max-backoff-seconds* 8.0
   "Maximum delay before retrying a transient provider HTTP failure.")
 
+(defvar *provider-http-connection-timeout-seconds* 20
+  "Maximum seconds for one provider TCP connect/header wait in Drakma.")
+
+(defvar *provider-http-error-body-max-characters* 65536
+  "Maximum characters retained from a provider HTTP error response body.")
+
+(defvar *provider-http-cancel-poll-seconds* 0.05
+  "Maximum cancellation latency while using the default retry sleeper.")
+
 (defvar *provider-http-sleep-function* #'sleep
   "Function used to sleep between provider HTTP retries.")
 
@@ -114,6 +123,13 @@ Populated on first call to fetch-openrouter-models.  Set to nil to force refresh
 
 (defvar *openai-oauth-callback-path* "/auth/callback"
   "HTTP path served by the local OpenAI Codex OAuth callback server.")
+
+(defvar *openai-oauth-max-rejected-callback-requests* 8
+  "Maximum wrong-method/path requests served before the OAuth flow fails.
+
+The localhost listener remains available after incidental probes such as a
+favicon request, but a bounded rejection budget prevents an unrelated local
+client from retaining the callback worker indefinitely.")
 
 (defvar *openai-oauth-redirect-uri*
   (format nil "http://localhost:~D~A"
@@ -153,6 +169,32 @@ Populated on first call to fetch-openrouter-models.  Set to nil to force refresh
 (defvar *agent-definition-registry* (make-hash-table :test #'equal)
   "Programmatic agent definitions keyed by downcased agent name.")
 
+(defvar *process-agent-definition-registry* *agent-definition-registry*
+  "Process-global agent registry, distinct from dynamic test bindings.")
+
+(defvar *agent-definition-registry-lock*
+  (bt:make-lock "clawmacs agent definition registry")
+  "Lock guarding the process-global agent definition registry.")
+
+(defun call-with-agent-definition-registry-lock (function &optional
+                                                            (table
+                                                              *agent-definition-registry*))
+  "Call FUNCTION under the process registry lock, or directly for private TABLE."
+  (if (eq table *process-agent-definition-registry*)
+      (bt:with-lock-held (*agent-definition-registry-lock*)
+        (funcall function))
+      (funcall function)))
+
+(defun agent-definition-registry-snapshot ()
+  "Return a stable alist snapshot of the currently bound agent registry."
+  (call-with-agent-definition-registry-lock
+   (lambda ()
+     (let ((entries nil))
+       (maphash (lambda (name definition)
+                  (push (cons name definition) entries))
+                *agent-definition-registry*)
+       entries))))
+
 (defvar *agent-prompt-overrides* nil
   "Dynamic prompt overrides keyed by normalized agent name.
 Each entry is (NAME-KEY . PLIST) and is intended for transient subagent runs.")
@@ -165,11 +207,12 @@ Each entry is (NAME-KEY . PLIST) and is intended for transient subagent runs.")
   think-level
   core-prompt
   personality-prompt
-  tool-names)
+  tool-names
+  package)
 
 (defparameter +default-core-system-prompt+
   "You are an expert coding assistant operating inside clawmacs, a Lisp-native McCLIM agent workbench.
-You help users by using provider tools to inspect files, edit code, write files, search projects, and verify changes in the live Lisp image.
+You help users by using provider tools to inspect files, edit code, write files, search projects, and verify Common Lisp changes in isolated workers.
 
 Tool calls and tool results use Lisp data mode with keyword arguments such as :path, :content, :old-text, and :new-text.
 
@@ -181,11 +224,11 @@ Guidelines:
 - Use edit for precise changes when :old-text can match exactly once.
 - Use write for new files or complete rewrites.
 - write and edit reject content that leaves Lisp parentheses unbalanced.
-- Use lisp_eval for Common Lisp tests, introspection, live system updates, or defining helper tools when no exposed tool fits.
+- Use lisp_eval only with :mode \"isolated\" for Common Lisp tests or introspection when no exposed tool fits. Provider-driven live evaluation is refused because it can block or terminate the CLIM frame process.
 - Return Lisp values from lisp_eval; prefer (format nil ...) over printing when you need a composed string.
 - Be concise in user-facing replies.
 - Show file paths clearly when working with files.
-- To display a sandbox-local image to the user, put a Markdown image link on its own line, such as `![alt text](relative/path.png)`."
+- To display a local image to the user, put a Markdown image link on its own line, such as `![alt text](relative/path.png)`."
   "Built-in clawmacs operating instructions inserted ahead of the personality prompt.")
 
 (defvar *default-core-system-prompt*
@@ -916,7 +959,8 @@ Returns NIL when the file is missing or blank."
                       (:grant--type . "refresh_token")
                       (:refresh--token . ,refresh-token)))
           :want-stream nil
-          :force-binary nil)))
+          :force-binary nil
+          :connection-timeout *provider-http-connection-timeout-seconds*)))
     (let ((body-string (http-body-string body)))
       (unless (= status-code 200)
         (error "OAuth refresh failed (~A): ~A" status-code body-string))
@@ -1244,7 +1288,8 @@ Returns a plist (:id-token ... :access-token ... :refresh-token ... :account-id 
                            (url-encode-param redirect-uri)
                            (url-encode-param code-verifier))
           :want-stream nil
-          :force-binary nil)))
+          :force-binary nil
+          :connection-timeout *provider-http-connection-timeout-seconds*)))
     (let ((body-string (http-body-string body)))
       (unless (= status-code 200)
         (error "OAuth token exchange failed (~A): ~A" status-code body-string))
@@ -1274,7 +1319,8 @@ Returns a plist (:id-token ... :access-token ... :refresh-token ... :account-id 
                            (url-encode-param id-token)
                            (url-encode-param "urn:ietf:params:oauth:token-type:id_token"))
           :want-stream nil
-          :force-binary nil)))
+          :force-binary nil
+          :connection-timeout *provider-http-connection-timeout-seconds*)))
     (let ((body-string (http-body-string body)))
       (when (= status-code 200)
         (alist-string-value (api-json-decode body-string) :access--token)))))
@@ -1316,7 +1362,12 @@ Returns the access token on success."
   code-verifier
   state
   listener
+  client-socket
+  client-stream
   thread
+  settlement-thread
+  (settlement-waiter-done-p nil :type boolean)
+  (worker-settled-p nil :type boolean)
   (done-p nil :type boolean)
   (success-p nil :type boolean)
   (cancelled-p nil :type boolean)
@@ -1356,18 +1407,24 @@ Returns the access token on success."
   (finish-output stream))
 
 (defun openai-oauth-flow-set-result (flow &key success cancelled error token)
-  "Record FLOW's completion state under its lock."
-  (bt:with-lock-held ((openai-oauth-flow-lock flow))
-    (when (openai-oauth-flow-done-p flow)
-      (return-from openai-oauth-flow-set-result flow))
-    (setf (openai-oauth-flow-done-p flow) t
-          (openai-oauth-flow-success-p flow) success
-          (openai-oauth-flow-cancelled-p flow) cancelled
-          (openai-oauth-flow-error flow) error
-          (openai-oauth-flow-token flow) token))
-  (when (openai-oauth-flow-buffer flow)
-    (notify-buffer-display-change (openai-oauth-flow-buffer flow) :oauth))
-  flow)
+  "Record FLOW's completion state exactly once under its lock.
+Return FLOW and a second value indicating whether this call won completion."
+  (let ((completed-now-p nil))
+    (bt:with-lock-held ((openai-oauth-flow-lock flow))
+      (unless (openai-oauth-flow-done-p flow)
+        (setf (openai-oauth-flow-done-p flow) t
+              (openai-oauth-flow-success-p flow) success
+              (openai-oauth-flow-cancelled-p flow) cancelled
+              (openai-oauth-flow-error flow) error
+              (openai-oauth-flow-token flow) token
+              completed-now-p t)))
+    ;; Workers only publish completion and wake the normal CLIM redisplay path.
+    ;; Public display observers are deliberately deferred until the frame
+    ;; process claims and applies the exact pending flow.
+    (when (and completed-now-p (openai-oauth-flow-buffer flow))
+      (ignore-errors
+        (wake-buffer-display-change (openai-oauth-flow-buffer flow) :oauth)))
+    (values flow completed-now-p)))
 
 (defun openai-oauth-flow-snapshot (flow)
   "Return a plist snapshot of FLOW for safe polling from the UI."
@@ -1379,7 +1436,97 @@ Returns the access token on success."
           :token (openai-oauth-flow-token flow)
           :auth-url (openai-oauth-flow-auth-url flow)
           :redirect-uri (openai-oauth-flow-redirect-uri flow)
-          :port (openai-oauth-flow-port flow))))
+          :port (openai-oauth-flow-port flow)
+          :client-active-p
+          (not (null (openai-oauth-flow-client-stream flow))))))
+
+(defun openai-oauth-flow-thread-snapshot (flow)
+  "Return FLOW's worker thread under the flow lock."
+  (and flow
+       (bt:with-lock-held ((openai-oauth-flow-lock flow))
+         (openai-oauth-flow-thread flow))))
+
+(defun register-openai-oauth-client (flow socket stream)
+  "Publish FLOW's accepted client unless FLOW has already completed."
+  (bt:with-lock-held ((openai-oauth-flow-lock flow))
+    (when (openai-oauth-flow-done-p flow)
+      (return-from register-openai-oauth-client nil))
+    (setf (openai-oauth-flow-client-socket flow) socket
+          (openai-oauth-flow-client-stream flow) stream)
+    t))
+
+(defun unregister-openai-oauth-client (flow socket stream)
+  "Forget SOCKET and STREAM when they are still FLOW's active client."
+  (bt:with-lock-held ((openai-oauth-flow-lock flow))
+    (when (eq socket (openai-oauth-flow-client-socket flow))
+      (setf (openai-oauth-flow-client-socket flow) nil))
+    (when (eq stream (openai-oauth-flow-client-stream flow))
+      (setf (openai-oauth-flow-client-stream flow) nil)))
+  flow)
+
+(defun detach-openai-oauth-client (flow)
+  "Atomically detach and return FLOW's active client stream and socket."
+  (bt:with-lock-held ((openai-oauth-flow-lock flow))
+    (multiple-value-prog1
+        (values (openai-oauth-flow-client-stream flow)
+                (openai-oauth-flow-client-socket flow))
+      (setf (openai-oauth-flow-client-stream flow) nil
+            (openai-oauth-flow-client-socket flow) nil))))
+
+#+sbcl
+(defun interrupt-openai-oauth-client (stream socket)
+  "Interrupt one accepted OAuth client without holding FLOW's lock.
+The server worker owns STREAM's final close.  Closing an SBCL fd-stream from a
+second thread can wait on its read lock, so cancellation shuts the socket down
+and lets the blocked reader unwind and close both objects itself."
+  (if socket
+      (ignore-errors
+        (sb-bsd-sockets:socket-shutdown socket :direction :io))
+      (when stream
+        (ignore-errors
+          (close stream :abort t)))))
+
+(defun detach-openai-oauth-listener (flow)
+  "Atomically detach and return FLOW's listening socket."
+  (bt:with-lock-held ((openai-oauth-flow-lock flow))
+    (prog1 (openai-oauth-flow-listener flow)
+      (setf (openai-oauth-flow-listener flow) nil))))
+
+#+sbcl
+(defun close-openai-oauth-listener (flow)
+  "Close FLOW's listener at most once, outside the flow lock."
+  (let ((listener (detach-openai-oauth-listener flow)))
+    (when listener
+      (ignore-errors
+        (sb-bsd-sockets:socket-close listener))))
+  flow)
+
+(defun openai-oauth-flow-cancelled-p-safe (flow)
+  "Return true when FLOW has been cancelled, holding its state lock."
+  (and flow
+       (bt:with-lock-held ((openai-oauth-flow-lock flow))
+         (openai-oauth-flow-cancelled-p flow))))
+
+#+sbcl
+(defun wake-openai-oauth-listener (flow)
+  "Wake FLOW's blocking localhost ACCEPT so its worker can observe cancel."
+  (let ((socket nil))
+    (unwind-protect
+         (handler-case
+             (progn
+               (setf socket
+                     (make-instance 'sb-bsd-sockets:inet-socket
+                                    :type :stream
+                                    :protocol :tcp))
+               (sb-bsd-sockets:socket-connect
+                socket
+                #(127 0 0 1)
+                (openai-oauth-flow-port flow))
+               t)
+           (error () nil))
+      (when socket
+        (ignore-errors
+          (sb-bsd-sockets:socket-close socket))))))
 
 (defun maybe-open-url-in-browser (url)
   "Best-effort browser opener for URL. Returns non-nil when a command launched."
@@ -1443,23 +1590,29 @@ Returns the access token on success."
   "Serve one localhost OAuth callback request for FLOW."
   #+sbcl
   (handler-case
-      (let ((listener (openai-oauth-flow-listener flow)))
+      (let ((listener
+              (bt:with-lock-held ((openai-oauth-flow-lock flow))
+                (openai-oauth-flow-listener flow)))
+            (rejected-requests 0))
         (loop
           (multiple-value-bind (client-socket peer-address)
               (sb-bsd-sockets:socket-accept listener)
             (declare (ignore peer-address))
             (unwind-protect
-                 (let ((stream (sb-bsd-sockets:socket-make-stream
-                                client-socket
-                                :input t
-                                :output t
-                                :element-type 'character
-                                :external-format :utf-8
-                                :buffering :line)))
-                   (unwind-protect
-                        (multiple-value-bind (method target)
-                            (openai-oauth-read-request-target stream)
-                          (cond
+                 (unless (openai-oauth-flow-cancelled-p-safe flow)
+                   (let ((stream (sb-bsd-sockets:socket-make-stream
+                                  client-socket
+                                  :input t
+                                  :output t
+                                  :element-type 'character
+                                  :external-format :utf-8
+                                  :buffering :line)))
+                     (unwind-protect
+                          (when (register-openai-oauth-client
+                                 flow client-socket stream)
+                            (multiple-value-bind (method target)
+                                (openai-oauth-read-request-target stream)
+                              (cond
                             ((or (null method) (null target))
                              (openai-oauth-send-http-response
                               stream 400 "Bad Request"
@@ -1470,13 +1623,25 @@ Returns the access token on success."
                              (openai-oauth-send-http-response
                               stream 405 "Method Not Allowed"
                               (openai-oauth-error-page "Only GET callbacks are supported"))
-                             (return))
+                             (incf rejected-requests)
+                             (when (>= rejected-requests
+                                       *openai-oauth-max-rejected-callback-requests*)
+                               (openai-oauth-flow-set-result
+                                flow
+                                :error "Too many rejected OAuth callback requests")
+                               (return)))
                             ((not (string= (openai-oauth-request-path target)
                                            *openai-oauth-callback-path*))
                              (openai-oauth-send-http-response
                               stream 404 "Not Found"
                               (openai-oauth-error-page "Unknown callback path"))
-                             (return))
+                             (incf rejected-requests)
+                             (when (>= rejected-requests
+                                       *openai-oauth-max-rejected-callback-requests*)
+                               (openai-oauth-flow-set-result
+                                flow
+                                :error "Too many rejected OAuth callback requests")
+                               (return)))
                             (t
                              (handler-case
                                  (let* ((callback-url
@@ -1505,54 +1670,83 @@ Returns the access token on success."
                                  (openai-oauth-send-http-response
                                   stream 400 "Bad Request"
                                   (openai-oauth-error-page (format nil "~A" e)))
-                                 (return))))))
-                     (ignore-errors
-                       (close stream))))
+                                   (return)))))))
+                       (unregister-openai-oauth-client
+                        flow client-socket stream)
+                       (ignore-errors
+                         (close stream)))))
               (ignore-errors
                 (sb-bsd-sockets:socket-close client-socket))))))
     (error (e)
-      (unless (openai-oauth-flow-cancelled-p flow)
+      (unless (openai-oauth-flow-cancelled-p-safe flow)
         (openai-oauth-flow-set-result flow :error (format nil "~A" e)))))
   #-sbcl
   (declare (ignore flow)))
 
-(defun start-openai-codex-oauth-login (&key buffer (open-browser-p t))
+(defun start-openai-codex-oauth-login
+    (&key buffer (open-browser-p t) (thread-constructor #'bt:make-thread))
   "Start the localhost OpenAI Codex OAuth PKCE flow and return the flow object."
   (multiple-value-bind (listener actual-port)
       (bind-openai-oauth-listener)
-    (let* ((redirect-uri (openai-oauth-redirect-uri actual-port))
-           (auth-url nil)
-           (code-verifier nil)
-           (state nil))
-      (multiple-value-setq (auth-url code-verifier state)
-        (openai-codex-oauth-start :redirect-uri redirect-uri))
-      (let ((flow (make-openai-oauth-flow :buffer buffer
-                                          :auth-url auth-url
-                                          :redirect-uri redirect-uri
-                                          :port actual-port
-                                          :code-verifier code-verifier
-                                          :state state
-                                          :listener listener)))
-        (setf (openai-oauth-flow-thread flow)
-              (bt:make-thread
-               (lambda ()
-                 (unwind-protect
-                      (run-openai-oauth-server flow)
-                   (ignore-errors
-                     #+sbcl
-                     (sb-bsd-sockets:socket-close (openai-oauth-flow-listener flow)))))
-               :name "clawmacs-openai-oauth"))
-        (when open-browser-p
-          (maybe-open-url-in-browser auth-url))
-        flow))))
+    (let ((flow nil)
+          (worker-owns-listener-p nil))
+      (unwind-protect
+           (let* ((redirect-uri (openai-oauth-redirect-uri actual-port))
+                  (auth-url nil)
+                  (code-verifier nil)
+                  (state nil))
+             (multiple-value-setq (auth-url code-verifier state)
+               (openai-codex-oauth-start :redirect-uri redirect-uri))
+             (setf flow (make-openai-oauth-flow :buffer buffer
+                                                :auth-url auth-url
+                                                :redirect-uri redirect-uri
+                                                :port actual-port
+                                                :code-verifier code-verifier
+                                                :state state
+                                                :listener listener))
+             (let ((thread
+                     (funcall
+                      thread-constructor
+                      (lambda ()
+                        (unwind-protect
+                             (run-openai-oauth-server flow)
+                          #+sbcl
+                          (close-openai-oauth-listener flow)))
+                      :name "clawmacs-openai-oauth")))
+               ;; Once the constructor returns, only the flow/worker lifecycle
+               ;; closes the listener.  Publish the thread under the same lock
+               ;; used by teardown snapshots.
+               (setf worker-owns-listener-p t)
+               (bt:with-lock-held ((openai-oauth-flow-lock flow))
+                 (setf (openai-oauth-flow-thread flow) thread)))
+             (when open-browser-p
+               (maybe-open-url-in-browser auth-url))
+             flow)
+        (unless worker-owns-listener-p
+          (if flow
+              #+sbcl (close-openai-oauth-listener flow)
+              #-sbcl flow
+              (ignore-errors
+                #+sbcl (sb-bsd-sockets:socket-close listener))))))))
 
 (defun cancel-openai-codex-oauth-login (flow)
-  "Cancel FLOW and shut down its listener."
-  (openai-oauth-flow-set-result flow :cancelled t)
-  (ignore-errors
+  "Cancel FLOW, interrupt its accepted client, and shut down its listener."
+  (multiple-value-bind (result cancelled-now-p)
+      (openai-oauth-flow-set-result flow :cancelled t)
+    (declare (ignore result))
+    (when cancelled-now-p
+      (multiple-value-bind (stream socket)
+          (detach-openai-oauth-client flow)
+        #+sbcl
+        (interrupt-openai-oauth-client stream socket)))
+  ;; Closing a listening descriptor from another thread does not portably wake
+  ;; an ACCEPT already blocked in the kernel.  Queue one localhost connection
+  ;; first; the server observes CANCELLED before reading from that client.
     #+sbcl
-    (sb-bsd-sockets:socket-close (openai-oauth-flow-listener flow)))
-  flow)
+    (wake-openai-oauth-listener flow)
+    #+sbcl
+    (close-openai-oauth-listener flow)
+    (values flow cancelled-now-p)))
 
 (defparameter *provider-fallback-models*
   '((:openai-codex . *openai-codex-model*)
@@ -1668,28 +1862,57 @@ NAME is stored as given for display, while lookups are keyed case-insensitively.
                                             :think-level normalized-think-level
                                             :core-prompt core-prompt
                                             :personality-prompt personality-prompt
-                                            :tool-names normalized-tool-names)))
+                                            :tool-names normalized-tool-names
+                                            :package
+                                            (and *current-clawmacs-package*
+                                                 (package-identifier-string
+                                                  *current-clawmacs-package*)))))
     (when (and model (blank-string-p model))
       (error "Agent model must be a non-empty string"))
-    (setf (gethash registry-key *agent-definition-registry*) definition)
+    (call-with-agent-definition-registry-lock
+     (lambda ()
+       (setf (gethash registry-key *agent-definition-registry*) definition)))
     definition))
 
 (defun find-agent-definition (agent-name)
   "Return the registered agent definition for AGENT-NAME, or NIL."
   (when agent-name
-    (gethash (normalize-agent-name-key agent-name)
-             *agent-definition-registry*)))
+    (call-with-agent-definition-registry-lock
+     (lambda ()
+       (gethash (normalize-agent-name-key agent-name)
+                *agent-definition-registry*)))))
 
 (defun list-agent-definitions ()
   "Return all registered agent definitions sorted by name."
-  (let ((definitions nil))
-    (maphash (lambda (name definition)
-               (declare (ignore name))
-               (push definition definitions))
-             *agent-definition-registry*)
+  (let ((definitions (mapcar #'cdr (agent-definition-registry-snapshot))))
     (sort definitions #'string<
           :key (lambda (definition)
                  (string-downcase (agent-definition-name definition))))))
+
+(defun package-owned-agent-definitions (package-name)
+  "Return agent definitions currently registered by PACKAGE-NAME."
+  (let ((owner (package-identifier-string package-name)))
+    (remove-if-not
+     (lambda (definition)
+       (string= owner (or (agent-definition-package definition) "")))
+     (list-agent-definitions))))
+
+(defun remove-agent-definitions-for-package (package-name)
+  "Remove and return agent definitions currently owned by PACKAGE-NAME."
+  (let ((owner (package-identifier-string package-name)))
+    (call-with-agent-definition-registry-lock
+     (lambda ()
+       (let ((definitions nil)
+             (keys nil))
+         (maphash
+          (lambda (key definition)
+            (when (string= owner (or (agent-definition-package definition) ""))
+              (push key keys)
+              (push definition definitions)))
+          *agent-definition-registry*)
+         (dolist (key keys)
+           (remhash key *agent-definition-registry*))
+         definitions)))))
 
 (defun agent-definition-provider-for-name (agent-name)
   "Return AGENT-NAME's programmatic default provider, or NIL."
@@ -1807,7 +2030,9 @@ nil to force a refresh. Returns the static fallback list on any error."
                 :method :get
                 :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token)))
                 :want-stream nil
-                :force-binary nil)))
+                :force-binary nil
+                :connection-timeout
+                *provider-http-connection-timeout-seconds*)))
           (if (= status-code 200)
               (let* ((body-string (http-body-string body))
                      (response (api-json-decode body-string))
@@ -2341,8 +2566,8 @@ Chat/documented names (prompt_tokens/completion_tokens)."
 
 (defun provider-http-backoff-delay (attempt headers)
   "Return the retry delay for zero-based ATTEMPT and optional HEADERS."
-  (or (provider-http-retry-after-seconds headers)
-      (min *provider-http-max-backoff-seconds*
+  (min *provider-http-max-backoff-seconds*
+       (or (provider-http-retry-after-seconds headers)
            (* *provider-http-initial-backoff-seconds*
               (expt *provider-http-backoff-multiplier* attempt)))))
 
@@ -2351,8 +2576,35 @@ Chat/documented names (prompt_tokens/completion_tokens)."
   (when (streamp body)
     (ignore-errors (close body))))
 
-(defun provider-http-sleep-before-retry (label attempt headers reason)
-  "Sleep before retrying a provider HTTP request."
+(defun provider-http-cancellation-requested-p (cancel-p)
+  "Return true when optional provider retry cancellation predicate fires."
+  (and cancel-p (funcall cancel-p)))
+
+(defun provider-http-cancellable-sleep (delay cancel-p)
+  "Wait DELAY seconds and return NIL if CANCEL-P interrupts the wait."
+  (cond
+    ((provider-http-cancellation-requested-p cancel-p)
+     nil)
+    ;; Preserve test/application-injected sleepers as one call.  The default
+    ;; sleeper is sliced so Stop does not wait through an entire backoff.
+    ((not (eq *provider-http-sleep-function* (symbol-function 'sleep)))
+     (funcall *provider-http-sleep-function* delay)
+     (not (provider-http-cancellation-requested-p cancel-p)))
+    (t
+     (loop :with remaining := delay
+           :while (plusp remaining)
+           :for slice := (min remaining *provider-http-cancel-poll-seconds*)
+           :when (provider-http-cancellation-requested-p cancel-p)
+             :do (return nil)
+           :do (sleep slice)
+               (decf remaining slice)
+           :finally
+              (return
+                (not (provider-http-cancellation-requested-p cancel-p)))))))
+
+(defun provider-http-sleep-before-retry
+    (label attempt headers reason &key cancel-p)
+  "Wait cancellably before retrying a provider HTTP request."
   (let ((delay (provider-http-backoff-delay attempt headers)))
     (file-debug-log "provider"
                     "~A transient failure on attempt ~D/~D (~A); retrying in ~,2Fs"
@@ -2361,26 +2613,37 @@ Chat/documented names (prompt_tokens/completion_tokens)."
                     (1+ *provider-http-max-retries*)
                     reason
                     delay)
-    (funcall *provider-http-sleep-function* delay)))
+    (provider-http-cancellable-sleep delay cancel-p)))
 
-(defun provider-http-request-with-retries (label thunk)
+(defun provider-http-request-with-retries (label thunk &key cancel-p)
   "Call THUNK, retrying transient provider HTTP failures with backoff.
 
 THUNK must perform one HTTP request and return the same values as
 drakma:http-request. Transient status codes and connection-level errors are
-retried up to *PROVIDER-HTTP-MAX-RETRIES*."
+retried up to *PROVIDER-HTTP-MAX-RETRIES*.  CANCEL-P interrupts retry backoff
+and returns an empty response; the owning stream state supplies cancellation
+semantics."
   (loop :with attempt := 0
-        :do (let ((result
+        :do (when (provider-http-cancellation-requested-p cancel-p)
+              (return (values nil nil nil)))
+            (let ((result
                     (handler-case
                         (multiple-value-list (funcall thunk))
                       (error (condition)
-                        (if (< attempt *provider-http-max-retries*)
+                        (if (provider-http-cancellation-requested-p cancel-p)
+                            :cancelled
+                            (if (< attempt *provider-http-max-retries*)
                             (progn
-                              (provider-http-sleep-before-retry
-                               label attempt nil condition)
-                              (incf attempt)
-                              :retry)
-                            (error condition))))))
+                              (if (provider-http-sleep-before-retry
+                                   label attempt nil condition
+                                   :cancel-p cancel-p)
+                                  (progn
+                                    (incf attempt)
+                                    :retry)
+                                  :cancelled))
+                            (error condition)))))))
+              (when (eq result :cancelled)
+                (return (values nil nil nil)))
               (unless (eq result :retry)
                 (let ((status-code (second result))
                       (headers (third result)))
@@ -2388,10 +2651,12 @@ retried up to *PROVIDER-HTTP-MAX-RETRIES*."
                     ((and (provider-http-retryable-status-p status-code)
                           (< attempt *provider-http-max-retries*))
                      (provider-http-close-body-for-retry (first result))
-                     (provider-http-sleep-before-retry
-                      label attempt headers
-                      (format nil "HTTP ~D" status-code))
-                     (incf attempt))
+                     (if (provider-http-sleep-before-retry
+                          label attempt headers
+                          (format nil "HTTP ~D" status-code)
+                          :cancel-p cancel-p)
+                         (incf attempt)
+                         (return (values nil nil nil))))
                     (t
                      (return (values-list result)))))))))
 
@@ -2756,12 +3021,19 @@ reasoning_content is present, falls back to reasoning_content."
     (and updated
          (openai-codex-auth-descriptor-from-auth-json updated))))
 
-(defun openai-codex-http-request (auth request-body &key stream (allow-refresh t))
+(defun openai-codex-http-request
+    (auth request-body &key stream (allow-refresh t) cancel-p)
   "Perform one OpenAI Codex HTTP request, refreshing ChatGPT auth once on 401."
+  (when (and cancel-p (funcall cancel-p))
+    (return-from openai-codex-http-request
+      (values nil nil nil auth)))
   (multiple-value-bind (body status-code headers)
       (provider-http-request-with-retries
        (if stream "OpenAI Codex streaming request" "OpenAI Codex request")
        (lambda ()
+         (when (and cancel-p (funcall cancel-p))
+           (return-from openai-codex-http-request
+             (values nil nil nil auth)))
          (drakma:http-request
           (openai-codex-responses-endpoint auth)
           :method :post
@@ -2770,16 +3042,30 @@ reasoning_content is present, falls back to reasoning_content."
           :external-format-in :utf-8
           :content request-body
           :want-stream stream
-          :force-binary t)))
+          :force-binary t
+          :connection-timeout *provider-http-connection-timeout-seconds*))
+       :cancel-p cancel-p)
     (declare (ignore headers))
-    (if (and (= status-code 401)
+    (if (and status-code
+             (= status-code 401)
              allow-refresh
              (getf auth :refreshable-p))
         (let ((refreshed (refresh-openai-codex-auth-descriptor)))
           (if refreshed
-              (openai-codex-http-request refreshed request-body
-                                         :stream stream
-                                         :allow-refresh nil)
+              (progn
+                ;; A streaming 401 returns a live Drakma response stream.  It
+                ;; belongs to this failed attempt and must be retired before
+                ;; the refreshed request opens a replacement connection.
+                ;; Close it here, on the request worker that owns it; the
+                ;; recursive call cannot otherwise expose it to normal stream
+                ;; registration/cleanup.
+                (when (streamp body)
+                  (ignore-errors
+                    (close body :abort t)))
+                (openai-codex-http-request refreshed request-body
+                                           :stream stream
+                                           :allow-refresh nil
+                                           :cancel-p cancel-p))
               (values body status-code nil auth)))
         (values body status-code nil auth))))
 
@@ -2885,7 +3171,7 @@ reasoning_content is present, falls back to reasoning_content."
   (declare (ignore model max-tokens tools system-prompt reasoning-effort service-tier))
   (unless (e2e-provider-enabled-p)
     (error "The deterministic E2E provider is disabled."))
-  (let* ((state (make-stream-state))
+  (let* ((state (make-stream-state :callback callback))
          (text (e2e-response-text messages))
          (usage (e2e-token-usage text))
          (chunks (e2e-response-chunks text)))
@@ -2894,43 +3180,39 @@ reasoning_content is present, falls back to reasoning_content."
                       :sentinel (if (search +e2e-hello-sentinel+ text)
                                     +e2e-hello-sentinel+
                                     "CLAWMACS_E2E_SENTINEL"))
-    (let ((thread
-            (bt:make-thread
-             (lambda ()
-               (handler-case
-                   (progn
-                     (dolist (chunk chunks)
-                       (when (stream-state-cancel-requested-p-safe state)
-                         (return))
-                       (bt:with-lock-held ((stream-state-lock state))
-                         (setf (stream-state-text state)
-                               (concatenate 'string
-                                            (stream-state-text state)
-                                            chunk))
-                         (set-stream-state-text-block state
-                                                      (stream-state-text state)))
-                       (maybe-call-streaming-callback callback state)
-                       (sleep 0.03))
-                     (unless (stream-state-cancel-requested-p-safe state)
-                       (bt:with-lock-held ((stream-state-lock state))
-                         (set-stream-state-text-block state text)
-                         (setf (stream-state-stop-reason state) "end_turn"
-                               (stream-state-usage state) usage
-                               (stream-state-done-p state) t))
-                       (file-debug-event "e2e-provider-complete"
-                                         :stop-reason "end_turn"
-                                         :sentinel (if (search +e2e-hello-sentinel+ text)
-                                                       +e2e-hello-sentinel+
-                                                       "CLAWMACS_E2E_SENTINEL"))
-                       (maybe-call-streaming-callback callback state)))
-                 (error (e)
-                   (bt:with-lock-held ((stream-state-lock state))
-                     (setf (stream-state-error-p state) (format nil "~A" e)
-                           (stream-state-done-p state) t))
-                   (maybe-call-streaming-callback callback state))))
-             :name "clawmacs-e2e-stream")))
-      (register-stream-state-reader state nil thread)
-      state)))
+    (start-stream-state-reader-worker
+     state
+     callback
+     "clawmacs-e2e-stream"
+     (lambda (worker-state)
+       (dolist (chunk chunks)
+         (unless (call-with-active-stream-state
+                  worker-state
+                  (lambda (locked-state)
+                    (setf (stream-state-text locked-state)
+                          (concatenate 'string
+                                       (stream-state-text locked-state)
+                                       chunk))
+                    (set-stream-state-text-block
+                     locked-state
+                     (stream-state-text locked-state))))
+           (return))
+         (maybe-call-streaming-callback callback worker-state)
+         (sleep 0.03))
+       (when (transition-stream-state-to-terminal
+              worker-state
+              :stop-reason "end_turn"
+              :update
+              (lambda (locked-state)
+                (set-stream-state-text-block locked-state text)
+                (setf (stream-state-usage locked-state) usage)))
+         (file-debug-event "e2e-provider-complete"
+                           :stop-reason "end_turn"
+                           :sentinel
+                           (if (search +e2e-hello-sentinel+ text)
+                               +e2e-hello-sentinel+
+                               "CLAWMACS_E2E_SENTINEL")))))
+    state))
 
 (defun install-e2e-agent-definition ()
   "Install the deterministic visible agent used by no-network GUI E2E runs."
@@ -3074,16 +3356,572 @@ reasoning_content is present, falls back to reasoning_content."
   (error-p nil)
   (cancel-requested-p nil :type boolean)
   (cancelled-p nil :type boolean)
+  callback
+  (terminal-callback-fired-p nil :type boolean)
   close-stream
   reader-thread
+  reader-settlement-thread
+  (reader-settlement-waiter-done-p nil :type boolean)
+  (reader-settled-p nil :type boolean)
   (lock (bt:make-lock "stream-state")))
 
-(defun maybe-call-streaming-callback (callback state)
-  "Invoke CALLBACK with STATE when CALLBACK is non-nil.
-Reader threads should not fail because UI notification raised."
-  (when callback
-    (ignore-errors
-      (funcall callback state))))
+;;; --------------------------------------------------------------------------
+;;; Bounded external callback delivery
+;;; --------------------------------------------------------------------------
+
+(defparameter *runtime-callback-dispatch-lane-count* 4
+  "Number of independent serial lanes used for external runtime callbacks.")
+
+(defparameter *runtime-callback-dispatch-queue-limit* 256
+  "Maximum queued callback deliveries retained by one dispatcher lane.")
+
+(defparameter *runtime-callback-dispatch-idle-timeout-seconds* 0.5
+  "Seconds an idle callback lane waits before retiring its worker thread.")
+
+(defstruct runtime-callback-delivery
+  "One copied external callback invocation owned by a dispatcher lane."
+  function
+  arguments
+  label)
+
+(defstruct runtime-callback-dispatch-lane
+  "Bounded FIFO and at most one callback worker for a hash lane."
+  queue-head
+  queue-tail
+  (queue-count 0 :type integer)
+  (dropped-count 0 :type integer)
+  (reported-dropped-count 0 :type integer)
+  worker
+  (active-p nil :type boolean)
+  (lock (bt:make-lock "clawmacs runtime callback lane"))
+  (condition
+    (bt:make-condition-variable :name "clawmacs runtime callback lane")))
+
+(defparameter *runtime-callback-copy-node-limit* 100000
+  "Maximum mutable nodes copied into one external callback delivery.")
+
+(defparameter *runtime-callback-copy-depth-limit* 2048
+  "Maximum recursive nesting copied into one external callback delivery.")
+
+(defparameter *runtime-callback-copy-element-limit* 65536
+  "Maximum aggregate container elements copied into one callback delivery.")
+
+(defun copy-runtime-callback-data (value)
+  "Copy callback VALUE with cycle preservation and bounded work budgets."
+  (let ((seen (make-hash-table :test #'eq))
+        (nodes 0)
+        (elements 0))
+    (labels ((claim-node ()
+               (when (> (incf nodes) *runtime-callback-copy-node-limit*)
+                 (error "Runtime callback payload exceeds the ~D node limit."
+                        *runtime-callback-copy-node-limit*)))
+             (claim-elements (count)
+               (when (> (+ elements count)
+                        *runtime-callback-copy-element-limit*)
+                 (error
+                  "Runtime callback payload exceeds the ~D element limit."
+                  *runtime-callback-copy-element-limit*))
+               (incf elements count))
+             (claim-depth (depth)
+               (when (> depth *runtime-callback-copy-depth-limit*)
+                 (error "Runtime callback payload exceeds the ~D depth limit."
+                        *runtime-callback-copy-depth-limit*)))
+             (copy-value (item depth)
+               (typecase item
+                 (string
+                  (or (gethash item seen)
+                      (progn
+                        (claim-elements (length item))
+                        (let ((copy (copy-seq item)))
+                          (setf (gethash item seen) copy)
+                          copy))))
+                 (cons
+                  (or (gethash item seen)
+                      (progn
+                        (claim-depth depth)
+                        (claim-node)
+                        (claim-elements 1)
+                        (let ((copy (cons nil nil)))
+                          (setf (gethash item seen) copy
+                                (car copy) (copy-value (car item) (1+ depth))
+                                (cdr copy) (copy-value (cdr item) (1+ depth)))
+                          copy))))
+                 (vector
+                  (or (gethash item seen)
+                      (progn
+                        (claim-depth depth)
+                        (claim-node)
+                        (claim-elements (length item))
+                        (let ((copy (make-array (length item))))
+                          (setf (gethash item seen) copy)
+                          (loop :for index :below (length item)
+                                :do (setf (aref copy index)
+                                          (copy-value (aref item index)
+                                                      (1+ depth))))
+                          copy))))
+                 (hash-table
+                  (or (gethash item seen)
+                      (progn
+                        (claim-depth depth)
+                        (claim-node)
+                        (claim-elements (* 2 (hash-table-count item)))
+                        (let ((copy (make-hash-table
+                                     :test (hash-table-test item)
+                                     ;; Do not reproduce a sparse table's
+                                     ;; potentially enormous reserved size.
+                                     :size (hash-table-count item))))
+                          (setf (gethash item seen) copy)
+                          (maphash
+                           (lambda (key entry)
+                             (setf (gethash (copy-value key (1+ depth)) copy)
+                                   (copy-value entry (1+ depth))))
+                           item)
+                          copy))))
+                 (t item))))
+      (copy-value value 0))))
+
+(defvar *runtime-callback-dispatch-lanes*
+  (let ((count (max 1 *runtime-callback-dispatch-lane-count*)))
+    (make-array count
+                :initial-contents
+                (loop :repeat count
+                      :collect (make-runtime-callback-dispatch-lane))))
+  "Fixed process-wide lanes that bound external callback threads and queues.")
+
+(defun runtime-callback-dispatch-lane-for (function)
+  "Return the stable serial dispatcher lane for FUNCTION."
+  (let ((lanes *runtime-callback-dispatch-lanes*))
+    (aref lanes (mod (sxhash function) (length lanes)))))
+
+(defun runtime-callback-dispatch-pop-locked (lane)
+  "Pop one delivery from LANE with its lock held."
+  (let ((cell (runtime-callback-dispatch-lane-queue-head lane)))
+    (when cell
+      (setf (runtime-callback-dispatch-lane-queue-head lane) (cdr cell))
+      (when (null (runtime-callback-dispatch-lane-queue-head lane))
+        (setf (runtime-callback-dispatch-lane-queue-tail lane) nil))
+      (decf (runtime-callback-dispatch-lane-queue-count lane))
+      (car cell))))
+
+(defun runtime-callback-dispatch-next (lane)
+  "Return LANE's next delivery, or NIL after retiring an idle worker."
+  (bt:with-lock-held ((runtime-callback-dispatch-lane-lock lane))
+    (labels ((claim-next ()
+               (let ((delivery (runtime-callback-dispatch-pop-locked lane)))
+                 (when delivery
+                   ;; Queue removal and active publication are one transaction;
+                   ;; safe reload can never observe a callback between owners.
+                   (setf (runtime-callback-dispatch-lane-active-p lane) t))
+                 delivery)))
+      (or (claim-next)
+          (progn
+            (bt:condition-wait
+             (runtime-callback-dispatch-lane-condition lane)
+             (runtime-callback-dispatch-lane-lock lane)
+             :timeout *runtime-callback-dispatch-idle-timeout-seconds*)
+            (or (claim-next)
+                (progn
+                  (when (eq (bt:current-thread)
+                            (runtime-callback-dispatch-lane-worker lane))
+                    (setf (runtime-callback-dispatch-lane-worker lane) nil))
+                  nil)))))))
+
+(defun report-runtime-callback-error (delivery condition)
+  "Best-effort report CONDITION raised by external callback DELIVERY."
+  (ignore-errors
+    (file-debug-event
+     "runtime-callback-error"
+     :callback (or (runtime-callback-delivery-label delivery) "external")
+     :condition (format nil "~A" condition))))
+
+(defun report-runtime-callback-drops (lane)
+  "Report newly refused callback deliveries from LANE on its owned worker."
+  (let ((dropped nil))
+    (bt:with-lock-held ((runtime-callback-dispatch-lane-lock lane))
+      (when (> (runtime-callback-dispatch-lane-dropped-count lane)
+               (runtime-callback-dispatch-lane-reported-dropped-count lane))
+        (setf dropped (runtime-callback-dispatch-lane-dropped-count lane)
+              (runtime-callback-dispatch-lane-reported-dropped-count lane)
+              dropped)))
+    (when dropped
+      (ignore-errors
+        (file-debug-event "runtime-callback-dropped"
+                          :dropped-count dropped)))))
+
+(defun run-runtime-callback-dispatch-lane (lane)
+  "Deliver LANE's callbacks serially without owning provider/interop workers."
+  (unwind-protect
+       (loop :for delivery := (runtime-callback-dispatch-next lane)
+             :while delivery
+             :do
+                (unwind-protect
+                     (handler-case
+                         (apply (runtime-callback-delivery-function delivery)
+                                (runtime-callback-delivery-arguments delivery))
+                       (error (condition)
+                         (report-runtime-callback-error delivery condition)))
+                  ;; Diagnostics execute on the callback-owned worker too.  A
+                  ;; stuck diagnostic therefore remains visible to safe reload
+                  ;; instead of migrating back onto a provider/runner thread.
+                  (report-runtime-callback-drops lane)
+                  (bt:with-lock-held
+                      ((runtime-callback-dispatch-lane-lock lane))
+                    (setf (runtime-callback-dispatch-lane-active-p lane) nil)
+                    (bt:condition-notify
+                     (runtime-callback-dispatch-lane-condition lane)))))
+    ;; An implementation/runtime failure outside the contained callback must
+    ;; not leave a dead worker handle that prevents a later enqueue from
+    ;; restarting this lane.
+    (bt:with-lock-held ((runtime-callback-dispatch-lane-lock lane))
+      (when (eq (bt:current-thread)
+                (runtime-callback-dispatch-lane-worker lane))
+        (setf (runtime-callback-dispatch-lane-worker lane) nil
+              (runtime-callback-dispatch-lane-active-p lane) nil)
+        (bt:condition-notify
+         (runtime-callback-dispatch-lane-condition lane))))))
+
+(defun ensure-runtime-callback-dispatch-worker-locked (lane)
+  "Ensure LANE has a live worker, with its lock already held."
+  (let ((worker (runtime-callback-dispatch-lane-worker lane)))
+    (when (or (null worker) (not (bt:thread-alive-p worker)))
+      (setf (runtime-callback-dispatch-lane-worker lane)
+            (bt:make-thread
+             (lambda () (run-runtime-callback-dispatch-lane lane))
+             :name "clawmacs-runtime-callback"))))
+  (runtime-callback-dispatch-lane-worker lane))
+
+(defun enqueue-runtime-callback (function arguments &key label)
+  "Queue copied ARGUMENTS for FUNCTION and return true when accepted.
+
+Each callback is assigned to one serial lane, preserving its event order.  The
+fixed lane and queue counts bound damage from a callback that never returns.
+Queue saturation drops the newest delivery rather than blocking a provider,
+subagent, interop runner, or CLIM process."
+  (unless function
+    (return-from enqueue-runtime-callback nil))
+  (handler-case
+      (let* ((lane (runtime-callback-dispatch-lane-for function))
+             (delivery
+               (make-runtime-callback-delivery
+                :function function
+                :arguments (copy-runtime-callback-data arguments)
+                :label label)))
+        (bt:with-lock-held ((runtime-callback-dispatch-lane-lock lane))
+          (when (>= (runtime-callback-dispatch-lane-queue-count lane)
+                    *runtime-callback-dispatch-queue-limit*)
+            (incf (runtime-callback-dispatch-lane-dropped-count lane))
+            (return-from enqueue-runtime-callback nil))
+          (ensure-runtime-callback-dispatch-worker-locked lane)
+          (let ((cell (list delivery)))
+            (if (runtime-callback-dispatch-lane-queue-tail lane)
+                (setf (cdr (runtime-callback-dispatch-lane-queue-tail lane)) cell
+                      (runtime-callback-dispatch-lane-queue-tail lane) cell)
+                (setf (runtime-callback-dispatch-lane-queue-head lane) cell
+                      (runtime-callback-dispatch-lane-queue-tail lane) cell)))
+          (incf (runtime-callback-dispatch-lane-queue-count lane))
+          (bt:condition-notify
+           (runtime-callback-dispatch-lane-condition lane))
+          t))
+    (error (_condition)
+      (declare (ignore _condition))
+      ;; Copy/constructor failure is itself a refused delivery.  Do not run a
+      ;; diagnostic file write on the provider/interop caller being protected.
+      (let ((lane (ignore-errors
+                    (runtime-callback-dispatch-lane-for function))))
+        (when lane
+          (ignore-errors
+            (bt:with-lock-held ((runtime-callback-dispatch-lane-lock lane))
+              (incf (runtime-callback-dispatch-lane-dropped-count lane))))))
+      nil)))
+
+(defun make-bounded-runtime-callback (function &key label)
+  "Return a non-blocking ordered proxy for external callback FUNCTION."
+  (and function
+       (lambda (&rest arguments)
+         (enqueue-runtime-callback function arguments :label label))))
+
+(defun runtime-callback-dispatch-pending-count ()
+  "Return queued plus currently executing external callback deliveries."
+  (loop :for lane :across *runtime-callback-dispatch-lanes*
+        :sum (bt:with-lock-held
+                 ((runtime-callback-dispatch-lane-lock lane))
+               (+ (runtime-callback-dispatch-lane-queue-count lane)
+                  (if (runtime-callback-dispatch-lane-active-p lane) 1 0)))))
+
+(defun runtime-callback-dispatch-dropped-count ()
+  "Return the total number of refused external callback deliveries."
+  (loop :for lane :across *runtime-callback-dispatch-lanes*
+        :sum (bt:with-lock-held
+                 ((runtime-callback-dispatch-lane-lock lane))
+               (runtime-callback-dispatch-lane-dropped-count lane))))
+
+(defun wait-for-runtime-callback-dispatch-idle
+    (&key (timeout 2.0) (poll-interval 0.005))
+  "Wait boundedly until no external callback is queued or executing."
+  (let ((deadline (+ (get-internal-real-time)
+                     (round (* timeout internal-time-units-per-second)))))
+    (loop :when (zerop (runtime-callback-dispatch-pending-count))
+            :return t
+          :when (>= (get-internal-real-time) deadline)
+            :return nil
+          :do (sleep poll-interval))))
+
+(defun provider-stream-wrapper-value
+    (stream package-name class-name accessor-name)
+  "Return STREAM's wrapped value for one known provider stream layer.
+
+PACKAGE-NAME, CLASS-NAME, and ACCESSOR-NAME are strings so optional transport
+packages do not become reader-time dependencies of this file."
+  (let* ((package (find-package package-name))
+         (class-symbol (and package (find-symbol class-name package)))
+         (accessor-symbol (and package (find-symbol accessor-name package))))
+    (when (and class-symbol
+               accessor-symbol
+               (find-class class-symbol nil)
+               (fboundp accessor-symbol)
+               (typep stream class-symbol))
+      (funcall accessor-symbol stream))))
+
+(defun provider-stream-transport-file-descriptor (stream)
+  "Return STREAM's underlying socket descriptor when it is discoverable.
+
+Drakma response bodies are Flexi streams layered over Chunga and either a
+native socket stream or a CL+SSL stream.  Walk only those known ownership
+layers; do not guess at arbitrary Gray stream internals.  Provider streaming
+leaves Drakma's DECODE-CONTENT at NIL, so no Chipz layer is expected here.
+
+This descriptor fast path is SBCL-specific.  It applies after Drakma has
+returned a body stream; cancellation during connect or response headers remains
+bounded by the configured Drakma connection timeout."
+  #+sbcl
+  (labels ((walk (current seen)
+             (when (or (null current)
+                       (member current seen :test #'eq))
+               (return-from walk nil))
+             (cond
+               ((and (integerp current) (not (minusp current)))
+                current)
+               ((typep current 'sb-sys:fd-stream)
+                (sb-sys:fd-stream-fd current))
+               (t
+                (let ((wrapped
+                        (or
+                         (and (typep current 'flexi-streams:flexi-stream)
+                              (flexi-streams:flexi-stream-stream current))
+                         (provider-stream-wrapper-value
+                          current "CHUNGA" "CHUNKED-STREAM"
+                          "CHUNKED-STREAM-STREAM")
+                         (provider-stream-wrapper-value
+                          current "CL+SSL" "SSL-STREAM"
+                          "SSL-STREAM-SOCKET"))))
+                  (and wrapped
+                       (walk wrapped (cons current seen))))))))
+    (walk stream nil))
+  #-sbcl
+  (declare (ignore stream))
+  #-sbcl
+  nil)
+
+#+sbcl
+(defun shutdown-provider-socket-file-descriptor (file-descriptor)
+  "Shut down FILE-DESCRIPTOR without taking ownership of or closing it."
+  (handler-case
+      (let ((socket
+              (make-instance 'sb-bsd-sockets:inet-socket
+                             :type :stream
+                             :protocol :tcp
+                             :descriptor file-descriptor)))
+        ;; The temporary socket object is only an exported SB-BSD-SOCKETS view
+        ;; over Drakma's descriptor.  Its original stream remains the sole
+        ;; close owner, so the view must never finalize or close the descriptor.
+        (sb-ext:cancel-finalization socket)
+        (sb-bsd-sockets:socket-shutdown socket :direction :io)
+        t)
+    (error ()
+      nil)))
+
+(defgeneric interrupt-provider-stream-read (stream)
+  (:documentation
+   "Wake a blocked provider read without closing STREAM from another thread."))
+
+(defmethod interrupt-provider-stream-read ((stream t))
+  #+sbcl
+  (let ((file-descriptor
+          (provider-stream-transport-file-descriptor stream)))
+    (and file-descriptor
+         (shutdown-provider-socket-file-descriptor file-descriptor)))
+  #-sbcl
+  (declare (ignore stream))
+  #-sbcl
+  nil)
+
+(defun stream-state-active-p-locked (state)
+  "Return true when STATE may still accept streamed mutations.
+The caller must hold STATE's lock."
+  (and (not (stream-state-done-p state))
+       (not (stream-state-cancel-requested-p state))))
+
+(defun stream-state-active-p-safe (state)
+  "Return true when STATE may still accept streamed mutations."
+  (and state
+       (bt:with-lock-held ((stream-state-lock state))
+         (stream-state-active-p-locked state))))
+
+(defun call-with-active-stream-state (state function)
+  "Call FUNCTION with STATE under its lock only while STATE is active.
+Return true exactly when FUNCTION ran."
+  (bt:with-lock-held ((stream-state-lock state))
+    (when (stream-state-active-p-locked state)
+      (funcall function state)
+      t)))
+
+(defun register-stream-state-callback (state callback)
+  "Register CALLBACK while STATE is active."
+  (bt:with-lock-held ((stream-state-lock state))
+    (when (and callback (stream-state-active-p-locked state))
+      (setf (stream-state-callback state) callback)))
+  state)
+
+(defun maybe-call-streaming-callback (callback state &key terminal)
+  "Invoke STATE's streaming callback outside its lock.
+Terminal notification is claimed under the lock and can fire at most once.
+Reader threads never fail because UI notification raised."
+  (let ((function nil))
+    (bt:with-lock-held ((stream-state-lock state))
+      (if (or terminal (stream-state-done-p state))
+          (unless (stream-state-terminal-callback-fired-p state)
+            (setf (stream-state-terminal-callback-fired-p state) t
+                  function (or callback (stream-state-callback state))
+                  (stream-state-callback state) nil))
+          (when (stream-state-active-p-locked state)
+            (setf function (or callback (stream-state-callback state))))))
+    (when function
+      (ignore-errors
+        (funcall function state)))
+    (not (null function))))
+
+(defun transition-stream-state-to-terminal
+    (state &key stop-reason (error nil error-supplied-p) cancelled-p update
+                detach-stream-p)
+  "Atomically make active STATE terminal and optionally detach its stream.
+UPDATE, when supplied, runs under STATE's lock immediately before the terminal
+fields are committed.  Return the transition flag and detached stream."
+  (let ((transitioned-p nil)
+        (stream nil))
+    (bt:with-lock-held ((stream-state-lock state))
+      (when (stream-state-active-p-locked state)
+        (when update
+          (funcall update state))
+        (when stop-reason
+          (setf (stream-state-stop-reason state) stop-reason))
+        (when error-supplied-p
+          (setf (stream-state-error-p state) error))
+        (when cancelled-p
+          (setf (stream-state-cancel-requested-p state) t
+                (stream-state-cancelled-p state) t))
+        (when detach-stream-p
+          (setf stream (stream-state-close-stream state)
+                (stream-state-close-stream state) nil))
+        (setf (stream-state-done-p state) t
+              transitioned-p t)))
+    (values transitioned-p stream)))
+
+(defun register-stream-state-stream (state stream)
+  "Attach STREAM to active STATE, closing it outside the lock if too late.
+Return true when STATE accepted ownership of STREAM."
+  (let ((accepted-p nil))
+    (bt:with-lock-held ((stream-state-lock state))
+      (when (stream-state-active-p-locked state)
+        (setf (stream-state-close-stream state) stream
+              accepted-p t)))
+    (unless accepted-p
+      (ignore-errors
+        (close stream :abort t)))
+    accepted-p))
+
+(defun release-stream-state-stream (state &optional expected-stream)
+  "Detach and close STATE's stream outside the lock.
+When EXPECTED-STREAM is non-nil, detach only that exact stream.  Return true
+when this call claimed the close operation."
+  (let ((stream nil)
+        (abort-p nil))
+    (bt:with-lock-held ((stream-state-lock state))
+      (let ((current (stream-state-close-stream state)))
+        (when (and current
+                   (or (null expected-stream)
+                       (eq current expected-stream)))
+          (setf stream current
+                abort-p (stream-state-cancelled-p state)
+                (stream-state-close-stream state) nil))))
+    (when stream
+      (ignore-errors
+        (close stream :abort abort-p)))
+    (not (null stream))))
+
+(defun register-stream-state-reader-thread (state thread)
+  "Attach THREAD to STATE."
+  (bt:with-lock-held ((stream-state-lock state))
+    (setf (stream-state-reader-thread state) thread
+          (stream-state-reader-settlement-thread state) nil
+          (stream-state-reader-settlement-waiter-done-p state) nil
+          (stream-state-reader-settled-p state) nil))
+  state)
+
+(defun clear-stream-state-reader-thread (state thread)
+  "Clear STATE's joined reader and settlement-waiter references."
+  (bt:with-lock-held ((stream-state-lock state))
+    (when (eq thread (stream-state-reader-thread state))
+      (setf (stream-state-reader-thread state) nil
+            (stream-state-reader-settlement-thread state) nil
+            (stream-state-reader-settled-p state) t)
+      t)))
+
+(defun start-stream-state-reader-worker (state callback name function)
+  "Run FUNCTION asynchronously as STATE's managed reader worker.
+The worker blocks on a start gate until its thread reference and callback are
+registered.  Errors and ordinary return both settle STATE; cleanup detaches the
+active stream and sends one terminal callback.  The exact thread reference is
+retained until its buffer/prompt owner joins it, so DONE-P never masquerades as
+worker settlement."
+  (let ((start-gate (bt:make-lock "stream-state-reader-start"))
+        (thread nil))
+    (bt:with-lock-held (start-gate)
+      (register-stream-state-callback state callback)
+      (setf thread
+            (bt:make-thread
+             (lambda ()
+               ;; The creating thread holds START-GATE until THREAD is stored
+               ;; in STATE, so a fast worker cannot finish before registration.
+               (bt:with-lock-held (start-gate))
+               (unwind-protect
+                    (handler-case
+                        (when (stream-state-active-p-safe state)
+                          (funcall function state))
+                      (error (condition)
+                        (transition-stream-state-to-terminal
+                         state
+                         :error (format nil "~A" condition))))
+                 ;; Final transport/state mutation is settlement, not a new
+                 ;; start.  If a visibility defect ever let reload claim first,
+                 ;; wait until live redefinition ends before touching methods.
+                 (call-with-runtime-settlement-admission
+                  (lambda ()
+                    (transition-stream-state-to-terminal state)
+                    (release-stream-state-stream state))
+                  :operation "provider reader settlement")
+                 (maybe-call-streaming-callback
+                  callback state :terminal t)))
+             :name name
+             ;; A provider can be started while the frame process suppresses
+             ;; its own nested notifications.  Caller-local binding inheritance
+             ;; is implementation-defined, so readers explicitly re-enable
+             ;; terminal/update wakeups.
+             :initial-bindings
+             (acons '*suppress-chat-redisplay-requests*
+                    nil
+                    bt:*default-special-bindings*)))
+      (register-stream-state-reader-thread state thread))
+    state))
 
 (defun stream-state-cancel-requested-p-safe (state)
   "Return true when STATE has been cancelled, holding its lock."
@@ -3093,27 +3931,45 @@ Reader threads should not fail because UI notification raised."
 
 (defun register-stream-state-reader (state stream &optional thread)
   "Attach STREAM and THREAD to STATE so cancellation can interrupt reads."
-  (bt:with-lock-held ((stream-state-lock state))
-    (setf (stream-state-close-stream state) stream
-          (stream-state-reader-thread state) thread))
+  (when stream
+    (register-stream-state-stream state stream))
+  (when thread
+    (register-stream-state-reader-thread state thread))
   state)
 
 (defun cancel-stream-state (state &key (stop-reason "cancelled"))
-  "Request cancellation of STATE and close its provider stream.
+  "Request cancellation of STATE and interrupt its provider transport.
 Returns true when cancellation changed an active stream."
-  (let ((stream nil)
-        (cancelled nil))
+  (let ((cancelled nil)
+        (orphan-stream nil))
     (when state
-      (bt:with-lock-held ((stream-state-lock state))
-        (unless (stream-state-done-p state)
-          (setf cancelled t
-                stream (stream-state-close-stream state)
-                (stream-state-cancel-requested-p state) t
-                (stream-state-cancelled-p state) t
-                (stream-state-stop-reason state) stop-reason
-                (stream-state-done-p state) t)))
-      (when stream
-        (ignore-errors (close stream))))
+      (setf cancelled
+            (transition-stream-state-to-terminal
+             state
+             :stop-reason stop-reason
+             :cancelled-p t
+             :update
+             (lambda (locked-state)
+               ;; Keep the stream attached for same-thread cleanup by the
+               ;; reader.  Shutdown is performed under the ownership lock so
+               ;; the reader cannot close and recycle the descriptor between
+               ;; descriptor discovery and the shutdown system call.
+               (let ((stream (stream-state-close-stream locked-state)))
+                 (when stream
+                   (if (stream-state-reader-thread locked-state)
+                       (ignore-errors
+                         (interrupt-provider-stream-read stream))
+                       ;; A manually attached stream with no managed reader has
+                       ;; no future unwind that can release it.  Detach it under
+                       ;; the state lock, then close it below without holding
+                       ;; that lock.
+                       (setf orphan-stream stream
+                             (stream-state-close-stream locked-state) nil)))))))
+      (when orphan-stream
+        (ignore-errors
+          (close orphan-stream :abort t)))
+      (when cancelled
+        (maybe-call-streaming-callback nil state :terminal t)))
     cancelled))
 
 (defun stream-state-final-content-blocks (state)
@@ -3195,17 +4051,22 @@ SSE format: 'field: value' or just 'data: {...}'."
 
 (defun process-openai-sse-event (data state)
   "Process a single OpenAI SSE DATA payload into STATE."
-  (when (stream-state-cancel-requested-p-safe state)
+  (unless (stream-state-active-p-safe state)
     (return-from process-openai-sse-event nil))
   (cond
     ((string= data "[DONE]")
-     (bt:with-lock-held ((stream-state-lock state))
-       (finalize-openai-stream-tool-blocks state)
-       (when (plusp (length (stream-state-text state)))
-         (set-stream-state-text-block state (stream-state-text state)))
-       (unless (stream-state-stop-reason state)
-         (setf (stream-state-stop-reason state) "end_turn"))
-       (setf (stream-state-done-p state) t)))
+     (when (transition-stream-state-to-terminal
+            state
+            :update
+            (lambda (locked-state)
+              (finalize-openai-stream-tool-blocks locked-state)
+              (when (plusp (length (stream-state-text locked-state)))
+                (set-stream-state-text-block
+                 locked-state
+                 (stream-state-text locked-state)))
+              (unless (stream-state-stop-reason locked-state)
+                (setf (stream-state-stop-reason locked-state) "end_turn"))))
+       :terminal))
     (t
      (let* ((event (api-json-decode data))
             (choice (first (coerce (cdr (assoc :choices event)) 'list)))
@@ -3217,48 +4078,65 @@ SSE format: 'field: value' or just 'data: {...}'."
         ;; Reasoning models (Z.AI GLM, DeepSeek R1) stream reasoning_content
         ;; first, then content. Keep those channels separate so UI rendering
         ;; can hide or show reasoning output.
-        (bt:with-lock-held ((stream-state-lock state))
-          (append-stream-state-reasoning-delta state reasoning)
-          (when text
-            (setf (stream-state-text state)
-                  (concatenate 'string (stream-state-text state) text))
-            (set-stream-state-text-block state (stream-state-text state)))
-          (dolist (tool-call (coerce (or tool-calls #()) 'list))
-            (upsert-openai-stream-tool-call state tool-call))
-          (when finish-reason
-            (when (or tool-calls
-                      (stream-state-openai-tool-call-order state))
-              (finalize-openai-stream-tool-blocks state))
-            (setf (stream-state-stop-reason state)
-                  (openai-finish-reason->stop-reason finish-reason))))))))
+        (when (call-with-active-stream-state
+               state
+               (lambda (locked-state)
+                 (append-stream-state-reasoning-delta
+                  locked-state reasoning)
+                 (when text
+                   (setf (stream-state-text locked-state)
+                         (concatenate 'string
+                                      (stream-state-text locked-state)
+                                      text))
+                   (set-stream-state-text-block
+                    locked-state
+                    (stream-state-text locked-state)))
+                 (dolist (tool-call (coerce (or tool-calls #()) 'list))
+                   (upsert-openai-stream-tool-call locked-state tool-call))
+                 (when finish-reason
+                   (when (or tool-calls
+                             (stream-state-openai-tool-call-order
+                              locked-state))
+                     (finalize-openai-stream-tool-blocks locked-state))
+                   (setf (stream-state-stop-reason locked-state)
+                         (openai-finish-reason->stop-reason
+                          finish-reason)))))
+          :updated)))))
 
-(defun read-openai-sse-stream (stream state callback)
+(defun read-openai-sse-stream (stream state callback
+                               &key defer-terminal-callback)
   "Read OpenAI SSE events from STREAM into STATE."
+  (register-stream-state-callback state callback)
   (handler-case
       (loop :with data-buffer := nil
+            :while (stream-state-active-p-safe state)
             :for line := (read-line stream nil nil)
-            :while (and line (not (stream-state-cancel-requested-p-safe state)))
+            :while line
             :do (let ((trimmed (string-trim '(#\Return) line)))
                   (cond
                     ((zerop (length trimmed))
                      (when data-buffer
-                       (process-openai-sse-event
-                        (format nil "~{~A~}" (nreverse data-buffer))
-                        state)
-                       (maybe-call-streaming-callback callback state)
-                       (setf data-buffer nil)))
+                       (let ((result
+                               (process-openai-sse-event
+                                (format nil "~{~A~}" (nreverse data-buffer))
+                                state)))
+                         (setf data-buffer nil)
+                         (case result
+                           (:updated
+                            (maybe-call-streaming-callback callback state))
+                           (:terminal
+                            (loop-finish))))))
                     (t
                      (multiple-value-bind (field value) (parse-sse-line trimmed)
                        (when (and field (string= "data" field))
                          (push value data-buffer)))))))
     (error (e)
-      (bt:with-lock-held ((stream-state-lock state))
-        (unless (stream-state-cancel-requested-p state)
-          (setf (stream-state-error-p state) (format nil "~A" e)))
-        (setf (stream-state-done-p state) t))))
-  (bt:with-lock-held ((stream-state-lock state))
-    (setf (stream-state-done-p state) t))
-  (maybe-call-streaming-callback callback state))
+      (transition-stream-state-to-terminal
+       state
+       :error (format nil "~A" e))))
+  (transition-stream-state-to-terminal state)
+  (unless defer-terminal-callback
+    (maybe-call-streaming-callback callback state :terminal t)))
 
 (defun responses-stream-tool-use-present-p (state)
   "Return non-nil when STATE already contains a tool_use block."
@@ -3268,7 +4146,7 @@ SSE format: 'field: value' or just 'data: {...}'."
 
 (defun process-openai-codex-responses-sse-event (data state)
   "Process one Responses API SSE DATA payload into STATE."
-  (when (stream-state-cancel-requested-p-safe state)
+  (unless (stream-state-active-p-safe state)
     (return-from process-openai-codex-responses-sse-event nil))
   (let* ((event (api-json-decode data))
          (event-type (cdr (assoc :type event))))
@@ -3292,102 +4170,173 @@ SSE format: 'field: value' or just 'data: {...}'."
     (cond
       ((string= event-type "response.output_text.delta")
        (let ((delta (cdr (assoc :delta event))))
-         (when delta
-           (bt:with-lock-held ((stream-state-lock state))
-             (setf (stream-state-text state)
-                   (concatenate 'string (stream-state-text state) delta))
-             (set-stream-state-text-block state (stream-state-text state))))))
+         (and delta
+              (call-with-active-stream-state
+               state
+               (lambda (locked-state)
+                 (setf (stream-state-text locked-state)
+                       (concatenate 'string
+                                    (stream-state-text locked-state)
+                                    delta))
+                 (set-stream-state-text-block
+                  locked-state
+                  (stream-state-text locked-state))))
+              :updated)))
       ((member event-type
                '("response.reasoning_summary_text.delta"
                  "response.reasoning_text.delta")
                :test #'string=)
        (let ((delta (or (cdr (assoc :delta event))
                         (cdr (assoc :text event)))))
-         (when delta
-           (bt:with-lock-held ((stream-state-lock state))
-             (append-stream-state-reasoning-delta state delta)))))
+         (and delta
+              (call-with-active-stream-state
+               state
+               (lambda (locked-state)
+                 (append-stream-state-reasoning-delta
+                  locked-state delta)))
+              :updated)))
       ((member event-type
                '("response.reasoning_summary_text.done"
                  "response.reasoning_text.done")
                :test #'string=)
        (let ((text (cdr (assoc :text event))))
-         (when text
-           (bt:with-lock-held ((stream-state-lock state))
-             (merge-stream-state-reasoning-summary state text)))))
+         (and text
+              (call-with-active-stream-state
+               state
+               (lambda (locked-state)
+                 (merge-stream-state-reasoning-summary
+                  locked-state text)))
+              :updated)))
       ((string= event-type "response.output_item.done")
        (let ((item (cdr (assoc :item event))))
          (when item
            (let ((item-type (cdr (assoc :type item))))
-             (bt:with-lock-held ((stream-state-lock state))
-               (cond
-                 ((and (string= item-type "message")
-                       (string= (cdr (assoc :role item)) "assistant"))
-                  (let ((text (responses-output-item-text item)))
-                    (when text
-                      (setf (stream-state-text state) text)
-                      (set-stream-state-text-block state text))))
-                 ((string= item-type "function_call")
-                  (push (responses-function-call->canonical-block item)
-                        (stream-state-content-blocks state))
-                  (setf (stream-state-stop-reason state) "tool_use"))
-                 ((string= item-type "reasoning")
-                  (dolist (text (responses-reasoning-summary-texts item))
-                    (merge-stream-state-reasoning-summary
-                     state
-                     text)))))))))
+             (and
+              (call-with-active-stream-state
+               state
+               (lambda (locked-state)
+                 (cond
+                   ((and (string= item-type "message")
+                         (string= (cdr (assoc :role item)) "assistant"))
+                    (let ((text (responses-output-item-text item)))
+                      (when text
+                        (setf (stream-state-text locked-state) text)
+                        (set-stream-state-text-block locked-state text))))
+                   ((string= item-type "function_call")
+                    (push (responses-function-call->canonical-block item)
+                          (stream-state-content-blocks locked-state))
+                    (setf (stream-state-stop-reason locked-state)
+                          "tool_use"))
+                   ((string= item-type "reasoning")
+                    (dolist (text (responses-reasoning-summary-texts item))
+                      (merge-stream-state-reasoning-summary
+                       locked-state text))))))
+              :updated)))))
       ((string= event-type "response.completed")
        (let* ((response (cdr (assoc :response event)))
               (usage (normalize-openai-token-usage
                       (or (and response (cdr (assoc :usage response)))
                           (cdr (assoc :usage event))))))
-         (bt:with-lock-held ((stream-state-lock state))
-           (when usage
-             (setf (stream-state-usage state) usage)
-             (file-debug-log "openai-codex-sse"
-                             "~A"
-                             (format-token-usage-summary usage)))
-           (unless (stream-state-stop-reason state)
-             (setf (stream-state-stop-reason state)
-                   (if (responses-stream-tool-use-present-p state)
-                       "tool_use"
-                       "end_turn")))
-           (setf (stream-state-done-p state) t))))
+         (and
+          (transition-stream-state-to-terminal
+           state
+           :update
+           (lambda (locked-state)
+             (when usage
+               (setf (stream-state-usage locked-state) usage)
+               (file-debug-log "openai-codex-sse"
+                               "~A"
+                               (format-token-usage-summary usage)))
+             (unless (stream-state-stop-reason locked-state)
+               (setf (stream-state-stop-reason locked-state)
+                     (if (responses-stream-tool-use-present-p locked-state)
+                         "tool_use"
+                         "end_turn")))))
+          :terminal)))
       ((or (string= event-type "response.failed")
            (string= event-type "error"))
        (let ((message (or (cdr (assoc :message event))
                           (cdr (assoc :error event))
                           "Unknown Responses API error")))
-         (bt:with-lock-held ((stream-state-lock state))
-           (setf (stream-state-error-p state) message
-                 (stream-state-done-p state) t)))))))
+         (and (transition-stream-state-to-terminal
+               state
+               :error message)
+              :terminal))))))
 
-(defun read-openai-codex-responses-sse-stream (stream state callback)
+(defun read-openai-codex-responses-sse-stream
+    (stream state callback &key defer-terminal-callback)
   "Read Responses API SSE events from STREAM into STATE."
+  (register-stream-state-callback state callback)
   (handler-case
       (loop :with data-buffer := nil
+            :while (stream-state-active-p-safe state)
             :for line := (read-line stream nil nil)
-            :while (and line (not (stream-state-cancel-requested-p-safe state)))
+            :while line
             :do (let ((trimmed (string-trim '(#\Return) line)))
                   (cond
                     ((zerop (length trimmed))
                      (when data-buffer
-                       (process-openai-codex-responses-sse-event
-                        (format nil "~{~A~}" (nreverse data-buffer))
-                        state)
-                       (maybe-call-streaming-callback callback state)
-                       (setf data-buffer nil)))
+                       (let ((result
+                               (process-openai-codex-responses-sse-event
+                                (format nil "~{~A~}" (nreverse data-buffer))
+                                state)))
+                         (setf data-buffer nil)
+                         (case result
+                           (:updated
+                            (maybe-call-streaming-callback callback state))
+                           (:terminal
+                            (loop-finish))))))
                     (t
                      (multiple-value-bind (field value) (parse-sse-line trimmed)
                        (when (and field (string= "data" field))
                          (push value data-buffer)))))))
     (error (e)
-      (bt:with-lock-held ((stream-state-lock state))
-        (unless (stream-state-cancel-requested-p state)
-          (setf (stream-state-error-p state) (format nil "~A" e)))
-        (setf (stream-state-done-p state) t))))
-  (bt:with-lock-held ((stream-state-lock state))
-    (setf (stream-state-done-p state) t))
-  (maybe-call-streaming-callback callback state))
+      (transition-stream-state-to-terminal
+       state
+       :error (format nil "~A" e))))
+  (transition-stream-state-to-terminal state)
+  (unless defer-terminal-callback
+    (maybe-call-streaming-callback callback state :terminal t)))
+
+(defun read-stream-prefix (stream maximum-characters)
+  "Read at most MAXIMUM-CHARACTERS from STREAM and return them as text."
+  (let ((output (make-string-output-stream)))
+    (loop :repeat maximum-characters
+          :for character := (read-char stream nil nil)
+          :while character
+          :do (write-char character output))
+    (get-output-stream-string output)))
+
+(defun streaming-http-error-body (state body)
+  "Read a bounded printable error BODY under STATE's cancellable ownership.
+
+Streaming error bodies can block just like successful SSE bodies.  Convert the
+body to a character stream, register it before the first read, and leave final
+close ownership to the managed reader unwind.  Return NIL when registration
+loses to cancellation."
+  (if (streamp body)
+      (let ((text-stream nil)
+            ;; Until registration succeeds, this scope owns BODY or its wrapper.
+            (locally-owned-stream body))
+        (unwind-protect
+             (progn
+               (setf text-stream (utf8-character-input-stream body)
+                     locally-owned-stream text-stream)
+               (if (register-stream-state-stream state text-stream)
+                   (progn
+                     (setf locally-owned-stream nil)
+                     (read-stream-prefix
+                      text-stream
+                      *provider-http-error-body-max-characters*))
+                   ;; REGISTER closed the rejected stream outside the state
+                   ;; lock, so this scope no longer owns it either.
+                   (progn
+                     (setf locally-owned-stream nil)
+                     nil)))
+          (when locally-owned-stream
+            (ignore-errors
+              (close locally-owned-stream :abort t)))))
+      (format nil "~A" body)))
 
 (defun openai-codex-request-streaming (messages callback
                                        &key (model *openai-codex-model*)
@@ -3396,40 +4345,73 @@ SSE format: 'field: value' or just 'data: {...}'."
                                             reasoning-effort
                                             service-tier
                                             (system-prompt (or (build-system-prompt) "")))
-  "Call the OpenAI Responses API with SSE streaming enabled."
-  (let* ((auth (or (resolve-openai-codex-auth)
-                   (error 'simple-error
-                          :format-control "No OpenAI Codex auth. Save a bearer token to ~/.config/clawmacs/openai-codex-token or sign in via ~/.codex/auth.json")))
-         (request-body
-           (openai-codex-responses-request-body
-            messages model max-tokens tools
-            :stream t
-            :system-prompt system-prompt
-            :service-tier service-tier
-            :reasoning-effort reasoning-effort))
-         (state (make-stream-state)))
-    (multiple-value-bind (body-stream status-code ignored effective-auth)
-        (openai-codex-http-request auth request-body :stream t)
-      (declare (ignore ignored effective-auth))
-      (unless (= status-code 200)
-        (let ((err (if (streamp body-stream)
-                       (unwind-protect
-                            (read-stream-as-utf8-string body-stream)
-                         (ignore-errors (close body-stream)))
-                       (format nil "~A" body-stream))))
-          (error "API error (~A): ~A" status-code err)))
-      (let ((sse-stream (utf8-character-input-stream body-stream)))
-        (register-stream-state-reader state sse-stream)
-        (let ((thread
-                (bt:make-thread
-                 (lambda ()
-                   (unwind-protect
-                        (read-openai-codex-responses-sse-stream
-                         sse-stream state callback)
-                     (ignore-errors (close sse-stream))))
-                 :name "clawmacs-openai-codex-responses")))
-          (register-stream-state-reader state sse-stream thread)
-          state)))))
+  "Start an asynchronous OpenAI Responses SSE request and return its STATE."
+  (let ((state (make-stream-state :callback callback)))
+    (start-stream-state-reader-worker
+     state
+     callback
+     "clawmacs-openai-codex-responses"
+     (lambda (worker-state)
+       (block request
+         (unless (stream-state-active-p-safe worker-state)
+           (return-from request))
+         (let* ((auth
+                  (or (resolve-openai-codex-auth)
+                      (error 'simple-error
+                             :format-control "No OpenAI Codex auth. Save a bearer token to ~/.config/clawmacs/openai-codex-token or sign in via ~/.codex/auth.json")))
+                (request-body
+                  (openai-codex-responses-request-body
+                   messages model max-tokens tools
+                   :stream t
+                   :system-prompt system-prompt
+                   :service-tier service-tier
+                   :reasoning-effort reasoning-effort)))
+           (unless (stream-state-active-p-safe worker-state)
+             (return-from request))
+           (multiple-value-bind
+                 (body-stream status-code ignored effective-auth)
+               (openai-codex-http-request
+                auth request-body
+                :stream t
+                :cancel-p
+                (lambda ()
+                  (not (stream-state-active-p-safe worker-state))))
+             (declare (ignore ignored effective-auth))
+             (unless (stream-state-active-p-safe worker-state)
+               (when (streamp body-stream)
+                 (ignore-errors
+                   (close body-stream)))
+               (return-from request))
+             (unless (= status-code 200)
+               (let ((detail
+                       (streaming-http-error-body
+                        worker-state body-stream)))
+                 (when (stream-state-active-p-safe worker-state)
+                   (error "API error (~A): ~A" status-code detail)))
+               (return-from request))
+             (let ((owned-body body-stream)
+                   (sse-stream nil))
+               (unwind-protect
+                    (progn
+                      (setf sse-stream
+                            (utf8-character-input-stream body-stream))
+                      (if (register-stream-state-stream
+                           worker-state sse-stream)
+                          (progn
+                            ;; The state now owns SSE-STREAM and its underlying
+                            ;; BODY-STREAM until cancellation or worker cleanup.
+                            (setf owned-body nil)
+                            (read-openai-codex-responses-sse-stream
+                             sse-stream worker-state callback
+                             :defer-terminal-callback t))
+                          ;; Registration rejected a concurrent cancellation and
+                          ;; closed SSE-STREAM outside the state lock.
+                          (setf owned-body nil
+                                sse-stream nil)))
+                 (when owned-body
+                   (ignore-errors
+                     (close owned-body))))))))))
+    state))
 
 ;;; --------------------------------------------------------------------------
 ;;; OpenRouter API — OpenAI-compatible
@@ -3471,7 +4453,8 @@ Uses the OpenAI-compatible chat completions protocol."
                                   ("X-Title" . "clawmacs"))
             :content request-body
             :want-stream nil
-            :force-binary nil)))
+            :force-binary nil
+            :connection-timeout *provider-http-connection-timeout-seconds*)))
       (let ((body-string (http-body-string body)))
         (unless (= status-code 200)
           (error "OpenRouter API error (~A): ~A" status-code body-string))
@@ -3487,55 +4470,81 @@ Uses the OpenAI-compatible chat completions protocol."
                                           (max-tokens *default-max-tokens*)
                                           tools
                                           (system-prompt (build-system-prompt)))
-  "Call the OpenRouter Chat Completions API with SSE streaming enabled.
-Uses the same OpenAI-compatible streaming protocol."
-  (let* ((token (or (read-provider-token :openrouter)
-                    (error 'simple-error
-                           :format-control "No OpenRouter API key. Set OPENROUTER_API_KEY env var or save to ~/.config/clawmacs/openrouter-api-key")))
-         (request-body
-            (let ((body `((:model . ,model)
-                          (:max--tokens . ,max-tokens)
-                          (:stream . t)
-                         (:messages . ,(coerce (openai-messages-with-system-prompt
-                                               messages
-                                               :system-prompt system-prompt)
-                                               'vector)))))
-              (when (and tools (plusp (length tools)))
-                (push `(:tools . ,(tool-definitions->openai-tools tools)) body))
-              (api-json-encode body)))
-         (state (make-stream-state)))
-    (multiple-value-bind (body-stream status-code headers)
-        (provider-http-request-with-retries
-         "OpenRouter streaming request"
-         (lambda ()
-           (drakma:http-request
-            *openrouter-api-url*
-            :method :post
-            :content-type "application/json"
-            :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
-                                  ("HTTP-Referer" . "https://github.com/clawmacs/clawmacs")
-                                  ("X-Title" . "clawmacs"))
-            :content request-body
-            :want-stream t)))
-      (declare (ignore headers))
-      (unless (= status-code 200)
-        (let ((err (if (streamp body-stream)
-                       (let ((s (make-string-output-stream)))
-                         (loop :for c := (read-char body-stream nil nil)
-                               :while c :do (write-char c s))
-                         (get-output-stream-string s))
-                       (format nil "~A" body-stream))))
-          (error "OpenRouter API error (~A): ~A" status-code err)))
-      (register-stream-state-reader state body-stream)
-      (let ((thread
-              (bt:make-thread
-               (lambda ()
-                 (unwind-protect
-                      (read-openai-sse-stream body-stream state callback)
-                   (ignore-errors (close body-stream))))
-               :name "clawmacs-openrouter-sse-reader")))
-        (register-stream-state-reader state body-stream thread)
-        state))))
+  "Start an asynchronous OpenRouter SSE request and return its STATE."
+  (let ((state (make-stream-state :callback callback)))
+    (start-stream-state-reader-worker
+     state
+     callback
+     "clawmacs-openrouter-sse-reader"
+     (lambda (worker-state)
+       (block request
+         (unless (stream-state-active-p-safe worker-state)
+           (return-from request))
+         (let* ((token
+                  (or (read-provider-token :openrouter)
+                      (error 'simple-error
+                             :format-control "No OpenRouter API key. Set OPENROUTER_API_KEY env var or save to ~/.config/clawmacs/openrouter-api-key")))
+                (request-body
+                  (let ((body
+                          `((:model . ,model)
+                            (:max--tokens . ,max-tokens)
+                            (:stream . t)
+                            (:messages
+                             . ,(coerce
+                                 (openai-messages-with-system-prompt
+                                  messages
+                                  :system-prompt system-prompt)
+                                 'vector)))))
+                    (when (and tools (plusp (length tools)))
+                      (push `(:tools
+                              . ,(tool-definitions->openai-tools tools))
+                            body))
+                    (api-json-encode body))))
+           (unless (stream-state-active-p-safe worker-state)
+             (return-from request))
+           (multiple-value-bind (body-stream status-code headers)
+               (provider-http-request-with-retries
+                "OpenRouter streaming request"
+                (lambda ()
+                  (unless (stream-state-active-p-safe worker-state)
+                    (return-from request))
+                  (drakma:http-request
+                   *openrouter-api-url*
+                   :method :post
+                   :content-type "application/json"
+                   :additional-headers
+                   `(("Authorization"
+                      . ,(format nil "Bearer ~A" token))
+                     ("HTTP-Referer"
+                      . "https://github.com/clawmacs/clawmacs")
+                     ("X-Title" . "clawmacs"))
+                   :content request-body
+                   :want-stream t
+                   :connection-timeout
+                   *provider-http-connection-timeout-seconds*))
+                :cancel-p
+                (lambda ()
+                  (not (stream-state-active-p-safe worker-state))))
+             (declare (ignore headers))
+             (unless (stream-state-active-p-safe worker-state)
+               (when (streamp body-stream)
+                 (ignore-errors
+                   (close body-stream)))
+               (return-from request))
+             (unless (= status-code 200)
+               (let ((detail
+                       (streaming-http-error-body
+                        worker-state body-stream)))
+                 (when (stream-state-active-p-safe worker-state)
+                   (error "OpenRouter API error (~A): ~A"
+                          status-code detail)))
+               (return-from request))
+             (when (register-stream-state-stream
+                    worker-state body-stream)
+               (read-openai-sse-stream
+                body-stream worker-state callback
+                :defer-terminal-callback t)))))))
+    state))
 
 ;;; --------------------------------------------------------------------------
 ;;; Z.AI (Zhipu AI) API — OpenAI-compatible
@@ -3574,7 +4583,8 @@ The API follows the OpenAI Chat Completions format."
                                   ("Accept-Language" . "en-US,en"))
             :content request-body
             :want-stream nil
-            :force-binary nil)))
+            :force-binary nil
+            :connection-timeout *provider-http-connection-timeout-seconds*)))
       (let ((body-string (http-body-string body)))
         (unless (= status-code 200)
           (error "Z.AI API error (~A): ~A" status-code body-string))
@@ -3590,54 +4600,79 @@ The API follows the OpenAI Chat Completions format."
                                     (max-tokens *default-max-tokens*)
                                     tools
                                     (system-prompt (build-system-prompt)))
-  "Call Z.AI Chat Completions API with SSE streaming enabled.
-Uses the same OpenAI-compatible streaming protocol."
-  (let* ((token (or (read-provider-token :zai)
-                    (error 'simple-error
-                           :format-control "No Z.AI API key. Set ZAI_CODING_MAX_API_KEY env var or save to ~/.config/clawmacs/zai-api-key")))
-         (request-body
-            (let ((body `((:model . ,model)
-                          (:max--tokens . ,max-tokens)
-                          (:stream . t)
-                         (:messages . ,(coerce (openai-messages-with-system-prompt
-                                               messages
-                                               :system-prompt system-prompt)
-                                               'vector)))))
-              (when (and tools (plusp (length tools)))
-                (push `(:tools . ,(tool-definitions->openai-tools tools)) body))
-              (api-json-encode body)))
-         (state (make-stream-state)))
-    (multiple-value-bind (body-stream status-code headers)
-        (provider-http-request-with-retries
-         "Z.AI streaming request"
-         (lambda ()
-           (drakma:http-request
-            *zai-api-url*
-            :method :post
-            :content-type "application/json"
-            :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
-                                  ("Accept-Language" . "en-US,en"))
-            :content request-body
-            :want-stream t)))
-      (declare (ignore headers))
-      (unless (= status-code 200)
-        (let ((err (if (streamp body-stream)
-                       (let ((s (make-string-output-stream)))
-                         (loop :for c := (read-char body-stream nil nil)
-                               :while c :do (write-char c s))
-                         (get-output-stream-string s))
-                       (format nil "~A" body-stream))))
-          (error "Z.AI API error (~A): ~A" status-code err)))
-      (register-stream-state-reader state body-stream)
-      (let ((thread
-              (bt:make-thread
-               (lambda ()
-                 (unwind-protect
-                      (read-openai-sse-stream body-stream state callback)
-                   (ignore-errors (close body-stream))))
-               :name "clawmacs-zai-sse-reader")))
-        (register-stream-state-reader state body-stream thread)
-        state))))
+  "Start an asynchronous Z.AI SSE request and return its STATE."
+  (let ((state (make-stream-state :callback callback)))
+    (start-stream-state-reader-worker
+     state
+     callback
+     "clawmacs-zai-sse-reader"
+     (lambda (worker-state)
+       (block request
+         (unless (stream-state-active-p-safe worker-state)
+           (return-from request))
+         (let* ((token
+                  (or (read-provider-token :zai)
+                      (error 'simple-error
+                             :format-control "No Z.AI API key. Set ZAI_CODING_MAX_API_KEY env var or save to ~/.config/clawmacs/zai-api-key")))
+                (request-body
+                  (let ((body
+                          `((:model . ,model)
+                            (:max--tokens . ,max-tokens)
+                            (:stream . t)
+                            (:messages
+                             . ,(coerce
+                                 (openai-messages-with-system-prompt
+                                  messages
+                                  :system-prompt system-prompt)
+                                 'vector)))))
+                    (when (and tools (plusp (length tools)))
+                      (push `(:tools
+                              . ,(tool-definitions->openai-tools tools))
+                            body))
+                    (api-json-encode body))))
+           (unless (stream-state-active-p-safe worker-state)
+             (return-from request))
+           (multiple-value-bind (body-stream status-code headers)
+               (provider-http-request-with-retries
+                "Z.AI streaming request"
+                (lambda ()
+                  (unless (stream-state-active-p-safe worker-state)
+                    (return-from request))
+                  (drakma:http-request
+                   *zai-api-url*
+                   :method :post
+                   :content-type "application/json"
+                   :additional-headers
+                   `(("Authorization"
+                      . ,(format nil "Bearer ~A" token))
+                     ("Accept-Language" . "en-US,en"))
+                   :content request-body
+                   :want-stream t
+                   :connection-timeout
+                   *provider-http-connection-timeout-seconds*))
+                :cancel-p
+                (lambda ()
+                  (not (stream-state-active-p-safe worker-state))))
+             (declare (ignore headers))
+             (unless (stream-state-active-p-safe worker-state)
+               (when (streamp body-stream)
+                 (ignore-errors
+                   (close body-stream)))
+               (return-from request))
+             (unless (= status-code 200)
+               (let ((detail
+                       (streaming-http-error-body
+                        worker-state body-stream)))
+                 (when (stream-state-active-p-safe worker-state)
+                   (error "Z.AI API error (~A): ~A"
+                          status-code detail)))
+               (return-from request))
+             (when (register-stream-state-stream
+                    worker-state body-stream)
+               (read-openai-sse-stream
+                body-stream worker-state callback
+                :defer-terminal-callback t)))))))
+    state))
 
 ;;; --------------------------------------------------------------------------
 ;;; Response Parsing Helpers

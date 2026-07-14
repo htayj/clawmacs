@@ -12,7 +12,7 @@
 (defpackage :clawmacs
   (:use :cl)
   (:shadowing-import-from :lispi
-   #:*sandbox-root*
+   #:*tool-working-directory*
    #:*file-read-default-limit*
    #:*find-default-limit*
    #:*grep-default-limit*
@@ -37,22 +37,20 @@
    #:lisp-data-string
    #:lisp-data-read
    #:tool-error-result-data
-   #:tool-denied-result-data
    #:tool-key-name
    #:tool-key=
    #:tool-plist-p
    #:tool-args-alist
    #:tool-arg
    #:compute-simple-diff
-   #:validate-sandbox-path
+   #:tool-working-directory-pathname
+   #:resolve-tool-path
    #:execute-read
    #:execute-find
    #:execute-grep
    #:execute-write
    #:execute-edit
    #:execute-lisp-eval
-   #:file-write-approval-display
-   #:file-edit-approval-display
    #:eval-history-to-string)
   (:export
    ;; General utilities
@@ -398,7 +396,7 @@
 
    ;; Commands
    #:*current-caller*
-   #:*sandbox-root*
+   #:*tool-working-directory*
    #:*command-table*
    #:command-metadata
    #:command-metadata-name
@@ -423,9 +421,8 @@
    #:agent-tool-metadata-description
    #:agent-tool-metadata-args
    #:agent-tool-metadata-input-schema
-   #:agent-tool-metadata-permission
    #:agent-tool-metadata-call-style
-   #:agent-tool-metadata-approval-display-fn
+   #:agent-tool-metadata-execution
    #:agent-tool-metadata-command-p
    #:agent-tool-metadata-lambda-list
    #:agent-tool-metadata-package
@@ -635,9 +632,12 @@
      #:agent-definition-core-prompt
      #:agent-definition-personality-prompt
      #:agent-definition-tool-names
+     #:agent-definition-package
      #:register-agent-definition
      #:find-agent-definition
      #:list-agent-definitions
+     #:package-owned-agent-definitions
+     #:remove-agent-definitions-for-package
      #:load-agent-defaults
      #:save-agent-defaults
      #:agent-default
@@ -742,39 +742,12 @@
    #:*lisp-eval-history*
    #:*lisp-eval-history-limit*
    #:*lisp-eval-max-output-chars*
-   #:*approval-policy-path*
+   #:tool-working-directory-pathname
+   #:resolve-tool-path
    #:*tool-table*
    #:*active-tool-names*
    #:*temporary-tool-table*
    #:*current-tool-buffer*
-   #:approval-policy-default-permission
-   #:approval-policy-default-sandbox-permission
-   #:approval-policy-default-working-directory-permission
-   #:approval-policy-default-network-permission
-   #:approval-policy-tool-permission
-   #:approval-policy-sandbox-permission
-   #:approval-policy-working-directory-permission
-   #:approval-policy-network-permission
-   #:approval-policy-network-default
-   #:approval-policy-network-tools
-   #:approval-policy-history-entries
-   #:approval-policy-history-to-string
-   #:set-approval-policy-default-permission
-   #:set-approval-policy-default-sandbox-permission
-   #:set-approval-policy-default-working-directory-permission
-   #:set-approval-policy-default-network-permission
-   #:set-approval-policy-tool-permission
-   #:set-approval-policy-sandbox-permission
-   #:set-approval-policy-working-directory-permission
-   #:set-approval-policy-network-default
-   #:set-approval-policy-network-permission
-   #:load-approval-policy
-   #:save-approval-policy
-   #:effective-tool-permission
-   #:effective-tool-sandbox-permission
-   #:effective-tool-working-directory-permission
-   #:effective-tool-network-toggle
-   #:approval-policy-tool-network-allowed-p
    #:lisp-eval-record
    #:lisp-eval-record-code
    #:lisp-eval-record-package
@@ -787,26 +760,22 @@
    #:tool-definition-name
    #:tool-definition-description
    #:tool-definition-input-schema
-   #:tool-definition-permission
+   #:tool-definition-execution
    #:tool-definition-execute-fn
-   #:tool-definition-approval-display-fn
    #:tool-definition-package
    #:subagent-tool
    #:subagent-tool-name
    #:subagent-tool-description
    #:subagent-tool-input-schema
-   #:subagent-tool-permission
+   #:subagent-tool-execution
    #:subagent-tool-execute-fn
-   #:subagent-tool-approval-display-fn
    #:make-subagent-tool
    #:register-tool
    #:execute-tool
-   #:tool-requires-permission-p
    #:tool-definitions-for-api
    #:render-agent-tools-section
    #:format-tool-call-sexpr
    #:format-tool-call-expanded
-   #:tool-approval-extra-display
    #:eval-history-to-string
    #:init-tools
 
@@ -815,6 +784,9 @@
    #:clawmacs-safe-reload-preflight
    #:clawmacs-reload-result-ok-p
    #:clawmacs-reload-result-summary
+   #:call-with-runtime-admission
+   #:call-with-runtime-settlement-admission
+   #:runtime-admission-closed
    #:safe-reload-clawmacs-command
 
    ;; Standard reference / library discovery
@@ -899,12 +871,15 @@
    #:slop-find-variable-uses
    #:slop-rename-variable
 
-   ;; Approval
-   #:buffer-approval-pending
-   #:buffer-approval-result
+   ;; Tool sequencing
    #:buffer-stashed-input
    #:buffer-pending-tool-calls
    #:buffer-tool-call-results
+   #:buffer-pending-tool-execution
+   #:buffer-pending-interactive-operation
+   #:buffer-runtime-generation
+   #:buffer-disposed-p
+   #:dispose-buffer
 
    ;; Buffer selector
    #:*buffer-selector-active*
@@ -952,8 +927,6 @@
    #:minibuffer-toggle-package-command
    #:describe-installed-package-command
    #:package-dashboard-command
-   #:describe-guard-policy-command
-   #:describe-guard-history-command
 
    ;; Model selector (overlay)
    #:*model-selector-active*
@@ -1185,7 +1158,6 @@
    #:*after-buffer-display-change-hook*
    #:*after-provider-response-hook*
    #:*package-enablement-changed-hook*
-   #:*approval-review-hook*
    #:*after-session-save-hook*
    #:*after-session-load-hook*
    #:*session-share-hook*
@@ -1229,7 +1201,6 @@
    #:pipeline-stage-package-names
    #:pipeline-stage-skill-names
    #:pipeline-stage-max-tool-iterations
-   #:pipeline-stage-auto-approve-tools-p
    #:pipeline-stage-output-schema
    #:pipeline-stage-output-parser
    #:pipeline-stage-runner
@@ -1241,7 +1212,7 @@
    #:pipeline-definition-entry-stage
    #:pipeline-definition-max-steps
    #:pipeline-definition-max-tool-iterations
-   #:pipeline-definition-auto-approve-tools-p
+   #:pipeline-definition-package
    #:pipeline-context
    #:pipeline-context-definition
    #:pipeline-context-original-prompt
@@ -1271,15 +1242,19 @@
    #:register-pipeline-definition
    #:find-pipeline-definition
    #:list-pipeline-definitions
+   #:package-owned-pipeline-definitions
    #:pipeline-test-profile
    #:pipeline-test-profile-name
    #:pipeline-test-profile-description
    #:pipeline-test-profile-command
+   #:pipeline-test-profile-package
    #:normalize-pipeline-test-profile-name
    #:define-pipeline-test-profile
    #:register-pipeline-test-profile
    #:find-pipeline-test-profile
    #:list-pipeline-test-profiles
+   #:package-owned-pipeline-test-profiles
+   #:remove-pipeline-registrations-for-package
    #:pipeline-last-stage-result
    #:pipeline-stage-output
    #:pipeline-stage-parsed-output
@@ -1305,6 +1280,7 @@
    #:subagent-handle-cancel-requested-p
    #:find-subagent
    #:list-subagents
+   #:active-synchronous-subagent-run-count
    #:subagent-status
    #:subagent-done-p
    #:subagent-result
@@ -1366,6 +1342,7 @@
    #:resume-interop-thread
    #:fork-interop-thread
    #:list-interop-threads
+   #:active-interop-runtime-operation-count
    #:read-interop-thread
    #:run-interop-thread
    #:interop-turn

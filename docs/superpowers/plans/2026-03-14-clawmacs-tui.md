@@ -1,5 +1,10 @@
 # Clawmacs TUI Chat Buffer Implementation Plan
 
+> **Historical document.** This completed Croatoan-era plan is retained as
+> project history. Its in-process permission and sandbox design was removed in
+> July 2026; current Clawmacs is full-trust and relies on user-controlled
+> external containment when desired.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a working terminal chat UI in Common Lisp with CLOS-based buffer/message/face/command abstractions and access control.

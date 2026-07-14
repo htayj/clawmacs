@@ -5,7 +5,7 @@
 (defmacro with-artifactum-test-state (&body body)
   `(with-package-state-override ((default-package-test-channels))
      (let* ((*sessions-dir* (temp-session-test-directory "artifactum"))
-            (clawmacs::*sandbox-root* *sessions-dir*)
+            (clawmacs::*tool-working-directory* *sessions-dir*)
             (clawmacs::*buffer-ring* nil)
             (clawmacs::*buffer-counter* 0)
             (clawmacs::*default-keymap* nil)
@@ -29,7 +29,7 @@
   "Return a persistent chat buffer for artifactum tests."
   (let ((root (merge-pathnames
                (format nil "~A/" label)
-               clawmacs::*sandbox-root*)))
+               clawmacs::*tool-working-directory*)))
     (ensure-directories-exist (merge-pathnames #P".keep" root))
     (let ((buffer (clawmacs::make-chat-buffer label :working-directory root)))
       (setf (clawmacs::buffer-keymap buffer) clawmacs::*default-keymap*)

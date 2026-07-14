@@ -3,9 +3,6 @@
 (defvar *git-tool-default-max-chars* 12000
   "Default maximum characters returned from git stdout or stderr.")
 
-(defvar *git-tool-approval-max-chars* 4000
-  "Maximum git output characters shown in approval displays.")
-
 (defun git-tool-blank-string-p (value)
   "Return true when VALUE is NIL or only ASCII whitespace."
   (or (null value)
@@ -92,10 +89,10 @@
   "Return the root directory for PROJECT-DESIGNATOR."
   (project-root (ensure-project project-designator)))
 
-(defun git-tool-repository-from-sandbox (repository)
-  "Return REPOSITORY as an existing sandbox-local directory."
+(defun git-tool-repository-from-path (repository)
+  "Resolve REPOSITORY and return it as an existing directory."
   (git-tool-existing-directory
-   (validate-sandbox-path repository)
+   (lispi:resolve-tool-path repository)
    "Git repository"))
 
 (defun git-tool-buffer-working-directory ()
@@ -107,9 +104,9 @@
      (uiop:ensure-directory-pathname
       (buffer-working-directory *current-tool-buffer*)))))
 
-(defun git-tool-sandbox-root ()
-  "Return the effective sandbox root as a directory pathname."
-  (uiop:ensure-directory-pathname (or *sandbox-root* (truename "."))))
+(defun git-tool-working-directory-root ()
+  "Return the effective tool working directory."
+  (lispi:tool-working-directory-pathname))
 
 (defun git-tool-resolve-repository (args)
   "Resolve ARGS to the directory where git should run."
@@ -119,10 +116,10 @@
       ((not (git-tool-blank-string-p project))
        (git-tool-repository-from-project project))
       ((not (git-tool-blank-string-p repository))
-       (git-tool-repository-from-sandbox repository))
+       (git-tool-repository-from-path repository))
       ((git-tool-buffer-working-directory))
       (t
-       (git-tool-existing-directory (git-tool-sandbox-root)
+       (git-tool-existing-directory (git-tool-working-directory-root)
                                     "Git repository")))))
 
 (defun git-tool-truncate (text max-chars)
@@ -167,26 +164,6 @@
                  :stderr-length err-length
                  :stdout-truncated out-truncated-p
                  :stderr-truncated err-truncated-p)))))))
-
-(defun git-tool-output-preview (repository argv &key max-chars)
-  "Run git and return compact human-readable output for approval displays."
-  (multiple-value-bind (stdout stderr exit-code)
-      (git-tool-run-raw repository argv)
-    (multiple-value-bind (out out-truncated-p)
-        (git-tool-truncate stdout (or max-chars *git-tool-approval-max-chars*))
-      (multiple-value-bind (err err-truncated-p)
-          (git-tool-truncate stderr (or max-chars *git-tool-approval-max-chars*))
-        (with-output-to-string (stream)
-          (format stream "$ ~A~%" (git-tool-command-label argv))
-          (format stream "exit-code: ~D~%" exit-code)
-          (unless (git-tool-blank-string-p out)
-            (format stream "~%stdout:~%~A~%" out)
-            (when out-truncated-p
-              (format stream "[stdout truncated]~%")))
-          (unless (git-tool-blank-string-p err)
-            (format stream "~%stderr:~%~A~%" err)
-            (when err-truncated-p
-              (format stream "[stderr truncated]~%"))))))))
 
 (defun git-tool-status (args)
   "Return git status for a repository."
@@ -304,47 +281,6 @@
                          (t nil)))))
     (git-tool-run repository argv)))
 
-(defun git-add-approval-display (args)
-  "Return approval context for git_add."
-  (let ((repository (git-tool-resolve-repository args))
-        (paths (git-tool-normalize-paths (tool-arg args :paths "paths"))))
-    (format nil "Repository: ~A~%Paths:~%~{  ~A~%~}"
-            (namestring repository)
-            paths)))
-
-(defun git-commit-approval-display (args)
-  "Return approval context for git_commit."
-  (let* ((repository (git-tool-resolve-repository args))
-         (message (git-tool-string (tool-arg args :message "message")
-                                   "message"))
-         (stat (git-tool-output-preview
-                repository
-                (list "diff" "--staged" "--stat")
-                :max-chars *git-tool-approval-max-chars*)))
-    (format nil "Repository: ~A~%Message: ~A~%~%Staged diff stat:~%~A"
-            (namestring repository)
-            message
-            stat)))
-
-(defun git-push-approval-display (args)
-  "Return approval context for git_push."
-  (let* ((repository (git-tool-resolve-repository args))
-         (remote (git-tool-safe-token
-                  (tool-arg args :remote "remote")
-                  "remote"))
-         (branch (git-tool-safe-token
-                  (tool-arg args :branch "branch")
-                  "branch"))
-         (head (git-tool-output-preview
-                repository
-                (list "log" "-1" "--oneline")
-                :max-chars *git-tool-approval-max-chars*)))
-    (format nil "Repository: ~A~%Remote: ~A~%Branch: ~A~%~%Current HEAD:~%~A"
-            (namestring repository)
-            (or remote "(default)")
-            (or branch "(default)")
-            head)))
-
 (register-package-prompt-section
  "git"
  "## Git workflow with git
@@ -361,8 +297,8 @@
 - Use `git_push` for normal pushes only. There are no force-push, reset,
   checkout, restore, clean, rebase, or stash tools in this package.
 - Prefer `project` when a Clawmacs project is known. Otherwise use a
-  sandbox-local `repository` path or omit both to use the current buffer
-  working directory or sandbox root.
+  `repository` path or omit both to use the current buffer or tool working
+  directory. Absolute and parent-relative repository paths are allowed.
 - Avoid `lisp_eval` or shell-style workarounds for git operations when a
   `git_*` tool fits the task."
  :title "Git workflow with git"
@@ -371,12 +307,11 @@
 (deftool git-tool-status
   :name "git_status"
   :description "Return git status for a repository. Defaults to compact short output."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. Takes precedence over repository.")
          (repository :type "string" :required nil
-                     :description "Optional sandbox-local repository directory.")
+                     :description "Optional repository directory path.")
          (short :type "boolean" :required nil
                 :description "Use compact --short output. Defaults to true.")
          (branch :type "boolean" :required nil
@@ -385,12 +320,11 @@
 (deftool git-tool-log
   :name "git_log"
   :description "Return compact git log output for a repository."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. Takes precedence over repository.")
          (repository :type "string" :required nil
-                     :description "Optional sandbox-local repository directory.")
+                     :description "Optional repository directory path.")
          (revision :type "string" :required nil
                    :description "Optional revision or ref to start from. Must not start with '-'.")
          (path :type "string" :required nil
@@ -403,12 +337,11 @@
 (deftool git-tool-diff
   :name "git_diff"
   :description "Return git diff output for unstaged or staged changes."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. Takes precedence over repository.")
          (repository :type "string" :required nil
-                     :description "Optional sandbox-local repository directory.")
+                     :description "Optional repository directory path.")
          (path :type "string" :required nil
                :description "Optional safe repo-relative path to filter.")
          (staged :type "boolean" :required nil
@@ -421,12 +354,11 @@
 (deftool git-tool-show
   :name "git_show"
   :description "Return git show output for a revision. Defaults to HEAD."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. Takes precedence over repository.")
          (repository :type "string" :required nil
-                     :description "Optional sandbox-local repository directory.")
+                     :description "Optional repository directory path.")
          (revision :type "string" :required nil
                    :description "Optional revision or ref. Defaults to HEAD and must not start with '-'.")
          (stat :type "boolean" :required nil
@@ -437,63 +369,55 @@
 (deftool git-tool-branch
   :name "git_branch"
   :description "List git branches for a repository."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. Takes precedence over repository.")
          (repository :type "string" :required nil
-                     :description "Optional sandbox-local repository directory.")
+                     :description "Optional repository directory path.")
          (all :type "boolean" :required nil
               :description "When true, include remote branches with --all.")))
 
 (deftool git-tool-remote
   :name "git_remote"
   :description "List git remotes for a repository."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. Takes precedence over repository.")
          (repository :type "string" :required nil
-                     :description "Optional sandbox-local repository directory.")
+                     :description "Optional repository directory path.")
          (verbose :type "boolean" :required nil
                   :description "When true, include remote URLs with --verbose.")))
 
 (deftool git-tool-add
   :name "git_add"
   :description "Stage specific safe repo-relative paths with git add."
-  :permission :agent-with-permission
   :call-style :raw-args
-  :approval-display-fn git-add-approval-display
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. Takes precedence over repository.")
          (repository :type "string" :required nil
-                     :description "Optional sandbox-local repository directory.")
+                     :description "Optional repository directory path.")
          (paths :type "array" :items ((:type . "string"))
                 :description "Non-empty array of safe repo-relative paths to stage.")))
 
 (deftool git-tool-commit
   :name "git_commit"
   :description "Create a git commit with the supplied message."
-  :permission :agent-with-permission
   :call-style :raw-args
-  :approval-display-fn git-commit-approval-display
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. Takes precedence over repository.")
          (repository :type "string" :required nil
-                     :description "Optional sandbox-local repository directory.")
+                     :description "Optional repository directory path.")
          (message :type "string"
                   :description "Commit message. Must not be blank.")))
 
 (deftool git-tool-push
   :name "git_push"
   :description "Push the current repository to a remote. Supports normal pushes only."
-  :permission :agent-with-permission
   :call-style :raw-args
-  :approval-display-fn git-push-approval-display
   :args ((project :type "string" :required nil
                   :description "Optional Clawmacs project name. Takes precedence over repository.")
          (repository :type "string" :required nil
-                     :description "Optional sandbox-local repository directory.")
+                     :description "Optional repository directory path.")
          (remote :type "string" :required nil
                  :description "Optional remote name, such as origin. Must not start with '-'.")
          (branch :type "string" :required nil

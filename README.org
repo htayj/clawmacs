@@ -9,7 +9,7 @@ Macros for your agent!
 
 Anyone who has used Emacs before knows the benefit of a tight feedback loop. Write lisp code, eval it, instant results. Clawmacs brings that same philosophy to agentic programming: the tighter the feedback loop between you and the agent, and the more the agent can introspect its own environment, the more powerful the collaboration becomes.
 
-Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment with full access to the running Lisp image. The agent can read, write, and edit sandboxed files directly through Lisp data mode, and it can use =lisp_eval= to inspect the editor, search symbols, read docs, call functions, and update runtime state inside the live Common Lisp process.
+Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment while keeping provider work off the CLIM frame process. The agent can read, write, and edit files directly through Lisp data mode, and it can use isolated =lisp_eval= workers to test Common Lisp without freezing or terminating the live UI.
 
 #+ATTR_ORG: :width 800
 [[file:docs/img/genera-style.png]]
@@ -40,16 +40,23 @@ OpenAI Codex auth follows Codex's own credential layout:
 The default built-in agent tool surface follows Pi-style coding tools, with
 provider tools as the primary action surface:
 
-| Tool         | Permission             | Description                          |
-|--------------+------------------------+--------------------------------------|
-| =read=       | agent-allowed          | Read text files in the sandbox       |
-| =find=       | agent-allowed          | Search files by name or wildcard     |
-| =grep=       | agent-allowed          | Search file contents by literal text |
-| =write=      | agent-allowed          | Create or overwrite sandboxed files  |
-| =edit=       | agent-allowed          | Replace exact text in sandboxed files |
-| =lisp_eval=  | agent-allowed          | Evaluate Common Lisp in the running image or an isolated worker |
-| =clawmacs_reload= | agent-allowed     | Safely preflight and reload Clawmacs source in place |
-| =recovery_list= | agent-allowed       | Inspect recent durable tool/eval/checkpoint journal events |
+| Tool            | Description                          |
+|-----------------+--------------------------------------|
+| =read=          | Read text files                      |
+| =find=          | Search files by name or wildcard     |
+| =grep=          | Search file contents by literal text |
+| =write=         | Create or overwrite text files       |
+| =edit=          | Replace exact text in text files     |
+| =lisp_eval=     | Evaluate Common Lisp in an isolated worker (=mode=isolated= required for provider calls) |
+| =recovery_list= | Inspect recent durable tool/eval/checkpoint journal events |
+
+Clawmacs is a full-trust application. Agent tools, package code, init files,
+shell commands, and live Lisp all run with the operating-system authority of
+the Clawmacs process. There is deliberately no in-application permission prompt
+or sandbox policy. If containment is required, run the entire application in a
+user-controlled container, VM, restricted account, or OS sandbox. Tool and
+package selection controls workflow composition and prompt exposure; it is not
+a security boundary.
 
 By default, agents use exposed provider tools for workspace search and text
 changes. Tool inputs and tool results are represented as Lisp data, for example
@@ -60,8 +67,11 @@ Custom tools may be registered explicitly with =register-tool= or tagged through
 =deftool=. Imported packages contribute tools as soon as their =deftool= forms
 are evaluated.
 
-The =lisp_eval= tool is the fallback for Common Lisp tests, introspection, live
-system updates, and defining helper tools when no exposed tool fits. Standard
+The =lisp_eval= tool is the fallback for Common Lisp tests and isolated
+introspection when no exposed tool fits. Provider calls must pass
+=:mode "isolated"=; live evaluation is refused at the provider boundary because
+arbitrary code can block or terminate the CLIM frame process. Trusted users can
+still use the listener or direct Lisp API for deliberate live evaluation. Standard
 Common Lisp reference lookup is available through a vendored offline snapshot of
 =cl-community-spec=, and imported library discovery is handled locally through
 ASDF metadata, package exports, docstrings, and source/doc search helpers.
@@ -70,12 +80,16 @@ ASDF metadata, package exports, docstrings, and source/doc search helpers.
 Its tool result is a printed Lisp plist. Recent calls are available with
 =(eval-history-to-string)=, and the latest success/error are exposed through
 =*last-eval-result*= and
-=*last-eval-condition*=. Pass =:mode "isolated"= to evaluate in a fresh SBCL
-worker process when probing risky compile/load/eval behavior without mutating
-or crashing the live Clawmacs image.
+=*last-eval-condition*=. Isolated mode evaluates in a fresh SBCL worker process
+without mutating or crashing the live Clawmacs image. The worker inherits the
+user's filesystem and network authority; this separation is for application
+stability, not containment.
 
-=clawmacs_reload= gives agents and users a safer hot-reload path for updated
-Clawmacs source. It first loads the current checkout in an isolated SBCL worker;
+The =safe-reload-clawmacs-command= gives users a deliberate development
+hot-reload path for updated Clawmacs source. It is not exposed as a provider
+tool because live class and method redefinition cannot be safely interleaved
+with a background agent tool worker. The command first loads the current
+checkout in an isolated SBCL worker;
 only if that preflight succeeds does it reload =:clawmacs= in the live image,
 refresh command/tool/package registrations, and insert a visible system message
 in the current buffer. Existing buffers, sessions, the frame, and compose draft
@@ -117,9 +131,10 @@ mention and =C-c S= to toggle skills.
 (skill-search-to-string "common-lisp" "hash table")
 #+end_src
 
-Skills do not add new agent tools or widen permissions. Agents inspect skill
+Skills do not add new agent tools by themselves. Agents inspect skill
 instructions and resources through =lisp_eval=, and scripts/assets are local
-resources unless other Clawmacs APIs explicitly execute or use them.
+resources unless other Clawmacs APIs explicitly execute or use them. Skill
+instructions are trusted input to the full-trust agent workflow.
 
 ** Built-in Packages
 
@@ -129,7 +144,7 @@ packages cover structural Lisp editing and lookup (=sexed=, =slop=), web access
 (=speculum=), testing (=prove=), subagents (=subagent=), deterministic
 pipelines (=pipelines=), Git workflows (=git=), prompt templates
 (=templata=), model-routing helpers (=modelaria=), artifacts
-(=artifactum=), approval/memory review (=quaestor=), and MCP bridging
+(=artifactum=), structured user questions and message queues (=quaestor=), and MCP bridging
 (=mcp-bridge=).
 
 Packages can be installed without being enabled. Enablement is scoped per
@@ -331,7 +346,7 @@ Agent responses stream in real time via background threads. The event loop polls
 Clawmacs has a full face (color/attribute) system inspired by Emacs:
 
 - Per-sender color schemes (user messages on blue, agent on black, system in cyan)
-- Global faces for modeline, minibuffer, selectors, approval prompts, diff highlighting
+- Global faces for modeline, minibuffer, selectors, structured question prompts, and diff highlighting
 - Face inheritance chains with full resolution
 - Interactive face customization via =C-h F=
 - Supports CGA (16-color), 256-color, and hex (#RRGGBB) color specs
@@ -419,7 +434,7 @@ the same Guix container and prints only the final assistant response to stdout
 by default:
 
 #+begin_src sh
-./prompt.sh "Use lisp_eval to inspect the current default provider."
+./prompt.sh 'Use lisp_eval with mode="isolated" to inspect the current default provider.'
 ./prompt.sh --show-tools --show-metadata "List the exported clawmacs functions."
 ./prompt.sh --json --provider openai-codex --model gpt-5.3-codex "Summarize this repo."
 ./prompt.sh --clean-build "Run this prompt after clearing cached Lisp build artifacts."
@@ -453,7 +468,14 @@ GUI E2E runs are opt-in and documented in [[file:docs/GUI-E2E.md][docs/GUI-E2E.m
 ./scripts/run-gui-e2e.sh --suite features
 ./scripts/run-gui-e2e.sh --suite keybinds
 ./scripts/run-gui-e2e.sh --suite reload
+./scripts/run-gui-e2e.sh --suite stability
 #+end_src
+
+The crash and lifecycle hardening plan, implemented findings, residual risks,
+and validation evidence are recorded in
+[[file:docs/STABILITY.md][docs/STABILITY.md]].  Suspected framework failures are
+classified separately, with minimal controls and a strict fork threshold, in
+[[file:docs/MCCLIM-ISSUES.md][docs/MCCLIM-ISSUES.md]].
 
 The probes run through =prompt.sh --isolated=, write logs under =/tmp=, and
 check real agent behavior for docs discovery, skill loading, transactional
@@ -496,7 +518,7 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
  :provider :openai-codex
  :model "gpt-5.4"
  :think-level "high"
- :core-prompt "Use lisp_eval for concrete work. Inspect first, then modify."
+ :core-prompt "Use lisp_eval only with mode=isolated for concrete work. Inspect first, then modify."
  :personality-prompt "You are a concise writing partner focused on structure and tone.")
 
 ;; Register additional skill roots or programmatic skills

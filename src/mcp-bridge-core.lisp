@@ -13,9 +13,7 @@
   args
   url
   headers
-  (enabled-p t :type boolean)
-  default-tool-permission
-  tool-permissions)
+  (enabled-p t :type boolean))
 
 (defstruct mcp-external-tool
   "One externally discovered MCP tool mapped into the local tool registry."
@@ -23,8 +21,7 @@
   tool-name
   provider-name
   description
-  input-schema
-  permission)
+  input-schema)
 
 (defvar *mcp-server-configuration-path*
   (merge-pathnames #P".clawmacs.d/mcp-servers.json" (user-homedir-pathname))
@@ -35,6 +32,29 @@
 
 (defvar *mcp-external-tool-table* (make-hash-table :test #'equal)
   "Live registry of discovered MCP external tools keyed by provider name.")
+
+(defvar *process-mcp-external-tool-table* *mcp-external-tool-table*
+  "The process-global MCP tool table, distinct from dynamic test bindings.")
+
+(defun call-with-mcp-tool-registry-lock (function)
+  "Call bounded MCP/tool table access under the shared registry lock.
+
+FUNCTION must not perform MCP I/O or invoke tool/package extension code."
+  (if (or (process-tool-registry-table-p *tool-table*)
+          (eq *mcp-external-tool-table* *process-mcp-external-tool-table*))
+      (bt:with-lock-held (*tool-registry-lock*)
+        (funcall function))
+      (funcall function)))
+
+(defun mcp-external-tool-table-snapshot ()
+  "Return a stable snapshot of the currently bound MCP tool table."
+  (call-with-mcp-tool-registry-lock
+   (lambda ()
+     (let ((entries nil))
+       (maphash (lambda (name tool)
+                  (push (cons name tool) entries))
+                *mcp-external-tool-table*)
+       entries))))
 
 (defun mcp-blank-string-p (value)
   "Return true when VALUE is NIL or only ASCII whitespace."
@@ -151,38 +171,6 @@
      (error "~A must be a JSON object or list of pairs, got ~S."
             field-name value))))
 
-(defun mcp-normalize-tool-permission-alist (value)
-  "Normalize VALUE into an alist of tool-name to permission keyword."
-  (cond
-    ((null value) nil)
-    ((mcp-json-object-p value)
-     (loop :for (key . item) :in value
-           :collect (cons (or (mcp-trim key)
-                              (error "MCP tool permission key must be non-empty."))
-                          (normalize-tool-permission
-                           item
-                           :allow-inherit-p t
-                           :context (format nil "MCP tool permission for ~A" key)))))
-    ((vectorp value)
-     (mcp-normalize-tool-permission-alist (coerce value 'list)))
-    ((listp value)
-     (loop :for entry :in value
-           :collect
-           (cond
-             ((consp entry)
-              (cons (or (mcp-trim (car entry))
-                        (error "MCP tool permission key must be non-empty."))
-                    (normalize-tool-permission
-                     (cdr entry)
-                     :allow-inherit-p t
-                     :context (format nil "MCP tool permission for ~A"
-                                      (car entry)))))
-             (t
-              (error "Invalid MCP tool permission entry ~S." entry)))))
-    (t
-     (error "MCP tool permissions must be an object or list of pairs, got ~S."
-            value))))
-
 (defun make-mcp-server-registry ()
   "Return a fresh equal-test MCP server registry."
   (make-hash-table :test #'equal))
@@ -195,16 +183,6 @@
    (cons :transport (string-downcase
                      (symbol-name (mcp-server-config-transport config))))
    (cons :enabled (mcp-server-config-enabled-p config))
-   (cons :default_permission
-         (tool-permission-json-value
-          (mcp-server-config-default-tool-permission config)))
-   (cons :tool_permissions
-         (loop :for (tool-name . permission)
-                 :in (sort (copy-list (mcp-server-config-tool-permissions config))
-                           #'string<
-                           :key #'car)
-               :collect (cons tool-name
-                              (tool-permission-json-value permission))))
    (cons :headers
          (loop :for (name . value)
                  :in (sort (copy-list (mcp-server-config-headers config))
@@ -216,8 +194,11 @@
    (cons :url (or (mcp-server-config-url config) ""))))
 
 (defun load-mcp-server-configurations ()
-  "Load and memoize configured MCP servers."
-  (let ((registry (make-mcp-server-registry)))
+  "Load and memoize configured MCP servers.
+
+Obsolete permission fields are ignored.  They disappear on the next save."
+  (let ((registry (make-mcp-server-registry))
+        (legacy-permission-fields-p nil))
     (when (probe-file *mcp-server-configuration-path*)
       (handler-case
           (let* ((data (api-json-decode
@@ -226,6 +207,19 @@
                            (or (mcp-json-value data :servers)
                                (mcp-json-value data :mcp_servers)))))
             (dolist (entry servers)
+              (when (or (find :default--permission entry
+                              :key #'car :test #'tool-key=)
+                        (find :default_permission entry
+                              :key #'car :test #'tool-key=)
+                        (find :default-permission entry
+                              :key #'car :test #'tool-key=)
+                        (find :tool--permissions entry
+                              :key #'car :test #'tool-key=)
+                        (find :tool_permissions entry
+                              :key #'car :test #'tool-key=)
+                        (find :tool-permissions entry
+                              :key #'car :test #'tool-key=))
+                (setf legacy-permission-fields-p t))
               (let* ((name (mcp-normalize-server-name
                             (or (mcp-json-value entry :name)
                                 (mcp-json-value entry "name"))))
@@ -248,24 +242,11 @@
                                   "MCP headers")
                         :enabled-p (if (member :enabled entry :key #'car :test #'tool-key=)
                                        (not (null (mcp-json-value entry :enabled "enabled")))
-                                       t)
-                        :default-tool-permission
-                        (normalize-tool-permission
-                         (or (mcp-json-value entry :default_permission
-                                             "default_permission"
-                                             :default-permission
-                                             "default-permission")
-                             :agent-with-permission)
-                         :allow-inherit-p t
-                         :context (format nil "MCP default permission for ~A"
-                                          name))
-                        :tool-permissions
-                        (mcp-normalize-tool-permission-alist
-                         (mcp-json-value entry :tool_permissions
-                                         "tool_permissions"
-                                         :tool-permissions
-                                         "tool-permissions")))))
-                (setf (gethash name registry) config))))
+                                       t))))
+                (setf (gethash name registry) config)))
+            (when legacy-permission-fields-p
+              (warn "Ignoring obsolete MCP permission fields in ~A. Clawmacs tools run with the process's authority; use an external sandbox when isolation is required. The obsolete fields will be removed on the next save."
+                    *mcp-server-configuration-path*)))
         (error (condition)
           (warn "Failed to load MCP server configuration from ~A: ~A"
                 *mcp-server-configuration-path*
@@ -316,9 +297,6 @@
 
 (defun register-mcp-server-config (name &key description transport command args
                                         url headers enabled-p
-                                        (default-tool-permission
-                                          :agent-with-permission)
-                                        tool-permissions
                                         (save-p t))
   "Store NAME as a configured MCP server and return its normalized config."
   (let* ((normalized-name (mcp-normalize-server-name name))
@@ -331,15 +309,7 @@
                   :args (mcp-normalize-string-list args "MCP args")
                   :url (mcp-trim url)
                   :headers (mcp-normalize-string-alist headers "MCP headers")
-                  :enabled-p (if (null enabled-p) t (not (null enabled-p)))
-                  :default-tool-permission
-                  (normalize-tool-permission
-                   default-tool-permission
-                   :allow-inherit-p t
-                   :context (format nil "MCP default permission for ~A"
-                                    normalized-name))
-                  :tool-permissions
-                  (mcp-normalize-tool-permission-alist tool-permissions))))
+                  :enabled-p (if (null enabled-p) t (not (null enabled-p))))))
     (ecase normalized-transport
       (:stdio
        (unless (mcp-server-config-command config)
@@ -370,61 +340,6 @@
     (when save-p
       (save-mcp-server-configurations))
     (mcp-server-config-enabled-p config)))
-
-(defun mcp-server-tool-permission (server-name tool-name)
-  "Return the persisted permission override for TOOL-NAME on SERVER-NAME."
-  (let ((config (find-mcp-server-config server-name)))
-    (and config
-         (cdr (assoc (or (mcp-trim tool-name) "")
-                     (mcp-server-config-tool-permissions config)
-                     :test #'string=)))))
-
-(defun set-mcp-server-default-permission (server-name permission
-                                          &key (save-p t))
-  "Set SERVER-NAME's default tool permission override."
-  (let ((config (or (find-mcp-server-config server-name)
-                    (error "Unknown MCP server: ~A" server-name))))
-    (setf (mcp-server-config-default-tool-permission config)
-          (normalize-tool-permission
-           permission
-           :allow-inherit-p t
-           :context (format nil "MCP default permission for ~A"
-                            (mcp-server-config-name config))))
-    (when save-p
-      (save-mcp-server-configurations))
-    (mcp-server-config-default-tool-permission config)))
-
-(defun set-mcp-server-tool-permission (server-name tool-name permission
-                                       &key (save-p t))
-  "Set TOOL-NAME's default permission override on SERVER-NAME."
-  (let* ((config (or (find-mcp-server-config server-name)
-                     (error "Unknown MCP server: ~A" server-name)))
-         (normalized-tool (or (mcp-trim tool-name)
-                              (error "MCP tool name must be non-empty.")))
-         (normalized-permission
-           (normalize-tool-permission
-            permission
-            :allow-inherit-p t
-            :context (format nil "MCP tool permission for ~A/~A"
-                             (mcp-server-config-name config)
-                             normalized-tool))))
-    (setf (mcp-server-config-tool-permissions config)
-          (cons (cons normalized-tool normalized-permission)
-                (remove normalized-tool
-                        (mcp-server-config-tool-permissions config)
-                        :key #'car
-                        :test #'string=)))
-    (when save-p
-      (save-mcp-server-configurations))
-    normalized-permission))
-
-(defun mcp-server-effective-tool-permission (server-name tool-name)
-  "Return the effective bridge-level default permission for TOOL-NAME."
-  (let ((config (or (find-mcp-server-config server-name)
-                    (error "Unknown MCP server: ~A" server-name))))
-    (or (mcp-server-tool-permission server-name tool-name)
-        (mcp-server-config-default-tool-permission config)
-        :agent-with-permission)))
 
 (defun mcp-request-working-directory (&optional designator)
   "Return the working directory used for MCP operations."
@@ -595,8 +510,7 @@
   "Return TOOL as an MCP-EXTERNAL-TOOL record."
   (let* ((tool-name (or (mcp-trim (mcp-json-value tool :name "name"))
                         (error "MCP tool from ~A is missing :name." server-name)))
-         (provider-name (mcp-provider-tool-name server-name tool-name))
-         (permission (mcp-server-effective-tool-permission server-name tool-name)))
+         (provider-name (mcp-provider-tool-name server-name tool-name)))
     (make-mcp-external-tool
      :server-name (mcp-normalize-server-name server-name)
      :tool-name tool-name
@@ -604,8 +518,7 @@
      :description (or (mcp-trim (mcp-json-value tool :description "description"))
                       (format nil "External MCP tool ~A from ~A."
                               tool-name server-name))
-     :input-schema (mcp-tool-input-schema tool)
-     :permission permission)))
+     :input-schema (mcp-tool-input-schema tool))))
 
 (defun mcp-list-server-tools (server-name &key working-directory)
   "Return discovered external tools for SERVER-NAME."
@@ -658,28 +571,27 @@
   "Return raw tool-definition entries owned by PACKAGE-NAME."
   (let ((normalized (manifest-package-name package-name))
         (entries nil))
-    (maphash (lambda (name definition)
-               (when (string= normalized (or (tool-definition-package definition) ""))
-                 (push (cons name definition) entries)))
-             *tool-table*)
+    (dolist (entry (registered-tool-definitions-snapshot))
+      (when (string= normalized
+                     (or (tool-definition-package (cdr entry)) ""))
+        (push entry entries)))
     (sort entries #'string< :key #'car)))
 
 (defun remove-registered-tool-definitions-for-package (package-name)
   "Remove raw tool-definition entries owned by PACKAGE-NAME."
-  (dolist (entry (registered-tool-definitions-for-package package-name))
-    (remhash (car entry) *tool-table*)))
+  (remove-registered-tools
+   (mapcar #'car (registered-tool-definitions-for-package package-name))))
 
 (defun clear-mcp-external-tool-registrations ()
   "Remove all currently mapped external MCP tools."
-  (maphash (lambda (provider-name tool)
-             (declare (ignore tool))
-             (remhash provider-name *tool-table*)
-             (setf *approval-policy-network-dependent-tools*
-                   (remove provider-name
-                           *approval-policy-network-dependent-tools*
-                           :test #'string=)))
-           *mcp-external-tool-table*)
-  (clrhash *mcp-external-tool-table*)
+  (call-with-mcp-tool-registry-lock
+   (lambda ()
+     (maphash
+     (lambda (provider-name tool)
+        (declare (ignore tool))
+        (remhash provider-name *tool-table*))
+      *mcp-external-tool-table*)
+     (clrhash *mcp-external-tool-table*)))
   t)
 
 (defun register-mcp-external-tool (tool)
@@ -689,7 +601,6 @@
      provider-name
      (mcp-external-tool-description tool)
      (mcp-external-tool-input-schema tool)
-     (or (mcp-external-tool-permission tool) :agent-with-permission)
      (lambda (args)
        (mcp-call-external-tool
         (mcp-external-tool-server-name tool)
@@ -697,9 +608,9 @@
         (tool-args-alist args)
         :working-directory *current-tool-buffer*))
      :package "mcp-bridge")
-    (setf (gethash provider-name *mcp-external-tool-table*) tool)
-    (pushnew provider-name *approval-policy-network-dependent-tools*
-             :test #'string=)
+    (call-with-mcp-tool-registry-lock
+     (lambda ()
+       (setf (gethash provider-name *mcp-external-tool-table*) tool)))
     tool))
 
 (defun refresh-mcp-tool-registrations (&key buffer)
@@ -734,19 +645,12 @@
   (list :server (mcp-external-tool-server-name tool)
         :tool-name (mcp-external-tool-tool-name tool)
         :provider-name (mcp-external-tool-provider-name tool)
-        :description (mcp-external-tool-description tool)
-        :permission (and (mcp-external-tool-permission tool)
-                         (string-downcase
-                          (symbol-name (mcp-external-tool-permission tool))))))
+        :description (mcp-external-tool-description tool)))
 
 (defun list-mcp-external-tools ()
   "Return mapped external MCP tools sorted by provider name."
-  (let ((tools nil))
-    (maphash (lambda (_name tool)
-               (declare (ignore _name))
-               (push tool tools))
-             *mcp-external-tool-table*)
-    (sort tools #'string< :key #'mcp-external-tool-provider-name)))
+  (sort (mapcar #'cdr (mcp-external-tool-table-snapshot))
+        #'string< :key #'mcp-external-tool-provider-name))
 
 (defun mcp-list-server-resources (server-name &key working-directory)
   "Return resources advertised by SERVER-NAME."
@@ -840,24 +744,12 @@
                          :tool-count 0
                          :error (format nil "~A" condition))))))))))
 
-(defun mcp-tool-permission-lines (config)
-  "Return sorted display lines for CONFIG's tool permission overrides."
-  (let ((lines nil))
-    (dolist (entry (copy-list (mcp-server-config-tool-permissions config)))
-      (push (format nil "~A -> ~A"
-                    (car entry)
-                    (guard-policy-value-string (cdr entry)))
-            lines))
-    (sort lines #'string<)))
-
 (defun mcp-server-status-entry (config)
   "Return CONFIG as a summary plist for user-facing status views."
   (list :name (mcp-server-config-name config)
         :transport (mcp-server-config-transport config)
         :enabled-p (mcp-server-config-enabled-p config)
         :description (or (mcp-server-config-description config) "")
-        :default-permission (mcp-server-config-default-tool-permission config)
-        :tool-permission-count (length (mcp-server-config-tool-permissions config))
         :mapped-tool-count
         (count (mcp-server-config-name config)
                (list-mcp-external-tools)
@@ -877,12 +769,8 @@
                 (getf status :transport))
         (when (plusp (length (getf status :description)))
           (format stream "  ~A~%" (getf status :description)))
-        (format stream "  default permission: ~A~%"
-                (guard-policy-value-string (getf status :default-permission)))
         (format stream "  mapped tools: ~D~%"
                 (getf status :mapped-tool-count))
-        (format stream "  tool overrides: ~D~%"
-                (getf status :tool-permission-count))
         (case (getf status :transport)
           (:stdio
            (format stream "  command: ~A~@[ ~{~A~^ ~}~]~%"
@@ -913,9 +801,6 @@
                                          "yes"
                                          "no"))
       (format stream "Transport: ~(~A~)~%" (mcp-server-config-transport config))
-      (format stream "Default permission: ~A~%"
-              (guard-policy-value-string
-               (mcp-server-config-default-tool-permission config)))
       (when (plusp (length (or (mcp-server-config-description config) "")))
         (format stream "~%~A~%" (mcp-server-config-description config)))
       (case (mcp-server-config-transport config)
@@ -926,20 +811,12 @@
         (:http
          (format stream "~%URL: ~A~%"
                  (or (mcp-server-config-url config) ""))))
-      (let ((tool-lines (mcp-tool-permission-lines config)))
-        (format stream "~%Permission overrides:~%")
-        (if tool-lines
-            (dolist (line tool-lines)
-              (format stream "  ~A~%" line))
-            (format stream "  (none)~%")))
       (format stream "~%Discovered tools:~%")
       (if tools
           (dolist (tool tools)
-            (format stream "  - ~A -> ~A (~A)~%"
+            (format stream "  - ~A -> ~A~%"
                     (mcp-external-tool-tool-name tool)
-                    (mcp-external-tool-provider-name tool)
-                    (guard-policy-value-string
-                     (mcp-external-tool-permission tool))))
+                    (mcp-external-tool-provider-name tool)))
           (format stream "  (none or unavailable)~%"))
       (format stream "~%Resources:~%")
       (if resources

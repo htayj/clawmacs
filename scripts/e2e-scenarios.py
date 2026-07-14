@@ -316,136 +316,6 @@ def test_14_point_face(s):
     s.press("Ctrl+k")
 
 
-def test_15_permission_approve(s):
-    """Test: Agent tool needing permission shows approval prompt, user approves."""
-    # Switch back to main buffer if needed, clear input
-    for _ in range(20):
-        s.press("Ctrl+k")
-    for _ in range(20):
-        s.press("Backspace")
-    # Ask agent to write a file (file_write requires :agent-with-permission)
-    s.type_text("Please write the text 'hello test' to a file called /tmp/clawmacs-e2e-test.txt")
-    s.press("Enter")
-    time.sleep(8)  # Wait for LLM to respond with tool_use
-
-    # Check for approval prompt
-    screen = s.text()
-    s.screenshot("15-permission-prompt")
-
-    # The screen should show PERMISSION REQUIRED or the approval options
-    has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
-                    or "APPROVAL" in screen or "approve" in screen.lower())
-    if has_approval:
-        # Approve it
-        s.press("a")
-        time.sleep(3)
-        screen = s.text()
-        s.screenshot("15-permission-approved")
-        # After approval, tool should have executed
-        assert_contains(screen, ">", "agent continued after approval")
-    else:
-        # Agent might have answered without using the tool, or tool was auto-approved
-        # Just verify it responded
-        assert_contains(screen, ">", "agent responded")
-        s.screenshot("15-permission-approved")
-
-
-def test_16_permission_deny(s):
-    """Test: Agent tool needing permission shows approval prompt, user denies."""
-    for _ in range(20):
-        s.press("Ctrl+k")
-    for _ in range(20):
-        s.press("Backspace")
-    s.type_text("Run the command: echo 'deny test'")
-    s.press("Enter")
-    time.sleep(8)
-
-    screen = s.text()
-    s.screenshot("16-permission-deny-prompt")
-
-    has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
-                    or "APPROVAL" in screen or "approve" in screen.lower())
-    if has_approval:
-        # Deny it
-        s.press("d")
-        time.sleep(3)
-        screen = s.text()
-        s.screenshot("16-permission-denied")
-        assert_contains(screen, "DENIED", "denial shown in chat")
-    else:
-        s.screenshot("16-permission-denied")
-
-
-def test_17_permission_deny_with_message(s):
-    """Test: User denies with a message to the agent."""
-    for _ in range(20):
-        s.press("Ctrl+k")
-    for _ in range(20):
-        s.press("Backspace")
-    s.type_text("Execute the command: echo 'message test'")
-    s.press("Enter")
-    time.sleep(8)
-
-    screen = s.text()
-    s.screenshot("17-permission-message-prompt")
-
-    has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
-                    or "APPROVAL" in screen or "approve" in screen.lower())
-    if has_approval:
-        # Press m for deny-with-message
-        s.press("m")
-        time.sleep(0.5)
-        s.type_text("Please do not run commands without explaining why first")
-        s.press("Enter")
-        time.sleep(5)
-        screen = s.text()
-        s.screenshot("17-permission-deny-message")
-        assert_contains(screen, ">", "agent responded to denial message")
-    else:
-        s.screenshot("17-permission-deny-message")
-
-
-def test_18_file_write_diff(s):
-    """Test: file_write approval prompt shows a diff against existing file."""
-    # First, create a file with known content via shell
-    for _ in range(20):
-        s.press("Ctrl+k")
-    for _ in range(20):
-        s.press("Backspace")
-    s.type_text("Please use the lisp_eval tool to evaluate this: (with-open-file (s (merge-pathnames \"e2e-diff-test.txt\" (truename \".\")) :direction :output :if-exists :supersede :if-does-not-exist :create) (write-string \"line one\" s) (terpri s) (write-string \"line two\" s) (terpri s) (write-string \"line three\" s))")
-    s.press("Enter")
-    time.sleep(8)
-
-    # Now ask the agent to overwrite it with different content
-    for _ in range(20):
-        s.press("Ctrl+k")
-    for _ in range(20):
-        s.press("Backspace")
-    s.type_text("Please write this exact content to e2e-diff-test.txt: line one\nline two modified\nline four")
-    s.press("Enter")
-    time.sleep(8)
-
-    screen = s.text()
-    s.screenshot("18-file-write-diff-prompt")
-
-    has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
-                    or "APPROVAL" in screen)
-    if has_approval:
-        # Check that diff-like content is visible (+ or - prefixed lines)
-        has_diff = ("+" in screen or "---" in screen or "new file" in screen)
-        if has_diff:
-            s.screenshot("18-file-write-diff-visible")
-        # Deny it (we just wanted to see the diff)
-        s.press("d")
-        time.sleep(3)
-        screen = s.text()
-        s.screenshot("18-file-write-diff-denied")
-        assert_contains(screen, ">", "agent responded after denial")
-    else:
-        # Agent may not have used file_write
-        s.screenshot("18-file-write-diff-no-approval")
-
-
 def test_19_file_write_append(s):
     """Test: file_write appends to existing files, never overwrites."""
     for _ in range(20):
@@ -453,42 +323,13 @@ def test_19_file_write_append(s):
     for _ in range(20):
         s.press("Backspace")
     # Use lisp_eval to verify append behavior directly
-    s.type_text("Use the lisp_eval tool to: (progn (clawmacs::init-tools) (setf clawmacs::*sandbox-root* (truename \".\")) (clawmacs::execute-tool \"file_write\" (list (cons :path \"e2e-append-test.txt\") (cons :content \"first\"))) (clawmacs::execute-tool \"file_write\" (list (cons :path \"e2e-append-test.txt\") (cons :content \" second\"))) (uiop:read-file-string (merge-pathnames \"e2e-append-test.txt\" (truename \".\"))))")
+    s.type_text("Use the lisp_eval tool to: (progn (clawmacs::init-tools) (let ((clawmacs::*tool-working-directory* (truename \".\"))) (clawmacs::execute-tool \"file_write\" (list (cons :path \"e2e-append-test.txt\") (cons :content \"first\"))) (clawmacs::execute-tool \"file_write\" (list (cons :path \"e2e-append-test.txt\") (cons :content \" second\")))) (uiop:read-file-string (merge-pathnames \"e2e-append-test.txt\" (truename \".\"))))")
     s.press("Enter")
     time.sleep(8)
     screen = s.text()
     s.screenshot("19-file-write-append")
     # The eval result should show "first second" (appended, not overwritten)
     assert_contains(screen, "first second", "file_write appended content")
-
-
-def test_20_file_edit_search_replace(s):
-    """Test: file_edit does search-and-replace with approval prompt showing diff."""
-    for _ in range(20):
-        s.press("Ctrl+k")
-    for _ in range(20):
-        s.press("Backspace")
-    # Ask agent to edit the file we just created
-    s.type_text("Edit the file e2e-append-test.txt: replace 'first' with 'FIRST'")
-    s.press("Enter")
-    time.sleep(8)
-    screen = s.text()
-    s.screenshot("20-file-edit-prompt")
-
-    has_approval = ("PERMISSION" in screen or "[a]pprove" in screen
-                    or "APPROVAL" in screen)
-    if has_approval:
-        # Should show diff with -first / +FIRST
-        has_diff = ("-" in screen or "+" in screen or "old" in screen)
-        s.screenshot("20-file-edit-diff")
-        # Approve the edit
-        s.press("a")
-        time.sleep(5)
-        screen = s.text()
-        s.screenshot("20-file-edit-approved")
-        assert_contains(screen, ">", "agent responded after edit approval")
-    else:
-        s.screenshot("20-file-edit-no-approval")
 
 
 def test_21_modeline_content(s):
@@ -1151,7 +992,7 @@ def test_52_skill_completion(s):
 # ==========================================================================
 
 def test_48_tool_lisp_eval(s):
-    """Test: Agent uses lisp_eval tool (auto-approved) and returns result."""
+    """Test: Agent uses lisp_eval and returns the result."""
     set_input(s, "Use the lisp_eval tool to evaluate (+ 40 2)")
     s.press("Enter")
     screen = wait_for_text(s, "42", timeout=30)

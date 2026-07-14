@@ -39,86 +39,316 @@
   "List of think-level entries for the selector, each a plist
 (:provider :keyword :model \"string\" :level (or null string) :active-p bool).")
 
-(defvar *session-tree-selector-active* nil
-  "When non-nil, the session tree selector overlay is displayed.")
+(defclass chat-interaction-state ()
+  ((generation :initform 0
+               :accessor chat-interaction-state-generation)
+   (minibuffer-active-p :initform nil
+                        :accessor interaction-minibuffer-active-p)
+   (minibuffer-mode :initform :completion
+                    :accessor interaction-minibuffer-mode)
+   (minibuffer-prompt :initform ""
+                      :accessor interaction-minibuffer-prompt)
+   (minibuffer-input :initform ""
+                     :accessor interaction-minibuffer-input)
+   (minibuffer-point :initform 0
+                     :accessor interaction-minibuffer-point)
+   (minibuffer-items :initform nil
+                     :accessor interaction-minibuffer-items)
+   (minibuffer-filtered-items :initform nil
+                              :accessor interaction-minibuffer-filtered-items)
+   (minibuffer-match-positions :initform nil
+                               :accessor interaction-minibuffer-match-positions)
+   (minibuffer-selected-index :initform 0
+                              :accessor interaction-minibuffer-selected-index)
+   (minibuffer-scroll-offset :initform 0
+                             :accessor interaction-minibuffer-scroll-offset)
+   (minibuffer-callback :initform nil
+                        :accessor interaction-minibuffer-callback)
+   (session-tree-active-p :initform nil
+                          :accessor interaction-session-tree-active-p)
+   (session-tree-buffer :initform nil
+                        :accessor interaction-session-tree-buffer)
+   (session-tree-items :initform nil
+                       :accessor interaction-session-tree-items)
+   (session-tree-filtered-items
+    :initform nil
+    :accessor interaction-session-tree-filtered-items)
+   (session-tree-index :initform 0
+                       :accessor interaction-session-tree-index)
+   (session-tree-scroll :initform 0
+                        :accessor interaction-session-tree-scroll)
+   (session-tree-search :initform ""
+                        :accessor interaction-session-tree-search)
+   (session-tree-filter-mode :initform :default
+                             :accessor interaction-session-tree-filter-mode)
+   (session-tree-folded-ids :initform nil
+                            :accessor interaction-session-tree-folded-ids)
+   (session-tree-callback :initform nil
+                          :accessor interaction-session-tree-callback)
+   (session-tree-label-callback
+    :initform nil
+    :accessor interaction-session-tree-label-callback)
+   (slash-completion-active-p
+    :initform nil
+    :accessor interaction-slash-completion-active-p)
+   (slash-completion-buffer :initform nil
+                            :accessor interaction-slash-completion-buffer)
+   (slash-completion-query :initform ""
+                           :accessor interaction-slash-completion-query)
+   (slash-completion-token-start
+    :initform 0
+    :accessor interaction-slash-completion-token-start)
+   (slash-completion-token-end
+    :initform 0
+    :accessor interaction-slash-completion-token-end)
+   (slash-completion-token-text
+    :initform nil
+    :accessor interaction-slash-completion-token-text)
+   (slash-completion-dismissed-token
+    :initform nil
+    :accessor interaction-slash-completion-dismissed-token)
+   (slash-completion-items :initform nil
+                           :accessor interaction-slash-completion-items)
+   (slash-completion-filtered-items
+    :initform nil
+    :accessor interaction-slash-completion-filtered-items)
+   (slash-completion-match-positions
+    :initform nil
+    :accessor interaction-slash-completion-match-positions)
+   (slash-completion-selected-index
+    :initform 0
+    :accessor interaction-slash-completion-selected-index)
+   (slash-completion-scroll-offset
+    :initform 0
+    :accessor interaction-slash-completion-scroll-offset)
+   (skill-completion-active-p
+    :initform nil
+    :accessor interaction-skill-completion-active-p)
+   (skill-completion-buffer :initform nil
+                            :accessor interaction-skill-completion-buffer)
+   (skill-completion-query :initform ""
+                           :accessor interaction-skill-completion-query)
+   (skill-completion-token-start
+    :initform 0
+    :accessor interaction-skill-completion-token-start)
+   (skill-completion-token-end
+    :initform 0
+    :accessor interaction-skill-completion-token-end)
+   (skill-completion-token-text
+    :initform nil
+    :accessor interaction-skill-completion-token-text)
+   (skill-completion-dismissed-token
+    :initform nil
+    :accessor interaction-skill-completion-dismissed-token)
+   (skill-completion-items :initform nil
+                           :accessor interaction-skill-completion-items)
+   (skill-completion-filtered-items
+    :initform nil
+    :accessor interaction-skill-completion-filtered-items)
+   (skill-completion-match-positions
+    :initform nil
+    :accessor interaction-skill-completion-match-positions)
+   (skill-completion-selected-index
+    :initform 0
+    :accessor interaction-skill-completion-selected-index)
+   (skill-completion-scroll-offset
+    :initform 0
+    :accessor interaction-skill-completion-scroll-offset)
+   (meta-pending-p :initform nil
+                   :accessor interaction-meta-pending-p)
+   (alt-pending-p :initform nil
+                  :accessor interaction-alt-pending-p)
+   (control-x-pending-p :initform nil
+                        :accessor interaction-control-x-pending-p)
+   (control-c-pending-p :initform nil
+                        :accessor interaction-control-c-pending-p)
+   (control-h-pending-p :initform nil
+                        :accessor interaction-control-h-pending-p))
+  (:documentation
+   "Frame-owned transient keyboard, selector, and completion state."))
 
-(defvar *session-tree-selector-buffer* nil
-  "Buffer whose session tree is currently being selected.")
+(defun make-chat-interaction-state ()
+  "Return a fresh transient interaction state for one application frame."
+  (make-instance 'chat-interaction-state))
 
-(defvar *session-tree-selector-items* nil
-  "All flattened session tree selector items before filtering.")
+(defvar *chat-interaction-state* (make-chat-interaction-state)
+  "Dynamically bound pointer to the current frame's interaction state.")
 
-(defvar *session-tree-selector-filtered-items* nil
-  "Filtered flattened session tree selector items.")
+(defun touch-chat-interaction-state (&optional (state *chat-interaction-state*))
+  "Invalidate semantic candidate presentations retained from STATE."
+  (incf (chat-interaction-state-generation state)))
 
-(defvar *session-tree-selector-index* 0
-  "The currently highlighted index in the session tree selector.")
+(defun clear-chat-interaction-state (&optional (state *chat-interaction-state*))
+  "Clear STATE in place, releasing callbacks and buffer references.
 
-(defvar *session-tree-selector-scroll* 0
-  "Scroll offset for the session tree selector.")
+The object identity remains stable for its owning frame.  Its generation is
+advanced first so every presentation created from the old state is stale."
+  (touch-chat-interaction-state state)
+  (setf (interaction-minibuffer-active-p state) nil
+        (interaction-minibuffer-mode state) :completion
+        (interaction-minibuffer-prompt state) ""
+        (interaction-minibuffer-input state) ""
+        (interaction-minibuffer-point state) 0
+        (interaction-minibuffer-items state) nil
+        (interaction-minibuffer-filtered-items state) nil
+        (interaction-minibuffer-match-positions state) nil
+        (interaction-minibuffer-selected-index state) 0
+        (interaction-minibuffer-scroll-offset state) 0
+        (interaction-minibuffer-callback state) nil
+        (interaction-session-tree-active-p state) nil
+        (interaction-session-tree-buffer state) nil
+        (interaction-session-tree-items state) nil
+        (interaction-session-tree-filtered-items state) nil
+        (interaction-session-tree-index state) 0
+        (interaction-session-tree-scroll state) 0
+        (interaction-session-tree-search state) ""
+        (interaction-session-tree-filter-mode state) :default
+        (interaction-session-tree-folded-ids state) nil
+        (interaction-session-tree-callback state) nil
+        (interaction-session-tree-label-callback state) nil
+        (interaction-slash-completion-active-p state) nil
+        (interaction-slash-completion-buffer state) nil
+        (interaction-slash-completion-query state) ""
+        (interaction-slash-completion-token-start state) 0
+        (interaction-slash-completion-token-end state) 0
+        (interaction-slash-completion-token-text state) nil
+        (interaction-slash-completion-dismissed-token state) nil
+        (interaction-slash-completion-items state) nil
+        (interaction-slash-completion-filtered-items state) nil
+        (interaction-slash-completion-match-positions state) nil
+        (interaction-slash-completion-selected-index state) 0
+        (interaction-slash-completion-scroll-offset state) 0
+        (interaction-skill-completion-active-p state) nil
+        (interaction-skill-completion-buffer state) nil
+        (interaction-skill-completion-query state) ""
+        (interaction-skill-completion-token-start state) 0
+        (interaction-skill-completion-token-end state) 0
+        (interaction-skill-completion-token-text state) nil
+        (interaction-skill-completion-dismissed-token state) nil
+        (interaction-skill-completion-items state) nil
+        (interaction-skill-completion-filtered-items state) nil
+        (interaction-skill-completion-match-positions state) nil
+        (interaction-skill-completion-selected-index state) 0
+        (interaction-skill-completion-scroll-offset state) 0
+        (interaction-meta-pending-p state) nil
+        (interaction-alt-pending-p state) nil
+        (interaction-control-x-pending-p state) nil
+        (interaction-control-c-pending-p state) nil
+        (interaction-control-h-pending-p state) nil)
+  state)
 
-(defvar *session-tree-selector-search* ""
-  "Search text for the session tree selector.")
-
-(defvar *session-tree-selector-filter-mode* :default
-  "Session tree selector filter mode.")
-
-(defvar *session-tree-selector-folded-ids* nil
-  "Entry ids whose descendants are hidden in the session tree selector.")
-
-(defvar *session-tree-selector-callback* nil
-  "Function called with the selected session tree item.")
-
-(defvar *session-tree-selector-label-callback* nil
-  "Function called with a session tree item when the user edits its label.")
-
+;; Source-compatible internal names expand directly to slots on the one
+;; dynamically bound state pointer.  There is no scalar snapshot or copyback:
+;; nested frame/UI calls simply rebind the pointer, as CLIM does for
+;; CLIM:*APPLICATION-FRAME*.
+(define-symbol-macro *minibuffer-active*
+  (interaction-minibuffer-active-p *chat-interaction-state*))
+(define-symbol-macro *minibuffer-mode*
+  (interaction-minibuffer-mode *chat-interaction-state*))
+(define-symbol-macro *minibuffer-prompt*
+  (interaction-minibuffer-prompt *chat-interaction-state*))
+(define-symbol-macro *minibuffer-input*
+  (interaction-minibuffer-input *chat-interaction-state*))
+(define-symbol-macro *minibuffer-point*
+  (interaction-minibuffer-point *chat-interaction-state*))
+(define-symbol-macro *minibuffer-items*
+  (interaction-minibuffer-items *chat-interaction-state*))
+(define-symbol-macro *minibuffer-filtered-items*
+  (interaction-minibuffer-filtered-items *chat-interaction-state*))
+(define-symbol-macro *minibuffer-match-positions*
+  (interaction-minibuffer-match-positions *chat-interaction-state*))
+(define-symbol-macro *minibuffer-selected-index*
+  (interaction-minibuffer-selected-index *chat-interaction-state*))
+(define-symbol-macro *minibuffer-scroll-offset*
+  (interaction-minibuffer-scroll-offset *chat-interaction-state*))
+(define-symbol-macro *minibuffer-callback*
+  (interaction-minibuffer-callback *chat-interaction-state*))
+(define-symbol-macro *session-tree-selector-active*
+  (interaction-session-tree-active-p *chat-interaction-state*))
+(define-symbol-macro *session-tree-selector-buffer*
+  (interaction-session-tree-buffer *chat-interaction-state*))
+(define-symbol-macro *session-tree-selector-items*
+  (interaction-session-tree-items *chat-interaction-state*))
+(define-symbol-macro *session-tree-selector-filtered-items*
+  (interaction-session-tree-filtered-items *chat-interaction-state*))
+(define-symbol-macro *session-tree-selector-index*
+  (interaction-session-tree-index *chat-interaction-state*))
+(define-symbol-macro *session-tree-selector-scroll*
+  (interaction-session-tree-scroll *chat-interaction-state*))
+(define-symbol-macro *session-tree-selector-search*
+  (interaction-session-tree-search *chat-interaction-state*))
+(define-symbol-macro *session-tree-selector-filter-mode*
+  (interaction-session-tree-filter-mode *chat-interaction-state*))
+(define-symbol-macro *session-tree-selector-folded-ids*
+  (interaction-session-tree-folded-ids *chat-interaction-state*))
+(define-symbol-macro *session-tree-selector-callback*
+  (interaction-session-tree-callback *chat-interaction-state*))
+(define-symbol-macro *session-tree-selector-label-callback*
+  (interaction-session-tree-label-callback *chat-interaction-state*))
+(define-symbol-macro *slash-completion-active*
+  (interaction-slash-completion-active-p *chat-interaction-state*))
+(define-symbol-macro *slash-completion-buffer*
+  (interaction-slash-completion-buffer *chat-interaction-state*))
+(define-symbol-macro *slash-completion-query*
+  (interaction-slash-completion-query *chat-interaction-state*))
+(define-symbol-macro *slash-completion-token-start*
+  (interaction-slash-completion-token-start *chat-interaction-state*))
+(define-symbol-macro *slash-completion-token-end*
+  (interaction-slash-completion-token-end *chat-interaction-state*))
+(define-symbol-macro *slash-completion-token-text*
+  (interaction-slash-completion-token-text *chat-interaction-state*))
+(define-symbol-macro *slash-completion-dismissed-token*
+  (interaction-slash-completion-dismissed-token *chat-interaction-state*))
+(define-symbol-macro *slash-completion-items*
+  (interaction-slash-completion-items *chat-interaction-state*))
+(define-symbol-macro *slash-completion-filtered-items*
+  (interaction-slash-completion-filtered-items *chat-interaction-state*))
+(define-symbol-macro *slash-completion-match-positions*
+  (interaction-slash-completion-match-positions *chat-interaction-state*))
+(define-symbol-macro *slash-completion-selected-index*
+  (interaction-slash-completion-selected-index *chat-interaction-state*))
+(define-symbol-macro *slash-completion-scroll-offset*
+  (interaction-slash-completion-scroll-offset *chat-interaction-state*))
+(define-symbol-macro *skill-completion-active*
+  (interaction-skill-completion-active-p *chat-interaction-state*))
+(define-symbol-macro *skill-completion-buffer*
+  (interaction-skill-completion-buffer *chat-interaction-state*))
+(define-symbol-macro *skill-completion-query*
+  (interaction-skill-completion-query *chat-interaction-state*))
+(define-symbol-macro *skill-completion-token-start*
+  (interaction-skill-completion-token-start *chat-interaction-state*))
+(define-symbol-macro *skill-completion-token-end*
+  (interaction-skill-completion-token-end *chat-interaction-state*))
+(define-symbol-macro *skill-completion-token-text*
+  (interaction-skill-completion-token-text *chat-interaction-state*))
+(define-symbol-macro *skill-completion-dismissed-token*
+  (interaction-skill-completion-dismissed-token *chat-interaction-state*))
+(define-symbol-macro *skill-completion-items*
+  (interaction-skill-completion-items *chat-interaction-state*))
+(define-symbol-macro *skill-completion-filtered-items*
+  (interaction-skill-completion-filtered-items *chat-interaction-state*))
+(define-symbol-macro *skill-completion-match-positions*
+  (interaction-skill-completion-match-positions *chat-interaction-state*))
+(define-symbol-macro *skill-completion-selected-index*
+  (interaction-skill-completion-selected-index *chat-interaction-state*))
+(define-symbol-macro *skill-completion-scroll-offset*
+  (interaction-skill-completion-scroll-offset *chat-interaction-state*))
+(define-symbol-macro *meta-pending*
+  (interaction-meta-pending-p *chat-interaction-state*))
+(define-symbol-macro *alt-pending*
+  (interaction-alt-pending-p *chat-interaction-state*))
+(define-symbol-macro *cx-pending*
+  (interaction-control-x-pending-p *chat-interaction-state*))
+(define-symbol-macro *cc-pending*
+  (interaction-control-c-pending-p *chat-interaction-state*))
+(define-symbol-macro *ch-pending*
+  (interaction-control-h-pending-p *chat-interaction-state*))
 ;;; --------------------------------------------------------------------------
 ;;; Minibuffer State
 ;;; --------------------------------------------------------------------------
 
-(defvar *minibuffer-active* nil
-  "When non-nil, the minibuffer is active and the cursor is in it.")
-
-(defvar *minibuffer-mode* :completion
-  "The current minibuffer mode: :COMPLETION or :PROMPT.")
-
-(defvar *minibuffer-prompt* ""
-  "The prompt string displayed in the minibuffer (e.g. \"Select Model\").")
-
-(defvar *minibuffer-input* ""
-  "The current input text in the minibuffer.")
-
-(defvar *minibuffer-point* 0
-  "Cursor position within *minibuffer-input*.")
-
-(defvar *minibuffer-items* nil
-  "Complete list of candidate items for the minibuffer completion.
-Each item is a plist with at least a :display key.")
-
-(defvar *minibuffer-filtered-items* nil
-  "Candidates after fuzzy-filtering by *minibuffer-input*.
-Subset of *minibuffer-items*.")
-
-(defvar *minibuffer-selected-index* 0
-  "Index of the currently selected candidate in *minibuffer-filtered-items*.")
-
-(defvar *minibuffer-callback* nil
-  "Function called with the selected item plist when the user confirms.
-Set to nil when inactive.")
-
 (defvar *minibuffer-max-height* 12
   "Maximum number of rows the minibuffer can expand to (including prompt).")
-
-(defvar *minibuffer-scroll-offset* 0
-  "Index of the first visible candidate in the minibuffer.
-When the selected item moves beyond the visible window, this offset
-is adjusted so that the selection is always visible.")
-
-(defvar *minibuffer-match-positions* nil
-  "List of match-position lists parallel to *minibuffer-filtered-items*.
-Each element is a sorted list of character indices (into the corresponding
-item's display string) that were matched by the current query.
-NIL entries mean no query is active or no positions were recorded.")
 
 (defvar *model-selection-history* nil
   "List of recently selected model display strings (most recent first).
@@ -172,6 +402,7 @@ and a CALLBACK function to call on confirmation."
 
 (defun minibuffer-deactivate ()
   "Deactivate the minibuffer, clearing all state."
+  (touch-chat-interaction-state)
   (setf *minibuffer-active* nil
         *minibuffer-mode* :completion
         *minibuffer-prompt* ""
@@ -231,7 +462,8 @@ resets the scroll offset."
                     (1- (max 1 (length *minibuffer-filtered-items*))))))
   ;; Reset scroll and ensure the selection is visible.
   (setf *minibuffer-scroll-offset* 0)
-  (minibuffer-ensure-visible))
+  (minibuffer-ensure-visible)
+  (touch-chat-interaction-state))
 
 (defun minibuffer-insert-char (char)
   "Insert CHAR at the current point in the minibuffer input and re-filter."
@@ -386,7 +618,8 @@ is within the visible window of candidates."
     (when (plusp count)
       (setf *minibuffer-selected-index*
             (mod (1+ *minibuffer-selected-index*) count))
-      (minibuffer-ensure-visible))))
+      (minibuffer-ensure-visible)
+      (touch-chat-interaction-state))))
 
 (defun minibuffer-prev-item ()
   "Move the selection to the previous candidate in the filtered list, wrapping."
@@ -394,7 +627,8 @@ is within the visible window of candidates."
     (when (plusp count)
       (setf *minibuffer-selected-index*
             (mod (1- *minibuffer-selected-index*) count))
-      (minibuffer-ensure-visible))))
+      (minibuffer-ensure-visible)
+      (touch-chat-interaction-state))))
 
 (defun minibuffer-confirm ()
   "Confirm the current selection, invoke the callback, and deactivate.
@@ -686,7 +920,49 @@ are sorted with the current buffer first, then alphabetically."
         (max 0 (min *session-tree-selector-index*
                     (1- (max 1
                              (length *session-tree-selector-filtered-items*))))))
+  (session-tree-selector-ensure-visible)
+  (touch-chat-interaction-state)
   *session-tree-selector-filtered-items*)
+
+(defun session-tree-selector-visible-item-count ()
+  "Return the number of session-tree candidates visible in the minibuffer pane."
+  (max 0
+       (1- (min *minibuffer-max-height*
+                (1+ (max 1
+                         (length *session-tree-selector-filtered-items*)))))))
+
+(defun session-tree-selector-ensure-visible ()
+  "Keep the selected session-tree item in its visible row window."
+  (let ((visible (session-tree-selector-visible-item-count)))
+    (when (plusp visible)
+      (when (< *session-tree-selector-index* *session-tree-selector-scroll*)
+        (setf *session-tree-selector-scroll* *session-tree-selector-index*))
+      (when (>= *session-tree-selector-index*
+                (+ *session-tree-selector-scroll* visible))
+        (setf *session-tree-selector-scroll*
+              (1+ (- *session-tree-selector-index* visible)))))))
+
+(defun session-tree-selector-visible-candidate-rows ()
+  "Return visible session-tree rows for the declared CLIM minibuffer pane."
+  (when *session-tree-selector-active*
+    (let* ((visible (session-tree-selector-visible-item-count))
+           (count (length *session-tree-selector-filtered-items*))
+           (start (max 0 (min *session-tree-selector-scroll* count)))
+           (end (min count (+ start visible))))
+      (loop :for item :in (subseq *session-tree-selector-filtered-items*
+                                  start end)
+            :for index :from start
+            :collect (list :index index
+                           :item item
+                           :display
+                           (format nil "~A~A~@[ [~A]~]  ~A: ~A"
+                                   (getf item :tree-prefix "")
+                                   (if (getf item :active-p) "*" " ")
+                                   (getf item :label)
+                                   (getf item :kind-label "entry")
+                                   (getf item :content ""))
+                           :selected-p
+                           (= index *session-tree-selector-index*))))))
 
 (defun session-tree-selector-current-item ()
   "Return the currently selected tree item, if any."
@@ -728,6 +1004,7 @@ are sorted with the current buffer first, then alphabetically."
 
 (defun session-tree-selector-deactivate ()
   "Deactivate the session tree selector."
+  (touch-chat-interaction-state)
   (setf *session-tree-selector-active* nil
         *session-tree-selector-buffer* nil
         *session-tree-selector-items* nil

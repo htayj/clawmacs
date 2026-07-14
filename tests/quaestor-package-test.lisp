@@ -27,7 +27,6 @@
 (defmacro with-quaestor-package-state (&body body)
   "Run BODY with isolated package, tool, command, keymap, and advice state."
   `(let* ((root (temp-package-test-directory "quaestor-config"))
-          (approval-path (temp-approval-policy-path))
           (clawmacs::*package-configuration-path*
            (merge-pathnames "packages.json" root))
           (clawmacs::*package-configuration* nil)
@@ -54,10 +53,6 @@
           (clawmacs::*scratch-keymap* nil)
           (clawmacs::*file-keymap* nil)
           (clawmacs::*after-buffer-display-change-hook* nil)
-          (clawmacs::*approval-policy-path* approval-path)
-          (clawmacs::*approval-policy-registry* nil)
-          (clawmacs::*approval-policy-project-registry-cache*
-           (make-hash-table :test #'equal))
           (clawmacs::*advice-table* (make-hash-table :test #'eq))
           (*quaestor-test-resume-record* nil))
      (unwind-protect
@@ -70,8 +65,8 @@
          (clawmacs:remove-advice 'clawmacs::handle-key-event
                                  'clawmacs::quaestor-handle-key-event))
        (ignore-errors
-         (clawmacs:remove-advice 'clawmacs::advance-tool-approval
-                                 'clawmacs::quaestor-advance-tool-approval))
+         (clawmacs:remove-advice 'clawmacs::advance-tool-calls
+                                 'clawmacs::quaestor-advance-tool-calls))
        (ignore-errors
          (clawmacs:remove-advice 'clawmacs::execute-prompt-tool-call
                                  'clawmacs::quaestor-prompt-tool-call))
@@ -117,7 +112,6 @@
            (prompt (render-package-prompt-sections))
            (commands (list-available-commands)))
       (is (member "request_user_input" tool-names :test #'string=))
-      (is-false (clawmacs::tool-requires-permission-p "request_user_input"))
       (let ((buf (make-quaestor-test-buffer "quaestor-provider-check")))
         (is (member 'clawmacs::quaestor-input-presentation-entries
                     (clawmacs::buffer-input-presentation-functions buf)
@@ -211,7 +205,7 @@
                          "call-1"
                          "request_user_input"
                          (quaestor-test-request-args))))
-          (clawmacs::begin-tool-approval buf (list tool-use))
+          (clawmacs::begin-tool-calls buf (list tool-use))
           (is (eq :question (buffer-status buf)))
           (is (not (null (clawmacs::buffer-user-input-pending buf))))
           (is (= 1 (length (buffer-pending-tool-calls buf))))
@@ -250,7 +244,7 @@
            (events nil))
       (multiple-value-bind (result event)
           (clawmacs::execute-prompt-tool-call
-           buf tool-use :agent t
+           buf tool-use :agent
            :event-callback (lambda (payload)
                              (push payload events)))
         (let ((events (nreverse events)))

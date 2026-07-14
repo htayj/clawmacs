@@ -169,11 +169,11 @@
     ;; (LF, ASCII 10) for Enter, so bind both.
     (keymap-bind km '(:ctrl-c #\Return) 'minibuffer-select-model-command)  ; C-c C-m
     (keymap-bind km '(:ctrl-c #\Newline) 'minibuffer-select-model-command) ; C-c C-m (LF variant)
-    ;; C-c M (capital M) = old overlay model selector
+    ;; C-c M (capital M) = compatibility alias for the visible minibuffer selector
     (keymap-bind km '(:ctrl-c #\M) 'select-model-command)
     ;; C-c C-r = minibuffer think selector
     (keymap-bind km (list :ctrl-c (code-char 18)) 'minibuffer-select-think-level-command)
-    ;; C-c R (capital R) = old overlay think selector
+    ;; C-c R (capital R) = compatibility alias for the visible minibuffer selector
     (keymap-bind km '(:ctrl-c #\R) 'select-think-level-command)
     ;; C-c C-d = toggle API debug mode (echo requests/responses in chat)
     ;; C-d = ASCII 4 = #\Eot (end of transmission)

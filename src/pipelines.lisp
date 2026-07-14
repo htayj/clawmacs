@@ -20,7 +20,6 @@
   package-names
   skill-names
   max-tool-iterations
-  auto-approve-tools-p
   output-schema
   output-parser
   runner)
@@ -33,7 +32,7 @@
   entry-stage
   max-steps
   max-tool-iterations
-  auto-approve-tools-p)
+  package)
 
 (defstruct pipeline-context
   "Mutable context accumulated while a pipeline is running."
@@ -65,14 +64,46 @@
 (defvar *pipeline-definition-registry* (make-hash-table :test #'equal)
   "Programmatic deterministic pipeline definitions keyed by normalized name.")
 
+(defvar *process-pipeline-definition-registry* *pipeline-definition-registry*
+  "Process-global pipeline definition table, distinct from test bindings.")
+
 (defstruct pipeline-test-profile
   "A named deterministic test profile runnable from a pipeline stage."
   name
   description
-  command)
+  command
+  package)
 
 (defvar *pipeline-test-profile-registry* (make-hash-table :test #'equal)
   "Deterministic pipeline test profiles keyed by normalized name.")
+
+(defvar *process-pipeline-test-profile-registry* *pipeline-test-profile-registry*
+  "Process-global pipeline profile table, distinct from test bindings.")
+
+(defvar *pipeline-registry-lock*
+  (bt:make-lock "clawmacs pipeline registry")
+  "Lock guarding the process-global pipeline definition and profile tables.")
+
+(defun call-with-pipeline-registry-lock (function &rest tables)
+  "Call FUNCTION under the process lock when TABLES include a global registry."
+  (if (some (lambda (table)
+              (or (eq table *process-pipeline-definition-registry*)
+                  (eq table *process-pipeline-test-profile-registry*)))
+            tables)
+      (bt:with-lock-held (*pipeline-registry-lock*)
+        (funcall function))
+      (funcall function)))
+
+(defun pipeline-registry-snapshot (table)
+  "Return a stable alist snapshot of pipeline registry TABLE."
+  (call-with-pipeline-registry-lock
+   (lambda ()
+     (let ((entries nil))
+       (maphash (lambda (name value)
+                  (push (cons name value) entries))
+                table)
+       entries))
+   table))
 
 ;;; --------------------------------------------------------------------------
 ;;; Deterministic Pipelines
@@ -170,10 +201,8 @@ NIL means no explicit skill injection list."
           (pipeline-stage-list-spec-value
            (or (getf plist :skill-names)
                (getf plist :skills))
-           #'normalize-pipeline-skill-name-list)
+          #'normalize-pipeline-skill-name-list)
           :max-tool-iterations (getf plist :max-tool-iterations)
-          :auto-approve-tools-p
-          (not (null (getf plist :auto-approve-tools-p)))
           :output-schema (or (getf plist :output-schema)
                              (getf plist :output_schema)
                              (getf plist :schema))
@@ -206,7 +235,7 @@ NIL means no explicit skill injection list."
 
 (defun register-pipeline-definition
     (name &key description stages entry-stage (max-steps 20)
-            max-tool-iterations auto-approve-tools-p)
+            max-tool-iterations)
   "Register a deterministic agent pipeline.
 STAGES is a list of stage plists. Each stage accepts :NAME, :AGENT,
 :PROMPT, :NEXT, routing overrides, :TOOL-NAMES, :PACKAGES, and
@@ -233,9 +262,14 @@ deterministic behavior."
              :entry-stage entry
              :max-steps max-steps
              :max-tool-iterations max-tool-iterations
-             :auto-approve-tools-p (not (null auto-approve-tools-p)))))
-      (setf (gethash normalized-name *pipeline-definition-registry*)
-            definition)
+             :package
+             (and *current-clawmacs-package*
+                  (package-identifier-string *current-clawmacs-package*)))))
+      (call-with-pipeline-registry-lock
+       (lambda ()
+         (setf (gethash normalized-name *pipeline-definition-registry*)
+               definition))
+       *pipeline-definition-registry*)
       definition)))
 
 (defun define-pipeline (name &rest options)
@@ -252,28 +286,47 @@ deterministic behavior."
 (defun find-pipeline-definition (name)
   "Return the registered pipeline named NAME, or NIL."
   (when name
-    (gethash (normalize-pipeline-name name)
-             *pipeline-definition-registry*)))
+    (call-with-pipeline-registry-lock
+     (lambda ()
+       (gethash (normalize-pipeline-name name)
+                *pipeline-definition-registry*))
+     *pipeline-definition-registry*)))
 
 (defun list-pipeline-definitions ()
   "Return registered pipeline definitions sorted by name."
-  (let ((definitions nil))
-    (maphash (lambda (_name definition)
-               (declare (ignore _name))
-               (push definition definitions))
-             *pipeline-definition-registry*)
+  (let ((definitions
+          (mapcar #'cdr
+                  (pipeline-registry-snapshot
+                   *pipeline-definition-registry*))))
     (sort definitions #'string< :key #'pipeline-definition-name)))
+
+(defun package-owned-pipeline-definitions (package-name)
+  "Return pipeline definitions currently registered by PACKAGE-NAME."
+  (let ((owner (package-identifier-string package-name)))
+    (remove-if-not
+     (lambda (definition)
+       (string= owner (or (pipeline-definition-package definition) "")))
+     (list-pipeline-definitions))))
 
 (defun register-pipeline-test-profile (name &key description command)
   "Register a deterministic test profile runnable from a pipeline stage."
   (let ((normalized-name (normalize-pipeline-test-profile-name name)))
     (unless command
       (error "Pipeline test profile ~A requires :command." normalized-name))
-    (setf (gethash normalized-name *pipeline-test-profile-registry*)
-          (make-pipeline-test-profile
-           :name normalized-name
-           :description (or description "")
-           :command command))))
+    (let ((profile
+            (make-pipeline-test-profile
+             :name normalized-name
+             :description (or description "")
+             :command command
+             :package
+             (and *current-clawmacs-package*
+                  (package-identifier-string *current-clawmacs-package*)))))
+      (call-with-pipeline-registry-lock
+       (lambda ()
+         (setf (gethash normalized-name *pipeline-test-profile-registry*)
+               profile))
+       *pipeline-test-profile-registry*)
+      profile)))
 
 (defun define-pipeline-test-profile (name &rest options)
   "Register a deterministic test profile from Lisp configuration."
@@ -282,17 +335,58 @@ deterministic behavior."
 (defun find-pipeline-test-profile (name)
   "Return the deterministic test profile named NAME, or NIL."
   (when name
-    (gethash (normalize-pipeline-test-profile-name name)
-             *pipeline-test-profile-registry*)))
+    (call-with-pipeline-registry-lock
+     (lambda ()
+       (gethash (normalize-pipeline-test-profile-name name)
+                *pipeline-test-profile-registry*))
+     *pipeline-test-profile-registry*)))
 
 (defun list-pipeline-test-profiles ()
   "Return registered deterministic test profiles sorted by name."
-  (let ((profiles nil))
-    (maphash (lambda (_name profile)
-               (declare (ignore _name))
-               (push profile profiles))
-             *pipeline-test-profile-registry*)
+  (let ((profiles
+          (mapcar #'cdr
+                  (pipeline-registry-snapshot
+                   *pipeline-test-profile-registry*))))
     (sort profiles #'string< :key #'pipeline-test-profile-name)))
+
+(defun package-owned-pipeline-test-profiles (package-name)
+  "Return pipeline test profiles currently registered by PACKAGE-NAME."
+  (let ((owner (package-identifier-string package-name)))
+    (remove-if-not
+     (lambda (profile)
+       (string= owner (or (pipeline-test-profile-package profile) "")))
+     (list-pipeline-test-profiles))))
+
+(defun remove-pipeline-registrations-for-package (package-name)
+  "Remove and return pipeline definitions and test profiles owned by PACKAGE-NAME."
+  (let ((owner (package-identifier-string package-name)))
+    (call-with-pipeline-registry-lock
+     (lambda ()
+       (let ((definitions nil)
+             (definition-keys nil)
+             (profiles nil)
+             (profile-keys nil))
+         (maphash
+          (lambda (key definition)
+            (when (string= owner (or (pipeline-definition-package definition)
+                                     ""))
+              (push key definition-keys)
+              (push definition definitions)))
+          *pipeline-definition-registry*)
+         (maphash
+          (lambda (key profile)
+            (when (string= owner (or (pipeline-test-profile-package profile)
+                                     ""))
+              (push key profile-keys)
+              (push profile profiles)))
+          *pipeline-test-profile-registry*)
+         (dolist (key definition-keys)
+           (remhash key *pipeline-definition-registry*))
+         (dolist (key profile-keys)
+           (remhash key *pipeline-test-profile-registry*))
+         (values definitions profiles)))
+     *pipeline-definition-registry*
+     *pipeline-test-profile-registry*)))
 
 (defun ensure-pipeline-definition (pipeline)
   "Return PIPELINE as a definition or signal a clear error."
@@ -413,13 +507,6 @@ deterministic behavior."
       (pipeline-definition-max-tool-iterations definition)
       *prompt-max-tool-iterations*))
 
-(defun effective-pipeline-stage-auto-approve-tools-p
-    (stage definition caller-auto-approve-tools-p)
-  "Return true when STAGE should auto-approve permissioned tools."
-  (or (pipeline-stage-auto-approve-tools-p stage)
-      caller-auto-approve-tools-p
-      (pipeline-definition-auto-approve-tools-p definition)))
-
 (defun resolve-pipeline-stage-value (value context stage)
   "Resolve VALUE for STAGE in CONTEXT, calling functions when needed."
   (if (functionp value)
@@ -536,7 +623,8 @@ deterministic behavior."
             stage-name runner-result))))
 
 (defun run-pipeline-stage-on-buffer
-    (context stage &key max-tool-iterations auto-approve-tools-p event-callback)
+    (context stage &key max-tool-iterations event-callback
+                    stream-state-callback cancel-requested-p)
   "Run STAGE against CONTEXT's buffer and return a PIPELINE-STAGE-RESULT."
   (let* ((definition (pipeline-context-definition context))
          (buffer (pipeline-context-buffer context))
@@ -556,6 +644,7 @@ deterministic behavior."
     (unwind-protect
          (handler-case
              (progn
+               (check-prompt-cancellation cancel-requested-p)
                (setf (buffer-agent-name buffer)
                      (or (pipeline-stage-agent-name stage)
                          old-agent-name)
@@ -584,15 +673,24 @@ deterministic behavior."
                       stage context old-packages))
                (let* ((runner (pipeline-stage-runner stage))
                       (result (if runner
-                                  (normalize-pipeline-stage-runner-result
-                                   (funcall runner
-                                            context
-                                            stage
-                                            prompt)
-                                   stage-name
-                                   prompt
-                                   started-at
-                                   (get-universal-time))
+                                  (progn
+                                    ;; Arbitrary in-process extension runners
+                                    ;; remain cooperative, but never run on the
+                                    ;; CLIM process in interactive mode.
+                                    (check-prompt-cancellation
+                                     cancel-requested-p)
+                                    (prog1
+                                        (normalize-pipeline-stage-runner-result
+                                         (funcall runner
+                                                  context
+                                                  stage
+                                                  prompt)
+                                         stage-name
+                                         prompt
+                                         started-at
+                                         (get-universal-time))
+                                      (check-prompt-cancellation
+                                       cancel-requested-p)))
                                   (make-pipeline-stage-result
                                    :stage-name stage-name
                                    :prompt prompt
@@ -603,14 +701,15 @@ deterministic behavior."
                                     nil
                                     (effective-pipeline-stage-max-tool-iterations
                                      stage definition max-tool-iterations)
-                                   (effective-pipeline-stage-auto-approve-tools-p
-                                     stage definition auto-approve-tools-p)
                                     (effective-pipeline-stage-tool-names
                                      stage context)
                                     (pipeline-stage-tool-names-supplied-p stage)
                                     :output-schema
                                     (pipeline-stage-output-schema stage)
-                                    :event-callback event-callback)
+                                    :event-callback event-callback
+                                    :stream-state-callback
+                                    stream-state-callback
+                                    :cancel-requested-p cancel-requested-p)
                                    :status :succeeded
                                    :started-at started-at
                                    :finished-at (get-universal-time)))))
@@ -629,7 +728,9 @@ deterministic behavior."
             (buffer-think-level-override buffer) old-think-level
             (buffer-model-role-override buffer) old-model-role
             (buffer-service-tier-override buffer) old-service-tier
-            (buffer-enabled-packages buffer) old-packages))))
+            (buffer-enabled-packages buffer) old-packages)
+      (when stream-state-callback
+        (funcall stream-state-callback nil)))))
 
 (defun pipeline-stage-working-directory (context)
   "Return the working directory used for deterministic pipeline commands."
@@ -650,29 +751,26 @@ deterministic behavior."
     (t
      (princ-to-string command))))
 
-(defun run-pipeline-command (command &key directory)
-  "Run COMMAND in DIRECTORY and return a plist result."
-  (let ((working-directory
-          (uiop:ensure-directory-pathname
-           (or directory (truename ".")))))
-    (multiple-value-bind (stdout stderr exit-code)
-        (if (stringp command)
-            (uiop:run-program (list "sh" "-lc" command)
-                              :directory working-directory
-                              :output :string
-                              :error-output :string
-                              :ignore-error-status t)
-            (uiop:run-program command
-                              :directory working-directory
-                              :output :string
-                              :error-output :string
-                              :ignore-error-status t))
-      (list :command (pipeline-command-display-string command)
-            :directory (namestring working-directory)
-            :exit-code exit-code
-            :stdout stdout
-            :stderr stderr
-            :passed-p (zerop exit-code)))))
+(defparameter *pipeline-command-default-timeout* 300
+  "Default wall-clock timeout for deterministic pipeline verification commands.")
+
+(defun run-pipeline-command
+    (command &key directory
+                  (timeout *pipeline-command-default-timeout*)
+                  (cancel-requested-p
+                    *interactive-operation-cancel-requested-p*))
+  "Run COMMAND with bounded time/output and return a structured result plist."
+  (let ((result
+          (run-interactive-subprocess
+           command
+           :directory directory
+           :timeout timeout
+           :cancel-requested-p cancel-requested-p)))
+    (append result
+            (list :passed-p
+                  (and (not (getf result :timed-out-p))
+                       (not (getf result :cancelled-p))
+                       (zerop (or (getf result :exit-code) 1)))))))
 
 (defun pipeline-test-profile-command-value (profile directory)
   "Return PROFILE's command in DIRECTORY."
@@ -792,10 +890,13 @@ deterministic behavior."
                       (prompt-run-result-session-id final-result)))))
 
 (defun run-pipeline-on-buffer
-    (pipeline prompt &key buffer max-tool-iterations auto-approve-tools-p
-                    event-callback)
+    (pipeline prompt &key buffer max-tool-iterations
+                    event-callback stream-state-callback cancel-requested-p)
   "Run PIPELINE deterministically against BUFFER for PROMPT."
-  (let* ((definition (ensure-pipeline-definition pipeline))
+  (let* ((event-callback
+           (make-bounded-runtime-callback event-callback
+                                          :label "pipeline prompt"))
+         (definition (ensure-pipeline-definition pipeline))
          (context (make-pipeline-context
                    :definition definition
                    :original-prompt prompt
@@ -807,6 +908,7 @@ deterministic behavior."
          (final-stage-result nil))
     (handler-case
         (loop
+          (check-prompt-cancellation cancel-requested-p)
           (when (>= step-count (pipeline-definition-max-steps definition))
             (let ((message (format nil "Pipeline ~A exceeded max steps (~D)."
                                    (pipeline-definition-name definition)
@@ -825,8 +927,9 @@ deterministic behavior."
                    (run-pipeline-stage-on-buffer
                     context stage
                     :max-tool-iterations max-tool-iterations
-                    :auto-approve-tools-p auto-approve-tools-p
-                    :event-callback event-callback)))
+                    :event-callback event-callback
+                    :stream-state-callback stream-state-callback
+                    :cancel-requested-p cancel-requested-p)))
             (setf (pipeline-context-stage-results context)
                   (append (pipeline-context-stage-results context)
                           (list stage-result))
@@ -864,7 +967,6 @@ deterministic behavior."
                                *default-buffer-session-persistence-mode*)
                               (max-tool-iterations
                                *prompt-max-tool-iterations*)
-                              auto-approve-tools-p
                               package-names
                               event-callback)
   "Run PROMPT through deterministic PIPELINE-NAME and return a prompt result."
@@ -891,8 +993,6 @@ deterministic behavior."
                                     prompt
                                     :buffer buf
                                     :max-tool-iterations max-tool-iterations
-                                    :auto-approve-tools-p
-                                    auto-approve-tools-p
                                     :event-callback event-callback)))
       (when (eq :failed (pipeline-run-result-status run-result))
         (let ((error-text (pipeline-run-result-error run-result)))
@@ -932,6 +1032,78 @@ deterministic behavior."
                     (or (pipeline-run-result-error run-result)
                         "pipeline failed")))))
         run-result))))
+
+(defun start-interactive-pipeline-for-buffer (buffer prompt)
+  "Run BUFFER's configured pipeline off the CLIM process.
+
+The worker receives a detached buffer.  Its message, journal, project, and
+after-tool effects are replayed only by UPDATE-INTERACTIVE-BUFFER-OPERATION."
+  ;; Resolve package-contributed definitions on the frame-owned start path.
+  ;; Worker-side prompt loads remain idempotent checks, never the first cold
+  ;; publication of the pipeline surface.
+  (load-active-packages
+   :buffer buffer
+   :agent-name (buffer-agent-name buffer))
+  (let* ((pipeline-name (buffer-pipeline-name buffer))
+         (definition (and pipeline-name
+                          (find-pipeline-definition pipeline-name))))
+    (unless definition
+      (setf (buffer-status buffer) :error)
+      (buffer-insert-system-message
+       buffer
+       (format nil "[Pipeline error: unknown pipeline ~A]" pipeline-name))
+      (return-from start-interactive-pipeline-for-buffer nil))
+    (multiple-value-bind (operation refusal)
+        (start-interactive-buffer-operation
+         buffer
+         :pipeline
+         (lambda (snapshot operation)
+           (declare (ignore operation))
+           (let ((*suppress-prompt-compaction* t))
+             (run-pipeline-on-buffer
+              definition
+              prompt
+              :buffer snapshot
+              :stream-state-callback
+              *interactive-operation-stream-state-callback*
+              :cancel-requested-p
+              *interactive-operation-cancel-requested-p*)))
+         (lambda (live-buffer operation run-result error-text)
+           (declare (ignore operation))
+           ;; Effects are already applied before this callback.  A failed
+           ;; application never reaches the continuation/hook below.
+           (cond
+             (error-text
+              (setf (buffer-status live-buffer) :error)
+              (buffer-insert-system-message
+               live-buffer
+               (format nil "[Pipeline error: ~A]" error-text)))
+             ((or (null run-result)
+                  (eq :failed (pipeline-run-result-status run-result)))
+              (setf (buffer-status live-buffer) :error)
+              (buffer-insert-system-message
+               live-buffer
+               (format nil "[Pipeline error: ~A]"
+                       (or (and run-result
+                                (pipeline-run-result-error run-result))
+                           "pipeline failed"))))
+             (t
+              (setf (buffer-status live-buffer) :idle)))
+           (run-hook-with-args '*after-send-message-hook*
+                               live-buffer prompt run-result))
+         :cancel-function
+         (lambda (live-buffer operation)
+           (declare (ignore operation))
+           (buffer-insert-system-message live-buffer "[Pipeline cancelled.]")
+           (run-hook-with-args '*after-send-message-hook*
+                               live-buffer prompt :cancelled))
+         :payload (list :pipeline pipeline-name :prompt prompt)
+         :status :pipeline-running)
+      (when refusal
+        (setf (buffer-status buffer) :idle)
+        (buffer-insert-system-message
+         buffer (format nil "[Pipeline start refused: ~A]" refusal)))
+      operation)))
 
 (defun buffer-has-active-pipeline-p (buffer)
   "Return true when BUFFER names a registered deterministic pipeline."

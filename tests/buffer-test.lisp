@@ -13,23 +13,6 @@
                                (get-universal-time)
                                (gensym)))))
 
-(defun temp-guard-test-path ()
-  "Return a fresh guard policy path for buffer command tests."
-  (let ((base (make-pathname
-               :directory (list :absolute "tmp"
-                                (format nil "clawmacs-guard-buffer-tests-~A-~A"
-                                        (get-universal-time)
-                                        (gensym))))))
-    (ensure-directories-exist (merge-pathnames #P".keep" base))
-    (merge-pathnames "guard.json" base)))
-
-(defmacro with-approval-policy-path-override ((path) &body body)
-  `(let ((clawmacs::*approval-policy-path* ,path)
-         (clawmacs::*approval-policy-registry* nil)
-         (clawmacs::*approval-policy-project-registry-cache*
-           (make-hash-table :test #'equal)))
-     ,@body))
-
 (defun read-jsonl-events (path)
   "Read JSONL transcript events from PATH."
   (let ((events nil))
@@ -97,35 +80,12 @@
 (defmacro with-interactive-command-test-buffer ((buffer-var) &body body)
   `(let ((*buffer-ring* nil)
          (clawmacs::*buffer-counter* 0)
+         (clawmacs::*chat-interaction-state*
+           (clawmacs::make-chat-interaction-state))
          (*buffer-selector-active* nil)
-         (clawmacs::*session-tree-selector-active* nil)
-         (clawmacs::*session-tree-selector-buffer* nil)
-         (clawmacs::*session-tree-selector-items* nil)
-         (clawmacs::*session-tree-selector-filtered-items* nil)
-         (clawmacs::*session-tree-selector-index* 0)
-         (clawmacs::*session-tree-selector-scroll* 0)
-         (clawmacs::*session-tree-selector-search* "")
-         (clawmacs::*session-tree-selector-filter-mode* :default)
-         (clawmacs::*session-tree-selector-folded-ids* nil)
          (*model-selector-active* nil)
          (*think-selector-active* nil)
          (*openai-oauth-pending* nil)
-         (*deny-message-mode* nil)
-         (*cc-pending* nil)
-         (*cx-pending* nil)
-         (*ch-pending* nil)
-         (*meta-pending* nil)
-         (*minibuffer-active* nil)
-         (*minibuffer-mode* :completion)
-         (*minibuffer-prompt* "")
-         (*minibuffer-input* "")
-         (*minibuffer-point* 0)
-         (*minibuffer-items* nil)
-         (*minibuffer-filtered-items* nil)
-         (*minibuffer-match-positions* nil)
-         (*minibuffer-selected-index* 0)
-         (*minibuffer-scroll-offset* 0)
-         (*minibuffer-callback* nil)
          (*mx-test-command-log* nil))
      (clawmacs::init-default-keymap)
      (let ((,buffer-var (make-buffer "test-session")))
@@ -958,35 +918,21 @@
 
 (test handle-key-event-control-l-requests-redraw-in-minibuffer-mode
   "Ctrl+l requests a redraw even when modal UI state like the minibuffer is active."
-  (let ((*minibuffer-active* t)
-        (*minibuffer-mode* :completion)
+  (let ((clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state))
         (*buffer-selector-active* nil)
-        (clawmacs::*session-tree-selector-active* nil)
         (*model-selector-active* nil)
         (*think-selector-active* nil)
-        (*openai-oauth-pending* nil)
-        (*deny-message-mode* nil)
-        (*cc-pending* nil)
-        (*cx-pending* nil)
-        (*ch-pending* nil)
-        (*meta-pending* nil))
+        (*openai-oauth-pending* nil))
+    (setf *minibuffer-active* t)
     (let ((buf (make-buffer "test")))
       (is (eq :redraw
               (clawmacs::handle-key-event buf (code-char 12)))))))
 
 (test minibuffer-completion-navigation-wraps-with-tab-and-backtab
   "Completion navigation accepts Emacs-style keys and wraps at both ends."
-  (let ((*minibuffer-active* nil)
-        (*minibuffer-mode* :completion)
-        (*minibuffer-prompt* "")
-        (*minibuffer-input* "")
-        (*minibuffer-point* 0)
-        (*minibuffer-items* nil)
-        (*minibuffer-filtered-items* nil)
-        (*minibuffer-match-positions* nil)
-        (*minibuffer-selected-index* 0)
-        (*minibuffer-scroll-offset* 0)
-        (*minibuffer-callback* nil)
+  (let ((clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state))
         (*minibuffer-max-height* 3))
     (minibuffer-activate
      "Pick"
@@ -1022,17 +968,8 @@
 (test minibuffer-completion-return-with-no-match-keeps-query
   "Return on an empty completion result keeps the minibuffer active."
   (let ((submitted nil)
-        (*minibuffer-active* nil)
-        (*minibuffer-mode* :completion)
-        (*minibuffer-prompt* "")
-        (*minibuffer-input* "")
-        (*minibuffer-point* 0)
-        (*minibuffer-items* nil)
-        (*minibuffer-filtered-items* nil)
-        (*minibuffer-match-positions* nil)
-        (*minibuffer-selected-index* 0)
-        (*minibuffer-scroll-offset* 0)
-        (*minibuffer-callback* nil))
+        (clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state)))
     (minibuffer-activate
      "Pick"
      (list (list :display "alpha"))
@@ -1046,17 +983,8 @@
 
 (test minibuffer-completion-mode-supports-emacs-motion-keys
   "Completion minibuffers support compose-like C-b/C-f/M-b/M-f editing motions."
-  (let ((*minibuffer-active* nil)
-        (*minibuffer-mode* :completion)
-        (*minibuffer-prompt* "")
-        (*minibuffer-input* "")
-        (*minibuffer-point* 0)
-        (*minibuffer-items* nil)
-        (*minibuffer-filtered-items* nil)
-        (*minibuffer-match-positions* nil)
-        (*minibuffer-selected-index* 0)
-        (*minibuffer-scroll-offset* 0)
-        (*minibuffer-callback* nil))
+  (let ((clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state)))
     (minibuffer-activate
      "Edit"
      (list (list :display "foo bar baz"))
@@ -1075,17 +1003,8 @@
 
 (test minibuffer-completion-mode-supports-emacs-kill-and-yank-keys
   "Completion minibuffers support C-d/M-d/M-Backspace/C-k/C-y editing."
-  (let ((*minibuffer-active* nil)
-        (*minibuffer-mode* :completion)
-        (*minibuffer-prompt* "")
-        (*minibuffer-input* "")
-        (*minibuffer-point* 0)
-        (*minibuffer-items* nil)
-        (*minibuffer-filtered-items* nil)
-        (*minibuffer-match-positions* nil)
-        (*minibuffer-selected-index* 0)
-        (*minibuffer-scroll-offset* 0)
-        (*minibuffer-callback* nil)
+  (let ((clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state))
         (clawmacs::*kill-ring* nil))
     (minibuffer-activate
      "Edit"
@@ -1120,17 +1039,8 @@
 (test minibuffer-prompt-mode-preserves-editing-keys
   "Prompt mode still edits raw input instead of cycling completion candidates."
   (let ((submitted nil)
-        (*minibuffer-active* nil)
-        (*minibuffer-mode* :completion)
-        (*minibuffer-prompt* "")
-        (*minibuffer-input* "")
-        (*minibuffer-point* 0)
-        (*minibuffer-items* nil)
-        (*minibuffer-filtered-items* nil)
-        (*minibuffer-match-positions* nil)
-        (*minibuffer-selected-index* 0)
-        (*minibuffer-scroll-offset* 0)
-        (*minibuffer-callback* nil))
+        (clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state)))
     (minibuffer-prompt "Raw" (lambda (input) (setf submitted input)))
     (handle-minibuffer-key #\a)
     (handle-minibuffer-key #\b)
@@ -1250,10 +1160,12 @@
 ;;; Buffer Selector Tests
 ;;; --------------------------------------------------------------------------
 
-(test buffer-selector-activates
-  "list-buffers-command activates the buffer selector."
+(test list-buffers-command-uses-visible-minibuffer
+  "The legacy command name delegates to the visible minibuffer selector."
   (let ((*buffer-ring* nil)
         (clawmacs::*buffer-counter* 0)
+        (clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state))
         (*buffer-selector-active* nil)
         (*buffer-selector-index* 99)
         (clawmacs::*buffer-selector-scroll* 99))
@@ -1262,9 +1174,10 @@
       (setf (buffer-keymap buf) *default-keymap*)
       (add-buffer-to-ring buf)
       (list-buffers-command buf)
-      (is (eq t *buffer-selector-active*))
-      (is (= 0 *buffer-selector-index*))
-      (is (= 0 clawmacs::*buffer-selector-scroll*)))))
+      (is-false *buffer-selector-active*)
+      (is-true *minibuffer-active*)
+      (is (string= "Switch Buffer" *minibuffer-prompt*))
+      (is (= 1 (length *minibuffer-filtered-items*))))))
 
 (test buffer-selector-navigate-down-and-up
   "Navigating the buffer selector moves the index."
@@ -1418,16 +1331,12 @@
   "RET edits scratch text instead of finalizing and sending a chat turn."
   (let ((*buffer-ring* nil)
         (clawmacs::*buffer-counter* 0)
-        (*minibuffer-active* nil)
+        (clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state))
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
         (*think-selector-active* nil)
         (*openai-oauth-pending* nil)
-        (*deny-message-mode* nil)
-        (*cc-pending* nil)
-        (*cx-pending* nil)
-        (*ch-pending* nil)
-        (*meta-pending* nil)
         (*scratch-buffer-initial-text* ""))
     (clawmacs::init-default-keymap)
     (let ((scratch (ensure-scratch-buffer)))
@@ -1706,38 +1615,6 @@
                       (message-text
                        (message-prev (buffer-input-message forked))))))))))
 
-(test describe-guard-policy-command-opens-help-buffer
-  "Describing guard policy opens a help buffer with policy sections."
-  (with-interactive-command-test-buffer (buf)
-    (with-approval-policy-path-override ((temp-guard-test-path))
-      (clawmacs::set-approval-policy-default-permission
-       :agent-with-permission :buffer buf)
-      (clawmacs::set-approval-policy-default-sandbox-permission
-       :workspace-write :buffer buf)
-      (clawmacs::set-approval-policy-tool-permission
-       "write" :user-only :buffer buf)
-      (clawmacs::describe-guard-policy-command buf)
-      (let* ((help (current-buffer))
-             (text (help-buffer-text help)))
-        (is (help-buffer-p help))
-        (is (search "Guard Policy" text))
-        (is (search "Project Policy" text))
-        (is (search "write -> user-only" text))))))
-
-(test describe-guard-history-command-opens-help-buffer
-  "Describing guard history opens a help buffer with recorded audit entries."
-  (with-interactive-command-test-buffer (buf)
-    (with-approval-policy-path-override ((temp-guard-test-path))
-      (clawmacs::approval-policy-record-history-entry
-       buf "write" :approve :policy :agent-with-permission :entry "allowed")
-      (clawmacs::describe-guard-history-command buf)
-      (let* ((help (current-buffer))
-             (text (help-buffer-text help)))
-        (is (help-buffer-p help))
-        (is (search "Guard History" text))
-        (is (search "tool=write" text))
-        (is (search "entry: allowed" text))))))
-
 ;;; --------------------------------------------------------------------------
 ;;; Package Selector Tests
 ;;; --------------------------------------------------------------------------
@@ -1950,7 +1827,7 @@
 ;;; --------------------------------------------------------------------------
 
 (test model-selector-activates
-  "select-model-command sets the model selector state when entries exist."
+  "Legacy model selector data remains testable without owning key capture."
   (let ((*buffer-ring* nil)
         (clawmacs::*buffer-counter* 0)
         (*model-selector-active* nil)
@@ -2075,8 +1952,10 @@
 ;;; --------------------------------------------------------------------------
 
 (test think-selector-activates
-  "select-think-level-command sets selector state for supported active models."
-  (let ((*think-selector-active* nil)
+  "The legacy think command delegates to the visible minibuffer selector."
+  (let ((clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state))
+        (*think-selector-active* nil)
         (*think-selector-index* 99)
         (clawmacs::*think-selector-scroll* 99)
         (*think-selector-entries* nil))
@@ -2084,14 +1963,18 @@
       (set-buffer-provider-override buf :openai-codex)
       (set-buffer-model-override buf "gpt-5.4")
       (select-think-level-command buf)
-      (is (eq t *think-selector-active*))
-      (is (= 0 *think-selector-index*))
-      (is (= 6 (length *think-selector-entries*)))
-      (is (string= "default" (getf (first *think-selector-entries*) :display))))))
+      (is-false *think-selector-active*)
+      (is-true *minibuffer-active*)
+      (is (= 0 *minibuffer-selected-index*))
+      (is (= 6 (length *minibuffer-filtered-items*)))
+      (is (string= "default"
+                   (getf (first *minibuffer-filtered-items*) :display))))))
 
 (test think-selector-active-level-pre-selected
-  "When opening the think selector, the active think level index is pre-selected."
-  (let ((*think-selector-active* nil)
+  "The visible think selector preselects the active level."
+  (let ((clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state))
+        (*think-selector-active* nil)
         (*think-selector-index* 0)
         (clawmacs::*think-selector-scroll* 0)
         (*think-selector-entries* nil))
@@ -2100,7 +1983,7 @@
       (set-buffer-model-override buf "gpt-5.4")
       (set-buffer-think-level-override buf "high")
       (select-think-level-command buf)
-      (is (= 4 *think-selector-index*)))))
+      (is (= 4 *minibuffer-selected-index*)))))
 
 (test think-selector-enter-selects-level
   "Enter in think selector sets the buffer think level and closes."

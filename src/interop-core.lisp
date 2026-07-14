@@ -215,7 +215,11 @@
   created-at
   updated-at
   current-turn-id
-  last-result)
+  last-result
+  execution-owner
+  registry-sequence
+  (retained-resources-released-p nil :type boolean)
+  (lock (bt:make-lock "interop-thread")))
 
 (defstruct interop-client
   "Minimal in-process Lisp client for the Clawmacs interop surface.")
@@ -237,6 +241,10 @@
   (interrupt-requested-p nil :type boolean)
   event-callback
   runner-thread
+  (runner-installed-p nil :type boolean)
+  (runner-finished-p nil :type boolean)
+  terminal-sequence
+  (retained-resources-released-p nil :type boolean)
   (lock (bt:make-lock "interop-turn")))
 
 (defparameter *interop-protocol-version* 1
@@ -247,6 +255,168 @@
 
 (defvar *interop-turn-table* (make-hash-table :test #'equal)
   "Live interop turns keyed by turn id.")
+
+(defparameter *interop-terminal-turn-history-limit* 128
+  "Maximum number of settled interop turns retained for read requests.")
+
+(defparameter *interop-idle-thread-history-limit* 32
+  "Maximum number of idle, unreferenced interop threads retained in memory.")
+
+(defvar *interop-registry-sequence-counter* 0
+  "Monotonic sequence for interop registry recency and terminal ordering.")
+
+(defvar *interop-runtime-operations* (make-hash-table :test #'eq)
+  "Exact construction and synchronous-run cleanup reservations.")
+
+(defvar *interop-registry-lock* (bt:make-lock "interop-registry")
+  "Lock protecting the live interop thread and turn registries.")
+
+(defvar *interop-thread-start-lock* (bt:make-lock "interop-thread-start")
+  "Single-flight lock for persistent session load, buffer creation, and publish.")
+
+(defun active-interop-runtime-operation-count ()
+  "Return interop construction/run tails still executing Clawmacs code."
+  (bt:with-lock-held (*interop-registry-lock*)
+    (hash-table-count *interop-runtime-operations*)))
+
+(defun publish-interop-runtime-operation-under-admission (token operation)
+  "Publish TOKEN while outer admission is held and inner locks are free."
+  (bt:with-lock-held (*interop-registry-lock*)
+    (setf (gethash token *interop-runtime-operations*) operation))
+  token)
+
+(defun settle-interop-runtime-operation (token)
+  "Remove TOKEN only after all operation cleanup has completed."
+  (when (bt:with-lock-held (*interop-registry-lock*)
+          (gethash token *interop-runtime-operations*))
+    (call-with-runtime-settlement-admission
+     (lambda ()
+       (bt:with-lock-held (*interop-registry-lock*)
+         (remhash token *interop-runtime-operations*)))
+     :operation "interop runtime cleanup"))
+  token)
+
+(defun interop-turn-terminal-status-p (status)
+  "Return true when STATUS is terminal for an interop turn."
+  (member status '(:succeeded :failed :interrupted) :test #'eq))
+
+(defun settled-interop-turn-p (turn)
+  "Return true when TURN is terminal and its managed runner has settled."
+  (and (interop-turn-runner-installed-p turn)
+       (interop-turn-runner-finished-p turn)
+       (interop-turn-terminal-status-p (interop-turn-status turn))))
+
+(defun note-interop-thread-use-locked (thread)
+  "Record THREAD recency with the registry lock already held."
+  (bt:with-lock-held ((interop-thread-lock thread))
+    (setf (interop-thread-registry-sequence thread)
+          (incf *interop-registry-sequence-counter*))))
+
+(defun note-interop-turn-terminal-sequence-locked (turn)
+  "Record TURN settlement order with the registry lock already held."
+  (bt:with-lock-held ((interop-turn-lock turn))
+    (when (and (settled-interop-turn-p turn)
+               (null (interop-turn-terminal-sequence turn)))
+      (setf (interop-turn-terminal-sequence turn)
+            (incf *interop-registry-sequence-counter*)))))
+
+(defun release-evicted-interop-turn-resources (turn)
+  "Release heavy references from an evicted, settled TURN."
+  (bt:with-lock-held ((interop-turn-lock turn))
+    (when (settled-interop-turn-p turn)
+      (setf (interop-turn-input turn) nil
+            (interop-turn-output-schema turn) nil
+            (interop-turn-result turn) nil
+            (interop-turn-error turn) nil
+            (interop-turn-current-stream-state turn) nil
+            (interop-turn-event-callback turn) nil
+            (interop-turn-runner-thread turn) nil
+            (interop-turn-retained-resources-released-p turn) t)))
+  turn)
+
+(defun release-evicted-interop-thread-resources (thread)
+  "Dispose the buffer and release result metadata held by evicted THREAD."
+  (let ((buffer nil))
+    (bt:with-lock-held ((interop-thread-lock thread))
+      (unless (interop-thread-execution-owner thread)
+        (setf buffer (interop-thread-buffer thread)
+              (interop-thread-buffer thread) nil
+              (interop-thread-last-result thread) nil
+              (interop-thread-retained-resources-released-p thread) t)))
+    ;; DISPOSE-BUFFER may cancel streams or tools.  It deliberately runs after
+    ;; every interop lock has been released.
+    (when buffer
+      (handler-case
+          (dispose-buffer buffer)
+        (error (condition)
+          (ignore-errors
+            (cancel-buffer-runtime-operations buffer))
+          (ignore-errors
+            (file-debug-event "interop-evicted-thread-dispose-failed"
+                              :thread-id (interop-thread-id thread)
+                              :condition (format nil "~A" condition)))))))
+  thread)
+
+(defun prune-interop-registries (&key protected-thread)
+  "Bound settled turn history and idle thread retention.
+
+PROTECTED-THREAD is a newly returned object that must remain usable by its
+caller.  Active turns, all threads referenced by retained turns, and threads
+with an execution reservation are never candidates.  Removal happens under
+the registry lock; resource release and buffer cancellation happen afterward."
+  (let ((evicted-turns nil)
+        (evicted-threads nil)
+        (turn-limit (max 0 *interop-terminal-turn-history-limit*))
+        (thread-limit (max 0 *interop-idle-thread-history-limit*)))
+    (bt:with-lock-held (*interop-registry-lock*)
+      (let ((terminal-turns nil))
+        (maphash
+         (lambda (_id turn)
+           (declare (ignore _id))
+           (note-interop-turn-terminal-sequence-locked turn)
+           (bt:with-lock-held ((interop-turn-lock turn))
+             (when (settled-interop-turn-p turn)
+               (push turn terminal-turns))))
+         *interop-turn-table*)
+        (setf terminal-turns
+              (sort terminal-turns #'>
+                    :key (lambda (turn)
+                           (or (interop-turn-terminal-sequence turn) 0))))
+        (dolist (turn (nthcdr turn-limit terminal-turns))
+          (when (eq turn
+                    (gethash (interop-turn-id turn) *interop-turn-table*))
+            (remhash (interop-turn-id turn) *interop-turn-table*)
+            (push turn evicted-turns))))
+      (let ((referenced-thread-ids
+              (loop :for turn :being :the hash-values :of *interop-turn-table*
+                    :collect (interop-turn-thread-id turn)))
+            (idle-threads nil))
+        (maphash
+         (lambda (_id thread)
+           (declare (ignore _id))
+           (bt:with-lock-held ((interop-thread-lock thread))
+             (when (and (not (eq thread protected-thread))
+                        (null (interop-thread-execution-owner thread))
+                        (not (member (interop-thread-id thread)
+                                     referenced-thread-ids
+                                     :test #'equal)))
+               (push thread idle-threads))))
+         *interop-thread-table*)
+        (setf idle-threads
+              (sort idle-threads #'>
+                    :key (lambda (thread)
+                           (or (interop-thread-registry-sequence thread) 0))))
+        (dolist (thread (nthcdr thread-limit idle-threads))
+          (when (eq thread
+                    (gethash (interop-thread-id thread)
+                             *interop-thread-table*))
+            (remhash (interop-thread-id thread) *interop-thread-table*)
+            (push thread evicted-threads)))))
+    (dolist (turn evicted-turns)
+      (release-evicted-interop-turn-resources turn))
+    (dolist (thread evicted-threads)
+      (release-evicted-interop-thread-resources thread))
+    (values (length evicted-turns) (length evicted-threads))))
 
 (defun clawmacs-system-version ()
   "Return the loaded Clawmacs system version string."
@@ -274,30 +444,70 @@
         (buffer-name buffer))))
 
 (defun interop-thread-summary (thread)
-  "Return THREAD as a JSON-ready plist."
-  (let* ((buffer (interop-thread-buffer thread))
-         (session (buffer-session buffer)))
-    (list :id (interop-thread-id thread)
-          :session-name (interop-thread-buffer-session-name buffer)
-          :session-id (and session (session-id session))
-          :display-name (and session (session-display-name-or-name session))
-          :ephemeral-p (interop-thread-ephemeral-p thread)
-          :working-directory
-          (session-path-string (buffer-working-directory buffer))
-          :agent-name (buffer-agent-name buffer)
-          :provider (buffer-provider-override buffer)
-          :model (buffer-model-override buffer)
-          :created-at (interop-thread-created-at thread)
-          :updated-at (interop-thread-updated-at thread)
-          :current-turn-id (interop-thread-current-turn-id thread))))
+  "Return THREAD as a JSON-ready plist and its retained buffer.
+
+Both values are NIL when bounded-history eviction won a concurrent race."
+  (let (buffer ephemeral-p created-at updated-at current-turn-id)
+    (bt:with-lock-held ((interop-thread-lock thread))
+      (setf buffer (interop-thread-buffer thread)
+            ephemeral-p (interop-thread-ephemeral-p thread)
+            created-at (interop-thread-created-at thread)
+            updated-at (interop-thread-updated-at thread)
+            current-turn-id (interop-thread-current-turn-id thread)))
+    (when buffer
+      (let ((session (buffer-session buffer)))
+        (values
+         (list :id (interop-thread-id thread)
+               :session-name (interop-thread-buffer-session-name buffer)
+               :session-id (and session (session-id session))
+               :display-name (and session
+                                  (session-display-name-or-name session))
+               :ephemeral-p ephemeral-p
+               :working-directory
+               (session-path-string (buffer-working-directory buffer))
+               :agent-name (buffer-agent-name buffer)
+               :provider (buffer-provider-override buffer)
+               :model (buffer-model-override buffer)
+               :created-at created-at
+               :updated-at updated-at
+               :current-turn-id current-turn-id)
+         buffer)))))
 
 (defun register-interop-thread (thread)
   "Register THREAD in the live interop registry."
-  (setf (gethash (interop-thread-id thread) *interop-thread-table*) thread)
+  (call-with-runtime-admission
+   (lambda ()
+     (bt:with-lock-held (*interop-registry-lock*)
+       (setf (gethash (interop-thread-id thread) *interop-thread-table*) thread)
+       (note-interop-thread-use-locked thread)))
+   :operation "interop thread publication")
   thread)
 
-(defun make-interop-thread-from-buffer (buffer &key id ephemeral-p)
-  "Create and register a live interop thread for BUFFER."
+(defun register-interop-thread-if-absent (thread)
+  "Publish THREAD unless its id already has a live object.
+Return the canonical live object and true when THREAD won publication."
+  (bt:with-lock-held (*interop-registry-lock*)
+    (multiple-value-bind (existing present-p)
+        (gethash (interop-thread-id thread) *interop-thread-table*)
+      (if present-p
+          (progn
+            (note-interop-thread-use-locked existing)
+            (values existing nil))
+          (progn
+            (setf (gethash (interop-thread-id thread) *interop-thread-table*)
+                  thread)
+            (note-interop-thread-use-locked thread)
+            (values thread t))))))
+
+(defun interop-thread-registry-snapshot ()
+  "Return a stable list of the threads currently in the live registry."
+  (bt:with-lock-held (*interop-registry-lock*)
+    (loop :for thread :being :the hash-values :of *interop-thread-table*
+          :collect thread)))
+
+(defun make-interop-thread-from-buffer
+    (buffer &key id ephemeral-p (register-p t))
+  "Create an interop thread for BUFFER and optionally register it."
   (let* ((session-id (interop-thread-buffer-session-id buffer))
          (thread-id (or id session-id (interop-generate-id "thr")))
          (now (get-universal-time))
@@ -307,7 +517,25 @@
                   :ephemeral-p (if session-id nil ephemeral-p)
                   :created-at now
                   :updated-at now)))
-    (register-interop-thread thread)))
+    (if register-p
+        (register-interop-thread thread)
+        thread)))
+
+(defun dispose-unregistered-interop-thread (thread)
+  "Release runtime resources retained by unpublished THREAD."
+  (let ((buffer (interop-thread-buffer thread)))
+    (handler-case
+        (dispose-buffer buffer)
+      (error (condition)
+        ;; A failed loser cleanup must not replace the canonical live object for
+        ;; callers.  Retry cancellation because DISPOSE-BUFFER may have failed
+        ;; after marking the buffer disposed.
+        (ignore-errors
+          (cancel-buffer-runtime-operations buffer))
+        (ignore-errors
+          (file-debug-event "interop-resume-loser-dispose-failed"
+                            :condition (format nil "~A" condition))))))
+  thread)
 
 (defun resolve-interop-working-directory (cwd)
   "Normalize CWD for interop entrypoints."
@@ -323,67 +551,198 @@
                                   model-role
                                   service-tier
                                   package-names)
-  "Create a new programmatic thread and return its live thread object."
-  (let* ((working-directory (resolve-interop-working-directory cwd))
-         (resolved-name (or session-name
-                            (interop-generate-id "clawmacs-thread")))
-         (persistent-p (not ephemeral))
-         (session (and persistent-p
-                       (load-or-create-session
-                        resolved-name
-                        :working-directory working-directory)))
-         (*buffer-system-prompt-display-enabled* nil)
-         (buffer (make-chat-buffer
-                  resolved-name
-                  :agent-name agent-name
-                  :working-directory working-directory
-                  :session session
-                  :session-persistence-mode
-                  (if persistent-p :persistent :ephemeral))))
-    (maybe-apply-prompt-routing-overrides buffer provider model think-level
-                                          :model-role model-role
-                                          :service-tier service-tier)
-    (when package-names
-      (setf (buffer-enabled-packages buffer)
-            (normalize-package-name-list package-names)))
-    (make-interop-thread-from-buffer buffer :ephemeral-p ephemeral)))
+  "Create a programmatic thread and return its canonical live object.
+
+Persistent starts are single-flight across session load, buffer construction,
+and registry publication.  This prevents even constructor/autosave hooks from
+writing one session through two candidate buffers."
+  (let ((token (cons :interop-start (gensym "START-")))
+        (result nil))
+    (unwind-protect
+         (setf
+          result
+          (multiple-value-bind (live loser)
+              (call-with-runtime-admission
+               (lambda ()
+                 (publish-interop-runtime-operation-under-admission
+                  token :thread-start)
+                 (bt:with-lock-held (*interop-thread-start-lock*)
+           (let* ((working-directory (resolve-interop-working-directory cwd))
+                  (resolved-name (or session-name
+                                     (interop-generate-id
+                                      "clawmacs-thread")))
+                  (persistent-p (not ephemeral))
+                  (session (and persistent-p
+                                (load-or-create-session
+                                 resolved-name
+                                 :working-directory working-directory)))
+                  (session-id (and session (session-id session)))
+                  (existing (and session-id
+                                 (find-live-interop-thread session-id))))
+             (if existing
+                 (values existing nil)
+                 (let* ((*buffer-system-prompt-display-enabled* nil)
+                        (buffer
+                          (make-chat-buffer
+                           resolved-name
+                           :agent-name agent-name
+                           :working-directory working-directory
+                           :session session
+                           :session-persistence-mode
+                           (if persistent-p :persistent :ephemeral))))
+                   (maybe-apply-prompt-routing-overrides
+                    buffer provider model think-level
+                    :model-role model-role
+                    :service-tier service-tier)
+                   (when package-names
+                     (setf (buffer-enabled-packages buffer)
+                           (normalize-package-name-list package-names)))
+                   (let ((candidate
+                           (make-interop-thread-from-buffer
+                            buffer :ephemeral-p ephemeral :register-p nil)))
+                     (multiple-value-bind (canonical published-p)
+                         (register-interop-thread-if-absent candidate)
+                           (values canonical
+                                   (unless published-p candidate)))))))))
+               :operation "interop thread construction")
+            ;; The exact operation token remains visible while cancellation
+            ;; and pruning run outside the construction and registry locks.
+            (when loser
+              (dispose-unregistered-interop-thread loser))
+            (prune-interop-registries :protected-thread live)
+            live))
+      (settle-interop-runtime-operation token))
+    result))
 
 (defun find-live-interop-thread (thread-id)
   "Return the live interop thread named THREAD-ID, or NIL."
   (and thread-id
-       (gethash thread-id *interop-thread-table*)))
+       (bt:with-lock-held (*interop-registry-lock*)
+         (let ((thread (gethash thread-id *interop-thread-table*)))
+           (when thread
+             (note-interop-thread-use-locked thread))
+           thread))))
+
+(defun resume-interop-thread-under-admission
+    (thread-id agent-name)
+  "Resolve THREAD-ID while runtime admission is already held.
+Return the canonical thread and any unpublished loser requiring disposal."
+  (let ((existing (find-live-interop-thread thread-id)))
+    (if existing
+        (values existing nil)
+        (bt:with-lock-held (*interop-thread-start-lock*)
+          ;; Recheck after acquiring the same construction lock used by START.
+          (let ((canonical (find-live-interop-thread thread-id)))
+            (if canonical
+                (values canonical nil)
+                (let* ((*buffer-system-prompt-display-enabled* nil)
+                       (buffer
+                         (load-session thread-id :agent-name agent-name)))
+                  (if (null buffer)
+                      (values nil nil)
+                      (let ((candidate
+                              (make-interop-thread-from-buffer
+                               buffer :register-p nil)))
+                        (multiple-value-bind (published published-p)
+                            (register-interop-thread-if-absent candidate)
+                          (values
+                           published
+                           (and (not published-p)
+                                (not (eq buffer
+                                         (interop-thread-buffer published)))
+                                candidate))))))))))))
 
 (defun resume-interop-thread (thread-id &key (agent-name *default-agent-name*))
   "Resume THREAD-ID from the live table or saved sessions."
-  (or (find-live-interop-thread thread-id)
-      (let* ((*buffer-system-prompt-display-enabled* nil)
-             (buffer (load-session thread-id :agent-name agent-name)))
-        (and buffer
-             (make-interop-thread-from-buffer buffer)))))
+  (let ((token (cons :interop-resume (gensym "RESUME-")))
+        (result nil))
+    (unwind-protect
+         (setf
+          result
+          (multiple-value-bind (live loser)
+              (call-with-runtime-admission
+               (lambda ()
+                 (publish-interop-runtime-operation-under-admission
+                  token :thread-resume)
+                 (resume-interop-thread-under-admission thread-id agent-name))
+               :operation "interop thread resume")
+            (when loser
+              (dispose-unregistered-interop-thread loser))
+            (when live
+              (prune-interop-registries :protected-thread live))
+            live))
+      (settle-interop-runtime-operation token))
+    result))
 
 (defun fork-interop-thread (thread-id &key name)
   "Fork THREAD-ID into a new persistent thread."
-  (let* ((thread (or (resume-interop-thread thread-id)
-                     (error "Unknown thread: ~A" thread-id)))
-         (buffer (interop-thread-buffer thread))
-         (session (or (buffer-session buffer)
-                      (error "Thread ~A is ephemeral and cannot be forked yet."
-                             thread-id)))
-         (leaf-id (or (session-current-leaf-id session)
-                      (session-last-tree-entry-id session)))
-         (new-session (create-branched-session session leaf-id :name name))
-         (*buffer-system-prompt-display-enabled* nil)
-         (new-buffer (make-chat-buffer
-                      (session-name new-session)
-                      :agent-name (buffer-agent-name buffer)
-                      :working-directory (session-working-directory new-session)
-                      :session new-session
-                      :session-persistence-mode :persistent)))
-    (replace-buffer-history-with-serialized-messages
-     new-buffer
-     (session-active-branch-message-events new-session leaf-id)
-     :autosave-p nil)
-    (make-interop-thread-from-buffer new-buffer)))
+  (let ((losers nil)
+        (forked nil)
+        (token (cons :interop-fork (gensym "FORK-OP-"))))
+    (unwind-protect
+         (progn
+           (unwind-protect
+                (setf
+                 forked
+                 (call-with-runtime-admission
+                  (lambda ()
+                    (publish-interop-runtime-operation-under-admission
+                     token :thread-fork)
+                    (multiple-value-bind (thread resume-loser)
+                        (resume-interop-thread-under-admission
+                         thread-id *default-agent-name*)
+                      (when resume-loser
+                        (push resume-loser losers))
+                      (unless thread
+                        (error "Unknown thread: ~A" thread-id))
+                      (let ((owner (cons :interop-fork (gensym "FORK-"))))
+                        (reserve-interop-thread-execution-under-admission
+                         thread owner)
+                        (unwind-protect
+                             (let* ((buffer (interop-thread-buffer thread))
+                                    (session
+                                      (or (buffer-session buffer)
+                                          (error
+                                           "Thread ~A is ephemeral and cannot be forked yet."
+                                           thread-id)))
+                                    (leaf-id
+                                      (or (session-current-leaf-id session)
+                                          (session-last-tree-entry-id session)))
+                                    (new-session
+                                      (create-branched-session
+                                       session leaf-id :name name))
+                                    (*buffer-system-prompt-display-enabled* nil)
+                                    (new-buffer
+                                      (make-chat-buffer
+                                       (session-name new-session)
+                                       :agent-name (buffer-agent-name buffer)
+                                       :working-directory
+                                       (session-working-directory new-session)
+                                       :session new-session
+                                       :session-persistence-mode :persistent)))
+                               (replace-buffer-history-with-serialized-messages
+                                new-buffer
+                                (session-active-branch-message-events
+                                 new-session leaf-id)
+                                :autosave-p nil)
+                               (let ((candidate
+                                       (make-interop-thread-from-buffer
+                                        new-buffer :register-p nil)))
+                                 (multiple-value-bind (canonical published-p)
+                                     (register-interop-thread-if-absent
+                                      candidate)
+                                   (unless published-p
+                                     (push candidate losers))
+                                   canonical)))
+                          (release-interop-thread-execution thread owner)))))
+                  :operation "interop thread fork"))
+             ;; Loser disposal runs without construction/registry/object locks,
+             ;; while TOKEN still makes this cleanup visible to safe reload.
+             (dolist (loser losers)
+               (dispose-unregistered-interop-thread loser)))
+           (prune-interop-registries :protected-thread forked)
+           forked)
+      (settle-interop-runtime-operation token))))
 
 (defun list-interop-threads (&key cwd)
   "Return saved and live thread summaries, optionally filtered by CWD."
@@ -391,21 +750,23 @@
            (and cwd
                 (session-path-string
                  (resolve-interop-working-directory cwd))))
+         (live-threads (interop-thread-registry-snapshot))
          (live nil)
          (records (or (list-saved-session-records) nil)))
-    (maphash (lambda (_id thread)
-               (declare (ignore _id))
-               (let ((summary (interop-thread-summary thread)))
-                 (when (or (null target-directory)
-                           (string= target-directory
-                                    (getf summary :working-directory)))
-                   (push summary live))))
-             *interop-thread-table*)
+    (dolist (thread live-threads)
+      (let ((summary (interop-thread-summary thread)))
+        (when (and summary
+                   (or (null target-directory)
+                       (string= target-directory
+                                (getf summary :working-directory))))
+          (push summary live))))
     (dolist (record records)
       (let* ((session-id (or (getf record :session-id)
                              (getf record :session-name)))
              (live-thread (and session-id
-                               (find-live-interop-thread session-id))))
+                               (find session-id live-threads
+                                     :key #'interop-thread-id
+                                     :test #'string=))))
         (unless live-thread
           (let ((summary
                   (list :id session-id
@@ -451,14 +812,15 @@
 
 (defun read-interop-thread (thread-id &key include-turns)
   "Return THREAD-ID as a structured read response."
-  (let* ((thread (or (resume-interop-thread thread-id)
-                     (error "Unknown thread: ~A" thread-id)))
-         (summary (interop-thread-summary thread)))
-    (append summary
-            (when include-turns
-              (list :items
-                    (interop-thread-items
-                     (interop-thread-buffer thread)))))))
+  (let ((thread (or (resume-interop-thread thread-id)
+                    (error "Unknown thread: ~A" thread-id))))
+    (multiple-value-bind (summary buffer)
+        (interop-thread-summary thread)
+      (unless summary
+        (error "Thread ~A was evicted while being read." thread-id))
+      (append summary
+              (when include-turns
+                (list :items (interop-thread-items buffer)))))))
 
 (defun interop-turn-status-string (status)
   "Return STATUS as the stable string used by the interop surface."
@@ -466,52 +828,129 @@
 
 (defun interop-turn-completed-p (turn)
   "Return true when TURN is no longer running."
-  (member (interop-turn-status turn)
-          '(:succeeded :failed :interrupted)
-          :test #'eq))
+  (interop-turn-terminal-status-p (interop-turn-status turn)))
 
 (defun interop-turn-summary (turn)
   "Return TURN as a JSON-ready plist."
-  (bt:with-lock-held ((interop-turn-lock turn))
+  (let (id thread-id status input created-at updated-at started-at finished-at
+        interrupt-requested-p error result)
+    (bt:with-lock-held ((interop-turn-lock turn))
+      (setf id (interop-turn-id turn)
+            thread-id (interop-turn-thread-id turn)
+            status (interop-turn-status turn)
+            input (interop-turn-input turn)
+            created-at (interop-turn-created-at turn)
+            updated-at (interop-turn-updated-at turn)
+            started-at (interop-turn-started-at turn)
+            finished-at (interop-turn-finished-at turn)
+            interrupt-requested-p (interop-turn-interrupt-requested-p turn)
+            error (interop-turn-error turn)
+            result (interop-turn-result turn)))
     (append
-     (list :id (interop-turn-id turn)
-           :thread-id (interop-turn-thread-id turn)
-           :status (interop-turn-status-string (interop-turn-status turn))
-           :input (interop-turn-input turn)
-           :created-at (interop-turn-created-at turn)
-           :updated-at (interop-turn-updated-at turn)
-           :started-at (interop-turn-started-at turn)
-           :finished-at (interop-turn-finished-at turn)
-           :interrupt-requested-p (interop-turn-interrupt-requested-p turn))
-     (when (interop-turn-error turn)
-       (list :error (interop-turn-error turn)))
-     (when (interop-turn-result turn)
-       (interop-run-result-data
-        (interop-turn-result turn)
-        (interop-turn-thread-id turn)
-        (interop-turn-id turn))))))
+     (list :id id
+           :thread-id thread-id
+           :status (interop-turn-status-string status)
+           :input input
+           :created-at created-at
+           :updated-at updated-at
+           :started-at started-at
+           :finished-at finished-at
+           :interrupt-requested-p interrupt-requested-p)
+     (when error
+       (list :error error))
+     (when result
+       (interop-run-result-data result thread-id id)))))
 
 (defun register-interop-turn (turn)
   "Register TURN in the live interop turn registry."
-  (setf (gethash (interop-turn-id turn) *interop-turn-table*) turn)
+  (call-with-runtime-admission
+   (lambda ()
+     (bt:with-lock-held (*interop-registry-lock*)
+       (setf (gethash (interop-turn-id turn) *interop-turn-table*) turn)
+       (note-interop-turn-terminal-sequence-locked turn)))
+   :operation "interop turn publication")
   turn)
+
+(defun interop-turn-registry-snapshot ()
+  "Return a stable list of the turns currently in the live registry."
+  (bt:with-lock-held (*interop-registry-lock*)
+    (loop :for turn :being :the hash-values :of *interop-turn-table*
+          :collect turn)))
 
 (defun find-interop-turn (turn-id)
   "Return the live interop turn named TURN-ID, or NIL."
   (and turn-id
-       (gethash turn-id *interop-turn-table*)))
+       (bt:with-lock-held (*interop-registry-lock*)
+         (gethash turn-id *interop-turn-table*))))
+
+(defun interop-turn-active-p (turn)
+  "Return true when TURN has not reached a terminal status."
+  (bt:with-lock-held ((interop-turn-lock turn))
+    (not (interop-turn-completed-p turn))))
+
+(defun reserve-interop-thread-execution-under-admission (thread owner)
+  "Reserve THREAD for OWNER while runtime admission is already held."
+  ;; Registry-before-thread is the pruning lock order.  The membership check
+  ;; prevents a caller that fetched an old object just before eviction from
+  ;; reserving and mutating its disposed buffer.
+  (bt:with-lock-held (*interop-registry-lock*)
+    (bt:with-lock-held ((interop-thread-lock thread))
+      (unless (eq thread
+                  (gethash (interop-thread-id thread) *interop-thread-table*))
+        (error "Thread ~A is no longer live." (interop-thread-id thread)))
+      (when (interop-thread-execution-owner thread)
+        (error "Thread ~A already has an active turn."
+               (interop-thread-id thread)))
+      (setf (interop-thread-execution-owner thread) owner
+            (interop-thread-registry-sequence thread)
+            (incf *interop-registry-sequence-counter*))))
+  thread)
+
+(defun reserve-interop-thread-execution (thread owner)
+  "Reserve THREAD's mutable buffer for OWNER or signal when it is busy."
+  (call-with-runtime-admission
+   (lambda ()
+     (reserve-interop-thread-execution-under-admission thread owner))
+   :operation "an interop thread execution"))
+
+(defun release-interop-thread-execution (thread owner)
+  "Release THREAD exactly when OWNER still holds its execution reservation."
+  (bt:with-lock-held ((interop-thread-lock thread))
+    (when (equal owner (interop-thread-execution-owner thread))
+      (setf (interop-thread-execution-owner thread) nil)
+      t)))
+
+(defun interop-thread-execution-reserved-p (thread)
+  "Return true when THREAD's mutable buffer is owned by a live execution."
+  (bt:with-lock-held ((interop-thread-lock thread))
+    (not (null (interop-thread-execution-owner thread)))))
 
 (defun thread-has-active-interop-turn-p (thread-id)
   "Return true when THREAD-ID already has a live active turn."
-  (loop :for turn :being :the hash-values :of *interop-turn-table*
-        :thereis
-        (and (string= thread-id (interop-turn-thread-id turn))
-             (not (interop-turn-completed-p turn)))))
+  (let ((thread (find-live-interop-thread thread-id)))
+    (and thread
+         (interop-thread-execution-reserved-p thread))))
 
 (defun ensure-thread-has-no-active-interop-turn (thread-id)
   "Signal an error when THREAD-ID already has an active turn."
   (when (thread-has-active-interop-turn-p thread-id)
     (error "Thread ~A already has an active turn." thread-id)))
+
+(defun register-interop-turn-for-idle-thread (thread turn)
+  "Reserve THREAD and register TURN as its sole execution.
+The per-thread reservation covers synchronous and asynchronous runs alike."
+  (let ((owner (interop-turn-id turn)))
+    (reserve-interop-thread-execution thread owner)
+    (handler-case
+        (progn
+          (bt:with-lock-held (*interop-registry-lock*)
+            (when (gethash owner *interop-turn-table*)
+              (error "Turn id collision: ~A" owner))
+            (setf (gethash owner *interop-turn-table*) turn))
+          turn)
+      (error (condition)
+        (release-interop-thread-execution thread owner)
+        (error condition)))))
 
 (defun call-interop-event-callback (callback event)
   "Send EVENT to CALLBACK when CALLBACK is non-nil."
@@ -519,8 +958,24 @@
     (funcall callback event)))
 
 (defun call-interop-turn-event (turn event)
-  "Send EVENT through TURN's event callback when available."
+  "Send EVENT through TURN's bounded callback proxy when available."
   (call-interop-event-callback (interop-turn-event-callback turn) event))
+
+(defun call-interop-turn-event-safely (turn event)
+  "Send EVENT without allowing an external callback failure to escape.
+
+This boundary is for terminal notifications from an async runner's own error
+path.  The original failure has already settled TURN; a second failure from a
+client callback must not unwind the managed runner or obscure cleanup."
+  (handler-case
+      (call-interop-turn-event turn event)
+    (error (condition)
+      (ignore-errors
+        (file-debug-event "interop-event-callback-error"
+                          :turn-id (interop-turn-id turn)
+                          :event (getf event :event)
+                          :condition (format nil "~A" condition)))
+      nil)))
 
 (defun interop-wrap-prompt-event (event thread-id turn-id)
   "Attach THREAD-ID and TURN-ID to EVENT."
@@ -572,6 +1027,28 @@
           (interop-turn-finished-at turn) (get-universal-time)))
   turn)
 
+(defun finish-interop-turn-runner (turn)
+  "Publish TURN settlement and prune history under settlement admission."
+  (call-with-runtime-settlement-admission
+   (lambda ()
+     (bt:with-lock-held (*interop-registry-lock*)
+       (bt:with-lock-held ((interop-turn-lock turn))
+         (setf (interop-turn-runner-finished-p turn) t
+               (interop-turn-current-stream-state turn) nil
+               ;; Client callbacks can retain transports and application state;
+               ;; terminal status reads do not need them.
+               (interop-turn-event-callback turn) nil)
+         (when (and (interop-turn-terminal-status-p
+                     (interop-turn-status turn))
+                    (null (interop-turn-terminal-sequence turn)))
+           (setf (interop-turn-terminal-sequence turn)
+                 (incf *interop-registry-sequence-counter*)))))
+     ;; TURN is now eligible.  Evicted resource cleanup happens outside the
+     ;; inner registry/object locks, but before outer admission reopens.
+     (prune-interop-registries))
+   :operation "interop turn settlement")
+  turn)
+
 (defun read-interop-turn (turn-id)
   "Return TURN-ID as a structured read response."
   (let ((turn (or (find-interop-turn turn-id)
@@ -583,17 +1060,21 @@
   (let ((turn (or (find-interop-turn turn-id)
                   (error "Unknown turn: ~A" turn-id)))
         (should-notify-p nil)
-        (thread-id nil))
+        (thread-id nil)
+        (stream-state nil))
     (bt:with-lock-held ((interop-turn-lock turn))
       (setf thread-id (interop-turn-thread-id turn))
       (unless (interop-turn-completed-p turn)
         (unless (interop-turn-interrupt-requested-p turn)
           (setf should-notify-p t))
         (setf (interop-turn-interrupt-requested-p turn) t
-              (interop-turn-updated-at turn) (get-universal-time))
-        (when (interop-turn-current-stream-state turn)
-          (cancel-stream-state (interop-turn-current-stream-state turn)
-                               :stop-reason "cancelled"))))
+              (interop-turn-updated-at turn) (get-universal-time)
+              stream-state (interop-turn-current-stream-state turn))))
+    ;; Cancellation may close streams, invoke callbacks, or block briefly.  It
+    ;; must never run while holding the turn lock because those callbacks may
+    ;; read the same turn.
+    (when stream-state
+      (cancel-stream-state stream-state :stop-reason "cancelled"))
     (when should-notify-p
       (call-interop-turn-event
        turn
@@ -608,25 +1089,65 @@
   (buffer-finalize-input buffer)
   buffer)
 
+(defun note-interop-thread-turn-started (thread turn-id)
+  "Publish TURN-ID as THREAD's current execution metadata."
+  (bt:with-lock-held ((interop-thread-lock thread))
+    (setf (interop-thread-current-turn-id thread) turn-id
+          (interop-thread-updated-at thread) (get-universal-time)))
+  thread)
+
+(defun note-interop-thread-turn-completed (thread result)
+  "Publish RESULT as THREAD's latest completed execution metadata."
+  (bt:with-lock-held ((interop-thread-lock thread))
+    (setf (interop-thread-last-result thread) result
+          (interop-thread-updated-at thread) (get-universal-time)))
+  thread)
+
+(defun make-cancelled-interop-run-result (buffer prompt)
+  "Return the terminal prompt result for a cooperatively interrupted turn."
+  (let ((session (buffer-session buffer)))
+    (make-prompt-run-result
+     :prompt prompt
+     :final-text ""
+     :tool-events nil
+     :reasoning-blocks nil
+     :agent-name (buffer-agent-name buffer)
+     :provider (buffer-provider-override buffer)
+     :model (buffer-model-override buffer)
+     :think-level (buffer-think-level-override buffer)
+     :service-tier (buffer-service-tier-override buffer)
+     :iterations 0
+     :stop-reason "cancelled"
+     :usage nil
+     :session-name (and session (session-name session))
+     :session-id (and session (session-id session)))))
+
 (defun run-interop-thread* (thread prompt
                             &key provider model think-level
                               model-role service-tier
                               package-names
                               (max-tool-iterations *prompt-max-tool-iterations*)
-                              auto-approve-tools-p
                               output-schema
                               event-callback
+                              event-callback-dispatched-p
                               turn-id
-                              stream-state-callback)
-  "Run PROMPT on live THREAD and return a prompt result."
+                              stream-state-callback
+                              cancel-requested-p)
+  "Run PROMPT on reserved THREAD and return RESULT and its turn id."
   (when (blank-string-p prompt)
     (error "Thread input must be non-empty"))
-  (let* ((thread-id (interop-thread-id thread))
+  (let* ((event-callback
+           (if event-callback-dispatched-p
+               event-callback
+               (make-bounded-runtime-callback
+                event-callback
+                :label (format nil "interop thread ~A"
+                               (interop-thread-id thread)))))
+         (thread-id (interop-thread-id thread))
          (buffer (interop-thread-buffer thread))
          (effective-turn-id (or turn-id
                                 (interop-generate-id "turn"))))
-    (setf (interop-thread-current-turn-id thread) effective-turn-id
-          (interop-thread-updated-at thread) (get-universal-time))
+    (note-interop-thread-turn-started thread effective-turn-id)
     (call-interop-event-callback
      event-callback
      (list :event "turn.started"
@@ -648,15 +1169,18 @@
                      (interop-wrap-prompt-event
                       event thread-id effective-turn-id)))))
            (result
-             (run-prompt-with-buffer
-              buffer prompt nil
-              max-tool-iterations auto-approve-tools-p
-              nil nil
-              :event-callback wrapped-callback
-              :output-schema output-schema
-              :stream-state-callback stream-state-callback)))
-      (setf (interop-thread-last-result thread) result
-            (interop-thread-updated-at thread) (get-universal-time))
+             (handler-case
+                 (run-prompt-with-buffer
+                  buffer prompt nil
+                  max-tool-iterations
+                  nil nil
+                  :event-callback wrapped-callback
+                  :output-schema output-schema
+                  :stream-state-callback stream-state-callback
+                  :cancel-requested-p cancel-requested-p)
+               (prompt-run-cancelled ()
+                 (make-cancelled-interop-run-result buffer prompt)))))
+      (note-interop-thread-turn-completed thread result)
       (call-interop-event-callback
        event-callback
        (append (list :event "turn.completed"
@@ -664,42 +1188,60 @@
                      :turn-id effective-turn-id)
                (interop-run-result-data
                 result thread-id effective-turn-id buffer)))
-      result)))
+      (values result effective-turn-id))))
 
 (defun run-interop-thread (thread-id prompt
                            &key provider model think-level
                              model-role service-tier
                              package-names
                              (max-tool-iterations *prompt-max-tool-iterations*)
-                             auto-approve-tools-p
                              output-schema
                              event-callback
                              turn-id
                              stream-state-callback)
   "Run PROMPT on THREAD-ID and return a prompt result."
-  (run-interop-thread*
-   (or (resume-interop-thread thread-id)
-       (error "Unknown thread: ~A" thread-id))
-   prompt
-   :provider provider
-   :model model
-   :think-level think-level
-   :model-role model-role
-   :service-tier service-tier
-   :package-names package-names
-   :max-tool-iterations max-tool-iterations
-   :auto-approve-tools-p auto-approve-tools-p
-   :output-schema output-schema
-   :event-callback event-callback
-   :turn-id turn-id
-   :stream-state-callback stream-state-callback))
+  (let* ((thread (or (resume-interop-thread thread-id)
+                     (error "Unknown thread: ~A" thread-id)))
+         (effective-turn-id (or turn-id (interop-generate-id "turn")))
+         (token (cons :synchronous-interop (gensym "RUN-"))))
+    (unwind-protect
+         (progn
+           (call-with-runtime-admission
+            (lambda ()
+              (publish-interop-runtime-operation-under-admission
+               token :synchronous-run)
+              (reserve-interop-thread-execution-under-admission
+               thread effective-turn-id))
+            :operation "a synchronous interop run")
+           (unwind-protect
+                (run-interop-thread*
+                 thread
+                 prompt
+                 :provider provider
+                 :model model
+                 :think-level think-level
+                 :model-role model-role
+                 :service-tier service-tier
+                 :package-names package-names
+                 :max-tool-iterations max-tool-iterations
+                 :output-schema output-schema
+                 :event-callback event-callback
+                 :turn-id effective-turn-id
+                 :stream-state-callback stream-state-callback)
+             (unwind-protect
+                  (release-interop-thread-execution thread effective-turn-id)
+               (prune-interop-registries :protected-thread thread))))
+      (settle-interop-runtime-operation token))))
+
+(defun make-interop-turn-runner-thread (function name)
+  "Start FUNCTION as the managed runner named NAME."
+  (bt:make-thread function :name name))
 
 (defun start-interop-turn (thread-id prompt
                            &key provider model think-level
                              model-role service-tier
                              package-names
                              (max-tool-iterations *prompt-max-tool-iterations*)
-                             auto-approve-tools-p
                              output-schema
                              event-callback)
   "Start an async turn for THREAD-ID and return its live turn object."
@@ -707,59 +1249,109 @@
     (error "Turn input must be non-empty"))
   (let* ((thread (or (resume-interop-thread thread-id)
                      (error "Unknown thread: ~A" thread-id)))
+         (canonical-thread-id (interop-thread-id thread))
          (turn-id (interop-generate-id "turn"))
          (now (get-universal-time))
+         (event-callback
+           (make-bounded-runtime-callback
+            event-callback
+            :label (format nil "interop turn ~A" turn-id)))
          (turn (make-interop-turn
                 :id turn-id
-                :thread-id thread-id
+                :thread-id canonical-thread-id
                 :status :queued
                 :input prompt
                 :output-schema output-schema
                 :created-at now
                 :updated-at now
-                :event-callback event-callback)))
-    (ensure-thread-has-no-active-interop-turn thread-id)
-    (register-interop-turn turn)
-    (setf (interop-turn-runner-thread turn)
-          (bt:make-thread
-           (lambda ()
-             (bt:with-lock-held ((interop-turn-lock turn))
-               (setf (interop-turn-status turn) :running
-                     (interop-turn-started-at turn) (get-universal-time)
-                     (interop-turn-updated-at turn) (get-universal-time)))
-             (handler-case
-                 (let ((result
-                         (run-interop-thread*
-                          thread
-                          prompt
-                          :provider provider
-                          :model model
-                          :think-level think-level
-                          :model-role model-role
-                          :service-tier service-tier
-                          :package-names package-names
-                          :max-tool-iterations max-tool-iterations
-                          :auto-approve-tools-p auto-approve-tools-p
-                          :output-schema output-schema
-                          :event-callback event-callback
-                          :turn-id turn-id
-                          :stream-state-callback
-                          (lambda (state)
-                            (update-interop-turn-stream-state turn state)))))
-                   (if (string= "cancelled"
-                                (or (prompt-run-result-stop-reason result) ""))
-                       (finalize-interop-turn turn :interrupted :result result)
-                       (finalize-interop-turn turn :succeeded :result result)))
-               (error (condition)
-                 (finalize-interop-turn turn :failed
-                                        :error (format nil "~A" condition))
-                 (call-interop-turn-event
-                  turn
-                  (list :event "turn.failed"
-                        :thread-id thread-id
-                        :turn-id turn-id
-                        :error (format nil "~A" condition))))))
-           :name (format nil "clawmacs-interop-turn-~A" turn-id)))
+                :event-callback event-callback))
+         (runner-start-gate
+           (bt:make-semaphore :name "interop-turn-runner-start")))
+    (register-interop-turn-for-idle-thread thread turn)
+    (handler-case
+        (let ((runner
+                (make-interop-turn-runner-thread
+                 (lambda ()
+                   ;; Publish the runner object before application work can
+                   ;; settle, so terminal pruning cannot race its installation.
+                   (bt:wait-on-semaphore runner-start-gate)
+                   (unwind-protect
+                        (progn
+                          (bt:with-lock-held ((interop-turn-lock turn))
+                            (setf (interop-turn-status turn) :running
+                                  (interop-turn-started-at turn)
+                                  (get-universal-time)
+                                  (interop-turn-updated-at turn)
+                                  (get-universal-time)))
+                          (handler-case
+                              (let ((result
+                                      (run-interop-thread*
+                                       thread
+                                       prompt
+                                       :provider provider
+                                       :model model
+                                       :think-level think-level
+                                       :model-role model-role
+                                       :service-tier service-tier
+                                       :package-names package-names
+                                       :max-tool-iterations max-tool-iterations
+                                       :output-schema output-schema
+                                       :event-callback event-callback
+                                       :event-callback-dispatched-p t
+                                       :turn-id turn-id
+                                       :stream-state-callback
+                                       (lambda (state)
+                                         (update-interop-turn-stream-state
+                                          turn state))
+                                       :cancel-requested-p
+                                       (lambda ()
+                                         (bt:with-lock-held
+                                             ((interop-turn-lock turn))
+                                           (interop-turn-interrupt-requested-p
+                                            turn))))))
+                                (if (string=
+                                     "cancelled"
+                                     (or (prompt-run-result-stop-reason result)
+                                         ""))
+                                    (finalize-interop-turn
+                                     turn :interrupted :result result)
+                                    (finalize-interop-turn
+                                     turn :succeeded :result result)))
+                            (error (condition)
+                              (finalize-interop-turn
+                               turn :failed :error (format nil "~A" condition))
+                              (call-interop-turn-event-safely
+                               turn
+                               (list :event "turn.failed"
+                                     :thread-id canonical-thread-id
+                                     :turn-id turn-id
+                                     :error (format nil "~A" condition))))))
+                     (unwind-protect
+                          (release-interop-thread-execution thread turn-id)
+                       (finish-interop-turn-runner turn))))
+                 (format nil "clawmacs-interop-turn-~A" turn-id))))
+          (bt:with-lock-held ((interop-turn-lock turn))
+            (unless (interop-turn-retained-resources-released-p turn)
+              (setf (interop-turn-runner-thread turn) runner
+                    (interop-turn-runner-installed-p turn) t)))
+          (bt:signal-semaphore runner-start-gate))
+      (error (condition)
+        ;; The turn is already visible, so publish a terminal failure instead
+        ;; of leaving a permanently queued registry entry.
+        (bt:with-lock-held ((interop-turn-lock turn))
+          (setf (interop-turn-runner-installed-p turn) t))
+        (finalize-interop-turn turn :failed
+                               :error (format nil "~A" condition))
+        (release-interop-thread-execution thread turn-id)
+        (ignore-errors
+          (call-interop-turn-event
+           turn
+           (list :event "turn.failed"
+                 :thread-id canonical-thread-id
+                 :turn-id turn-id
+                 :error (format nil "~A" condition))))
+        (finish-interop-turn-runner turn)
+        (error condition)))
     turn))
 
 ;;; --------------------------------------------------------------------------
@@ -851,8 +1443,6 @@
          :max-tool-iterations
          (or (interop-request-param params :max-tool-iterations)
              *prompt-max-tool-iterations*)
-         :auto-approve-tools-p
-         (not (null (interop-request-param params :auto-approve-tools-p)))
          :output-schema (interop-request-param params :output-schema)
          :event-callback event-callback)))
       ((string= method "turn.read")
@@ -871,30 +1461,25 @@
                          (interop-request-param params :prompt)
                          (interop-request-param params :text)
                          "")))
-         (interop-run-result-data
-          (run-interop-thread
-           thread-id
-           (if (stringp input)
-               input
-               (princ-to-string input))
-           :provider (interop-request-param params :model-provider)
-           :model (interop-request-param params :model)
-           :think-level (or (interop-request-param params :effort)
-                            (interop-request-param params :think-level))
-           :model-role (interop-request-param params :model-role)
-           :service-tier (interop-request-param params :service-tier)
-           :package-names (interop-request-param params :packages)
-           :max-tool-iterations
-           (or (interop-request-param params :max-tool-iterations)
-               *prompt-max-tool-iterations*)
-           :auto-approve-tools-p
-           (not (null (interop-request-param params :auto-approve-tools-p)))
-           :output-schema (interop-request-param params :output-schema)
-           :event-callback event-callback)
-          thread-id
-          (interop-thread-current-turn-id
-           (or (find-live-interop-thread thread-id)
-               (resume-interop-thread thread-id))))))
+         (multiple-value-bind (result turn-id)
+             (run-interop-thread
+              thread-id
+              (if (stringp input)
+                  input
+                  (princ-to-string input))
+              :provider (interop-request-param params :model-provider)
+              :model (interop-request-param params :model)
+              :think-level (or (interop-request-param params :effort)
+                               (interop-request-param params :think-level))
+              :model-role (interop-request-param params :model-role)
+              :service-tier (interop-request-param params :service-tier)
+              :package-names (interop-request-param params :packages)
+              :max-tool-iterations
+              (or (interop-request-param params :max-tool-iterations)
+                  *prompt-max-tool-iterations*)
+              :output-schema (interop-request-param params :output-schema)
+              :event-callback event-callback)
+           (interop-run-result-data result thread-id turn-id))))
       (t
        (error "Unknown interop method: ~A" method)))))
 
@@ -938,7 +1523,6 @@
   (parse-clawmacs-args)
   (initialize-clawmacs-runtime)
   (reset-interaction-state)
-  (setf *sandbox-root* (truename "."))
   (ensure-prompt-workspace-project)
   (let ((write-lock (bt:make-lock "interop-jsonl-output")))
     (labels ((safe-write (message)

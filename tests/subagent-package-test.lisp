@@ -25,6 +25,10 @@
            (make-hash-table :test #'equal))
           (clawmacs::*subagent-handle-counter* 0)
           (clawmacs::*subagent-handles* (make-hash-table :test #'equal))
+          (clawmacs::*subagent-terminal-history-limit* 64)
+          (clawmacs::*subagent-terminal-sequence-counter* 0)
+          (clawmacs::*synchronous-subagent-runs*
+           (make-hash-table :test #'eq))
           (clawmacs::*subagent-registry-lock*
            (bt:make-lock "test-subagent-package-registry"))
           (clawmacs::*package-configuration-path*
@@ -37,6 +41,127 @@
           (clawmacs::*package-prompt-sections* nil)
           (clawmacs::*enabled-builtin-packages* nil))
      ,@body))
+
+(test settled-subagent-history-is-bounded-without-evicting-active-work
+  "Pruning retains active handles and releases resources held by old history."
+  (with-subagent-package-state
+    (let* ((clawmacs::*subagent-terminal-history-limit* 1)
+           (running
+             (clawmacs::make-subagent-handle
+              :id "subagent-running"
+              :prompt "running prompt"
+              :status :running
+              :thread (list :running-thread)
+              :started-at 1))
+           (cancelling
+             (clawmacs::make-subagent-handle
+              :id "subagent-cancelling"
+              :prompt "cancelling prompt"
+              :status :cancelling
+              :thread (list :cancelling-thread)
+              :cancel-requested-p t
+              :started-at 2))
+           (old-result (list :large "old-result"))
+           (old-thread (list :old-thread))
+           (old
+             (clawmacs::make-subagent-handle
+              :id "subagent-old"
+              :prompt "old prompt"
+              :status :succeeded
+              :result old-result
+              :error "old error metadata"
+              :thread old-thread
+              :started-at 3))
+           (recent-result (list :large "recent-result"))
+           (recent
+             (clawmacs::make-subagent-handle
+              :id "subagent-recent"
+              :prompt "recent prompt"
+              :status :succeeded
+              :result recent-result
+              :thread (list :recent-thread)
+              :started-at 4)))
+      (mapc #'clawmacs::register-subagent-handle
+            (list running cancelling old))
+      (clawmacs::finish-subagent-worker old)
+      (clawmacs::register-subagent-handle recent)
+      (clawmacs::finish-subagent-worker recent)
+      (is (eq running (clawmacs:find-subagent "subagent-running")))
+      (is (eq cancelling (clawmacs:find-subagent "subagent-cancelling")))
+      (is (eq recent (clawmacs:find-subagent "subagent-recent")))
+      (is-false (clawmacs:find-subagent "subagent-old"))
+      (is (= 3 (hash-table-count clawmacs::*subagent-handles*)))
+      (is (= 1
+             (count-if #'clawmacs::settled-subagent-handle-p
+                       (clawmacs:list-subagents))))
+      (is-true
+       (clawmacs::subagent-handle-retained-resources-released-p old))
+      (is (null (clawmacs::subagent-handle-prompt old)))
+      (is (null (clawmacs::subagent-handle-result old)))
+      (is (null (clawmacs::subagent-handle-error old)))
+      (is (null (clawmacs::subagent-handle-thread old)))
+      (is (equal '(:running-thread)
+                 (clawmacs::subagent-handle-thread running)))
+      (is (equal '(:cancelling-thread)
+                 (clawmacs::subagent-handle-thread cancelling)))
+      (multiple-value-bind (result status handle)
+          (clawmacs:wait-subagent recent :timeout 0)
+        (is (eq recent handle))
+        (is (eq :succeeded status))
+        (is (eq recent-result result))))))
+
+(test subagent-starts-participate-in-safe-reload-admission
+  "Direct runs are observable and reload ownership rejects all new starts."
+  (with-subagent-package-state
+    (let ((entered (bt:make-semaphore :name "sync-subagent-entered"))
+          (release (bt:make-semaphore :name "sync-subagent-release"))
+          (runs clawmacs::*synchronous-subagent-runs*)
+          (worker nil)
+          (result nil)
+          (worker-error nil)
+          (prompt-call-count 0))
+      (with-subagent-package-function-override
+          (clawmacs::run-single-prompt (prompt &rest arguments)
+           (declare (ignore prompt arguments))
+           (incf prompt-call-count)
+           (bt:signal-semaphore entered)
+           (unless (bt:wait-on-semaphore release :timeout 5.0)
+             (error "Timed out releasing synchronous subagent test run"))
+           :synchronous-result)
+        (unwind-protect
+             (progn
+               (setf worker
+                     (bt:make-thread
+                      (lambda ()
+                        (let ((clawmacs::*synchronous-subagent-runs* runs))
+                          (handler-case
+                              (setf result
+                                    (clawmacs:run-subagent "Hold admission"))
+                            (error (condition)
+                              (setf worker-error condition)))))
+                      :name "synchronous-subagent-admission-test"))
+               (is (bt:wait-on-semaphore entered :timeout 2.0))
+               (is (= 1
+                      (clawmacs:active-synchronous-subagent-run-count)))
+               (bt:signal-semaphore release)
+               (bt:join-thread worker)
+               (setf worker nil)
+               (is (null worker-error))
+               (is (eq :synchronous-result result))
+               (is (= 0
+                      (clawmacs:active-synchronous-subagent-run-count))))
+          (bt:signal-semaphore release)
+          (when worker
+            (bt:join-thread worker))))
+      (let ((clawmacs::*safe-reload-active-request* :reload-owned))
+        (signals clawmacs:runtime-admission-closed
+          (clawmacs:run-subagent "Refuse direct run"))
+        (signals clawmacs:runtime-admission-closed
+          (clawmacs:run-subagent-async "Refuse async run")))
+      (is (= 1 prompt-call-count))
+      (is (= 0 clawmacs::*subagent-handle-counter*))
+      (is (= 0 (hash-table-count clawmacs::*subagent-handles*)))
+      (is (= 0 (clawmacs:active-synchronous-subagent-run-count))))))
 
 (defun load-test-subagent-package ()
   "Enable and load the bundled subagent package."
@@ -74,8 +199,7 @@
            (prompt (render-package-prompt-sections)))
       (dolist (name '("subagent_cancel" "subagent_run" "subagent_start"
                       "subagent_status" "subagent_wait"))
-        (is (member name tool-names :test #'string=))
-        (is-false (clawmacs::tool-requires-permission-p name)))
+        (is (member name tool-names :test #'string=)))
       (is (search "Delegation with subagent" prompt))
       (is (search "subagent_run" prompt))
       (is (search "agent_spec" prompt))
@@ -214,17 +338,12 @@
                            "subagent_cancel"
                            `(:id ,id))))
           (is (getf cancelled :ok))
-          (is (eq :cancelled (getf (getf cancelled :subagent) :status))))))))
-
-(test subagent-package-rejects-agent-auto-approval-escalation
-  "Agent callers cannot use subagent tools to auto-approve permissioned tools."
-  (with-subagent-package-state
-    (load-test-subagent-package)
-    (let ((*current-caller* :coder))
-      (signals error
-        (clawmacs:execute-tool
-         "subagent_run"
-         '(:prompt "Try escalation"
-           :provider "zai"
-           :model "glm-5"
-           :auto_approve_tools t))))))
+          (is (member (getf (getf cancelled :subagent) :status)
+                      '(:cancelling :cancelled)))
+          ;; Keep the provider override installed until the cancelled worker has
+          ;; actually unwound.  This guards against cross-test/provider leakage.
+          (let ((waited (subagent-package-tool-result
+                         "subagent_wait"
+                         `(:id ,id :timeout 2))))
+            (is (eq :cancelled (getf waited :status)))
+            (is (getf (getf waited :subagent) :done-p))))))))

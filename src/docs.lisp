@@ -21,7 +21,7 @@
 documentation in *extended-docs*."
   (let ((undocumented nil))
     (dolist (sym (list-functions))
-      (unless (gethash sym *extended-docs*)
+      (unless (extended-doc sym)
         (push sym undocumented)))
     (sort undocumented #'string< :key #'symbol-name)))
 
@@ -30,7 +30,7 @@ documentation in *extended-docs*."
 documentation in *extended-docs*."
   (let ((undocumented nil))
     (dolist (sym (list-variables))
-      (unless (gethash sym *extended-docs*)
+      (unless (extended-doc sym)
         (push sym undocumented)))
     (sort undocumented #'string< :key #'symbol-name)))
 
@@ -638,7 +638,7 @@ documentation in *extended-docs*."
 (defdoc buffer-status
   :category "buffer"
   :usage "(buffer-status BUF:buffer) — (buffer-status (current-buffer))"
-  :returns "keyword — :IDLE, :THINKING, :STREAMING, :ERROR, :APPROVAL, or :OAUTH."
+  :returns "keyword — Current runtime state such as :IDLE, :THINKING, :TOOL-RUNNING, :QUESTION, :ERROR, or :OAUTH."
   :see-also (buffer send-to-agent-with-context))
 
 (defdoc buffer-provider-override
@@ -1016,10 +1016,11 @@ documentation in *extended-docs*."
   :returns "keyword — :USER for interactive use, or an agent keyword while provider tools run."
   :see-also (tool-definitions-for-api execute-tool deftool))
 
-(defdoc *sandbox-root*
+(defdoc *tool-working-directory*
   :category "tool"
-  :returns "pathname or nil - Sandboxed file tools are restricted to this directory subtree when non-nil."
-  :see-also (execute-tool validate-sandbox-path))
+  :returns "pathname or nil — Base directory used to resolve relative tool paths; absolute paths and parent traversal remain valid."
+  :side-effects "Dynamically bound from the buffer's captured working directory while a tool executes. This is path context, not containment."
+  :see-also (execute-tool resolve-tool-path tool-working-directory-pathname))
 
 (defdoc *command-table*
   :category "command"
@@ -1111,7 +1112,7 @@ documentation in *extended-docs*."
   :category "tool"
   :usage "(deftool SYMBOL :name \"provider_name\" :description \"...\" :args ((arg :type \"string\") (items :type \"array\" :items ((:type . \"object\")))))"
   :returns "agent-tool-metadata — Metadata for the registered provider-callable tool."
-  :side-effects "Registers an existing function as an agent tool, including tool permission, and syncs the provider tool table when available. Argument specs support :type, :description, :required, and :items for array schemas. If SYMBOL is a registered command, command call style is inferred and the current tool buffer is supplied automatically."
+  :side-effects "Registers an existing function as an agent tool and syncs the provider tool table when available. Argument specs support :type, :description, :required, and :items for array schemas. If SYMBOL is a registered command, command call style is inferred and the current tool buffer is supplied automatically."
   :see-also (register-agent-tool-metadata defcommand execute-tool))
 
 (defdoc extended-doc
@@ -1908,8 +1909,8 @@ documentation in *extended-docs*."
 
 (defdoc *diff-display-max-lines*
   :category "tool"
-  :returns "integer - Maximum diff lines shown when lispi file tool approval displays render edits."
-  :see-also (*tool-table* tool-approval-extra-display))
+  :returns "integer - Maximum diff lines included in lispi file-edit result data."
+  :see-also (compute-simple-diff execute-edit))
 
 (defdoc *lisp-eval-default-package*
   :category "tool"
@@ -1942,36 +1943,36 @@ documentation in *extended-docs*."
   :category "tool"
   :usage "(execute-read ARGS:lisp-data)"
   :returns "string — File contents, truncated by line window."
-  :side-effects "Reads a text file within the current sandbox."
-  :see-also (*file-read-default-limit* validate-sandbox-path deftool))
+  :side-effects "Reads a text file resolved against the current tool working directory."
+  :see-also (*file-read-default-limit* resolve-tool-path deftool))
 
 (defdoc execute-find
   :category "tool"
   :usage "(execute-find ARGS:lisp-data)"
   :returns "string — Matching file paths as Lisp data."
-  :side-effects "Searches file names within the current sandbox."
-  :see-also (*find-default-limit* validate-sandbox-path deftool))
+  :side-effects "Searches file names below the requested path, resolved against the current tool working directory."
+  :see-also (*find-default-limit* resolve-tool-path deftool))
 
 (defdoc execute-grep
   :category "tool"
   :usage "(execute-grep ARGS:lisp-data)"
   :returns "string — Matching lines as Lisp data."
-  :side-effects "Searches file contents within the current sandbox."
-  :see-also (*grep-default-limit* *grep-max-file-bytes* validate-sandbox-path deftool))
+  :side-effects "Searches file contents below the requested path, resolved against the current tool working directory."
+  :see-also (*grep-default-limit* *grep-max-file-bytes* resolve-tool-path deftool))
 
 (defdoc execute-write
   :category "tool"
   :usage "(execute-write ARGS:lisp-data)"
   :returns "string — Write result as Lisp data."
-  :side-effects "Creates or overwrites a text file within the current sandbox."
-  :see-also (file-write-approval-display validate-sandbox-path deftool))
+  :side-effects "Creates or overwrites a text file resolved against the current tool working directory."
+  :see-also (resolve-tool-path deftool))
 
 (defdoc execute-edit
   :category "tool"
   :usage "(execute-edit ARGS:lisp-data)"
   :returns "string — Edit result as Lisp data."
-  :side-effects "Replaces one exact text occurrence in a file within the current sandbox."
-  :see-also (file-edit-approval-display validate-sandbox-path deftool))
+  :side-effects "Replaces one exact text occurrence in a file resolved against the current tool working directory."
+  :see-also (resolve-tool-path deftool))
 
 (defdoc execute-lisp-eval
   :category "tool"
@@ -2005,7 +2006,7 @@ documentation in *extended-docs*."
 (defdoc agent-tool-metadata
   :category "tool"
   :usage "Created by deftool or register-agent-tool-metadata."
-  :returns "Structure — Holds provider name, description, explicit args, schema, permission, call style, and owning Lisp symbol."
+  :returns "Structure — Holds provider name, description, explicit args, schema, call style, execution ownership, and owning Lisp symbol."
   :see-also (deftool defcommand register-agent-tool-metadata list-agent-tool-metadata))
 
 (defdoc agent-tool-metadata-package
@@ -2043,13 +2044,13 @@ documentation in *extended-docs*."
 (defdoc tool-definition
   :category "tool"
   :usage "Created by register-tool."
-  :returns "Structure — Holds name, description, schema, permission, execute-fn, optional approval-display-fn, and optional owning package."
+  :returns "Structure — Holds name, description, schema, execution ownership, execute-fn, and optional owning package."
   :see-also (register-tool *tool-table* execute-tool))
 
 (defdoc subagent-tool
   :category "tool"
   :usage "Created by make-subagent-tool for temporary subagent tool exposure."
-  :returns "Structure — Holds name, description, schema, permission, execute-fn, and optional approval-display-fn."
+  :returns "Structure — Holds name, description, schema, execution ownership, and execute-fn."
   :see-also (make-subagent-tool run-subagent run-subagent-async))
 
 (defdoc make-subagent-tool
@@ -2061,7 +2062,7 @@ documentation in *extended-docs*."
 
 (defdoc register-tool
   :category "tool"
-  :usage "(register-tool NAME DESCRIPTION SCHEMA PERMISSION EXECUTE-FN ...)"
+  :usage "(register-tool NAME DESCRIPTION SCHEMA EXECUTE-FN &key PACKAGE EXECUTION)"
   :returns "tool-definition — The registered tool."
   :side-effects "Stores the tool definition in *tool-table*."
   :see-also (*tool-table* tool-definition execute-tool init-tools))
@@ -2071,13 +2072,7 @@ documentation in *extended-docs*."
   :usage "(execute-tool NAME:string ARGS:lisp-data) — (execute-tool \"lisp_eval\" '(:code \"(+ 1 2)\"))"
   :returns "string — The tool execution result. File tools return plain text; lisp_eval returns a printed Lisp plist for structured display and history."
   :side-effects "Executes the tool's function. Side effects depend on the registered tool implementation."
-  :see-also (register-tool tool-requires-permission-p *tool-table*))
-
-(defdoc tool-requires-permission-p
-  :category "tool"
-  :usage "(tool-requires-permission-p NAME:string) — (tool-requires-permission-p \"lisp_eval\")"
-  :returns "boolean — T if the tool requires user approval."
-  :see-also (execute-tool register-tool))
+  :see-also (register-tool *tool-table*))
 
 (defdoc tool-definitions-for-api
   :category "tool"
@@ -2095,19 +2090,13 @@ documentation in *extended-docs*."
   :category "tool"
   :usage "(format-tool-call-sexpr NAME:string ARGS:lisp-data)"
   :returns "string — S-expression formatted tool call. \"(lisp_eval :code \\\"(+ 1 2)\\\")\""
-  :see-also (format-tool-call-expanded tool-approval-extra-display))
+  :see-also (format-tool-call-expanded))
 
 (defdoc format-tool-call-expanded
   :category "tool"
   :usage "(format-tool-call-expanded NAME:string ARGS:lisp-data)"
   :returns "string — Multi-line expanded display of a tool call."
-  :see-also (format-tool-call-sexpr tool-approval-extra-display))
-
-(defdoc tool-approval-extra-display
-  :category "tool"
-  :usage "(tool-approval-extra-display NAME:string ARGS:alist)"
-  :returns "string or nil — Extra display content for approval prompts (e.g. file diffs)."
-  :see-also (format-tool-call-sexpr format-tool-call-expanded))
+  :see-also (format-tool-call-sexpr))
 
 (defdoc init-tools
   :category "tool"
@@ -2154,128 +2143,26 @@ documentation in *extended-docs*."
   :see-also (clawmacs-safe-reload))
 
 ;;; ==========================================================================
-;;; Category: approval — Tool approval state
+;;; Category: tool-runtime — Tool sequencing state
 ;;; ==========================================================================
-
-(defdoc buffer-approval-pending
-  :category "approval"
-  :usage "(buffer-approval-pending BUF:buffer) — (buffer-approval-pending (current-buffer))"
-  :returns "alist or nil — Describes the tool call awaiting approval."
-  :see-also (buffer-approval-result buffer-stashed-input buffer-status))
-
-(defdoc buffer-approval-result
-  :category "approval"
-  :usage "(buffer-approval-result BUF:buffer) — (buffer-approval-result (current-buffer))"
-  :returns "keyword or cons — :APPROVE, :DENY, or (:DENY-WITH-MESSAGE . \"reason\")."
-  :see-also (buffer-approval-pending))
 
 (defdoc buffer-stashed-input
-  :category "approval"
+  :category "tool-runtime"
   :usage "(buffer-stashed-input BUF:buffer) — (buffer-stashed-input (current-buffer))"
-  :returns "string or nil — The user's input text stashed during approval."
-  :see-also (buffer-approval-pending))
+  :returns "string or nil — The compose text preserved while a tool batch runs."
+  :see-also (buffer-pending-tool-calls buffer-status))
 
 (defdoc buffer-pending-tool-calls
-  :category "approval"
+  :category "tool-runtime"
   :usage "(buffer-pending-tool-calls BUF:buffer)"
-  :returns "list — Tool_use blocks awaiting sequential approval."
-  :see-also (buffer-tool-call-results buffer-approval-pending))
+  :returns "list — Tool-use blocks awaiting sequential execution."
+  :see-also (buffer-tool-call-results buffer-pending-tool-execution))
 
 (defdoc buffer-tool-call-results
-  :category "approval"
+  :category "tool-runtime"
   :usage "(buffer-tool-call-results BUF:buffer)"
-  :returns "list — Accumulated results from approved/denied tool calls."
-  :see-also (buffer-pending-tool-calls buffer-approval-pending))
-
-;;; ==========================================================================
-;;; Category: guard — Approval policies and sandbox presets
-;;; ==========================================================================
-
-(defdoc approval-policy-default-permission
-  :category "guard"
-  :usage "(approval-policy-default-permission &key BUFFER DIRECTORY)"
-  :returns "keyword or nil — Effective default approval override."
-  :see-also (set-approval-policy-default-permission approval-policy-tool-permission))
-
-(defdoc approval-policy-default-sandbox-permission
-  :category "guard"
-  :usage "(approval-policy-default-sandbox-permission &key BUFFER DIRECTORY)"
-  :returns "keyword or nil — Effective default sandbox preset."
-  :see-also (set-approval-policy-default-sandbox-permission approval-policy-sandbox-permission))
-
-(defdoc approval-policy-default-network-permission
-  :category "guard"
-  :usage "(approval-policy-default-network-permission &key BUFFER DIRECTORY)"
-  :returns "keyword or nil — Effective default network toggle."
-  :see-also (set-approval-policy-default-network-permission approval-policy-network-permission))
-
-(defdoc approval-policy-default-working-directory-permission
-  :category "guard"
-  :usage "(approval-policy-default-working-directory-permission &key BUFFER DIRECTORY)"
-  :returns "keyword or nil — Effective default working-directory policy."
-  :see-also (set-approval-policy-default-working-directory-permission approval-policy-working-directory-permission))
-
-(defdoc approval-policy-tool-permission
-  :category "guard"
-  :usage "(approval-policy-tool-permission NAME:string &key BUFFER DIRECTORY)"
-  :returns "keyword or nil — Per-tool approval override."
-  :see-also (approval-policy-default-permission set-approval-policy-tool-permission))
-
-(defdoc approval-policy-sandbox-permission
-  :category "guard"
-  :usage "(approval-policy-sandbox-permission NAME:string &key BUFFER DIRECTORY)"
-  :returns "keyword or nil — Per-tool sandbox preset override."
-  :see-also (approval-policy-default-sandbox-permission set-approval-policy-sandbox-permission))
-
-(defdoc approval-policy-network-permission
-  :category "guard"
-  :usage "(approval-policy-network-permission NAME:string &key BUFFER DIRECTORY)"
-  :returns "keyword or nil — Per-tool network toggle override."
-  :see-also (approval-policy-default-network-permission set-approval-policy-network-permission))
-
-(defdoc approval-policy-working-directory-permission
-  :category "guard"
-  :usage "(approval-policy-working-directory-permission NAME:string &key BUFFER DIRECTORY)"
-  :returns "keyword or nil — Per-tool working-directory override."
-  :see-also (approval-policy-default-working-directory-permission set-approval-policy-working-directory-permission))
-
-(defdoc approval-policy-history-entries
-  :category "guard"
-  :usage "(approval-policy-history-entries &key BUFFER DIRECTORY)"
-  :returns "list — Recent recorded approval decisions."
-  :see-also (approval-policy-history-to-string describe-guard-history-command))
-
-(defdoc approval-policy-history-to-string
-  :category "guard"
-  :usage "(approval-policy-history-to-string &key BUFFER DIRECTORY LIMIT)"
-  :returns "string — Human-readable guard policy and audit summary."
-  :see-also (approval-policy-history-entries describe-guard-policy-command))
-
-(defdoc set-approval-policy-default-network-permission
-  :category "guard"
-  :usage "(set-approval-policy-default-network-permission PERMISSION &key BUFFER DIRECTORY)"
-  :returns "keyword or nil — Updated default network toggle."
-  :see-also (approval-policy-default-network-permission))
-
-(defdoc set-approval-policy-network-permission
-  :category "guard"
-  :usage "(set-approval-policy-network-permission NAME:string PERMISSION &key BUFFER DIRECTORY)"
-  :returns "keyword or nil — Updated per-tool network toggle."
-  :see-also (approval-policy-network-permission))
-
-(defdoc describe-guard-policy-command
-  :category "guard"
-  :usage "M-x describe-guard-policy-command"
-  :returns "nil — Displays a help buffer."
-  :side-effects "Creates or refreshes *help:guard-policy*."
-  :see-also (guard-policy-report-to-string describe-guard-history-command))
-
-(defdoc describe-guard-history-command
-  :category "guard"
-  :usage "M-x describe-guard-history-command"
-  :returns "nil — Displays a help buffer."
-  :side-effects "Creates or refreshes *help:guard-history*."
-  :see-also (guard-history-report-to-string describe-guard-policy-command))
+  :returns "list — Accumulated results from completed or refused tool calls."
+  :see-also (buffer-pending-tool-calls buffer-pending-tool-execution))
 (defdoc new-buffer-command
   :category "buffer-command"
   :usage "Bound to C-x n. Creates a new chat buffer and switches to it."
@@ -2719,11 +2606,6 @@ documentation in *extended-docs*."
   :returns "list of hook-metadata sorted by hook variable name."
   :see-also (defhook find-hook-metadata))
 
-(defdoc *approval-review-hook*
-  :category "init"
-  :usage "List of functions called when a guard approval decision is recorded."
-  :see-also (add-hook remove-hook run-hook-with-args approval-policy-history-entries))
-
 (defdoc *startup-hook*
   :category "init"
   :usage "List of function designators run after init.lisp loads and before McCLIM startup."
@@ -2870,21 +2752,21 @@ documentation in *extended-docs*."
 
 (defdoc run-single-prompt
   :category "main"
-  :usage "(run-single-prompt PROMPT &key :agent-name :provider :model :think-level :working-directory :max-tool-iterations :auto-approve-tools-p :tool-names :custom-tools)"
+  :usage "(run-single-prompt PROMPT &key :agent-name :provider :model :think-level :working-directory :max-tool-iterations :tool-names :custom-tools)"
   :returns "prompt-run-result — Final text, routing metadata, iteration count, and captured tool events."
-  :side-effects "Creates an in-memory prompt buffer, sends non-streaming provider requests, executes agent-allowed tools, inserts tool_result messages into the prompt buffer, and loops until a final assistant response is returned."
+  :side-effects "Creates an in-memory prompt buffer, sends non-streaming provider requests, executes exposed tools, inserts tool_result messages into the prompt buffer, and loops until a final assistant response is returned."
   :see-also (clawmacs-prompt-main run-subagent provider-request execute-tool build-conversation-messages))
 
 (defdoc run-subagent
   :category "main"
-  :usage "(run-subagent PROMPT &key :agent-name :provider :model :think-level :working-directory :core-prompt :personality-prompt :tool-names :custom-tools :max-tool-iterations :auto-approve-tools-p)"
+  :usage "(run-subagent PROMPT &key :agent-name :provider :model :think-level :working-directory :core-prompt :personality-prompt :tool-names :custom-tools :max-tool-iterations)"
   :returns "prompt-run-result — The delegated agent's final response and tool evidence."
   :side-effects "Runs a synchronous prompt-mode subagent. Transient prompt overrides and custom tools are dynamically scoped and do not mutate the agent or tool registries."
   :see-also (run-subagent-async make-subagent-tool register-agent-definition prompt-run-result prompt-run-used-tool-p *active-tool-names*))
 
 (defdoc run-subagent-async
   :category "main"
-  :usage "(run-subagent-async PROMPT &key :agent-name :provider :model :think-level :working-directory :core-prompt :personality-prompt :tool-names :custom-tools :max-tool-iterations :auto-approve-tools-p)"
+  :usage "(run-subagent-async PROMPT &key :agent-name :provider :model :think-level :working-directory :core-prompt :personality-prompt :tool-names :custom-tools :max-tool-iterations)"
   :returns "subagent-handle — A process-local handle for polling, waiting, cancellation, and result inspection."
   :side-effects "Starts a background thread and stores the returned handle in the process-local subagent registry."
   :see-also (wait-subagent cancel-subagent subagent-snapshot run-subagent make-subagent-tool))
@@ -2910,13 +2792,13 @@ documentation in *extended-docs*."
 (defdoc subagent-status
   :category "main"
   :usage "(subagent-status HANDLE)"
-  :returns "keyword — :RUNNING, :SUCCEEDED, :FAILED, or :CANCELLED."
+  :returns "keyword — :RUNNING, :CANCELLING, :SUCCEEDED, :FAILED, or :CANCELLED."
   :see-also (subagent-done-p subagent-result subagent-error subagent-snapshot))
 
 (defdoc subagent-done-p
   :category "main"
   :usage "(subagent-done-p HANDLE)"
-  :returns "boolean — True when the subagent has reached a terminal status."
+  :returns "boolean — True when the subagent has reached a terminal status and its worker has exited."
   :see-also (subagent-status wait-subagent))
 
 (defdoc subagent-result
@@ -2934,7 +2816,7 @@ documentation in *extended-docs*."
 (defdoc subagent-snapshot
   :category "main"
   :usage "(subagent-snapshot HANDLE)"
-  :returns "plist — Immutable snapshot of id, prompt, agent-name, status, done-p, result, error, timestamps, and cancellation flag."
+  :returns "plist — Immutable snapshot of id, prompt, agent-name, status, done-p, result, error, timestamps, worker settlement, and cancellation flag."
   :see-also (subagent-status subagent-result subagent-error))
 
 (defdoc wait-subagent
@@ -2947,7 +2829,7 @@ documentation in *extended-docs*."
   :category "main"
   :usage "(cancel-subagent HANDLE)"
   :returns "subagent-handle — The cancelled handle."
-  :side-effects "Marks the subagent cancelled cooperatively. The provider call may still finish in the background, but late completion does not overwrite cancelled status."
+  :side-effects "Marks the subagent cancelling, closes its active provider stream, prevents later provider/tool iterations, and publishes :CANCELLED after the worker exits. A tool already executing is not forcibly preempted."
   :see-also (run-subagent-async wait-subagent subagent-status))
 
 (defdoc prompt-run-tool-names

@@ -142,7 +142,6 @@
 (deftool artifactum-list-tool
   :name "artifactum_list"
   :description "List durable session attachments and artifacts for the current buffer."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ())
 
@@ -157,7 +156,6 @@
 (deftool artifactum-read-tool
   :name "artifactum_read"
   :description "Read one durable artifact by id, including text content when available."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((id :type "string"
              :description "Artifact id returned by artifactum_list or attachment context.")))
@@ -189,7 +187,6 @@
 (deftool artifactum-create-tool
   :name "artifactum_create"
   :description "Create one durable artifact for the current session from text content or a local file path."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((name :type "string" :required nil
                :description "Artifact file name, such as report.md or chart.json.")
@@ -219,7 +216,6 @@
 (deftool artifactum-update-tool
   :name "artifactum_update"
   :description "Update one durable artifact in the current session."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((id :type "string"
              :description "Artifact id to update.")

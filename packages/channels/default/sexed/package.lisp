@@ -6,7 +6,7 @@
 
 - Use the `sexed_*` provider tools for Lisp source files and Lisp source text.
 - For files, prefer the disk-backed tools. Use `sexed_file_*` for ordinary
-  sandbox-local paths such as `.cache/...` or user-supplied relative paths.
+  working-directory-relative paths such as `.cache/...`, or absolute paths.
   Use `sexed_project_outline`, `sexed_project_form_text`, `sexed_project_edit`,
   `sexed_project_read`, and `sexed_project_write` only when you have an actual
   Clawmacs project name and a project-relative path.
@@ -36,7 +36,6 @@
 (deftool sexed-tool-text-diagnostics
   :name "sexed_text_diagnostics"
   :description "Check Lisp source text for balanced s-expressions and return parser diagnostics."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((text :type "string"
                :description "Lisp source text to inspect.")))
@@ -44,7 +43,6 @@
 (deftool sexed-tool-text-outline
   :name "sexed_text_outline"
   :description "Return a structural outline for Lisp source text."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((text :type "string"
                :description "Lisp source text to outline.")
@@ -62,7 +60,6 @@
 (deftool sexed-tool-text-form-text
   :name "sexed_text_form_text"
   :description "Return the selected form text from Lisp source text."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((text :type "string"
                :description "Lisp source text to inspect.")
@@ -72,7 +69,6 @@
 (deftool sexed-tool-text-edit
   :name "sexed_text_edit"
   :description "Apply one structural edit to Lisp source text and return the edited text. Requires selector, usually copied from sexed_text_outline."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((text :type "string"
                :description "Lisp source text to edit.")
@@ -94,7 +90,6 @@
 (deftool sexed-tool-text-edits
   :name "sexed_text_edits"
   :description "Apply a batch of structural edits to Lisp source text and return the edited text. Prefer head/name selectors because edits are applied sequentially."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((text :type "string"
                :description "Lisp source text to edit.")
@@ -103,11 +98,10 @@
 
 (deftool sexed-tool-file-read
   :name "sexed_file_read"
-  :description "Read a sandbox-local Lisp source file from disk. Ordinary files return exact source; structurally giant files return a safety page unless full is true."
-  :permission :agent-allowed
+  :description "Read a Lisp source file from disk. Relative paths use the tool working directory; structurally giant files return a safety page unless full is true."
   :call-style :raw-args
   :args ((path :type "string"
-               :description "Sandbox-local path to read.")
+               :description "Relative or absolute path to read.")
          (offset :type "integer" :required nil
                  :description "1-indexed structural item offset when a safety page is returned.")
          (limit :type "integer" :required nil
@@ -123,21 +117,19 @@
 
 (deftool sexed-tool-file-write
   :name "sexed_file_write"
-  :description "Create or overwrite a sandbox-local Lisp source file after balance validation."
-  :permission :agent-allowed
+  :description "Create or overwrite a relative or absolute Lisp source file after balance validation."
   :call-style :raw-args
   :args ((path :type "string"
-               :description "Sandbox-local path to write.")
+               :description "Relative or absolute path to write.")
          (content :type "string"
                   :description "Complete Lisp source content to write.")))
 
 (deftool sexed-tool-file-outline
   :name "sexed_file_outline"
-  :description "Return a structural outline for a sandbox-local Lisp source file."
-  :permission :agent-allowed
+  :description "Return a structural outline for a relative or absolute Lisp source file."
   :call-style :raw-args
   :args ((path :type "string"
-               :description "Sandbox-local path to outline.")
+               :description "Relative or absolute path to outline.")
          (depth :type "integer" :required nil
                 :description "Only include forms at this depth.")
          (max-depth :type "integer" :required nil
@@ -151,21 +143,19 @@
 
 (deftool sexed-tool-file-form-text
   :name "sexed_file_form_text"
-  :description "Return the selected form text from a sandbox-local Lisp source file."
-  :permission :agent-allowed
+  :description "Return the selected form text from a relative or absolute Lisp source file."
   :call-style :raw-args
   :args ((path :type "string"
-               :description "Sandbox-local path to inspect.")
+               :description "Relative or absolute path to inspect.")
          (selector :type "object"
                    :description "Selector object for the target form.")))
 
 (deftool sexed-tool-file-edit
   :name "sexed_file_edit"
-  :description "Apply one structural edit directly to a sandbox-local Lisp source file. Requires selector, usually copied from sexed_file_outline."
-  :permission :agent-allowed
+  :description "Apply one structural edit directly to a relative or absolute Lisp source file. Requires selector, usually copied from sexed_file_outline."
   :call-style :raw-args
   :args ((path :type "string"
-               :description "Sandbox-local path to edit.")
+               :description "Relative or absolute path to edit.")
          (operation :type "string"
                     :description "One of replace, delete, insert-before, insert-after, wrap, splice, raise, slurp-forward, or barf-forward.")
          (selector :type "object"
@@ -183,18 +173,16 @@
 
 (deftool sexed-tool-file-edits
   :name "sexed_file_edits"
-  :description "Apply a batch of structural edits directly to a sandbox-local Lisp source file in one balanced write. Prefer this for multi-change file tasks."
-  :permission :agent-allowed
+  :description "Apply a batch of structural edits directly to a relative or absolute Lisp source file in one balanced write. Prefer this for multi-change file tasks."
   :call-style :raw-args
   :args ((path :type "string"
-               :description "Sandbox-local path to edit.")
+               :description "Relative or absolute path to edit.")
          (edits :type "array" :items ((:type . "object"))
                 :description "Array of edit objects. Each edit has operation, selector, and for replace/insert operations new-text/newtext. Prefer head/name selectors.")))
 
 (deftool sexed-tool-project-read
   :name "sexed_project_read"
   :description "Read a project Lisp source file from disk. Ordinary files return exact source; structurally giant files return a safety page unless full is true."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string"
                   :description "Project name.")
@@ -216,7 +204,6 @@
 (deftool sexed-tool-project-write
   :name "sexed_project_write"
   :description "Create or overwrite a project Lisp source file after balance validation."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string"
                   :description "Project name.")
@@ -228,7 +215,6 @@
 (deftool sexed-tool-project-outline
   :name "sexed_project_outline"
   :description "Return a structural outline for a project Lisp source file."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string"
                   :description "Project name.")
@@ -248,7 +234,6 @@
 (deftool sexed-tool-project-form-text
   :name "sexed_project_form_text"
   :description "Return the selected form text from a project Lisp source file."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string"
                   :description "Project name.")
@@ -260,7 +245,6 @@
 (deftool sexed-tool-project-edit
   :name "sexed_project_edit"
   :description "Apply one structural edit directly to a project Lisp source file. Requires selector, usually copied from sexed_project_outline."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string"
                   :description "Project name.")
@@ -284,7 +268,6 @@
 (deftool sexed-tool-project-edits
   :name "sexed_project_edits"
   :description "Apply a batch of structural edits directly to a project Lisp source file in one balanced write. Prefer this for multi-change project tasks."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((project :type "string"
                   :description "Project name.")

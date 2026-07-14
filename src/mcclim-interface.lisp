@@ -14,10 +14,19 @@
 (clim:define-gesture-name
     :describe-presentation :pointer-button-press (:left :control :shift))
 
-(clim:define-presentation-type tool-approval ())
 (clim:define-presentation-type tool-activity-summary ())
-(clim:define-presentation-type minibuffer-command-candidate ())
+(clim:define-presentation-type chat-interaction-candidate ())
 (clim:define-presentation-type package-dashboard-entry-ref ())
+
+(defstruct (chat-interaction-candidate-ref
+             (:constructor make-chat-interaction-candidate-ref
+                 (state generation kind index item)))
+  "Exact semantic identity for one visibly rendered interaction candidate."
+  state
+  generation
+  kind
+  index
+  item)
 
 (defparameter *buffer-presentation-default-columns* 100
   "Fallback display width passed to buffer presentation hooks.")
@@ -32,14 +41,8 @@
       ""))
 
 (clim:define-presentation-method clim:presentation-typep
-    (object (type tool-approval))
-  (and (listp object)
-       (not (null (assoc :tool-name object)))))
-
-(clim:define-presentation-method clim:presentation-typep
-    (object (type minibuffer-command-candidate))
-  (and (listp object)
-       (not (null (getf object :command)))))
+    (object (type chat-interaction-candidate))
+  (typep object 'chat-interaction-candidate-ref))
 
 (clim:define-presentation-method clim:presentation-typep
     (object (type package-dashboard-entry-ref))
@@ -47,10 +50,7 @@
        (getf object :dashboard-buffer)
        (getf object :entry)))
 
-(defclass clawmacs-chat-redisplay-event (clim:window-event)
-  ())
-
-(defclass clawmacs-chat-menu-refresh-event (clim:window-event)
+(defclass clawmacs-chat-redisplay-event (clim:window-manager-event)
   ())
 
 (defvar *suppress-chat-redisplay-requests* nil
@@ -65,196 +65,45 @@ avoid recursive update→notify→redisplay loops in the CLIM event thread.")
   :menu (("Stop Response" :command com-chat-stop-response
           :documentation "Stop the active streaming response.")))
 
-(defun chat-menu-check-label (enabled-p name)
-  "Return NAME prefixed with a check mark when ENABLED-P."
-  (format nil "~A ~A" (if enabled-p "✓" " ") name))
+(clim:define-command-table clawmacs-chat-view-menu
+  :menu (("Toggle Tool Results"
+          :command com-chat-toggle-tool-results
+          :documentation "Toggle tool result messages.")
+         ("Toggle Reasoning Output"
+          :command com-chat-toggle-reasoning-output
+          :documentation "Toggle provider reasoning blocks.")
+         ("Toggle Metadata Output"
+          :command com-chat-toggle-metadata-output
+          :documentation "Toggle provider response metadata.")
+         ("Toggle Debug Mode"
+          :command com-chat-toggle-debug-mode
+          :documentation "Toggle API debug messages.")))
 
-(defun chat-view-menu-items (&optional buffer)
-  "Return dynamic menu items for transcript display options.
-When BUFFER is nil, use the default buffer visibility settings."
-  (let ((show-tool-results-p (if buffer
-                                 (buffer-show-tool-results-p buffer)
-                                 *default-show-tool-results*))
-        (show-reasoning-p (if buffer
-                              (buffer-show-reasoning-p buffer)
-                              *default-show-reasoning-output*))
-        (show-metadata-p (if buffer
-                             (buffer-show-metadata-p buffer)
-                             *default-show-metadata-output*)))
-    `((,(chat-menu-check-label show-tool-results-p "Tool Results")
-       :command com-chat-toggle-tool-results
-       :documentation "Toggle tool result messages.")
-      (,(chat-menu-check-label show-reasoning-p "Reasoning Output")
-       :command com-chat-toggle-reasoning-output
-       :documentation "Toggle provider reasoning blocks.")
-      (,(chat-menu-check-label show-metadata-p "Metadata Output")
-       :command com-chat-toggle-metadata-output
-       :documentation "Toggle provider response metadata.")
-      (,(chat-menu-check-label *debug-mode* "Debug Mode")
-       :command com-chat-toggle-debug-mode
-       :documentation "Toggle API debug messages."))))
+(clim:define-command-table clawmacs-chat-skills-menu
+  :menu (("Toggle Skill..."
+          :command com-chat-open-skill-selector
+          :documentation
+          "Enable or disable a skill through the presentation-based minibuffer.")))
 
-(defun no-chat-menu-items-label (label)
-  "Return a non-action menu item for an empty dynamic menu."
-  `((,label :divider nil)))
+(clim:define-command-table clawmacs-chat-packages-menu
+  :menu (("Open Package Dashboard..."
+          :command com-chat-open-package-dashboard
+          :documentation
+          "Open the presentation-based package dashboard for this chat.")))
 
-(defun chat-skill-menu-items ()
-  "Return dynamic menu items for file-backed skills."
-  (let ((items
-          (loop :for skill :in (list-skills :include-disabled t)
-                :for key := (skill-path-key skill)
-                :when key
-                  :collect
-                  `(,(chat-menu-check-label
-                      (skill-enabled-p skill)
-                      (skill-name skill))
-                    :command (com-chat-toggle-skill ,key)
-                    :documentation ,(skill-display-description skill)))))
-    (or items (no-chat-menu-items-label "No skills available"))))
+(clim:define-command-table clawmacs-chat-effort-menu
+  :menu (("Select Think Level..."
+          :command com-chat-open-effort-selector
+          :documentation
+          "Choose reasoning effort through the presentation-based minibuffer.")))
 
-(defun chat-buffer-package-enabled-p (buffer package-name)
-  "Return true when BUFFER explicitly enables PACKAGE-NAME."
-  (and buffer
-       (buffer-package-name-enabled-p buffer
-                                      (manifest-package-name package-name))))
-
-(defun chat-package-menu-items (buffer)
-  "Return dynamic menu items for packages visible to BUFFER."
-  (let ((items
-          (loop :for definition :in (list-installed-packages :buffer buffer)
-                :for name := (package-definition-name definition)
-                :collect
-                `(,(chat-menu-check-label
-                    (chat-buffer-package-enabled-p buffer name)
-                    name)
-                  :command (com-chat-toggle-package ,name)
-                  :documentation ,(package-display-description definition)))))
-    (or items (no-chat-menu-items-label "No packages available"))))
-
-(defun chat-effort-menu-label (buffer)
-  "Return the top-level effort menu label for BUFFER."
-  (if (null buffer)
-      "Effort"
-      (handler-case
-          (let* ((entries (available-think-levels-for-selector buffer))
-                 (active (and entries
-                              (or (find-if (lambda (entry)
-                                             (getf entry :active-p))
-                                           entries)
-                                  (first entries))))
-                 (status (if active
-                             (getf active :display)
-                             "n/a")))
-            (format nil "Effort: ~A" status))
-        (error ()
-          "Effort: n/a"))))
-
-(defun chat-effort-unavailable-label (buffer)
-  "Return the disabled effort menu label for BUFFER."
-  (multiple-value-bind (provider model)
-      (handler-case (resolve-buffer-provider-and-model buffer)
-        (error () (values nil nil)))
-    (if (and provider model)
-        (format nil "Not available for ~A"
-                (model-selector-display provider model))
-        "Not available for the active model")))
-
-(defun chat-effort-menu-items (buffer)
-  "Return dynamic menu items for model effort selection."
-  (cond
-    ((null buffer)
-     (no-chat-menu-items-label "No active chat buffer"))
-    (t
-     (let ((entries (available-think-levels-for-selector buffer)))
-       (if entries
-           (mapcar
-            (lambda (entry)
-              (let* ((provider (getf entry :provider))
-                     (model (getf entry :model))
-                     (display (getf entry :display))
-                     (level (getf entry :level))
-                     (model-display (model-selector-display provider model)))
-                `(,(chat-menu-check-label (getf entry :active-p) display)
-                  :command (com-chat-select-effort ,(or level ""))
-                  :documentation
-                  ,(if level
-                       (format nil "Set reasoning effort to ~A for ~A."
-                               display
-                               model-display)
-                       (format nil "Use the model default reasoning effort for ~A."
-                               model-display)))))
-            entries)
-           (no-chat-menu-items-label
-            (chat-effort-unavailable-label buffer)))))))
-
-(defun chat-menu-context-buffer (context)
-  "Return the chat buffer represented by CONTEXT."
-  (cond
-    ((null context) nil)
-    ((typep context 'buffer) context)
-    (t (chat-frame-buffer context))))
-
-(defun chat-system-menu-items ()
-  "Return dynamic menu items for system-level frame actions."
-  '(("Safe Reload" :command com-chat-safe-reload
-     :documentation "Safely reload updated Clawmacs source in place.")
-    ("Recurse" :command com-chat-recurse
-     :documentation "Open a fresh nested Clawmacs frame in a new process.")))
-
-(defun make-chat-menu-bar-command-table (&optional context)
-  "Return a frame-local chat menu command table for CONTEXT."
-  (let* ((buffer (chat-menu-context-buffer context))
-         (view-menu
-           (clim:make-command-table
-            nil
-            :inherit-from nil
-            :menu (chat-view-menu-items buffer)))
-         (skills-menu
-           (clim:make-command-table
-            nil
-            :inherit-from nil
-            :menu (chat-skill-menu-items)))
-         (packages-menu
-           (clim:make-command-table
-            nil
-            :inherit-from nil
-            :menu (chat-package-menu-items buffer)))
-         (effort-menu
-           (clim:make-command-table
-            nil
-            :inherit-from nil
-            :menu (chat-effort-menu-items buffer)))
-         (system-menu
-           (clim:make-command-table
-            nil
-            :inherit-from nil
-            :menu (chat-system-menu-items))))
-    (clim:make-command-table
-     nil
-     :inherit-from '(clawmacs-chat-frame)
-     :menu `(("Chat" :menu ,(clim:find-command-table
-                             'clawmacs-chat-control-menu)
-              :documentation "Chat controls.")
-             ("View" :menu ,view-menu
-              :documentation "Transcript display controls.")
-             ("Skills" :menu ,skills-menu
-              :documentation "Enable or disable skills.")
-             ("Packages" :menu ,packages-menu
-              :documentation "Enable or disable packages for this chat.")
-             (,(chat-effort-menu-label buffer) :menu ,effort-menu
-              :documentation "Select the model reasoning effort for this chat.")
-             ("System" :menu ,system-menu
-              :documentation "Launch nested Clawmacs instances and other system actions.")))))
-
-(defun rebuild-chat-menu-bar-command-tables (&optional context)
-  "Return a fresh chat menu command table for CONTEXT."
-  (make-chat-menu-bar-command-table context))
-
-(defun refresh-chat-frame-menu-bar (frame)
-  "Refresh FRAME's frame-local dynamic menu-bar entries."
-  (setf (clim:frame-command-table frame)
-        (make-chat-menu-bar-command-table frame))
-  frame)
+(clim:define-command-table clawmacs-chat-system-menu
+  :menu (("Safe Reload"
+          :command com-chat-safe-reload
+          :documentation "Safely reload updated Clawmacs source in place.")
+         ("Recurse"
+          :command com-chat-recurse
+          :documentation "Open a fresh nested Clawmacs frame in a new process.")))
 
 (defun chat-message-kind (msg)
   "Return MSG's high-level display kind."
@@ -417,67 +266,9 @@ When BUFFER is nil, use the default buffer visibility settings."
             (length (or (message-raw-content msg) nil)))
     (format stream "~%Metadata:~%~S~%" (message-metadata msg))))
 
-(defun chat-approval-value (approval key)
-  "Return KEY's value in APPROVAL."
-  (cdr (assoc key approval)))
-
-(defun chat-approval-display-string (approval)
-  "Return a compact display string for a pending tool APPROVAL."
-  (with-output-to-string (stream)
-    (format stream "Approval required~%")
-    (write-string
-     (or (chat-approval-value approval :display-expanded)
-         (chat-approval-value approval :display-raw)
-         (chat-approval-value approval :tool-name)
-         "")
-     stream)
-    (let ((extra (chat-approval-value approval :display-extra)))
-      (unless (blank-string-p (or extra ""))
-        (format stream "~2%~A" extra)))
-    (format stream "~2%Decision: approve | deny")))
-
-(defun display-chat-approval (stream approval)
-  "Display pending APPROVAL as a semantic presentation."
-  (clim:with-output-as-presentation
-      (stream approval 'tool-approval :single-box t)
-    (clim:with-drawing-options
-        (stream :ink (clim:make-rgb-color 0.50 0.22 0.08))
-      (write-string (chat-approval-display-string approval) stream)))
-  (terpri stream)
-  (terpri stream))
-
-(defun chat-string-prefix-p (prefix string)
-  "Return true when PREFIX is a prefix of STRING."
-  (and (<= (length prefix) (length string))
-       (string= prefix string :end2 (length prefix))))
-
-(defun chat-denial-reason-from-text (trimmed lower)
-  "Return a denial reason encoded in TRIMMED/LOWER, or NIL."
-  (dolist (prefix '("deny:" "deny " "no:" "no "))
-    (when (chat-string-prefix-p prefix lower)
-      (let ((reason
-              (string-trim '(#\Space #\Tab #\Newline #\Return)
-                           (subseq trimmed (length prefix)))))
-        (return (unless (blank-string-p reason)
-                  reason))))))
-
-(defun chat-approval-response-from-text (text)
-  "Return an approval response encoded by compose TEXT."
-  (let* ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return)
-                               (or text "")))
-         (lower (string-downcase trimmed))
-         (reason (chat-denial-reason-from-text trimmed lower)))
-    (cond
-      (reason (cons :deny-with-message reason))
-      ((member lower '("d" "deny" "n" "no") :test #'string=) :deny)
-      (t :approve))))
-
 (defun handle-chat-compose-text (buf text)
   "Submit compose TEXT for BUF. Return true when TEXT was consumed."
   (cond
-    ((buffer-approval-pending buf)
-     (handle-approval-response buf (chat-approval-response-from-text text))
-     t)
     ((buffer-user-input-pending buf)
      (set-message-text (buffer-input-message buf) text)
      (send-message buf)
@@ -507,32 +298,99 @@ When BUFFER is nil, use the default buffer visibility settings."
    (message-metadata-help-string (help-frame-message frame))
    stream))
 
+(defun make-message-help-worker-thread (function)
+  "Create the worker that owns one independent message-help frame."
+  (bt:make-thread function :name "clawmacs message metadata"))
+
+(defun make-message-help-frame (msg)
+  "Construct one disowned message-help application frame for MSG."
+  (clim:make-application-frame
+   'clawmacs-message-help-frame
+   :message msg
+   :pretty-name "Message Metadata"))
+
 (defun open-message-help-window (msg)
   "Open a one-pane help frame for MSG metadata."
-  (let ((frame (clim:make-application-frame
-                'clawmacs-message-help-frame
-                :message msg
-                :pretty-name "Message Metadata")))
-    (bt:make-thread
-     (lambda ()
-       (clim:run-frame-top-level frame))
-     :name "clawmacs message metadata")
-    frame))
+  (let ((reservation
+          (handler-case
+              (reserve-message-help-runtime)
+            (runtime-admission-closed (condition)
+              (file-debug-event
+               "message-help-admission-refused"
+               :condition (format nil "~A" condition))
+              (return-from open-message-help-window nil))
+            (error (condition)
+              (file-debug-event
+               "message-help-admission-error"
+               :condition (format nil "~A" condition))
+              (return-from open-message-help-window nil))))
+        (frame nil))
+    (setf frame
+          (handler-case
+              (make-message-help-frame msg)
+            (error (condition)
+              ;; Frame construction allocates panes and backend-independent
+              ;; CLIM state at a user command boundary.  Resource errors must
+              ;; not unwind the owning ESA frame.
+              (release-message-help-runtime reservation)
+              (file-debug-event
+               "message-help-frame-construction-error"
+               :condition (format nil "~A" condition))
+              (return-from open-message-help-window nil))))
+    (handler-case
+        (let ((worker-reservation reservation))
+          (make-message-help-worker-thread
+           (lambda ()
+             (unwind-protect
+                  ;; An independent help frame must not drop its failure into
+                  ;; SBCL's debugger or destabilize the main application frame.
+                  (handler-case
+                      (clim:run-frame-top-level frame)
+                    (error (condition)
+                      (file-debug-event
+                       "message-help-frame-error"
+                       :condition (format nil "~A" condition))))
+               (release-message-help-runtime worker-reservation))))
+          frame)
+      (error (condition)
+        ;; Thread resource exhaustion occurs at the user command boundary.
+        ;; Contain it here so ESA's top level is never unwound.
+        (release-message-help-runtime reservation)
+        (file-debug-event
+         "message-help-thread-start-error"
+         :condition (format nil "~A" condition))
+        nil))))
+
+(clim:define-command-table clawmacs-chat-compose-editing-table)
+
+(defun chat-compose-drei-command-symbol (name)
+  "Return Drei's built-in command named NAME.
+
+McCLIM does not export its concrete editing-command symbols.  Keep that one
+compatibility boundary here; command-table creation and pane integration use
+the public ESA and DREI-SYNTAX protocols."
+  (or (find-symbol name :drei-commands)
+      (error "This McCLIM does not provide the Drei command ~A." name)))
 
 (defun install-chat-compose-drei-keybindings ()
-  "Install Clawmacs-specific Drei bindings expected by the compose pane.
-Drei already binds C-j to newline-and-indent, but its gadget event bridge
-ignores modifier key events by default. We also add the Clawmacs/Emacs-style
-C-Backspace binding for backward word deletion, matching the old input pane."
-  (esa:set-key 'drei-commands::com-newline-and-indent
-               'drei:indent-table
+  "Install Clawmacs compose bindings in its application-owned command table.
+
+Drei already binds the usual C-j representation, but some backends deliver it
+as Control-Newline.  The compose pane also preserves the Clawmacs/Emacs-style
+C-Backspace word deletion binding.  Do not modify Drei's process-global
+INDENT-TABLE or DELETION-TABLE: `additional-command-tables' scopes these
+bindings to `clawmacs-chat-compose-pane'."
+  (esa:set-key (chat-compose-drei-command-symbol
+                "COM-NEWLINE-AND-INDENT")
+               'clawmacs-chat-compose-editing-table
                '((#\Newline :control)))
-  (dolist (gesture '((#\Backspace :control)
-                     (#\Rubout :control)))
-    (esa:set-key `(drei-commands::com-backward-kill-word
-                   ,clim:*numeric-argument-marker*)
-                 'drei:deletion-table
-                 (list gesture))))
+  (let ((backward-kill-word
+          (chat-compose-drei-command-symbol "COM-BACKWARD-KILL-WORD")))
+    (dolist (gesture '((#\Backspace :control)
+                       (#\Rubout :control)))
+      (esa:set-key (list backward-kill-word clim:*numeric-argument-marker*)
+                   'clawmacs-chat-compose-editing-table
+                   (list gesture)))))
 
 (install-chat-compose-drei-keybindings)
 
@@ -571,29 +429,6 @@ C-Backspace binding for backward word deletion, matching the old input pane."
                                           :min-height height
                                           :max-height height)))))
   pane)
-
-(defun chat-compose-pane-p (pane)
-  "Return true when PANE is the compose pane of a Clawmacs chat frame."
-  (let ((frame (ignore-errors (clim:pane-frame pane))))
-    (and (typep frame 'clawmacs-chat-frame)
-         (eq pane (ignore-errors (clim:find-pane-named frame 'compose))))))
-
-(defun maybe-configure-chat-compose-pane (pane)
-  "Configure PANE when it is the chat compose pane."
-  (when (chat-compose-pane-p pane)
-    (configure-chat-compose-pane pane)))
-
-(defmethod clim:note-sheet-grafted :after ((pane clim:text-editor-pane))
-  (maybe-configure-chat-compose-pane pane))
-
-(defmethod clim:note-sheet-grafted :after ((pane drei:drei-gadget-pane))
-  (maybe-configure-chat-compose-pane pane))
-
-(defmethod clim:note-sheet-region-changed :after ((pane clim:text-editor-pane))
-  (maybe-configure-chat-compose-pane pane))
-
-(defmethod clim:note-sheet-region-changed :after ((pane drei:drei-gadget-pane))
-  (maybe-configure-chat-compose-pane pane))
 
 (defun chat-compose-submit-event-p (event)
   "Return true when EVENT should submit the compose pane.
@@ -739,10 +574,7 @@ pane redraws and value callbacks propagate."
   "Return true when Clawmacs modal input should receive compose keystrokes."
   (or *minibuffer-active*
       *session-tree-selector-active*
-      *buffer-selector-active*
-      *model-selector-active*
-      *think-selector-active*
-      *openai-oauth-pending*
+      (openai-oauth-login-pending-p)
       (and buffer (buffer-user-input-pending buffer))))
 
 (defun chat-key-name-keyword (key-name)
@@ -814,7 +646,6 @@ pane redraws and value callbacks propagate."
   (let ((current (current-buffer)))
     (when current
       (setf (chat-frame-buffer frame) current)))
-  (request-chat-frame-menu-refresh frame)
   (request-chat-frame-redisplay frame)
   (when focus-compose
     (let ((compose (ignore-errors (clim:find-pane-named frame 'compose))))
@@ -826,13 +657,13 @@ pane redraws and value callbacks propagate."
 (defun chat-compose-pane-point-offset (pane)
   "Return PANE's Drei point as a flat character offset, or NIL."
   (ignore-errors
-    (drei-buffer:offset (drei:point (slot-value pane 'drei::%view)))))
+    (drei-buffer:offset (drei:point (drei:current-view pane)))))
 
 (defun set-chat-compose-pane-point-offset (pane offset)
-  "Set PANE's Drei point to OFFSET when Drei internals are available."
+  "Set PANE's Drei point to OFFSET when its public view is available."
   (when offset
     (ignore-errors
-      (setf (drei-buffer:offset (drei:point (slot-value pane 'drei::%view)))
+      (setf (drei-buffer:offset (drei:point (drei:current-view pane)))
             offset))))
 
 (defun sync-chat-buffer-input-from-compose-pane (pane buffer)
@@ -901,17 +732,29 @@ buffer keymap after synchronizing the Drei text/point."
   (:documentation "Drei-backed chat compose pane with Clawmacs frame commands."))
 
 (defmethod drei-syntax:additional-command-tables append
-    ((pane clawmacs-chat-compose-pane) (table drei::drei-command-table))
-  "Let the compose pane resolve frame commands before Drei editor commands.
+    ((pane clawmacs-chat-compose-pane) (table clim:command-table))
+  "Prefer FRAME's application commands, then compose-specific editing keys.
 
-This follows the Climacs/Drei extension hook: add the frame-local Clawmacs
-command table to the compose pane's effective Drei command table instead of
-manually dispatching every key.  Editing keys stay in Drei because only
-application-level Clawmacs keys are installed in the frame table."
+Drei gadgets put `exclusive-gadget-table' before their inherited frame table.
+That table owns M-x for Drei's blocking `accept' workflow, while Clawmacs uses
+its frame command to activate the application's non-blocking minibuffer.  Use
+Drei's public application-extension hook to put the frame-local table first;
+the inherited copy remains harmless and ordinary editing keys stay in Drei
+because they are intentionally absent from the frame table."
   (declare (ignore table))
   (let ((frame (ignore-errors (clim:pane-frame pane))))
-    (when frame
-      (list (clim:frame-command-table frame)))))
+    (append (when frame
+              (list (clim:frame-command-table frame)))
+            '(clawmacs-chat-compose-editing-table))))
+
+(defmethod clim:note-sheet-grafted :after ((pane clawmacs-chat-compose-pane))
+  "Apply Clawmacs compose layout only to the application-owned pane."
+  (configure-chat-compose-pane pane))
+
+(defmethod clim:note-sheet-region-changed :after
+    ((pane clawmacs-chat-compose-pane))
+  "Preserve the compact compose height after CLIM layout changes."
+  (configure-chat-compose-pane pane))
 
 (defun chat-compose-meta-prefix-event (pane event)
   "Return EVENT as a Meta-modified key press for an ESC prefix."
@@ -924,55 +767,59 @@ application-level Clawmacs keys are installed in the frame table."
                  :modifier-state (logior (clim:event-modifier-state event)
                                           clim:+meta-key+)))
 
-(defmethod clim:handle-event
+(defmethod clim:handle-event :around
     ((pane clawmacs-chat-compose-pane) (event clim:key-press-event))
-  "Feed compose key events into Drei's command processor.
+  "Normalize only key forms that upstream Drei cannot process directly.
 
-The only direct dispatches left here are Clawmacs' custom modal input overlays
-and legacy compose editing keys that intentionally conflict with ESA/Drei's
-standard meanings.  All normal application and editor commands are resolved by
-Drei/ESA command tables."
+Ordinary editing and application keys go through Drei's own HANDLE-EVENT and
+its inherited frame command table.  Direct dispatch remains only for Clawmacs'
+modal input overlays, two intentional editing conflicts, ESC-as-Meta, and
+modified key events that ESA:CONVERT-TO-GESTURE currently drops.  Standalone
+modifier presses are consumed explicitly so a retained prefix never depends
+on backend-specific modifier-event conversion."
   (let* ((frame (ignore-errors (clim:pane-frame pane)))
-         (buf (and frame (chat-frame-buffer frame)))
+         (dispatch
+           (lambda ()
+             (let ((buf (and frame (chat-frame-buffer frame))))
+               (cond
+                 ((chat-compose-modifier-key-name-p
+                   (clim:keyboard-event-key-name event))
+                  ;; A modifier by itself is not a semantic editor gesture.
+                  ;; Keep it out of ESA's accumulated prefix sequence.
+                  t)
+                 ((and buf (chat-compose-escape-event-p event)
+                       (buffer-llm-running-p buf))
+                  ;; Escape always means "stop the active stream" before it can
+                  ;; extend or consume a pending ESC-as-Meta prefix.
+                  (setf *meta-pending* nil)
+                  (dispatch-chat-compose-event-to-buffer pane event))
+                 ((and buf (chat-compose-application-input-active-p buf)
+                       (chat-compose-escape-event-p event)
+                       (not *meta-pending*))
+                  (setf *meta-pending* t)
+                  t)
+                 ((and buf (chat-compose-application-input-active-p buf))
+                  (dispatch-chat-compose-event-to-buffer pane event))
+                 ((and (chat-compose-escape-event-p event)
+                       (not *meta-pending*))
+                  (setf *meta-pending* t)
+                  t)
+                 ((chat-compose-buffer-owned-editing-event-p pane event)
+                  (dispatch-chat-compose-event-to-buffer pane event))
+                 (*meta-pending*
+                  (let ((gesture-event
+                          (prog1 (chat-compose-meta-prefix-event pane event)
+                            (setf *meta-pending* nil))))
+                    (process-chat-compose-drei-event pane gesture-event
+                                                     :redisplay t)))
+                 ((chat-compose-modified-key-event-p event)
+                  (process-chat-compose-drei-event pane event :redisplay t))
+                 (t (call-next-method))))))
          (result
-           (cond
-             ((and buf (chat-compose-escape-event-p event)
-                   (buffer-llm-running-p buf))
-              ;; Escape always means "stop the active stream" before it can
-              ;; extend or consume a pending ESC-as-Meta prefix.
-              (setf *meta-pending* nil)
-              (dispatch-chat-compose-event-to-buffer pane event))
-             ((and buf (chat-compose-application-input-active-p buf)
-                   (chat-compose-escape-event-p event)
-                   (not *meta-pending*))
-              (setf *meta-pending* t)
-              t)
-             ((and buf (chat-compose-application-input-active-p buf))
-              (dispatch-chat-compose-event-to-buffer pane event))
-             ((and (chat-compose-escape-event-p event)
-                   (not *meta-pending*))
-              (setf *meta-pending* t)
-              t)
-             ((chat-compose-buffer-owned-editing-event-p pane event)
-              (dispatch-chat-compose-event-to-buffer pane event))
-             ((and (drei::currently-processing-p pane)
-                   (esa:directly-processing-p pane))
-              nil)
-             (t
-              (let* ((gesture-event (if *meta-pending*
-                                        (prog1 (chat-compose-meta-prefix-event pane event)
-                                          (setf *meta-pending* nil))
-                                        event))
-                     (gesture (chat-compose-drei-gesture pane gesture-event)))
-                (when (and gesture (esa:proper-gesture-p gesture))
-                  (unwind-protect
-                       (progn
-                         (setf (drei::currently-processing-p pane) t)
-                         (drei:with-bound-drei-special-variables
-                             (pane :prompt (format nil "~A "
-                                                   (esa:gesture-name gesture)))
-                           (drei:handle-gesture pane gesture)))
-                    (setf (drei::currently-processing-p pane) nil))))))))
+           (if (typep frame 'clawmacs-chat-frame)
+               (call-chat-frame-ui-action-safely
+                frame "compose key dispatch" dispatch)
+               (funcall dispatch))))
     (when frame
       (emit-chat-frame-e2e-snapshot frame :reason "compose-key" :pane "compose"))
     result))
@@ -997,62 +844,6 @@ Drei/ESA command tables."
 When NIL, derive it from `*minibuffer-max-height*' and
 `*chat-minibuffer-line-height*' so logical rows and reserved space agree.")
 
-(defun basic-medium-fallback-text-size (text-style)
-  "Return an approximate pixel size for TEXT-STYLE during output replay.
-
-Native Quicklisp/Ultralisp McCLIM can ask a temporary `clim:basic-medium' for
-text metrics while replaying output records before a backend medium is bound.
-Backend-specific mediums still provide real font metrics; this fallback only
-keeps backend-independent replay/layout paths from failing during startup."
-  (let ((size (ignore-errors (clim:text-style-size text-style))))
-    (cond
-      ((realp size) (max 2 (round size)))
-      ((eq size :tiny) 8)
-      ((eq size :very-small) 10)
-      ((eq size :small) 12)
-      ((eq size :large) 18)
-      ((eq size :very-large) 20)
-      ((eq size :huge) 24)
-      (t 14))))
-
-(defun basic-medium-fallback-ascent (text-style)
-  "Return an approximate text ascent for a temporary basic medium."
-  (round (* 0.8 (basic-medium-fallback-text-size text-style))))
-
-(defun basic-medium-fallback-descent (text-style)
-  "Return an approximate text descent for a temporary basic medium."
-  (max 1 (- (basic-medium-fallback-text-size text-style)
-            (basic-medium-fallback-ascent text-style))))
-
-(defmethod clim:text-style-ascent (text-style (medium clim:basic-medium))
-  "Fallback ascent for temporary basic mediums in native McCLIM output replay."
-  (declare (ignore medium))
-  (basic-medium-fallback-ascent text-style))
-
-(defmethod clim:text-style-descent (text-style (medium clim:basic-medium))
-  "Fallback descent for temporary basic mediums in native McCLIM output replay."
-  (declare (ignore medium))
-  (basic-medium-fallback-descent text-style))
-
-(defmethod climi::text-style-character-width
-    (text-style (medium clim:basic-medium) char)
-  "Fallback character width for temporary basic mediums."
-  (declare (ignore medium char))
-  (round (* 0.6 (basic-medium-fallback-text-size text-style))))
-
-(defmethod clim:text-size ((medium clim:basic-medium) text
-                           &key text-style (start 0) end)
-  "Fallback text extent for temporary basic mediums in output replay."
-  (let* ((string (string text))
-         (end (or end (length string)))
-         (count (max 0 (- end start)))
-         (width (* count
-                   (climi::text-style-character-width text-style medium #\M)))
-         (height (+ (clim:text-style-ascent text-style medium)
-                    (clim:text-style-descent text-style medium)))
-         (baseline (clim:text-style-ascent text-style medium)))
-    (values width height width 0 baseline)))
-
 (defclass clawmacs-chat-minibuffer-pane (esa:minibuffer-pane)
   ()
   (:documentation "ESA minibuffer used for messages, command arguments, and M-x.")
@@ -1061,15 +852,6 @@ keeps backend-independent replay/layout paths from failing during startup."
    :min-height 24
    :max-height 24
    :incremental-redisplay nil))
-
-(defmethod clim:handle-repaint ((pane clawmacs-chat-minibuffer-pane) region)
-  "Replay the chat minibuffer without ESA's recursive repaint trampoline.
-
-Some native McCLIM builds inherit ESA's default minibuffer repaint path, whose
-fallback display function calls `dispatch-repaint' while McCLIM already holds
-the output-history repaint lock.  Clawmacs drives minibuffer updates via frame
-redisplay, so expose events only need to replay the existing output history."
-  (clim:stream-replay pane region))
 
 (defmethod clim:compose-space ((pane clawmacs-chat-minibuffer-pane)
                                &key width height)
@@ -1135,20 +917,78 @@ and avoids the backend-independent metric probe."
       (when count-text
         (format stream "  (~A)" count-text)))))
 
+(defun chat-completion-visible-candidate-rows
+    (items scroll-offset selected-index visible-count)
+  "Return semantic rows for one automatic completion view."
+  (let* ((count (length items))
+         (start (max 0 (min scroll-offset count)))
+         (end (min count (+ start visible-count))))
+    (loop :for item :in (subseq items start end)
+          :for index :from start
+          :collect (list :index index
+                         :item item
+                         :display (minibuffer-item-display item)
+                         :selected-p (= index selected-index)))))
+
+(defun chat-interaction-pane-kind ()
+  "Return the visible semantic interaction hosted by the minibuffer pane."
+  (cond
+    (*minibuffer-active* :minibuffer)
+    (*session-tree-selector-active* :session-tree)
+    (*slash-completion-active* :slash)
+    (*skill-completion-active* :skill)
+    (t nil)))
+
+(defun chat-interaction-pane-rows (&optional (kind (chat-interaction-pane-kind)))
+  "Return visible presentation rows for KIND."
+  (case kind
+    (:minibuffer (minibuffer-visible-candidate-rows))
+    (:session-tree (session-tree-selector-visible-candidate-rows))
+    (:slash
+     (chat-completion-visible-candidate-rows
+      *slash-completion-filtered-items*
+      *slash-completion-scroll-offset*
+      *slash-completion-selected-index*
+      (slash-completion-visible-item-count)))
+    (:skill
+     (chat-completion-visible-candidate-rows
+      *skill-completion-filtered-items*
+      *skill-completion-scroll-offset*
+      *skill-completion-selected-index*
+      (skill-completion-visible-item-count)))
+    (otherwise nil)))
+
+(defun write-chat-interaction-prompt-line
+    (stream kind &key (display-cursor-p nil))
+  "Write the visible prompt for semantic interaction KIND."
+  (case kind
+    (:minibuffer
+     (write-minibuffer-prompt-line stream :display-cursor-p display-cursor-p))
+    (:session-tree
+     (format stream "Session Tree [~(~A~)] search: ~A"
+             *session-tree-selector-filter-mode*
+             *session-tree-selector-search*))
+    (:slash
+     (format stream "Slash command: /~A" *slash-completion-query*))
+    (:skill
+     (format stream "Skill mention: $~A" *skill-completion-query*))))
+
 (defun chat-frame-e2e-minibuffer-text ()
-  "Return semantic minibuffer text for the current input state."
-  (if *minibuffer-active*
+  "Return semantic text for the interaction declared in the minibuffer pane."
+  (let ((kind (chat-interaction-pane-kind)))
+    (if kind
       (with-output-to-string (stream)
-        (write-minibuffer-prompt-line stream)
-        (cond
-          (*minibuffer-filtered-items*
-           (dolist (row (minibuffer-visible-candidate-rows))
-             (format stream "~%~A ~A"
-                     (if (getf row :selected-p) ">" " ")
-                     (getf row :display))))
-          ((eq *minibuffer-mode* :completion)
-           (format stream "~%  No matches"))))
-      ""))
+          (write-chat-interaction-prompt-line stream kind)
+          (let ((rows (chat-interaction-pane-rows kind)))
+            (if rows
+                (dolist (row rows)
+                  (format stream "~%~A ~A"
+                          (if (getf row :selected-p) ">" " ")
+                          (getf row :display)))
+                (unless (and (eq kind :minibuffer)
+                             (eq *minibuffer-mode* :prompt))
+                  (format stream "~%  No matches")))))
+        "")))
 
 (defun chat-frame-buffer-status-label (buffer)
   "Return BUFFER's visible status label for the chat info line."
@@ -1246,28 +1086,32 @@ and avoids the backend-independent metric probe."
 
 (defun chat-frame-e2e-screen-text (frame)
   "Return a semantic screen-text snapshot for FRAME."
-  (let* ((buf (and frame (chat-frame-buffer frame)))
-         (transcript (chat-frame-e2e-transcript-text buf))
-         (input-panel (chat-frame-e2e-input-presentation-text
-                       buf
-                       (chat-frame-e2e-compose-text frame)))
-         (approval (and buf (buffer-approval-pending buf)
-                        (chat-approval-display-string
-                         (buffer-approval-pending buf))))
-         (info (chat-frame-e2e-info-line frame))
-         (minibuffer (chat-frame-e2e-minibuffer-text))
-         (parts (remove-if #'blank-string-p
-                           (list transcript
-                                 input-panel
-                                 approval
-                                 info
-                                 minibuffer))))
-    (format nil "~{~A~%~}" parts)))
+  (let ((*chat-interaction-state*
+          (if (typep frame 'clawmacs-chat-frame)
+              (chat-frame-interaction-state frame)
+              *chat-interaction-state*)))
+    (let* ((buf (and frame (chat-frame-buffer frame)))
+           (transcript (chat-frame-e2e-transcript-text buf))
+           (input-panel (chat-frame-e2e-input-presentation-text
+                         buf
+                         (chat-frame-e2e-compose-text frame)))
+           (info (chat-frame-e2e-info-line frame))
+           (minibuffer (chat-frame-e2e-minibuffer-text))
+           (parts (remove-if #'blank-string-p
+                             (list transcript
+                                   input-panel
+                                   info
+                                   minibuffer))))
+      (format nil "~{~A~%~}" parts))))
 
 (defun chat-frame-e2e-snapshot (frame)
   "Return semantic GUI state for FRAME as a plist for tests and E2E logs."
   (let* ((frame (chat-frame-e2e-effective-frame frame))
-         (buf (and frame (chat-frame-buffer frame))))
+         (buf (and frame (chat-frame-buffer frame)))
+         (*chat-interaction-state*
+           (if frame
+               (chat-frame-interaction-state frame)
+               *chat-interaction-state*)))
     (multiple-value-bind (provider model)
         (if buf
             (handler-case (resolve-buffer-provider-and-model buf)
@@ -1285,10 +1129,11 @@ and avoids the backend-independent metric probe."
             :show-metadata (and buf (buffer-show-metadata-p buf))
             :debug-mode *debug-mode*
             :minibuffer-active *minibuffer-active*
-            :buffer-selector-active *buffer-selector-active*
-            :model-selector-active *model-selector-active*
-            :think-selector-active *think-selector-active*
+            :buffer-selector-active nil
+            :model-selector-active nil
+            :think-selector-active nil
             :session-tree-selector-active *session-tree-selector-active*
+            :interaction-kind (chat-interaction-pane-kind)
             :compose-text (chat-frame-e2e-compose-text frame)
             :minibuffer-text (chat-frame-e2e-minibuffer-text)
             :info-text (chat-frame-e2e-info-line frame)
@@ -1296,58 +1141,73 @@ and avoids the backend-independent metric probe."
 
 (defun emit-chat-frame-e2e-snapshot (frame &key reason pane)
   "Emit a structured semantic GUI snapshot for FRAME when E2E logging is enabled."
-  (let ((frame (chat-frame-e2e-effective-frame frame)))
-    (when frame
-      (ignore-errors
-        (apply #'file-debug-event
-               "ui-snapshot"
-               (append (list :reason reason :pane pane)
-                       (chat-frame-e2e-snapshot frame)))))))
+  ;; Gate before constructing the snapshot.  Its semantic transcript mirrors
+  ;; the visible CLIM view for the external E2E driver and may invoke package
+  ;; presentation functions; production redisplay must never evaluate that
+  ;; secondary test representation.
+  (when (and *debug-log-file* (e2e-events-enabled-p))
+    (let ((frame (chat-frame-e2e-effective-frame frame)))
+      (when frame
+        (ignore-errors
+          (apply #'file-debug-event
+                 "ui-snapshot"
+                 (append (list :reason reason :pane pane)
+                         (chat-frame-e2e-snapshot frame))))))))
 
 (defun emit-chat-pane-rendered (frame pane-name &rest payload)
   "Emit E2E pane render and snapshot events for FRAME."
-  (let ((frame (chat-frame-e2e-effective-frame frame)))
-    (when frame
-      (ignore-errors
-        (apply #'file-debug-event
-               "pane-rendered"
-               :pane pane-name
-               payload))
-      (emit-chat-frame-e2e-snapshot frame :reason "pane-rendered" :pane pane-name))))
+  (when (and *debug-log-file* (e2e-events-enabled-p))
+    (let ((frame (chat-frame-e2e-effective-frame frame)))
+      (when frame
+        (ignore-errors
+          (apply #'file-debug-event
+                 "pane-rendered"
+                 :pane pane-name
+                 payload))
+        (emit-chat-frame-e2e-snapshot
+         frame :reason "pane-rendered" :pane pane-name)))))
 
-(defun display-minibuffer-candidate-row (stream row)
-  "Display one minibuffer completion ROW on STREAM."
+(defun display-minibuffer-candidate-row (stream row kind)
+  "Display one semantic interaction ROW on STREAM as a presentation."
   (let* ((item (getf row :item))
+         (index (getf row :index))
          (display (getf row :display))
          (selected-p (getf row :selected-p))
-         (marker (if selected-p ">" " ")))
+         (marker (if selected-p ">" " "))
+         (ref (make-chat-interaction-candidate-ref
+               *chat-interaction-state*
+               (chat-interaction-state-generation *chat-interaction-state*)
+               kind index item)))
     (flet ((emit-row ()
              (format stream " ~A " marker)
              (if selected-p
                  (clim:with-text-face (stream :bold)
                    (format stream "~A" display))
                  (format stream "~A" display))))
-      (if (and (listp item) (getf item :command))
-          (clim:with-output-as-presentation
-              (stream item 'minibuffer-command-candidate :single-box t)
-            (emit-row))
-          (emit-row)))))
+      (clim:with-output-as-presentation
+          (stream ref 'chat-interaction-candidate :single-box t)
+        (emit-row)))))
 
 (defun display-chat-minibuffer-pane (frame stream)
-  "Display Clawmacs' lightweight minibuffer state in STREAM."
-  (when *minibuffer-active*
-    (write-char #\Space stream)
-    (write-minibuffer-prompt-line stream :display-cursor-p t)
-    (cond
-      (*minibuffer-filtered-items*
-       (dolist (row (minibuffer-visible-candidate-rows))
-         (terpri stream)
-         (display-minibuffer-candidate-row stream row)))
-      ((eq *minibuffer-mode* :completion)
-       (format stream "~%   No matches"))))
-  (emit-chat-pane-rendered frame "minibuffer"
-                           :active *minibuffer-active*
-                           :text (chat-frame-e2e-minibuffer-text)))
+  "Display frame-owned semantic interaction state in the minibuffer pane."
+  (let ((*chat-interaction-state* (chat-frame-interaction-state frame)))
+    (let ((kind (chat-interaction-pane-kind)))
+      (when kind
+        (write-char #\Space stream)
+        (write-chat-interaction-prompt-line
+         stream kind :display-cursor-p t)
+        (let ((rows (chat-interaction-pane-rows kind)))
+          (if rows
+              (dolist (row rows)
+                (terpri stream)
+                (display-minibuffer-candidate-row stream row kind))
+              (unless (and (eq kind :minibuffer)
+                           (eq *minibuffer-mode* :prompt))
+                (format stream "~%   No matches")))))
+      (emit-chat-pane-rendered frame "minibuffer"
+                               :active (not (null kind))
+                               :kind kind
+                               :text (chat-frame-e2e-minibuffer-text)))))
 
 (defun display-chat-info-pane (frame stream)
   "Display an Emacs-style status line for FRAME."
@@ -1376,17 +1236,39 @@ and avoids the backend-independent metric probe."
     (esa:esa-frame-mixin clim:standard-application-frame)
   ((buffer :initarg :buffer
            :accessor chat-frame-buffer)
+   (interaction-state :initform (make-chat-interaction-state)
+                      :reader chat-frame-interaction-state)
    (redisplay-lock :initform (bt:make-lock "clawmacs chat redisplay")
                    :reader chat-frame-redisplay-lock)
+   (lifecycle-state :initform :created
+                    :accessor chat-frame-lifecycle-state)
+   (redisplay-dirty-p :initform nil
+                      :accessor chat-frame-redisplay-dirty-p)
+   (redisplay-request-generation :initform 0
+                                 :accessor chat-frame-redisplay-request-generation)
+   (redisplay-reserved-generation :initform 0
+                                  :accessor chat-frame-redisplay-reserved-generation)
    (redisplay-pending-p :initform nil
                         :accessor chat-frame-redisplay-pending-p)
    (redisplay-handling-p :initform nil
-                         :accessor chat-frame-redisplay-handling-p)
-   (redisplay-repeat-p :initform nil
-                       :accessor chat-frame-redisplay-repeat-p))
+                         :accessor chat-frame-redisplay-handling-p))
   (:command-table (clawmacs-chat-frame
                    :inherit-from (esa:global-esa-table
-                                  esa:keyboard-macro-table)))
+                                  esa:keyboard-macro-table)
+                   :menu (("Chat" :menu clawmacs-chat-control-menu
+                           :documentation "Chat controls.")
+                          ("View" :menu clawmacs-chat-view-menu
+                           :documentation "Transcript display controls.")
+                          ("Skills" :menu clawmacs-chat-skills-menu
+                           :documentation "Enable or disable skills.")
+                          ("Packages" :menu clawmacs-chat-packages-menu
+                           :documentation "Manage packages for this chat.")
+                          ("Effort" :menu clawmacs-chat-effort-menu
+                           :documentation
+                           "Select model reasoning effort for this chat.")
+                          ("System" :menu clawmacs-chat-system-menu
+                           :documentation
+                           "Launch nested frames and system actions."))))
   (:pointer-documentation t)
   (:menu-bar t)
   (:panes
@@ -1434,6 +1316,71 @@ and avoids the backend-independent metric probe."
       minibuffer)))
   (:top-level (run-clawmacs-chat-top-level)))
 
+(defun call-chat-frame-ui-action-safely (frame action function)
+  "Call FUNCTION as a user UI ACTION, containing ordinary application errors.
+
+Only ERROR is handled.  CLIM control conditions such as FRAME-EXIT and
+ABORT-GESTURE therefore retain their normal command-loop semantics.  Reporting
+is itself best-effort so a broken log, feedback hook, or redisplay request
+cannot turn the original action failure into a frame exit."
+  (let ((*chat-interaction-state* (chat-frame-interaction-state frame)))
+    (handler-case
+        (funcall function)
+      (error (condition)
+        (let* ((action-text
+                 (handler-case
+                     (format nil "~(~A~)" action)
+                   (error () "unknown UI action")))
+               (condition-text
+                 (handler-case
+                     (format nil "~A" condition)
+                   (error () "unprintable error")))
+               (diagnostic-text
+                 (if (> (length condition-text) 240)
+                     (concatenate 'string
+                                  (subseq condition-text 0 240)
+                                  "...")
+                     condition-text)))
+          (ignore-errors
+            (file-debug-event "ui-action-error"
+                              :action action-text
+                              :condition condition-text))
+          (ignore-errors
+            (let ((buffer (chat-frame-buffer frame)))
+              (when buffer
+                (buffer-insert-system-message
+                 buffer
+                 (format nil "[UI action failed (~A): ~A]"
+                         action-text diagnostic-text)
+                 :record-p nil
+                 :run-hook-p nil))))
+          (ignore-errors
+            (request-chat-frame-redisplay frame))
+          nil)))))
+
+(defmethod clim:execute-frame-command :around
+    ((frame clawmacs-chat-frame) command)
+  "Keep an ordinary command error inside FRAME's running CLIM command loop."
+  (call-chat-frame-ui-action-safely
+   frame
+   (if (and (consp command) (symbolp (car command)))
+       (format nil "frame command ~A" (car command))
+       "frame command")
+   (lambda () (call-next-method))))
+
+(defmethod (setf clim:frame-command-table) :around
+    (new-table (frame clawmacs-chat-frame))
+  "Avoid rebuilding FRAME's live menu bar for an identical command table.
+
+Pinned ESA assigns its applicable command table on every command-loop turn.
+McCLIM treats even an EQ assignment as a request to disown and recreate every
+menu gadget.  Besides doing unnecessary work, that can leave already queued
+pointer events referring to the disowned gadgets.  A genuinely fresh
+frame-local table still goes through the standard CLIM setter and menu update."
+  (if (eq new-table (clim:frame-command-table frame))
+      new-table
+      (call-next-method)))
+
 (defmethod initialize-instance :after ((frame clawmacs-chat-frame) &key)
   "Keep ESA frame slots safely initialized before panes are generated."
   (unless (slot-boundp frame 'esa:windows)
@@ -1473,7 +1420,7 @@ and avoids the backend-independent metric probe."
   command)
 
 (defmethod esa:find-applicable-command-table ((frame clawmacs-chat-frame))
-  "Use the frame-local command table so ESA M-x sees dynamic Clawmacs menus."
+  "Use FRAME's stable application command table for ESA lookup and M-x."
   (clim:frame-command-table frame))
 
 (defun focus-chat-compose-pane (frame)
@@ -1486,74 +1433,26 @@ and avoids the backend-independent metric probe."
 
 (defun run-clawmacs-chat-top-level (frame)
   "Run FRAME with ESA command processing and compose focused initially."
+  (bt:with-lock-held ((chat-frame-redisplay-lock frame))
+    (setf (chat-frame-lifecycle-state frame) :running
+          (chat-frame-redisplay-pending-p frame) nil
+          (chat-frame-redisplay-handling-p frame) nil))
   (unless (eq (clim:frame-state frame) :enabled)
     (clim:enable-frame frame)
     (file-debug-event "frame-enabled"
                       :buffer-name (buffer-name (chat-frame-buffer frame))
                       :state (clim:frame-state frame)))
+  ;; Requests made during construction remain dirty. Drain them only after
+  ;; CLIM has enabled and grafted the frame, so a pre-adoption miss cannot be
+  ;; the last scheduling attempt.
+  (when (reserve-chat-frame-redisplay-event frame)
+    (enqueue-reserved-chat-frame-redisplay frame))
   (focus-chat-compose-pane frame)
   (file-debug-event "frame-ready"
                     :buffer-name (buffer-name (chat-frame-buffer frame))
                     :state (clim:frame-state frame))
   (emit-chat-frame-e2e-snapshot frame :reason "frame-ready")
   (esa:esa-top-level frame))
-
-(defun mcclim-kill-items-vector (items)
-  "Return ITEMS in the vector representation McCLIM's kill history expects."
-  (if (vectorp items)
-      items
-      (coerce items 'vector)))
-
-;; McCLIM's Edward kill history reinserts killed items with AREF, so the
-;; list-producing kill commands need to hand it vectors.
-(defmethod climi::ie-erase-word
-    ((sheet clim:text-editor-pane) (buffer cluffer:buffer) event numeric-argument)
-  (declare (ignore buffer event))
-  (loop :with cursor := (climi::edit-cursor sheet)
-        :repeat numeric-argument
-        :do (loop :for item := (climi::smooth-erase-item cursor)
-                  :when item
-                    :collect item :into result
-                  :until (or (cluffer:beginning-of-line-p cursor)
-                             (cluffer:beginning-of-buffer-p cursor)
-                             (char= (cluffer:item-before-cursor cursor) #\space))
-                  :finally
-                     (climi::edward-kill-object
-                      sheet
-                      (mcclim-kill-items-vector (nreverse result))
-                      :front))))
-
-(defmethod climi::ie-delete-word
-    ((sheet clim:text-editor-pane) (buffer cluffer:buffer) event numeric-argument)
-  (declare (ignore buffer event))
-  (loop :with cursor := (climi::edit-cursor sheet)
-        :repeat numeric-argument
-        :do (loop :for item := (climi::smooth-delete-item cursor)
-                  :when item
-                    :collect item :into result
-                  :until (or (cluffer:end-of-line-p cursor)
-                             (cluffer:end-of-buffer-p cursor)
-                             (char= (cluffer:item-after-cursor cursor) #\space))
-                  :finally
-                     (climi::edward-kill-object
-                      sheet
-                      (mcclim-kill-items-vector result)
-                      :back))))
-
-(defmethod climi::ie-kill-line
-    ((sheet clim:text-editor-pane) (buffer cluffer:buffer) event numeric-argument)
-  (declare (ignore buffer event))
-  (handler-bind ((cluffer:end-of-buffer
-                   (lambda (condition)
-                     (declare (ignore condition))
-                     (return-from climi::ie-kill-line))))
-    (loop :with cursor := (climi::edit-cursor sheet)
-          :repeat numeric-argument
-          :for line := (climi::smooth-kill-line cursor)
-          :do (climi::edward-kill-object
-               sheet
-               (mcclim-kill-items-vector line)
-               :back))))
 
 (defun display-chat-message (stream msg)
   "Display MSG as one chat-message presentation on STREAM."
@@ -1718,11 +1617,8 @@ and avoids the backend-independent metric probe."
                  stream buf input-function
                  :namespace :buffer-input-presentation
                  :columns columns)))))
-    (when (buffer-approval-pending buf)
-      (display-chat-approval stream (buffer-approval-pending buf)))
     (emit-chat-pane-rendered frame "transcript"
-                             :item-count item-count
-                             :approval-pending (not (null (buffer-approval-pending buf))))))
+                             :item-count item-count)))
 
 (defun chat-transcript-pane (frame)
   "Return FRAME's transcript pane, or NIL when unavailable."
@@ -1790,13 +1686,24 @@ and avoids the backend-independent metric probe."
     (clim:execute-frame-command frame '(com-chat-submit-compose))))
 
 (defun queue-chat-frame-redisplay-event (frame)
-  "Queue one redisplay event for FRAME when its sheet is available."
-  (let ((sheet (ignore-errors (clim:frame-top-level-sheet frame))))
+  "Queue one redisplay wakeup on FRAME's grafted top-level sheet.
+
+The event is only a cross-thread handoff into the CLIM event process.  Its
+EVENT-SHEET is the actual top-level sheet, as required by the event protocol;
+all rendering remains in the pane display functions and
+CLIM:REDISPLAY-FRAME-PANE."
+  (let ((sheet (chat-frame-grafted-top-level-sheet frame)))
     (when sheet
-      (clim:queue-event
-       sheet
-       (make-instance 'clawmacs-chat-redisplay-event :sheet frame))
-      t)))
+      (handler-case
+          (progn
+            (clim:queue-event
+             sheet
+             (make-instance 'clawmacs-chat-redisplay-event :sheet sheet))
+            t)
+        (error (condition)
+          (file-debug-event "redisplay-queue-failed"
+                            :condition (format nil "~A" condition))
+          nil)))))
 
 (defun chat-frame-grafted-top-level-sheet (frame)
   "Return FRAME's grafted top-level sheet, or NIL before FRAME is running."
@@ -1805,47 +1712,91 @@ and avoids the backend-independent metric probe."
          (ignore-errors (clim:sheet-grafted-p sheet))
          sheet)))
 
-(defun queue-chat-frame-menu-refresh-event (frame)
-  "Queue one menu refresh event for FRAME when its sheet is grafted."
-  (let ((sheet (chat-frame-grafted-top-level-sheet frame)))
-    (when sheet
-      (clim:queue-event
-       sheet
-       (make-instance 'clawmacs-chat-menu-refresh-event :sheet frame))
+(defun reserve-chat-frame-redisplay-event (frame)
+  "Reserve a single queued redisplay event for dirty running FRAME.
+Return true when the caller must enqueue the reserved event."
+  (bt:with-lock-held ((chat-frame-redisplay-lock frame))
+    (when (and (eq (chat-frame-lifecycle-state frame) :running)
+               (chat-frame-redisplay-dirty-p frame)
+               (not (chat-frame-redisplay-pending-p frame))
+               (not (chat-frame-redisplay-handling-p frame)))
+      (setf (chat-frame-redisplay-pending-p frame) t)
+      (setf (chat-frame-redisplay-reserved-generation frame)
+            (chat-frame-redisplay-request-generation frame))
       t)))
 
-(defun request-chat-frame-menu-refresh (frame)
-  "Refresh FRAME's dynamic menu bar outside active menu callbacks.
+(defparameter *chat-redisplay-enqueue-max-attempts* 2
+  "Maximum immediate attempts to enqueue one reserved redisplay wakeup.
 
-Unstarted frames have no grafted top-level sheet, so tests and pre-run frame
-setup refresh synchronously. Running frames use the event queue so a menu command
-does not replace McCLIM submenu sheets while pointer tracking is still unwinding."
-  (unless (queue-chat-frame-menu-refresh-event frame)
-    (refresh-chat-frame-menu-bar frame))
-  frame)
+Retries do not sleep or recurse, so a broken/ungrafted event queue cannot spin
+forever or block the frame process.  Persistent failure releases the pending
+reservation while preserving dirty state for a later request or lifecycle
+start.")
+
+(defun enqueue-reserved-chat-frame-redisplay (frame)
+  "Enqueue FRAME's reserved redisplay event transactionally.
+If a transient queue failure clears before the bounded retry, deliver the
+already-dirty generation without requiring another notification.  Persistent
+failure releases the reservation while leaving the dirty bit set."
+  ;; Keep both same-generation recovery and concurrent-generation transfer in
+  ;; this bounded iterative loop.  No retry sleeps, recurses, or renders.
+  (loop
+    :with max-attempts := (max 1 *chat-redisplay-enqueue-max-attempts*)
+    :for attempt :from 1 :to max-attempts
+    :for reserved-generation :=
+      (bt:with-lock-held ((chat-frame-redisplay-lock frame))
+        (chat-frame-redisplay-reserved-generation frame))
+    :when (queue-chat-frame-redisplay-event frame)
+      :return t
+    :do
+       (let ((retry-p nil))
+         (bt:with-lock-held ((chat-frame-redisplay-lock frame))
+           (when (and (chat-frame-redisplay-pending-p frame)
+                      (= reserved-generation
+                         (chat-frame-redisplay-reserved-generation frame)))
+             (setf (chat-frame-redisplay-pending-p frame) nil)
+             ;; Retry the same dirty generation after a lone transient failure,
+             ;; or transfer a newer request that observed PENDING while this
+             ;; attempt was in flight.  The attempt cap is checked while the
+             ;; reservation is released so the last failure cannot leave a
+             ;; phantom PENDING event behind.
+             (when (and (eq (chat-frame-lifecycle-state frame) :running)
+                        (chat-frame-redisplay-dirty-p frame)
+                        (not (chat-frame-redisplay-handling-p frame))
+                        (< attempt max-attempts))
+               (setf (chat-frame-redisplay-pending-p frame) t
+                     (chat-frame-redisplay-reserved-generation frame)
+                     (chat-frame-redisplay-request-generation frame)
+                     retry-p t))))
+         (unless retry-p
+           (return nil)))))
 
 (defun request-chat-frame-redisplay (frame)
-  "Request one coalesced transcript redisplay for FRAME."
+  "Mark FRAME dirty and request one coalesced CLIM redisplay wakeup."
   (file-debug-event "redisplay-requested"
                     :buffer-name (buffer-name (chat-frame-buffer frame)))
-  (let ((queue-now-p nil))
-    (bt:with-lock-held ((chat-frame-redisplay-lock frame))
-      (cond
-        ((chat-frame-redisplay-handling-p frame)
-         (setf (chat-frame-redisplay-repeat-p frame) t))
-        ((not (chat-frame-redisplay-pending-p frame))
-         (setf (chat-frame-redisplay-pending-p frame) t
-               queue-now-p t))))
-    (when queue-now-p
-      (queue-chat-frame-redisplay-event frame))))
+  (bt:with-lock-held ((chat-frame-redisplay-lock frame))
+    (unless (member (chat-frame-lifecycle-state frame)
+                    '(:stopping :stopped))
+      (incf (chat-frame-redisplay-request-generation frame))
+      (setf (chat-frame-redisplay-dirty-p frame) t)))
+  (when (reserve-chat-frame-redisplay-event frame)
+    (enqueue-reserved-chat-frame-redisplay frame))
+  frame)
 
 (defun chat-minibuffer-desired-row-count ()
-  "Return the number of rows the chat minibuffer pane should reserve."
-  (cond
-    ((not *minibuffer-active*) 1)
-    ((eq *minibuffer-mode* :completion)
-     (+ 1 (max 1 (minibuffer-visible-item-count))))
-    (t 1)))
+  "Return rows reserved for the frame's visible semantic interaction."
+  (let ((kind (chat-interaction-pane-kind)))
+    (case kind
+      (:minibuffer
+       (if (eq *minibuffer-mode* :completion)
+           (+ 1 (max 1 (minibuffer-visible-item-count)))
+           1))
+      (:session-tree
+       (+ 1 (max 1 (session-tree-selector-visible-item-count))))
+      (:slash (+ 1 (max 1 (slash-completion-visible-item-count))))
+      (:skill (+ 1 (max 1 (skill-completion-visible-item-count))))
+      (otherwise 1))))
 
 (defun chat-minibuffer-max-pixel-height ()
   "Return the maximum expanded minibuffer pane height in pixels."
@@ -1867,56 +1818,87 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
 
 (defun handle-chat-frame-redisplay (frame)
   "Run the canonical redisplay step for FRAME's transcript pane."
-  (let ((repeat-p nil))
+  (let ((redisplay-p nil))
     (bt:with-lock-held ((chat-frame-redisplay-lock frame))
-      (setf (chat-frame-redisplay-pending-p frame) nil
-            (chat-frame-redisplay-handling-p frame) t
-            (chat-frame-redisplay-repeat-p frame) nil))
-    (unwind-protect
-         (let ((buf (chat-frame-buffer frame)))
-           (when (and buf (buffer-pending-stream buf))
-             (let ((*suppress-chat-redisplay-requests* t))
-               (update-streaming-response buf)))
-           (update-chat-minibuffer-space-requirements frame)
-           (clim:redisplay-frame-pane frame 'transcript :force-p nil)
-           (ignore-errors
-             (clim:redisplay-frame-pane frame 'info :force-p t))
-           (ignore-errors
-             (clim:redisplay-frame-pane frame 'minibuffer :force-p t))
-           (chat-frame-follow-transcript-tail frame))
-      (bt:with-lock-held ((chat-frame-redisplay-lock frame))
-        (setf repeat-p (chat-frame-redisplay-repeat-p frame)
-              (chat-frame-redisplay-handling-p frame) nil
-              (chat-frame-redisplay-repeat-p frame) nil)))
-    (file-debug-event "redisplay-handled"
-                      :buffer-name (buffer-name (chat-frame-buffer frame))
-                      :repeat repeat-p)
-    (emit-chat-frame-e2e-snapshot frame :reason "redisplay-handled")
-    (when repeat-p
-      (request-chat-frame-redisplay frame))))
+      (setf (chat-frame-redisplay-pending-p frame) nil)
+      (when (and (eq (chat-frame-lifecycle-state frame) :running)
+                 (chat-frame-redisplay-dirty-p frame))
+        (setf (chat-frame-redisplay-dirty-p frame) nil
+              (chat-frame-redisplay-handling-p frame) t
+              redisplay-p t)))
+    (when redisplay-p
+      (unwind-protect
+           (let ((buf (chat-frame-buffer frame)))
+             (when buf
+               (let ((*suppress-chat-redisplay-requests* t))
+                 ;; Teardown reapers queue only a private wake.  Deliver the
+                 ;; public completion hook here, after exact teardown released
+                 ;; STOPPING and on the owning CLIM frame process.  A queued
+                 ;; follow-up may now safely reserve a new provider operation.
+                 (deliver-buffer-runtime-stopped-notification buf)
+                 ;; OAuth workers publish only flow state and queue this normal
+                 ;; CLIM wakeup.  Application state is applied here, on the
+                 ;; frame process, after an exact-flow claim.
+                 (update-openai-oauth-login buf)
+                 (update-interactive-tool-execution buf)
+                 (update-interactive-buffer-operation buf)
+                 (when (buffer-pending-stream buf)
+                   (update-streaming-response buf))))
+             (update-chat-minibuffer-space-requirements frame)
+             (clim:redisplay-frame-pane frame 'transcript :force-p nil)
+             (ignore-errors
+               (clim:redisplay-frame-pane frame 'info :force-p t))
+             (ignore-errors
+               (clim:redisplay-frame-pane frame 'minibuffer :force-p t))
+             (chat-frame-follow-transcript-tail frame))
+        (bt:with-lock-held ((chat-frame-redisplay-lock frame))
+          (setf (chat-frame-redisplay-handling-p frame) nil)))
+      ;; Reserve and enqueue immediately after releasing HANDLING.  In
+      ;; particular, do not leave PENDING claimed across diagnostics: if the
+      ;; redisplay body or a later log/snapshot signals, SAFE still has to be
+      ;; able to transfer a concurrent dirty request into a real queued event.
+      (let ((queued-again-p
+              (when (reserve-chat-frame-redisplay-event frame)
+                (enqueue-reserved-chat-frame-redisplay frame))))
+        (file-debug-event "redisplay-handled"
+                          :buffer-name (buffer-name (chat-frame-buffer frame))
+                          :repeat queued-again-p)
+        (emit-chat-frame-e2e-snapshot frame :reason "redisplay-handled")
+        queued-again-p)))
+  frame)
+
+(defun handle-chat-frame-redisplay-safely (frame)
+  "Contain one asynchronous update failure at the application event boundary."
+  (handler-case
+      (handle-chat-frame-redisplay frame)
+    (error (condition)
+      ;; Transfer a request made by a worker during the failed body before any
+      ;; error reporting can itself fail.  HANDLE's cleanup released HANDLING
+      ;; without claiming PENDING, so this reservation remains transactional.
+      (when (reserve-chat-frame-redisplay-event frame)
+        (enqueue-reserved-chat-frame-redisplay frame))
+      (ignore-errors
+        (file-debug-event "redisplay-handler-error"
+                          :buffer-name
+                          (buffer-name (chat-frame-buffer frame))
+                          :condition (format nil "~A" condition)))
+      (ignore-errors
+        (let ((buffer (chat-frame-buffer frame)))
+          (when buffer
+            (setf (buffer-status buffer) :error))))
+      frame)))
 
 (defmethod clim:handle-event
-    ((frame clawmacs-chat-frame) (event clawmacs-chat-redisplay-event))
+    ((sheet clime:top-level-sheet-mixin)
+     (event clawmacs-chat-redisplay-event))
   (declare (ignore event))
-  (handle-chat-frame-redisplay frame))
-
-(defmethod clim:handle-event
-    ((frame clawmacs-chat-frame) (event clawmacs-chat-menu-refresh-event))
-  (declare (ignore event))
-  (refresh-chat-frame-menu-bar frame))
-
-(defun respond-to-chat-approval (frame response)
-  "Apply RESPONSE to FRAME's pending approval and redisplay."
-  (let ((buf (chat-frame-buffer frame)))
-    (when (buffer-approval-pending buf)
-      (handle-approval-response buf response)
-      (request-chat-frame-redisplay frame)
-      t)))
+  (let ((frame (ignore-errors (clim:pane-frame sheet))))
+    (when (typep frame 'clawmacs-chat-frame)
+      (handle-chat-frame-redisplay-safely frame))))
 
 (defun run-chat-frame-buffer-command (frame command)
   "Run COMMAND on FRAME's buffer and refresh frame UI state."
   (funcall command (chat-frame-buffer frame))
-  (request-chat-frame-menu-refresh frame)
   (request-chat-frame-redisplay frame))
 
 (defun select-chat-effort-for-buffer (buffer level)
@@ -2108,7 +2090,12 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
 (define-clawmacs-chat-frame-command
     (com-show-message-metadata :name nil)
     ((msg 'chat-message))
-  (open-message-help-window msg))
+  (unless (open-message-help-window msg)
+    (clim:with-application-frame (frame)
+      (buffer-insert-system-message
+       (chat-frame-buffer frame)
+       "[Unable to open message metadata: help-frame worker unavailable]")
+      (request-chat-frame-redisplay frame))))
 
 (define-clawmacs-chat-frame-command
     (com-chat-submit-compose :name nil)
@@ -2118,15 +2105,83 @@ does not replace McCLIM submenu sheets while pointer tracking is still unwinding
      frame
      (clim:find-pane-named frame 'compose))))
 
+(defun chat-interaction-candidate-current-p (frame ref)
+  "Return true only when REF exactly names a current FRAME candidate."
+  (let* ((state (chat-frame-interaction-state frame))
+         (*chat-interaction-state* state))
+    (when (typep ref 'chat-interaction-candidate-ref)
+      (let* ((kind (chat-interaction-candidate-ref-kind ref))
+             (index (chat-interaction-candidate-ref-index ref))
+             (item (chat-interaction-candidate-ref-item ref))
+             (items
+               (case kind
+                 (:minibuffer *minibuffer-filtered-items*)
+                 (:session-tree *session-tree-selector-filtered-items*)
+                 (:slash *slash-completion-filtered-items*)
+                 (:skill *skill-completion-filtered-items*)
+                 (otherwise nil)))
+             (active-p
+               (case kind
+                 (:minibuffer *minibuffer-active*)
+                 (:session-tree
+                  (and *session-tree-selector-active*
+                       (eq *session-tree-selector-buffer*
+                           (chat-frame-buffer frame))))
+                 (:slash
+                  (and *slash-completion-active*
+                       (eq *slash-completion-buffer*
+                           (chat-frame-buffer frame))))
+                 (:skill
+                  (and *skill-completion-active*
+                       (eq *skill-completion-buffer*
+                           (chat-frame-buffer frame))))
+                 (otherwise nil))))
+        (and (eq state (chat-interaction-candidate-ref-state ref))
+             (= (chat-interaction-state-generation state)
+                (chat-interaction-candidate-ref-generation ref))
+             active-p
+             (integerp index)
+             (<= 0 index)
+             (< index (length items))
+             (eq item (nth index items)))))))
+
+(defun choose-chat-interaction-candidate (frame ref)
+  "Choose current semantic REF and reject stale presentation records."
+  (let ((*chat-interaction-state* (chat-frame-interaction-state frame)))
+    (unless (chat-interaction-candidate-current-p frame ref)
+      (file-debug-event
+       "stale-interaction-candidate"
+       :kind (and (typep ref 'chat-interaction-candidate-ref)
+                  (chat-interaction-candidate-ref-kind ref)))
+      (request-chat-frame-redisplay frame)
+      (return-from choose-chat-interaction-candidate nil))
+    (let ((kind (chat-interaction-candidate-ref-kind ref))
+          (index (chat-interaction-candidate-ref-index ref))
+          (item (chat-interaction-candidate-ref-item ref))
+          (buffer (chat-frame-buffer frame)))
+      (case kind
+        (:minibuffer
+         (setf *minibuffer-selected-index* index)
+         (minibuffer-confirm))
+        (:session-tree
+         (let ((callback *session-tree-selector-callback*))
+           (session-tree-selector-deactivate)
+           (when callback
+             (funcall callback item))))
+        (:slash
+         (setf *slash-completion-selected-index* index)
+         (insert-selected-slash-completion buffer))
+        (:skill
+         (setf *skill-completion-selected-index* index)
+         (insert-selected-skill-completion buffer)))
+      (sync-chat-frame-after-command-dispatch frame :focus-compose t)
+      t)))
+
 (define-clawmacs-chat-frame-command
-    (com-chat-select-minibuffer-command-candidate :name nil)
-    ((item 'minibuffer-command-candidate))
+    (com-chat-select-interaction-candidate :name nil)
+    ((ref 'chat-interaction-candidate))
   (clim:with-application-frame (frame)
-    (let ((command (and (listp item) (getf item :command))))
-      (when command
-        (minibuffer-deactivate)
-        (invoke-command (chat-frame-buffer frame) command)
-        (sync-chat-frame-after-command-dispatch frame :focus-compose t)))))
+    (choose-chat-interaction-candidate frame ref)))
 
 (dolist (gesture '((#\Return) (#\Newline)))
   (clim:add-keystroke-to-command-table
@@ -2283,9 +2338,10 @@ compose pane while leaving text editing keys to Drei's editor tables."
                       (cons gestures
                             (chat-keyspec-uppercase-aliases gestures)))
                (handler-case
-                   ;; CLIM executes command table entries as command forms;
-                   ;; quote the Clawmacs key object so list keys like
-                   ;; (:meta #\x) are passed as data rather than called.
+                   ;; ESA's partial command parser evaluates supplied argument
+                   ;; forms before executing the command.  Quote list-valued
+                   ;; keys so (:META #\x) remains data instead of a function
+                   ;; call whose operator is :META.
                    (esa:set-key `(com-chat-dispatch-key ',key)
                                 'clawmacs-chat-frame
                                 key-gestures)
@@ -2313,7 +2369,6 @@ compose pane while leaving text editing keys to Drei's editor tables."
         (let ((current (current-buffer)))
           (when current
             (setf (chat-frame-buffer frame) current)))
-        (request-chat-frame-menu-refresh frame)
         (request-chat-frame-redisplay frame)))))
 
 (install-chat-frame-keybindings)
@@ -2350,11 +2405,33 @@ compose pane while leaving text editing keys to Drei's editor tables."
     (run-chat-frame-buffer-command frame #'toggle-debug-mode-command)))
 
 (define-clawmacs-chat-frame-command
+    (com-chat-open-package-dashboard :name "Open Package Dashboard")
+    ()
+  (clim:with-application-frame (frame)
+    (package-dashboard-command (chat-frame-buffer frame))
+    (sync-chat-frame-after-command-dispatch frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-open-skill-selector :name "Toggle Skill")
+    ()
+  (clim:with-application-frame (frame)
+    (minibuffer-toggle-skill-command (chat-frame-buffer frame))
+    (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-open-effort-selector :name "Select Think Level")
+    ()
+  (clim:with-application-frame (frame)
+    ;; The minibuffer renders each choice as a semantic CLIM presentation and
+    ;; validates the selected candidate against frame-owned interaction state.
+    (select-think-level-command (chat-frame-buffer frame))
+    (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
     (com-chat-toggle-skill :name nil)
     ((skill-key 'string))
   (clim:with-application-frame (frame)
     (toggle-chat-skill-for-buffer (chat-frame-buffer frame) skill-key)
-    (request-chat-frame-menu-refresh frame)
     (request-chat-frame-redisplay frame)))
 
 (define-clawmacs-chat-frame-command
@@ -2362,7 +2439,6 @@ compose pane while leaving text editing keys to Drei's editor tables."
     ((package-name 'string))
   (clim:with-application-frame (frame)
     (toggle-chat-package-for-buffer (chat-frame-buffer frame) package-name)
-    (request-chat-frame-menu-refresh frame)
     (request-chat-frame-redisplay frame)))
 
 (define-clawmacs-chat-frame-command
@@ -2370,7 +2446,6 @@ compose pane while leaving text editing keys to Drei's editor tables."
     ((level 'string))
   (clim:with-application-frame (frame)
     (select-chat-effort-for-buffer (chat-frame-buffer frame) level)
-    (request-chat-frame-menu-refresh frame)
     (request-chat-frame-redisplay frame)))
 
 (define-clawmacs-chat-frame-command
@@ -2378,30 +2453,33 @@ compose pane while leaving text editing keys to Drei's editor tables."
     ()
   (clim:with-application-frame (frame)
     (safe-reload-clawmacs-command (chat-frame-buffer frame))
-    (request-chat-frame-menu-refresh frame)
     (request-chat-frame-redisplay frame)))
 
 (define-clawmacs-chat-frame-command
     (com-chat-recurse :name "Recurse")
     ()
   (clim:with-application-frame (frame)
-    (let* ((buffer (chat-frame-buffer frame))
-           (spec (launch-chat-recurse buffer)))
-      (buffer-insert-system-message
-       buffer
-       (format nil
-               "[Opened recurse frame ~A for session ~A in ~A]"
-               (getf spec :window-title)
-               (getf spec :session-name)
-               (namestring (getf spec :working-directory))))
+    (let ((buffer (chat-frame-buffer frame)))
+      (handler-case
+          (let ((spec (launch-chat-recurse buffer)))
+            (buffer-insert-system-message
+             buffer
+             (format nil
+                     "[Opened recurse frame ~A for session ~A in ~A]"
+                     (getf spec :window-title)
+                     (getf spec :session-name)
+                     (namestring (getf spec :working-directory)))))
+        (error (condition)
+          ;; Process creation is an application action, not part of CLIM's
+          ;; frame lifecycle.  Report it without unwinding ESA's top level.
+          (file-debug-event
+           "chat-recurse-launch-error"
+           :buffer-name (buffer-name buffer)
+           :condition (format nil "~A" condition))
+          (buffer-insert-system-message
+           buffer
+           (format nil "[Unable to open recurse frame: ~A]" condition))))
       (request-chat-frame-redisplay frame))))
-
-(define-clawmacs-chat-frame-command
-    (com-approve-tool :name "Approve Tool")
-    ((approval 'tool-approval))
-  (declare (ignore approval))
-  (clim:with-application-frame (frame)
-    (respond-to-chat-approval frame :approve)))
 
 (define-clawmacs-chat-frame-command
     (com-toggle-package-dashboard-entry :name nil)
@@ -2420,11 +2498,11 @@ compose pane while leaving text editing keys to Drei's editor tables."
     (object)
   (list object))
 
-(clim:define-presentation-to-command-translator select-minibuffer-command-candidate
-    (minibuffer-command-candidate com-chat-select-minibuffer-command-candidate
+(clim:define-presentation-to-command-translator select-chat-interaction-candidate
+    (chat-interaction-candidate com-chat-select-interaction-candidate
      clawmacs-chat-frame
      :gesture :select
-     :documentation "Run command"
+     :documentation "Choose candidate"
      :menu nil)
     (object)
   (list object))
@@ -2438,84 +2516,103 @@ compose pane while leaving text editing keys to Drei's editor tables."
     (object)
   (list object))
 
-(clim:define-presentation-to-command-translator approve-tool-approval
-    (tool-approval com-approve-tool clawmacs-chat-frame
-     :gesture :select
-     :documentation "Approve tool call"
-     :menu t)
-    (object)
-  (list object))
-
-(defun menu-sheet-type-name (object)
-  "Return OBJECT's type name for transient menu error classification."
-  (let ((type (type-of object)))
-    (if (symbolp type)
-        (symbol-name type)
-        (prin1-to-string type))))
-
-(defun transient-menu-sheet-not-grafted-error-p (condition)
-  "Return true for McCLIM CLX menu-sheet graft races during menu tracking.
-
-The CLX menu bar is implemented with temporary unmanaged menu frames.  In rare
-pointer/menu timing paths McCLIM may signal a SIMPLE-ERROR for one of those
-already-disowned menu sheets.  Treat only that narrow menu/top-level-sheet
-condition as recoverable; ordinary application-pane graft errors still escape."
-  (and (typep condition 'simple-error)
-       (equal (simple-condition-format-control condition)
-              "Sheet ~s is not grafted.")
-       (let* ((sheet (first (simple-condition-format-arguments condition)))
-              (type-name (menu-sheet-type-name sheet)))
-         (and (search "MENU" type-name :test #'char-equal)
-              (search "TOP-LEVEL-SHEET" type-name :test #'char-equal)))))
-
-(defun recover-from-transient-menu-error (frame condition)
-  "Recover FRAME from a transient McCLIM menu sheet graft error."
-  (file-debug-event "menu-bar-error-recovered"
-                    :condition (format nil "~A" condition))
-  ;; Rebuild the frame-local command table and ask the normal redisplay path to
-  ;; repaint panes.  Do not touch menu sheets or mediums directly; this keeps the
-  ;; workaround at the application-frame level while McCLIM cleans up the stale
-  ;; transient menu frame during unwinding.
+(defun report-chat-frame-cleanup-error (frame phase condition &optional buffer)
+  "Record a teardown CONDITION without allowing diagnostics to abort cleanup."
   (ignore-errors
-    (refresh-chat-frame-menu-bar frame))
-  (ignore-errors
-    (request-chat-frame-redisplay frame))
-  (sleep 0.05)
-  t)
+    (file-debug-event "frame-cleanup-error"
+                      :phase phase
+                      :buffer-name
+                      (and buffer (buffer-name buffer))
+                      :frame-buffer-name
+                      (buffer-name (chat-frame-buffer frame))
+                      :condition (princ-to-string condition))))
 
-(defun call-chat-top-level-with-menu-error-recovery (frame continuation)
-  "Call CONTINUATION, resuming FRAME after recoverable menu graft errors."
-  (loop
-    (let ((condition
-            (block retry-top-level
-              (handler-bind
-                  ((error (lambda (condition)
-                            (when (transient-menu-sheet-not-grafted-error-p condition)
-                              (return-from retry-top-level condition)))))
-                (return (funcall continuation))))))
-      ;; Recover only after the menu tracking stack has unwound.  Non-matching
-      ;; errors are not handled here, so they keep their original signal site and
-      ;; debugger context.
-      (recover-from-transient-menu-error frame condition))))
+(defun cleanup-chat-frame-runtime (frame hook)
+  "Release FRAME-owned runtime resources and always retire its display hook.
+
+Every buffer cancellation has its own error boundary.  A broken provider or
+tool cleanup therefore cannot retain the dead frame through HOOK, prevent the
+remaining buffers from being cancelled, or leave the frame marked running."
+  (handler-case
+      (bt:with-lock-held ((chat-frame-redisplay-lock frame))
+        (setf (chat-frame-lifecycle-state frame) :stopping
+              (chat-frame-redisplay-dirty-p frame) nil
+              (chat-frame-redisplay-pending-p frame) nil
+              (chat-frame-redisplay-handling-p frame) nil))
+    (error (condition)
+      (report-chat-frame-cleanup-error frame :mark-stopping condition)))
+  (unwind-protect
+       ;; The chat frame is the application object for the in-process buffer
+       ;; ring.  Closing it tears down operations from every buffer that could
+       ;; otherwise retain the dead frame through display callbacks.
+       (dolist (buffer
+                (remove-duplicates
+                 (cons (chat-frame-buffer frame) *buffer-ring*)
+                 :test #'eq))
+         (when buffer
+           (handler-case
+               (progn
+                 ;; Closing the application frame is permanent disposal, not a
+                 ;; temporary Stop.  Mark that ownership before cancellation so
+                 ;; a late reaper silently protocol-completes and releases its
+                 ;; exact teardown after this frame's wake hook is gone.
+                 (dispose-buffer buffer)
+                 ;; Apply any already-ready legacy/live delivery before retiring
+                 ;; the hook.  A still-running disposal needs no future frame:
+                 ;; its reaper follows the silent disposal branch above.
+                 (deliver-buffer-runtime-stopped-notification buffer))
+             (error (condition)
+               (report-chat-frame-cleanup-error
+                frame :cancel-buffer condition buffer)))))
+    (handler-case
+        (clear-chat-interaction-state (chat-frame-interaction-state frame))
+      (error (condition)
+        (report-chat-frame-cleanup-error
+         frame :clear-interaction-state condition)))
+    (when hook
+      (handler-case
+          (remove-hook '*buffer-display-wakeup-hook* hook)
+        (error (condition)
+          (report-chat-frame-cleanup-error frame :remove-hook condition))))
+    (handler-case
+        (bt:with-lock-held ((chat-frame-redisplay-lock frame))
+          (setf (chat-frame-lifecycle-state frame) :stopped))
+      (error (condition)
+        (report-chat-frame-cleanup-error frame :mark-stopped condition)))
+    (ignore-errors
+      (file-debug-event "frame-stopped"
+                        :buffer-name
+                        (buffer-name (chat-frame-buffer frame)))))
+  frame)
+
+(defun call-with-chat-frame-runtime (frame continuation)
+  "Run CONTINUATION with FRAME's top-level runtime installed and protected."
+  (let ((hook nil)
+        (*chat-interaction-state* (chat-frame-interaction-state frame)))
+    ;; Pane configuration and hook registration can invoke extension code.
+    ;; Establish cleanup first so no startup failure can strand :STARTING or a
+    ;; partially installed display hook.
+    (unwind-protect
+         (progn
+           (bt:with-lock-held ((chat-frame-redisplay-lock frame))
+             (setf (chat-frame-lifecycle-state frame) :starting
+                   (chat-frame-redisplay-pending-p frame) nil
+                   (chat-frame-redisplay-handling-p frame) nil))
+           (let ((transcript (clim:find-pane-named frame 'transcript)))
+             (setf (esa:windows frame) (and transcript (list transcript))))
+           (configure-chat-compose-pane (clim:find-pane-named frame 'compose))
+           (setf hook
+                 (lambda (buf reason)
+                   (when (and (or (eq reason :runtime-stopped-pending)
+                                  (not *suppress-chat-redisplay-requests*))
+                              (eq buf (chat-frame-buffer frame)))
+                     (request-chat-frame-redisplay frame))))
+           (add-hook '*buffer-display-wakeup-hook* hook :append t)
+           (funcall continuation))
+      (cleanup-chat-frame-runtime frame hook))))
 
 (defmethod clim:run-frame-top-level :around ((frame clawmacs-chat-frame) &key)
-  (refresh-chat-frame-menu-bar frame)
-  (let ((transcript (clim:find-pane-named frame 'transcript)))
-    (setf (esa:windows frame) (and transcript (list transcript))))
-  (configure-chat-compose-pane (clim:find-pane-named frame 'compose))
-  (let ((hook (lambda (buf reason)
-                (when (and (not *suppress-chat-redisplay-requests*)
-                           (eq buf (chat-frame-buffer frame)))
-                  (when (member reason '(:routing :system-prompt)
-                                :test #'eq)
-                    (request-chat-frame-menu-refresh frame))
-                  (request-chat-frame-redisplay frame)))))
-    (add-hook '*after-buffer-display-change-hook* hook :append t)
-    (unwind-protect
-         (call-chat-top-level-with-menu-error-recovery
-          frame
-          (lambda () (call-next-method)))
-      (remove-hook '*after-buffer-display-change-hook* hook))))
+  (call-with-chat-frame-runtime frame (lambda () (call-next-method))))
 
 (defun run-clawmacs-chat-frame (buffer &key window-title)
   "Run the fresh McCLIM chat frame for BUFFER."

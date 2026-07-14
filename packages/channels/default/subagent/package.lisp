@@ -128,16 +128,6 @@
           (values names (not (null names))))
         (values nil nil))))
 
-(defun subagent-tool-auto-approve-tools-p (args spec)
-  "Return the requested auto-approve setting, rejecting agent escalation."
-  (let ((value (subagent-tool-boolean-field
-                args spec
-                '(:auto-approve-tools "auto_approve_tools")
-                nil)))
-    (when (and value (not (eq *current-caller* :user)))
-      (error "auto_approve_tools can only be true for direct user calls."))
-    value))
-
 (defun subagent-tool-run-arguments (args)
   "Return values PROMPT and keyword arguments for RUN-SUBAGENT."
   (let* ((spec (subagent-tool-agent-spec args))
@@ -179,8 +169,6 @@
                                          "max_tool_iterations"))
             "max_tool_iterations"
             *prompt-max-tool-iterations*))
-         (auto-approve-tools-p
-           (subagent-tool-auto-approve-tools-p args spec))
          (run-args (list :agent-name agent-name
                          :provider provider
                          :model model
@@ -189,8 +177,7 @@
                          :service-tier service-tier
                          :core-prompt core-prompt
                          :personality-prompt personality-prompt
-                         :max-tool-iterations max-tool-iterations
-                         :auto-approve-tools-p auto-approve-tools-p)))
+                         :max-tool-iterations max-tool-iterations)))
     (multiple-value-bind (tool-names supplied-p)
         (subagent-tool-tool-names args spec)
       (when supplied-p
@@ -330,8 +317,8 @@
   `core_prompt` and/or `personality_prompt`. This does not register or mutate
   the agent definition.
 - Use `tool_names` to constrain the subagent's tools. Omit it to use the
-  selected agent's default tools. Permission-gated tools are denied in
-  non-interactive subagents unless the user directly requested auto-approval.
+  selected agent's default tools. Subagents execute every tool exposed to them
+  directly.
 - Prefer these tools over `lisp_eval` for subagent delegation."
  :title "Delegation with subagent"
  :package "subagent")
@@ -339,7 +326,6 @@
 (deftool subagent-tool-run
   :name "subagent_run"
   :description "Run a Clawmacs subagent synchronously. Use agent for an existing agent, or provide core_prompt/personality_prompt/routing overrides for a custom transient agent."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((prompt :type "string"
                  :description "Task prompt for the subagent.")
@@ -366,7 +352,6 @@
 (deftool subagent-tool-start
   :name "subagent_start"
   :description "Start a Clawmacs subagent asynchronously and return a handle id for later status, wait, or cancel calls."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((prompt :type "string"
                  :description "Task prompt for the subagent.")
@@ -393,7 +378,6 @@
 (deftool subagent-tool-status
   :name "subagent_status"
   :description "Inspect one background subagent by id, or list all known background subagents when id is omitted."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((id :type "string" :required nil
              :description "Subagent id returned by subagent_start.")
@@ -403,7 +387,6 @@
 (deftool subagent-tool-wait
   :name "subagent_wait"
   :description "Wait for a background subagent to finish and return its status and final result when it succeeds."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((id :type "string"
              :description "Subagent id returned by subagent_start.")
@@ -413,7 +396,6 @@
 (deftool subagent-tool-cancel
   :name "subagent_cancel"
   :description "Cooperatively cancel a background subagent by id."
-  :permission :agent-allowed
   :call-style :raw-args
   :args ((id :type "string"
              :description "Subagent id returned by subagent_start.")))

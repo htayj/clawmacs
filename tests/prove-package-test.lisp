@@ -51,8 +51,6 @@
            (prompt (render-package-prompt-sections))
            (tester (find-agent-definition "tester")))
       (is (equal '("prove_list_methods" "prove_run") tool-names))
-      (dolist (name tool-names)
-        (is-false (clawmacs::tool-requires-permission-p name)))
       (is (search "Self-testing with prove" prompt))
       (is (search "prove_list_methods" prompt))
       (is (search "prove_run" prompt))

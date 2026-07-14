@@ -39,6 +39,14 @@
   "Function used to verify advised functions preserve multiple values."
   (values value :second))
 
+(defun advice-reload-target ()
+  "Function used to simulate ASDF redefining an advised target."
+  :original)
+
+(defun advice-reload-probe ()
+  "Record one invocation of package-owned reload advice."
+  (push :advice *advice-test-log*))
+
 (defun hook-dispatch-test-command (buffer)
   "Command used by hook dispatch tests."
   (push (list :body buffer) *hook-dispatch-test-log*)
@@ -138,6 +146,48 @@
            (is (eq original (symbol-function 'advice-values-target))))
       (clawmacs:clear-advices 'advice-values-target))))
 
+(test package-advice-preserves-and-readvises-redefined-targets
+  "Package cleanup never restores a stale pre-reload target fdefinition."
+  (let ((original (symbol-function 'advice-reload-target))
+        (*advice-test-log* nil))
+    (unwind-protect
+         (progn
+           (clawmacs:clear-advices 'advice-reload-target)
+           (let ((clawmacs::*current-clawmacs-package* "reload-probe"))
+             (clawmacs:add-advice 'advice-reload-target
+                                  :before
+                                  'advice-reload-probe
+                                  :name 'advice-reload-probe))
+           (is (eq :original (advice-reload-target)))
+           (is (equal '(:advice) *advice-test-log*))
+           (setf *advice-test-log* nil
+                 (fdefinition 'advice-reload-target) (lambda () :redefined))
+           (clawmacs::remove-package-advices "reload-probe")
+           (is (eq :redefined (advice-reload-target)))
+           (is (null (clawmacs:list-advices 'advice-reload-target)))
+           (let ((clawmacs::*current-clawmacs-package* "reload-probe"))
+             (clawmacs:add-advice 'advice-reload-target
+                                  :before
+                                  'advice-reload-probe
+                                  :name 'advice-reload-probe))
+           (is (eq :redefined (advice-reload-target)))
+           (is (equal '(:advice) *advice-test-log*))
+           ;; A second target redefinition while bookkeeping exists is adopted
+           ;; when the package re-registers its advice.
+           (setf *advice-test-log* nil
+                 (fdefinition 'advice-reload-target) (lambda () :newest))
+           (let ((clawmacs::*current-clawmacs-package* "reload-probe"))
+             (clawmacs:add-advice 'advice-reload-target
+                                  :before
+                                  'advice-reload-probe
+                                  :name 'advice-reload-probe))
+           (is (eq :newest (advice-reload-target)))
+           (is (equal '(:advice) *advice-test-log*))
+           (clawmacs::remove-package-advices "reload-probe")
+           (is (eq :newest (advice-reload-target))))
+      (clawmacs:clear-advices 'advice-reload-target)
+      (setf (fdefinition 'advice-reload-target) original))))
+
 (test invoke-command-runs-command-hooks
   "Interactive command dispatch runs before and after command hooks."
   (let ((clawmacs::*before-command-hook* nil)
@@ -175,7 +225,6 @@
      "hook_probe"
      "Probe tool hooks."
      '((:type . "object"))
-     :agent-allowed
      (lambda (args)
        (push (list :body args) log)
        "tool-result"))
@@ -351,8 +400,6 @@ All args: $@" stream))
       (is (not (null metadata)))
       (is (string= "metadata_doc_tool"
                    (agent-tool-metadata-name metadata)))
-      (is (eq :agent-allowed
-              (agent-tool-metadata-permission metadata)))
       (is (not (null definition)))
       (is (not (null (assoc "value" properties :test #'string=))))
       (is (string= "value=ok"
@@ -418,7 +465,6 @@ All args: $@" stream))
       (eval '(clawmacs:deftool command-tool-test
                :name "command_tool_test"
                :description "Run a command as an agent tool."
-               :permission :agent-allowed
                :args ((label :type "string"
                              :description "Label to record."))))
       (let* ((definition (gethash "command_tool_test" clawmacs::*tool-table*))
@@ -426,8 +472,7 @@ All args: $@" stream))
              (schema (tool-definition-input-schema definition))
              (properties (cdr (assoc :properties schema)))
              (buf (make-buffer "tool-buffer")))
-        (is (eq :agent-allowed
-                (agent-tool-metadata-permission metadata)))
+        (is (not (null metadata)))
         (is (not (null (assoc "label" properties :test #'string=))))
         (is (null (assoc "buffer" properties :test #'string=)))
         (let ((*current-caller* :some-agent)
@@ -451,11 +496,28 @@ All args: $@" stream))
                :args ((label :type "string")))))))
 
 (test defcommand-rejects-permission-keyword
-  "Command permissions belong in deftool metadata, not defcommand."
+  "Commands have no in-process permission metadata."
   (signals error
     (macroexpand-1
      '(clawmacs:defcommand permission-command
         :permission :agent-allowed))))
+
+(test deftool-rejects-obsolete-security-keywords
+  "Tool declarations reject removed permission and approval UI metadata."
+  (with-agent-tool-state ()
+    (eval '(defun obsolete-security-tool (value) value))
+    (signals error
+      (eval '(clawmacs:deftool obsolete-security-tool
+               :name "obsolete_security_tool"
+               :description "Obsolete metadata test."
+               :permission :agent-allowed
+               :args ((value :type "string")))))
+    (signals error
+      (eval '(clawmacs:deftool obsolete-security-tool
+               :name "obsolete_security_tool"
+               :description "Obsolete metadata test."
+               :approval-display-fn identity
+               :args ((value :type "string")))))))
 
 (test defcommand-rejects-interactive-keyword
   "Prompt metadata belongs under :PROMPTS, not :INTERACTIVE."

@@ -15,6 +15,35 @@
 (defvar *session-share-handler-table* (make-hash-table :test #'equal)
   "Registry of share handlers keyed by normalized handler name.")
 
+(defvar *process-session-share-handler-table* *session-share-handler-table*
+  "Process-global share handler table, distinct from dynamic test bindings.")
+
+(defvar *session-share-handler-registry-lock*
+  (bt:make-lock "clawmacs session share handler registry")
+  "Lock guarding bounded access to the process-global share handler table.")
+
+(defun call-with-session-share-handler-registry-lock
+    (function &optional (table *session-share-handler-table*))
+  "Call FUNCTION under the share-handler lock when TABLE is process-global.
+
+Handler callbacks and filesystem work must run after this lock is released."
+  (if (eq table *process-session-share-handler-table*)
+      (bt:with-lock-held (*session-share-handler-registry-lock*)
+        (funcall function))
+      (funcall function)))
+
+(defun session-share-handler-registry-snapshot
+    (&optional (table *session-share-handler-table*))
+  "Return a stable alist snapshot of share handler TABLE."
+  (call-with-session-share-handler-registry-lock
+   (lambda ()
+     (let ((entries nil))
+       (maphash (lambda (name handler)
+                  (push (cons name handler) entries))
+                table)
+       entries))
+   table))
+
 (defun normalize-session-share-handler-name (name)
   "Return NAME as a lowercase share-handler key."
   (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return)
@@ -30,7 +59,10 @@
                    :name normalized
                    :description (or description "")
                    :function function)))
-    (setf (gethash normalized *session-share-handler-table*) handler)
+    (call-with-session-share-handler-registry-lock
+     (lambda ()
+       (setf (gethash normalized *session-share-handler-table*) handler))
+     *session-share-handler-table*)
     handler))
 
 (defun session-export-default-html-path (session)
@@ -364,7 +396,7 @@ Returns a plist describing the export."
 
 (defun call-session-share-hook-handler (buffer export-info)
   "Run *SESSION-SHARE-HOOK* until one hook returns a non-nil share result."
-  (dolist (hook *session-share-hook*)
+  (dolist (hook (hook-member-snapshot '*session-share-hook*))
     (let ((result (call-hook-safely hook '*session-share-hook*
                                     buffer export-info)))
       (when result
@@ -393,33 +425,41 @@ Returns a plist describing the export."
 
 (defun ensure-default-session-share-handlers ()
   "Register built-in session share handlers when absent."
-  (unless (gethash "local-copy" *session-share-handler-table*)
-    (register-session-share-handler
-     "local-copy"
-     #'session-share-local-copy-handler
-     :description "Copy the exported HTML into the session shares directory."))
-  (unless (gethash "hook" *session-share-handler-table*)
-    (register-session-share-handler
-     "hook"
-     #'call-session-share-hook-handler
-     :description "Delegate sharing to functions on *session-share-hook*.")))
+  (let ((local-copy
+          (make-session-share-handler
+           :name "local-copy"
+           :function #'session-share-local-copy-handler
+           :description
+           "Copy the exported HTML into the session shares directory."))
+        (hook
+          (make-session-share-handler
+           :name "hook"
+           :function #'call-session-share-hook-handler
+           :description
+           "Delegate sharing to functions on *session-share-hook*.")))
+    (call-with-session-share-handler-registry-lock
+     (lambda ()
+       (unless (gethash "local-copy" *session-share-handler-table*)
+         (setf (gethash "local-copy" *session-share-handler-table*) local-copy))
+       (unless (gethash "hook" *session-share-handler-table*)
+         (setf (gethash "hook" *session-share-handler-table*) hook)))
+     *session-share-handler-table*))
+  t)
 
 (defun find-session-share-handler (name)
   "Return the registered session share handler NAME, or NIL."
   (ensure-default-session-share-handlers)
-  (gethash (normalize-session-share-handler-name
-            (or name "local-copy"))
-           *session-share-handler-table*))
+  (let ((normalized
+          (normalize-session-share-handler-name (or name "local-copy"))))
+    (call-with-session-share-handler-registry-lock
+     (lambda () (gethash normalized *session-share-handler-table*))
+     *session-share-handler-table*)))
 
 (defun list-session-share-handlers ()
   "Return registered session share handlers sorted by name."
   (ensure-default-session-share-handlers)
-  (let ((handlers nil))
-    (maphash (lambda (_name handler)
-               (declare (ignore _name))
-               (push handler handlers))
-             *session-share-handler-table*)
-    (sort handlers #'string< :key #'session-share-handler-name)))
+  (sort (mapcar #'cdr (session-share-handler-registry-snapshot))
+        #'string< :key #'session-share-handler-name))
 
 (defun share-session-export (buffer export-info &key (handler "local-copy"))
   "Invoke HANDLER for EXPORT-INFO and return a plist summary."

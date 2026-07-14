@@ -2,14 +2,163 @@
 
 (in-suite clawmacs-suite)
 
-(defclass menu-unmanaged-top-level-sheet-pane-test ()
-  ())
+(defmacro with-mcclim-test-function-override
+    ((name lambda-list &body implementation) &body body)
+  "Temporarily replace NAME during a serial McCLIM unit test."
+  (let ((original (gensym "ORIGINAL")))
+    `(let ((,original (symbol-function ',name)))
+       (unwind-protect
+            (progn
+              (setf (symbol-function ',name)
+                    (lambda ,lambda-list ,@implementation))
+              ,@body)
+         (setf (symbol-function ',name) ,original)))))
 
-(defun test-menu-sheet-not-grafted-condition (&optional (object (make-instance 'menu-unmanaged-top-level-sheet-pane-test)))
-  (handler-case
-      (error "Sheet ~s is not grafted." object)
-    (simple-error (condition)
-      condition)))
+(defclass synthetic-chat-compose-pane
+    (clawmacs::clawmacs-chat-compose-pane)
+  ((test-frame :accessor synthetic-chat-compose-pane-frame))
+  (:metaclass esa-utils:modual-class)
+  (:documentation "Uninitialized compose pane used for headless event tests."))
+
+(defmethod clim:pane-frame ((pane synthetic-chat-compose-pane))
+  (synthetic-chat-compose-pane-frame pane))
+
+(defun make-synthetic-chat-compose-pane (frame)
+  "Return a headless compose pane whose public PANE-FRAME is FRAME."
+  (let ((pane (allocate-instance
+               (find-class 'synthetic-chat-compose-pane))))
+    (setf (synthetic-chat-compose-pane-frame pane) frame)
+    pane))
+
+(defun test-direct-command-table-keystrokes (table)
+  "Return stable snapshots of TABLE's non-inherited keystroke entries."
+  (let ((entries nil))
+    (clim:map-over-command-table-keystrokes
+     (lambda (name gesture item)
+       (push (list name
+                   (copy-tree gesture)
+                   (clim:command-menu-item-type item)
+                   (copy-tree (clim:command-menu-item-value item)))
+             entries))
+     table
+     :inherited nil)
+    (nreverse entries)))
+
+(test compose-meta-x-prefers-frame-command-and-preserves-the-key-form
+  "M-x resolves to Clawmacs and ESA parses its list-valued key as data."
+  (clawmacs::init-default-keymap)
+  (clawmacs::install-chat-frame-keybindings)
+  (let* ((buffer (make-buffer "compose-meta-x"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buffer))
+         (clawmacs::*chat-interaction-state*
+           (clawmacs::chat-frame-interaction-state frame))
+         (pane (let ((pane (make-instance 'synthetic-chat-compose-pane)))
+                 (setf (synthetic-chat-compose-pane-frame pane) frame)
+                 pane))
+         (frame-table (clim:frame-command-table frame))
+         (event (make-instance 'clim:key-press-event
+                               :sheet nil
+                               :x 0
+                               :y 0
+                               :key-name nil
+                               :key-character #\x
+                               :modifier-state
+                               (clim:make-modifier-state :meta)))
+         (additional-tables
+           (drei-syntax:additional-command-tables pane frame-table))
+         (frame-item
+           (clim:find-keystroke-item event frame-table :errorp nil))
+         (exclusive-item
+           (clim:find-keystroke-item
+            event
+            (clim:find-command-table 'drei:exclusive-gadget-table)
+            :errorp nil))
+         (clim:*application-frame* frame)
+         (clawmacs::*buffer-ring* nil))
+    ;; Drei's public extension hook must put the frame-local table ahead of
+    ;; EXCLUSIVE-GADGET-TABLE, whose own M-x command uses a blocking ACCEPT.
+    (is (eq frame-table (first additional-tables)))
+    (is (eq 'clawmacs::clawmacs-chat-compose-editing-table
+            (second additional-tables)))
+    (is (eq (find-symbol "COM-DREI-EXTENDED-COMMAND" :drei)
+            (first (clim:command-menu-item-value exclusive-item))))
+    ;; ESA evaluates supplied command arguments.  The key must therefore be a
+    ;; quoted form in the table and become literal data only after parsing.
+    (is (equal '(clawmacs::com-chat-dispatch-key '(:meta #\x))
+               (clim:command-menu-item-value frame-item)))
+    (is (equal '(clawmacs::com-chat-dispatch-key (:meta #\x))
+               (esa:esa-partial-command-parser
+                frame-table
+                (make-string-input-stream "")
+                (clim:command-menu-item-value frame-item)
+                0)))
+    ;; Exercise the same Drei/ESA gesture lookup and argument-evaluation path
+    ;; used by the live compose pane; direct EXECUTE-FRAME-COMMAND would skip
+    ;; both of the regressions guarded above.
+    (setf (buffer-keymap buffer) clawmacs::*default-keymap*)
+    (with-mcclim-test-function-override
+        (clawmacs::make-command-selector-items (&key buffer)
+          (declare (ignore buffer))
+          (list (list :display "toggle"
+                      :command 'clawmacs::toggle-debug-mode-command)))
+      (with-mcclim-test-function-override
+          (clawmacs::request-chat-frame-redisplay (requested-frame)
+            (is (eq frame requested-frame))
+            requested-frame)
+        (clawmacs::process-chat-compose-drei-event pane event)))
+    (is-true clawmacs::*minibuffer-active*)
+    (is (string= "M-x" clawmacs::*minibuffer-prompt*))))
+
+(test compose-prefix-survives-esas-identical-command-table-assignment
+  "ESA's per-turn table assignment cannot invalidate a retained prefix."
+  (clawmacs::init-default-keymap)
+  (clawmacs::install-chat-frame-keybindings)
+  (let* ((buffer (make-buffer "compose-prefix-refresh"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buffer))
+         (pane (make-instance 'synthetic-chat-compose-pane))
+         (control-c
+           (make-instance 'clim:key-press-event
+                          :sheet pane :x 0 :y 0
+                          :key-name nil
+                          :key-character #\c
+                          :modifier-state
+                          (clim:make-modifier-state :control)))
+         (standalone-shift
+           (make-instance 'clim:key-press-event
+                          :sheet pane :x 0 :y 0
+                          ;; Exercise a backend spelling that pinned ESA does
+                          ;; not itself classify as modifier-only.
+                          :key-name :lshift
+                          :key-character nil
+                          :modifier-state
+                          (clim:make-modifier-state :shift)))
+         (uppercase-v
+           (make-instance 'clim:key-press-event
+                          :sheet pane :x 0 :y 0
+                          :key-name nil
+                          :key-character #\V
+                          ;; CLX has already used Shift to select uppercase V
+                          ;; and removes Shift from the character event.
+                          :modifier-state (clim:make-modifier-state)))
+         (table (clim:frame-command-table frame))
+         (clim:*application-frame* frame)
+         (clawmacs::*buffer-ring* nil))
+    (setf (synthetic-chat-compose-pane-frame pane) frame
+          (buffer-keymap buffer) clawmacs::*default-keymap*)
+    (setf (clim:frame-command-table frame) table)
+    (clawmacs::process-chat-compose-drei-event pane control-c)
+    (setf (clim:frame-command-table frame) table)
+    ;; A standalone modifier is not part of the command sequence and must not
+    ;; disturb the retained C-c prefix.
+    (clim:handle-event pane standalone-shift)
+    (clawmacs::process-chat-compose-drei-event pane uppercase-v)
+    (is-true (buffer-show-reasoning-p buffer))))
 
 (defun test-tool-use-block (id name)
   `((:type . "tool_use")
@@ -21,6 +170,267 @@
   `((:type . "tool_result")
     (:tool--use--id . ,id)
     (:content . ,content)))
+
+(test message-help-thread-constructor-failure-is-contained
+  "Metadata help resource exhaustion must not escape the CLIM command path."
+  (let ((debug-event nil)
+        (clawmacs::*message-help-runtime-reservations*
+          (make-hash-table :test #'eq)))
+    (with-mcclim-test-function-override
+        (clawmacs::make-message-help-worker-thread (function)
+          (declare (ignore function))
+          (error "simulated message-help thread failure"))
+      (with-mcclim-test-function-override
+          (clawmacs::file-debug-event (event-name &rest payload)
+            (declare (ignore payload))
+            (setf debug-event event-name))
+        ;; Any escaped constructor condition would fail at this call.
+        (is (null
+             (clawmacs::open-message-help-window (make-message :agent))))
+        (is (string= "message-help-thread-start-error" debug-event))
+        (is (= 0 (clawmacs::message-help-active-count-snapshot)))))))
+
+(test message-help-frame-construction-failure-is-contained
+  "A help-frame allocation failure must remain inside the user command path."
+  (let ((debug-event nil)
+        (clawmacs::*message-help-runtime-reservations*
+          (make-hash-table :test #'eq)))
+    (with-mcclim-test-function-override
+        (clawmacs::make-message-help-frame (message)
+          (declare (ignore message))
+          (error "simulated message-help frame construction failure"))
+      (with-mcclim-test-function-override
+          (clawmacs::file-debug-event (event-name &rest payload)
+            (declare (ignore payload))
+            (setf debug-event event-name))
+        (is (null
+             (clawmacs::open-message-help-window (make-message :agent))))
+        (is (string= "message-help-frame-construction-error"
+                     debug-event))
+        (is (= 0 (clawmacs::message-help-active-count-snapshot)))))))
+
+(test message-help-reservation-covers-the-independent-frame-lifetime
+  "The reservation remains visible until the help frame top level exits."
+  (let ((worker-function nil)
+        (debug-events nil)
+        (clawmacs::*message-help-runtime-reservations*
+          (make-hash-table :test #'eq)))
+    (with-mcclim-test-function-override
+        (clawmacs::make-message-help-frame (message)
+          (declare (ignore message))
+          :synthetic-help-frame)
+      (with-mcclim-test-function-override
+          (clawmacs::make-message-help-worker-thread (function)
+            (setf worker-function function)
+            :synthetic-worker)
+        (with-mcclim-test-function-override
+            (clawmacs::file-debug-event (event-name &rest payload)
+              (declare (ignore payload))
+              (push event-name debug-events))
+          (is (eq :synthetic-help-frame
+                  (clawmacs::open-message-help-window
+                   (make-message :agent))))
+          (is (= 1 (clawmacs::message-help-active-count-snapshot)))
+          ;; The synthetic frame has no CLIM top-level method.  OPEN's worker
+          ;; boundary contains that expected error and still releases exactly.
+          (funcall worker-function)
+          (is (= 0 (clawmacs::message-help-active-count-snapshot)))
+          (is (member "message-help-frame-error"
+                      debug-events :test #'string=)))))))
+
+(test message-help-start-is-refused-while-reload-owns-admission
+  "A help frame cannot begin construction during live reload ownership."
+  (let ((constructor-called-p nil)
+        (debug-event nil)
+        (clawmacs::*message-help-runtime-reservations*
+          (make-hash-table :test #'eq))
+        (clawmacs::*safe-reload-active-request*
+          (clawmacs::make-safe-reload-request
+           :token (gensym "ACTIVE-RELOAD-"))))
+    (with-mcclim-test-function-override
+        (clawmacs::make-message-help-frame (message)
+          (declare (ignore message))
+          (setf constructor-called-p t)
+          :must-not-exist)
+      (with-mcclim-test-function-override
+          (clawmacs::file-debug-event (event-name &rest payload)
+            (declare (ignore payload))
+            (setf debug-event event-name))
+        (is (null
+             (clawmacs::open-message-help-window (make-message :agent))))
+        (is-false constructor-called-p)
+        (is (= 0 (clawmacs::message-help-active-count-snapshot)))
+        (is (string= "message-help-admission-refused" debug-event))))))
+
+(test chat-recurse-launch-failure-is-contained-at-command-boundary
+  "A child-process launch failure is visible but cannot unwind the chat frame."
+  (let* ((buf (make-buffer "recurse-launch-failure"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf))
+         (clawmacs::*chat-interaction-state*
+           (clawmacs::chat-frame-interaction-state frame))
+         (debug-events nil))
+    (with-mcclim-test-function-override
+        (clawmacs::launch-chat-recurse (ignored-buffer)
+          (declare (ignore ignored-buffer))
+          (error "simulated recurse process failure"))
+      (with-mcclim-test-function-override
+          (clawmacs::file-debug-event (event-name &rest payload)
+            (declare (ignore payload))
+            (push event-name debug-events))
+        ;; EXECUTE-FRAME-COMMAND is the same ESA boundary used by the menu.
+        (clim:execute-frame-command frame '(clawmacs::com-chat-recurse))
+        (let ((status (message-prev (buffer-input-message buf))))
+          (is (eq :system (message-sender status)))
+          (is (search "Unable to open recurse frame"
+                      (message-text status)))
+          (is (search "simulated recurse process failure"
+                      (message-text status))))
+        (is (member "chat-recurse-launch-error"
+                    debug-events
+                    :test #'string=))))))
+
+(test chat-frame-command-errors-remain-inside-the-running-frame
+  "An ordinary CLIM command error is logged, displayed, and contained."
+  (let* ((buf (make-buffer "frame-command-error"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf))
+         (redisplay-requests 0)
+         (debug-events nil))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (with-mcclim-test-function-override
+        (clawmacs::request-chat-frame-redisplay (requested-frame)
+          (is (eq frame requested-frame))
+          (incf redisplay-requests)
+          requested-frame)
+      (with-mcclim-test-function-override
+          (clawmacs::file-debug-event (event-name &rest payload)
+            (push (cons event-name payload) debug-events))
+        ;; Any escaped condition fails this test at the call site.
+        (is (null
+             (clim:execute-frame-command
+              frame '(error "simulated frame command failure"))))))
+    (let ((diagnostic (message-prev (buffer-input-message buf))))
+      (is (eq :system (message-sender diagnostic)))
+      (is (search "UI action failed" (message-text diagnostic)))
+      (is (search "simulated frame command failure"
+                  (message-text diagnostic))))
+    (is (= 1 redisplay-requests))
+    (is (member "ui-action-error" debug-events
+                :key #'car :test #'string=))
+    (is (eq :running (clawmacs::chat-frame-lifecycle-state frame)))))
+
+(test chat-compose-direct-command-errors-remain-inside-the-running-frame
+  "A failing buffer-owned compose command cannot unwind the CLIM event loop."
+  (let* ((buf (make-buffer "compose-command-error"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf))
+         (clawmacs::*chat-interaction-state*
+           (clawmacs::chat-frame-interaction-state frame))
+         (pane (make-synthetic-chat-compose-pane frame))
+         (keymap (clawmacs::make-keymap :compose-command-error))
+         (event (make-instance 'clim:key-press-event
+                               :sheet nil
+                               :x 0
+                               :y 0
+                               :key-name nil
+                               :key-character #\u
+                               :modifier-state
+                               (clim:make-modifier-state :control)))
+         (redisplay-requests 0)
+         (debug-events nil)
+         (clawmacs::*before-command-hook* nil)
+         (clawmacs::*after-command-hook* nil)
+         (clawmacs::*buffer-selector-active* nil)
+         (clawmacs::*model-selector-active* nil)
+         (clawmacs::*think-selector-active* nil))
+    (clawmacs::keymap-bind keymap (code-char 21)
+                           'clawmacs::kill-backward-line-command)
+    (setf (buffer-keymap buf) keymap
+          (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (with-mcclim-test-function-override
+        (clawmacs::sync-chat-buffer-input-from-compose-pane
+            (ignored-pane ignored-buffer)
+          (declare (ignore ignored-pane ignored-buffer))
+          nil)
+      (with-mcclim-test-function-override
+          (clawmacs::kill-backward-line-command (ignored-buffer)
+            (declare (ignore ignored-buffer))
+            (error "simulated direct compose command failure"))
+        (with-mcclim-test-function-override
+            (clawmacs::request-chat-frame-redisplay (requested-frame)
+              (is (eq frame requested-frame))
+              (incf redisplay-requests)
+              requested-frame)
+          (with-mcclim-test-function-override
+              (clawmacs::file-debug-event (event-name &rest payload)
+                (declare (ignore payload))
+                (push event-name debug-events))
+            ;; This is the real compose HANDLE-EVENT direct-dispatch branch.
+            (is (null (clim:handle-event pane event)))))))
+    (let ((diagnostic (message-prev (buffer-input-message buf))))
+      (is (eq :system (message-sender diagnostic)))
+      (is (search "simulated direct compose command failure"
+                  (message-text diagnostic))))
+    (is (= 1 redisplay-requests))
+    (is (member "ui-action-error" debug-events :test #'string=))
+    (is (eq :running (clawmacs::chat-frame-lifecycle-state frame)))))
+
+(test chat-compose-minibuffer-callback-errors-remain-inside-the-running-frame
+  "A failing prompt callback deactivates cleanly without exiting the frame."
+  (let* ((buf (make-buffer "minibuffer-callback-error"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf))
+         (clawmacs::*chat-interaction-state*
+           (clawmacs::chat-frame-interaction-state frame))
+         (pane (make-synthetic-chat-compose-pane frame))
+         (event (make-instance 'clim:key-press-event
+                               :sheet nil
+                               :x 0
+                               :y 0
+                               :key-name nil
+                               :key-character #\Return
+                               :modifier-state (clim:make-modifier-state)))
+         (redisplay-requests 0)
+         (debug-events nil))
+    (setf clawmacs::*minibuffer-active* t
+          clawmacs::*minibuffer-mode* :prompt
+          clawmacs::*minibuffer-prompt* "Failing prompt"
+          clawmacs::*minibuffer-input* "confirmed value"
+          clawmacs::*minibuffer-point* 15
+          clawmacs::*minibuffer-callback*
+          (lambda (value)
+            (declare (ignore value))
+            (error "simulated minibuffer callback failure"))
+          (buffer-keymap buf) (clawmacs::make-keymap :minibuffer-error)
+          (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (with-mcclim-test-function-override
+        (clawmacs::request-chat-frame-redisplay (requested-frame)
+          (is (eq frame requested-frame))
+          (incf redisplay-requests)
+          requested-frame)
+      (with-mcclim-test-function-override
+          (clawmacs::file-debug-event (event-name &rest payload)
+            (declare (ignore payload))
+            (push event-name debug-events))
+        ;; MINIBUFFER-CONFIRM invokes the callback through compose dispatch.
+        (is (null (clim:handle-event pane event)))))
+    (is-false clawmacs::*minibuffer-active*)
+    (let ((diagnostic (message-prev (buffer-input-message buf))))
+      (is (eq :system (message-sender diagnostic)))
+      (is (search "simulated minibuffer callback failure"
+                  (message-text diagnostic))))
+    (is (= 1 redisplay-requests))
+    (is (member "ui-action-error" debug-events :test #'string=))
+    (is (eq :running (clawmacs::chat-frame-lifecycle-state frame)))))
 
 (test transcript-collapses-consecutive-tool-activity
   (let ((buf (make-buffer "tool-collapse" :session-persistence-mode :ephemeral)))
@@ -89,54 +499,6 @@
                  (clawmacs::chat-tool-activity-summary-tool-counts (first items))))
       (is (= 0 (clawmacs::chat-tool-activity-summary-result-count (first items)))))))
 
-(test menu-sheet-not-grafted-error-classification-is-narrow
-  "Only transient McCLIM menu top-level-sheet graft errors are recoverable."
-  (is-true
-   (clawmacs::transient-menu-sheet-not-grafted-error-p
-    (test-menu-sheet-not-grafted-condition)))
-  (is-false
-   (clawmacs::transient-menu-sheet-not-grafted-error-p
-    (test-menu-sheet-not-grafted-condition 'ordinary-pane)))
-  (is-false
-   (clawmacs::transient-menu-sheet-not-grafted-error-p
-    (handler-case
-        (error "Different menu problem: ~s"
-               (make-instance 'menu-unmanaged-top-level-sheet-pane-test))
-      (simple-error (condition)
-        condition)))))
-
-(test chat-top-level-recovers-from-transient-menu-graft-errors
-  "The chat frame top-level can resume after McCLIM menu sheet graft races."
-  (let* ((buf (make-buffer "menu-recovery" :session-persistence-mode :ephemeral))
-         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
-                                             :buffer buf))
-         (attempts 0))
-    (is (eq :resumed
-            (clawmacs::call-chat-top-level-with-menu-error-recovery
-             frame
-             (lambda ()
-               (incf attempts)
-               (when (= attempts 1)
-                 (error (test-menu-sheet-not-grafted-condition)))
-               :resumed))))
-    (is (= 2 attempts))))
-
-(test chat-top-level-does-not-intercept-non-menu-errors
-  "Non-menu top-level errors are left for the normal debugger/context path."
-  (let* ((buf (make-buffer "menu-recovery-non-menu" :session-persistence-mode :ephemeral))
-         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
-                                             :buffer buf))
-         (condition (make-condition 'simple-error
-                                    :format-control "Ordinary top-level failure"
-                                    :format-arguments nil)))
-    (handler-case
-        (clawmacs::call-chat-top-level-with-menu-error-recovery
-         frame
-         (lambda ()
-           (error condition)))
-      (simple-error (caught)
-        (is (eq condition caught))))))
-
 (test chat-frame-is-esa-application
   "The chat frame exposes the ESA frame and buffer protocol."
   (let* ((buf (make-buffer "esa-frame" :session-persistence-mode :ephemeral))
@@ -150,9 +512,447 @@
     (is (eq (esa:find-applicable-command-table frame)
             (clim:frame-command-table frame)))))
 
+(test chat-frame-redisplay-request-before-graft-does-not-wedge
+  "A failed pre-graft wakeup leaves dirty state retryable, not pending forever."
+  (let* ((buf (make-buffer "redisplay-before-graft"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
+                                             :buffer buf)))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (clawmacs::request-chat-frame-redisplay frame)
+    (is-true (clawmacs::chat-frame-redisplay-dirty-p frame))
+    (is-false (clawmacs::chat-frame-redisplay-pending-p frame))
+    (is-false (clawmacs::chat-frame-redisplay-handling-p frame))))
+
+(test concurrent-chat-redisplay-requests-reserve-one-wakeup
+  "Many worker notifications coalesce without losing the dirty state."
+  (let* ((buf (make-buffer "redisplay-coalescing"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
+                                             :buffer buf))
+         (count-lock (bt:make-lock "redisplay-queue-count"))
+         (queue-count 0)
+         (wrong-frame-p nil)
+         (workers nil))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (with-mcclim-test-function-override
+        (clawmacs::queue-chat-frame-redisplay-event (requested-frame)
+          (bt:with-lock-held (count-lock)
+            (unless (eq frame requested-frame)
+              (setf wrong-frame-p t))
+            (incf queue-count))
+          t)
+      (setf workers
+            (loop :repeat 64
+                  :collect
+                  (bt:make-thread
+                   (lambda ()
+                     (clawmacs::request-chat-frame-redisplay frame)))))
+      (dolist (worker workers)
+        (bt:join-thread worker))
+      (is-false wrong-frame-p)
+      (is (= 1 queue-count))
+      (is-true (clawmacs::chat-frame-redisplay-dirty-p frame))
+      (is-true (clawmacs::chat-frame-redisplay-pending-p frame)))))
+
+(test lone-chat-redisplay-enqueue-failure-recovers-without-new-request
+  "One transient enqueue failure is retried without another worker notification."
+  (let* ((buf (make-buffer "redisplay-retry"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
+                                             :buffer buf))
+         (attempts 0)
+         (clawmacs::*chat-redisplay-enqueue-max-attempts* 2))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (with-mcclim-test-function-override
+        (clawmacs::queue-chat-frame-redisplay-event (requested-frame)
+          (declare (ignore requested-frame))
+          (incf attempts)
+          (> attempts 1))
+      (clawmacs::request-chat-frame-redisplay frame)
+      (is (= 2 attempts))
+      (is-true (clawmacs::chat-frame-redisplay-dirty-p frame))
+      (is-true (clawmacs::chat-frame-redisplay-pending-p frame)))))
+
+(test request-during-failed-redisplay-enqueue-is-not-lost
+  "A requester that observes an in-flight reservation is transferred on failure."
+  (let* ((buf (make-buffer "redisplay-failure-race"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
+                                             :buffer buf))
+         (first-enqueue-entered
+           (bt:make-semaphore :name "redisplay-first-enqueue-entered"))
+         (release-first-enqueue
+           (bt:make-semaphore :name "redisplay-release-first-enqueue"))
+         (count-lock (bt:make-lock "redisplay-race-count"))
+         (attempts 0))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (with-mcclim-test-function-override
+        (clawmacs::queue-chat-frame-redisplay-event (requested-frame)
+          (declare (ignore requested-frame))
+          (let ((attempt
+                  (bt:with-lock-held (count-lock)
+                    (incf attempts))))
+            (if (= attempt 1)
+                (progn
+                  (bt:signal-semaphore first-enqueue-entered)
+                  (bt:wait-on-semaphore release-first-enqueue :timeout 2)
+                  nil)
+                t)))
+      (let ((first-request
+              (bt:make-thread
+               (lambda ()
+                 (clawmacs::request-chat-frame-redisplay frame))
+               :name "redisplay-failing-request")))
+        (is-true
+         (bt:wait-on-semaphore first-enqueue-entered :timeout 2))
+        ;; This request sees PENDING and returns without enqueuing itself.
+        (clawmacs::request-chat-frame-redisplay frame)
+        (bt:signal-semaphore release-first-enqueue)
+        (bt:join-thread first-request))
+      (is (= 2 attempts))
+      (is-true (clawmacs::chat-frame-redisplay-dirty-p frame))
+      (is-true (clawmacs::chat-frame-redisplay-pending-p frame)))))
+
+(test redisplay-enqueue-retry-is-bounded-and-iterative
+  "A failing queue cannot spin despite newer requests during every attempt."
+  (let* ((buf (make-buffer "redisplay-iterative-retry"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf))
+         (attempts 0)
+         (clawmacs::*chat-redisplay-enqueue-max-attempts* 3))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (with-mcclim-test-function-override
+        (clawmacs::queue-chat-frame-redisplay-event (requested-frame)
+          (incf attempts)
+          ;; Each newer request observes PENDING.  The owning iterative retry
+          ;; must stop at the cap and release that reservation on final failure.
+          (clawmacs::request-chat-frame-redisplay requested-frame)
+          nil)
+      (clawmacs::request-chat-frame-redisplay frame))
+    (is (= clawmacs::*chat-redisplay-enqueue-max-attempts* attempts))
+    (is-true (clawmacs::chat-frame-redisplay-dirty-p frame))
+    (is-false (clawmacs::chat-frame-redisplay-pending-p frame))))
+
+(test identical-chat-frame-command-table-assignment-does-not-rebuild-menu-gadgets
+  "ESA's per-turn EQ assignment cannot recreate an otherwise unchanged menu."
+  (let* ((buf (make-buffer "equal-menu-table-assignment"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
+                                             :buffer buf))
+         (same-table (clim:frame-command-table frame))
+         (fresh-table (clim:make-command-table
+                       nil :inherit-from '(clawmacs::clawmacs-chat-frame)))
+         (notifications 0))
+    (with-mcclim-test-function-override
+        (clime:note-frame-command-table-changed
+            (frame-manager requested-frame new-table)
+          (declare (ignore frame-manager new-table))
+          (is (eq frame requested-frame))
+          (incf notifications))
+      (is (eq same-table
+              (setf (clim:frame-command-table frame) same-table)))
+      (is (= 0 notifications))
+      (is (eq fresh-table
+              (setf (clim:frame-command-table frame) fresh-table)))
+      (is (= 1 notifications)))))
+
+(test frame-command-keeps-the-stable-menu-table
+  "A state-mutating command redisplays content without replacing menu gadgets."
+  (let* ((buf (make-buffer "stable-menu-command"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
+                                             :buffer buf))
+         (table (clim:frame-command-table frame))
+         (before (buffer-show-tool-results-p buf)))
+    (clim:execute-frame-command
+     frame '(clawmacs::com-chat-toggle-tool-results))
+    (is (not (eql before (buffer-show-tool-results-p buf))))
+    (is (eq table (clim:frame-command-table frame)))))
+
+(test chat-frame-redisplay-wakeup-is-not-a-window-repaint-event
+  "The async wakeup carries no window region and targets a real sheet at runtime."
+  (let ((event (make-instance 'clawmacs::clawmacs-chat-redisplay-event
+                              :sheet nil)))
+    (is (typep event 'clim:window-manager-event))
+    (is-false (typep event 'clim:window-event))))
+
+(test runtime-stopped-hook-is-delivered-by-clim-redisplay
+  "The frame process claims a reaper's pending public completion exactly once."
+  (let* ((buf (make-buffer "runtime-stopped-clim-delivery"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf))
+         (frame-thread (bt:current-thread))
+         (hook-events nil)
+         (clawmacs::*buffer-display-wakeup-hook* nil)
+         (clawmacs::*after-buffer-display-change-hook*
+           (list
+            (lambda (hook-buffer reason)
+              (when (eq hook-buffer buf)
+                (push (list (bt:current-thread)
+                            reason
+                            (clawmacs::buffer-runtime-stopping-p hook-buffer)
+                            (clawmacs::buffer-runtime-teardown hook-buffer))
+                      hook-events))))))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (bt:with-lock-held ((clawmacs::buffer-runtime-lock buf))
+      (setf (clawmacs::buffer-runtime-stopped-notification-p buf) t
+            (clawmacs::buffer-runtime-stopping-p buf) nil
+            (clawmacs::buffer-runtime-teardown buf) nil))
+    (bt:with-lock-held ((clawmacs::chat-frame-redisplay-lock frame))
+      (setf (clawmacs::chat-frame-redisplay-dirty-p frame) t
+            (clawmacs::chat-frame-redisplay-pending-p frame) t))
+    (with-mcclim-test-function-override
+        (clim:redisplay-frame-pane (requested-frame pane &key force-p)
+          (declare (ignore requested-frame pane force-p))
+          :redisplayed)
+      (is (eq frame (clawmacs::handle-chat-frame-redisplay frame))))
+    (is (= 1 (length hook-events)))
+    (destructuring-bind (thread reason stopping-p teardown)
+        (first hook-events)
+      (is (eq frame-thread thread))
+      (is (eq :runtime-stopped reason))
+      (is-false stopping-p)
+      (is (null teardown)))
+    (is-false (clawmacs::buffer-runtime-stopped-notification-p buf))
+    (is-false
+     (clawmacs::deliver-buffer-runtime-stopped-notification buf))))
+
+(test oauth-completion-is-applied-by-normal-clim-redisplay
+  "The OAuth worker publishes state; the frame process claims and applies it."
+  (let* ((buf (make-buffer "oauth-clim-redisplay"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf))
+         (flow (clawmacs::make-openai-oauth-flow :buffer buf))
+         (frame-thread (bt:current-thread))
+         (public-events nil)
+         (clawmacs::*openai-oauth-pending* nil)
+         (clawmacs::*openai-oauth-pending-lock*
+           (bt:make-lock "test-clim-openai-oauth-pending"))
+         (clawmacs::*buffer-display-wakeup-hook* nil)
+         (clawmacs::*after-buffer-display-change-hook*
+           (list
+            (lambda (hook-buffer reason)
+              (when (eq hook-buffer buf)
+                (push (list (bt:current-thread) reason) public-events))))))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running
+          (buffer-status buf) :oauth)
+    (is-true (clawmacs::publish-openai-oauth-pending-flow flow))
+    ;; This is the worker-side operation: record terminal state and request a
+    ;; display change.  It must not mutate the buffer itself.
+    (clawmacs::openai-oauth-flow-set-result
+     flow :success t :token "test-token")
+    (is (eq :oauth (buffer-status buf)))
+    (is (eq flow (clawmacs::openai-oauth-pending-flow)))
+    (is (null public-events))
+    (bt:with-lock-held ((clawmacs::chat-frame-redisplay-lock frame))
+      (setf (clawmacs::chat-frame-redisplay-dirty-p frame) t
+            (clawmacs::chat-frame-redisplay-pending-p frame) t))
+    (with-mcclim-test-function-override
+        (clim:redisplay-frame-pane (requested-frame pane &key force-p)
+          (declare (ignore requested-frame pane force-p))
+          :redisplayed)
+      (is (eq frame (clawmacs::handle-chat-frame-redisplay frame))))
+    (is (null (clawmacs::openai-oauth-pending-flow)))
+    (is (eq :idle (buffer-status buf)))
+    (is (member :message public-events :key #'second :test #'eq))
+    (is-true
+     (every (lambda (event)
+              (eq frame-thread (first event)))
+            public-events))
+    (is-true
+     (loop :for message := (buffer-first-message buf)
+             :then (message-next message)
+           :while (and message
+                       (not (eq message (buffer-input-message buf))))
+           :thereis (search "Login successful" (message-text message))))))
+
+(test asynchronous-redisplay-error-is-contained-and-later-request-recovers
+  "A failing redisplay phase does not unwind the frame top level or wedge latches."
+  (let* ((buf (make-buffer "redisplay-error-boundary"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame 'clawmacs::clawmacs-chat-frame
+                                             :buffer buf))
+         (calls 0))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (with-mcclim-test-function-override
+        (clim:redisplay-frame-pane (requested-frame pane &key force-p)
+          (declare (ignore requested-frame pane force-p))
+          (incf calls)
+          (when (= calls 1)
+            (error "injected redisplay failure"))
+          :redisplayed)
+      (bt:with-lock-held ((clawmacs::chat-frame-redisplay-lock frame))
+        (setf (clawmacs::chat-frame-redisplay-dirty-p frame) t
+              (clawmacs::chat-frame-redisplay-pending-p frame) t))
+      (is (eq frame
+              (clawmacs::handle-chat-frame-redisplay-safely frame)))
+      (is (eq :running (clawmacs::chat-frame-lifecycle-state frame)))
+      (is-false (clawmacs::chat-frame-redisplay-handling-p frame))
+      (is-false (clawmacs::chat-frame-redisplay-pending-p frame))
+      (bt:with-lock-held ((clawmacs::chat-frame-redisplay-lock frame))
+        (setf (clawmacs::chat-frame-redisplay-dirty-p frame) t
+              (clawmacs::chat-frame-redisplay-pending-p frame) t))
+      (is (eq frame
+              (clawmacs::handle-chat-frame-redisplay-safely frame)))
+      (is (> calls 1))
+      (is (eq :running (clawmacs::chat-frame-lifecycle-state frame)))
+      (is-false (clawmacs::chat-frame-redisplay-handling-p frame)))))
+
+(test redisplay-request-arriving-during-failed-handler-is-not-stranded
+  "The error boundary queues dirty work after HANDLING is released."
+  (let* ((buf (make-buffer "redisplay-error-concurrent-request"
+                           :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buf))
+         (redisplay-calls 0)
+         (queue-calls 0))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (with-mcclim-test-function-override
+        (clawmacs::queue-chat-frame-redisplay-event (requested-frame)
+          (declare (ignore requested-frame))
+          (incf queue-calls)
+          t)
+      (with-mcclim-test-function-override
+          (clim:redisplay-frame-pane (requested-frame pane &key force-p)
+            (declare (ignore force-p))
+            ;; Count the transcript phase, not the independently redisplayed
+            ;; info/minibuffer panes in the successful retry.
+            (when (eq pane 'clawmacs::transcript)
+              (incf redisplay-calls)
+              (when (= redisplay-calls 1)
+                ;; A worker-equivalent request lands while HANDLING is true,
+                ;; then the current display phase fails before its epilogue.
+                (clawmacs::request-chat-frame-redisplay requested-frame)
+                (error "injected redisplay failure after concurrent request")))
+            :redisplayed)
+        (bt:with-lock-held ((clawmacs::chat-frame-redisplay-lock frame))
+          (setf (clawmacs::chat-frame-redisplay-dirty-p frame) t
+                (clawmacs::chat-frame-redisplay-pending-p frame) t))
+        (is (eq frame
+                (clawmacs::handle-chat-frame-redisplay-safely frame)))
+        (is (= 1 queue-calls))
+        (is-true (clawmacs::chat-frame-redisplay-dirty-p frame))
+        (is-true (clawmacs::chat-frame-redisplay-pending-p frame))
+        (is-false (clawmacs::chat-frame-redisplay-handling-p frame))
+        ;; Consume the queued retry.  It succeeds and leaves every latch clear.
+        (is (eq frame
+                (clawmacs::handle-chat-frame-redisplay-safely frame)))
+        (is (= 2 redisplay-calls))
+        (is (= 1 queue-calls))
+        (is-false (clawmacs::chat-frame-redisplay-dirty-p frame))
+        (is-false (clawmacs::chat-frame-redisplay-pending-p frame))
+        (is-false (clawmacs::chat-frame-redisplay-handling-p frame))))))
+
+(test chat-frame-cleanup-continues-after-one-buffer-cancellation-fails
+  "Frame teardown retires its hook and visits every buffer despite one error."
+  (let* ((first (make-buffer "cleanup-first"
+                             :session-persistence-mode :ephemeral))
+         (second (make-buffer "cleanup-second"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer first))
+         (hook (lambda (buffer reason)
+                 (declare (ignore buffer reason))))
+         (visited nil)
+         (clawmacs::*buffer-ring* (list first second))
+         (clawmacs::*buffer-display-wakeup-hook* nil)
+         (clawmacs::*after-buffer-display-change-hook* nil))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (clawmacs::add-hook 'clawmacs::*buffer-display-wakeup-hook* hook)
+    (with-mcclim-test-function-override
+        (clawmacs::cancel-buffer-runtime-operations (buffer)
+          (push (buffer-name buffer) visited)
+          (when (eq buffer first)
+            (error "injected cancellation failure"))
+          buffer)
+      (is (eq frame (clawmacs::cleanup-chat-frame-runtime frame hook))))
+    (is (equal '("cleanup-first" "cleanup-second") (nreverse visited)))
+    (is-false (member hook clawmacs::*buffer-display-wakeup-hook*
+                      :test #'eq))
+    (is (eq :stopped
+            (clawmacs::chat-frame-lifecycle-state frame)))))
+
+(test chat-frame-cleanup-makes-late-reaper-headless-and-self-finalizing
+  "The last frame may retire its wake hook before a blocked owner exits."
+  (let* ((buffer (make-buffer "cleanup-late-headless-reaper"
+                              :agent-name "agent"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buffer))
+         (hook (lambda (ignored-buffer ignored-reason)
+                 (declare (ignore ignored-buffer ignored-reason))))
+         (release (bt:make-semaphore :name "cleanup-late-reaper-release"))
+         (worker
+           (bt:make-thread
+            (lambda ()
+              (bt:wait-on-semaphore release :timeout 5.0))
+            :name "cleanup-late-headless-owner"))
+         (operation
+           (clawmacs::make-interactive-buffer-operation
+            :kind :cleanup-headless
+            :buffer-generation (clawmacs::buffer-runtime-generation buffer)
+            :worker worker))
+         (clawmacs::*buffer-ring* (list buffer))
+         (clawmacs::*buffer-display-wakeup-hook* nil)
+         (clawmacs::*after-buffer-display-change-hook* nil))
+    (setf (clawmacs::chat-frame-lifecycle-state frame) :running
+          (buffer-pending-tool-calls buffer)
+          (list (clawmacs::canonical-tool-use-block
+                 "cleanup-tool" "read" nil)))
+    (bt:with-lock-held ((clawmacs::buffer-runtime-lock buffer))
+      (setf (buffer-pending-interactive-operation buffer) operation
+            (buffer-status buffer) :working))
+    (clawmacs::add-hook 'clawmacs::*buffer-display-wakeup-hook* hook)
+    (unwind-protect
+         (progn
+           (let ((started-at (get-internal-real-time)))
+             (is (eq frame
+                     (clawmacs::cleanup-chat-frame-runtime frame hook)))
+             (is (< (/ (- (get-internal-real-time) started-at)
+                       (float internal-time-units-per-second 1.0))
+                    1.0)))
+           (is (eq :stopped (clawmacs::chat-frame-lifecycle-state frame)))
+           (is-false (member hook clawmacs::*buffer-display-wakeup-hook*
+                             :test #'eq))
+           (is-true (clawmacs::buffer-disposing-p buffer))
+           (is-true (clawmacs::buffer-runtime-stopping-p buffer))
+           (is-false (clawmacs::buffer-disposed-p buffer))
+           (bt:signal-semaphore release)
+           (is-true
+            (loop :repeat 400
+                  :when (clawmacs::buffer-disposed-p buffer) :return t
+                  :do (sleep 0.005)
+                  :finally (return nil)))
+           (is-false (clawmacs::buffer-disposing-p buffer))
+           (is-false (clawmacs::buffer-runtime-stopping-p buffer))
+           (is (null (clawmacs::buffer-runtime-teardown buffer)))
+           (let ((result-message
+                   (find :tool-result
+                         (test-buffer-history-messages buffer)
+                         :key #'message-sender)))
+             (is-true result-message)
+             (is (search "cancelled"
+                         (message-text result-message)
+                         :test #'char-equal))))
+      (bt:signal-semaphore release)
+      (when (bt:thread-alive-p worker)
+        (bt:join-thread worker)))))
+
 (test mcclim-compose-routes-modal-input-to-minibuffer
   "When M-x or another selector is active, compose keys are normalized for Clawmacs."
-  (let* ((event (make-instance 'clim:key-press-event
+  (let* ((clawmacs::*chat-interaction-state*
+           (clawmacs::make-chat-interaction-state))
+         (event (make-instance 'clim:key-press-event
                                :sheet nil
                                :x 0
                                :y 0
@@ -166,18 +966,10 @@
                                        :key-name nil
                                        :key-character #\g
                                        :modifier-state
-                                       (clim:make-modifier-state :control)))
-         (clawmacs::*minibuffer-active* t)
-         (clawmacs::*minibuffer-mode* :prompt)
-         (clawmacs::*minibuffer-prompt* "M-x")
-         (clawmacs::*minibuffer-input* "")
-         (clawmacs::*minibuffer-point* 0)
-         (clawmacs::*minibuffer-items* nil)
-         (clawmacs::*minibuffer-filtered-items* nil)
-         (clawmacs::*minibuffer-match-positions* nil)
-         (clawmacs::*minibuffer-selected-index* 0)
-         (clawmacs::*minibuffer-scroll-offset* 0)
-         (clawmacs::*minibuffer-callback* nil))
+                                       (clim:make-modifier-state :control))))
+    (setf clawmacs::*minibuffer-active* t
+          clawmacs::*minibuffer-mode* :prompt
+          clawmacs::*minibuffer-prompt* "M-x")
     (is-true (clawmacs::chat-compose-application-input-active-p))
     (is (eql #\a (clawmacs::chat-compose-event-key event)))
     (clawmacs::handle-key-event (make-buffer "modal-compose"
@@ -235,26 +1027,255 @@
 
 (test mcclim-minibuffer-semantic-text-includes-visible-candidate-rows
   "Semantic E2E minibuffer text keeps the prompt summary and lists visible rows."
-  (let ((clawmacs::*minibuffer-active* t)
-        (clawmacs::*minibuffer-mode* :completion)
-        (clawmacs::*minibuffer-prompt* "M-x")
-        (clawmacs::*minibuffer-input* "td")
-        (clawmacs::*minibuffer-point* 2)
-        (clawmacs::*minibuffer-items* nil)
-        (clawmacs::*minibuffer-filtered-items*
+  (let ((clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state))
+        (clawmacs::*minibuffer-max-height* 3))
+    (setf clawmacs::*minibuffer-active* t
+          clawmacs::*minibuffer-mode* :completion
+          clawmacs::*minibuffer-prompt* "M-x"
+          clawmacs::*minibuffer-input* "td"
+          clawmacs::*minibuffer-point* 2
+          clawmacs::*minibuffer-filtered-items*
           (list (list :display "toggle-debug-mode-command")
                 (list :display "toggle-tool-results-command")
-                (list :display "toggle-metadata-output-command")))
-        (clawmacs::*minibuffer-match-positions* nil)
-        (clawmacs::*minibuffer-selected-index* 1)
-        (clawmacs::*minibuffer-scroll-offset* 0)
-        (clawmacs::*minibuffer-max-height* 3)
-        (clawmacs::*minibuffer-callback* nil))
+                (list :display "toggle-metadata-output-command"))
+          clawmacs::*minibuffer-selected-index* 1)
     (let ((text (clawmacs::chat-frame-e2e-minibuffer-text)))
       (is (search "M-x: td  [toggle-tool-results-command]  (2/3)" text))
       (is (search "  toggle-debug-mode-command" text))
       (is (search "> toggle-tool-results-command" text))
       (is-false (search "toggle-metadata-output-command" text)))))
+
+(test chat-interaction-state-is-owned-by-each-frame
+  "Two frames never share transient minibuffer or callback state."
+  (let* ((first-buffer (make-buffer "interaction-first"
+                                    :session-persistence-mode :ephemeral))
+         (second-buffer (make-buffer "interaction-second"
+                                     :session-persistence-mode :ephemeral))
+         (first-frame (clim:make-application-frame
+                       'clawmacs::clawmacs-chat-frame
+                       :buffer first-buffer))
+         (second-frame (clim:make-application-frame
+                        'clawmacs::clawmacs-chat-frame
+                        :buffer second-buffer))
+         (first-state (clawmacs::chat-frame-interaction-state first-frame))
+         (second-state (clawmacs::chat-frame-interaction-state second-frame)))
+    (is-false (eq first-state second-state))
+    (clawmacs::call-chat-frame-ui-action-safely
+     first-frame "first interaction"
+     (lambda ()
+       (clawmacs::minibuffer-prompt "First" #'identity
+                                    :initial-input "one")))
+    (clawmacs::call-chat-frame-ui-action-safely
+     second-frame "second interaction"
+     (lambda ()
+       (clawmacs::minibuffer-prompt "Second" #'identity
+                                    :initial-input "two")))
+    (is (string= "First"
+                 (clawmacs::interaction-minibuffer-prompt first-state)))
+    (is (string= "one"
+                 (clawmacs::interaction-minibuffer-input first-state)))
+    (is (string= "Second"
+                 (clawmacs::interaction-minibuffer-prompt second-state)))
+    (is (string= "two"
+                 (clawmacs::interaction-minibuffer-input second-state)))))
+
+(test chat-interaction-callback-preserves-nested-frame-binding
+  "A callback can enter a second frame and returns to the first state pointer."
+  (let* ((first-buffer (make-buffer "nested-first"
+                                    :session-persistence-mode :ephemeral))
+         (second-buffer (make-buffer "nested-second"
+                                     :session-persistence-mode :ephemeral))
+         (first-frame (clim:make-application-frame
+                       'clawmacs::clawmacs-chat-frame
+                       :buffer first-buffer))
+         (second-frame (clim:make-application-frame
+                        'clawmacs::clawmacs-chat-frame
+                        :buffer second-buffer))
+         (first-state (clawmacs::chat-frame-interaction-state first-frame))
+         (second-state (clawmacs::chat-frame-interaction-state second-frame))
+         (observed nil))
+    (clawmacs::call-chat-frame-ui-action-safely
+     first-frame "nested callback"
+     (lambda ()
+       (clawmacs::minibuffer-prompt
+        "Outer"
+        (lambda (value)
+          (push (list :before (eq clawmacs::*chat-interaction-state*
+                                  first-state)
+                      :value value)
+                observed)
+          (clawmacs::call-chat-frame-ui-action-safely
+           second-frame "inner callback"
+           (lambda ()
+             (clawmacs::minibuffer-prompt "Inner" #'identity)))
+          (push (list :after (eq clawmacs::*chat-interaction-state*
+                                 first-state))
+                observed)))
+       (setf clawmacs::*minibuffer-input* "accepted"
+             clawmacs::*minibuffer-point* 8)
+       (clawmacs::minibuffer-confirm)))
+    (is-true (getf (second observed) :before))
+    (is (string= "accepted" (getf (second observed) :value)))
+    (is-true (getf (first observed) :after))
+    (is-false (clawmacs::interaction-minibuffer-active-p first-state))
+    (is-true (clawmacs::interaction-minibuffer-active-p second-state))
+    (is (string= "Inner"
+                 (clawmacs::interaction-minibuffer-prompt second-state)))))
+
+(test chat-frame-cleanup-clears-transient-callback-ownership
+  "Frame cleanup releases callbacks and buffer references from its state."
+  (let* ((buffer (make-buffer "interaction-cleanup"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buffer))
+         (state (clawmacs::chat-frame-interaction-state frame))
+         (generation (clawmacs::chat-interaction-state-generation state)))
+    (clawmacs::call-chat-frame-ui-action-safely
+     frame "prepare cleanup"
+     (lambda ()
+       (clawmacs::minibuffer-activate
+        "Owned callback"
+        (list (list :display "one"))
+        (lambda (item) item))
+       (setf clawmacs::*session-tree-selector-buffer* buffer
+             clawmacs::*slash-completion-buffer* buffer
+             clawmacs::*skill-completion-buffer* buffer)))
+    (clawmacs::cleanup-chat-frame-runtime frame nil)
+    (is-false (clawmacs::interaction-minibuffer-active-p state))
+    (is (null (clawmacs::interaction-minibuffer-callback state)))
+    (is (null (clawmacs::interaction-session-tree-buffer state)))
+    (is (null (clawmacs::interaction-slash-completion-buffer state)))
+    (is (null (clawmacs::interaction-skill-completion-buffer state)))
+    (is (> (clawmacs::chat-interaction-state-generation state) generation))
+    (is (eq :stopped (clawmacs::chat-frame-lifecycle-state frame)))))
+
+(test chat-interaction-candidate-requires-exact-state-and-generation
+  "Candidate refs from another frame or an older generation are rejected."
+  (let* ((buffer (make-buffer "candidate-generation"
+                              :session-persistence-mode :ephemeral))
+         (other-buffer (make-buffer "candidate-other"
+                                    :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buffer))
+         (other-frame (clim:make-application-frame
+                       'clawmacs::clawmacs-chat-frame
+                       :buffer other-buffer))
+         (state (clawmacs::chat-frame-interaction-state frame))
+         (chosen nil)
+         (first-item (list :display "first"))
+         (second-item (list :display "second")))
+    (clawmacs::call-chat-frame-ui-action-safely
+     frame "candidate setup"
+     (lambda ()
+       (clawmacs::minibuffer-activate
+        "Pick"
+        (list first-item second-item)
+        (lambda (item) (setf chosen item)))))
+    (let* ((generation
+             (clawmacs::chat-interaction-state-generation state))
+           (ref (clawmacs::make-chat-interaction-candidate-ref
+                 state generation :minibuffer 0 first-item)))
+      (is-true (clawmacs::chat-interaction-candidate-current-p frame ref))
+      (is-false
+       (clawmacs::chat-interaction-candidate-current-p other-frame ref))
+      (clawmacs::call-chat-frame-ui-action-safely
+       frame "advance candidate"
+       #'clawmacs::minibuffer-next-item)
+      (is-false (clawmacs::chat-interaction-candidate-current-p frame ref))
+      (is (null chosen))
+      (let ((current-ref
+              (clawmacs::make-chat-interaction-candidate-ref
+               state
+               (clawmacs::chat-interaction-state-generation state)
+               :minibuffer 1 second-item)))
+        (is-true
+         (clawmacs::choose-chat-interaction-candidate frame current-ref))
+        (is (eq second-item chosen))))))
+
+(test retained-interaction-candidates-are-visible-in-declared-pane
+  "Session-tree, slash, and skill candidates all have visible semantic rows."
+  (let* ((buffer (make-buffer "visible-interactions"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buffer))
+         (state (clawmacs::chat-frame-interaction-state frame)))
+    (let ((clawmacs::*chat-interaction-state* state))
+      (setf clawmacs::*session-tree-selector-active* t
+            clawmacs::*session-tree-selector-buffer* buffer
+            clawmacs::*session-tree-selector-filtered-items*
+            (list (list :id "entry-1"
+                        :tree-prefix "|- "
+                        :kind-label "user"
+                        :content "visible branch"
+                        :active-p t
+                        :display "unused")))
+      (clawmacs::touch-chat-interaction-state))
+    (let ((text (clawmacs::chat-frame-e2e-screen-text frame)))
+      (is (search "Session Tree" text))
+      (is (search "visible branch" text)))
+    (clawmacs::clear-chat-interaction-state state)
+    (let ((clawmacs::*chat-interaction-state* state))
+      (setf clawmacs::*slash-completion-active* t
+            clawmacs::*slash-completion-buffer* buffer
+            clawmacs::*slash-completion-query* "he"
+            clawmacs::*slash-completion-filtered-items*
+            (list (list :name "help" :display "/help")))
+      (clawmacs::touch-chat-interaction-state))
+    (let ((text (clawmacs::chat-frame-e2e-screen-text frame)))
+      (is (search "Slash command: /he" text))
+      (is (search "/help" text)))
+    (clawmacs::clear-chat-interaction-state state)
+    (let ((clawmacs::*chat-interaction-state* state))
+      (setf clawmacs::*skill-completion-active* t
+            clawmacs::*skill-completion-buffer* buffer
+            clawmacs::*skill-completion-query* "demo"
+            clawmacs::*skill-completion-filtered-items*
+            (list (list :display "$demo")))
+      (clawmacs::touch-chat-interaction-state))
+    (let ((text (clawmacs::chat-frame-e2e-screen-text frame)))
+      (is (search "Skill mention: $demo" text))
+      (is (search "$demo" text)))))
+
+(test obsolete-overlay-flags-no-longer-capture-compose-input
+  "Old buffer/model/think flags cannot create an invisible modal key sink."
+  (clawmacs::init-default-keymap)
+  (let ((clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state))
+        (clawmacs::*buffer-selector-active* t)
+        (clawmacs::*model-selector-active* t)
+        (clawmacs::*think-selector-active* t)
+        (clawmacs::*buffer-ring* nil))
+    (let ((buffer (make-buffer "obsolete-overlays"
+                               :session-persistence-mode :ephemeral)))
+      (setf (buffer-keymap buffer) clawmacs::*default-keymap*)
+      (is-false (clawmacs::chat-compose-application-input-active-p buffer))
+      (clawmacs::handle-key-event buffer #\z)
+      (is (string= "z" (message-text (buffer-input-message buffer)))))))
+
+(test legacy-model-command-opens-visible-minibuffer
+  "SELECT-MODEL-COMMAND delegates to the standard minibuffer presentation."
+  (let* ((buffer (make-buffer "visible-model-selector"
+                              :session-persistence-mode :ephemeral))
+         (clawmacs::*chat-interaction-state*
+           (clawmacs::make-chat-interaction-state))
+         (clawmacs::*model-selector-active* nil))
+    (with-mcclim-test-function-override
+        (clawmacs::available-models-for-selector (ignored-buffer)
+          (declare (ignore ignored-buffer))
+          (list (list :provider :openai-codex
+                      :model "gpt-test"
+                      :active-p t)))
+      (clawmacs::select-model-command buffer))
+    (is-false clawmacs::*model-selector-active*)
+    (is-true clawmacs::*minibuffer-active*)
+    (is (string= "Select Model" clawmacs::*minibuffer-prompt*))
+    (is (search "gpt-test"
+                (clawmacs::minibuffer-item-display
+                 (first clawmacs::*minibuffer-filtered-items*))))))
 
 (test mcclim-buffer-presentation-function-supplies-semantic-transcript
   "Custom buffer presentation hooks feed the same semantic path GUI E2E reads."
@@ -275,6 +1296,51 @@
              (text (clawmacs::chat-frame-e2e-transcript-text buffer)))
         (is (search "custom view for semantic-buffer" text))
         (is (search "columns=100" text))))))
+
+(test disabled-e2e-snapshot-instrumentation-never-runs-presenters
+  "Production redisplay does not evaluate the E2E semantic mirror."
+  (let ((clawmacs::*buffer-type-registry*
+          (clawmacs::make-buffer-type-registry))
+        (presentation-calls 0)
+        (emitted-event nil))
+    (flet ((counted-entries (buffer columns)
+             (declare (ignore buffer columns))
+             (incf presentation-calls)
+             (list (list :text "instrumented view"))))
+      (register-buffer-type :instrumented-view
+                            :major-mode "instrumented"
+                            :presentation-function #'counted-entries)
+      (let* ((buffer
+               (make-buffer "instrumented-buffer"
+                            :kind :instrumented-view
+                            :session-persistence-mode :ephemeral))
+             (frame
+               (clim:make-application-frame
+                'clawmacs::clawmacs-chat-frame
+                :buffer buffer)))
+        (let ((clawmacs::*debug-log-file* nil)
+              (clawmacs::*e2e-events-enabled-override* t))
+          (clawmacs::emit-chat-frame-e2e-snapshot
+           frame :reason "disabled-no-log"))
+        (is (= 0 presentation-calls))
+        (let ((clawmacs::*debug-log-file*
+                #P"/tmp/clawmacs-disabled-e2e-snapshot.jsonl"))
+          (with-mcclim-test-function-override
+              (clawmacs::e2e-events-enabled-p () nil)
+            (clawmacs::emit-chat-frame-e2e-snapshot
+             frame :reason "disabled-no-events")))
+        (is (= 0 presentation-calls))
+        (let ((clawmacs::*debug-log-file*
+                #P"/tmp/clawmacs-enabled-e2e-snapshot.jsonl")
+              (clawmacs::*e2e-events-enabled-override* t))
+          (with-mcclim-test-function-override
+              (clawmacs::file-debug-event (event-name &rest payload)
+                (declare (ignore payload))
+                (setf emitted-event event-name))
+            (clawmacs::emit-chat-frame-e2e-snapshot
+             frame :reason "enabled")))
+        (is (= 1 presentation-calls))
+        (is (string= "ui-snapshot" emitted-event))))))
 
 (test mcclim-input-presentation-function-appends-semantic-overlay
   "Input presentation hooks append package-owned overlays to screen snapshots."
@@ -319,6 +1385,38 @@
         (is (= expected (clim:space-requirement-height space-after)))
         (is (= expected (clim:space-requirement-min-height space-after)))
         (is (= expected (clim:space-requirement-max-height space-after)))))))
+
+(test mcclim-compose-drei-bindings-are-pane-scoped
+  "Compose bindings use Drei's pane extension hook without global mutation."
+  (let* ((indent-table (clim:find-command-table 'drei:indent-table))
+         (deletion-table (clim:find-command-table 'drei:deletion-table))
+         (indent-before (test-direct-command-table-keystrokes indent-table))
+         (deletion-before
+           (test-direct-command-table-keystrokes deletion-table))
+         (compose (make-instance 'clawmacs::clawmacs-chat-compose-pane))
+         (plain-drei (make-instance 'drei:drei-gadget-pane))
+         (compose-tables
+           (drei-syntax:additional-command-tables compose indent-table))
+         (plain-tables
+           (drei-syntax:additional-command-tables plain-drei indent-table)))
+    ;; Reinstallation is idempotent and touches only Clawmacs' table.
+    (clawmacs::install-chat-compose-drei-keybindings)
+    (is (equal indent-before
+               (test-direct-command-table-keystrokes indent-table)))
+    (is (equal deletion-before
+               (test-direct-command-table-keystrokes deletion-table)))
+    (is (member 'clawmacs::clawmacs-chat-compose-editing-table
+                compose-tables))
+    (is-false
+     (member 'clawmacs::clawmacs-chat-compose-editing-table plain-tables))
+    (let ((bindings
+            (test-direct-command-table-keystrokes
+             (clim:find-command-table
+              'clawmacs::clawmacs-chat-compose-editing-table))))
+      (dolist (gesture '((#\Newline :control)
+                         (#\Backspace :control)
+                         (#\Rubout :control)))
+        (is (find gesture bindings :key #'second :test #'equal))))))
 
 (test mcclim-minibuffer-pane-compose-space-is-fixed-height
   "The chat minibuffer pane computes space without backend font metrics."

@@ -16,7 +16,7 @@
 (defmacro with-organa-package-state (&body body)
   "Run BODY with isolated package, project, tool, and buffer registries."
   `(let* ((root (organa-package-test-directory "config"))
-          (clawmacs::*sandbox-root* root)
+          (clawmacs::*tool-working-directory* root)
           (clawmacs::*agent-tool-metadata-table*
            (make-hash-table :test #'eq))
           (clawmacs::*agent-tool-name-table*
@@ -90,13 +90,6 @@
                       "organa_todo_overview"
                       "organa_todo_set_status"))
         (is (member name tool-names :test #'string=)))
-      (is-false (clawmacs::tool-requires-permission-p
-                 "organa_todo_overview"))
-      (dolist (name '("organa_todo_add"
-                      "organa_todo_link_dependency"
-                      "organa_todo_move"
-                      "organa_todo_set_status"))
-        (is-true (clawmacs::tool-requires-permission-p name)))
       (is (search "Project TODO management with organa" prompt))
       (is (search "organa_todo_overview" prompt))
       (is (search "ORGANA_DEPENDS" prompt))

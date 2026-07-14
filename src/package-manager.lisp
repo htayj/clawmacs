@@ -74,12 +74,54 @@ Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
 (defvar *package-configuration* nil
   "Memoized package enablement configuration.")
 
+(defvar *package-configuration-lock*
+  (bt:make-lock "clawmacs package configuration")
+  "Lock guarding the published package enablement configuration.")
+
+(defvar *package-configuration-save-lock*
+  (bt:make-lock "clawmacs package configuration save")
+  "Lock serializing package configuration commits with their disk writes.")
+
+(defvar *package-configuration-write-function* nil
+  "Test override called with JSON and target path instead of the atomic writer.")
+
 (defvar *packages-directory*
   (merge-pathnames #P".clawmacs.d/packages/" (user-homedir-pathname))
   "Directory where user-installed Clawmacs packages are cloned.")
 
 (defvar *loaded-packages* (make-hash-table :test #'equal)
   "Session-local registry of package install directories already loaded.")
+
+(defvar *package-lifecycle-lock*
+  (bt:make-lock "clawmacs package lifecycle")
+  "Short-held lock guarding the exact process-wide package lifecycle owner.")
+
+(defvar *package-lifecycle-condition*
+  (bt:make-condition-variable :name "clawmacs package lifecycle")
+  "Condition variable used by package lifecycle contenders.")
+
+(defvar *package-lifecycle-owner* nil
+  "Exact token owning package load/reset/reload publication, or NIL.")
+
+(defvar *package-lifecycle-operation* nil
+  "Human-readable operation associated with *PACKAGE-LIFECYCLE-OWNER*.")
+
+(defvar *package-lifecycle-token* nil
+  "Dynamically bound lifecycle token used for dependency and maintenance recursion.")
+
+(defvar *package-runtime-maintenance-admitted-p* nil
+  "True only while an outer runtime maintenance owner has closed admission.")
+
+(define-condition package-runtime-maintenance-refused (error)
+  ((operation :initarg :operation
+              :reader package-runtime-maintenance-refused-operation)
+   (blocker :initarg :blocker
+            :reader package-runtime-maintenance-refused-blocker))
+  (:report
+   (lambda (condition stream)
+     (format stream "Cannot ~A while Clawmacs runtime activity is ~A."
+             (package-runtime-maintenance-refused-operation condition)
+             (package-runtime-maintenance-refused-blocker condition)))))
 
 (defvar *package-prompt-sections* nil
   "Prompt sections registered by loaded packages.")
@@ -93,6 +135,133 @@ When NIL, all package-owned resource types are allowed.")
 
 (defvar *supported-package-source-types* '(:git :path :local :npm)
   "Supported package source types for installed packages.")
+
+(defun package-lifecycle-operation-snapshot ()
+  "Return the active package lifecycle operation, or NIL.
+
+The returned string is immutable process state.  This function is intentionally
+small because safe reload calls it while holding the outer runtime-admission
+lock; package lifecycle code must never acquire that outer lock while holding
+*PACKAGE-LIFECYCLE-LOCK*."
+  (bt:with-lock-held (*package-lifecycle-lock*)
+    *package-lifecycle-operation*))
+
+(defun package-lifecycle-operation-active-p ()
+  "Return true while a package load/reset/reload owner is published."
+  (not (null (package-lifecycle-operation-snapshot))))
+
+(defun try-claim-package-lifecycle (token operation)
+  "Try to publish TOKEN as the exact package lifecycle owner.
+Return values CLAIMED-P and the observed competing owner token."
+  (bt:with-lock-held (*package-lifecycle-lock*)
+    (cond
+      ((eq token *package-lifecycle-owner*)
+       (values t nil))
+      ((null *package-lifecycle-owner*)
+       (setf *package-lifecycle-owner* token
+             *package-lifecycle-operation* operation)
+       (values t nil))
+      (t
+       (values nil *package-lifecycle-owner*)))))
+
+(defun wait-for-package-lifecycle-owner (owner)
+  "Wait outside runtime admission until observed package lifecycle OWNER leaves."
+  (bt:with-lock-held (*package-lifecycle-lock*)
+    (loop :while (eq owner *package-lifecycle-owner*)
+          :do (bt:condition-wait *package-lifecycle-condition*
+                                 *package-lifecycle-lock*
+                                 ;; BT v1 has no portable broadcast.  The
+                                 ;; timeout makes its single-notify fallback
+                                 ;; safe for more than one contender.
+                                 :timeout 0.1))))
+
+(defun release-package-lifecycle (token)
+  "Release exact package lifecycle TOKEN and wake every contender."
+  (bt:with-lock-held (*package-lifecycle-lock*)
+    (when (eq token *package-lifecycle-owner*)
+      (setf *package-lifecycle-owner* nil
+            *package-lifecycle-operation* nil)
+      #+sbcl
+      (sb-thread:condition-broadcast *package-lifecycle-condition*)
+      #-sbcl
+      (bt:condition-notify *package-lifecycle-condition*)
+      t)))
+
+(defun call-with-package-cold-load-admission (function operation)
+  "Try FUNCTION under outer runtime admission, when that layer is loaded."
+  (if (and (not *package-runtime-maintenance-admitted-p*)
+           (fboundp 'call-with-runtime-admission))
+      (funcall 'call-with-runtime-admission function :operation operation)
+      (funcall function)))
+
+(defun call-with-package-lifecycle (function &key (operation "load packages"))
+  "Call FUNCTION as the exact process-wide package lifecycle owner.
+
+The lifecycle mutex is never held while FUNCTION, LOAD, a package entrypoint,
+or an extension callback runs.  Dependency recursion reuses the dynamically
+bound token.  A competing thread waits only after outer runtime admission has
+been released, then retries the atomic admission/claim sequence."
+  (if *package-lifecycle-token*
+      (funcall function)
+      (let ((token (list :package-lifecycle (gensym "OWNER-"))))
+        (loop
+          (multiple-value-bind (claimed-p observed-owner)
+              (call-with-package-cold-load-admission
+               (lambda ()
+                 (try-claim-package-lifecycle token operation))
+               operation)
+            (when claimed-p
+              (return
+                (let ((*package-lifecycle-token* token))
+                  (unwind-protect
+                       (funcall function)
+                    (release-package-lifecycle token)))))
+            (wait-for-package-lifecycle-owner observed-owner))))))
+
+(defun package-maintenance-runtime-functions-available-p ()
+  "Return true when safe reload's runtime maintenance primitives are loaded."
+  (and (fboundp 'make-safe-reload-request)
+       (fboundp 'safe-reload-try-claim-request)
+       (fboundp 'finish-safe-reload-request)))
+
+(defun claim-package-runtime-maintenance (operation buffer)
+  "Close runtime admission for destructive package OPERATION or signal."
+  (unless (package-maintenance-runtime-functions-available-p)
+    (error 'package-runtime-maintenance-refused
+           :operation operation
+           :blocker :runtime-admission-unavailable))
+  (let ((request
+          (funcall 'make-safe-reload-request
+                   :token (list :package-maintenance (gensym "OWNER-"))
+                   :mode :package-maintenance
+                   :buffer buffer
+                   :started-at (get-internal-real-time)
+                   :notify-p nil)))
+    (multiple-value-bind (claimed-p blocker)
+        (funcall 'safe-reload-try-claim-request request)
+      (unless claimed-p
+        (error 'package-runtime-maintenance-refused
+               :operation operation
+               :blocker blocker))
+      request)))
+
+(defun call-with-package-runtime-maintenance
+    (function &key (operation "mutate package runtime") buffer)
+  "Run destructive package FUNCTION only with proven process quiescence.
+
+The existing safe-reload admission owner blocks new provider, tool, OAuth,
+interop, subagent, and cold-package starts for the whole mutation.  Nested
+reset/reload calls and safe reload's own registration refresh reuse the exact
+outer admission rather than attempting to claim it recursively."
+  (cond
+    (*package-runtime-maintenance-admitted-p*
+     (call-with-package-lifecycle function :operation operation))
+    (t
+     (let ((request (claim-package-runtime-maintenance operation buffer)))
+       (unwind-protect
+            (let ((*package-runtime-maintenance-admitted-p* t))
+              (call-with-package-lifecycle function :operation operation))
+         (funcall 'finish-safe-reload-request request))))))
 
 (defun emit-package-warning (format-string &rest format-args)
   "Report a non-fatal package warning and return NIL."
@@ -626,6 +795,29 @@ When NIL, all package-owned resource types are allowed.")
                table))
     (sort names #'string<)))
 
+(defun copy-package-enable-table (table)
+  "Return an independent copy of package enablement TABLE."
+  (let ((copy (make-hash-table :test #'equal)))
+    (when table
+      (maphash (lambda (name enabled-p)
+                 (setf (gethash name copy) enabled-p))
+               table))
+    copy))
+
+(defun copy-package-configuration (configuration)
+  "Return a deep copy of package CONFIGURATION's nested hash tables."
+  (let ((copy (make-package-configuration)))
+    (setf (getf copy :global)
+          (copy-package-enable-table
+           (package-configuration-global-table configuration)))
+    (maphash
+     (lambda (agent-name table)
+       (setf (gethash agent-name
+                      (package-configuration-agents-table copy))
+             (copy-package-enable-table table)))
+     (package-configuration-agents-table configuration))
+    copy))
+
 (defun load-package-configuration ()
   "Load and memoize persisted package enablement configuration."
   (let ((configuration (make-package-configuration)))
@@ -649,48 +841,115 @@ When NIL, all package-owned resource types are allowed.")
           (emit-package-warning "Failed to load package configuration ~A: ~A"
                                 (namestring *package-configuration-path*)
                                 e))))
-    (setf *package-configuration* configuration)))
+    ;; File I/O and JSON decoding occur before the short publication lock.
+    ;; If another loader or writer won meanwhile, preserve its newer object.
+    (bt:with-lock-held (*package-configuration-lock*)
+      (or *package-configuration*
+          (setf *package-configuration* configuration)))))
 
 (defun ensure-package-configuration-loaded ()
   "Return the package enablement configuration, loading it if needed."
-  (or *package-configuration*
+  (or (bt:with-lock-held (*package-configuration-lock*)
+        *package-configuration*)
       (load-package-configuration)))
 
-(defun save-package-configuration ()
-  "Persist package enablement configuration to disk."
-  (let* ((configuration (ensure-package-configuration-loaded))
-         (global (package-table-names
-                  (package-configuration-global-table configuration)))
-         (agents nil))
+(defun package-configuration-snapshot ()
+  "Return an immutable-for-the-caller package configuration snapshot."
+  (ensure-package-configuration-loaded)
+  (bt:with-lock-held (*package-configuration-lock*)
+    (copy-package-configuration *package-configuration*)))
+
+(defun package-configuration-json (configuration)
+  "Encode private CONFIGURATION as persisted package JSON."
+  (let ((global (package-table-names
+                 (package-configuration-global-table configuration)))
+        (agents nil))
     (maphash (lambda (agent-name table)
                (let ((names (package-table-names table)))
                  (when names
                    (push `(,agent-name . ,(coerce names 'vector))
                          agents))))
              (package-configuration-agents-table configuration))
-    (ensure-directories-exist *package-configuration-path*)
-    (with-open-file (stream *package-configuration-path*
-                            :direction :output
-                            :if-exists :supersede
-                            :if-does-not-exist :create)
-      (write-string
-       (cl-json:encode-json-to-string
-        `((:global . ,(coerce global 'vector))
-          (:agents . ,(sort agents #'string< :key #'car))))
-       stream))
-    *package-configuration-path*))
+    (cl-json:encode-json-to-string
+     `((:global . ,(coerce global 'vector))
+       (:agents . ,(sort agents #'string< :key #'car))))))
+
+(defun write-package-configuration-json (json)
+  "Atomically replace the package configuration file with JSON."
+  (when *package-configuration-write-function*
+    (return-from write-package-configuration-json
+      (funcall *package-configuration-write-function*
+               json *package-configuration-path*)))
+  (ensure-directories-exist *package-configuration-path*)
+  (let* ((target *package-configuration-path*)
+         (temporary
+           (make-pathname
+            :name (format nil ".~A-~D-~D"
+                          (or (pathname-name target) "packages")
+                          (get-universal-time)
+                          (get-internal-real-time))
+            :type "tmp"
+            :defaults target)))
+    (unwind-protect
+         (progn
+           (with-open-file (stream temporary
+                                   :direction :output
+                                   :if-exists :supersede
+                                   :if-does-not-exist :create)
+             (write-string json stream))
+           (uiop:rename-file-overwriting-target temporary target))
+      (when (probe-file temporary)
+        (ignore-errors (delete-file temporary)))))
+  *package-configuration-path*)
+
+(defun save-package-configuration ()
+  "Persist package enablement configuration to disk."
+  (ensure-package-configuration-loaded)
+  ;; SAVE-LOCK is outermost for writers.  A scope commit and its rename cannot
+  ;; be overtaken by an older snapshot writing after a newer one.
+  (bt:with-lock-held (*package-configuration-save-lock*)
+    (write-package-configuration-json
+     (package-configuration-json (package-configuration-snapshot)))))
 
 (defun package-agent-enable-table (agent-name &key create)
-  "Return AGENT-NAME's package enablement table."
+  "Return a private snapshot of AGENT-NAME's package enablement table.
+CREATE is retained for compatibility and returns an empty private table when
+the agent has no published table; callers must use the COW update helpers to
+publish changes."
   (let ((agent-key (normalize-package-agent-name agent-name)))
     (when agent-key
-      (let* ((configuration (ensure-package-configuration-loaded))
+      (let* ((configuration (package-configuration-snapshot))
              (agents (package-configuration-agents-table configuration))
              (table (gethash agent-key agents)))
         (or table
             (when create
-              (setf (gethash agent-key agents)
-                    (make-package-enable-table))))))))
+              (make-package-enable-table)))))))
+
+(defun package-enablement-names-snapshot (agent-name)
+  "Return values global and AGENT-NAME enabled package-name lists."
+  (let* ((configuration (package-configuration-snapshot))
+         (agent-key (normalize-package-agent-name agent-name))
+         (agent-table (and agent-key
+                           (gethash agent-key
+                                    (package-configuration-agents-table
+                                     configuration)))))
+    (values
+     (package-table-names
+      (package-configuration-global-table configuration))
+     (package-table-names agent-table))))
+
+(defun package-enablement-flags-snapshot (package-name agent-name)
+  "Return values global-enabled-p and agent-enabled-p from one snapshot."
+  (let* ((configuration (package-configuration-snapshot))
+         (agent-key (normalize-package-agent-name agent-name))
+         (agent-table (and agent-key
+                           (gethash agent-key
+                                    (package-configuration-agents-table
+                                     configuration)))))
+    (values
+     (package-name-enabled-in-table-p
+      package-name (package-configuration-global-table configuration))
+     (package-name-enabled-in-table-p package-name agent-table))))
 
 (defun package-name-enabled-in-table-p (name table)
   "Return true when normalized package NAME is enabled in TABLE."
@@ -720,16 +979,17 @@ When NIL, all package-owned resource types are allowed.")
 
 (defun package-enabled-globally-p (package-name)
   "Return true when PACKAGE-NAME is globally enabled."
-  (package-name-enabled-in-table-p
-   package-name
-   (package-configuration-global-table
-    (ensure-package-configuration-loaded))))
+  (multiple-value-bind (global-enabled-p _agent-enabled-p)
+      (package-enablement-flags-snapshot package-name nil)
+    (declare (ignore _agent-enabled-p))
+    global-enabled-p))
 
 (defun package-enabled-for-agent-p (package-name agent-name)
   "Return true when PACKAGE-NAME is enabled for AGENT-NAME."
-  (package-name-enabled-in-table-p
-   package-name
-   (package-agent-enable-table agent-name)))
+  (multiple-value-bind (_global-enabled-p agent-enabled-p)
+      (package-enablement-flags-snapshot package-name agent-name)
+    (declare (ignore _global-enabled-p))
+    agent-enabled-p))
 
 (defun package-enablement-scope (package &key buffer agent-name project)
   "Return PACKAGE's effective enablement scope for BUFFER/AGENT-NAME/PROJECT."
@@ -741,28 +1001,28 @@ When NIL, all package-owned resource types are allowed.")
          (project-definition (and project-name
                                   (find-installed-package name
                                                           :project project-name))))
-    (cond
-      ((null name) :default)
-      ((and project-definition
-            (eq :project (package-definition-source-tier project-definition)))
-       :project)
-      ((buffer-package-name-enabled-p buffer name) :buffer)
-      ((package-enabled-for-agent-p name agent) :agent)
-      ((package-enabled-globally-p name) :global)
-      (t :default))))
+    (multiple-value-bind (global-enabled-p agent-enabled-p)
+        (package-enablement-flags-snapshot name agent)
+      (cond
+        ((null name) :default)
+        ((and project-definition
+              (eq :project (package-definition-source-tier project-definition)))
+         :project)
+        ((buffer-package-name-enabled-p buffer name) :buffer)
+        (agent-enabled-p :agent)
+        (global-enabled-p :global)
+        (t :default)))))
 
 (defun active-package-names (&key buffer agent-name)
   "Return package names active for BUFFER/AGENT-NAME."
   (let ((table (make-hash-table :test #'equal))
         (agent (or agent-name
                    (and buffer (buffer-agent-name buffer)))))
-    (dolist (name (package-table-names
-                   (package-configuration-global-table
-                    (ensure-package-configuration-loaded))))
-      (setf (gethash name table) t))
-    (when agent
-      (dolist (name (package-table-names
-                     (package-agent-enable-table agent)))
+    (multiple-value-bind (global-names agent-names)
+        (package-enablement-names-snapshot agent)
+      (dolist (name global-names)
+        (setf (gethash name table) t))
+      (dolist (name agent-names)
         (setf (gethash name table) t)))
     (when buffer
       (dolist (name (buffer-enabled-packages buffer))
@@ -775,6 +1035,40 @@ When NIL, all package-owned resource types are allowed.")
           (when (eq :project (package-definition-source-tier definition))
             (setf (gethash (package-definition-name definition) table) t)))))
     (package-table-names table)))
+
+(defun update-package-configuration-scope (name agent scope)
+  "Publish and persist one serialized COW package enablement update."
+  (ensure-package-configuration-loaded)
+  (bt:with-lock-held (*package-configuration-save-lock*)
+    (let ((configuration nil))
+      (bt:with-lock-held (*package-configuration-lock*)
+        (setf configuration
+              (copy-package-configuration *package-configuration*))
+        (let* ((agents (package-configuration-agents-table configuration))
+               (agent-key (normalize-package-agent-name agent))
+               (agent-table
+                 (and agent-key
+                      (or (gethash agent-key agents)
+                          (setf (gethash agent-key agents)
+                                (make-package-enable-table)))))
+               (global-table
+                 (package-configuration-global-table configuration)))
+          (when agent-table
+            (set-package-name-enabled-in-table name agent-table nil))
+          (set-package-name-enabled-in-table name global-table nil)
+          (ecase scope
+            ((:default :buffer) nil)
+            (:agent
+             (set-package-name-enabled-in-table name agent-table t))
+            (:global
+             (set-package-name-enabled-in-table name global-table t))))
+        nil)
+      ;; Persist the private copy before publishing it.  A failed write leaves
+      ;; both the previous in-memory generation and the prior file intact.
+      (write-package-configuration-json
+       (package-configuration-json configuration))
+      (bt:with-lock-held (*package-configuration-lock*)
+        (setf *package-configuration* configuration)))))
 
 (defun package-active-p (package &key buffer agent-name)
   "Return true when PACKAGE is active for BUFFER/AGENT-NAME."
@@ -793,7 +1087,6 @@ removes the package from the other scopes in the same context."
          (agent (or agent-name
                     (and buffer (buffer-agent-name buffer))
                     *default-agent-name*))
-         (configuration (ensure-package-configuration-loaded))
          (previous-scope (and buffer
                               (package-enablement-scope
                                name
@@ -806,21 +1099,12 @@ removes the package from the other scopes in the same context."
       (error "Unsupported package enablement scope: ~S" scope))
     (when buffer
       (set-buffer-package-name-enabled buffer name nil))
-    (when agent
-      (set-package-name-enabled-in-table
-       name (package-agent-enable-table agent :create t) nil))
-    (set-package-name-enabled-in-table
-     name (package-configuration-global-table configuration) nil)
     (ecase scope
       (:default nil)
       (:buffer
        (set-buffer-package-name-enabled buffer name t))
-      (:agent
-       (set-package-name-enabled-in-table
-        name (package-agent-enable-table agent :create t) t))
-      (:global
-       (set-package-name-enabled-in-table
-        name (package-configuration-global-table configuration) t)))
+      ((:agent :global) nil))
+    (update-package-configuration-scope name agent scope)
     (when buffer
       (cond
         ((eq scope :default)
@@ -830,7 +1114,6 @@ removes the package from the other scopes in the same context."
                                                had-context-p))))
     (when buffer
       (sync-buffer-system-prompt-display buffer))
-    (save-package-configuration)
     (maybe-run-hook-with-args
      '*package-enablement-changed-hook*
      name
@@ -964,16 +1247,14 @@ removes the package from the other scopes in the same context."
 
 (defun package-owned-command-metadata (package-name)
   "Return command metadata registered by PACKAGE-NAME."
-  (let ((entries nil))
-    (maphash (lambda (_name metadata)
-               (declare (ignore _name))
-               (when (string= package-name
-                              (or (command-metadata-package metadata) ""))
-                 (push metadata entries)))
-             *command-table*)
-    (sort entries #'string<
-          :key (lambda (metadata)
-                 (symbol-name (command-metadata-name metadata))))))
+  (sort
+   (loop :for (_name . metadata) :in (command-registry-snapshot)
+         :when (string= package-name
+                        (or (command-metadata-package metadata) ""))
+           :collect metadata)
+   #'string<
+   :key (lambda (metadata)
+          (symbol-name (command-metadata-name metadata)))))
 
 (defun package-owned-tool-metadata (package-name)
   "Return tool metadata registered by PACKAGE-NAME."
@@ -984,14 +1265,12 @@ removes the package from the other scopes in the same context."
 
 (defun package-owned-slash-commands (package-name)
   "Return slash commands registered by PACKAGE-NAME."
-  (let ((entries nil))
-    (maphash (lambda (_name command)
-               (declare (ignore _name))
-               (when (string= package-name
-                              (or (slash-command-package command) ""))
-                 (push command entries)))
-             *slash-command-table*)
-    (sort entries #'string< :key #'slash-command-name)))
+  (sort
+   (loop :for (_name . command) :in (slash-command-registry-snapshot)
+         :when (string= package-name
+                        (or (slash-command-package command) ""))
+           :collect command)
+   #'string< :key #'slash-command-name))
 
 (defun package-owned-prompt-templates (package &key buffer project)
   "Return prompt templates contributed by PACKAGE's prompt directory."
@@ -1112,13 +1391,13 @@ removes the package from the other scopes in the same context."
 
 (defun package-owned-extended-docs (package-name)
   "Return extended documentation entries registered by PACKAGE-NAME."
-  (let ((entries nil))
-    (maphash (lambda (symbol doc)
-               (when (string= package-name (or (getf doc :package) ""))
-                 (push (cons symbol doc) entries)))
-             *extended-docs*)
-    (sort entries #'string< :key (lambda (entry)
-                                   (symbol-name (car entry))))))
+  (sort
+   (remove-if-not
+    (lambda (entry)
+      (string= package-name (or (getf (cdr entry) :package) "")))
+    (extended-doc-registry-snapshot))
+   #'string< :key (lambda (entry)
+                    (symbol-name (car entry)))))
 
 (defun describe-installed-package-to-string (definition buffer)
   "Return the help text for installed package DEFINITION."
@@ -1143,9 +1422,8 @@ removes the package from the other scopes in the same context."
         (when tools
           (format s "Tools:~%")
           (dolist (tool tools)
-            (format s "  - ~A (~(~A~)): ~A~%"
+            (format s "  - ~A: ~A~%"
                     (agent-tool-metadata-name tool)
-                    (agent-tool-metadata-permission tool)
                     (agent-tool-metadata-description tool)))
           (format s "~%")))
       (let ((commands (package-owned-command-metadata name)))
@@ -1371,7 +1649,7 @@ Returns a normalized plist or NIL on failure."
          :argument-hint (package-slash-command-spec-argument-hint spec)
          :package (package-definition-name definition))))))
 
-(defun load-package-definition-entrypoint (definition)
+(defun %load-package-definition-entrypoint (definition)
   "Load DEFINITION's entrypoint unless its root is already loaded."
   (let* ((install-key (package-install-key (package-definition-root definition)))
          (package-name (package-definition-name definition))
@@ -1382,7 +1660,7 @@ Returns a normalized plist or NIL on failure."
            (and install-record
                 (package-install-record-resource-types install-record))))
     (when (gethash install-key *loaded-packages*)
-      (return-from load-package-definition-entrypoint definition))
+      (return-from %load-package-definition-entrypoint definition))
     (handler-case
         (let ((*default-pathname-defaults* (package-definition-root definition))
               (*package* (find-package :clawmacs))
@@ -1402,20 +1680,27 @@ Returns a normalized plist or NIL on failure."
                               (namestring entrypoint)
                               e)))))
 
+(defun load-package-definition-entrypoint (definition)
+  "Load DEFINITION's entrypoint exactly once across concurrent callers."
+  (call-with-package-lifecycle
+   (lambda () (%load-package-definition-entrypoint definition))
+   :operation (format nil "load package ~A"
+                      (package-definition-name definition))))
+
 (defun load-package-entrypoint (manifest package-root install-dir)
   "Load MANIFEST's entrypoint from PACKAGE-ROOT unless INSTALL-DIR is loaded."
   (declare (ignore package-root install-dir))
   (load-package-definition-entrypoint
    (package-definition-from-manifest manifest)))
 
-(defun reset-package-runtime-state (package)
+(defun %reset-package-runtime-state (package)
   "Remove package-owned runtime registrations for PACKAGE."
   (let* ((definition (typecase package
                        (package-definition package)
                        (t (find-installed-package package))))
          (name (and definition (package-definition-name definition))))
     (unless definition
-      (return-from reset-package-runtime-state nil))
+      (return-from %reset-package-runtime-state nil))
     (setf *package-prompt-sections*
           (remove name
                   *package-prompt-sections*
@@ -1426,26 +1711,42 @@ Returns a normalized plist or NIL on failure."
     (when (fboundp 'remove-registered-tool-definitions-for-package)
       (funcall (symbol-function 'remove-registered-tool-definitions-for-package)
                name))
-    (dolist (metadata (package-owned-command-metadata name))
-      (remhash (command-metadata-name metadata) *command-table*))
-    (dolist (command (package-owned-slash-commands name))
-      (remhash (slash-command-name command) *slash-command-table*))
-    (dolist (type (package-owned-buffer-types name))
-      (remhash (buffer-type-name type) *buffer-type-registry*))
+    (when (fboundp 'remove-agent-definitions-for-package)
+      (funcall 'remove-agent-definitions-for-package name))
+    (when (fboundp 'remove-pipeline-registrations-for-package)
+      (funcall 'remove-pipeline-registrations-for-package name))
+    (when (fboundp 'remove-package-hook-registrations)
+      (funcall 'remove-package-hook-registrations name))
+    (when (fboundp 'remove-package-advices)
+      (funcall 'remove-package-advices name))
+    (remove-command-metadata-for-package name)
+    (remove-slash-commands-for-package name)
+    (remove-buffer-types-for-package name)
     (remove-buffer-input-presentation-providers-for-package name)
-    (dolist (entry (package-owned-extended-docs name))
-      (remhash (car entry) *extended-docs*))
+    (remove-extended-docs-for-package name)
     (remhash (package-install-key (package-definition-root definition))
              *loaded-packages*)
     definition))
 
-(defun reload-clawmacs-package (package)
+(defun reset-package-runtime-state (package)
+  "Remove PACKAGE registrations only after process quiescence is proven."
+  (call-with-package-runtime-maintenance
+   (lambda () (%reset-package-runtime-state package))
+   :operation (format nil "reset package ~A" package)))
+
+(defun %reload-clawmacs-package (package)
   "Reload PACKAGE by removing package-owned runtime state, then loading it."
   (let ((definition (reset-package-runtime-state package)))
     (when definition
       (load-clawmacs-package definition))))
 
-(defun reload-active-packages (&key buffer agent-name)
+(defun reload-clawmacs-package (package)
+  "Reload PACKAGE only after process quiescence is proven."
+  (call-with-package-runtime-maintenance
+   (lambda () (%reload-clawmacs-package package))
+   :operation (format nil "reload package ~A" package)))
+
+(defun %reload-active-packages (&key buffer agent-name)
   "Reload packages active for BUFFER/AGENT-NAME and return loaded definitions."
   (let ((loaded nil))
     (dolist (name (active-package-names :buffer buffer :agent-name agent-name))
@@ -1464,6 +1765,14 @@ Returns a normalized plist or NIL on failure."
                   (package-definition-name result)))
                (push result loaded)))))))
     (nreverse loaded)))
+
+(defun reload-active-packages (&key buffer agent-name)
+  "Reload active packages only after process quiescence is proven."
+  (call-with-package-runtime-maintenance
+   (lambda ()
+     (%reload-active-packages :buffer buffer :agent-name agent-name))
+   :operation "reload active packages"
+   :buffer buffer))
 
 (defun read-package-channel-manifest (channel)
   "Read CHANNEL's manifest plist, returning NIL on warning."
@@ -1624,7 +1933,7 @@ Returns a normalized plist or NIL on failure."
                :key #'package-definition-name
                :test #'string=))))
 
-(defun load-clawmacs-package (package &key seen buffer project)
+(defun %load-clawmacs-package (package &key seen buffer project)
   "Load PACKAGE by name or definition, including dependencies.
 Returns the loaded package definition on success, or NIL on warning/failure."
   (let* ((definition (typecase package
@@ -1634,25 +1943,35 @@ Returns the loaded package definition on success, or NIL on warning/failure."
                                                  :project project))))
          (name (and definition (package-definition-name definition))))
     (unless definition
-      (return-from load-clawmacs-package
+      (return-from %load-clawmacs-package
         (emit-package-warning "Unknown Clawmacs package ~S" package)))
     (let ((seen-table (or seen (make-hash-table :test #'equal))))
       (when (gethash name seen-table)
-        (return-from load-clawmacs-package definition))
+        (return-from %load-clawmacs-package definition))
       (setf (gethash name seen-table) t)
       (dolist (dependency (package-definition-dependencies definition))
         (unless (load-clawmacs-package dependency
                                        :seen seen-table
                                        :buffer buffer
                                        :project project)
-          (return-from load-clawmacs-package
+          (return-from %load-clawmacs-package
             (emit-package-warning
              "Package ~A dependency ~A failed to load"
              name
              dependency))))
       (load-package-definition-entrypoint definition))))
 
-(defun load-active-packages (&key buffer agent-name)
+(defun load-clawmacs-package (package &key seen buffer project)
+  "Load PACKAGE and dependencies under the process-wide cold-load owner."
+  (call-with-package-lifecycle
+   (lambda ()
+     (%load-clawmacs-package package
+                             :seen seen
+                             :buffer buffer
+                             :project project))
+   :operation (format nil "load package ~A" package)))
+
+(defun %load-active-packages (&key buffer agent-name)
   "Load packages active for BUFFER/AGENT-NAME and return loaded definitions."
   (let ((loaded nil))
     (dolist (name (active-package-names :buffer buffer :agent-name agent-name))
@@ -1672,6 +1991,13 @@ Returns the loaded package definition on success, or NIL on warning/failure."
                   (package-definition-name result)))
                (push result loaded)))))))
     (nreverse loaded)))
+
+(defun load-active-packages (&key buffer agent-name)
+  "Load the complete active package set under one process-wide owner."
+  (call-with-package-lifecycle
+   (lambda ()
+     (%load-active-packages :buffer buffer :agent-name agent-name))
+   :operation "load active packages"))
 
 (defun load-autoload-packages ()
   "Compatibility wrapper that loads globally enabled packages."
@@ -2007,7 +2333,7 @@ Returns the installed package definition on success, or NIL on warning/failure."
  :major-mode "package-dashboard"
  :presentation-function 'package-dashboard-display-entries)
 
-(defun remove-installed-package (package &key buffer project)
+(defun %remove-installed-package (package &key buffer project)
   "Delete PACKAGE's installed files and return its definition."
   (let* ((definition (typecase package
                        (package-definition package)
@@ -2021,6 +2347,14 @@ Returns the installed package definition on success, or NIL on warning/failure."
         (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))
       (clear-package-registry)
       definition)))
+
+(defun remove-installed-package (package &key buffer project)
+  "Remove PACKAGE only after runtime quiescence, before deleting any files."
+  (call-with-package-runtime-maintenance
+   (lambda ()
+     (%remove-installed-package package :buffer buffer :project project))
+   :operation (format nil "remove package ~A" package)
+   :buffer buffer))
 
 (defun refresh-package-source-directory (definition record)
   "Refresh DEFINITION's source directory using RECORD."
@@ -2052,7 +2386,7 @@ Returns the installed package definition on success, or NIL on warning/failure."
                              (package-definition-name definition)
                              source-type)))))
 
-(defun update-installed-package (package &key buffer project)
+(defun %update-installed-package (package &key buffer project)
   "Refresh PACKAGE from its recorded source and return the updated definition."
   (let* ((definition (typecase package
                        (package-definition package)
@@ -2072,8 +2406,16 @@ Returns the installed package definition on success, or NIL on warning/failure."
         (clear-package-registry)
         (reload-clawmacs-package definition)))))
 
-(defun set-installed-package-resource-types (package resource-types
-                                                    &key buffer project)
+(defun update-installed-package (package &key buffer project)
+  "Update PACKAGE only after quiescence, before refreshing its source tree."
+  (call-with-package-runtime-maintenance
+   (lambda ()
+     (%update-installed-package package :buffer buffer :project project))
+   :operation (format nil "update package ~A" package)
+   :buffer buffer))
+
+(defun %set-installed-package-resource-types (package resource-types
+                                                     &key buffer project)
   "Persist RESOURCE-TYPES as PACKAGE's allowlist and return the new record."
   (let* ((definition (typecase package
                        (package-definition package)
@@ -2092,6 +2434,17 @@ Returns the installed package definition on success, or NIL on warning/failure."
       (clear-package-registry)
       (reload-clawmacs-package definition)
       normalized)))
+
+(defun set-installed-package-resource-types (package resource-types
+                                                     &key buffer project)
+  "Set PACKAGE's resource policy only after process quiescence is proven."
+  (call-with-package-runtime-maintenance
+   (lambda ()
+     (%set-installed-package-resource-types package resource-types
+                                            :buffer buffer
+                                            :project project))
+   :operation (format nil "configure package ~A" package)
+   :buffer buffer))
 
 (defun install-package-status-string (package &key buffer project)
   "Return a short status string for PACKAGE."

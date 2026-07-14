@@ -102,8 +102,7 @@
            (prompt (render-package-prompt-sections)))
       (dolist (name '("netcons_find" "netcons_open"
                       "netcons_run" "netcons_search"))
-        (is (member name tool-names :test #'string=))
-        (is-false (clawmacs::tool-requires-permission-p name)))
+        (is (member name tool-names :test #'string=)))
       (is (search "Web lookup with netcons" prompt))
       (is (search "netcons_run" prompt))
       (is (search "search_query" prompt))

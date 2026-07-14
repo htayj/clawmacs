@@ -25,6 +25,15 @@
     (ensure-directories-exist (merge-pathnames #P".keep" base))
     (merge-pathnames filename base)))
 
+(defun wait-for-llm-test (predicate &key (timeout 3.0))
+  "Wait boundedly for asynchronous LLM test state and return its value."
+  (let ((deadline (+ (get-internal-real-time)
+                     (round (* timeout internal-time-units-per-second)))))
+    (loop :for value := (funcall predicate)
+          :when value :return value
+          :when (>= (get-internal-real-time) deadline) :return nil
+          :do (sleep 0.005))))
+
 (defmacro with-provider-token-path-overrides ((_removed-provider-path openai-codex-path &optional zai-path) &body body)
   (declare (ignore _removed-provider-path))
   `(let ((original-provider-token-path
@@ -56,15 +65,6 @@
          (clawmacs::*agent-defaults-registry* nil))
      ,@body))
 
-(defun temp-approval-policy-path ()
-  (let ((base (make-pathname :directory (list :absolute "tmp"
-                                              (format nil "clawmacs-guard-policy-~A"
-                                                      (list (get-universal-time)
-                                                            (get-internal-real-time)
-                                                            (gensym)))))))
-    (ensure-directories-exist (merge-pathnames #P".keep" base))
-    (merge-pathnames "guard.json" base)))
-
 (defun temp-package-test-directory (label)
   (make-pathname :directory (list :absolute "tmp"
                                   (format nil "clawmacs-package-tests-~A-~36R-~36R-~A"
@@ -72,13 +72,6 @@
                                           (get-universal-time)
                                           (get-internal-real-time)
                                           (gensym)))))
-
-(defmacro with-approval-policy-path-override ((path) &body body)
-  `(let ((clawmacs::*approval-policy-path* ,path)
-         (clawmacs::*approval-policy-registry* nil)
-         (clawmacs::*approval-policy-project-registry-cache*
-           (make-hash-table :test #'equal)))
-     ,@body))
 
 (defun default-package-test-channels ()
   (list (clawmacs:make-package-channel
@@ -137,6 +130,132 @@
             ,@body)
        (setf (symbol-function ',name) original-function))))
 
+(defclass controlled-character-input-stream
+    (trivial-gray-streams:fundamental-character-input-stream)
+  ((contents
+    :initarg :contents
+    :initform ""
+    :reader controlled-stream-contents)
+   (position
+    :initform 0
+    :accessor controlled-stream-position)
+   (block-first-read-p
+    :initarg :block-first-read-p
+    :initform nil
+    :reader controlled-stream-block-first-read-p)
+   (first-read-started-p
+    :initform nil
+    :accessor controlled-stream-first-read-started-p)
+   (read-entered
+    :initform (bt:make-semaphore :name "test-stream-read-entered")
+    :reader controlled-stream-read-entered)
+   (read-release
+    :initform (bt:make-semaphore :name "test-stream-read-release")
+    :reader controlled-stream-read-release)
+   (closed-p
+    :initform nil
+    :accessor controlled-stream-closed-p)
+   (close-count
+    :initform 0
+    :accessor controlled-stream-close-count)
+   (lock
+    :initform (bt:make-lock "test-controlled-stream")
+    :reader controlled-stream-lock)))
+
+(defmethod trivial-gray-streams:stream-read-char
+    ((stream controlled-character-input-stream))
+  (let ((block-p nil))
+    (bt:with-lock-held ((controlled-stream-lock stream))
+      (when (and (controlled-stream-block-first-read-p stream)
+                 (not (controlled-stream-first-read-started-p stream)))
+        (setf (controlled-stream-first-read-started-p stream) t
+              block-p t)))
+    (when block-p
+      (bt:signal-semaphore (controlled-stream-read-entered stream))
+      (bt:wait-on-semaphore (controlled-stream-read-release stream)
+                            :timeout 2))
+    (bt:with-lock-held ((controlled-stream-lock stream))
+      (if (controlled-stream-closed-p stream)
+          :eof
+          (let ((position (controlled-stream-position stream))
+                (contents (controlled-stream-contents stream)))
+            (if (< position (length contents))
+                (prog1 (char contents position)
+                  (incf (controlled-stream-position stream)))
+                :eof))))))
+
+(defmethod close :around ((stream controlled-character-input-stream)
+                          &key abort)
+  (declare (ignore abort))
+  (bt:with-lock-held ((controlled-stream-lock stream))
+    (incf (controlled-stream-close-count stream))
+    (setf (controlled-stream-closed-p stream) t))
+  (bt:signal-semaphore (controlled-stream-read-release stream))
+  (call-next-method))
+
+(defmethod clawmacs::interrupt-provider-stream-read
+    ((stream controlled-character-input-stream))
+  "Wake the controlled test read while leaving close ownership to its reader."
+  (bt:signal-semaphore (controlled-stream-read-release stream))
+  t)
+
+#+sbcl
+(defclass observed-provider-character-input-stream
+    (trivial-gray-streams:fundamental-character-input-stream)
+  ((underlying-stream
+    :initarg :underlying-stream
+    :reader observed-provider-underlying-stream)
+   (read-entered
+    :initform (bt:make-semaphore :name "test-provider-read-entered")
+    :reader observed-provider-read-entered)
+   (read-observed-p
+    :initform nil
+    :accessor observed-provider-read-observed-p)
+   (lock
+    :initform (bt:make-lock "test-observed-provider-stream")
+    :reader observed-provider-stream-lock)))
+
+#+sbcl
+(defmethod trivial-gray-streams:stream-read-char
+    ((stream observed-provider-character-input-stream))
+  (let ((signal-p nil))
+    (bt:with-lock-held ((observed-provider-stream-lock stream))
+      (unless (observed-provider-read-observed-p stream)
+        (setf (observed-provider-read-observed-p stream) t
+              signal-p t)))
+    (when signal-p
+      (bt:signal-semaphore (observed-provider-read-entered stream)))
+    (read-char (observed-provider-underlying-stream stream) nil :eof)))
+
+#+sbcl
+(defmethod trivial-gray-streams:stream-listen
+    ((stream observed-provider-character-input-stream))
+  (listen (observed-provider-underlying-stream stream)))
+
+#+sbcl
+(defmethod close :around ((stream observed-provider-character-input-stream)
+                          &key abort)
+  (unwind-protect
+       (call-next-method)
+    (ignore-errors
+      (close (observed-provider-underlying-stream stream) :abort abort))))
+
+#+sbcl
+(defmethod clawmacs::interrupt-provider-stream-read
+    ((stream observed-provider-character-input-stream))
+  (clawmacs::interrupt-provider-stream-read
+   (observed-provider-underlying-stream stream)))
+
+(defun stream-state-reader-thread-snapshot (state)
+  (bt:with-lock-held ((clawmacs::stream-state-lock state))
+    (clawmacs::stream-state-reader-thread state)))
+
+(defun join-test-stream-reader (state)
+  (let ((thread (stream-state-reader-thread-snapshot state)))
+    (when thread
+      (clawmacs::settle-stream-state-reader state))
+    thread))
+
 (defun write-test-file (path contents)
   (ensure-directories-exist path)
   (with-open-file (stream path
@@ -175,13 +294,7 @@
           (clawmacs::*before-send-message-hook* nil)
           (clawmacs::*after-send-message-hook* nil)
           (clawmacs::*after-buffer-create-hook* nil)
-          (clawmacs::*after-provider-response-hook* nil)
-          (clawmacs::*approval-policy-path* (temp-approval-policy-path))
-          (clawmacs::*approval-policy-isolation-root*
-           (temp-package-test-directory "approval-policy-isolation"))
-          (clawmacs::*approval-policy-registry* nil)
-          (clawmacs::*approval-policy-project-registry-cache*
-           (make-hash-table :test #'equal)))
+          (clawmacs::*after-provider-response-hook* nil))
      (maphash (lambda (key value)
                 (setf (gethash key snapshot) value))
               clawmacs::*tool-table*)
@@ -291,12 +404,11 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("clawmacs_reload" "edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
+      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names))
       (is (string= "CLAWMACS" clawmacs:*lisp-eval-default-package*))
       (dolist (name '("read" "find" "grep" "write" "edit" "lisp_eval"))
-        (is (not (null (gethash name clawmacs::*tool-table*))))
-        (is-false (clawmacs::tool-requires-permission-p name)))
+        (is (not (null (gethash name clawmacs::*tool-table*)))))
       (is (null (gethash "http_fetch" clawmacs::*tool-table*)))
       (is (null (gethash "file_read" clawmacs::*tool-table*)))
       (is (null (gethash "file_write" clawmacs::*tool-table*)))
@@ -313,116 +425,13 @@
            (tool-names (mapcar (lambda (tool)
                                  (cdr (assoc :name tool)))
                                tools)))
-      (is (equal '("clawmacs_reload" "edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
+      (is (equal '("edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names)))))
 
-(test approval-policy-round-trips-default-and-tool-overrides
-  "Guard policy JSON persists default and per-tool permission overrides."
-  (let ((path (temp-approval-policy-path)))
-    (with-approval-policy-path-override (path)
-      (clawmacs::set-approval-policy-default-permission
-       :agent-with-permission)
-      (clawmacs::set-approval-policy-tool-permission "write" :user-only)
-      (clawmacs::save-approval-policy)
-      (setf clawmacs::*approval-policy-registry* nil)
-      (clawmacs::load-approval-policy)
-      (is (eq :agent-with-permission
-              (clawmacs:approval-policy-default-permission)))
-      (is (eq :user-only
-              (clawmacs:approval-policy-tool-permission "write")))
-      (is (null (clawmacs:approval-policy-tool-permission "read"))))))
-
-(test approval-policy-precedence-is-tool-override-then-default-then-static
-  "Guard policy overlay precedence is tool override, then default, then static metadata."
-  (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
-    (initialize-test-tools)
-    (let ((path (temp-approval-policy-path)))
-      (with-approval-policy-path-override (path)
-        (is (eq :agent-allowed
-                (clawmacs:effective-tool-permission "lisp_eval")))
-        (clawmacs::set-approval-policy-default-permission :user-only)
-        (clawmacs::set-approval-policy-tool-permission "read" :agent-allowed)
-        (is (eq :agent-allowed
-                (clawmacs:effective-tool-permission "read")))
-        (is (eq :user-only
-                (clawmacs:effective-tool-permission "lisp_eval")))))))
-
-(test approval-policy-preserves-static-permissioned-tools
-  "Tools with static permission prompts require approval unless policy overrides them."
-  (with-tool-table-restored
-    (clawmacs:register-tool
-     "permissioned_test"
-     "A permissioned test tool."
-     '((:type . "object"))
-     :agent-with-permission
-     (lambda (args)
-       (declare (ignore args))
-       "ok"))
-    (let ((path (temp-approval-policy-path)))
-      (with-approval-policy-path-override (path)
-        (is (eq :agent-with-permission
-                (clawmacs:effective-tool-permission "permissioned_test")))
-        (is-true
-         (clawmacs:tool-requires-permission-p "permissioned_test"))
-        (clawmacs::set-approval-policy-default-permission :agent-allowed)
-        (is (eq :agent-allowed
-                (clawmacs:effective-tool-permission "permissioned_test")))
-        (is-false
-         (clawmacs:tool-requires-permission-p "permissioned_test"))))))
-
-(test approval-policy-user-only-overrides-hide-tools-from-agent-discovery
-  "User-only overrides remove tools from agent-visible provider discovery."
-  (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
-    (initialize-test-tools)
-    (let ((path (temp-approval-policy-path)))
-      (with-approval-policy-path-override (path)
-        (clawmacs::set-approval-policy-tool-permission "write" :user-only)
-        (let* ((*current-caller* :agent)
-               (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
-               (tool-names (mapcar (lambda (tool)
-                                     (cdr (assoc :name tool)))
-                                   tools)))
-          (is-false (member "write" tool-names :test #'string=)))
-        (let* ((*current-caller* :user)
-               (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
-               (tool-names (mapcar (lambda (tool)
-                                     (cdr (assoc :name tool)))
-                                   tools)))
-          (is (member "write" tool-names :test #'string=)))))))
-
-(test approval-policy-overrides-prompt-and-interactive-tool-permission-flow
-  "Guard policy overrides feed both prompt-mode denial and interactive approval."
-  (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
-    (initialize-test-tools)
-    (let ((path (temp-approval-policy-path)))
-      (with-approval-policy-path-override (path)
-        (clawmacs::set-approval-policy-tool-permission "write"
-                                                       :agent-with-permission)
-        (let ((tool-use (clawmacs::canonical-tool-use-block
-                         "call-1"
-                         "write"
-                         '((:path . "/tmp/guard-policy.txt")
-                           (:content . "guarded"))))
-              (buf (make-buffer "guard-policy" :agent-name "agent")))
-          (multiple-value-bind (result event)
-              (clawmacs::execute-prompt-tool-call buf tool-use :agent nil)
-            (is (search "DENIED" (cdr (assoc :display result))))
-            (is (clawmacs:prompt-tool-event-denied-p event)))
-          (clawmacs::begin-tool-approval buf (list tool-use))
-          (is (eq :approval (buffer-status buf)))
-          (is (string= "write"
-                       (cdr (assoc :tool-name
-                                   (buffer-approval-pending buf))))))))))
-
-(test mcclim-compose-approval-continues-lisp-eval-tool-loop
-  "The McCLIM compose helper can approve a pending lisp_eval call and continue."
+(test mcclim-provider-live-lisp-eval-refusal-continues-tool-loop
+  "A refused provider live eval produces a result and continues automatically."
   (with-tool-table-restored
     (initialize-test-tools)
-    (clawmacs::set-approval-policy-tool-permission
-     "lisp_eval" :agent-with-permission)
     (let ((request-count 0))
       (with-function-override (clawmacs::resolve-buffer-provider-and-model
                                (buffer)
@@ -452,24 +461,19 @@
                                       (list
                                        (clawmacs::canonical-text-block
                                         "the result is 2")))))
-          (let ((buf (make-buffer "mcclim-approval" :agent-name "agent")))
+          (let ((buf (make-buffer "mcclim-live-eval" :agent-name "agent")))
             (clawmacs::start-streaming-response buf)
             (is (= 1 request-count))
             (is-true (clawmacs::update-streaming-response buf))
-            (is (eq :approval (buffer-status buf)))
-            (is (string= "lisp_eval"
-                         (cdr (assoc :tool-name
-                                     (buffer-approval-pending buf)))))
-            (is-true (clawmacs::handle-chat-compose-text buf ""))
+            (is (null (buffer-pending-tool-execution buf)))
             (is (= 2 request-count))
-            (is (null (buffer-approval-pending buf)))
             (is-false (clawmacs::update-streaming-response buf))
             (let ((messages (test-buffer-history-messages buf)))
               (is (member :tool-result
                           (mapcar #'message-sender messages)))
               (is (some (lambda (text)
-                          (and (search ";; lisp_eval" text)
-                               (search "2" text)))
+                          (and (search "lisp_eval REFUSED" text)
+                               (search "trusted user command" text)))
                         (mapcar #'message-text messages)))
               (is (some (lambda (text)
                           (search "the result is 2" text))
@@ -512,7 +516,7 @@
                  'clawmacs::clawmacs-chat-frame
                  :buffer buf))
          (table (clim:find-command-table 'clawmacs::clawmacs-chat-frame))
-         (menu-table (clawmacs::make-chat-menu-bar-command-table frame))
+         (menu-table (clim:frame-command-table frame))
          (drei-order-table
            (clim:make-command-table
             nil
@@ -545,6 +549,19 @@
                 drei-order-table
                 `((#\h :modifiers (:control))
                   (#\b)))))
+    (dolist (second-gesture
+             (list #\V
+                   (test-command-table-key-event #\V)
+                   (test-command-table-key-event #\V :modifiers '(:shift))
+                   (test-command-table-key-event #\v :modifiers '(:shift))))
+      (is (equal '(clawmacs::com-chat-dispatch-key '(:ctrl-c #\V))
+                 (let ((item
+                         (esa::find-gestures-with-inheritance
+                          (list (test-command-table-key-event
+                                 #\c :modifiers '(:control))
+                                second-gesture)
+                          table)))
+                   (and item (clim:command-menu-item-value item))))))
     (is-false (equal '(clawmacs::com-chat-dispatch-key #\Soh)
                      (test-command-table-key-command table #\a
                                                      :modifiers '(:control))))
@@ -580,8 +597,12 @@
 (test mcclim-compose-drei-control-editing-gestures
   "The Drei compose pane handles C-j and C-Backspace as editor gestures."
   (let* ((editor-table (clim:find-command-table 'drei:editor-table))
-         (compose (make-instance 'drei:drei-gadget-pane
+         (compose-table
+           (clim:find-command-table
+            'clawmacs::clawmacs-chat-compose-editing-table))
+         (compose (make-instance 'clawmacs::clawmacs-chat-compose-pane
                                  :initial-contents "hello world"))
+         (plain-drei (make-instance 'drei:drei-gadget-pane))
          (control-j (make-instance 'clim:key-press-event
                                    :sheet compose
                                    :x 0
@@ -660,7 +681,7 @@
                (test-command-table-key-command editor-table #\j
                                                :modifiers '(:control))))
     (is (equal '(drei-commands::com-newline-and-indent)
-               (test-command-table-key-command editor-table #\Newline
+               (test-command-table-key-command compose-table #\Newline
                                                :modifiers '(:control))))
     (is (equal `(drei-commands::com-backward-object
                  ,clim:*numeric-argument-marker*)
@@ -672,12 +693,23 @@
                                                :modifiers '(:meta))))
     (is (equal `(drei-commands::com-backward-kill-word
                  ,clim:*numeric-argument-marker*)
-               (test-command-table-key-command editor-table #\Backspace
+               (test-command-table-key-command compose-table #\Backspace
                                                :modifiers '(:control))))
     (is (equal `(drei-commands::com-backward-delete-object
                  ,clim:*numeric-argument-marker*
                  ,clim:*numeric-argument-marker*)
                (test-command-table-key-command editor-table #\Backspace)))
+    (is-false
+     (test-command-table-key-command editor-table #\Newline
+                                     :modifiers '(:control)))
+    (is-false
+     (test-command-table-key-command editor-table #\Backspace
+                                     :modifiers '(:control)))
+    (is (member 'clawmacs::clawmacs-chat-compose-editing-table
+                (drei-syntax:additional-command-tables compose editor-table)))
+    (is-false
+     (member 'clawmacs::clawmacs-chat-compose-editing-table
+             (drei-syntax:additional-command-tables plain-drei editor-table)))
     (is-true (clawmacs::chat-compose-drei-control-editing-event-p control-j))
     (is-false (clawmacs::chat-compose-encoded-control-character
                plain-backspace))
@@ -689,53 +721,46 @@
     (is (string= (format nil "~%hello world")
                  (clim:gadget-value compose)))
     (setf (clim:gadget-value compose) "hello world")
-    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
+    (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
     (is-true (clawmacs::chat-compose-modified-key-event-p control-b))
     (clawmacs::process-chat-compose-drei-event compose control-b)
     (is (= (1- (length (clim:gadget-value compose)))
-           (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))))
-    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
+           (drei-buffer:offset (drei:point (drei:current-view compose)))))
+    (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
     (is (eql #\b (clawmacs::chat-compose-encoded-control-character
                   encoded-control-b)))
     (is-true (clawmacs::chat-compose-modified-key-event-p encoded-control-b))
     (clawmacs::process-chat-compose-drei-event compose encoded-control-b)
     (is (= (1- (length (clim:gadget-value compose)))
-           (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))))
-    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view))) 0)
+           (drei-buffer:offset (drei:point (drei:current-view compose)))))
+    (setf (drei-buffer:offset (drei:point (drei:current-view compose))) 0)
     (is-true (clawmacs::chat-compose-modified-key-event-p meta-f))
     (clawmacs::process-chat-compose-drei-event compose meta-f)
-    (is (= 5 (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))))
+    (is (= 5 (drei-buffer:offset (drei:point (drei:current-view compose)))))
     (setf (clim:gadget-value compose) "hello world")
-    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
+    (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
     (clawmacs::process-chat-compose-drei-event compose plain-backspace)
     (is (string= "hello worl" (clim:gadget-value compose)))
     (setf (clim:gadget-value compose) "hello world")
-    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
+    (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
     (is-true (clawmacs::chat-compose-drei-control-editing-event-p
               control-backspace))
     (clawmacs::process-chat-compose-drei-event compose control-backspace)
     (is (string= "hello " (clim:gadget-value compose)))
     (setf (clim:gadget-value compose) "hello world")
-    (setf (drei-buffer:offset (drei:point (slot-value compose 'drei::%view)))
+    (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
     (is-true (clawmacs::chat-compose-drei-control-editing-event-p
               control-named-backspace))
     (clawmacs::process-chat-compose-drei-event compose control-named-backspace)
     (is (string= "hello " (clim:gadget-value compose)))))
 
-(test mcclim-kill-items-vector-normalizes-list-kills
-  "The McCLIM kill helper converts list kills into the vector form Edward expects."
-  (let ((items (clawmacs::mcclim-kill-items-vector
-                (list #\b #\u #\t #\t #\o #\n #\Space))))
-    (is (vectorp items))
-    (is (equal "button " (coerce items 'string)))))
-
-(test mcclim-compose-kill-commands-use-vector-kill-ring-items
-  "McCLIM compose word-kill entries can be yanked without list/AREF crashes."
+(test pinned-mcclim-word-kill-can-be-yanked
+  "Pinned McCLIM's Edward word kill/yank works without application overrides."
   (let* ((compose (make-instance 'clim:text-editor-pane :value "button "))
          (buffer (climi::input-editor-buffer compose)))
     (let ((climi::*killring-uses-clipboard* nil))
@@ -821,7 +846,8 @@
 
 (test mcclim-chat-menu-bar-exposes-toolbar-commands
   "The McCLIM chat frame exposes its MVP toolbar through command-table menus."
-  (let* ((menu-table (clawmacs::make-chat-menu-bar-command-table))
+  (let* ((menu-table (clim:find-command-table
+                      'clawmacs::clawmacs-chat-frame))
          (chat-menu (clim:find-menu-item "Chat" menu-table :errorp nil))
          (view-menu (clim:find-menu-item "View" menu-table :errorp nil))
          (skills-menu (clim:find-menu-item "Skills" menu-table :errorp nil))
@@ -850,16 +876,15 @@
         (is (eq 'clawmacs::com-chat-stop-response
                 (menu-command "Stop Response" chat-table)))
         (is (eq 'clawmacs::com-chat-toggle-tool-results
-                (menu-command "✓ Tool Results" view-table)))
+                (menu-command "Toggle Tool Results" view-table)))
         (is (eq 'clawmacs::com-chat-toggle-reasoning-output
-                (menu-command "  Reasoning Output" view-table)))
+                (menu-command "Toggle Reasoning Output" view-table)))
         (is (eq 'clawmacs::com-chat-toggle-metadata-output
-                (menu-command "  Metadata Output" view-table)))
+                (menu-command "Toggle Metadata Output" view-table)))
         (is (eq 'clawmacs::com-chat-toggle-debug-mode
-                (menu-command "  Debug Mode" view-table)))
-        (is (member "No active chat buffer"
-                    (test-command-table-menu-labels effort-table)
-                    :test #'string=))
+                (menu-command "Toggle Debug Mode" view-table)))
+        (is (eq 'clawmacs::com-chat-open-effort-selector
+                (menu-command "Select Think Level..." effort-table)))
         (is (eq 'clawmacs::com-chat-safe-reload
                 (menu-command "Safe Reload" system-table)))
         (is (eq 'clawmacs::com-chat-recurse
@@ -869,6 +894,9 @@
                        clawmacs::com-chat-toggle-reasoning-output
                        clawmacs::com-chat-toggle-metadata-output
                        clawmacs::com-chat-toggle-debug-mode
+                       clawmacs::com-chat-open-skill-selector
+                       clawmacs::com-chat-open-package-dashboard
+                       clawmacs::com-chat-open-effort-selector
                        clawmacs::com-chat-submit-compose
                        clawmacs::com-chat-toggle-skill
                        clawmacs::com-chat-toggle-package
@@ -896,7 +924,8 @@
 
 (test mcclim-chat-system-menu-exposes-recurse-command
   "The McCLIM system menu exposes safe reload and recurse frame commands."
-  (let* ((menu-table (clawmacs::make-chat-menu-bar-command-table))
+  (let* ((menu-table (clim:find-command-table
+                      'clawmacs::clawmacs-chat-frame))
          (system-table (test-chat-menu-submenu menu-table "System")))
     (is (equal '("Safe Reload" "Recurse")
                (test-command-table-menu-labels system-table)))
@@ -907,56 +936,38 @@
             (clim:command-menu-item-value
              (clim:find-menu-item "Recurse" system-table :errorp t))))))
 
-(test mcclim-chat-view-menu-shows-checkmarks-and-refreshes-frame-state
-  "The McCLIM view menu shows checkmarks and refreshes after toggles."
+(test mcclim-chat-view-menu-is-stable-while-commands-toggle-frame-state
+  "View commands mutate state without replacing the live menu gadget tree."
   (let* ((buf (make-buffer "view-toolbar" :agent-name "agent"))
          (frame (clim:make-application-frame
                  'clawmacs::clawmacs-chat-frame
                  :buffer buf)))
     (let ((*debug-mode* nil))
-      (clawmacs::refresh-chat-frame-menu-bar frame)
-      (let ((view-menu (test-chat-menu-submenu
-                        (clim:frame-command-table frame)
-                        "View")))
-        (is (member "✓ Tool Results"
-                    (test-command-table-menu-labels view-menu)
-                    :test #'string=))
-        (is (member "  Reasoning Output"
-                    (test-command-table-menu-labels view-menu)
-                    :test #'string=))
-        (is (member "  Metadata Output"
-                    (test-command-table-menu-labels view-menu)
-                    :test #'string=))
-        (is (member "  Debug Mode"
-                    (test-command-table-menu-labels view-menu)
-                    :test #'string=)))
-      (clawmacs::run-chat-frame-buffer-command
-       frame
-       #'clawmacs::toggle-reasoning-output-command)
-      (clawmacs::run-chat-frame-buffer-command
-       frame
-       #'clawmacs::toggle-metadata-output-command)
-      (clawmacs::run-chat-frame-buffer-command
-       frame
-       #'clawmacs::toggle-debug-mode-command)
-      (let ((view-menu (test-chat-menu-submenu
-                        (clim:frame-command-table frame)
-                        "View")))
-        (is (member "✓ Tool Results"
-                    (test-command-table-menu-labels view-menu)
-                    :test #'string=))
-        (is (member "✓ Reasoning Output"
-                    (test-command-table-menu-labels view-menu)
-                    :test #'string=))
-        (is (member "✓ Metadata Output"
-                    (test-command-table-menu-labels view-menu)
-                    :test #'string=))
-        (is (member "✓ Debug Mode"
-                    (test-command-table-menu-labels view-menu)
-                    :test #'string=))))))
+      (let* ((before (clim:frame-command-table frame))
+             (view-menu (test-chat-menu-submenu before "View"))
+             (labels (test-command-table-menu-labels view-menu)))
+        (is (equal '("Toggle Tool Results"
+                     "Toggle Reasoning Output"
+                     "Toggle Metadata Output"
+                     "Toggle Debug Mode")
+                   labels))
+        (clawmacs::run-chat-frame-buffer-command
+         frame
+         #'clawmacs::toggle-reasoning-output-command)
+        (clawmacs::run-chat-frame-buffer-command
+         frame
+         #'clawmacs::toggle-metadata-output-command)
+        (clawmacs::run-chat-frame-buffer-command
+         frame
+         #'clawmacs::toggle-debug-mode-command)
+        (is (eq before (clim:frame-command-table frame)))
+        (is (equal labels
+                   (test-command-table-menu-labels
+                    (test-chat-menu-submenu
+                     (clim:frame-command-table frame) "View"))))))))
 
-(test mcclim-chat-effort-menu-shows-current-selection-and-updates
-  "The McCLIM effort menu shows the active effort and updates after selection."
+(test mcclim-chat-effort-menu-dispatches-semantic-selector
+  "The stable effort menu delegates changing state to the CLIM minibuffer."
   (with-agent-definition-registry-override ()
     (let* ((buf (make-buffer "effort-toolbar" :agent-name "agent"))
            (frame (clim:make-application-frame
@@ -964,63 +975,42 @@
                    :buffer buf)))
       (set-buffer-provider-override buf :openai-codex)
       (set-buffer-model-override buf "gpt-5.4")
-      (clawmacs::refresh-chat-frame-menu-bar frame)
       (let* ((menu-table (clim:frame-command-table frame))
-             (effort-menu-item (clim:find-menu-item "Effort: default"
-                                                    menu-table
-                                                    :errorp nil))
-             (effort-menu (and effort-menu-item
-                               (clim:command-menu-item-value effort-menu-item))))
+             (effort-menu-item (clim:find-menu-item "Effort"
+                                                    menu-table :errorp nil))
+             (effort-menu (clim:command-menu-item-value effort-menu-item))
+             (selector-item
+               (clim:find-menu-item "Select Think Level..."
+                                    effort-menu :errorp nil)))
         (is (not (null effort-menu-item)))
-        (is (member "✓ default"
-                    (test-command-table-menu-labels effort-menu)
-                    :test #'string=))
-        (is (member "  high"
-                    (test-command-table-menu-labels effort-menu)
-                    :test #'string=)))
+        (is (eq 'clawmacs::com-chat-open-effort-selector
+                (clim:command-menu-item-value selector-item))))
       (clawmacs::select-chat-effort-for-buffer buf "high")
-      (clawmacs::refresh-chat-frame-menu-bar frame)
-      (let* ((menu-table (clim:frame-command-table frame))
-             (effort-menu-item (clim:find-menu-item "Effort: high"
-                                                    menu-table
-                                                    :errorp nil))
-             (effort-menu (and effort-menu-item
-                               (clim:command-menu-item-value effort-menu-item))))
-        (is (string= "high" (buffer-think-level-override buf)))
-        (is (not (null effort-menu-item)))
-        (is (member "✓ high"
-                    (test-command-table-menu-labels effort-menu)
-                    :test #'string=))
-        (is (member "  default"
-                    (test-command-table-menu-labels effort-menu)
-                    :test #'string=))))))
+      (is (string= "high" (buffer-think-level-override buf))))))
 
-(test mcclim-chat-skills-menu-toggles-enabled-state
-  "The McCLIM skills menu shows checkmarks and toggles persisted skill state."
+(test mcclim-chat-skills-menu-opens-selector-and-helper-toggles-state
+  "The stable Skills menu delegates selection while its helper persists state."
   (with-isolated-skills (root)
     (write-demo-skill root :name "demo")
     (register-skill-root root)
     (let* ((buf (make-buffer "skill-toolbar"))
            (skill (first (list-skills :include-disabled t)))
            (key (clawmacs::skill-path-key skill)))
-      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
-        (is (member "✓ demo"
-                    (test-command-table-menu-labels
-                     (test-chat-menu-submenu menu-table "Skills"))
-                    :test #'string=)))
+      (let ((menu-table (clim:find-command-table
+                         'clawmacs::clawmacs-chat-frame)))
+        (let* ((skills (test-chat-menu-submenu menu-table "Skills"))
+               (item (clim:find-menu-item "Toggle Skill..."
+                                          skills :errorp nil)))
+          (is (eq 'clawmacs::com-chat-open-skill-selector
+                  (clim:command-menu-item-value item)))))
       (is-false (clawmacs::toggle-chat-skill-for-buffer buf key))
-      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
-        (is (member "  demo"
-                    (test-command-table-menu-labels
-                     (test-chat-menu-submenu menu-table "Skills"))
-                    :test #'string=)))
       (is-false (skill-enabled-p
                  (clawmacs::find-skill-by-path key :include-disabled t)))
       (is (search "[Skill demo disabled]"
                   (message-text (message-prev (buffer-input-message buf))))))))
 
-(test mcclim-chat-frame-menu-tables-are-frame-local
-  "Each McCLIM chat frame owns package menu state for its own buffer."
+(test mcclim-chat-frames-share-state-independent-menu-table
+  "Frames share the immutable menu table while commands obtain frame state."
   (with-package-state-override ((default-package-test-channels))
     (let* ((enabled-buffer (make-buffer "enabled-package-toolbar"
                                         :agent-name "agent"))
@@ -1032,55 +1022,33 @@
            (default-frame (clim:make-application-frame
                            'clawmacs::clawmacs-chat-frame
                            :buffer default-buffer)))
-      (clawmacs::set-buffer-package-name-enabled enabled-buffer "sexed" t)
-      (clawmacs::refresh-chat-frame-menu-bar enabled-frame)
-      (clawmacs::refresh-chat-frame-menu-bar default-frame)
-      (is (not (eq (clim:frame-command-table enabled-frame)
-                   (clim:frame-command-table default-frame))))
-      (is (member "✓ sexed"
-                  (test-command-table-menu-labels
-                   (test-chat-menu-submenu
-                    (clim:frame-command-table enabled-frame)
-                    "Packages"))
-                  :test #'string=))
-      (is (member "  sexed"
-                  (test-command-table-menu-labels
-                   (test-chat-menu-submenu
-                    (clim:frame-command-table default-frame)
-                    "Packages"))
-                  :test #'string=))
-      (is (member "✓ sexed"
-                  (test-command-table-menu-labels
-                   (test-chat-menu-submenu
-                    (clim:frame-command-table enabled-frame)
-                    "Packages"))
-                  :test #'string=)))))
+      (is (eq (clim:frame-command-table enabled-frame)
+              (clim:frame-command-table default-frame)))
+      (dolist (frame (list enabled-frame default-frame))
+        (let* ((packages (test-chat-menu-submenu
+                          (clim:frame-command-table frame) "Packages"))
+               (item (clim:find-menu-item "Open Package Dashboard..."
+                                          packages :errorp nil)))
+          (is (eq 'clawmacs::com-chat-open-package-dashboard
+                  (clim:command-menu-item-value item))))))))
 
-(test mcclim-chat-packages-menu-toggles-buffer-package-state
-  "The McCLIM packages menu toggles current-buffer package enablement."
+(test mcclim-chat-package-helper-toggles-state-without-changing-menu
+  "Package state changes while the stable menu continues to open its dashboard."
   (with-package-state-override ((default-package-test-channels))
     (let ((buf (make-buffer "package-toolbar" :agent-name "agent")))
-      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
-        (is (member "  sexed"
-                    (test-command-table-menu-labels
-                     (test-chat-menu-submenu menu-table "Packages"))
-                    :test #'string=)))
-      (is-true (clawmacs::toggle-chat-package-for-buffer buf "sexed"))
-      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
-        (is (member "✓ sexed"
-                    (test-command-table-menu-labels
-                     (test-chat-menu-submenu menu-table "Packages"))
-                    :test #'string=)))
-      (is (member "sexed" (buffer-enabled-packages buf) :test #'string=))
-      (is-false (clawmacs::package-enabled-globally-p "sexed"))
-      (is-false (clawmacs::toggle-chat-package-for-buffer buf "sexed"))
-      (let ((menu-table (clawmacs::make-chat-menu-bar-command-table buf)))
-        (is (member "  sexed"
-                    (test-command-table-menu-labels
-                     (test-chat-menu-submenu menu-table "Packages"))
-                    :test #'string=)))
-      (is-false (member "sexed" (buffer-enabled-packages buf)
-                        :test #'string=)))))
+      (let ((menu-table (clim:find-command-table
+                         'clawmacs::clawmacs-chat-frame)))
+        (is-true (clawmacs::toggle-chat-package-for-buffer buf "sexed"))
+        (is (member "sexed" (buffer-enabled-packages buf) :test #'string=))
+        (is-false (clawmacs::package-enabled-globally-p "sexed"))
+        (is-false (clawmacs::toggle-chat-package-for-buffer buf "sexed"))
+        (is-false (member "sexed" (buffer-enabled-packages buf)
+                          :test #'string=))
+        (let* ((packages (test-chat-menu-submenu menu-table "Packages"))
+               (item (clim:find-menu-item "Open Package Dashboard..."
+                                          packages :errorp nil)))
+          (is (eq 'clawmacs::com-chat-open-package-dashboard
+                  (clim:command-menu-item-value item))))))))
 
 (test chat-recurse-launch-spec-uses-current-buffer-state
   "Recurse launch specs inherit the current buffer agent and working directory."
@@ -1182,108 +1150,6 @@
             (symbol-function 'clawmacs::initialize-clawmacs-runtime) original-init
             (symbol-function 'clawmacs::ensure-scratch-buffer) original-scratch))))
 
-(test approval-policy-round-trips-sandbox-and-working-directory-settings
-  "Guard policy JSON persists sandbox and working-directory defaults and overrides."
-  (let ((path (temp-approval-policy-path)))
-    (with-approval-policy-path-override (path)
-      (clawmacs::set-approval-policy-default-sandbox-permission :workspace-write)
-      (clawmacs::set-approval-policy-default-working-directory-permission
-       :workspace)
-      (clawmacs::set-approval-policy-sandbox-permission "write" :full-access)
-      (clawmacs::set-approval-policy-working-directory-permission
-       "write" :project-root)
-      (clawmacs::save-approval-policy)
-      (setf clawmacs::*approval-policy-registry* nil)
-      (clawmacs::load-approval-policy)
-      (is (eq :workspace-write
-              (clawmacs:approval-policy-default-sandbox-permission)))
-      (is (eq :workspace
-              (clawmacs:approval-policy-default-working-directory-permission)))
-      (is (eq :full-access
-              (clawmacs:approval-policy-sandbox-permission "write")))
-      (is (eq :project-root
-              (clawmacs:approval-policy-working-directory-permission "write"))))))
-
-(test approval-policy-project-settings-override-user-settings
-  "Project-local guard settings override user policy for effective sandbox/workdir resolution."
-  (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
-    (clawmacs::register-tool "guard-test-tool"
-                             "Guard test tool"
-                             '((:type . "object"))
-                             :agent-allowed
-                             (lambda (_args)
-                               (declare (ignore _args))
-                               "ok"))
-    (let* ((path (temp-approval-policy-path))
-           (project-root
-             (make-pathname
-              :directory (list :absolute "tmp"
-                               (format nil "clawmacs-guard-project-~A"
-                                       (gensym)))))
-           (buffer (make-buffer "guard-project"
-                                :working-directory project-root)))
-      (with-approval-policy-path-override (path)
-        (clawmacs::set-approval-policy-default-sandbox-permission :read-only)
-        (clawmacs::set-approval-policy-default-working-directory-permission
-         :workspace)
-        (clawmacs::set-approval-policy-default-sandbox-permission
-         :workspace-write
-         :directory project-root)
-        (clawmacs::set-approval-policy-default-working-directory-permission
-         :project-root
-         :directory project-root)
-        (clawmacs::set-approval-policy-sandbox-permission
-         "guard-test-tool" :full-access :directory project-root)
-        (clawmacs::set-approval-policy-working-directory-permission
-         "guard-test-tool" :any :directory project-root)
-        (is (eq :full-access
-                (clawmacs::effective-tool-sandbox-permission
-                 "guard-test-tool" :buffer buffer)))
-        (is (eq :any
-                (clawmacs::effective-tool-working-directory-permission
-                 "guard-test-tool" :buffer buffer)))
-        (is (eq :workspace-write
-                (clawmacs::effective-tool-sandbox-permission
-                 "lisp_eval" :buffer buffer)))
-        (is (eq :project-root
-                (clawmacs::effective-tool-working-directory-permission
-                 "lisp_eval" :buffer buffer)))))))
-
-(test approval-policy-history-is-recorded-and-review-hook-runs
-  "Guard history entries persist and notify approval review hooks."
-  (let ((path (temp-approval-policy-path))
-        (hook-calls nil))
-    (with-approval-policy-path-override (path)
-      (let* ((buffer (make-buffer "guard-history"
-                                  :working-directory
-                                  (uiop:pathname-directory-pathname path)))
-             (*approval-review-hook*
-               (list (lambda (buf tool-name decision policy entry)
-                       (push (list :buffer (and buf (buffer-name buf))
-                                   :tool tool-name
-                                   :decision decision
-                                   :policy policy
-                                   :entry entry)
-                             hook-calls)))))
-        (clawmacs::approval-policy-record-history-entry
-         buffer "write" :approve
-         :policy :agent-with-permission
-         :entry "write allowed")
-        (let ((history (clawmacs:approval-policy-history-entries
-                        :buffer buffer)))
-          (is (plusp (length history)))
-          (is (string= "write"
-                       (cdr (assoc :tool-name (first history)))))
-          (is (string= "approve"
-                       (cdr (assoc :decision (first history)))))
-          (is (string= "write allowed"
-                       (cdr (assoc :entry (first history))))))
-        (is (= 1 (length hook-calls)))
-        (is (equal "guard-history"
-                   (getf (first hook-calls) :buffer)))
-        (is (equal "write" (getf (first hook-calls) :tool)))))))
-
 (test init-tools-hides-lispi-tools-until-package-enabled
   "init-tools exposes built-in core tools without lispi package tools."
   (with-tool-table-restored
@@ -1295,7 +1161,7 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("clawmacs_reload" "lisp_eval" "recovery_list") tool-names))
+      (is (equal '("lisp_eval" "recovery_list") tool-names))
       (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*))))
       (is-false (member "read" tool-names :test #'string=)))))
 
@@ -1308,7 +1174,6 @@
      "User read tool."
      '((:type . "object")
        (:properties . nil))
-     :agent-allowed
      (lambda (args)
        (declare (ignore args))
        "user-read"))
@@ -1319,7 +1184,7 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("clawmacs_reload" "lisp_eval" "read" "recovery_list") tool-names))
+      (is (equal '("lisp_eval" "read" "recovery_list") tool-names))
       (is (string= "user-read"
                    (clawmacs:execute-tool "read" nil))))))
 
@@ -1336,7 +1201,6 @@
      "User read tool."
      '((:type . "object")
        (:properties . nil))
-     :agent-allowed
      (lambda (args)
        (declare (ignore args))
        "user-read"))
@@ -1347,7 +1211,7 @@
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
-      (is (equal '("clawmacs_reload" "lisp_eval" "read" "recovery_list") tool-names))
+      (is (equal '("lisp_eval" "read" "recovery_list") tool-names))
       (is (string= "user-read"
                    (clawmacs:execute-tool "read" nil))))))
 
@@ -1365,7 +1229,6 @@
      "journal_fail"
      "Tool that fails for journaling tests."
      '((:type . "object") (:properties . nil))
-     :agent-allowed
      (lambda (args)
        (declare (ignore args))
        (error "boom from journal_fail")))
@@ -1395,7 +1258,6 @@
      "prompt_journal_fail"
      "Tool that fails in prompt-mode journaling tests."
      '((:type . "object") (:properties . nil))
-     :agent-allowed
      (lambda (args)
        (declare (ignore args))
        (error "prompt boom")))
@@ -1405,7 +1267,7 @@
                        (:name . "prompt_journal_fail")
                        (:input . ((:value . "x"))))))
       (multiple-value-bind (result event)
-          (clawmacs::execute-prompt-tool-call buf tool-use :coder t)
+          (clawmacs::execute-prompt-tool-call buf tool-use :coder)
         (is (search ":error" (cdr (assoc :result result))))
         (is (string= "prompt_journal_fail"
                      (clawmacs:prompt-tool-event-name event))))
@@ -1416,24 +1278,25 @@
         (is (search "prompt boom"
                     (event-value (second events) :condition-message)))))))
 
-(test execute-tool-safely-journals-denied-tool-calls
-  "Denied tool calls are journaled without executing or requiring a definition."
+(test execute-tool-safely-journals-unavailable-tool-calls
+  "Unavailable tool calls are journaled as ordinary execution errors."
   (with-tool-table-restored
     (clrhash clawmacs::*tool-table*)
-    (let* ((buf (make-chat-buffer "tool-journal-denied"))
+    (let* ((buf (make-chat-buffer "tool-journal-unavailable"))
            (*current-caller* :coder)
            (*current-tool-buffer* buf)
            (result (clawmacs::execute-tool-safely
                     "not_registered" '(:value "x")
                     :buffer buf
-                    :tool-id "toolu-denied-1"
-                    :denied-reason "test denied"))
+                    :tool-id "toolu-unavailable-1"))
            (events (tool-execution-test-events buf)))
-      (is (search ":denied" result))
+      (is (search ":error" result))
       (is (= 2 (length events)))
-      (is (string= "denied" (event-value (second events) :status)))
-      (is (string= "test denied" (event-value (second events) :reason)))
-      (is (search "test denied" (event-value (second events) :result))))))
+      (is (string= "error" (event-value (second events) :status)))
+      (is (null (event-value (second events) :reason)))
+      (is (search "Unknown tool"
+                  (event-value (second events) :condition-message)))
+      (is (search "Unknown tool" (event-value (second events) :result))))))
 
 (defun file-checkpoint-test-events (buf)
   "Return durable file-checkpoint events recorded for BUF."
@@ -1517,8 +1380,9 @@
   (with-tool-table-restored
     (initialize-test-tools)
     (let* ((root (temp-package-test-directory "checkpoint-write"))
-           (*sandbox-root* root)
-           (buf (make-chat-buffer "file-checkpoint-write"))
+           (*tool-working-directory* root)
+           (buf (make-chat-buffer "file-checkpoint-write"
+                                  :working-directory root))
            (*current-caller* :coder)
            (*current-tool-buffer* buf)
            (result (clawmacs::execute-tool-safely
@@ -1542,9 +1406,10 @@
   (with-tool-table-restored
     (initialize-test-tools)
     (let* ((root (temp-package-test-directory "checkpoint-edit"))
-           (*sandbox-root* root)
+           (*tool-working-directory* root)
            (target (merge-pathnames "notes.txt" root))
-           (buf (make-chat-buffer "file-checkpoint-edit")))
+           (buf (make-chat-buffer "file-checkpoint-edit"
+                                  :working-directory root)))
       (write-test-file target "hello\n")
       (let* ((*current-caller* :coder)
              (*current-tool-buffer* buf)
@@ -1624,7 +1489,6 @@
      "Custom probe tool."
      '((:type . "object")
        (:properties . ((:payload . ((:type . "string"))))))
-     :agent-allowed
      (lambda (args)
        (declare (ignore args))
        "{\"ok\":true}"))
@@ -1633,19 +1497,19 @@
            (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
-      (is (equal '("clawmacs_reload" "custom_probe" "edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
+      (is (equal '("custom_probe" "edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names))
       (is (not (null (gethash "custom_probe" clawmacs::*tool-table*))))
       (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*)))))))
 
 (test default-file-tools-read-write-edit-plain-text
-  "The default file tools accept Lisp data and mutate sandboxed text files."
+  "The default file tools mutate text relative to the tool working directory."
   (with-tool-table-restored
     (let* ((root (uiop:ensure-directory-pathname
                   (temp-package-test-directory "file-tools")))
            (file (merge-pathnames "nested/demo.txt" root)))
       (ensure-directories-exist (merge-pathnames #P".keep" root))
-      (let ((clawmacs::*sandbox-root* root))
+      (let ((clawmacs::*tool-working-directory* root))
         (initialize-test-tools)
         (let ((write-result
                 (clawmacs:execute-tool
@@ -1697,7 +1561,7 @@ BETA
         (is (string= "reset" (uiop:read-file-string file)))))))
 
 (test default-search-tools-find-files-and-grep-contents
-  "find searches filenames and grep searches file contents inside the sandbox."
+  "find and grep search from the configured tool working directory."
   (with-tool-table-restored
     (let* ((root (uiop:ensure-directory-pathname
                   (temp-package-test-directory "search-tools")))
@@ -1713,7 +1577,7 @@ needle here
 ")
       (write-test-file ignored "needle should not be seen
 ")
-      (let ((clawmacs::*sandbox-root* root))
+      (let ((clawmacs::*tool-working-directory* root))
         (initialize-test-tools)
         (let ((find-result (clawmacs:execute-tool
                             "find"
@@ -1744,7 +1608,7 @@ needle here
                 (temp-package-test-directory "lispi-tools")))
          (file (merge-pathnames "demo.txt" root)))
     (ensure-directories-exist (merge-pathnames #P".keep" root))
-    (let ((lispi:*sandbox-root* root))
+    (let ((lispi:*tool-working-directory* root))
       (is (search "Successfully wrote"
                   (lispi:execute-write
                    '(:path "demo.txt"
@@ -1779,7 +1643,7 @@ TWO"
              (format nil
                      "(list \"(\" #\\) ; ignored )~% #| ignored ) #| nested ( |# |# :ok)")))
       (ensure-directories-exist (merge-pathnames #P".keep" root))
-      (let ((clawmacs::*sandbox-root* root))
+      (let ((clawmacs::*tool-working-directory* root))
         (initialize-test-tools)
         (clawmacs:execute-tool
          "write"
@@ -1817,7 +1681,7 @@ TWO"
       (write-test-file file "same
 same
 ")
-      (let ((clawmacs::*sandbox-root* root))
+      (let ((clawmacs::*tool-working-directory* root))
         (initialize-test-tools)
         (signals error
           (clawmacs:execute-tool
@@ -1843,7 +1707,7 @@ same
   (let* ((root (uiop:ensure-directory-pathname
                 (temp-package-test-directory "shell-exec-fast"))))
     (ensure-directories-exist (merge-pathnames #P".keep" root))
-    (let ((clawmacs::*sandbox-root* root))
+    (let ((clawmacs::*tool-working-directory* root))
       (let* ((result-json
                (clawmacs::execute-shell-exec
                 '((:command . "printf 'hello'")
@@ -1860,7 +1724,7 @@ same
   (let* ((root (uiop:ensure-directory-pathname
                 (temp-package-test-directory "shell-exec-timeout"))))
     (ensure-directories-exist (merge-pathnames #P".keep" root))
-    (let ((clawmacs::*sandbox-root* root))
+    (let ((clawmacs::*tool-working-directory* root))
       (let* ((result-json
                (clawmacs::execute-shell-exec
                 '((:command . "sleep 2")
@@ -1886,7 +1750,7 @@ same
         (let ((prompt (clawmacs::build-system-prompt)))
           (is (search "operating inside clawmacs" prompt))
           (is (search "## Tools" prompt))
-          (is (search "- read: Read the contents of a text file" prompt))
+          (is (search "- read: Read a text file" prompt))
           (is (search "- find: Search for files" prompt))
           (is (search "- grep: Search file contents" prompt))
           (is (search "- write: Create or overwrite a text file" prompt))
@@ -1898,7 +1762,7 @@ same
           (is (search "Prefer provider tools for normal work" prompt))
           (is (search "Use find to locate files by name" prompt))
           (is (search "Use grep to locate literal text" prompt))
-          (is (search "Use `lisp_eval` for testing" prompt))
+          (is (search "provider-driven live evaluation is refused" prompt))
           (is (search "Current date:" prompt))
           (is (search "Current working directory:" prompt))
           (is (search (clawmacs::current-system-prompt-date) prompt))
@@ -2190,27 +2054,23 @@ same
        :description "Demo self-modify skill"
        :contents "---\nname: demo-skill\ndescription: Demo self-modify skill\n---\nUse the DEMO-SKILL marker when this skill is injected.\n")
       (with-agent-defaults-path-override (path)
-        (with-approval-policy-path-override ((temp-approval-policy-path))
-          (let ((clawmacs::*approval-policy-isolation-root*
-                  (temp-package-test-directory
-                   "self-modify-approval-isolation")))
-            (with-pipeline-definition-registry-override ()
-              (let ((clawmacs::*agent-definition-registry*
-                      (make-hash-table :test #'equal))
-                    (clawmacs::*tool-table*
-                      (make-hash-table :test #'equal))
-                    (clawmacs::*agent-tool-metadata-table*
-                      (make-hash-table :test #'eq))
-                    (clawmacs::*agent-tool-name-table*
-                      (make-hash-table :test #'equal))
-                    (clawmacs::*command-table*
-                      (make-hash-table :test #'eq))
-                    (clawmacs::*extended-docs*
-                      (make-hash-table :test #'eq))
-                    (clawmacs::*slash-command-table*
-                      (make-hash-table :test #'equal))
-                    (clawmacs::*compaction-point* nil))
-                (with-package-state-override ((default-package-test-channels))
+        (with-pipeline-definition-registry-override ()
+          (let ((clawmacs::*agent-definition-registry*
+                  (make-hash-table :test #'equal))
+                (clawmacs::*tool-table*
+                  (make-hash-table :test #'equal))
+                (clawmacs::*agent-tool-metadata-table*
+                  (make-hash-table :test #'eq))
+                (clawmacs::*agent-tool-name-table*
+                  (make-hash-table :test #'equal))
+                (clawmacs::*command-table*
+                  (make-hash-table :test #'eq))
+                (clawmacs::*extended-docs*
+                  (make-hash-table :test #'eq))
+                (clawmacs::*slash-command-table*
+                  (make-hash-table :test #'equal))
+                (clawmacs::*compaction-point* nil))
+            (with-package-state-override ((default-package-test-channels))
               (setf responses
                     (list
                      (list :kind :text
@@ -2351,7 +2211,7 @@ same
                                 :test #'char-equal))
                     (is (search (namestring clawmacs::*user-init-file*)
                                 (princ-to-string (getf init-call :messages))
-                                :test #'char-equal))))))))))))))
+                                :test #'char-equal))))))))))))
 
 (test run-pipeline-on-buffer-reports-invalid-route
   "Pipeline route errors are returned as failed pipeline results."
@@ -2393,7 +2253,7 @@ same
                           :test #'char-equal)))))))))
 
 (test send-message-runs-active-buffer-pipeline
-  "Interactive send-message dispatches to a buffer pipeline when one is set."
+  "Interactive send-message applies its managed buffer pipeline on the frame."
   (let ((path (temp-agent-defaults-path))
         (request-payload nil))
     (with-agent-defaults-path-override (path)
@@ -2426,7 +2286,18 @@ same
               (clawmacs:set-buffer-model-override buf "glm-5")
               (clawmacs::set-message-text (buffer-input-message buf)
                                           "hello pipeline")
-              (clawmacs::send-message buf)
+              (let ((operation (clawmacs::send-message buf)))
+                (is-true
+                 (clawmacs::interactive-buffer-operation-p operation))
+                (is-true
+                 (wait-for-llm-test
+                  (lambda ()
+                    (not
+                     (bt:thread-alive-p
+                      (clawmacs::interactive-buffer-operation-worker
+                       operation))))))
+                (is-true
+                 (clawmacs::update-interactive-buffer-operation buf)))
               (is (string= "PIPELINE DONE"
                            (message-text
                             (message-prev (buffer-input-message buf)))))
@@ -2894,9 +2765,10 @@ same
                          (event-value event :sender))
                   :test #'string=))))))
 
-(test send-message-compacts-before-finalizing-current-input
-  "Interactive sending runs pre-send compaction while current input is editable."
+(test send-message-refuses-custom-interactive-compaction-and-continues
+  "Unsafe custom snapshot compaction is refused without losing the user send."
   (let ((buf (make-buffer "compact-send"))
+        (compactor-called-p nil)
         (saw-input nil)
         (saw-read-only nil)
         (sent-p nil))
@@ -2909,16 +2781,26 @@ same
             (clawmacs::*compaction-function*
               (lambda (buffer &key reason)
                 (declare (ignore reason))
-                (setf saw-input (message-text (buffer-input-message buffer))
+                (setf compactor-called-p t
+                      saw-input (message-text (buffer-input-message buffer))
                       saw-read-only (message-read-only-p
                                      (buffer-input-message buffer)))
                 buffer)))
         (clawmacs::send-message buf)))
-    (is (string= "current user request" saw-input))
+    (is-false compactor-called-p)
+    (is (null saw-input))
     (is-false saw-read-only)
     (is-true sent-p)
-    (is (string= "current user request"
-                 (message-text (message-prev (buffer-input-message buf)))))))
+    (let* ((messages (test-buffer-history-messages buf))
+           (user-message
+             (find "current user request" messages
+                   :key #'message-text :test #'string=)))
+      (is-true user-message)
+      (is-true (message-read-only-p user-message))
+      (is (some (lambda (message)
+                  (search "Interactive custom compaction is not supported"
+                          (message-text message)))
+                messages)))))
 
 (test run-single-prompt-compacts-before-provider-request
   "Prompt mode applies compaction before sending provider requests."
@@ -3008,8 +2890,8 @@ same
           (is (= 1 (clawmacs:prompt-run-result-iterations result)))
           (is (null (clawmacs:prompt-run-result-tool-events result))))))))
 
-(test run-single-prompt-executes-lisp-eval-tool-loop
-  "Prompt mode executes lisp_eval tool calls and continues with tool results."
+(test run-single-prompt-refuses-command-only-lisp-eval-and-continues
+  "Prompt mode records a Command-Only refusal and continues the tool loop."
   (let ((path (temp-agent-defaults-path))
         (request-count 0)
         (second-request-messages nil))
@@ -3042,7 +2924,7 @@ same
                                        (make-completed-stream-state-response
                                         "end_turn"
                                         (list (clawmacs::canonical-text-block
-                                               "the result is 5"))
+                                               "live evaluation was refused"))
                                         '(:input-tokens 120
                                           :output-tokens 20
                                           :total-tokens 140
@@ -3059,7 +2941,7 @@ same
                  (event (first events)))
             (is (= 2 request-count))
             (is (= 3 (length second-request-messages)))
-            (is (string= "the result is 5"
+            (is (string= "live evaluation was refused"
                          (clawmacs:prompt-run-result-final-text result)))
             (is (= 2 (clawmacs:prompt-run-result-iterations result)))
             (let ((usage (clawmacs:prompt-run-result-usage result)))
@@ -3078,8 +2960,10 @@ same
                                         json-usage))))))
             (is (= 1 (length events)))
             (is (string= "lisp_eval" (clawmacs:prompt-tool-event-name event)))
-            (is (search "(+ 2 3)" (clawmacs:prompt-tool-event-display event)))
-            (is (search "5" (clawmacs:prompt-tool-event-result-text event)))
+            (is-true (clawmacs:prompt-tool-event-denied-p event))
+            (is (search "REFUSED" (clawmacs:prompt-tool-event-display event)))
+            (is (search "Command-Only"
+                        (clawmacs:prompt-tool-event-result-text event)))
             (let* ((tool-result-message (third second-request-messages))
                    (content (coerce (cdr (assoc :content tool-result-message))
                                     'list))
@@ -3088,7 +2972,8 @@ same
               (is (string= "tool_result" (cdr (assoc :type tool-result))))
               (is (string= "call-1"
                            (cdr (assoc :tool--use--id tool-result))))
-              (is (search "5" (cdr (assoc :content tool-result)))))))))))
+              (is (search "Command-Only"
+                          (cdr (assoc :content tool-result)))))))))))
 
 (test run-session-prompt-reuses-saved-session-context
   "Session prompt mode reloads prior turns before sending the next prompt."
@@ -3271,8 +3156,8 @@ same
               (is (string= "custom answer"
                            (clawmacs:prompt-run-result-final-text result))))))))))
 
-(test run-subagent-uses-agent-tool-allowlist-and-explicit-overrides
-  "Agent tool defaults constrain request tools; explicit subagent tool names override them."
+(test run-subagent-uses-agent-tool-selection-and-explicit-overrides
+  "Agent defaults select request tools; explicit subagent names override them."
   (let ((path (temp-agent-defaults-path))
         (captured-tool-names nil))
     (with-agent-defaults-path-override (path)
@@ -3285,7 +3170,6 @@ same
            "Look up docs."
            '((:type . "object")
              (:properties . ((:query . ((:type . "string"))))))
-           :agent-allowed
            (lambda (args)
              (declare (ignore args))
              "{\"doc\":\"ok\"}"))
@@ -3426,8 +3310,8 @@ same
                      captured-tool-names))
           (is (null (gethash "custom_plist" clawmacs::*tool-table*))))))))
 
-(test run-subagent-records-unallowed-tool-call-as-tool-result-error
-  "A provider cannot execute a tool outside the subagent allowlist."
+(test run-subagent-records-unexposed-tool-call-as-tool-result-error
+  "A provider call outside the selected workflow tool set returns an error."
   (let ((path (temp-agent-defaults-path))
         (request-count 0)
         (second-request-messages nil))
@@ -3440,7 +3324,6 @@ same
          "Look up docs."
          '((:type . "object")
            (:properties . ((:query . ((:type . "string"))))))
-         :agent-allowed
          (lambda (args)
            (declare (ignore args))
            "{\"doc\":\"ok\"}"))
@@ -3449,7 +3332,6 @@ same
          "A tool this subagent must not call."
          '((:type . "object")
            (:properties . ((:payload . ((:type . "string"))))))
-         :agent-allowed
          (lambda (args)
            (declare (ignore args))
            "{\"wrote\":true}"))
@@ -3474,7 +3356,7 @@ same
                                        (make-completed-stream-state-response
                                         "end_turn"
                                         (list (clawmacs::canonical-text-block
-                                               "handled denial"))))))
+                                               "handled unavailable tool"))))))
           (clawmacs::init-default-keymap)
           (let* ((result (clawmacs:run-subagent
                           "Try the wrong tool"
@@ -3493,11 +3375,11 @@ same
             (is (= 1 (length events)))
             (is (string= "write_probe"
                          (clawmacs:prompt-tool-event-name event)))
-            (is (search "not allowed"
+            (is (search "not exposed"
                         (clawmacs:prompt-tool-event-result-text event)))
-            (is (search "not allowed"
+            (is (search "not exposed"
                         (cdr (assoc :content tool-result))))
-            (is (string= "handled denial"
+            (is (string= "handled unavailable tool"
                          (clawmacs:prompt-run-result-final-text result)))))))))
 
 (test run-subagent-async-waits-and-registers-result
@@ -3568,8 +3450,8 @@ same
               (is (search "provider boom"
                           (clawmacs:subagent-error handle))))))))))
 
-(test cancel-subagent-is-cooperative-and-stable
-  "Cancelled handles stay cancelled even if the background provider returns."
+(test cancel-subagent-closes-stream-and-settles-worker
+  "Cancellation settles only after the provider worker has unwound."
   (let ((path (temp-agent-defaults-path)))
     (with-agent-defaults-path-override (path)
       (with-subagent-registry-override ()
@@ -3593,13 +3475,50 @@ same
                          :model "glm-5")))
             (is (eq :running (clawmacs:subagent-status handle)))
             (clawmacs:cancel-subagent handle)
+            (is (member (clawmacs:subagent-status handle)
+                        '(:cancelling :cancelled)))
             (multiple-value-bind (result status)
                 (clawmacs:wait-subagent handle :timeout 1)
               (is (null result))
               (is (eq :cancelled status)))
-            (sleep 0.2)
             (is (eq :cancelled (clawmacs:subagent-status handle)))
+            (is (clawmacs:subagent-done-p handle))
+            (is (getf (clawmacs:subagent-snapshot handle)
+                      :worker-finished-p))
             (is (null (clawmacs:subagent-result handle)))))))))
+
+(test cancel-subagent-cancels-active-provider-stream
+  "An active stream is closed and no assistant/tool work is committed after cancel."
+  (let ((path (temp-agent-defaults-path))
+        (state nil))
+    (with-agent-defaults-path-override (path)
+      (with-subagent-registry-override ()
+        (with-function-override (clawmacs::provider-request-streaming
+                                 (provider messages callback
+                                           &key model max-tokens tools
+                                           reasoning-effort system-prompt)
+                                 (declare (ignore provider messages callback model
+                                                  max-tokens tools
+                                                  reasoning-effort system-prompt))
+                                 (setf state (clawmacs::make-stream-state)))
+          (clawmacs::init-default-keymap)
+          (initialize-test-tools)
+          (let ((handle (clawmacs:run-subagent-async
+                         "Cancel active stream"
+                         :provider :zai
+                         :model "glm-5")))
+            (loop :repeat 200
+                  :until (clawmacs::subagent-handle-current-stream-state handle)
+                  :do (sleep 0.005))
+            (is (eq state
+                    (clawmacs::subagent-handle-current-stream-state handle)))
+            (clawmacs:cancel-subagent handle)
+            (multiple-value-bind (result status)
+                (clawmacs:wait-subagent handle :timeout 2 :poll-interval 0.005)
+              (is (null result))
+              (is (eq :cancelled status)))
+            (is-true (clawmacs::stream-state-cancel-requested-p-safe state))
+            (is (clawmacs:subagent-done-p handle))))))))
 
 (test prompt-run-tool-verification-helpers
   "Parent agents can check tool usage without parsing raw events."
@@ -3744,7 +3663,9 @@ same
                 (is (string= "lisp_eval"
                              (clawmacs:prompt-tool-event-name
                               (first events))))
-                (is (search "2"
+                (is-true
+                 (clawmacs:prompt-tool-event-denied-p (first events)))
+                (is (search "Command-Only"
                             (clawmacs:prompt-tool-event-result-text
                              (first events))))))))))))
 
@@ -4407,6 +4328,10 @@ same
     (is-true (clawmacs::stop-streaming-response buf))
     (is (null (buffer-pending-stream buf)))
     (is (null (buffer-streaming-message buf)))
+    (is (eq :cancelling (buffer-status buf)))
+    (is-false (search "[Stopped by user]" (message-text msg)))
+    (is-true
+     (clawmacs::deliver-buffer-runtime-stopped-notification buf))
     (is (eq :idle (buffer-status buf)))
     (is (search "[Stopped by user]" (message-text msg)))
     (is (string= "partial answer"
@@ -4444,6 +4369,9 @@ same
           (buffer-streaming-message buf) msg
           (buffer-status buf) :thinking)
     (is-true (clawmacs::stop-streaming-response buf))
+    (is (eq :agent (message-sender msg)))
+    (is-true
+     (clawmacs::deliver-buffer-runtime-stopped-notification buf))
     (is (eq :system (message-sender msg)))
     (is (null (message-raw-content msg)))
     (is (string= "[Response stopped by user]" (message-text msg)))
@@ -4458,6 +4386,187 @@ same
       (is (string= "SYSTEM" (event-value event :sender)))
       (is (string= "[Response stopped by user]"
                    (event-value event :text))))))
+
+(test terminal-stream-retains-buffer-owner-until-reader-cleanup-settles
+  "DONE publication cannot expose idle state or live reload before reader exit."
+  (let* ((buf (make-buffer "stream-terminal-cleanup-barrier"
+                           :agent-name "agent"
+                           :session-persistence-mode :ephemeral))
+         (msg (buffer-insert-agent-message buf "" :record-p nil))
+         (callback-entered
+           (bt:make-semaphore :name "stream-terminal-callback-entered"))
+         (callback-release
+           (bt:make-semaphore :name "stream-terminal-callback-release"))
+         (settled-wake
+           (bt:make-semaphore :name "stream-terminal-settled-wake"))
+         (applied
+           (bt:make-semaphore :name "stream-terminal-applied"))
+         (state
+           (clawmacs::make-stream-state
+            :callback
+            (lambda (ignored-state)
+              (declare (ignore ignored-state))
+              (bt:signal-semaphore callback-entered)
+              (bt:wait-on-semaphore callback-release :timeout 5))))
+         (pump nil)
+         (automatic-result :not-run)
+         (preflight-called-p nil)
+         (clawmacs::*runtime-settlement-notify-function*
+           (lambda (changed-buffer reason)
+             (declare (ignore changed-buffer))
+             (when (eq reason :stream-settled)
+               (bt:signal-semaphore settled-wake)))))
+    (with-safe-reload-quiescent-process (buf)
+      (unwind-protect
+           (progn
+             (setf (buffer-pending-stream buf) state
+                   (buffer-streaming-message buf) msg
+                   (buffer-status buf) :thinking)
+             (clawmacs::start-stream-state-reader-worker
+              state
+              (clawmacs::stream-state-callback state)
+              "test-terminal-stream-cleanup-barrier"
+              (lambda (worker-state)
+                (bt:with-lock-held
+                    ((clawmacs::stream-state-lock worker-state))
+                  (setf (clawmacs::stream-state-content-blocks worker-state)
+                        (list (clawmacs::canonical-text-block "settled"))
+                        (clawmacs::stream-state-stop-reason worker-state)
+                        "end_turn"))))
+             (is-true
+              (bt:wait-on-semaphore callback-entered :timeout 2))
+             (is-true
+              (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                (clawmacs::stream-state-done-p state)))
+             (setf pump
+                   (bt:make-thread
+                    (lambda ()
+                      (when (bt:wait-on-semaphore settled-wake :timeout 5)
+                        (setf automatic-result
+                              (clawmacs::update-streaming-response buf)))
+                      (bt:signal-semaphore applied))
+                    :name "simulated-clim-stream-event-pump"))
+             ;; The first update installs the joiner and returns immediately.
+             (is-true (clawmacs::update-streaming-response buf))
+             (is (eq state (buffer-pending-stream buf)))
+             (is (eq :thinking (buffer-status buf)))
+             (is-true
+              (bt:thread-alive-p
+               (clawmacs::stream-state-reader-thread state)))
+             (with-safe-reload-test-runners
+                 ((lambda (&key timeout source-root)
+                    (declare (ignore timeout source-root))
+                    (setf preflight-called-p t)
+                    (safe-reload-test-result :ok "Must not run."))
+                  (lambda (&key buffer source-root)
+                    (declare (ignore buffer source-root))
+                    (safe-reload-test-result :ok "Must not run.")))
+               (let ((result (clawmacs:clawmacs-safe-reload
+                              :buffer buf :notify-p nil)))
+                 (is (eq :refused
+                         (clawmacs::safe-reload-result-status result)))
+                 (is-false preflight-called-p)))
+             (bt:signal-semaphore callback-release)
+             ;; The joiner supplies the only retry wake.
+             (is-true (bt:wait-on-semaphore applied :timeout 3))
+             (bt:join-thread pump)
+             (setf pump nil)
+             (is-false automatic-result)
+             (is (null (buffer-pending-stream buf)))
+             (is (null (clawmacs::stream-state-reader-thread state)))
+             (is (null
+                  (clawmacs::stream-state-reader-settlement-thread state)))
+             (is (eq :idle (buffer-status buf)))
+             (is (string= "settled" (message-text msg))))
+        (bt:signal-semaphore callback-release)
+        (bt:signal-semaphore settled-wake)
+        (when pump
+          (bt:join-thread pump))
+        (clawmacs::settle-stream-state-reader state)))))
+
+(test stopped-stream-retains-buffer-owner-until-reader-cleanup-settles
+  "Stop transfers ownership to teardown without admitting work before exit."
+  (let* ((buf (make-buffer "stream-stop-cleanup-barrier"
+                           :agent-name "agent"
+                           :session-persistence-mode :ephemeral))
+         (msg (buffer-insert-agent-message buf "" :record-p nil))
+         (reader-entered
+           (bt:make-semaphore :name "stream-stop-reader-entered"))
+         (cleanup-entered
+           (bt:make-semaphore :name "stream-stop-cleanup-entered"))
+         (cleanup-release
+           (bt:make-semaphore :name "stream-stop-cleanup-release"))
+         (state (clawmacs::make-stream-state))
+         (preflight-called-p nil))
+    (with-safe-reload-quiescent-process (buf)
+      (unwind-protect
+           (progn
+             (setf (buffer-pending-stream buf) state
+                   (buffer-streaming-message buf) msg
+                   (buffer-status buf) :thinking)
+             (clawmacs::start-stream-state-reader-worker
+              state nil "test-stopped-stream-cleanup-barrier"
+              (lambda (worker-state)
+                (bt:signal-semaphore reader-entered)
+                (loop :until
+                        (clawmacs::stream-state-cancel-requested-p-safe
+                         worker-state)
+                      :do (sleep 0.002))
+                (bt:signal-semaphore cleanup-entered)
+                (bt:wait-on-semaphore cleanup-release :timeout 5)))
+             (is-true (bt:wait-on-semaphore reader-entered :timeout 2))
+             (is-true (clawmacs::stop-streaming-response buf))
+             (is-true (bt:wait-on-semaphore cleanup-entered :timeout 2))
+             ;; Stop detaches the public owner atomically; the teardown retains
+             ;; the exact stream until its reader exits.
+             (is (null (buffer-pending-stream buf)))
+             (is (null (buffer-streaming-message buf)))
+             (is (eq :cancelling (buffer-status buf)))
+             (is-true (clawmacs::buffer-runtime-stopping-p buf))
+             (is-true (clawmacs::buffer-runtime-teardown buf))
+             (is-true
+              (bt:thread-alive-p
+               (clawmacs::stream-state-reader-thread state)))
+             (is-false (search "stopped by user"
+                               (message-text msg) :test #'char-equal))
+             (with-safe-reload-test-runners
+                 ((lambda (&key timeout source-root)
+                    (declare (ignore timeout source-root))
+                    (setf preflight-called-p t)
+                    (safe-reload-test-result :ok "Must not run."))
+                  (lambda (&key buffer source-root)
+                    (declare (ignore buffer source-root))
+                    (safe-reload-test-result :ok "Must not run.")))
+               (let ((result (clawmacs:clawmacs-safe-reload
+                              :buffer buf :notify-p nil)))
+                 (is (eq :refused
+                         (clawmacs::safe-reload-result-status result)))
+                 (is-false preflight-called-p)))
+             ;; No frame polling or join is needed after ownership transfers.
+             (is-false (clawmacs::update-streaming-response buf))
+             (bt:signal-semaphore cleanup-release)
+             (loop :repeat 400
+                   :until
+                   (let ((teardown
+                           (clawmacs::buffer-runtime-teardown buf)))
+                     (and teardown
+                          (clawmacs::buffer-runtime-teardown-frame-delivery-p
+                           teardown)))
+                   :do (sleep 0.005))
+             (is (null (buffer-pending-stream buf)))
+             (is (null (clawmacs::stream-state-reader-thread state)))
+             (is (null
+                  (clawmacs::stream-state-reader-settlement-thread state)))
+             (is (eq :cancelling (buffer-status buf)))
+             (is-false (search "stopped by user"
+                               (message-text msg) :test #'char-equal))
+             (is-true
+              (clawmacs::deliver-buffer-runtime-stopped-notification buf))
+             (is (eq :idle (buffer-status buf)))
+             (is (search "stopped by user"
+                         (message-text msg) :test #'char-equal)))
+        (bt:signal-semaphore cleanup-release)
+        (clawmacs::settle-stream-state-reader state)))))
 
 (test handle-key-event-escape-stops-active-stream
   "Esc dispatches to the stop command while a stream is active."
@@ -4474,6 +4583,9 @@ same
     (is (eq :redraw
             (clawmacs::handle-key-event buf #\Esc)))
     (is (null (buffer-pending-stream buf)))
+    (is-false (search "[Stopped by user]" (message-text msg)))
+    (is-true
+     (clawmacs::deliver-buffer-runtime-stopped-notification buf))
     (is (search "[Stopped by user]" (message-text msg)))))
 
 (test insert-tool-results-message-records-raw-content
@@ -4732,6 +4844,53 @@ same
             (is (equal '("Bearer expired-token" "Bearer fresh-token")
                        (nreverse captured-authz)))))))))
 
+(test openai-codex-streaming-refresh-closes-rejected-response-body
+  "A refreshable streaming 401 retires its body before opening the retry."
+  (let* ((rejected-body
+           (make-instance 'controlled-character-input-stream
+                          :contents "unauthorized"))
+         (accepted-body
+           (make-instance 'controlled-character-input-stream
+                          :contents "data: [DONE]"))
+         (expired-auth
+           '(:source :codex-chatgpt
+             :mode :chatgpt
+             :token "expired-token"
+             :base-url "https://chatgpt.com/backend-api/codex"
+             :account-id "acct_123"
+             :refreshable-p t))
+         (fresh-auth
+           '(:source :codex-chatgpt
+             :mode :chatgpt
+             :token "fresh-token"
+             :base-url "https://chatgpt.com/backend-api/codex"
+             :account-id "acct_123"
+             :refreshable-p t))
+         (calls 0))
+    (unwind-protect
+         (with-function-override
+             (clawmacs::refresh-openai-codex-auth-descriptor () fresh-auth)
+           (with-function-override (drakma:http-request (&rest args)
+                                     (declare (ignore args))
+                                     (incf calls)
+                                     (if (= calls 1)
+                                         (values rejected-body 401 nil)
+                                         (values accepted-body 200 nil)))
+             (multiple-value-bind (body status ignored effective-auth)
+                 (clawmacs::openai-codex-http-request
+                  expired-auth "{}" :stream t)
+               (declare (ignore ignored))
+               (is (eq accepted-body body))
+               (is (= 200 status))
+               (is (eq fresh-auth effective-auth))
+               (is (= 2 calls))
+               (is (= 1 (controlled-stream-close-count rejected-body)))
+               (is (= 0 (controlled-stream-close-count accepted-body))))))
+      (unless (controlled-stream-closed-p rejected-body)
+        (close rejected-body :abort t))
+      (unless (controlled-stream-closed-p accepted-body)
+        (close accepted-body :abort t)))))
+
 (test openai-codex-request-retries-transient-503-with-backoff
   "OpenAI Codex retries transient 503 responses before failing the request."
   (let ((calls 0)
@@ -4797,6 +4956,58 @@ same
     (is (= 2 calls))
     (is (equal '(2) (nreverse sleeps)))))
 
+(test provider-http-retry-after-is-capped
+  "A provider cannot force a retry sleep beyond the configured maximum."
+  (let ((calls 0)
+        (sleeps nil))
+    (let ((clawmacs::*provider-http-max-retries* 1)
+          (clawmacs::*provider-http-max-backoff-seconds* 1.25)
+          (clawmacs::*provider-http-sleep-function*
+            (lambda (seconds)
+              (push seconds sleeps))))
+      (multiple-value-bind (body status)
+          (clawmacs::provider-http-request-with-retries
+           "retry-after-cap-test"
+           (lambda ()
+             (incf calls)
+             (if (= calls 1)
+                 (values "busy" 503 '(("Retry-After" . "600")))
+                 (values "ok" 200 nil))))
+        (is (string= "ok" body))
+        (is (= 200 status)))
+      (is (= 2 calls))
+      (is (equal '(1.25) (nreverse sleeps))))))
+
+(test provider-http-retry-backoff-is-cooperatively-cancellable
+  "Cancellation wakes the default backoff sleeper without another request."
+  (let ((entered (bt:make-semaphore :name "provider-backoff-entered"))
+        (cancel-p nil)
+        (calls 0)
+        (result :unset)
+        (clawmacs::*provider-http-max-retries* 3)
+        (clawmacs::*provider-http-initial-backoff-seconds* 5.0)
+        (clawmacs::*provider-http-max-backoff-seconds* 5.0)
+        (clawmacs::*provider-http-cancel-poll-seconds* 0.01)
+        (clawmacs::*provider-http-sleep-function* #'sleep))
+    (let ((worker
+            (bt:make-thread
+             (lambda ()
+               (setf result
+                     (multiple-value-list
+                      (clawmacs::provider-http-request-with-retries
+                       "cancel-backoff-test"
+                       (lambda ()
+                         (incf calls)
+                         (bt:signal-semaphore entered)
+                         (error "transient connect failure"))
+                       :cancel-p (lambda () cancel-p)))))
+             :name "provider-backoff-cancel-test")))
+      (is-true (bt:wait-on-semaphore entered :timeout 2.0))
+      (setf cancel-p t)
+      (bt:join-thread worker)
+      (is (= 1 calls))
+      (is (equal '(nil nil nil) result)))))
+
 (test openai-codex-request-does-not-retry-client-errors
   "Non-transient HTTP errors are returned to the provider-specific handler."
   (let ((calls 0)
@@ -4855,6 +5066,7 @@ same
 (test openai-codex-streaming-normalizes-response-shape
   "OpenAI Codex streaming adapter accumulates Responses output deltas."
   (let ((captured-force-binary nil)
+        (captured-connection-timeout nil)
         (payloads '("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi from \"}"
                     ""
                     "data: {\"type\":\"response.output_text.delta\",\"delta\":\"codex\"}"
@@ -4862,7 +5074,10 @@ same
                     "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}"
                     "")))
     (with-function-override (drakma:http-request (&rest args)
-                              (setf captured-force-binary (getf (rest args) :force-binary))
+                              (setf captured-force-binary
+                                    (getf (rest args) :force-binary)
+                                    captured-connection-timeout
+                                    (getf (rest args) :connection-timeout))
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
@@ -4880,6 +5095,8 @@ same
                         (clawmacs::stream-state-done-p state))
                 do (sleep 0.01))
           (is-true captured-force-binary)
+          (is (= clawmacs::*provider-http-connection-timeout-seconds*
+                 captured-connection-timeout))
           (is (string= "end_turn"
                        (bt:with-lock-held ((clawmacs::stream-state-lock state))
                          (clawmacs::stream-state-stop-reason state))))
@@ -5396,6 +5613,390 @@ same
               (is (string= "final-refresh" (getf saved :refresh-token)))
               (is (string= "acct_789" (getf saved :account-id)))
               (is (string= "sk-exchanged" (getf saved :openai-api-key))))))))))
+
+#+sbcl
+(test openai-oauth-start-failure-releases-listener
+  "A PKCE/start failure cannot leak the listener bound before it."
+  (let ((captured-port nil)
+        (original-bind
+          (symbol-function 'clawmacs::bind-openai-oauth-listener)))
+    (with-function-override
+        (clawmacs::bind-openai-oauth-listener
+            (&optional (preferred-port clawmacs::*openai-oauth-default-port*))
+          (multiple-value-bind (listener port)
+              (funcall original-bind preferred-port)
+            (setf captured-port port)
+            (values listener port)))
+      (with-function-override
+          (clawmacs::openai-codex-oauth-start (&key redirect-uri)
+            (declare (ignore redirect-uri))
+            (error "injected PKCE construction failure"))
+        (signals error
+          (clawmacs::start-openai-codex-oauth-login
+           :open-browser-p nil))))
+    (is-true captured-port)
+    (multiple-value-bind (listener rebound-port)
+        (clawmacs::bind-openai-oauth-listener captured-port)
+      (unwind-protect
+           (is (= captured-port rebound-port))
+        (ignore-errors
+          (sb-bsd-sockets:socket-close listener))))))
+
+#+sbcl
+(test openai-oauth-thread-constructor-failure-releases-listener
+  "A thread-constructor failure leaves no orphan callback listener."
+  (let ((captured-port nil)
+        (original-bind
+          (symbol-function 'clawmacs::bind-openai-oauth-listener)))
+    (with-function-override
+        (clawmacs::bind-openai-oauth-listener
+            (&optional (preferred-port clawmacs::*openai-oauth-default-port*))
+          (multiple-value-bind (listener port)
+              (funcall original-bind preferred-port)
+            (setf captured-port port)
+            (values listener port)))
+      (signals error
+        (clawmacs::start-openai-codex-oauth-login
+         :open-browser-p nil
+         :thread-constructor
+         (lambda (&rest arguments)
+           (declare (ignore arguments))
+           (error "injected thread construction failure")))))
+    (is-true captured-port)
+    (multiple-value-bind (listener rebound-port)
+        (clawmacs::bind-openai-oauth-listener captured-port)
+      (unwind-protect
+           (is (= captured-port rebound-port))
+        (ignore-errors
+          (sb-bsd-sockets:socket-close listener))))))
+
+#+sbcl
+(defun openai-oauth-test-http-request (port method target)
+  "Send one complete localhost HTTP request and return the complete response."
+  (let ((socket nil)
+        (stream nil))
+    (unwind-protect
+         (progn
+           (setf socket
+                 (make-instance 'sb-bsd-sockets:inet-socket
+                                :type :stream
+                                :protocol :tcp))
+           (sb-bsd-sockets:socket-connect socket #(127 0 0 1) port)
+           (setf stream
+                 (sb-bsd-sockets:socket-make-stream
+                  socket
+                  :input t
+                  :output t
+                  :element-type 'character
+                  :external-format :utf-8
+                  :buffering :line))
+           (format stream
+                   "~A ~A HTTP/1.1~C~CHost: localhost~C~CConnection: close~C~C~C~C"
+                   method target
+                   #\Return #\Linefeed
+                   #\Return #\Linefeed
+                   #\Return #\Linefeed
+                   #\Return #\Linefeed)
+           (finish-output stream)
+           (with-output-to-string (response)
+             (loop :for character := (read-char stream nil nil)
+                   :while character
+                   :do (write-char character response))))
+      (when stream
+        (ignore-errors
+          (close stream :abort t)))
+      (when socket
+        (ignore-errors
+          (sb-bsd-sockets:socket-close socket))))))
+
+#+sbcl
+(defun wait-for-openai-oauth-test-worker (worker)
+  "Wait boundedly for WORKER and join it when it exits."
+  (loop :repeat 400
+        :while (bt:thread-alive-p worker)
+        :do (sleep 0.005))
+  (unless (bt:thread-alive-p worker)
+    (bt:join-thread worker))
+  (not (bt:thread-alive-p worker)))
+
+#+sbcl
+(defun openai-oauth-test-port-released-p (port)
+  "Return true when a fresh listener can reclaim PORT."
+  (multiple-value-bind (listener rebound-port)
+      (clawmacs::bind-openai-oauth-listener port)
+    (unwind-protect
+         (= port rebound-port)
+      (ignore-errors
+        (sb-bsd-sockets:socket-close listener)))))
+
+#+sbcl
+(defun run-openai-oauth-rejection-then-success-test (method target)
+  "Return evidence that one rejected request does not retire the OAuth worker."
+  (let ((flow nil)
+        (worker nil)
+        (port nil)
+        (callback-url nil)
+        (code-verifier nil)
+        (expected-state nil))
+    (with-function-override
+        (clawmacs::openai-codex-oauth-start (&key redirect-uri)
+          (values (format nil "https://auth.invalid/?redirect=~A" redirect-uri)
+                  "test-verifier"
+                  "test-state"))
+      (with-function-override
+          (clawmacs::openai-codex-oauth-finish
+              (url verifier state &key redirect-uri)
+            (declare (ignore redirect-uri))
+            (setf callback-url url
+                  code-verifier verifier
+                  expected-state state)
+            "test-access-token")
+        (unwind-protect
+             (progn
+               (setf flow
+                     (clawmacs::start-openai-codex-oauth-login
+                      :open-browser-p nil)
+                     worker (clawmacs::openai-oauth-flow-thread-snapshot flow)
+                     port (clawmacs::openai-oauth-flow-port flow))
+               (let* ((rejection-response
+                        (openai-oauth-test-http-request port method target))
+                      (after-rejection
+                        (clawmacs::openai-oauth-flow-snapshot flow))
+                      (worker-alive-after-rejection-p
+                        (bt:thread-alive-p worker))
+                      (success-response
+                        (openai-oauth-test-http-request
+                         port
+                         "GET"
+                         "/auth/callback?code=test-code&state=test-state"))
+                      (worker-exited-p
+                        (wait-for-openai-oauth-test-worker worker))
+                      (final-snapshot
+                        (clawmacs::openai-oauth-flow-snapshot flow)))
+                 (list :rejection-response rejection-response
+                       :after-rejection after-rejection
+                       :worker-alive-after-rejection-p
+                       worker-alive-after-rejection-p
+                       :success-response success-response
+                       :worker-exited-p worker-exited-p
+                       :final-snapshot final-snapshot
+                       :callback-url callback-url
+                       :code-verifier code-verifier
+                       :expected-state expected-state
+                       :port-released-p
+                       (and worker-exited-p
+                            (openai-oauth-test-port-released-p port)))))
+          (when (and flow worker (bt:thread-alive-p worker))
+            (clawmacs::cancel-openai-codex-oauth-login flow)
+            (wait-for-openai-oauth-test-worker worker)))))))
+
+#+sbcl
+(test openai-oauth-wrong-method-does-not-retire-listener
+  "A rejected HTTP method can be followed by the real OAuth callback."
+  (let* ((evidence
+           (run-openai-oauth-rejection-then-success-test
+            "POST"
+            "/auth/callback?code=ignored&state=test-state"))
+         (final-snapshot (getf evidence :final-snapshot)))
+    (is (search "405 Method Not Allowed"
+                (getf evidence :rejection-response)))
+    (is-false (getf (getf evidence :after-rejection) :done-p))
+    (is-true (getf evidence :worker-alive-after-rejection-p))
+    (is (search "200 OK" (getf evidence :success-response)))
+    (is-true (getf evidence :worker-exited-p))
+    (is-true (getf final-snapshot :done-p))
+    (is-true (getf final-snapshot :success-p))
+    (is (string= "test-access-token" (getf final-snapshot :token)))
+    (is (search "code=test-code&state=test-state"
+                (getf evidence :callback-url)))
+    (is (string= "test-verifier" (getf evidence :code-verifier)))
+    (is (string= "test-state" (getf evidence :expected-state)))
+    (is-true (getf evidence :port-released-p))))
+
+#+sbcl
+(test openai-oauth-wrong-path-does-not-retire-listener
+  "A rejected callback path can be followed by the real OAuth callback."
+  (let* ((evidence
+           (run-openai-oauth-rejection-then-success-test
+            "GET"
+            "/favicon.ico"))
+         (final-snapshot (getf evidence :final-snapshot)))
+    (is (search "404 Not Found" (getf evidence :rejection-response)))
+    (is-false (getf (getf evidence :after-rejection) :done-p))
+    (is-true (getf evidence :worker-alive-after-rejection-p))
+    (is (search "200 OK" (getf evidence :success-response)))
+    (is-true (getf evidence :worker-exited-p))
+    (is-true (getf final-snapshot :done-p))
+    (is-true (getf final-snapshot :success-p))
+    (is-true (getf evidence :port-released-p))))
+
+#+sbcl
+(test openai-oauth-rejection-budget-fails-and-releases-listener
+  "Repeated invalid requests terminate the bounded callback worker cleanly."
+  (let ((flow nil)
+        (worker nil)
+        (port nil))
+    (with-function-override
+        (clawmacs::openai-codex-oauth-start (&key redirect-uri)
+          (values (format nil "https://auth.invalid/?redirect=~A" redirect-uri)
+                  "test-verifier"
+                  "test-state"))
+      (unwind-protect
+           (progn
+             (setf flow
+                   (clawmacs::start-openai-codex-oauth-login
+                    :open-browser-p nil)
+                   worker (clawmacs::openai-oauth-flow-thread-snapshot flow)
+                   port (clawmacs::openai-oauth-flow-port flow))
+             (loop :repeat clawmacs::*openai-oauth-max-rejected-callback-requests*
+                   :for response :=
+                     (openai-oauth-test-http-request port "GET" "/favicon.ico")
+                   :do (is (search "404 Not Found" response)))
+             (is-true (wait-for-openai-oauth-test-worker worker))
+             (let ((snapshot (clawmacs::openai-oauth-flow-snapshot flow)))
+               (is-true (getf snapshot :done-p))
+               (is-false (getf snapshot :success-p))
+               (is (search "Too many rejected"
+                           (getf snapshot :error))))
+             (is-true (openai-oauth-test-port-released-p port)))
+        (when (and flow worker (bt:thread-alive-p worker))
+          (clawmacs::cancel-openai-codex-oauth-login flow)
+          (wait-for-openai-oauth-test-worker worker))))))
+
+#+sbcl
+(test cancelling-openai-oauth-partial-request-interrupts-client
+  "Cancellation closes an accepted client blocked on an incomplete header."
+  (let* ((flow (clawmacs::start-openai-codex-oauth-login
+                :open-browser-p nil))
+         (port (clawmacs::openai-oauth-flow-port flow))
+         (worker (clawmacs::openai-oauth-flow-thread-snapshot flow))
+         (client-socket nil)
+         (client-stream nil))
+    (unwind-protect
+         (progn
+           (setf client-socket
+                 (make-instance 'sb-bsd-sockets:inet-socket
+                                :type :stream
+                                :protocol :tcp))
+           (sb-bsd-sockets:socket-connect
+            client-socket #(127 0 0 1) port)
+           (setf client-stream
+                 (sb-bsd-sockets:socket-make-stream
+                  client-socket
+                  :input t
+                  :output t
+                  :element-type 'character
+                  :external-format :utf-8
+                  :buffering :line))
+           ;; Supply a request line and one header, but no terminating blank
+           ;; line.  The server must be blocked in its header read when active.
+           (format client-stream
+                   "GET /auth/callback?code=x&state=y HTTP/1.1~C~CHost: localhost~C~C"
+                   #\Return #\Linefeed #\Return #\Linefeed)
+           (finish-output client-stream)
+           (loop :repeat 400
+                 :until (getf (clawmacs::openai-oauth-flow-snapshot flow)
+                              :client-active-p)
+                 :do (sleep 0.005))
+           (is-true
+            (getf (clawmacs::openai-oauth-flow-snapshot flow)
+                  :client-active-p))
+           (multiple-value-bind (cancelled-flow cancelled-now-p)
+               (clawmacs::cancel-openai-codex-oauth-login flow)
+             (is (eq flow cancelled-flow))
+             (is-true cancelled-now-p))
+           (loop :repeat 400
+                 :while (bt:thread-alive-p worker)
+                 :do (sleep 0.005))
+           (is-false (bt:thread-alive-p worker))
+           (unless (bt:thread-alive-p worker)
+             (bt:join-thread worker))
+           (let ((snapshot (clawmacs::openai-oauth-flow-snapshot flow)))
+             (is-true (getf snapshot :cancelled-p))
+             (is-false (getf snapshot :client-active-p))))
+      (when client-stream
+        (ignore-errors
+          (close client-stream :abort t)))
+      (when client-socket
+        (ignore-errors
+          (sb-bsd-sockets:socket-close client-socket)))
+      (when (and worker (bt:thread-alive-p worker))
+        (clawmacs::cancel-openai-codex-oauth-login flow)
+        (loop :repeat 400
+              :while (bt:thread-alive-p worker)
+              :do (sleep 0.005)))
+      (when (and worker (not (bt:thread-alive-p worker)))
+        (bt:join-thread worker)))))
+
+(test stale-openai-oauth-snapshot-cannot-mutate-buffer
+  "A replaced flow cannot clear its successor or apply stale cancellation."
+  (let* ((buf (make-buffer "oauth-stale-claim"
+                           :session-persistence-mode :ephemeral))
+         (stale (clawmacs::make-openai-oauth-flow :buffer buf))
+         (replacement (clawmacs::make-openai-oauth-flow :buffer buf))
+         (original-snapshot
+           (symbol-function 'clawmacs::openai-oauth-flow-snapshot))
+         (clawmacs::*openai-oauth-pending* nil)
+         (clawmacs::*openai-oauth-pending-lock*
+           (bt:make-lock "test-openai-oauth-pending"))
+         (clawmacs::*after-buffer-display-change-hook* nil))
+    (setf (buffer-status buf) :oauth)
+    (clawmacs::openai-oauth-flow-set-result stale :cancelled t)
+    (is-true (clawmacs::publish-openai-oauth-pending-flow stale))
+    (with-function-override
+        (clawmacs::openai-oauth-flow-snapshot (flow)
+          (let ((snapshot (funcall original-snapshot flow)))
+            (when (eq flow stale)
+              (is (eq stale
+                      (clawmacs::claim-openai-oauth-pending-flow stale)))
+              (is-true
+               (clawmacs::publish-openai-oauth-pending-flow replacement)))
+            snapshot))
+      (is-true (clawmacs::update-openai-oauth-login buf)))
+    (is (eq replacement (clawmacs::openai-oauth-pending-flow)))
+    (is (eq :oauth (buffer-status buf)))
+    (is-false
+     (some (lambda (message)
+             (search "OAuth cancelled" (message-text message)))
+           (test-buffer-history-messages buf)))
+    (is (eq replacement (clawmacs::take-openai-oauth-pending-flow)))))
+
+(test oauth-command-rejection-preserves-existing-flow-status
+  "Rejecting a second login cannot idle or cancel the already pending login."
+  (let* ((buf (make-buffer "oauth-existing-command"
+                           :session-persistence-mode :ephemeral))
+         (flow (clawmacs::make-openai-oauth-flow :buffer buf))
+         (clawmacs::*openai-oauth-pending* nil)
+         (clawmacs::*openai-oauth-pending-lock*
+           (bt:make-lock "test-openai-oauth-existing-command"))
+         (clawmacs::*after-buffer-display-change-hook* nil))
+    (setf (buffer-status buf) :oauth)
+    (is-true (clawmacs::publish-openai-oauth-pending-flow flow))
+    (clawmacs::openai-codex-oauth-command buf)
+    (is (eq flow (clawmacs::openai-oauth-pending-flow)))
+    (is (eq :oauth (buffer-status buf)))
+    (is-false
+     (getf (clawmacs::openai-oauth-flow-snapshot flow) :done-p))
+    (is (eq flow (clawmacs::take-openai-oauth-pending-flow)))))
+
+(test oauth-buffer-teardown-clears-pending-flow-and-status
+  "Buffer teardown atomically retires OAuth ownership and leaves idle status."
+  (let* ((buf (make-buffer "oauth-teardown"
+                           :session-persistence-mode :ephemeral))
+         (flow (clawmacs::make-openai-oauth-flow :buffer buf))
+         (clawmacs::*openai-oauth-pending* nil)
+         (clawmacs::*openai-oauth-pending-lock*
+           (bt:make-lock "test-openai-oauth-teardown"))
+         (clawmacs::*after-buffer-display-change-hook* nil))
+    (setf (buffer-status buf) :oauth)
+    (is-true (clawmacs::publish-openai-oauth-pending-flow flow))
+    (clawmacs::cancel-buffer-runtime-operations buf)
+    (is (null (clawmacs::openai-oauth-pending-flow)))
+    (is-true
+     (clawmacs::deliver-buffer-runtime-stopped-notification buf))
+    (is (eq :idle (buffer-status buf)))
+    (is-true
+     (getf (clawmacs::openai-oauth-flow-snapshot flow) :cancelled-p))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Z.AI (Zhipu AI) Provider Tests
@@ -6059,3 +6660,503 @@ when no cached models are present."
       (clawmacs::provider-request-streaming :openrouter nil nil
                                             :model "anthropic/claude-3-5-haiku")
       (is (string= "anthropic/claude-3-5-haiku" routed-to)))))
+
+;;; --------------------------------------------------------------------------
+;;; Streaming lifecycle race tests
+;;; --------------------------------------------------------------------------
+
+(test sse-event-processors-reject-mutation-after-terminal-state
+  "Chat Completions and Responses event processors ignore post-terminal data."
+  (let ((state (clawmacs::make-stream-state)))
+    (is (eq :updated
+            (clawmacs::process-openai-sse-event
+             "{\"choices\":[{\"delta\":{\"content\":\"before\"}}]}"
+             state)))
+    (is (eq :terminal
+            (clawmacs::process-openai-sse-event "[DONE]" state)))
+    (is (null
+         (clawmacs::process-openai-sse-event
+          "{\"choices\":[{\"delta\":{\"content\":\"-after\"}}]}"
+          state)))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (is (string= "before" (clawmacs::stream-state-text state)))
+      (is-true (clawmacs::stream-state-done-p state))))
+  (let ((state (clawmacs::make-stream-state)))
+    (is (eq :updated
+            (clawmacs::process-openai-codex-responses-sse-event
+             "{\"type\":\"response.output_text.delta\",\"delta\":\"before\"}"
+             state)))
+    (is (eq :terminal
+            (clawmacs::process-openai-codex-responses-sse-event
+             "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}"
+             state)))
+    (is (null
+         (clawmacs::process-openai-codex-responses-sse-event
+          "{\"type\":\"response.output_text.delta\",\"delta\":\"-after\"}"
+          state)))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (is (string= "before" (clawmacs::stream-state-text state)))
+      (is-true (clawmacs::stream-state-done-p state)))))
+
+(test cancellation-wins-against-in-flight-sse-delta-commit
+  "A delta parsed before cancellation re-checks active state before mutation."
+  (dolist (case
+           (list
+            (list #'clawmacs::process-openai-sse-event
+                  "{\"choices\":[{\"delta\":{\"content\":\"late\"}}]}")
+            (list #'clawmacs::process-openai-codex-responses-sse-event
+                  "{\"type\":\"response.output_text.delta\",\"delta\":\"late\"}")))
+    (let* ((decode-entered
+             (bt:make-semaphore :name "test-sse-decode-entered"))
+           (decode-release
+             (bt:make-semaphore :name "test-sse-decode-release"))
+           (callback-count 0)
+           (state
+             (clawmacs::make-stream-state
+              :callback (lambda (ignored-state)
+                          (declare (ignore ignored-state))
+                          (incf callback-count)))))
+      (with-function-override (clawmacs::api-json-decode (json)
+                                (let ((decoded (funcall original-function json)))
+                                  (bt:signal-semaphore decode-entered)
+                                  (bt:wait-on-semaphore decode-release
+                                                        :timeout 2)
+                                  decoded))
+        (let ((thread
+                (bt:make-thread
+                 (lambda ()
+                   (funcall (first case) (second case) state))
+                 :name "test-cancel-vs-sse-delta")))
+          (is-true (bt:wait-on-semaphore decode-entered :timeout 2))
+          (is-true (clawmacs::cancel-stream-state state))
+          (bt:signal-semaphore decode-release)
+          (bt:join-thread thread)))
+      (bt:with-lock-held ((clawmacs::stream-state-lock state))
+        (is (string= "" (clawmacs::stream-state-text state)))
+        (is-true (clawmacs::stream-state-cancelled-p state))
+        (is-true (clawmacs::stream-state-done-p state)))
+      (is (= 1 callback-count)))))
+
+(test cancellation-closes-blocked-reader-once-and-clears-reader-refs
+  "Cancel versus EOF/close has one close, one terminal callback, and no stale refs."
+  (let* ((stream
+           (make-instance 'controlled-character-input-stream
+                          :block-first-read-p t))
+         (callback-count 0)
+         (state
+           (clawmacs::make-stream-state
+            :callback (lambda (ignored-state)
+                        (declare (ignore ignored-state))
+                        (incf callback-count)))))
+    (clawmacs::start-stream-state-reader-worker
+     state
+     (clawmacs::stream-state-callback state)
+     "test-blocked-sse-reader"
+     (lambda (worker-state)
+       (when (clawmacs::register-stream-state-stream worker-state stream)
+         (clawmacs::read-openai-sse-stream
+          stream worker-state nil :defer-terminal-callback t))))
+    (let ((thread (stream-state-reader-thread-snapshot state)))
+      (is-true thread)
+      (is-true
+       (bt:wait-on-semaphore (controlled-stream-read-entered stream)
+                             :timeout 2))
+      (is-true (clawmacs::cancel-stream-state state))
+      (clawmacs::settle-stream-state-reader state))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (is-true (clawmacs::stream-state-cancelled-p state))
+      (is-true (clawmacs::stream-state-done-p state))
+      (is (null (clawmacs::stream-state-close-stream state)))
+      (is (null (clawmacs::stream-state-reader-thread state))))
+    (is (= 1 (controlled-stream-close-count stream)))
+    (is (= 1 callback-count))))
+
+(test cancellation-closes-attached-stream-with-no-reader-owner
+  "Cancellation closes an attached orphan stream that has no managed reader."
+  (let ((stream (make-instance 'controlled-character-input-stream))
+        (state (clawmacs::make-stream-state)))
+    (is-true (clawmacs::register-stream-state-stream state stream))
+    (is-true (clawmacs::cancel-stream-state state))
+    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+      (is-true (clawmacs::stream-state-cancelled-p state))
+      (is (null (clawmacs::stream-state-close-stream state)))
+      (is (null (clawmacs::stream-state-reader-thread state))))
+    (is (= 1 (controlled-stream-close-count stream)))))
+
+#+sbcl
+(test provider-transport-descriptor-traverses-cl-plus-ssl-layer
+  "The SBCL cancellation fast path recognizes Drakma's TLS stream layer."
+  (with-open-file (raw-stream #P"/dev/null"
+                              :direction :input
+                              :element-type '(unsigned-byte 8))
+    (let* ((file-descriptor (sb-sys:fd-stream-fd raw-stream))
+           (ssl-stream
+             (make-instance 'cl+ssl::ssl-stream
+                            :socket raw-stream
+                            :close-callback nil)))
+      (is (= file-descriptor
+             (clawmacs::provider-stream-transport-file-descriptor
+              ssl-stream))))))
+
+#+sbcl
+(test cancellation-shuts-down-blocked-drakma-transport
+  "A cancelled Drakma SSE read settles well before its configured I/O timeout."
+  (let* ((listener
+           (make-instance 'sb-bsd-sockets:inet-socket
+                          :type :stream
+                          :protocol :tcp))
+         (server-release
+           (bt:make-semaphore :name "test-stalled-sse-server-release"))
+         (server-thread nil)
+         (body nil)
+         (observed-stream nil)
+         (state nil)
+         (reader nil))
+    (sb-bsd-sockets:socket-bind listener #(127 0 0 1) 0)
+    (sb-bsd-sockets:socket-listen listener 1)
+    (multiple-value-bind (ignored-address port)
+        (sb-bsd-sockets:socket-name listener)
+      (declare (ignore ignored-address))
+      (setf server-thread
+            (bt:make-thread
+             (lambda ()
+               (let ((client nil)
+                     (client-stream nil))
+                 (unwind-protect
+                      (progn
+                        (setf client
+                              (nth-value
+                               0
+                               (sb-bsd-sockets:socket-accept listener)))
+                        (setf client-stream
+                              (sb-bsd-sockets:socket-make-stream
+                               client
+                               :input t
+                               :output t
+                               :element-type 'character
+                               :external-format :utf-8
+                               :buffering :none))
+                        (loop :for line := (read-line client-stream nil nil)
+                              :while (and line
+                                          (plusp
+                                           (length
+                                            (string-trim '(#\Return) line)))))
+                        (format client-stream
+                                "HTTP/1.1 200 OK~C~CContent-Type: text/event-stream~C~CConnection: keep-alive~C~C~C~C"
+                                #\Return #\Linefeed
+                                #\Return #\Linefeed
+                                #\Return #\Linefeed
+                                #\Return #\Linefeed)
+                        (force-output client-stream)
+                        ;; Deliberately send no body.  Cancellation must wake
+                        ;; the client's blocked descriptor read.
+                        (bt:wait-on-semaphore server-release :timeout 5))
+                   (when client-stream
+                     (ignore-errors
+                       (close client-stream :abort t)))
+                   (when client
+                     (ignore-errors
+                       (sb-bsd-sockets:socket-close client))))))
+             :name "test-stalled-sse-server"))
+      (unwind-protect
+           (progn
+             (multiple-value-bind (response-body status-code)
+                 (drakma:http-request
+                  (format nil "http://127.0.0.1:~D/events" port)
+                  :want-stream t
+                  :connection-timeout 20)
+               (setf body response-body)
+               (is (= 200 status-code)))
+             (setf observed-stream
+                   (make-instance 'observed-provider-character-input-stream
+                                  :underlying-stream body)
+                   state (clawmacs::make-stream-state))
+             (clawmacs::start-stream-state-reader-worker
+              state nil "test-blocked-drakma-sse-reader"
+              (lambda (worker-state)
+                (when (clawmacs::register-stream-state-stream
+                       worker-state observed-stream)
+                  (clawmacs::read-openai-sse-stream
+                   observed-stream worker-state nil
+                   :defer-terminal-callback t))))
+             (setf reader (stream-state-reader-thread-snapshot state))
+             (is-true reader)
+             (is-true
+              (bt:wait-on-semaphore
+               (observed-provider-read-entered observed-stream)
+               :timeout 2))
+             (let* ((started-at (get-internal-real-time))
+                    (deadline
+                      (+ started-at internal-time-units-per-second)))
+               (is-true (clawmacs::cancel-stream-state state))
+               (loop :while (and (bt:thread-alive-p reader)
+                                 (< (get-internal-real-time) deadline))
+                     :do (sleep 0.005))
+               (is (< (/ (- (get-internal-real-time) started-at)
+                         (float internal-time-units-per-second 1.0))
+                      1.0)))
+             (is-false (bt:thread-alive-p reader))
+             (unless (bt:thread-alive-p reader)
+               (clawmacs::settle-stream-state-reader state))
+             (bt:with-lock-held ((clawmacs::stream-state-lock state))
+               (is-true (clawmacs::stream-state-cancelled-p state))
+               (is (null (clawmacs::stream-state-close-stream state)))
+               (is (null (clawmacs::stream-state-reader-thread state)))))
+        (bt:signal-semaphore server-release)
+        (when server-thread
+          (loop :repeat 400
+                :while (bt:thread-alive-p server-thread)
+                :do (sleep 0.005))
+          (unless (bt:thread-alive-p server-thread)
+            (bt:join-thread server-thread)))
+        (when (and reader (bt:thread-alive-p reader))
+          ;; Server release closes the accepted socket and gives a failing old
+          ;; implementation a bounded cleanup path after the assertion.
+          (loop :repeat 400
+                :while (bt:thread-alive-p reader)
+                :do (sleep 0.005))
+          (unless (bt:thread-alive-p reader)
+            (bt:join-thread reader)))
+        (when (and observed-stream (open-stream-p observed-stream))
+          (ignore-errors
+            (close observed-stream :abort t)))
+        (when (and body (open-stream-p body))
+          (ignore-errors
+            (close body :abort t)))
+        (ignore-errors
+          (sb-bsd-sockets:socket-close listener))))))
+
+(test streaming-entrypoint-returns-while-http-request-is-blocked
+  "The streaming caller gets STATE while the managed worker is still connecting."
+  (let ((request-entered
+          (bt:make-semaphore :name "test-http-request-entered"))
+        (request-release
+          (bt:make-semaphore :name "test-http-request-release"))
+        (callback-count 0)
+        (callback-suppression-value :unset))
+    (with-function-override (clawmacs::read-provider-token (provider)
+                              (declare (ignore provider))
+                              "zai-key")
+      (with-function-override (drakma:http-request (&rest args)
+                                (declare (ignore args))
+                                (bt:signal-semaphore request-entered)
+                                (bt:wait-on-semaphore request-release
+                                                      :timeout 2)
+                                (values
+                                 (make-string-input-stream
+                                  (format nil "data: [DONE]~%~%"))
+                                 200
+                                 nil))
+        (let* ((state
+                 (let ((clawmacs::*suppress-chat-redisplay-requests* t))
+                   (clawmacs::zai-request-streaming
+                    nil
+                    (lambda (ignored-state)
+                      (declare (ignore ignored-state))
+                      (setf callback-suppression-value
+                            clawmacs::*suppress-chat-redisplay-requests*)
+                      (incf callback-count))
+                    :model "glm-5")))
+               (thread (stream-state-reader-thread-snapshot state)))
+          (is-true thread)
+          (is-true (bt:wait-on-semaphore request-entered :timeout 2))
+          (is-false
+           (bt:with-lock-held ((clawmacs::stream-state-lock state))
+             (clawmacs::stream-state-done-p state)))
+          (bt:signal-semaphore request-release)
+          (clawmacs::settle-stream-state-reader state)
+          (bt:with-lock-held ((clawmacs::stream-state-lock state))
+            (is-true (clawmacs::stream-state-done-p state))
+            (is (null (clawmacs::stream-state-error-p state)))
+            (is (null (clawmacs::stream-state-close-stream state)))
+            (is (null (clawmacs::stream-state-reader-thread state)))))))
+    (is (= 1 callback-count))
+    (is (null callback-suppression-value))))
+
+(test cancel-before-connect-skips-provider-http-request
+  "Cancellation during auth resolution prevents the HTTP connect from starting."
+  (let ((auth-entered
+          (bt:make-semaphore :name "test-stream-auth-entered"))
+        (auth-release
+          (bt:make-semaphore :name "test-stream-auth-release"))
+        (http-calls 0)
+        (callback-count 0))
+    (with-function-override (clawmacs::read-provider-token (provider)
+                              (declare (ignore provider))
+                              (bt:signal-semaphore auth-entered)
+                              (bt:wait-on-semaphore auth-release :timeout 2)
+                              "zai-key")
+      (with-function-override (drakma:http-request (&rest args)
+                                (declare (ignore args))
+                                (incf http-calls)
+                                (error "HTTP must not start after cancellation"))
+        (let* ((state
+                 (clawmacs::zai-request-streaming
+                  nil
+                  (lambda (ignored-state)
+                    (declare (ignore ignored-state))
+                    (incf callback-count))
+                  :model "glm-5"))
+               (thread (stream-state-reader-thread-snapshot state)))
+          (is-true thread)
+          (is-true (bt:wait-on-semaphore auth-entered :timeout 2))
+          (is-true (clawmacs::cancel-stream-state state))
+          (bt:signal-semaphore auth-release)
+          (clawmacs::settle-stream-state-reader state)
+          (bt:with-lock-held ((clawmacs::stream-state-lock state))
+            (is-true (clawmacs::stream-state-cancelled-p state))
+            (is (null (clawmacs::stream-state-reader-thread state)))))))
+    (is (= 0 http-calls))
+    (is (= 1 callback-count))))
+
+(test openrouter-and-zai-non-200-stream-bodies-are-closed
+  "Final non-200 streaming response bodies are closed exactly once."
+  (dolist (provider '(:openrouter :zai))
+    (let ((stream
+            (make-instance 'controlled-character-input-stream
+                           :contents "denied"))
+          (callback-count 0))
+      (with-function-override (clawmacs::read-provider-token (ignored-provider)
+                                (declare (ignore ignored-provider))
+                                "provider-key")
+        (with-function-override (drakma:http-request (&rest args)
+                                  (declare (ignore args))
+                                  (values stream 401 nil))
+          (let* ((state
+                   (ecase provider
+                     (:openrouter
+                      (clawmacs::openrouter-request-streaming
+                       nil
+                       (lambda (ignored-state)
+                         (declare (ignore ignored-state))
+                         (incf callback-count))))
+                     (:zai
+                      (clawmacs::zai-request-streaming
+                       nil
+                       (lambda (ignored-state)
+                         (declare (ignore ignored-state))
+                         (incf callback-count))))))
+                 (thread (stream-state-reader-thread-snapshot state)))
+            (is-true thread)
+            (clawmacs::settle-stream-state-reader state)
+            (bt:with-lock-held ((clawmacs::stream-state-lock state))
+              (is-true (clawmacs::stream-state-done-p state))
+              (is (search "401"
+                          (clawmacs::stream-state-error-p state)))
+              (is (null (clawmacs::stream-state-close-stream state)))
+              (is (null (clawmacs::stream-state-reader-thread state)))))))
+      (is (= 1 (controlled-stream-close-count stream)))
+      (is (= 1 callback-count)))))
+
+(test cancellation-wakes-held-open-non-200-stream-body
+  "A final HTTP error body is registered before its first blocking read."
+  (let ((stream
+          (make-instance 'controlled-character-input-stream
+                         :block-first-read-p t))
+        (callback-count 0)
+        (reader nil))
+    (unwind-protect
+         (with-function-override (clawmacs::read-provider-token (provider)
+                                   (declare (ignore provider))
+                                   "provider-key")
+           (with-function-override (drakma:http-request (&rest args)
+                                     (declare (ignore args))
+                                     (values stream 401 nil))
+             (let* ((clawmacs::*provider-http-max-retries* 0)
+                    (state
+                      (clawmacs::openrouter-request-streaming
+                       nil
+                       (lambda (ignored-state)
+                         (declare (ignore ignored-state))
+                         (incf callback-count)))))
+               (setf reader (stream-state-reader-thread-snapshot state))
+               (is-true reader)
+               (is-true
+                (bt:wait-on-semaphore
+                 (controlled-stream-read-entered stream)
+                 :timeout 2))
+               (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                 (is (eq stream
+                         (clawmacs::stream-state-close-stream state))))
+               (let* ((started-at (get-internal-real-time))
+                      (deadline
+                        (+ started-at internal-time-units-per-second)))
+                 (is-true (clawmacs::cancel-stream-state state))
+                 (loop :while (and (bt:thread-alive-p reader)
+                                   (< (get-internal-real-time) deadline))
+                       :do (sleep 0.005))
+                 (is (< (/ (- (get-internal-real-time) started-at)
+                           (float internal-time-units-per-second 1.0))
+                        1.0)))
+               (is-false (bt:thread-alive-p reader))
+               (unless (bt:thread-alive-p reader)
+                 (clawmacs::settle-stream-state-reader state))
+               (bt:with-lock-held ((clawmacs::stream-state-lock state))
+                 (is-true (clawmacs::stream-state-cancelled-p state))
+                 (is (null (clawmacs::stream-state-close-stream state)))
+                 (is (null (clawmacs::stream-state-reader-thread state)))))))
+      (bt:signal-semaphore (controlled-stream-read-release stream))
+      (when (and reader (bt:thread-alive-p reader))
+        (clawmacs::settle-stream-state-reader state))
+      (unless (controlled-stream-closed-p stream)
+        (close stream :abort t)))
+    (is (= 1 (controlled-stream-close-count stream)))
+    (is (= 1 callback-count))))
+
+(test prompt-stream-state-callback-failure-cancels-and-settles-reader
+  "A failing observer cannot strand the provider state it was given."
+  (let* ((stream
+           (make-instance 'controlled-character-input-stream
+                          :block-first-read-p t))
+         (buffer
+           (make-buffer "prompt-stream-callback-failure"
+                        :agent-name "agent"
+                        :session-persistence-mode :ephemeral))
+         (captured-state nil)
+         (captured-reader nil)
+         (observed-condition nil))
+    (set-buffer-provider-override buffer :openrouter)
+    (set-buffer-model-override buffer "e2e-model")
+    (unwind-protect
+         (with-function-override
+             (clawmacs::provider-request-streaming
+              (provider messages callback &rest args)
+              (declare (ignore provider messages args))
+              (setf captured-state
+                    (clawmacs::make-stream-state :callback callback))
+              (clawmacs::start-stream-state-reader-worker
+               captured-state callback
+               "test-prompt-callback-owned-reader"
+               (lambda (worker-state)
+                 (when (clawmacs::register-stream-state-stream
+                        worker-state stream)
+                   (read-char stream nil nil))))
+              (setf captured-reader
+                    (stream-state-reader-thread-snapshot captured-state))
+              captured-state)
+           (handler-case
+               (clawmacs::prompt-request-once
+                buffer
+                :stream-state-callback
+                (lambda (state)
+                  (declare (ignore state))
+                  (error "simulated stream observer failure")))
+             (error (condition)
+               (setf observed-condition condition))))
+      (bt:signal-semaphore (controlled-stream-read-release stream))
+      (when captured-reader
+        (clawmacs::settle-stream-state-reader captured-state))
+      (unless (controlled-stream-closed-p stream)
+        (close stream :abort t)))
+    (is-true observed-condition)
+    (is (search "simulated stream observer failure"
+                (princ-to-string observed-condition)))
+    (is-true captured-state)
+    (is-true captured-reader)
+    (is-false (bt:thread-alive-p captured-reader))
+    (bt:with-lock-held ((clawmacs::stream-state-lock captured-state))
+      (is-true (clawmacs::stream-state-cancelled-p captured-state))
+      (is-true (clawmacs::stream-state-done-p captured-state))
+      (is (null (clawmacs::stream-state-close-stream captured-state)))
+      (is (null (clawmacs::stream-state-reader-thread captured-state))))
+    (is (= 1 (controlled-stream-close-count stream)))))

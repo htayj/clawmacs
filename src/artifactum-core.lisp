@@ -6,6 +6,15 @@
 (defvar *artifactum-index-file-name* "index.json"
   "Artifact metadata index file stored under the artifact root.")
 
+(defvar *artifactum-index-lock*
+  (bt:make-lock "clawmacs artifactum index")
+  "Process-wide lock serializing Artifactum index and store transactions.
+
+Detached tool buffers copy session objects and therefore do not share the
+session lock of their live buffer.  This lock intentionally lives above those
+session objects so buffers that name the same session directory cannot race a
+read-modify-supersede update of artifacts/index.json.")
+
 (declaim (type integer *artifactum-preview-character-limit*))
 (defvar *artifactum-preview-character-limit* 2000
   "Maximum preview text length stored in artifact metadata and context messages.")
@@ -46,15 +55,19 @@
          (ftype (function (t) list) artifactum-zip-entry-list
                 normalize-artifactum-record
                 artifactum-record-json
+                artifactum-read-index-unlocked
                 artifactum-read-index
                 artifactum-session-records)
          (ftype (function (t list) (or null string)) artifactum-office-xml-text)
          (ftype (function (t) integer) artifactum-file-size)
          (ftype (function (t t) (or null list)) artifactum-find-record)
-         (ftype (function (t string) string) artifactum-generate-id)
+         (ftype (function (t string) string) artifactum-generate-id-unlocked
+                artifactum-generate-id)
          (ftype (function (t string string) pathname) artifactum-store-path)
-         (ftype (function (t list) list) artifactum-upsert-record)
-         (ftype (function (t list) t) artifactum-write-index))
+         (ftype (function (t list) list) artifactum-upsert-record-unlocked
+                artifactum-upsert-record)
+         (ftype (function (t list) t) artifactum-write-index-unlocked
+                artifactum-write-index))
 
 (defun artifactum-blank-string-p (value)
   "Return true when VALUE is NIL or ASCII whitespace only."
@@ -366,8 +379,8 @@
     (:created_at . ,(getf record :created-at))
     (:updated_at . ,(getf record :updated-at))))
 
-(defun artifactum-read-index (session)
-  "Return SESSION's artifact records."
+(defun artifactum-read-index-unlocked (session)
+  "Return SESSION's artifact records while the caller owns the index lock."
   (let ((path (artifactum-session-index-path session)))
     (if (probe-file path)
         (let ((cl-json:*json-array-type* 'vector))
@@ -379,8 +392,13 @@
                            #()))))
         nil)))
 
-(defun artifactum-write-index (session records)
-  "Persist SESSION RECORDS to disk."
+(defun artifactum-read-index (session)
+  "Return SESSION's artifact records under the process-wide index lock."
+  (bt:with-lock-held (*artifactum-index-lock*)
+    (artifactum-read-index-unlocked session)))
+
+(defun artifactum-write-index-unlocked (session records)
+  "Persist SESSION RECORDS while the caller owns the index lock."
   (let ((path (artifactum-session-index-path session)))
     (ensure-directories-exist path)
     (with-open-file (stream path
@@ -394,20 +412,27 @@
        stream))
     path))
 
+(defun artifactum-write-index (session records)
+  "Persist SESSION RECORDS under the process-wide index lock."
+  (bt:with-lock-held (*artifactum-index-lock*)
+    (artifactum-write-index-unlocked session records)))
+
 (defun artifactum-session-records (buffer)
   "Return BUFFER's durable artifact records."
   (artifactum-read-index (artifactum-session-for-buffer buffer)))
 
 (defun artifactum-find-record (buffer artifact-id)
   "Return BUFFER artifact ARTIFACT-ID, or NIL."
-  (find (artifactum-normalize-string artifact-id)
-        (artifactum-session-records buffer)
-        :key (lambda (record) (getf record :id))
-        :test #'string=))
+  (let ((session (artifactum-session-for-buffer buffer)))
+    (bt:with-lock-held (*artifactum-index-lock*)
+      (find (artifactum-normalize-string artifact-id)
+            (artifactum-read-index-unlocked session)
+            :key (lambda (record) (getf record :id))
+            :test #'string=))))
 
-(defun artifactum-generate-id (session name)
-  "Return a unique artifact id for SESSION derived from NAME."
-  (let* ((records (artifactum-read-index session))
+(defun artifactum-generate-id-unlocked (session name)
+  "Return a unique artifact id while the caller owns the index lock."
+  (let* ((records (artifactum-read-index-unlocked session))
          (existing-ids (mapcar (lambda (record) (getf record :id)) records))
          (base (artifactum-sanitize-file-name name))
          (stamp (get-universal-time)))
@@ -417,6 +442,11 @@
                                 (format nil "art-~D-~A-~D" stamp base suffix))
           :unless (member candidate existing-ids :test #'string=)
             :return candidate)))
+
+(defun artifactum-generate-id (session name)
+  "Return a unique artifact id for SESSION derived from NAME."
+  (bt:with-lock-held (*artifactum-index-lock*)
+    (artifactum-generate-id-unlocked session name)))
 
 (defun artifactum-store-path (session artifact-id name)
   "Return the on-disk storage path for ARTIFACT-ID and NAME."
@@ -428,20 +458,26 @@
                        (format nil "~A-~A" artifact-id stem))))
     (merge-pathnames filename (artifactum-session-root session))))
 
-(defun artifactum-upsert-record (session record)
-  "Insert or replace RECORD in SESSION's artifact index."
-  (let* ((records (artifactum-read-index session))
+(defun artifactum-upsert-record-unlocked (session record)
+  "Upsert RECORD while the caller owns the complete index transaction."
+  (let* ((records (artifactum-read-index-unlocked session))
          (id (getf record :id))
          (updated (cons record
                         (remove id records
                                 :key (lambda (existing)
                                        (getf existing :id))
                                 :test #'string=))))
-    (artifactum-write-index session
-                            (sort updated #'string<
-                                  :key (lambda (existing)
-                                         (getf existing :id))))
+    (artifactum-write-index-unlocked
+     session
+     (sort updated #'string<
+           :key (lambda (existing)
+                  (getf existing :id))))
     record))
+
+(defun artifactum-upsert-record (session record)
+  "Atomically insert or replace RECORD in SESSION's artifact index."
+  (bt:with-lock-held (*artifactum-index-lock*)
+    (artifactum-upsert-record-unlocked session record)))
 
 (defun artifactum-create-from-file (buffer source-path
                                      &key name mime-type
@@ -449,7 +485,7 @@
                                        (author "user"))
   "Copy SOURCE-PATH into BUFFER's session artifact store and return its record."
   (let* ((session (artifactum-session-for-buffer buffer))
-         (source (validate-sandbox-path source-path))
+         (source (lispi:resolve-tool-path source-path))
          (_exists (or (probe-file source)
                       (error "Artifact source path does not exist: ~A" source-path)))
          (resolved-name (or (artifactum-normalize-string name)
@@ -458,25 +494,27 @@
                             (artifactum-guess-mime-type resolved-name)))
          (_supported (or (not (string= kind "attachment"))
                          (artifactum-supported-attachment-mime-type-p resolved-mime)
-                         (error "Unsupported attachment type: ~A" resolved-mime)))
-         (id (artifactum-generate-id session resolved-name))
-         (target (artifactum-store-path session id resolved-name)))
+                         (error "Unsupported attachment type: ~A" resolved-mime))))
     (declare (ignore _exists _supported))
-    (ensure-directories-exist target)
-    (uiop:copy-file source target)
-    (let* ((extracted-text (artifactum-extract-text-from-path target resolved-mime))
-           (record (list :id id
-                         :kind kind
-                         :name resolved-name
-                         :mime-type resolved-mime
-                         :path (artifactum-path-string target)
-                         :size (artifactum-file-size target)
-                         :preview (artifactum-preview-text extracted-text)
-                         :extracted-text extracted-text
-                         :author author
-                         :created-at (get-universal-time)
-                         :updated-at (get-universal-time))))
-      (artifactum-upsert-record session record))))
+    (bt:with-lock-held (*artifactum-index-lock*)
+      (let* ((id (artifactum-generate-id-unlocked session resolved-name))
+             (target (artifactum-store-path session id resolved-name)))
+        (ensure-directories-exist target)
+        (uiop:copy-file source target)
+        (let* ((extracted-text
+                 (artifactum-extract-text-from-path target resolved-mime))
+               (record (list :id id
+                             :kind kind
+                             :name resolved-name
+                             :mime-type resolved-mime
+                             :path (artifactum-path-string target)
+                             :size (artifactum-file-size target)
+                             :preview (artifactum-preview-text extracted-text)
+                             :extracted-text extracted-text
+                             :author author
+                             :created-at (get-universal-time)
+                             :updated-at (get-universal-time))))
+          (artifactum-upsert-record-unlocked session record))))))
 
 (defun artifactum-create-from-content (buffer name content
                                         &key mime-type
@@ -488,86 +526,103 @@
                             (error "Artifact content creation requires a file name.")))
          (resolved-mime (or (artifactum-normalize-string mime-type)
                             (artifactum-guess-mime-type resolved-name)))
-         (text (or content ""))
-         (id (artifactum-generate-id session resolved-name))
-         (target (artifactum-store-path session id resolved-name)))
-    (ensure-directories-exist target)
-    (with-open-file (stream target
-                            :direction :output
-                            :if-exists :supersede
-                            :if-does-not-exist :create
-                            :external-format :utf-8)
-      (write-string text stream))
-    (let* ((extracted-text (if (artifactum-textual-mime-type-p resolved-mime)
-                               text
-                               (artifactum-extract-text-from-path target resolved-mime)))
-           (record (list :id id
-                         :kind kind
-                         :name resolved-name
-                         :mime-type resolved-mime
-                         :path (artifactum-path-string target)
-                         :size (artifactum-file-size target)
-                         :preview (artifactum-preview-text extracted-text)
-                         :extracted-text extracted-text
-                         :author author
-                         :created-at (get-universal-time)
-                         :updated-at (get-universal-time))))
-      (artifactum-upsert-record session record))))
+         (text (or content "")))
+    (bt:with-lock-held (*artifactum-index-lock*)
+      (let* ((id (artifactum-generate-id-unlocked session resolved-name))
+             (target (artifactum-store-path session id resolved-name)))
+        (ensure-directories-exist target)
+        (with-open-file (stream target
+                                :direction :output
+                                :if-exists :supersede
+                                :if-does-not-exist :create
+                                :external-format :utf-8)
+          (write-string text stream))
+        (let* ((extracted-text
+                 (if (artifactum-textual-mime-type-p resolved-mime)
+                     text
+                     (artifactum-extract-text-from-path target resolved-mime)))
+               (record (list :id id
+                             :kind kind
+                             :name resolved-name
+                             :mime-type resolved-mime
+                             :path (artifactum-path-string target)
+                             :size (artifactum-file-size target)
+                             :preview (artifactum-preview-text extracted-text)
+                             :extracted-text extracted-text
+                             :author author
+                             :created-at (get-universal-time)
+                             :updated-at (get-universal-time))))
+          (artifactum-upsert-record-unlocked session record))))))
 
 (defun artifactum-update-record (buffer artifact-id
                                   &key name content source-path mime-type)
   "Update BUFFER artifact ARTIFACT-ID from CONTENT or SOURCE-PATH."
   (let* ((session (artifactum-session-for-buffer buffer))
-         (record (or (artifactum-find-record buffer artifact-id)
-                     (error "Unknown artifact id: ~A" artifact-id)))
-         (resolved-name (or (artifactum-normalize-string name)
-                            (getf record :name)))
-         (resolved-mime (or (artifactum-normalize-string mime-type)
-                            (artifactum-guess-mime-type resolved-name)
-                            (getf record :mime-type)))
-         (target (artifactum-store-path session (getf record :id) resolved-name)))
-    (ensure-directories-exist target)
-    (cond
-      (source-path
-       (uiop:copy-file (validate-sandbox-path source-path) target))
-      (t
-       (with-open-file (stream target
-                               :direction :output
-                               :if-exists :supersede
-                               :if-does-not-exist :create
-                               :external-format :utf-8)
-         (write-string (or content "") stream))))
-    (let* ((extracted-text (artifactum-extract-text-from-path target resolved-mime))
-           (updated (copy-list record)))
-      (setf (getf updated :name) resolved-name
-            (getf updated :mime-type) resolved-mime
-            (getf updated :path) (artifactum-path-string target)
-            (getf updated :size) (artifactum-file-size target)
-            (getf updated :preview) (artifactum-preview-text extracted-text)
-            (getf updated :extracted-text) extracted-text
-            (getf updated :updated-at) (get-universal-time))
-      (artifactum-upsert-record session updated))))
+         (resolved-source (and source-path
+                               (lispi:resolve-tool-path source-path))))
+    (bt:with-lock-held (*artifactum-index-lock*)
+      (let* ((record
+               (or (find (artifactum-normalize-string artifact-id)
+                         (artifactum-read-index-unlocked session)
+                         :key (lambda (entry) (getf entry :id))
+                         :test #'string=)
+                   (error "Unknown artifact id: ~A" artifact-id)))
+             (resolved-name (or (artifactum-normalize-string name)
+                                (getf record :name)))
+             (resolved-mime (or (artifactum-normalize-string mime-type)
+                                (artifactum-guess-mime-type resolved-name)
+                                (getf record :mime-type)))
+             (target (artifactum-store-path
+                      session (getf record :id) resolved-name)))
+        (ensure-directories-exist target)
+        (cond
+          (resolved-source
+           (uiop:copy-file resolved-source target))
+          (t
+           (with-open-file (stream target
+                                   :direction :output
+                                   :if-exists :supersede
+                                   :if-does-not-exist :create
+                                   :external-format :utf-8)
+             (write-string (or content "") stream))))
+        (let* ((extracted-text
+                 (artifactum-extract-text-from-path target resolved-mime))
+               (updated (copy-list record)))
+          (setf (getf updated :name) resolved-name
+                (getf updated :mime-type) resolved-mime
+                (getf updated :path) (artifactum-path-string target)
+                (getf updated :size) (artifactum-file-size target)
+                (getf updated :preview) (artifactum-preview-text extracted-text)
+                (getf updated :extracted-text) extracted-text
+                (getf updated :updated-at) (get-universal-time))
+          (artifactum-upsert-record-unlocked session updated))))))
 
 (defun artifactum-read-record-data (buffer artifact-id &key (include-content-p t))
   "Return BUFFER artifact ARTIFACT-ID as a plist suitable for tools."
-  (let* ((record (or (artifactum-find-record buffer artifact-id)
-                     (error "Unknown artifact id: ~A" artifact-id)))
-         (path (pathname (getf record :path)))
-         (mime-type (getf record :mime-type))
-         (content (and include-content-p
-                       (artifactum-textual-mime-type-p mime-type)
-                       (ignore-errors (uiop:read-file-string path)))))
-    (list :id (getf record :id)
-          :kind (getf record :kind)
-          :name (getf record :name)
-          :mime-type mime-type
-          :path (getf record :path)
-          :size (getf record :size)
-          :preview (getf record :preview)
-          :extracted-text (getf record :extracted-text)
-          :content content
-          :created-at (getf record :created-at)
-          :updated-at (getf record :updated-at))))
+  (let ((session (artifactum-session-for-buffer buffer)))
+    (bt:with-lock-held (*artifactum-index-lock*)
+      (let* ((record
+               (or (find (artifactum-normalize-string artifact-id)
+                         (artifactum-read-index-unlocked session)
+                         :key (lambda (entry) (getf entry :id))
+                         :test #'string=)
+                   (error "Unknown artifact id: ~A" artifact-id)))
+             (path (pathname (getf record :path)))
+             (mime-type (getf record :mime-type))
+             (content (and include-content-p
+                           (artifactum-textual-mime-type-p mime-type)
+                           (ignore-errors (uiop:read-file-string path)))))
+        (list :id (getf record :id)
+              :kind (getf record :kind)
+              :name (getf record :name)
+              :mime-type mime-type
+              :path (getf record :path)
+              :size (getf record :size)
+              :preview (getf record :preview)
+              :extracted-text (getf record :extracted-text)
+              :content content
+              :created-at (getf record :created-at)
+              :updated-at (getf record :updated-at))))))
 
 (defun artifactum-record-summary-line (record)
   "Return one selector/help line for RECORD."

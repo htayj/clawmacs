@@ -272,8 +272,8 @@
 (deftool packrat-tool-install
   :name "packrat_install"
   :description "Install a Clawmacs package from a repo URL or local path."
-  :permission :agent-allowed
   :call-style :raw-args
+  :execution :frame
   :args ((repo :type "string"
                :description "Git repository URL or local path to install.")
          (src-type :type "string" :required nil
@@ -291,8 +291,8 @@
 (deftool packrat-tool-remove
   :name "packrat_remove"
   :description "Remove an installed Clawmacs package."
-  :permission :agent-allowed
   :call-style :raw-args
+  :execution :frame
   :args ((package :type "string"
                   :description "Installed package name.")
          (project :type "string" :required nil
@@ -301,8 +301,8 @@
 (deftool packrat-tool-update
   :name "packrat_update"
   :description "Update an installed Clawmacs package from its recorded source."
-  :permission :agent-allowed
   :call-style :raw-args
+  :execution :frame
   :args ((package :type "string"
                   :description "Installed package name.")
          (project :type "string" :required nil
@@ -311,16 +311,16 @@
 (deftool packrat-tool-list
   :name "packrat_list"
   :description "List installed packages with install and enablement scopes."
-  :permission :agent-allowed
   :call-style :raw-args
+  :execution :frame
   :args ((project :type "string" :required nil
                   :description "Optional project name to include project-local packages.")))
 
 (deftool packrat-tool-config
   :name "packrat_config"
   :description "Set an installed package's allowed resource types."
-  :permission :agent-allowed
   :call-style :raw-args
+  :execution :frame
   :args ((package :type "string"
                   :description "Installed package name.")
          (resource-types :type "array" :items ((:type . "string"))
@@ -331,15 +331,15 @@
 (deftool packrat-tool-status
   :name "packrat_status"
   :description "Return a package status report."
-  :permission :agent-allowed
   :call-style :raw-args
+  :execution :frame
   :args ((project :type "string" :required nil
                   :description "Optional project name to include project-local packages.")))
 
 (deftool packrat-tool-doctor
   :name "packrat_doctor"
   :description "Return a package doctor report."
-  :permission :agent-allowed
   :call-style :raw-args
+  :execution :frame
   :args ((project :type "string" :required nil
                   :description "Optional project name to include project-local packages.")))

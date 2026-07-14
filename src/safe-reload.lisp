@@ -16,8 +16,24 @@
 (defvar *safe-reload-lock* (bt:make-lock "clawmacs safe reload")
   "Process-local nonblocking lock guarding in-place Clawmacs reloads.")
 
+(defvar *safe-reload-condition*
+  (bt:make-condition-variable :name "clawmacs safe reload")
+  "Condition variable for exact request/worker handoff under the reload lock.")
+
 (defvar *safe-reload-running-p* nil
-  "True while the interactive safe reload command is visibly in progress.")
+  "True while a synchronous or interactive safe reload request is active.")
+
+(defvar *safe-reload-active-request* nil
+  "Exact process-wide reload request currently owning the reload lifecycle.")
+
+(defvar *safe-reload-worker-constructor* nil
+  "Test override for the managed interactive preflight thread constructor.
+NIL uses BT:MAKE-THREAD.  An override receives FUNCTION and NAME arguments.")
+
+(defvar *safe-reload-completion-dispatch-function* nil
+  "Test override for marshalling preflight completion to the frame process.
+NIL queues a CLIM window-manager event to the request's top-level sheet.  An
+override receives the SAFE-RELOAD-REQUEST and must preserve frame ownership.")
 
 (defvar *safe-reload-preflight-function* nil
   "Function used by CLAWMACS-SAFE-RELOAD-PREFLIGHT.
@@ -44,6 +60,91 @@ reinitializing Clawmacs runtime state.")
   condition-message
   duration-seconds
   source-root)
+
+(defstruct safe-reload-request
+  "Exact ownership record for one synchronous or interactive reload."
+  token
+  mode
+  buffer
+  frame
+  started-at
+  timeout
+  source-root
+  (notify-p t :type boolean)
+  (stage :claimed :type keyword)
+  worker
+  preflight)
+
+(defclass clawmacs-safe-reload-completion-event (clim:window-manager-event)
+  ((request :initarg :request
+            :reader safe-reload-completion-event-request)))
+
+(define-condition runtime-admission-closed (error)
+  ((operation :initarg :operation
+              :reader runtime-admission-closed-operation))
+  (:report
+   (lambda (condition stream)
+     (format stream "Cannot start ~A while safe reload owns runtime admission."
+             (runtime-admission-closed-operation condition)))))
+
+(defun call-with-runtime-admission (function &key (operation "runtime work"))
+  "Call FUNCTION under the outer runtime-admission lock or signal.
+
+FUNCTION must publish its observable buffer/registry reservation before it
+returns.  The admission lock is deliberately outermost: callers may acquire
+their existing buffer or registry lock inside FUNCTION, but must never call
+this helper while already holding such an inner lock."
+  (bt:with-lock-held (*safe-reload-lock*)
+    (when *safe-reload-active-request*
+      (error 'runtime-admission-closed :operation operation))
+    (funcall function)))
+
+(defun call-with-runtime-settlement-admission
+    (function &key (operation "runtime settlement"))
+  "Run final settlement under admission, waiting for an active reload.
+
+Unlike a new start, already-owned cleanup must eventually publish settlement.
+If an unexpected visibility gap allowed reload to claim first, wait on the
+exact reload condition and run FUNCTION under the outer lock only after live
+redefinition has ended.  FUNCTION may acquire the operation's inner lock."
+  (declare (ignore operation))
+  (bt:with-lock-held (*safe-reload-lock*)
+    (loop :while *safe-reload-active-request*
+          :do (bt:condition-wait *safe-reload-condition*
+                                 *safe-reload-lock*
+                                 ;; BT v1 has no portable broadcast.  Timed
+                                 ;; rechecks keep the fallback notify safe for
+                                 ;; multiple settlement waiters.
+                                 :timeout 0.1))
+    (funcall function)))
+
+(defvar *message-help-runtime-lock*
+  (bt:make-lock "clawmacs message help runtime")
+  "Lock guarding active independent message-help frame reservations.")
+
+(defvar *message-help-runtime-reservations* (make-hash-table :test #'eq)
+  "Exact reservations for help-frame construction and top-level lifetimes.")
+
+(defun message-help-active-count-snapshot ()
+  "Return the number of constructing or running independent help frames."
+  (bt:with-lock-held (*message-help-runtime-lock*)
+    (hash-table-count *message-help-runtime-reservations*)))
+
+(defun reserve-message-help-runtime ()
+  "Atomically reserve one help-frame lifetime against live reload."
+  (let ((token (cons :message-help (gensym "RUNTIME-"))))
+    (call-with-runtime-admission
+     (lambda ()
+       (bt:with-lock-held (*message-help-runtime-lock*)
+         (setf (gethash token *message-help-runtime-reservations*) t))
+       token)
+     :operation "a message metadata help frame")))
+
+(defun release-message-help-runtime (token)
+  "Release exact help-frame runtime TOKEN idempotently."
+  (when token
+    (bt:with-lock-held (*message-help-runtime-lock*)
+      (remhash token *message-help-runtime-reservations*))))
 
 (defun clawmacs-reload-result-ok-p (result)
   "Return true when RESULT represents a completed safe reload."
@@ -233,7 +334,8 @@ reinitializing Clawmacs runtime state.")
   (when (fboundp 'reload-package-channels)
     (funcall 'reload-package-channels))
   (when (fboundp 'reload-active-packages)
-    (funcall 'reload-active-packages :buffer buffer)))
+    (let ((*package-runtime-maintenance-admitted-p* t))
+      (funcall 'reload-active-packages :buffer buffer))))
 
 (defun %safe-reload-live-reload (&key buffer source-root)
   "Reload Clawmacs in the current image without resetting application state."
@@ -402,6 +504,8 @@ The current Lisp image is not mutated by this function."
        (format nil "[Clawmacs safe reload succeeded: ~A]" summary))
       (:busy
        (format nil "[Clawmacs safe reload busy: ~A]" summary))
+      (:refused
+       (format nil "[Clawmacs safe reload refused: ~A]" summary))
       (:preflight-failed
        (format nil "[Clawmacs safe reload failed during preflight: ~A]" summary))
       (:live-failed
@@ -426,6 +530,102 @@ The current Lisp image is not mutated by this function."
    :status :busy
    :stage :lock
    :summary "Another Clawmacs safe reload is already running."))
+
+(defun safe-reload-buffer-runtime-active-p (buffer)
+  "Return true when BUFFER owns or awaits provider/tool/OAuth runtime work."
+  (and buffer
+       (bt:with-lock-held ((buffer-runtime-lock buffer))
+         (not
+          (null
+           (or (buffer-pending-stream buffer)
+               (buffer-streaming-message buffer)
+               (buffer-pending-tool-execution buffer)
+               (buffer-pending-interactive-operation buffer)
+               (buffer-runtime-application buffer)
+               (buffer-runtime-teardown buffer)
+               (buffer-runtime-start-generation buffer)
+               (buffer-runtime-start-owner buffer)
+               (buffer-runtime-tool-cancellation-p buffer)
+               (buffer-runtime-stopping-p buffer)
+               (buffer-runtime-stopped-notification-p buffer)
+               (buffer-disposing-p buffer)
+               (buffer-pending-tool-calls buffer)
+               (buffer-user-input-pending buffer)
+               (eq :oauth (buffer-status buffer))))))))
+
+(defun safe-reload-process-buffer-snapshot (buffer interop-threads)
+  "Return buffers whose runtime ownership can make live reload unsafe.
+
+The buffer ring is frame-process-owned and has no independent lock.  The
+interactive command copies it on the frame process, then combines it with the
+explicit BUFFER and buffers from the already-stable interop registry snapshot."
+  (remove-duplicates
+   (remove nil
+           (append (list buffer)
+                   (copy-list *buffer-ring*)
+                   (mapcar #'interop-thread-buffer interop-threads)))
+   :test #'eq))
+
+(defun safe-reload-subagent-active-p (handle)
+  "Return true until HANDLE has both terminal status and a settled worker."
+  (let ((snapshot (subagent-snapshot handle)))
+    (or (not (getf snapshot :done-p))
+        (not (getf snapshot :worker-finished-p)))))
+
+(defun safe-reload-interop-turn-unsettled-p (turn)
+  "Return true until TURN has terminal status and its runner has exited."
+  (bt:with-lock-held ((interop-turn-lock turn))
+    (not (settled-interop-turn-p turn))))
+
+(defun safe-reload-process-runtime-activity (&optional buffer)
+  "Return the kind of process activity that prevents live redefinition.
+
+This deliberately conservative process-wide check snapshots each registry
+under its own established lock, releases that lock, and only then inspects
+individual buffer, interop, and subagent objects under their respective locks.
+No runtime lock is held while another registry or object lock is acquired.
+When a snapshot cannot be verified, return :SNAPSHOT-ERROR so safety wins over
+attempting a reload from incomplete state."
+  (handler-case
+      (let* ((help-frame-count (message-help-active-count-snapshot))
+             (runtime-callback-count
+               (runtime-callback-dispatch-pending-count))
+             (oauth-flow (openai-oauth-pending-flow))
+             (interop-threads (interop-thread-registry-snapshot))
+             (interop-turns (interop-turn-registry-snapshot))
+             (interop-runtime-operation-count
+               (active-interop-runtime-operation-count))
+             (synchronous-subagent-count
+               (active-synchronous-subagent-run-count))
+             (subagents (list-subagents))
+             (buffers (safe-reload-process-buffer-snapshot
+                       buffer interop-threads)))
+        (cond
+          ((plusp runtime-callback-count) :external-callback)
+          ((package-lifecycle-operation-active-p) :package-lifecycle)
+          ((plusp help-frame-count) :help-frame)
+          (oauth-flow :oauth)
+          ((some #'safe-reload-buffer-runtime-active-p buffers)
+           :buffer-runtime)
+          ((or (plusp interop-runtime-operation-count)
+               (some #'interop-thread-execution-reserved-p interop-threads)
+               (some #'safe-reload-interop-turn-unsettled-p interop-turns))
+           :interop)
+          ((or (plusp synchronous-subagent-count)
+               (some #'safe-reload-subagent-active-p subagents))
+           :subagent)
+          (t nil)))
+    (error () :snapshot-error)))
+
+(defun safe-reload-refused-result (activity)
+  "Return a refusal result for unsafe process ACTIVITY."
+  (make-safe-reload-result
+   :status :refused
+   :stage :quiescence
+   :summary
+   (if (eq activity :snapshot-error)
+       "Runtime quiescence could not be verified; reload was not started."
+       "Runtime work is active; wait for external callbacks, close help frames, and stop provider/tool/OAuth, interop, and subagent work, then retry.")))
 
 (defun safe-reload-complete-result (preflight live started-at)
   "Return the final success result combining PREFLIGHT and LIVE phases."
@@ -475,44 +675,316 @@ The current Lisp image is not mutated by this function."
       (bt:acquire-lock *safe-reload-lock* nil)
     (error () nil)))
 
-(defun clawmacs-safe-reload (&key buffer timeout source-root (notify-p t))
-  "Safely reload updated Clawmacs source in-place.
-An isolated worker first proves that Clawmacs can load from SOURCE-ROOT.  The
-live image is reloaded only when that preflight returns :OK.  All preflight,
-busy, and live-reload failures are returned as SAFE-RELOAD-RESULT objects rather
-than signaled to the caller."
-  (let ((started-at (safe-reload-now-seconds)))
-    (if (safe-reload-try-acquire-lock)
-        (unwind-protect
-             (run-safe-reload-under-lock buffer timeout source-root notify-p started-at)
-          (bt:release-lock *safe-reload-lock*))
-        (finalize-safe-reload-result (safe-reload-busy-result)
-                                     buffer
-                                     notify-p))))
+(defun safe-reload-try-claim-request (request)
+  "Atomically verify quiescence, close admission, and claim REQUEST.
 
-(defun safe-reload-clawmacs-command (buffer)
-  "Safely reload updated Clawmacs source from an interactive command."
-  (let ((*safe-reload-running-p* t))
+Return true and NIL on success.  Otherwise return NIL and either :BUSY or the
+activity kind that made the process unsafe.  The outer admission lock remains
+held throughout inner registry/buffer snapshots, so a start either publishes
+before this check and is observed, or sees the installed request and refuses."
+  (unless (safe-reload-try-acquire-lock)
+    (return-from safe-reload-try-claim-request (values nil :busy)))
+  (unwind-protect
+       (cond
+         (*safe-reload-active-request*
+          (values nil :busy))
+         (t
+          (let ((activity
+                  (safe-reload-process-runtime-activity
+                   (safe-reload-request-buffer request))))
+            (if activity
+                (values nil activity)
+                (progn
+                  (setf *safe-reload-active-request* request
+                        *safe-reload-running-p* t)
+                  (values t nil))))))
+    (bt:release-lock *safe-reload-lock*)))
+
+(defun safe-reload-blocked-result (blocker)
+  "Return the busy or quiescence result represented by BLOCKER."
+  (if (eq blocker :busy)
+      (safe-reload-busy-result)
+      (safe-reload-refused-result blocker)))
+
+(defun safe-reload-request-active-p (request)
+  "Return true when REQUEST still owns the process-wide reload lifecycle."
+  (bt:with-lock-held (*safe-reload-lock*)
+    (eq request *safe-reload-active-request*)))
+
+(defun finish-safe-reload-request (request)
+  "Release exact REQUEST ownership and clear visible busy state."
+  (bt:with-lock-held (*safe-reload-lock*)
+    (when (eq request *safe-reload-active-request*)
+      (setf *safe-reload-active-request* nil
+            *safe-reload-running-p* nil)
+      #+sbcl
+      (sb-thread:condition-broadcast *safe-reload-condition*)
+      #-sbcl
+      (bt:condition-notify *safe-reload-condition*)
+      t)))
+
+(defun safe-reload-record-worker (request worker)
+  "Record WORKER only while REQUEST still owns the reload lifecycle."
+  (bt:with-lock-held (*safe-reload-lock*)
+    (when (eq request *safe-reload-active-request*)
+      (setf (safe-reload-request-worker request) worker)
+      (bt:condition-notify *safe-reload-condition*)
+      t)))
+
+(defun safe-reload-await-recorded-worker (request)
+  "Wait until REQUEST records the current worker, or loses exact ownership."
+  (let ((current (bt:current-thread)))
+    (bt:with-lock-held (*safe-reload-lock*)
+      (loop :while (and (eq request *safe-reload-active-request*)
+                        (null (safe-reload-request-worker request)))
+            :do (bt:condition-wait *safe-reload-condition*
+                                   *safe-reload-lock*))
+      (and (eq request *safe-reload-active-request*)
+           (eq current (safe-reload-request-worker request))))))
+
+(defun safe-reload-publish-preflight (request preflight)
+  "Publish PREFLIGHT completion for exact active REQUEST."
+  (bt:with-lock-held (*safe-reload-lock*)
+    (when (and (eq request *safe-reload-active-request*)
+               (eq :preflight (safe-reload-request-stage request)))
+      (setf (safe-reload-request-preflight request) preflight
+            (safe-reload-request-stage request) :preflight-complete)
+      t)))
+
+(defun safe-reload-begin-completion (request)
+  "Claim REQUEST's frame-process application and return its worker/preflight."
+  (bt:with-lock-held (*safe-reload-lock*)
+    (when (and (eq request *safe-reload-active-request*)
+               (eq :preflight-complete
+                   (safe-reload-request-stage request)))
+      (setf (safe-reload-request-stage request) :applying)
+      (values (safe-reload-request-preflight request)
+              (safe-reload-request-worker request)
+              t))))
+
+(defun make-safe-reload-preflight-thread (function name)
+  "Create one managed preflight worker through the testable constructor."
+  (if *safe-reload-worker-constructor*
+      (funcall *safe-reload-worker-constructor* function name)
+      (bt:make-thread function :name name)))
+
+(defun safe-reload-queue-completion-event (request)
+  "Queue REQUEST completion to its grafted CLIM top-level sheet."
+  (let* ((frame (safe-reload-request-frame request))
+         (sheet (and frame
+                     (ignore-errors (clim:frame-top-level-sheet frame)))))
+    (unless (and sheet (ignore-errors (clim:sheet-grafted-p sheet)))
+      (error "Safe reload frame is no longer grafted."))
+    (clim:queue-event
+     sheet
+     (make-instance 'clawmacs-safe-reload-completion-event
+                    :sheet sheet
+                    :request request))
+    t))
+
+(defun safe-reload-dispatch-completion (request)
+  "Marshal REQUEST completion to the frame process without mutating UI state."
+  (handler-case
+      (funcall (or *safe-reload-completion-dispatch-function*
+                   #'safe-reload-queue-completion-event)
+               request)
+    (error (condition)
+      (ignore-errors
+        (file-debug-event "safe-reload-completion-dispatch-error"
+                          :condition (format nil "~A" condition)))
+      (finish-safe-reload-request request)
+      nil)))
+
+(defun run-safe-reload-preflight-worker (request)
+  "Run REQUEST's isolated preflight and publish only immutable completion."
+  (when (safe-reload-await-recorded-worker request)
+    (let ((preflight
+            (clawmacs-safe-reload-preflight
+             :timeout (safe-reload-request-timeout request)
+             :source-root (safe-reload-request-source-root request))))
+      (when (safe-reload-publish-preflight request preflight)
+        (safe-reload-dispatch-completion request))))
+  request)
+
+(defun safe-reload-started-result ()
+  "Return the immediate result from an accepted asynchronous preflight."
+  (make-safe-reload-result
+   :status :started
+   :stage :preflight
+   :summary "Isolated reload preflight is running."))
+
+(defun safe-reload-missing-frame-result ()
+  "Return a refusal when an interactive reload has no application frame."
+  (make-safe-reload-result
+   :status :refused
+   :stage :frame
+   :summary "Interactive safe reload requires a running Clawmacs frame."))
+
+(defun safe-reload-live-result-after-preflight (request preflight)
+  "Apply PREFLIGHT at the frame boundary and return the final reload result."
+  (let* ((buffer (safe-reload-request-buffer request))
+         (source-root (safe-reload-request-source-root request))
+         (started-at (safe-reload-request-started-at request))
+         (activity (and (clawmacs-reload-result-ok-p preflight)
+                        (safe-reload-process-runtime-activity buffer))))
+    (cond
+      ((not (clawmacs-reload-result-ok-p preflight))
+       preflight)
+      (activity
+       (let ((result (safe-reload-refused-result activity)))
+         (setf (safe-reload-result-preflight result) preflight)
+         result))
+      (t
+       (let ((live
+               (handler-case
+                   (call-safe-reload-live-function buffer source-root)
+                 (error (condition)
+                   (safe-reload-condition-result
+                    :live-failed
+                    :live
+                    condition
+                    started-at
+                    :preflight preflight
+                    :source-root source-root)))))
+         (if (clawmacs-reload-result-ok-p live)
+             (safe-reload-complete-result preflight live started-at)
+             (safe-reload-live-failed-result live preflight)))))))
+
+(defun apply-safe-reload-preflight-completion (request)
+  "Apply exact REQUEST completion on the frame process and finalize visibly."
+  (multiple-value-bind (preflight worker claimed-p)
+      (safe-reload-begin-completion request)
+    (unless claimed-p
+      (return-from apply-safe-reload-preflight-completion nil))
+    (let ((result nil)
+          (buffer (safe-reload-request-buffer request))
+          (notify-p (safe-reload-request-notify-p request)))
+      (unwind-protect
+           (progn
+             ;; The completion event may be dequeued before the worker lambda
+             ;; has returned from QUEUE-EVENT.  Join that already-complete
+             ;; worker before redefining any code it could still execute.
+             (when (and worker (not (eq worker (bt:current-thread))))
+               (bt:join-thread worker))
+             (setf result
+                   (handler-case
+                       (safe-reload-live-result-after-preflight
+                        request preflight)
+                     (error (condition)
+                       (safe-reload-condition-result
+                        :live-failed
+                        :application
+                        condition
+                        (safe-reload-request-started-at request)
+                        :preflight preflight
+                        :source-root
+                        (safe-reload-request-source-root request)))))
+             (finalize-safe-reload-result result buffer notify-p))
+        (finish-safe-reload-request request))
+      result)))
+
+(defmethod clim:handle-event
+    ((sheet clime:top-level-sheet-mixin)
+     (event clawmacs-safe-reload-completion-event))
+  "Apply safe reload completion only at the CLIM application event boundary."
+  (declare (ignore sheet))
+  (let ((request (safe-reload-completion-event-request event)))
+    (handler-case
+        (apply-safe-reload-preflight-completion request)
+      (error (condition)
+        (finish-safe-reload-request request)
+        (ignore-errors
+          (file-debug-event "safe-reload-completion-application-error"
+                            :condition (format nil "~A" condition)))
+        nil))))
+
+(defun run-synchronous-safe-reload-request
+    (buffer timeout source-root notify-p)
+  "Run a programmatic reload synchronously under exact request ownership."
+  (let ((request
+          (make-safe-reload-request
+           :token (cons :safe-reload (gensym "REQUEST-"))
+           :mode :synchronous
+           :buffer buffer
+           :started-at (safe-reload-now-seconds)
+           :timeout timeout
+           :source-root source-root
+           :notify-p notify-p)))
+    (multiple-value-bind (claimed-p blocker)
+        (safe-reload-try-claim-request request)
+      (if claimed-p
+          (unwind-protect
+               (run-safe-reload-under-lock
+                buffer timeout source-root notify-p
+                (safe-reload-request-started-at request))
+            (finish-safe-reload-request request))
+          (finalize-safe-reload-result
+           (safe-reload-blocked-result blocker)
+           buffer
+           notify-p)))))
+
+(defun start-interactive-safe-reload (buffer)
+  "Start a managed preflight and return before it completes."
+  (let* ((frame (safe-reload-current-chat-frame))
+         (request
+           (make-safe-reload-request
+            :token (cons :safe-reload (gensym "REQUEST-"))
+            :mode :interactive
+            :buffer buffer
+            :frame frame
+            :started-at (safe-reload-now-seconds)
+            :notify-p t
+            :stage :preflight)))
+    (unless (or frame *safe-reload-completion-dispatch-function*)
+      (return-from start-interactive-safe-reload
+        (finalize-safe-reload-result
+         (safe-reload-missing-frame-result) buffer t)))
+    (multiple-value-bind (claimed-p blocker)
+        (safe-reload-try-claim-request request)
+      (unless claimed-p
+        (return-from start-interactive-safe-reload
+          (finalize-safe-reload-result
+           (safe-reload-blocked-result blocker) buffer t))))
     (notify-safe-reload-started buffer)
     (redisplay-safe-reload-status-now)
-    (clawmacs-safe-reload :buffer buffer)))
+    (handler-case
+        (let ((worker
+                (make-safe-reload-preflight-thread
+                 (lambda () (run-safe-reload-preflight-worker request))
+                 "clawmacs-safe-reload-preflight")))
+          (unless worker
+            (error "Safe reload worker constructor returned NIL."))
+          (safe-reload-record-worker request worker)
+          (safe-reload-started-result))
+      (error (condition)
+        (unwind-protect
+             (finalize-safe-reload-result
+              (safe-reload-condition-result
+               :preflight-failed
+               :worker-start
+               condition
+               (safe-reload-request-started-at request))
+              buffer
+              t)
+          (finish-safe-reload-request request))))))
+
+(defun clawmacs-safe-reload (&key buffer timeout source-root (notify-p t))
+  "Safely reload updated Clawmacs source in-place.
+The process must first be quiescent: no buffer runtime owner, provider/tool/OAuth
+activity, interop turn, or subagent worker may be active.  An isolated worker
+then proves that Clawmacs can load from SOURCE-ROOT.  The live image is reloaded
+only when that preflight returns :OK.  Accepted live reload is a synchronous,
+explicit development operation and briefly blocks its caller.  Refusals and
+all preflight, busy, and live-reload failures are returned as SAFE-RELOAD-RESULT
+objects rather than signaled to the caller."
+  (run-synchronous-safe-reload-request buffer timeout source-root notify-p))
+
+(defun safe-reload-clawmacs-command (buffer)
+  "Start a managed safe reload from a user command when quiescent.
+
+The isolated preflight runs off the CLIM command process.  Its completion is
+marshalled back as an application event; only the accepted live ASDF reload is
+synchronous and briefly blocks the UI at that quiescent frame boundary.  Unsafe
+activity is visibly refused before the start notification or either phase."
+  (start-interactive-safe-reload buffer))
 (defcommand safe-reload-clawmacs-command)
-
-(defun execute-clawmacs-reload (args)
-  "Provider tool entry point for requesting a safe Clawmacs reload."
-  (let* ((timeout (or (tool-arg args :timeout "timeout")
-                      *safe-reload-preflight-timeout*))
-         (buffer (or *current-tool-buffer*
-                     (ignore-errors (current-buffer))))
-         (result (clawmacs-safe-reload :buffer buffer
-                                       :timeout timeout)))
-    (lisp-data-string (safe-reload-result-plist result))))
-
-(deftool execute-clawmacs-reload
-  :name "clawmacs_reload"
-  :description "Safely reload updated Clawmacs source in place. Runs an isolated preflight worker first; only on preflight success does the live image reload. Returns a Lisp data status payload and inserts a visible system notification in the active buffer."
-  :permission :agent-allowed
-  :call-style :raw-args
-  :args ((timeout :type "integer"
-                  :required nil
-                  :description "Optional isolated preflight timeout in seconds. Default: 60.")))

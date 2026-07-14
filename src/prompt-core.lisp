@@ -58,7 +58,6 @@
   (json-p nil :type boolean)
   (jsonl-p nil :type boolean)
   output-schema
-  (auto-approve-tools-p nil :type boolean)
   (max-tool-iterations *prompt-max-tool-iterations* :type integer)
   (skill-roots nil :type list)
   (packages nil :type list)

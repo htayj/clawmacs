@@ -70,11 +70,6 @@
                       "git_log" "git_push" "git_remote" "git_show"
                       "git_status"))
         (is (member name tool-names :test #'string=)))
-      (dolist (name '("git_add" "git_commit" "git_push"))
-        (is-true (clawmacs::tool-requires-permission-p name)))
-      (dolist (name '("git_status" "git_log" "git_diff" "git_show"
-                      "git_branch" "git_remote"))
-        (is-false (clawmacs::tool-requires-permission-p name)))
       (is (search "Git workflow with git" prompt))
       (is (search "git_status" prompt))
       (is (search "git_diff" prompt))
@@ -125,7 +120,7 @@ new line
         (is (search "origin" (getf remote :stdout)))))))
 
 (test git-package-mutating-tools-stage-commit-and-push
-  "Approval-gated git tools support add, commit, and local bare-remote push."
+  "Git tools directly support add, commit, and local bare-remote push."
   (with-git-package-state
     (let* ((repo (make-git-package-repo "mutating"))
            (remote (git-package-test-directory "remote")))

@@ -1,5 +1,10 @@
 # Clawmacs TUI Chat Buffer -- Design Spec
 
+> **Historical document.** This Croatoan-era design is retained as project
+> history and is not a description of current Clawmacs. In particular, its
+> in-process permission and sandbox model was removed in July 2026. Current
+> Clawmacs is full-trust; users provide external containment when desired.
+
 Version: 0.1 -- 2026-03-14
 
 ## Overview

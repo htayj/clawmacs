@@ -16,6 +16,44 @@
 (defvar *slop-project-index-cache* (make-hash-table :test #'equal)
   "Cache of parsed project indexes keyed by normalized project name.")
 
+(defvar *process-slop-project-index-cache* *slop-project-index-cache*
+  "Process-global SLOP cache, distinct from dynamic test bindings.")
+
+(defvar *slop-project-index-cache-lock*
+  (bt:make-lock "clawmacs slop project index cache")
+  "Lock guarding bounded access to the process-global SLOP cache.")
+
+(defun call-with-slop-project-index-cache-lock
+    (function &optional (cache *slop-project-index-cache*))
+  "Call FUNCTION under the SLOP cache lock when CACHE is process-global.
+
+Filesystem traversal, parsing, and index validation must happen after this
+lock has been released."
+  (if (eq cache *process-slop-project-index-cache*)
+      (bt:with-lock-held (*slop-project-index-cache-lock*)
+        (funcall function))
+      (funcall function)))
+
+(defun find-cached-slop-project-index (cache-key)
+  "Return the cached SLOP index for CACHE-KEY, or NIL."
+  (call-with-slop-project-index-cache-lock
+   (lambda () (gethash cache-key *slop-project-index-cache*))
+   *slop-project-index-cache*))
+
+(defun publish-cached-slop-project-index (cache-key index)
+  "Publish INDEX for CACHE-KEY and return INDEX."
+  (call-with-slop-project-index-cache-lock
+   (lambda ()
+     (setf (gethash cache-key *slop-project-index-cache*) index))
+   *slop-project-index-cache*)
+  index)
+
+(defun clear-slop-project-index-cache ()
+  "Clear the active SLOP project index cache atomically."
+  (call-with-slop-project-index-cache-lock
+   (lambda () (clrhash *slop-project-index-cache*))
+   *slop-project-index-cache*))
+
 (defstruct slop-definition
   id
   project
@@ -1079,7 +1117,7 @@
          (project-key (normalize-project-name (project-name project)))
          (paths (sort (slop-project-lisp-paths project path) #'string<))
          (cache-key (list project-key (or path "")))
-         (cached (gethash cache-key *slop-project-index-cache*)))
+         (cached (find-cached-slop-project-index cache-key)))
     (if (slop-project-index-current-p cached project paths)
         cached
         (let ((index (make-slop-project-index
@@ -1089,8 +1127,10 @@
                                                                resource-path))
                                             paths)
                       :indexed-at (get-universal-time))))
-          (setf (gethash cache-key *slop-project-index-cache*) index)
-          index))))
+          ;; Index construction performs filesystem I/O and parsing outside
+          ;; the mutex.  Concurrent equivalent builds are harmless; publication
+          ;; is one bounded hash-table mutation.
+          (publish-cached-slop-project-index cache-key index)))))
 
 (defun slop-index-definitions (index)
   "Return all definitions in INDEX."
@@ -2040,7 +2080,7 @@
              (new-text (slop-apply-span-replacements old-text replacements)))
         (sexed-ensure-balanced new-text "Renamed Lisp source")
         (project-save-file project resource-path new-text)
-        (clrhash *slop-project-index-cache*)
+        (clear-slop-project-index-cache)
         (list :status :ok
               :project (project-name (ensure-project project))
               :path resource-path

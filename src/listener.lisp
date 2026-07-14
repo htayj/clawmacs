@@ -449,25 +449,35 @@
                                    :output :interactive
                                    :error-output :interactive)))
         (format nil "Started background process: ~A" process))
-      (multiple-value-bind (stdout stderr code)
-          (uiop:run-program (list "/bin/sh" "-c" command)
-                            :directory (listener-current-directory buf)
-                            :output :string
-                            :error-output :string
-                            :ignore-error-status t)
-        (listener-truncate-text
-         (with-output-to-string (stream)
-           (unless (blank-string-p stdout)
-             (write-string stdout stream)
-             (unless (char= (char stdout (1- (length stdout))) #\Newline)
-               (terpri stream)))
-           (unless (blank-string-p stderr)
-             (write-string ";; stderr" stream)
-             (terpri stream)
-             (write-string stderr stream)
-             (unless (char= (char stderr (1- (length stderr))) #\Newline)
-               (terpri stream)))
-           (format stream "Exit status: ~A" code))))))
+      (let ((directory (listener-current-directory buf)))
+        (start-interactive-buffer-operation
+         buf
+         :listener-shell
+         (lambda (snapshot operation)
+           (declare (ignore snapshot operation))
+           (run-interactive-subprocess command :directory directory))
+         (lambda (live-buffer operation result error-text)
+           (declare (ignore operation))
+           (setf (buffer-status live-buffer)
+                 (if error-text :error :idle))
+           (buffer-insert-read-only-message
+            live-buffer
+            :listener
+            (if error-text
+                (format nil "Listener shell error: ~A" error-text)
+                (listener-truncate-text
+                 (interactive-shell-result-text command result)))
+            :record-p nil))
+         :cancel-function
+         (lambda (live-buffer operation)
+           (declare (ignore operation))
+           (buffer-insert-read-only-message
+            live-buffer :listener
+            (interactive-shell-result-text
+             command (list :cancelled-p t))
+            :record-p nil))
+         :payload (list :command command)
+         :status :shell-running))))
 
 (defun listener-read-object (buf text)
   "Read one object from TEXT in BUF's listener package."
@@ -634,7 +644,8 @@
       (buffer-finalize-input buf)
       (handler-case
           (let ((output (listener-handle-input buf input-text)))
-            (unless (blank-string-p output)
+            (when (and (stringp output)
+                       (not (blank-string-p output)))
               (buffer-insert-read-only-message buf :listener output
                                                :record-p nil)))
         (error (condition)

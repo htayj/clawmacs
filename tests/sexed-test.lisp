@@ -171,10 +171,10 @@
                (sexed-barf-forward "(foo (bar baz quux))" '(:head "bar")))))
 
 (test sexed-file-adapters-validate-before-writing
-  "File adapters edit sandboxed files and leave files unchanged on invalid edits."
+  "File adapters edit working-directory-relative files and preserve invalid edits."
   (let* ((dir (sexed-test-directory))
          (file (merge-pathnames "sample.lisp" dir))
-         (*sandbox-root* (truename dir))
+         (*tool-working-directory* (truename dir))
          (initial "(defun foo () (+ 1 2))"))
     (write-sexed-test-file file initial)
     (let ((result (sexed-replace-file-form "sample.lisp"
@@ -222,7 +222,7 @@
   "Safety pagination does not change normal small-file reads."
   (let* ((dir (sexed-test-directory))
          (file (merge-pathnames "small.lisp" dir))
-         (*sandbox-root* (truename dir))
+         (*tool-working-directory* (truename dir))
          (text "(defun small () :ok)"))
     (write-sexed-test-file file text)
     (let ((clawmacs::*sexed-read-form-count-limit* 3))
@@ -234,7 +234,7 @@
   "Large files return structural safety pages with continuation hints."
   (let* ((dir (sexed-test-directory))
          (file (merge-pathnames "large.lisp" dir))
-         (*sandbox-root* (truename dir))
+         (*tool-working-directory* (truename dir))
          (text (sexed-test-top-level-calls 5)))
     (write-sexed-test-file file text)
     (let ((clawmacs::*sexed-read-form-count-limit* 3))
@@ -264,7 +264,7 @@
   "Selector and level options let agents drill into giant structural forms."
   (let* ((dir (sexed-test-directory))
          (file (merge-pathnames "wide.lisp" dir))
-         (*sandbox-root* (truename dir))
+         (*tool-working-directory* (truename dir))
          (text (sexed-test-wide-form 5)))
     (write-sexed-test-file file text)
     (let ((clawmacs::*sexed-read-form-count-limit* 3))
@@ -338,7 +338,7 @@
     (with-package-state-override ((default-package-test-channels))
       (let* ((dir (sexed-test-directory))
              (*project-registry* (make-hash-table :test #'equal))
-             (*sandbox-root* (truename dir))
+             (*tool-working-directory* (truename dir))
              (file (merge-pathnames "source.lisp" dir)))
         (write-sexed-test-file file "(defun foo () (+ 1 2))")
         (define-project "sexed-tool" :root dir)
