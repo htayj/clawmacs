@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 EVENT_MARKER = "[e2e-event]"
 HELLO_SENTINEL = "CLAWMACS_E2E_HELLO_SENTINEL"
+DEBUG_LOG_ANCHOR_BYTES = 256
 
 
 class DriverError(RuntimeError):
@@ -32,6 +33,12 @@ class McCLIMGuiSession:
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
         self.action_log = artifact_dir / "actions.jsonl"
         self.steps: list[dict[str, Any]] = []
+        self._event_cache: list[dict[str, Any]] = []
+        self._debug_log_identity: tuple[int, int] | None = None
+        self._debug_log_offset = 0
+        self._debug_log_partial = b""
+        self._debug_log_anchor = b""
+        self._debug_log_mtime_ns: int | None = None
 
     def log_action(self, action: str, **fields: Any) -> None:
         entry = {
@@ -243,23 +250,80 @@ class McCLIMGuiSession:
         self.focus()
         self.log_action("unmap_map", window_id=self.window_id)
 
+    def _reset_event_reader(self,
+                            identity: tuple[int, int] | None = None) -> None:
+        """Forget events and byte state after a debug-log lifecycle change."""
+        self._event_cache.clear()
+        self._debug_log_identity = identity
+        self._debug_log_offset = 0
+        self._debug_log_partial = b""
+        self._debug_log_anchor = b""
+        self._debug_log_mtime_ns = None
+
+    def _consume_debug_log_lines(self, data: bytes) -> None:
+        """Decode newly completed event lines from DATA exactly once."""
+        buffered = self._debug_log_partial + data
+        lines = buffered.split(b"\n")
+        self._debug_log_partial = lines.pop()
+        for raw_line in lines:
+            line = raw_line.decode("utf-8", errors="replace")
+            marker = line.find(EVENT_MARKER)
+            if marker < 0:
+                continue
+            payload = line[marker + len(EVENT_MARKER):].strip()
+            try:
+                decoded = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(decoded, dict):
+                self._event_cache.append(decoded)
+
     def _events(self) -> list[dict[str, Any]]:
-        if not self.debug_log.exists():
-            return []
-        events: list[dict[str, Any]] = []
-        with self.debug_log.open("r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                marker = line.find(EVENT_MARKER)
-                if marker < 0:
-                    continue
-                payload = line[marker + len(EVENT_MARKER):].strip()
-                try:
-                    decoded = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(decoded, dict):
-                    events.append(decoded)
-        return events
+        """Return cached events after consuming only newly appended log bytes."""
+        try:
+            stream = self.debug_log.open("rb")
+        except FileNotFoundError:
+            if self._debug_log_identity is not None:
+                self._reset_event_reader()
+            return list(self._event_cache)
+
+        with stream:
+            stat = os.fstat(stream.fileno())
+            identity = (stat.st_dev, stat.st_ino)
+            mtime_ns = getattr(stat, "st_mtime_ns",
+                               int(stat.st_mtime * 1_000_000_000))
+            if self._debug_log_identity is None:
+                self._debug_log_identity = identity
+            elif identity != self._debug_log_identity:
+                self._reset_event_reader(identity)
+            elif stat.st_size < self._debug_log_offset:
+                self._reset_event_reader(identity)
+            elif (self._debug_log_anchor
+                  and (stat.st_size != self._debug_log_offset
+                       or mtime_ns != self._debug_log_mtime_ns)):
+                anchor_offset = (self._debug_log_offset
+                                 - len(self._debug_log_anchor))
+                stream.seek(anchor_offset)
+                observed_anchor = stream.read(len(self._debug_log_anchor))
+                if observed_anchor != self._debug_log_anchor:
+                    # A same-inode truncate-and-rewrite can grow beyond the old
+                    # offset before the next poll.  Validate a short consumed
+                    # suffix so that case resets instead of reading mid-line.
+                    self._reset_event_reader(identity)
+
+            stream.seek(self._debug_log_offset)
+            data = stream.read()
+            self._debug_log_offset += len(data)
+            if data:
+                combined_anchor = self._debug_log_anchor + data
+                self._debug_log_anchor = combined_anchor[-DEBUG_LOG_ANCHOR_BYTES:]
+                self._consume_debug_log_lines(data)
+            final_stat = os.fstat(stream.fileno())
+            self._debug_log_mtime_ns = getattr(
+                final_stat, "st_mtime_ns",
+                int(final_stat.st_mtime * 1_000_000_000))
+
+        return list(self._event_cache)
 
     def latest_event(self, event_name: str) -> dict[str, Any] | None:
         for event in reversed(self._events()):

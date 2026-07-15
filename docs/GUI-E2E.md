@@ -141,6 +141,12 @@ The driver correlates every screenshot with the latest `ui-snapshot` event. The
 snapshot is semantic state (transcript, compose text, status/model line,
 selector/toggle state, and minibuffer text), not OCR.
 
+The driver tails `debug.log` by file identity and byte offset. It retains an
+incomplete trailing line until the writer finishes it, consumes appended event
+records once, and resets its cache if the log is replaced or truncated. This
+keeps long stress runs proportional to newly written log data instead of
+reparsing the full event history on every poll.
+
 ## Smoke behavior
 
 The current `smoke` suite:
