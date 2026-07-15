@@ -46,7 +46,21 @@ if [ "$(cat "$SOURCE_CACHE/common-lisp/system-a/component.fasl")" != seed-v1 ]; 
   exit 1
 fi
 
+if gui_e2e_seed_private_common_lisp_cache \
+     "$SOURCE_CACHE" "$SOURCE_CACHE/nested-private" "$LOCK_FILE"; then
+  echo 'FAIL overlapping-cache-roots: nested destination was accepted' >&2
+  exit 1
+fi
+if [ "$GUI_E2E_CACHE_SEED_STATUS" != seed-failed ] || \
+   [ -e "$SOURCE_CACHE/nested-private/common-lisp" ]; then
+  echo 'FAIL overlapping-cache-roots: unsafe destination was touched' >&2
+  exit 1
+fi
+
 PRIVATE_COLD="$TMP_DIR/private-cold"
+mkdir -p "$PRIVATE_COLD/common-lisp"
+printf 'stale-cache\n' >"$PRIVATE_COLD/common-lisp/stale.fasl"
+printf 'preserve-sibling\n' >"$PRIVATE_COLD/unrelated-state"
 CLAWMACS_GUI_E2E_COLD_CACHE=1
 export CLAWMACS_GUI_E2E_COLD_CACHE
 gui_e2e_seed_private_common_lisp_cache \
@@ -54,7 +68,11 @@ gui_e2e_seed_private_common_lisp_cache \
 unset CLAWMACS_GUI_E2E_COLD_CACHE
 if [ "$GUI_E2E_CACHE_SEED_STATUS" != cold-override ] || \
    [ -e "$PRIVATE_COLD/common-lisp" ]; then
-  echo 'FAIL cold-cache-override: cache was seeded' >&2
+  echo 'FAIL cold-cache-override: existing Common Lisp cache survived' >&2
+  exit 1
+fi
+if [ "$(cat "$PRIVATE_COLD/unrelated-state")" != preserve-sibling ]; then
+  echo 'FAIL cold-cache-override: unrelated private state was removed' >&2
   exit 1
 fi
 
@@ -101,6 +119,20 @@ while [ ! -s "$LOCK_READY" ] && [ "$attempt" -lt 200 ]; do
 done
 if [ ! -s "$LOCK_READY" ]; then
   echo 'FAIL seed-lock: exclusive owner did not acquire lock' >&2
+  exit 1
+fi
+
+PRIVATE_TIMED_OUT="$TMP_DIR/private-timed-out"
+gui_e2e_seed_private_common_lisp_cache \
+  "$SOURCE_CACHE" "$PRIVATE_TIMED_OUT" "$LOCK_FILE" 1
+if [ "$GUI_E2E_CACHE_SEED_STATUS" != seed-failed ]; then
+  echo "FAIL seed-lock-timeout: status $GUI_E2E_CACHE_SEED_STATUS" >&2
+  exit 1
+fi
+if [ -e "$PRIVATE_TIMED_OUT/common-lisp" ] || \
+   find "$PRIVATE_TIMED_OUT" -name '.common-lisp-seed.*' -print -quit \
+     2>/dev/null | grep -q .; then
+  echo 'FAIL seed-lock-timeout: unlocked copy or stage was published' >&2
   exit 1
 fi
 
