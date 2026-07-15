@@ -49,6 +49,55 @@
     (clawmacs::lisp-data-read
      (clawmacs:execute-tool tool-name args))))
 
+(test artifactum-normalizes-record-without-updated-timestamp
+  "Legacy records use their creation timestamp when updated_at is absent."
+  (let ((record (clawmacs::normalize-artifactum-record
+                 '((:id . "legacy-created")
+                   (:path . "/tmp/legacy-created.txt")
+                   (:created_at . 12345)))))
+    (is (= 12345 (getf record :created-at)))
+    (is (= 12345 (getf record :updated-at)))))
+
+(test artifactum-normalizes-record-without-timestamps
+  "Records without timestamps receive one consistent fallback timestamp."
+  (let* ((record (clawmacs::normalize-artifactum-record
+                  '((:id . "legacy-undated")
+                    (:path . "/tmp/legacy-undated.txt"))))
+         (created-at (getf record :created-at)))
+    (is (integerp created-at))
+    (is (= created-at (getf record :updated-at)))))
+
+(test artifactum-normalization-preserves-supplied-timestamps
+  "Complete records retain distinct supplied creation and update timestamps."
+  (let ((record (clawmacs::normalize-artifactum-record
+                 '((:id . "complete")
+                   (:path . "/tmp/complete.txt")
+                   (:created_at . 12345)
+                   (:updated_at . 23456)))))
+    (is (= 12345 (getf record :created-at)))
+    (is (= 23456 (getf record :updated-at)))))
+
+(test artifactum-session-records-read-legacy-index-without-updated-timestamp
+  "The durable index reader accepts legacy records missing updated_at."
+  (with-artifactum-test-state
+    (let* ((buffer (make-artifactum-test-buffer "legacy-index"))
+           (session (clawmacs::artifactum-session-for-buffer buffer))
+           (index-path (clawmacs::artifactum-session-index-path session)))
+      (ensure-directories-exist index-path)
+      (with-open-file (stream index-path
+                              :direction :output
+                              :if-exists :supersede
+                              :if-does-not-exist :create
+                              :external-format :utf-8)
+        (write-string
+         "[{\"id\":\"legacy-index\",\"path\":\"/tmp/legacy-index.txt\",\"created_at\":34567}]"
+         stream))
+      (let ((records (clawmacs::artifactum-session-records buffer)))
+        (is (= 1 (length records)))
+        (is (string= "legacy-index" (getf (first records) :id)))
+        (is (= 34567 (getf (first records) :created-at)))
+        (is (= 34567 (getf (first records) :updated-at)))))))
+
 (test artifactum-package-registers-tools-buffer-type-and-commands
   "Artifactum loads its tools, prompt section, commands, and buffer type."
   (with-artifactum-test-state

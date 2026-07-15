@@ -327,7 +327,7 @@ read-modify-supersede update of artifacts/index.json.")
 
 (defun normalize-artifactum-record (record)
   "Normalize RECORD into a plist."
-  (let ((id (artifactum-normalize-string
+  (let* ((id (artifactum-normalize-string
              (artifactum-json-value record "id")))
         (kind (or (artifactum-normalize-string
                    (artifactum-json-value record "kind"))
