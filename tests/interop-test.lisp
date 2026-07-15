@@ -1507,34 +1507,62 @@
                     :provider "zai"
                     :model "glm-5"))
            (thread-id (clawmacs:interop-thread-id thread))
+           (callback-entered
+             (bt:make-semaphore :name "spawn failure callback entered"))
+           (callback-release
+             (bt:make-semaphore :name "release spawn failure callback"))
+           (events-lock (bt:make-lock "spawn failure callback events"))
            (events nil)
            (start-error nil))
       (declare (ignore _keep))
-      (with-interop-function-override
-          (clawmacs::make-interop-turn-runner-thread (function name)
-           (declare (ignore function name))
-           (error "forced interop runner creation failure"))
-        (handler-case
-            (clawmacs:start-interop-turn
-             thread-id "This cannot start"
-             :event-callback (lambda (event) (push event events)))
-          (error (condition)
-            (setf start-error condition))))
-      (is (typep start-error 'error))
-      (is (search "forced interop runner creation failure"
-                  (format nil "~A" start-error)))
-      (is (= 1 (hash-table-count clawmacs::*interop-turn-table*)))
-      (let* ((turn (first (clawmacs::interop-turn-registry-snapshot)))
-             (summary (clawmacs:read-interop-turn
-                       (clawmacs:interop-turn-id turn))))
-        (is (string= "failed" (getf summary :status)))
-        (is (search "forced interop runner creation failure"
-                    (getf summary :error)))
-        (is (getf summary :finished-at))
-        (is (null (clawmacs::interop-turn-runner-thread turn))))
-      (is-false (clawmacs::interop-thread-execution-reserved-p thread))
-      (is (equal '("turn.failed")
-                 (mapcar (lambda (event) (getf event :event)) events)))
+      (is-true (clawmacs::wait-for-runtime-callback-dispatch-idle))
+      (unwind-protect
+           (progn
+             (with-interop-function-override
+                 (clawmacs::make-interop-turn-runner-thread (function name)
+                  (declare (ignore function name))
+                  (error "forced interop runner creation failure"))
+               (handler-case
+                   (clawmacs:start-interop-turn
+                    thread-id "This cannot start"
+                    :event-callback
+                    (lambda (event)
+                      (bt:with-lock-held (events-lock)
+                        (push (clawmacs::copy-runtime-owned-data event) events))
+                      (bt:signal-semaphore callback-entered)
+                      (bt:wait-on-semaphore callback-release)))
+                 (error (condition)
+                   (setf start-error condition))))
+             ;; Runner construction and thread ownership settle synchronously;
+             ;; the bounded public callback is deliberately not joined.
+             (is (typep start-error 'error))
+             (is (search "forced interop runner creation failure"
+                         (format nil "~A" start-error)))
+             (is-true
+              (bt:wait-on-semaphore callback-entered :timeout 2.0))
+             (is (= 1 (hash-table-count clawmacs::*interop-turn-table*)))
+             (let* ((turn (first (clawmacs::interop-turn-registry-snapshot)))
+                    (summary (clawmacs:read-interop-turn
+                              (clawmacs:interop-turn-id turn))))
+               (is (string= "failed" (getf summary :status)))
+               (is (search "forced interop runner creation failure"
+                           (getf summary :error)))
+               (is (getf summary :finished-at))
+               (is (null (clawmacs::interop-turn-runner-thread turn))))
+             (is-false
+              (clawmacs::interop-thread-execution-reserved-p thread))
+             (is (= 1
+                    (clawmacs::runtime-callback-dispatch-pending-count)))
+             (is (equal
+                  '("turn.failed")
+                  (mapcar
+                   (lambda (event) (getf event :event))
+                   (nreverse
+                    (bt:with-lock-held (events-lock)
+                      (copy-list events)))))))
+        (bt:signal-semaphore callback-release)
+        (is-true
+         (clawmacs::wait-for-runtime-callback-dispatch-idle :timeout 2.0)))
       (with-interop-function-override
           (clawmacs::provider-request-streaming
            (provider messages callback

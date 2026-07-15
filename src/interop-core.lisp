@@ -1244,7 +1244,9 @@ client callback must not unwind the managed runner or obscure cleanup."
                              (max-tool-iterations *prompt-max-tool-iterations*)
                              output-schema
                              event-callback)
-  "Start an async turn for THREAD-ID and return its live turn object."
+  "Start an async turn for THREAD-ID and return its live turn object.
+External callback delivery is bounded and asynchronous, including terminal
+notification when runner creation fails."
   (when (blank-string-p prompt)
     (error "Turn input must be non-empty"))
   (let* ((thread (or (resume-interop-thread thread-id)
