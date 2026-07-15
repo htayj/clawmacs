@@ -46,6 +46,10 @@ The harness:
   600-second acquisition bound; it releases the lock before starting the GUI,
   so concurrent suites only read installed releases while compiling into
   their artifact-local caches;
+- seeds only the prewarmed `common-lisp` tree into each artifact-local cache
+  while holding a shared lock against later warmups; the seed uses a reflink
+  when supported and otherwise copies files, never hard-links them, so every
+  suite continues writing only to its private `HOME` and `XDG_CACHE_HOME`;
 - asks `Xvfb -displayfd` to allocate a free private display, with access control
   disabled on its container-local Unix socket and TCP listening disabled, then
   connects clients through `:<display>`;
@@ -69,7 +73,9 @@ The harness:
 No real provider network call or user secret is required for the GUI E2E suites.
 The frame-ready wait defaults to 300 seconds so a cold McCLIM compilation can
 finish; set `CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS` to a positive integer
-to override it.
+to override it. Set `CLAWMACS_GUI_E2E_COLD_CACHE=1` to skip the private cache
+seed and deliberately exercise cold compilation. An unavailable or failed seed
+also falls back to an empty private cache rather than sharing writable state.
 
 After the semantic `frame-stopped` event, the natural SBCL exit is bounded to
 30 seconds. Set `CLAWMACS_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS` to a positive
@@ -98,6 +104,13 @@ warmup-failure gating, and lock release after abrupt owner death:
 
 ```sh
 sh ./scripts/test-guix-container.sh
+```
+
+The cache-seeding regression verifies isolation, timestamp preservation,
+warmup-lock coordination, cold fallback, and parallel private copies:
+
+```sh
+sh ./scripts/test-gui-e2e-cache.sh
 ```
 
 Every successful driver scenario exits through the ordinary `C-x C-c` CLIM

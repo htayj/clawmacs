@@ -3,6 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$SCRIPT_DIR/gui-e2e-cleanup.sh"
+. "$SCRIPT_DIR/gui-e2e-cache.sh"
 if ! REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null); then
   REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 fi
@@ -19,6 +20,8 @@ Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|keyb
 Runs an opt-in Clawmacs GUI E2E suite inside an isolated Xvfb display.
 Set CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS to override the 300-second
 cold-start/frame-ready timeout.
+Set CLAWMACS_GUI_E2E_COLD_CACHE=1 to skip the artifact-cache seed and exercise
+a deliberately cold ASDF startup.
 EOF
 }
 
@@ -75,6 +78,8 @@ inside_preflight() {
   need_binary Xvfb
   need_binary xdotool
   need_binary setsid
+  need_binary flock
+  need_binary cp
   need_binary realpath
   if ! have_screenshot_command; then
     fail 'missing screenshot command: import, magick, or xwd'
@@ -167,6 +172,8 @@ if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
   exit 0
 fi
 
+PREWARMED_XDG_CACHE_HOME=${XDG_CACHE_HOME:-}
+
 case "$SUITE" in
   smoke|mx|features|keybinds|organa|quaestor|reload|stability) ;;
   *) fail "unsupported GUI E2E suite: $SUITE" ;;
@@ -196,6 +203,33 @@ APP_PGID_FILE="$ARTIFACT_DIR/app.pgid"
 log() {
   printf '[gui-e2e] %s\n' "$*" | tee -a "$HARNESS_LOG" >&2
 }
+
+if [ -n "$PREWARMED_XDG_CACHE_HOME" ]; then
+  gui_e2e_seed_private_common_lisp_cache \
+    "$PREWARMED_XDG_CACHE_HOME" \
+    "$ARTIFACT_DIR/cache" \
+    "$PREWARMED_XDG_CACHE_HOME/quicklisp.lock"
+else
+  GUI_E2E_CACHE_SEED_STATUS=source-unavailable
+fi
+
+case "$GUI_E2E_CACHE_SEED_STATUS" in
+  seeded)
+    log "seeded artifact-private Common Lisp cache from $PREWARMED_XDG_CACHE_HOME"
+    ;;
+  cold-override)
+    log 'cold-cache override enabled; starting with an empty artifact cache'
+    ;;
+  private-cache-present)
+    log 'artifact-private Common Lisp cache already exists; preserving it'
+    ;;
+  source-unavailable)
+    log 'prewarmed Common Lisp cache unavailable; continuing with a cold artifact cache'
+    ;;
+  seed-failed)
+    log 'prewarmed Common Lisp cache could not be copied safely; continuing with a cold artifact cache'
+    ;;
+esac
 
 capture_root_screenshot() {
   path="$1"

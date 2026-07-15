@@ -694,7 +694,8 @@ for variable in \
   CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS \
   CLAWMACS_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS \
   CLAWMACS_GUI_E2E_STABILITY_MENU_ITERATIONS \
-  CLAWMACS_GUI_E2E_STABILITY_EXPOSE_ITERATIONS; do
+  CLAWMACS_GUI_E2E_STABILITY_EXPOSE_ITERATIONS \
+  CLAWMACS_GUI_E2E_COLD_CACHE; do
   if ! grep -q "$variable" "$guix_args_log"; then
     echo "FAIL preserved-gui-env: missing $variable from guix arguments" >&2
     cat "$guix_args_log" >&2
