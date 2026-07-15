@@ -1342,6 +1342,36 @@
         (is (= 1 presentation-calls))
         (is (string= "ui-snapshot" emitted-event))))))
 
+(test redisplay-e2e-snapshot-carries-repeat-state
+  "A handled snapshot says whether another redisplay cycle is already queued."
+  (let* ((buffer
+           (make-buffer "redisplay-snapshot-repeat"
+                        :session-persistence-mode :ephemeral))
+         (frame
+           (clim:make-application-frame
+            'clawmacs::clawmacs-chat-frame
+            :buffer buffer))
+         (payloads nil)
+         (clawmacs::*debug-log-file*
+           #P"/tmp/clawmacs-redisplay-snapshot-repeat.jsonl")
+         (clawmacs::*e2e-events-enabled-override* t))
+    (with-mcclim-test-function-override
+        (clawmacs::file-debug-event (event-name &rest payload)
+          (when (string= event-name "ui-snapshot")
+            (push payload payloads)))
+      (clawmacs::emit-chat-frame-e2e-snapshot
+       frame :reason "redisplay-handled" :repeat t)
+      (clawmacs::emit-chat-frame-e2e-snapshot
+       frame :reason "redisplay-handled" :repeat nil)
+      (clawmacs::emit-chat-frame-e2e-snapshot
+       frame :reason "pane-rendered" :pane "transcript"))
+    (setf payloads (nreverse payloads))
+    (is (= 3 (length payloads)))
+    (is-true (getf (first payloads) :repeat))
+    (is (member :repeat (second payloads)))
+    (is-false (getf (second payloads) :repeat))
+    (is-false (member :repeat (third payloads)))))
+
 (test mcclim-input-presentation-function-appends-semantic-overlay
   "Input presentation hooks append package-owned overlays to screen snapshots."
   (let ((clawmacs::*buffer-type-registry*

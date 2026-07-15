@@ -256,7 +256,8 @@ class FinalStateScreenshotTests(unittest.TestCase):
         record = DRIVER.McCLIMGuiSession.final_state_screenshot(
             FakeSession(), "final",
             final_snapshot={"sequence": 29,
-                            "reason": "redisplay-handled"})
+                            "reason": "redisplay-handled",
+                            "repeat": None})
 
         self.assertEqual(
             [("log", "final_snapshot_after_redisplay",
@@ -267,6 +268,76 @@ class FinalStateScreenshotTests(unittest.TestCase):
         )
         self.assertTrue(record["redisplay_already_handled"])
         self.assertIsNone(record["redisplay_sequence"])
+
+    def test_repeating_redisplay_snapshot_waits_for_quiescent_cycle(self) -> None:
+        calls: list[tuple[object, ...]] = []
+
+        class FakeSession:
+            def wait_event_after(self, event_name: str, after_sequence: int,
+                                 predicate: object,
+                                 *, timeout: float) -> dict[str, object]:
+                repeated = {"buffer_name": "chat", "repeat": True}
+                completed = {"buffer_name": "chat", "repeat": None}
+                calls.append(("wait", event_name, after_sequence, timeout,
+                              predicate(repeated), predicate(completed)))
+                return {"event": event_name, "sequence": 37, **completed}
+
+            def x_request_reply_barrier(self) -> None:
+                calls.append(("barrier",))
+
+            def screenshot(self, name: str, *, root: bool) -> dict[str, object]:
+                calls.append(("screenshot", name, root))
+                return {"name": name}
+
+        record = DRIVER.McCLIMGuiSession.final_state_screenshot(
+            FakeSession(), "final",
+            final_snapshot={"sequence": 29,
+                            "reason": "redisplay-handled",
+                            "repeat": True,
+                            "buffer_name": "chat"})
+
+        self.assertEqual(
+            [("wait", "redisplay-handled", 29, 10.0, False, True),
+             ("barrier",),
+             ("screenshot", "final", False)],
+            calls,
+        )
+        self.assertFalse(record["redisplay_already_handled"])
+        self.assertEqual(37, record["redisplay_sequence"])
+
+    def test_legacy_redisplay_snapshot_without_repeat_waits(self) -> None:
+        calls: list[tuple[object, ...]] = []
+
+        class FakeSession:
+            def wait_event_after(self, event_name: str, after_sequence: int,
+                                 predicate: object,
+                                 *, timeout: float) -> dict[str, object]:
+                completed = {"buffer_name": "chat", "repeat": None}
+                calls.append(("wait", event_name, after_sequence, timeout,
+                              predicate(completed)))
+                return {"event": event_name, "sequence": 43, **completed}
+
+            def x_request_reply_barrier(self) -> None:
+                calls.append(("barrier",))
+
+            def screenshot(self, name: str, *, root: bool) -> dict[str, object]:
+                calls.append(("screenshot", name, root))
+                return {"name": name}
+
+        record = DRIVER.McCLIMGuiSession.final_state_screenshot(
+            FakeSession(), "final",
+            final_snapshot={"sequence": 31,
+                            "reason": "redisplay-handled",
+                            "buffer_name": "chat"})
+
+        self.assertEqual(
+            [("wait", "redisplay-handled", 31, 10.0, True),
+             ("barrier",),
+             ("screenshot", "final", False)],
+            calls,
+        )
+        self.assertFalse(record["redisplay_already_handled"])
+        self.assertEqual(43, record["redisplay_sequence"])
 
     def test_x_barrier_requires_an_x_server_reply(self) -> None:
         calls: list[tuple[object, ...]] = []

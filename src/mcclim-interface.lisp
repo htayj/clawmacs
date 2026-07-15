@@ -1139,7 +1139,8 @@ and avoids the backend-independent metric probe."
             :info-text (chat-frame-e2e-info-line frame)
             :screen-text (chat-frame-e2e-screen-text frame)))))
 
-(defun emit-chat-frame-e2e-snapshot (frame &key reason pane)
+(defun emit-chat-frame-e2e-snapshot
+    (frame &key reason pane (repeat nil repeat-supplied-p))
   "Emit a structured semantic GUI snapshot for FRAME when E2E logging is enabled."
   ;; Gate before constructing the snapshot.  Its semantic transcript mirrors
   ;; the visible CLIM view for the external E2E driver and may invoke package
@@ -1152,6 +1153,8 @@ and avoids the backend-independent metric probe."
           (apply #'file-debug-event
                  "ui-snapshot"
                  (append (list :reason reason :pane pane)
+                         (when repeat-supplied-p
+                           (list :repeat repeat))
                          (chat-frame-e2e-snapshot frame))))))))
 
 (defun emit-chat-pane-rendered (frame pane-name &rest payload)
@@ -1863,7 +1866,8 @@ failure releases the reservation while leaving the dirty bit set."
         (file-debug-event "redisplay-handled"
                           :buffer-name (buffer-name (chat-frame-buffer frame))
                           :repeat queued-again-p)
-        (emit-chat-frame-e2e-snapshot frame :reason "redisplay-handled")
+        (emit-chat-frame-e2e-snapshot
+         frame :reason "redisplay-handled" :repeat queued-again-p)
         queued-again-p)))
   frame)
 

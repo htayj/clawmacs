@@ -125,13 +125,14 @@ class McCLIMGuiSession:
         return record
 
     def x_request_reply_barrier(self) -> None:
-        """Wait for the X server to answer a request before image capture.
+        """Require an X server round trip before image capture.
 
         The application emits ``redisplay-handled`` after its CLIM redisplay
-        work, but X drawing requests may still be pending when the driver sees
-        that log event.  ``getwindowgeometry`` requires a server reply, so it
-        provides a deterministic synchronization point without reaching into
-        McCLIM's repaint or output-record machinery.
+        work. ``getwindowgeometry`` confirms that the server answers after the
+        semantic gate and gives already-flushed drawing a settle point without
+        reaching into McCLIM's repaint machinery. Because xdotool uses another
+        X connection, this round trip is not itself a cross-client ordering
+        fence; the explicit non-repeating redisplay event is the primary gate.
         """
         self.run(["xdotool", "getwindowgeometry", "--shell",
                   self.window_id])
@@ -141,11 +142,13 @@ class McCLIMGuiSession:
                                final_snapshot: dict[str, Any],
                                root: bool = False,
                                timeout: float = 10.0) -> dict[str, Any]:
-        """Capture final state only after a newer redisplay and X barrier."""
+        """Capture final state after a completed redisplay and X round trip."""
         snapshot_sequence = event_sequence(final_snapshot,
                                            "final screenshot snapshot")
         redisplay_already_handled = (
-            final_snapshot.get("reason") == "redisplay-handled")
+            final_snapshot.get("reason") == "redisplay-handled"
+            and "repeat" in final_snapshot
+            and not final_snapshot.get("repeat"))
         redisplay_sequence: int | None = None
         if redisplay_already_handled:
             self.log_action(
