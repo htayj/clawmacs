@@ -4,6 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$SCRIPT_DIR/gui-e2e-cleanup.sh"
 . "$SCRIPT_DIR/gui-e2e-cache.sh"
+. "$SCRIPT_DIR/gui-e2e-container-retry.sh"
 if ! REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null); then
   REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 fi
@@ -81,6 +82,7 @@ inside_preflight() {
   need_binary flock
   need_binary cp
   need_binary realpath
+  need_binary stat
   if ! have_screenshot_command; then
     fail 'missing screenshot command: import, magick, or xwd'
   fi
@@ -160,11 +162,16 @@ if [ "$INSIDE_CONTAINER" -ne 1 ]; then
   else
     ARTIFACT_DIR=$(normalize_host_artifact_path_for_container "$ARTIFACT_DIR")
   fi
-  exec "$SCRIPT_DIR/guix-container.sh" --mode e2e -- \
-    sh "scripts/run-gui-e2e.sh" \
-      --inside-container \
-      --suite "$SUITE" \
-      --artifact-dir "$ARTIFACT_DIR"
+  if gui_e2e_run_container_with_retry \
+       "$SCRIPT_DIR/guix-container.sh" --mode e2e -- \
+       sh "scripts/run-gui-e2e.sh" \
+         --inside-container \
+         --suite "$SUITE" \
+         --artifact-dir "$ARTIFACT_DIR"; then
+    exit 0
+  else
+    exit $?
+  fi
 fi
 
 inside_preflight
@@ -200,36 +207,13 @@ DRIVER_STDERR="$ARTIFACT_DIR/driver.stderr"
 WINDOW_ID_FILE="$ARTIFACT_DIR/window.id"
 APP_PGID_FILE="$ARTIFACT_DIR/app.pgid"
 
+# Never let diagnostics or probes fall back to a preserved host display.  The
+# private Xvfb DISPLAY is exported only after its container-local server is up.
+unset DISPLAY XAUTHORITY
+
 log() {
   printf '[gui-e2e] %s\n' "$*" | tee -a "$HARNESS_LOG" >&2
 }
-
-if [ -n "$PREWARMED_XDG_CACHE_HOME" ]; then
-  gui_e2e_seed_private_common_lisp_cache \
-    "$PREWARMED_XDG_CACHE_HOME" \
-    "$ARTIFACT_DIR/cache" \
-    "$PREWARMED_XDG_CACHE_HOME/quicklisp.lock"
-else
-  GUI_E2E_CACHE_SEED_STATUS=source-unavailable
-fi
-
-case "$GUI_E2E_CACHE_SEED_STATUS" in
-  seeded)
-    log "seeded artifact-private Common Lisp cache from $PREWARMED_XDG_CACHE_HOME"
-    ;;
-  cold-override)
-    log 'cold-cache override enabled; starting with an empty artifact cache'
-    ;;
-  private-cache-present)
-    log 'artifact-private Common Lisp cache already exists; preserving it'
-    ;;
-  source-unavailable)
-    log 'prewarmed Common Lisp cache unavailable; continuing with a cold artifact cache'
-    ;;
-  seed-failed)
-    log 'prewarmed Common Lisp cache could not be copied safely; continuing with a cold artifact cache'
-    ;;
-esac
 
 capture_root_screenshot() {
   path="$1"
@@ -271,6 +255,50 @@ with open(summary_path, 'w', encoding='utf-8') as f:
     f.write('\n')
 PY
 }
+
+if [ -e /tmp/.X11-unix ] || [ -L /tmp/.X11-unix ]; then
+  xvfb_socket_metadata=$(stat -c 'device=%d inode=%i mode=%a uid=%u gid=%g' \
+    /tmp/.X11-unix 2>/dev/null || printf 'metadata unavailable')
+  write_failure_artifacts \
+    "Xvfb socket directory pre-exists before startup ($xvfb_socket_metadata)"
+  exit "$GUI_E2E_XVFB_NAMESPACE_RETRY_STATUS"
+fi
+
+if [ -n "$PREWARMED_XDG_CACHE_HOME" ]; then
+  if ! gui_e2e_seed_private_common_lisp_cache \
+       "$PREWARMED_XDG_CACHE_HOME" \
+       "$ARTIFACT_DIR/cache" \
+       "$PREWARMED_XDG_CACHE_HOME/quicklisp.lock"; then
+    write_failure_artifacts \
+      'artifact-private Common Lisp cache policy could not be applied safely'
+    exit 1
+  fi
+else
+  GUI_E2E_CACHE_SEED_STATUS=source-unavailable
+fi
+
+case "$GUI_E2E_CACHE_SEED_STATUS" in
+  seeded)
+    log "seeded artifact-private Common Lisp cache from $PREWARMED_XDG_CACHE_HOME"
+    ;;
+  cold-override)
+    log 'cold-cache override enabled; starting with an empty artifact cache'
+    ;;
+  private-cache-present)
+    log 'artifact-private Common Lisp cache already exists; preserving it'
+    ;;
+  source-unavailable)
+    log 'prewarmed Common Lisp cache unavailable; continuing with a cold artifact cache'
+    ;;
+  seed-failed)
+    log 'prewarmed Common Lisp cache could not be copied safely; continuing with a cold artifact cache'
+    ;;
+  *)
+    write_failure_artifacts \
+      "unexpected Common Lisp cache seed status: $GUI_E2E_CACHE_SEED_STATUS"
+    exit 1
+    ;;
+esac
 
 scan_runtime_failure_artifacts() {
   python3 - "$DEBUG_LOG" "$APP_STDOUT" "$APP_STDERR" <<'PY'
@@ -397,7 +425,6 @@ esac
 
 XVFB_DISPLAY_FILE="$ARTIFACT_DIR/xvfb.display"
 rm -f "$XVFB_DISPLAY_FILE"
-unset DISPLAY XAUTHORITY
 
 log "artifacts: $ARTIFACT_DIR"
 log 'starting Xvfb on a dynamically allocated Unix display'

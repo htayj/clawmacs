@@ -53,6 +53,11 @@ The harness:
 - asks `Xvfb -displayfd` to allocate a free private display, with access control
   disabled on its container-local Unix socket and TCP listening disabled, then
   connects clients through `:<display>`;
+- requires `/tmp/.X11-unix` to be absent before Xvfb starts; a pre-existing
+  directory means the container inherited or exposed another X socket
+  namespace, so the inner harness exits before touching it and the host wrapper
+  retries exactly once in a fresh Guix container; the harness never removes or
+  changes ownership of an existing X socket directory;
 - sets `HOME` and `XDG_CACHE_HOME` under the artifact directory;
 - canonicalizes relative or repository-absolute artifact paths to an absolute
   `/workspace/...` path before deriving `HOME` and `XDG_CACHE_HOME`, because
@@ -111,6 +116,15 @@ warmup-lock coordination, cold fallback, and parallel private copies:
 
 ```sh
 sh ./scripts/test-gui-e2e-cache.sh
+```
+
+The Xvfb namespace regression proves the fresh-container retry is bounded,
+unrelated launcher failures are not retried, and a disposable read-only
+`/tmp/.X11-unix` exposure is diagnosed before Xvfb starts or the directory is
+changed. It does not launch SBCL or Clawmacs:
+
+```sh
+sh ./scripts/test-gui-e2e-xvfb.sh
 ```
 
 Every successful driver scenario exits through the ordinary `C-x C-c` CLIM
