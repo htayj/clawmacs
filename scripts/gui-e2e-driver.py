@@ -117,6 +117,52 @@ class McCLIMGuiSession:
         self.log_action("screenshot", **record)
         return record
 
+    def x_request_reply_barrier(self) -> None:
+        """Wait for the X server to answer a request before image capture.
+
+        The application emits ``redisplay-handled`` after its CLIM redisplay
+        work, but X drawing requests may still be pending when the driver sees
+        that log event.  ``getwindowgeometry`` requires a server reply, so it
+        provides a deterministic synchronization point without reaching into
+        McCLIM's repaint or output-record machinery.
+        """
+        self.run(["xdotool", "getwindowgeometry", "--shell",
+                  self.window_id])
+        self.log_action("x_request_reply_barrier", window_id=self.window_id)
+
+    def final_state_screenshot(self, name: str, *,
+                               final_snapshot: dict[str, Any],
+                               root: bool = False,
+                               timeout: float = 10.0) -> dict[str, Any]:
+        """Capture final state only after a newer redisplay and X barrier."""
+        snapshot_sequence = event_sequence(final_snapshot,
+                                           "final screenshot snapshot")
+        redisplay_already_handled = (
+            final_snapshot.get("reason") == "redisplay-handled")
+        redisplay_sequence: int | None = None
+        if redisplay_already_handled:
+            self.log_action(
+                "final_snapshot_after_redisplay",
+                snapshot_sequence=snapshot_sequence)
+        else:
+            expected_buffer = final_snapshot.get("buffer_name")
+            redisplay = self.wait_event_after(
+                "redisplay-handled", snapshot_sequence,
+                lambda event: (
+                    (expected_buffer is None
+                     or event.get("buffer_name") == expected_buffer)
+                    and not event.get("repeat")
+                ),
+                timeout=timeout)
+            redisplay_sequence = event_sequence(
+                redisplay, "final screenshot redisplay")
+        self.x_request_reply_barrier()
+        record = self.screenshot(name, root=root)
+        record["final_snapshot_sequence"] = snapshot_sequence
+        record["redisplay_already_handled"] = redisplay_already_handled
+        record["redisplay_sequence"] = redisplay_sequence
+        return record
+
     def window_geometry(self) -> dict[str, int]:
         """Return xdotool's current geometry for the main application window."""
         result = self.run(["xdotool", "getwindowgeometry", "--shell",
@@ -326,6 +372,14 @@ def prepare_session(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     return screenshots
 
 
+def event_sequence(event: dict[str, Any], description: str) -> int:
+    """Return EVENT's sequence or reject an unusable observability event."""
+    sequence = event.get("sequence")
+    if not isinstance(sequence, int):
+        raise DriverError(f"{description} has no integer sequence: {event!r}")
+    return sequence
+
+
 def run_smoke(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     screenshots = prepare_session(session)
 
@@ -340,11 +394,15 @@ def run_smoke(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     session.wait_event("e2e-provider-complete",
                        lambda event: event.get("sentinel") == HELLO_SENTINEL,
                        timeout=20.0)
-    session.wait_snapshot("final idle response rendered",
-                          lambda snapshot: snapshot.get("status") == "idle"
-                          and HELLO_SENTINEL in str(snapshot.get("screen_text", "")),
-                          timeout=20.0)
-    screenshots.append(session.screenshot("03-agent-response"))
+    final_snapshot = session.wait_snapshot(
+        "final idle response rendered",
+        lambda snapshot: snapshot.get("status") == "idle"
+        and HELLO_SENTINEL in str(snapshot.get("screen_text", "")),
+        timeout=20.0)
+    screenshots.append(session.final_state_screenshot(
+        "03-agent-response",
+        final_snapshot=final_snapshot,
+        timeout=20.0))
     return screenshots
 
 
@@ -580,13 +638,16 @@ def run_stability(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     session.wait_event("e2e-provider-complete",
                        lambda event: event.get("sentinel") == HELLO_SENTINEL,
                        timeout=20.0)
-    session.wait_snapshot(
+    final_snapshot = session.wait_snapshot(
         "stability final idle response rendered",
         lambda snapshot: snapshot.get("status") == "idle"
         and HELLO_SENTINEL in str(snapshot.get("screen_text", "")),
         timeout=20.0,
     )
-    screenshots.append(session.screenshot("06-stability-complete"))
+    screenshots.append(session.final_state_screenshot(
+        "06-stability-complete",
+        final_snapshot=final_snapshot,
+        timeout=20.0))
     assert_no_stability_failure_signatures(session)
     return screenshots
 
@@ -717,11 +778,14 @@ def run_mx(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     screenshots.append(session.screenshot("03-mx-command"))
 
     session.press("Return")
-    session.wait_snapshot("M-x command executed",
-                          lambda snapshot: "[Debug mode ON" in str(snapshot.get("screen_text", ""))
-                          and not snapshot.get("minibuffer_text"),
-                          timeout=10.0)
-    screenshots.append(session.screenshot("04-mx-result"))
+    final_snapshot = session.wait_snapshot(
+        "M-x command executed",
+        lambda snapshot: "[Debug mode ON" in str(snapshot.get("screen_text", ""))
+        and not snapshot.get("minibuffer_text"),
+        timeout=10.0)
+    screenshots.append(session.final_state_screenshot(
+        "04-mx-result",
+        final_snapshot=final_snapshot))
     return screenshots
 
 
@@ -783,12 +847,15 @@ def run_organa(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     screenshots.append(session.screenshot("04-organa-dependency"))
 
     run_mx_selection(session, "organa-cycle-view-command")
-    session.wait_snapshot("Organa outline view shown",
-                          lambda snapshot: "Organa outline" in str(snapshot.get("screen_text", ""))
-                          and "Implement package UI" in str(snapshot.get("screen_text", ""))
-                          and "Test package UI" in str(snapshot.get("screen_text", "")),
-                          timeout=10.0)
-    screenshots.append(session.screenshot("05-organa-outline"))
+    final_snapshot = session.wait_snapshot(
+        "Organa outline view shown",
+        lambda snapshot: "Organa outline" in str(snapshot.get("screen_text", ""))
+        and "Implement package UI" in str(snapshot.get("screen_text", ""))
+        and "Test package UI" in str(snapshot.get("screen_text", "")),
+        timeout=10.0)
+    screenshots.append(session.final_state_screenshot(
+        "05-organa-outline",
+        final_snapshot=final_snapshot))
     return screenshots
 
 
@@ -815,12 +882,15 @@ def run_quaestor(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     screenshots.append(session.screenshot("03-quaestor-answering"))
 
     session.press("Return")
-    session.wait_snapshot("Quaestor request answered",
-                          lambda snapshot: "[request_user_input answered]" in str(snapshot.get("screen_text", ""))
-                          and "Scope: Beta; ship it" in str(snapshot.get("screen_text", ""))
-                          and "Quaestor request 1/1" not in str(snapshot.get("screen_text", "")),
-                          timeout=10.0)
-    screenshots.append(session.screenshot("04-quaestor-answered"))
+    final_snapshot = session.wait_snapshot(
+        "Quaestor request answered",
+        lambda snapshot: "[request_user_input answered]" in str(snapshot.get("screen_text", ""))
+        and "Scope: Beta; ship it" in str(snapshot.get("screen_text", ""))
+        and "Quaestor request 1/1" not in str(snapshot.get("screen_text", "")),
+        timeout=10.0)
+    screenshots.append(session.final_state_screenshot(
+        "04-quaestor-answered",
+        final_snapshot=final_snapshot))
     return screenshots
 
 
@@ -1069,10 +1139,14 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     expect_key_command(session, ("ctrl+x", "n"), "new-buffer-command")
     temp_name = str(session.latest_snapshot().get("buffer_name"))
     kill_current_buffer_with_key(session)
-    session.wait_snapshot("temporary buffer killed by C-x k",
-                          lambda snapshot, temp_name=temp_name: snapshot.get("buffer_name") != temp_name,
-                          timeout=10.0)
-    screenshots.append(session.screenshot("06-ctrl-x-keybinds"))
+    final_snapshot = session.wait_snapshot(
+        "temporary buffer killed by C-x k",
+        lambda snapshot, temp_name=temp_name:
+        snapshot.get("buffer_name") != temp_name,
+        timeout=10.0)
+    screenshots.append(session.final_state_screenshot(
+        "06-ctrl-x-keybinds",
+        final_snapshot=final_snapshot))
 
     return screenshots
 
@@ -1221,12 +1295,15 @@ def run_features(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           and "Skills" in str(snapshot.get("screen_text", "")),
                           timeout=10.0)
     run_mx_selection(session, "package-dashboard-command")
-    session.wait_snapshot("package dashboard shown",
-                          lambda snapshot: snapshot.get("buffer_name") == "*Packages*"
-                          and snapshot.get("major_mode") == "package-dashboard"
-                          and "Packages for" in str(snapshot.get("screen_text", "")),
-                          timeout=10.0)
-    screenshots.append(session.screenshot("08-offline-help-dashboards"))
+    final_snapshot = session.wait_snapshot(
+        "package dashboard shown",
+        lambda snapshot: snapshot.get("buffer_name") == "*Packages*"
+        and snapshot.get("major_mode") == "package-dashboard"
+        and "Packages for" in str(snapshot.get("screen_text", "")),
+        timeout=10.0)
+    screenshots.append(session.final_state_screenshot(
+        "08-offline-help-dashboards",
+        final_snapshot=final_snapshot))
 
     return screenshots
 
@@ -1258,7 +1335,7 @@ def run_reload(session: McCLIMGuiSession) -> list[dict[str, Any]]:
         lambda event: event.get("status") == "ok",
         timeout=90.0,
     )
-    session.wait_snapshot(
+    final_snapshot = session.wait_snapshot(
         "safe reload success notification visible",
         lambda snapshot: (
             snapshot.get("buffer_name") == "clawmacs:e2e"
@@ -1268,7 +1345,10 @@ def run_reload(session: McCLIMGuiSession) -> list[dict[str, Any]]:
         ),
         timeout=30.0,
     )
-    screenshots.append(session.screenshot("04-after-safe-reload"))
+    screenshots.append(session.final_state_screenshot(
+        "04-after-safe-reload",
+        final_snapshot=final_snapshot,
+        timeout=30.0))
     return screenshots
 
 

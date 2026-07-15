@@ -28,6 +28,14 @@ ASDF integration is also opt-in and runs `smoke`, `mx`, `features`,
 The default FiveAM unit suite only covers E2E primitives; it does not launch
 Xvfb or the GUI smoke test.
 
+The dependency-free Python regression checks final-screenshot event ordering,
+wrong-buffer/repeated-redisplay rejection, and the X request/reply barrier
+without launching Clawmacs or Xvfb:
+
+```sh
+python3 ./scripts/test_gui_e2e_driver.py
+```
+
 ## Isolation
 
 The harness:
