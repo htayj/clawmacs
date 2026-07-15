@@ -29,7 +29,7 @@ The default FiveAM unit suite only covers E2E primitives; it does not launch
 Xvfb or the GUI smoke test.
 
 The dependency-free Python regression checks final-screenshot event ordering,
-wrong-buffer/repeated-redisplay rejection, and the X request/reply barrier
+wrong-buffer/repeated-redisplay rejection, and the final X server round trip
 without launching Clawmacs or Xvfb:
 
 ```sh
@@ -78,9 +78,11 @@ The harness:
 No real provider network call or user secret is required for the GUI E2E suites.
 The frame-ready wait defaults to 300 seconds so a cold McCLIM compilation can
 finish; set `CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS` to a positive integer
-to override it. Set `CLAWMACS_GUI_E2E_COLD_CACHE=1` to skip the private cache
-seed and deliberately exercise cold compilation. An unavailable or failed seed
-also falls back to an empty private cache rather than sharing writable state.
+to override it. Set `CLAWMACS_GUI_E2E_COLD_CACHE=1` to remove any existing,
+validated artifact-local `cache/common-lisp` tree before startup while
+preserving sibling state. Invalid or overlapping roots and a failed cold-cache
+clear abort safely. An unavailable or safely failed seed copy continues with
+an empty private cache and never shares writable cache state.
 
 After the semantic `frame-stopped` event, the natural SBCL exit is bounded to
 30 seconds. Set `CLAWMACS_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS` to a positive
@@ -112,7 +114,10 @@ sh ./scripts/test-guix-container.sh
 ```
 
 The cache-seeding regression verifies isolation, timestamp preservation,
-warmup-lock coordination, cold fallback, and parallel private copies:
+warmup-lock coordination, parallel private copies, overlapping-root rejection,
+and that lock timeout cannot copy or leave a staging tree. It also reuses an
+artifact to prove cold mode clears only its validated `common-lisp` tree and
+preserves sibling cache state:
 
 ```sh
 sh ./scripts/test-gui-e2e-cache.sh
@@ -146,20 +151,41 @@ Each run writes under `.artifacts/gui-e2e/<timestamp-pid>/` by default:
 - `driver.stdout`, `driver.stderr` — Python driver output;
 - `harness.log` — shell harness milestones;
 - `xvfb.display`, `xvfb.log` — allocated display number and X server log;
+- `home/` — isolated runtime configuration and session state;
+- `cache/common-lisp/` — private seeded and subsequently generated ASDF
+  output;
 - `actions.jsonl` — driver step/action log;
 - `screenshots/*.png` (or `.xwd` fallback) — visual artifacts;
 - `summary.json` — pass/fail summary, screenshot records, repo-relative paths,
   per-screenshot snapshot sequence/status, and the last snapshot.
 
+Successful adversarial runs retained approximately 67–82 MiB of private cache
+per run. This is intentional isolation evidence, but the harness has no
+automatic artifact-retention policy; remove old run directories manually when
+their evidence is no longer needed.
+
 The driver correlates every screenshot with the latest `ui-snapshot` event. The
 snapshot is semantic state (transcript, compose text, status/model line,
 selector/toggle state, and minibuffer text), not OCR.
 
+A final semantic snapshot is accepted immediately only when its reason is
+`redisplay-handled` and it explicitly carries `repeat: false`. A repeated or
+legacy snapshot, or an earlier semantic state, requires a later same-buffer
+`redisplay-handled` event with `repeat: false`. The driver then performs a
+separate-connection X server round trip as a responsiveness and settling point;
+because it is not a cross-client ordering fence, the explicit non-repeating
+CLIM event remains the primary ordering gate. Final screenshot records include
+`final_snapshot_sequence`, `redisplay_sequence`, and
+`redisplay_already_handled` for inspection.
+
 The driver tails `debug.log` by file identity and byte offset. It retains an
 incomplete trailing line until the writer finishes it, consumes appended event
-records once, and resets its cache if the log is replaced or truncated. This
-keeps long stress runs proportional to newly written log data instead of
-reparsing the full event history on every poll.
+records once, and resets its cache when the log is replaced, shrinks, or has a
+different same-inode rewrite. Disk reads and JSON decoding consume only newly
+appended complete bytes; cached event references may still be copied or scanned
+by polling helpers. The production writer is append-only. An arbitrary
+truncate/regrow that recreates the same 256-byte consumed suffix before the
+next poll is outside this guarantee.
 
 ## Smoke behavior
 
@@ -261,7 +287,8 @@ The default is 24 menu cycles and 6 unmap/map cycles. Set
 `CLAWMACS_GUI_E2E_STABILITY_MENU_ITERATIONS` or
 `CLAWMACS_GUI_E2E_STABILITY_EXPOSE_ITERATIONS` to a positive integer for a
 longer bounded stress run; the Guix launcher preserves both overrides into the
-container. The release validation also runs 100 menu cycles.
+container. Extended adversarial validation has run both 100- and
+250-menu-cycle configurations.
 Pointer coordinates exist only in the external driver; application interaction
 continues through CLIM commands, presentations, and normal redisplay.
 

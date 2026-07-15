@@ -1,6 +1,6 @@
 # McCLIM issue classification
 
-Audit date: 2026-07-13 through 2026-07-14
+Audit date: 2026-07-13 through 2026-07-15
 
 ## Tested McCLIM provenance
 
@@ -88,6 +88,24 @@ propose.
 | Edward word kill followed by yank fails on a list/`aref` mismatch | Fixed in the pin | The pinned Edward implementation already normalizes killed word data. The Clawmacs replacements for three private `climi::ie-*` methods are removed, and a regression test exercises the pinned implementation directly. |
 | Live compose `M-x` entered an undefined `STREAM` path | Application command-table ordering | Drei's `exclusive-gadget-table` handled `M-x` before Clawmacs' inherited frame table and entered Drei's blocking extended-command workflow. A pane-specific public `additional-command-tables` method now gives the application command precedence. Headless lookup/parser coverage and live GUI passes prove the non-blocking Clawmacs minibuffer path. |
 | A rapid `C-c V` became literal `V` in one GUI run | Not proven upstream | The actual pin already filters CLX's documented `:SHIFT-LEFT` and `:SHIFT-RIGHT` standalone modifier names. Clawmacs now consumes recognized standalone modifiers explicitly at its pane boundary, preserves the prefix across ESA's identical command-table assignment, and the GUI driver waits for one toggle's semantic completion before beginning the next chord. Repeated live keybinding coverage is the classification gate; there is no stripped-down McCLIM reproducer. |
+
+## Post-adversarial classification
+
+The extended run completed 250 menu operations, 62 semantic selector
+activations, 30 expose/unmap-map operations, and three resizes without a crash.
+After its one-time setup transition, the bounded resource profile showed no
+accumulating RSS, descriptor, or thread trend during the sampled interval. The
+Artifactum timestamp crash, screenshot-ordering race, compile-cache and
+event-log costs, interop test flake, and inherited X socket namespace were
+owned by Clawmacs, its tests, or its harness.
+
+Fresh provenance again resolves the tested CLIM, McCLIM, ESA, and Drei systems
+from the pinned Guix McCLIM tree. The Clawmacs-free ESA control again starts and
+returns `:OK`; current evidence is under
+`.artifacts/adversarial-mcclim/final-closure/provenance/`. No new candidate is
+certainly caused by McCLIM, and none meets the fork threshold. The existing
+pointer-tracking failing locus and pinned ESA modifier limitation retain their
+classifications above.
 
 ## Minimal ESA control
 
