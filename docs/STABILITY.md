@@ -1,6 +1,6 @@
 # Stability audit and hardening plan
 
-Audit date: 2026-07-13 through 2026-07-15
+Audit date: 2026-07-13 through 2026-07-16
 
 ## Scope and standard
 
@@ -365,9 +365,15 @@ The final proof after those changes is:
   produced `made frame state=:DISOWNED` and `run result=:OK`. Evidence:
   `.artifacts/adversarial-mcclim/final-closure/provenance/`.
 
-No new failure meets the McCLIM fork threshold. The pointer-tracking robustness
-locus and pinned ESA modifier-conversion limitation remain documented in
-`MCCLIM-ISSUES.md`; every new crash, race, and performance cost above was owned
-by Clawmacs, its tests, or its harness. Successful GUI artifacts currently
-retain approximately 67–82 MiB of private cache per run; cleanup remains an
-explicit evidence-retention decision rather than an automatic policy.
+A focused follow-up on 2026-07-16 supersedes the pointer issue's earlier
+ownership classification. The official McCLIM #1312 lifecycle reproduced the
+exact current ungrafted-menu-sheet failure in three of three plain-CLIM
+Guix/private-Xvfb runs. It now meets the upstream attribution threshold, but
+not the operational fork threshold because Clawmacs' stable command-table
+mitigation remains effective. The causal chain, current-upstream comparison,
+repair boundary, and fork criteria are documented in `MCCLIM-ISSUES.md`.
+
+Every other new crash, race, and performance cost above was owned by Clawmacs,
+its tests, or its harness. Successful GUI artifacts currently retain
+approximately 67–82 MiB of private cache per run; cleanup remains an explicit
+evidence-retention decision rather than an automatic policy.
