@@ -406,5 +406,168 @@ class FinalStateScreenshotTests(unittest.TestCase):
         self.assertEqual("04-mx-result", screenshots[-1]["name"])
 
 
+class SwitchBufferAssertionTests(unittest.TestCase):
+    class FakeSession:
+        def __init__(self) -> None:
+            self.actions: list[tuple[str, dict[str, object]]] = []
+
+        def log_action(self, action: str, **fields: object) -> None:
+            self.actions.append((action, fields))
+
+    @staticmethod
+    def expanded_snapshot() -> dict[str, object]:
+        return {
+            "minibuffer_active": True,
+            "input_focus_pane": "compose",
+            "minibuffer_filtered_count": 14,
+            "minibuffer_visible_count": 11,
+            "minibuffer_desired_rows": 12,
+            "minibuffer_required_height": 315,
+            "minibuffer_row_height": 25,
+            "top_level_grafted": True,
+            "pointer_documentation_grafted": True,
+            "top_level_left": 0,
+            "top_level_top": 0,
+            "top_level_right": 900,
+            "top_level_bottom": 846,
+            "minibuffer_left": 0,
+            "minibuffer_top": 480,
+            "minibuffer_right": 900,
+            "minibuffer_bottom": 795,
+            "pointer_documentation_left": 1,
+            "pointer_documentation_top": 796,
+            "pointer_documentation_right": 899,
+            "pointer_documentation_bottom": 845,
+        }
+
+    def test_expanded_and_collapsed_geometry_contracts(self) -> None:
+        session = self.FakeSession()
+        expanded_height = DRIVER.assert_switch_buffer_layout(
+            session, self.expanded_snapshot())
+        collapsed = {
+            **self.expanded_snapshot(),
+            "minibuffer_active": False,
+            "top_level_bottom": 555,
+            "minibuffer_top": 480,
+            "minibuffer_bottom": 505,
+            "pointer_documentation_top": 506,
+            "pointer_documentation_bottom": 554,
+        }
+        DRIVER.assert_switch_buffer_collapsed(
+            session, collapsed, expanded_height, "cancellation")
+
+        self.assertEqual(846, expanded_height)
+        self.assertEqual(
+            ["assert_switch_buffer_layout", "assert_switch_buffer_collapsed"],
+            [action for action, _fields in session.actions],
+        )
+        self.assertEqual("cancellation", session.actions[-1][1]["transition"])
+
+    def test_expanded_geometry_rejects_pointer_help_overlap(self) -> None:
+        snapshot = self.expanded_snapshot()
+        snapshot["pointer_documentation_top"] = 793
+        with self.assertRaisesRegex(DRIVER.DriverError, "overlaps pointer help"):
+            DRIVER.assert_switch_buffer_layout(self.FakeSession(), snapshot)
+
+    def test_large_draft_and_stress_burst_contract(self) -> None:
+        self.assertEqual(32 * 1024,
+                         len(DRIVER.SWITCH_BUFFER_LARGE_DRAFT))
+        self.assertTrue(DRIVER.SWITCH_BUFFER_LARGE_DRAFT.startswith(
+            DRIVER.SWITCH_BUFFER_LARGE_DRAFT_PREFIX))
+        self.assertLess(DRIVER.SWITCH_BUFFER_LARGE_DRAFT_POINT,
+                        DRIVER.SWITCH_BUFFER_LARGE_DRAFT_MARK)
+        self.assertLess(DRIVER.SWITCH_BUFFER_LARGE_DRAFT_MARK,
+                        len(DRIVER.SWITCH_BUFFER_LARGE_DRAFT))
+
+        keys = DRIVER.switch_buffer_stress_keys()
+        self.assertGreaterEqual(
+            len(DRIVER.SWITCH_BUFFER_STRESS_QUERY) + len(keys), 50)
+        self.assertNotIn("Return", keys)
+        self.assertNotIn("ctrl+g", keys)
+        self.assertIn("Down", keys)
+        self.assertIn("Up", keys)
+        self.assertIn("BackSpace", keys)
+
+        snapshot = {
+            "compose_text": DRIVER.SWITCH_BUFFER_LARGE_DRAFT,
+            "compose_point": DRIVER.SWITCH_BUFFER_LARGE_DRAFT_POINT,
+            "compose_mark": DRIVER.SWITCH_BUFFER_LARGE_DRAFT_MARK,
+        }
+        self.assertTrue(DRIVER.switch_buffer_large_draft_state_p(snapshot))
+        snapshot["compose_mark"] = DRIVER.SWITCH_BUFFER_LARGE_DRAFT_MARK - 1
+        self.assertFalse(DRIVER.switch_buffer_large_draft_state_p(snapshot))
+
+    def test_press_keys_uses_one_xdotool_burst(self) -> None:
+        calls: list[tuple[object, ...]] = []
+
+        class FakeSession:
+            def run(self, argv: list[str]) -> None:
+                calls.append(("run", tuple(argv)))
+
+            def log_action(self, action: str, **fields: object) -> None:
+                calls.append(("log", action, fields))
+
+        DRIVER.McCLIMGuiSession.press_keys(
+            FakeSession(), ["Down", "Up", "BackSpace"], delay_ms=7)
+
+        self.assertEqual(
+            ("run", ("xdotool", "key", "--clearmodifiers", "--delay",
+                     "7", "Down", "Up", "BackSpace")),
+            calls[0],
+        )
+        self.assertEqual(
+            ("log", "press_keys",
+            {"keys": ["Down", "Up", "BackSpace"], "delay_ms": 7}),
+            calls[1],
+        )
+
+    def test_stress_burst_uses_one_quiescence_wait_and_shared_deadline(self) -> None:
+        calls: list[tuple[object, ...]] = []
+        snapshot = {
+            **self.expanded_snapshot(),
+            "compose_text": DRIVER.SWITCH_BUFFER_LARGE_DRAFT,
+            "compose_point": DRIVER.SWITCH_BUFFER_LARGE_DRAFT_POINT,
+            "compose_mark": DRIVER.SWITCH_BUFFER_LARGE_DRAFT_MARK,
+            "minibuffer_text": (
+                "Switch Buffer: switch-e2e\n> switch-e2e-0"),
+        }
+
+        class FakeSession:
+            def latest_sequence(self) -> int:
+                return 41
+
+            def type_text(self, value: str) -> None:
+                calls.append(("type", value))
+
+            def press_keys(self, keys: list[str], *, delay_ms: int = 5
+                           ) -> None:
+                calls.append(("burst", tuple(keys), delay_ms))
+
+            def log_action(self, action: str, **fields: object) -> None:
+                calls.append(("log", action, fields))
+
+        with mock.patch.object(
+                DRIVER.time, "monotonic",
+                side_effect=[100.0, 100.4, 101.0]), \
+             mock.patch.object(
+                 DRIVER, "wait_quiescent_snapshot_after",
+                 return_value=snapshot) as wait_quiescent, \
+             mock.patch.object(
+                 DRIVER, "assert_switch_buffer_layout",
+                 return_value=846.0):
+            observed, height = DRIVER.run_switch_buffer_stress_burst(
+                FakeSession())
+
+        self.assertIs(snapshot, observed)
+        self.assertEqual(846.0, height)
+        self.assertEqual(("type", DRIVER.SWITCH_BUFFER_STRESS_QUERY), calls[0])
+        self.assertEqual("burst", calls[1][0])
+        self.assertEqual(50, len(calls[1][1]))
+        self.assertAlmostEqual(
+            4.6, wait_quiescent.call_args.kwargs["timeout"])
+        self.assertEqual(
+            "assert_switch_buffer_stress_burst", calls[-1][1])
+
+
 if __name__ == "__main__":
     unittest.main()

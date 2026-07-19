@@ -403,6 +403,11 @@ export CLAWMACS_E2E_PROVIDER=1
 export CLAWMACS_CONTAINER_DISABLE_HOST_X=1
 export CLAWMACS_PROMPT_PROJECT_ROOT=/workspace
 export CLAWMACS_GUI_E2E_SUITE="$SUITE"
+if [ "$SUITE" = "keybinds" ]; then
+  export CLAWMACS_GUI_E2E_INITIAL_INPUT_FOCUS=standard-input
+else
+  unset CLAWMACS_GUI_E2E_INITIAL_INPUT_FOCUS
+fi
 
 FRAME_READY_TIMEOUT_SECONDS=${CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS:-300}
 case "$FRAME_READY_TIMEOUT_SECONDS" in
@@ -489,6 +494,7 @@ setsid --wait sh -c '
   --eval '(ql:quickload :clawmacs)' \
   --eval '(setf clawmacs:*inhibit-user-init* t)' \
   --eval '(let ((suite (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") ""))) (when (member suite (list "organa" "quaestor") :test (function string=)) (clawmacs:set-package-enablement-scope suite :global) (clawmacs:load-active-packages)))' \
+  --eval '(when (string= (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") "keybinds") (clawmacs:add-hook (quote clawmacs:*initial-buffer-hook*) (lambda (buffer) (let* ((prefix "CLAWMACS_SWITCH_BUFFER_LARGE_DRAFT:") (draft (concatenate (quote string) prefix (make-string (- 32768 (length prefix)) :initial-element #\x))) (message (clawmacs:buffer-input-message buffer))) (clawmacs:set-message-text message draft) (clawmacs:set-message-point-from-absolute-offset message 8192) (clawmacs:set-message-mark-from-absolute-offset message 24576)) (dotimes (index 12) (clawmacs:make-chat-buffer (format nil "switch-e2e-~D" index) :agent-name "agent" :working-directory (truename ".") :session-persistence-mode :ephemeral :add-to-ring-p t)) (clawmacs:switch-to-buffer buffer)) :append t))' \
   --eval '(when (string= (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") "quaestor") (clawmacs:add-hook (quote clawmacs:*initial-buffer-hook*) (lambda (buffer) (clawmacs::quaestor-request-user-input buffer (quote ((:header "Scope" :id "scope" :question "Pick a scope." :options ((:label "Alpha" :description "Smaller change.") (:label "Beta" :description "Broader change.")) :freeform t))))) :append t))' \
   --eval '(when (string= (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") "stability") (clawmacs:add-hook (quote clawmacs:*initial-buffer-hook*) (lambda (buffer) (clawmacs:set-buffer-provider-override buffer :openai-codex) (clawmacs:set-buffer-model-override buffer "gpt-5.3-codex")) :append t))' \
   --eval '(clawmacs:clawmacs-main :session-name "clawmacs:e2e" :agent-name "agent" :window-title "Clawmacs E2E" :working-directory (truename "."))' \

@@ -16,6 +16,17 @@ from typing import Any, Callable
 EVENT_MARKER = "[e2e-event]"
 HELLO_SENTINEL = "CLAWMACS_E2E_HELLO_SENTINEL"
 DEBUG_LOG_ANCHOR_BYTES = 256
+SWITCH_BUFFER_LARGE_DRAFT_PREFIX = "CLAWMACS_SWITCH_BUFFER_LARGE_DRAFT:"
+SWITCH_BUFFER_LARGE_DRAFT_SIZE = 32 * 1024
+SWITCH_BUFFER_LARGE_DRAFT = (
+    SWITCH_BUFFER_LARGE_DRAFT_PREFIX
+    + "x" * (SWITCH_BUFFER_LARGE_DRAFT_SIZE
+             - len(SWITCH_BUFFER_LARGE_DRAFT_PREFIX))
+)
+SWITCH_BUFFER_LARGE_DRAFT_POINT = 8192
+SWITCH_BUFFER_LARGE_DRAFT_MARK = 24576
+SWITCH_BUFFER_STRESS_QUERY = "switch-e2e"
+SWITCH_BUFFER_STRESS_BUDGET_SECONDS = 5.0
 
 
 class DriverError(RuntimeError):
@@ -73,6 +84,14 @@ class McCLIMGuiSession:
     def press(self, key: str) -> None:
         self.run(["xdotool", "key", "--clearmodifiers", key])
         self.log_action("press", key=key)
+
+    def press_keys(self, keys: list[str], *, delay_ms: int = 5) -> None:
+        """Deliver KEYS as one xdotool burst without per-key process waits."""
+        if not keys:
+            return
+        self.run(["xdotool", "key", "--clearmodifiers", "--delay",
+                  str(delay_ms), *keys])
+        self.log_action("press_keys", keys=keys, delay_ms=delay_ms)
 
     def type_text(self, text: str) -> None:
         self.run(["xdotool", "type", "--clearmodifiers", "--delay", "25", text])
@@ -765,6 +784,370 @@ def wait_compose_text(session: McCLIMGuiSession, expected: str,
                                  timeout=timeout)
 
 
+def wait_compose_state(session: McCLIMGuiSession, text: str, point: int,
+                       *, timeout: float = 10.0) -> dict[str, Any]:
+    """Wait for the visible Drei draft and point to match one buffer state."""
+    return session.wait_snapshot(
+        f"compose state is {text!r} at {point}",
+        lambda snapshot: (snapshot.get("compose_text") == text
+                          and snapshot.get("compose_point") == point),
+        timeout=timeout,
+    )
+
+
+def switch_buffer_large_draft_state_p(snapshot: dict[str, Any]) -> bool:
+    """Return whether SNAPSHOT preserves the seeded large Drei state."""
+    return (snapshot.get("compose_text") == SWITCH_BUFFER_LARGE_DRAFT
+            and snapshot.get("compose_point")
+            == SWITCH_BUFFER_LARGE_DRAFT_POINT
+            and snapshot.get("compose_mark")
+            == SWITCH_BUFFER_LARGE_DRAFT_MARK)
+
+
+def assert_switch_buffer_large_draft(snapshot: dict[str, Any],
+                                     action: str) -> None:
+    """Require the exact E2E large draft, point, and mark after ACTION."""
+    if not switch_buffer_large_draft_state_p(snapshot):
+        text = snapshot.get("compose_text")
+        length = len(text) if isinstance(text, str) else None
+        raise DriverError(
+            f"large compose state changed after {action}: length={length}, "
+            f"point={snapshot.get('compose_point')!r}, "
+            f"mark={snapshot.get('compose_mark')!r}"
+        )
+
+
+def switch_buffer_stress_keys() -> list[str]:
+    """Return 50 non-confirming navigation/edit keys for one modal burst."""
+    return (["Down"] * 15
+            + ["Up"] * 15
+            + ["Left"] * 5
+            + ["Right"] * 5
+            + ["BackSpace"] * 5
+            + ["h", "minus", "e", "2", "e"])
+
+
+def snapshot_number(snapshot: dict[str, Any], field: str) -> float:
+    """Return a required numeric snapshot FIELD with a useful failure."""
+    value = snapshot.get(field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise DriverError(f"snapshot field {field!r} is not numeric: {value!r}")
+    return float(value)
+
+
+def snapshot_bounds(snapshot: dict[str, Any], prefix: str
+                    ) -> tuple[float, float, float, float]:
+    """Return PREFIX's CLIM bounds from one semantic snapshot."""
+    return tuple(snapshot_number(snapshot, f"{prefix}_{edge}")
+                 for edge in ("left", "top", "right", "bottom"))
+
+
+def wait_quiescent_snapshot_after(
+        session: McCLIMGuiSession, after_sequence: int, description: str,
+        predicate: Callable[[dict[str, Any]], bool], *, timeout: float = 10.0
+        ) -> dict[str, Any]:
+    """Wait for a matching state after CLIM completed a non-repeating layout."""
+    snapshot = session.wait_event_after(
+        "ui-snapshot", after_sequence,
+        lambda candidate: (
+            candidate.get("reason") == "redisplay-handled"
+            and not candidate.get("repeat")
+            and predicate(candidate)
+        ),
+        timeout=timeout,
+    )
+    session.log_action("wait_quiescent_snapshot", description=description,
+                       sequence=snapshot.get("sequence"))
+    return snapshot
+
+
+def assert_switch_buffer_layout(session: McCLIMGuiSession,
+                                snapshot: dict[str, Any],
+                                *, minimum_candidates: int = 12) -> float:
+    """Prove a large selector fits above pointer help and inside the mirror."""
+    filtered_count = int(snapshot_number(snapshot, "minibuffer_filtered_count"))
+    visible_count = int(snapshot_number(snapshot, "minibuffer_visible_count"))
+    desired_rows = int(snapshot_number(snapshot, "minibuffer_desired_rows"))
+    required_height = snapshot_number(snapshot, "minibuffer_required_height")
+    top_bounds = snapshot_bounds(snapshot, "top_level")
+    minibuffer_bounds = snapshot_bounds(snapshot, "minibuffer")
+    pointer_bounds = snapshot_bounds(snapshot, "pointer_documentation")
+    tolerance = 1.0
+
+    if not snapshot.get("minibuffer_active"):
+        raise DriverError("large selector layout snapshot is not active")
+    if snapshot.get("input_focus_pane") != "compose":
+        raise DriverError(
+            "large selector did not transfer CLIM input focus to compose: "
+            f"{snapshot.get('input_focus_pane')!r}"
+        )
+    if filtered_count < minimum_candidates:
+        raise DriverError(
+            f"selector has {filtered_count} candidates; expected at least "
+            f"{minimum_candidates}"
+        )
+    if visible_count <= 0 or desired_rows != visible_count + 1:
+        raise DriverError(
+            "selector prompt/candidate row contract is inconsistent: "
+            f"visible={visible_count}, desired={desired_rows}"
+        )
+    actual_height = minibuffer_bounds[3] - minibuffer_bounds[1]
+    if actual_height + tolerance < required_height:
+        raise DriverError(
+            "selector pane is shorter than its complete CLIM rows: "
+            f"actual={actual_height}, required={required_height}"
+        )
+    if not snapshot.get("top_level_grafted"):
+        raise DriverError("selector top-level sheet is not grafted")
+    if not snapshot.get("pointer_documentation_grafted"):
+        raise DriverError("pointer-documentation sheet is not grafted")
+
+    top_left, top_top, top_right, top_bottom = top_bounds
+    mini_left, mini_top, mini_right, mini_bottom = minibuffer_bounds
+    pointer_left, pointer_top, pointer_right, pointer_bottom = pointer_bounds
+    if (mini_left < top_left - tolerance
+            or mini_top < top_top - tolerance
+            or mini_right > top_right + tolerance
+            or mini_bottom > top_bottom + tolerance):
+        raise DriverError(
+            f"selector bounds {minibuffer_bounds} escape top-level {top_bounds}"
+        )
+    if (pointer_left < top_left - tolerance
+            or pointer_top < top_top - tolerance
+            or pointer_right > top_right + tolerance
+            or pointer_bottom > top_bottom + tolerance):
+        raise DriverError(
+            f"pointer-documentation bounds {pointer_bounds} escape "
+            f"top-level {top_bounds}"
+        )
+    if pointer_bottom <= pointer_top:
+        raise DriverError(
+            f"pointer-documentation pane is not visibly allocated: {pointer_bounds}"
+        )
+    if mini_bottom > pointer_top + tolerance:
+        raise DriverError(
+            f"selector {minibuffer_bounds} overlaps pointer help {pointer_bounds}"
+        )
+
+    top_height = top_bottom - top_top
+    session.log_action(
+        "assert_switch_buffer_layout",
+        filtered_count=filtered_count,
+        visible_count=visible_count,
+        desired_rows=desired_rows,
+        actual_height=actual_height,
+        required_height=required_height,
+        top_height=top_height,
+        minibuffer_bounds=minibuffer_bounds,
+        pointer_documentation_bounds=pointer_bounds,
+    )
+    return top_height
+
+
+def assert_switch_buffer_collapsed(session: McCLIMGuiSession,
+                                   snapshot: dict[str, Any],
+                                   previous_top_height: float,
+                                   action: str) -> None:
+    """Prove cancelling or confirming returns the frame to one compact row."""
+    if snapshot.get("minibuffer_active"):
+        raise DriverError(f"selector remained active after {action}")
+    top_bounds = snapshot_bounds(snapshot, "top_level")
+    minibuffer_bounds = snapshot_bounds(snapshot, "minibuffer")
+    pointer_bounds = snapshot_bounds(snapshot, "pointer_documentation")
+    row_height = snapshot_number(snapshot, "minibuffer_row_height")
+    top_height = top_bounds[3] - top_bounds[1]
+    minibuffer_height = minibuffer_bounds[3] - minibuffer_bounds[1]
+    tolerance = 1.0
+    if top_height >= previous_top_height - tolerance:
+        raise DriverError(
+            f"frame did not collapse after {action}: "
+            f"before={previous_top_height}, after={top_height}"
+        )
+    if minibuffer_height > row_height + tolerance:
+        raise DriverError(
+            f"minibuffer did not collapse to one row after {action}: "
+            f"height={minibuffer_height}, row={row_height}"
+        )
+    if minibuffer_bounds[3] > pointer_bounds[1] + tolerance:
+        raise DriverError(
+            f"collapsed minibuffer overlaps pointer help after {action}"
+        )
+    session.log_action(
+        "assert_switch_buffer_collapsed", transition=action,
+        previous_top_height=previous_top_height, top_height=top_height,
+        minibuffer_height=minibuffer_height,
+    )
+
+
+def open_switch_buffer(session: McCLIMGuiSession) -> tuple[dict[str, Any], float]:
+    """Open the real C-x b selector and wait for its complete CLIM layout."""
+    command = expect_key_command(
+        session, ("ctrl+x", "b"), "minibuffer-select-buffer-command")
+    command_sequence = event_sequence(command, "switch-buffer command")
+    snapshot = wait_quiescent_snapshot_after(
+        session, command_sequence, "large switch-buffer selector",
+        lambda candidate: (
+            candidate.get("minibuffer_active")
+            and "Switch Buffer" in str(candidate.get("minibuffer_text", ""))
+            and candidate.get("input_focus_pane") == "compose"
+        ),
+        timeout=15.0,
+    )
+    return snapshot, assert_switch_buffer_layout(session, snapshot)
+
+
+def run_switch_buffer_stress_burst(
+        session: McCLIMGuiSession) -> tuple[dict[str, Any], float]:
+    """Filter and navigate a large selector under one five-second deadline."""
+    keys = switch_buffer_stress_keys()
+    after_sequence = session.latest_sequence()
+    started = time.monotonic()
+    session.type_text(SWITCH_BUFFER_STRESS_QUERY)
+    session.press_keys(keys)
+    remaining = SWITCH_BUFFER_STRESS_BUDGET_SECONDS - (
+        time.monotonic() - started)
+    if remaining <= 0:
+        raise DriverError(
+            "switch-buffer stress key delivery exceeded the five-second "
+            "responsiveness budget"
+        )
+    snapshot = wait_quiescent_snapshot_after(
+        session, after_sequence, "switch-buffer large-draft stress burst",
+        lambda candidate: (
+            candidate.get("minibuffer_active")
+            and candidate.get("input_focus_pane") == "compose"
+            and f"Switch Buffer: {SWITCH_BUFFER_STRESS_QUERY}" in str(
+                candidate.get("minibuffer_text", ""))
+            and selected_candidate_contains(candidate, "switch-e2e")
+            and switch_buffer_large_draft_state_p(candidate)
+        ),
+        timeout=remaining,
+    )
+    elapsed = time.monotonic() - started
+    if elapsed > SWITCH_BUFFER_STRESS_BUDGET_SECONDS:
+        raise DriverError(
+            "switch-buffer stress burst did not quiesce within five seconds: "
+            f"elapsed={elapsed:.3f}s"
+        )
+    assert_switch_buffer_large_draft(snapshot, "stress burst")
+    top_height = assert_switch_buffer_layout(session, snapshot)
+    session.log_action(
+        "assert_switch_buffer_stress_burst",
+        elapsed_seconds=elapsed,
+        filter_key_count=len(SWITCH_BUFFER_STRESS_QUERY),
+        burst_key_count=len(keys),
+        total_key_count=len(SWITCH_BUFFER_STRESS_QUERY) + len(keys),
+    )
+    return snapshot, top_height
+
+
+def set_compose_state(session: McCLIMGuiSession, text: str, point: int) -> None:
+    """Set one draft and point entirely through physical editor gestures."""
+    if session.latest_snapshot().get("compose_text"):
+        press_chord(session, "ctrl+a", "ctrl+k")
+        wait_compose_state(session, "", 0)
+    session.type_text(text)
+    wait_compose_text(session, text)
+    session.press("ctrl+a")
+    wait_compose_state(session, text, 0)
+    for _ in range(point):
+        session.press("Right")
+    wait_compose_state(session, text, point)
+
+
+def switch_buffer_with_keyboard(session: McCLIMGuiSession, query: str,
+                                expected_name: str, expected_text: str,
+                                expected_point: int, *,
+                                minimum_matches: int = 1) -> dict[str, Any]:
+    """Switch buffers through C-x b and prove filtered/closed frame geometry."""
+    open_switch_buffer(session)
+    after_type = session.latest_sequence()
+    session.type_text(query)
+    filtered = wait_quiescent_snapshot_after(
+        session, after_type, f"switch-buffer candidate {query!r}",
+        lambda snapshot: (
+            snapshot.get("minibuffer_active")
+            and selected_candidate_contains(snapshot, expected_name)
+        ),
+        timeout=15.0,
+    )
+    filtered_count = int(snapshot_number(
+        filtered, "minibuffer_filtered_count"))
+    if filtered_count < minimum_matches:
+        raise DriverError(
+            f"switch-buffer query {query!r} returned {filtered_count} match(es); "
+            f"expected at least {minimum_matches}"
+        )
+    filtered_top = snapshot_bounds(filtered, "top_level")
+    filtered_height = filtered_top[3] - filtered_top[1]
+    after_confirm = session.latest_sequence()
+    session.press("Return")
+    confirmed = wait_quiescent_snapshot_after(
+        session, after_confirm, f"switched to {expected_name!r}",
+        lambda snapshot: (
+            snapshot.get("buffer_name") == expected_name
+            and not snapshot.get("minibuffer_active")
+            and snapshot.get("compose_text") == expected_text
+            and snapshot.get("compose_point") == expected_point
+        ),
+        timeout=15.0,
+    )
+    assert_switch_buffer_collapsed(
+        session, confirmed, filtered_height, "confirmation")
+    return confirmed
+
+
+def run_switch_buffer_regression(session: McCLIMGuiSession) -> dict[str, Any]:
+    """Regress selector focus/layout and per-buffer draft/point transitions."""
+    session.wait_snapshot(
+        "ESA standard input initially owns keyboard focus",
+        lambda snapshot: (
+            snapshot.get("buffer_name") == "clawmacs:e2e"
+            and snapshot.get("input_focus_pane") == "standard-input"
+            and switch_buffer_large_draft_state_p(snapshot)
+        ),
+        timeout=10.0,
+    )
+
+    expanded, _ = open_switch_buffer(session)
+    assert_switch_buffer_large_draft(expanded, "selector activation")
+    screenshot = session.final_state_screenshot(
+        "02-switch-buffer-expanded", final_snapshot=expanded)
+
+    _stressed, stressed_height = run_switch_buffer_stress_burst(session)
+    after_cancel = session.latest_sequence()
+    session.press("ctrl+g")
+    cancelled = wait_quiescent_snapshot_after(
+        session, after_cancel, "switch-buffer accepts C-g",
+        lambda snapshot: (
+            not snapshot.get("minibuffer_active")
+            and snapshot.get("buffer_name") == "clawmacs:e2e"
+            and snapshot.get("input_focus_pane") == "compose"
+            and switch_buffer_large_draft_state_p(snapshot)
+        ),
+        timeout=15.0,
+    )
+    assert_switch_buffer_large_draft(cancelled, "cancellation")
+    assert_switch_buffer_collapsed(session, cancelled, stressed_height,
+                                   "cancellation")
+
+    set_compose_state(session, "alpha-tail", 5)
+    switch_buffer_with_keyboard(
+        session, "switch-e2e-0", "switch-e2e-0", "", 0,
+        minimum_matches=2)
+    set_compose_state(session, "bravo-tail", 2)
+    switch_buffer_with_keyboard(
+        session, "clawmacs:e2e", "clawmacs:e2e", "alpha-tail", 5)
+    switch_buffer_with_keyboard(
+        session, "switch-e2e-0", "switch-e2e-0", "bravo-tail", 2,
+        minimum_matches=2)
+    switch_buffer_with_keyboard(
+        session, "clawmacs:e2e", "clawmacs:e2e", "alpha-tail", 5)
+    press_chord(session, "ctrl+a", "ctrl+k")
+    wait_compose_state(session, "", 0)
+    return screenshot
+
+
 def press_chord(session: McCLIMGuiSession, *keys: str) -> None:
     """Press KEYS in order, allowing McCLIM time to retain prefix state."""
     for key in keys:
@@ -964,6 +1347,7 @@ def run_quaestor(session: McCLIMGuiSession) -> list[dict[str, Any]]:
 def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     """Exercise default keybindings through the real McCLIM/ESA GUI path."""
     screenshots = prepare_session(session)
+    screenshots.append(run_switch_buffer_regression(session))
 
     # Drei-owned compose editing keys should edit text instead of being stolen
     # by the frame command table.

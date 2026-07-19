@@ -996,6 +996,110 @@ and avoids the backend-independent metric probe."
         fallback
         "")))
 
+(defun chat-frame-e2e-compose-point (frame)
+  "Return FRAME's visible Drei compose point as a flat character offset."
+  (let ((compose (and frame
+                      (ignore-errors (clim:find-pane-named frame 'compose)))))
+    (or (and compose (chat-compose-pane-point-offset compose)) 0)))
+
+(defun chat-frame-e2e-compose-mark (frame)
+  "Return FRAME's visible Drei compose mark as a flat character offset."
+  (let ((compose (and frame
+                      (ignore-errors (clim:find-pane-named frame 'compose)))))
+    (or (and compose (chat-compose-pane-mark-offset compose)) 0)))
+
+(defun chat-frame-e2e-sheet-bounds (frame sheet prefix)
+  "Return flat E2E fields for SHEET's bounds in FRAME top-level coordinates.
+
+This uses the portable CLIM sheet geometry protocol.  It observes the layout
+selected by CLIM without inspecting output records, pixels, mirrors, or private
+rendering state."
+  (let ((top-level (and frame
+                        (ignore-errors (clim:frame-top-level-sheet frame)))))
+    (when (and top-level sheet)
+      (ignore-errors
+        (let* ((transformation
+                 (clim:sheet-delta-transformation sheet top-level))
+               (region
+                 (clim:transform-region transformation
+                                        (clim:sheet-region sheet))))
+          (multiple-value-bind (left top right bottom)
+              (clim:bounding-rectangle* region)
+            (flet ((field (suffix)
+                     (intern (format nil "~A-~A" prefix suffix) :keyword)))
+              (list (field "LEFT") left
+                    (field "TOP") top
+                    (field "RIGHT") right
+                    (field "BOTTOM") bottom))))))))
+
+(defun chat-frame-e2e-input-focus-pane (frame)
+  "Return the semantic FRAME pane that currently owns CLIM keyboard input."
+  (let* ((top-level (and frame
+                         (ignore-errors (clim:frame-top-level-sheet frame))))
+         (port (and top-level (ignore-errors (clim:port top-level))))
+         (focus (and port
+                     (ignore-errors (clim:port-keyboard-input-focus port))))
+         (standard-input
+           (and frame (ignore-errors (clim:frame-standard-input frame))))
+         (compose (and frame
+                       (ignore-errors (clim:find-pane-named frame 'compose))))
+         (transcript
+           (and frame
+                (ignore-errors (clim:find-pane-named frame 'transcript))))
+         (pointer-documentation
+           (and frame
+                (ignore-errors
+                  (clim:frame-pointer-documentation-output frame)))))
+    (cond
+      ((null focus) nil)
+      ((eq focus compose) :compose)
+      ((eq focus transcript) :transcript)
+      ((eq focus standard-input) :standard-input)
+      ((eq focus pointer-documentation) :pointer-documentation)
+      (t :other))))
+
+(defun chat-frame-e2e-layout-fields (frame)
+  "Return E2E-only semantic and CLIM layout measurements for FRAME."
+  (let* ((top-level (and frame
+                         (ignore-errors (clim:frame-top-level-sheet frame))))
+         (minibuffer
+           (and frame
+                (ignore-errors (clim:find-pane-named frame 'minibuffer))))
+         (pointer-documentation
+           (and frame
+                (ignore-errors
+                  (clim:frame-pointer-documentation-output frame))))
+         (kind (chat-interaction-pane-kind))
+         (visible-count (length (chat-interaction-pane-rows kind)))
+         (desired-rows (chat-minibuffer-desired-row-count))
+         (required-height
+           (and minibuffer
+                (chat-minibuffer-content-pixel-height minibuffer desired-rows))))
+    (append
+     (list :input-focus-pane (chat-frame-e2e-input-focus-pane frame)
+           :compose-point (chat-frame-e2e-compose-point frame)
+           :compose-mark (chat-frame-e2e-compose-mark frame)
+           :minibuffer-filtered-count
+           (if (and *minibuffer-active*
+                    (eq *minibuffer-mode* :completion))
+               (length *minibuffer-filtered-items*)
+               0)
+           :minibuffer-visible-count visible-count
+           :minibuffer-desired-rows desired-rows
+           :minibuffer-row-height
+           (and minibuffer (chat-minibuffer-row-pixel-height minibuffer))
+           :minibuffer-required-height required-height
+           :top-level-grafted
+           (and top-level (ignore-errors (clim:sheet-grafted-p top-level)))
+           :pointer-documentation-grafted
+           (and pointer-documentation
+                (ignore-errors
+                  (clim:sheet-grafted-p pointer-documentation))))
+     (chat-frame-e2e-sheet-bounds frame top-level "TOP-LEVEL")
+     (chat-frame-e2e-sheet-bounds frame minibuffer "MINIBUFFER")
+     (chat-frame-e2e-sheet-bounds
+      frame pointer-documentation "POINTER-DOCUMENTATION"))))
+
 (defun minibuffer-selection-count-text ()
   "Return a compact selected/total completion count string, or NIL."
   (let ((count (length *minibuffer-filtered-items*)))
@@ -1227,27 +1331,29 @@ and avoids the backend-independent metric probe."
             (handler-case (resolve-buffer-provider-and-model buf)
               (error () (values nil nil)))
             (values nil nil))
-      (list :buffer-name (and buf (buffer-name buf))
-            :agent (and buf (buffer-agent-name buf))
-            :status (and buf (chat-frame-buffer-status-label buf))
-            :major-mode (and buf (buffer-major-mode buf))
-            :provider (and provider (string-downcase (symbol-name provider)))
-            :model model
-            :message-count (and buf (buffer-message-count buf))
-            :show-tool-results (and buf (buffer-show-tool-results-p buf))
-            :show-reasoning (and buf (buffer-show-reasoning-p buf))
-            :show-metadata (and buf (buffer-show-metadata-p buf))
-            :debug-mode *debug-mode*
-            :minibuffer-active *minibuffer-active*
-            :buffer-selector-active nil
-            :model-selector-active nil
-            :think-selector-active nil
-            :session-tree-selector-active *session-tree-selector-active*
-            :interaction-kind (chat-interaction-pane-kind)
-            :compose-text (chat-frame-e2e-compose-text frame)
-            :minibuffer-text (chat-frame-e2e-minibuffer-text)
-            :info-text (chat-frame-e2e-info-line frame)
-            :screen-text (chat-frame-e2e-screen-text frame)))))
+      (append
+       (list :buffer-name (and buf (buffer-name buf))
+             :agent (and buf (buffer-agent-name buf))
+             :status (and buf (chat-frame-buffer-status-label buf))
+             :major-mode (and buf (buffer-major-mode buf))
+             :provider (and provider (string-downcase (symbol-name provider)))
+             :model model
+             :message-count (and buf (buffer-message-count buf))
+             :show-tool-results (and buf (buffer-show-tool-results-p buf))
+             :show-reasoning (and buf (buffer-show-reasoning-p buf))
+             :show-metadata (and buf (buffer-show-metadata-p buf))
+             :debug-mode *debug-mode*
+             :minibuffer-active *minibuffer-active*
+             :buffer-selector-active nil
+             :model-selector-active nil
+             :think-selector-active nil
+             :session-tree-selector-active *session-tree-selector-active*
+             :interaction-kind (chat-interaction-pane-kind)
+             :compose-text (chat-frame-e2e-compose-text frame)
+             :minibuffer-text (chat-frame-e2e-minibuffer-text)
+             :info-text (chat-frame-e2e-info-line frame)
+             :screen-text (chat-frame-e2e-screen-text frame))
+       (chat-frame-e2e-layout-fields frame)))))
 
 (defun emit-chat-frame-e2e-snapshot
     (frame &key reason pane (repeat nil repeat-supplied-p))
@@ -1607,6 +1713,29 @@ single shared Drei gadget's undo history so undo cannot cross buffers."
         (clim:stream-set-input-focus compose))
       compose)))
 
+(defun focus-chat-frame-initial-input-pane (frame)
+  "Focus FRAME's normal compose pane or an explicitly E2E-requested CLIM stream.
+
+The override is accepted only while structured E2E events are enabled.  It lets
+the external GUI harness start from ESA's standard-input ownership and prove
+that opening a non-blocking selector transfers ownership back to Drei, without
+changing ordinary application startup."
+  (let* ((requested
+           (and (e2e-events-enabled-p)
+                (uiop:getenv "CLAWMACS_GUI_E2E_INITIAL_INPUT_FOCUS")))
+         (pane
+           (cond
+             ((and requested (string-equal requested "standard-input"))
+              (ignore-errors (clim:frame-standard-input frame)))
+             ((and requested (string-equal requested "transcript"))
+              (ignore-errors (clim:find-pane-named frame 'transcript)))
+             (t nil))))
+    (if pane
+        (progn
+          (ignore-errors (clim:stream-set-input-focus pane))
+          pane)
+        (focus-chat-compose-pane frame))))
+
 (defmethod clim:execute-frame-command :after
     ((frame clawmacs-chat-frame) command)
   "Keep non-blocking Clawmacs interaction input on FRAME's compose pane.
@@ -1641,7 +1770,7 @@ implements that input contract before the next gesture is delivered."
   ;; the last scheduling attempt.
   (when (reserve-chat-frame-redisplay-event frame)
     (enqueue-reserved-chat-frame-redisplay frame))
-  (focus-chat-compose-pane frame)
+  (focus-chat-frame-initial-input-pane frame)
   (file-debug-event "frame-ready"
                     :buffer-name (buffer-name (chat-frame-buffer frame))
                     :state (clim:frame-state frame))
