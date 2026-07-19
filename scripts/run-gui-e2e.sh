@@ -3,6 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$SCRIPT_DIR/gui-e2e-cleanup.sh"
+. "$SCRIPT_DIR/gui-e2e-artifacts.sh"
 . "$SCRIPT_DIR/gui-e2e-cache.sh"
 . "$SCRIPT_DIR/gui-e2e-container-retry.sh"
 if ! REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null); then
@@ -195,6 +196,7 @@ fi
 # original pathname error behind its generic "Could not load ASDF" condition.
 ARTIFACT_DIR=$(canonicalize_container_artifact_path "$ARTIFACT_DIR")
 
+gui_e2e_reset_run_artifacts "$ARTIFACT_DIR"
 SCREENSHOT_DIR="$ARTIFACT_DIR/screenshots"
 mkdir -p "$SCREENSHOT_DIR" "$ARTIFACT_DIR/home" "$ARTIFACT_DIR/cache"
 
