@@ -18,11 +18,35 @@ HELLO_SENTINEL = "CLAWMACS_E2E_HELLO_SENTINEL"
 DEBUG_LOG_ANCHOR_BYTES = 256
 SWITCH_BUFFER_LARGE_DRAFT_PREFIX = "CLAWMACS_SWITCH_BUFFER_LARGE_DRAFT:"
 SWITCH_BUFFER_LARGE_DRAFT_SIZE = 32 * 1024
-SWITCH_BUFFER_LARGE_DRAFT = (
-    SWITCH_BUFFER_LARGE_DRAFT_PREFIX
-    + "x" * (SWITCH_BUFFER_LARGE_DRAFT_SIZE
-             - len(SWITCH_BUFFER_LARGE_DRAFT_PREFIX))
-)
+SWITCH_BUFFER_LARGE_DRAFT_LINE_WIDTH = 80
+
+
+def stable_text_fingerprint(text: str) -> str:
+    """Return Clawmacs' uppercase 64-bit FNV-1a fingerprint for TEXT."""
+    value = 0xCBF29CE484222325
+    for character in text:
+        value ^= ord(character)
+        value = (value * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"{value:016X}"
+
+
+def make_switch_buffer_large_draft() -> str:
+    """Return an exact-size multiline draft without adversarial long lines."""
+    characters = list(
+        SWITCH_BUFFER_LARGE_DRAFT_PREFIX
+        + "x" * (SWITCH_BUFFER_LARGE_DRAFT_SIZE
+                 - len(SWITCH_BUFFER_LARGE_DRAFT_PREFIX))
+    )
+    for offset in range(SWITCH_BUFFER_LARGE_DRAFT_LINE_WIDTH - 1,
+                        len(characters),
+                        SWITCH_BUFFER_LARGE_DRAFT_LINE_WIDTH):
+        characters[offset] = "\n"
+    return "".join(characters)
+
+
+SWITCH_BUFFER_LARGE_DRAFT = make_switch_buffer_large_draft()
+SWITCH_BUFFER_LARGE_DRAFT_FINGERPRINT = stable_text_fingerprint(
+    SWITCH_BUFFER_LARGE_DRAFT)
 SWITCH_BUFFER_LARGE_DRAFT_POINT = 8192
 SWITCH_BUFFER_LARGE_DRAFT_MARK = 24576
 SWITCH_BUFFER_STRESS_QUERY = "switch-e2e"
@@ -755,6 +779,20 @@ def selected_candidate_contains(snapshot: dict[str, Any], text: str) -> bool:
                for line in minibuffer.splitlines())
 
 
+def selected_buffer_candidate_name(snapshot: dict[str, Any]) -> str | None:
+    """Return the exact selected buffer name from its semantic display row."""
+    minibuffer = str(snapshot.get("minibuffer_text", ""))
+    for line in minibuffer.splitlines():
+        selected = line.lstrip()
+        if not selected.startswith(">"):
+            continue
+        candidate = selected[1:].lstrip()
+        if candidate.startswith("*"):
+            candidate = candidate[1:].lstrip()
+        return candidate.split(maxsplit=1)[0] if candidate else None
+    return None
+
+
 def run_mx_selection(session: McCLIMGuiSession, query: str,
                      *, selected: str | None = None,
                      timeout: float = 10.0) -> None:
@@ -797,7 +835,9 @@ def wait_compose_state(session: McCLIMGuiSession, text: str, point: int,
 
 def switch_buffer_large_draft_state_p(snapshot: dict[str, Any]) -> bool:
     """Return whether SNAPSHOT preserves the seeded large Drei state."""
-    return (snapshot.get("compose_text") == SWITCH_BUFFER_LARGE_DRAFT
+    return (snapshot.get("compose_length") == SWITCH_BUFFER_LARGE_DRAFT_SIZE
+            and snapshot.get("compose_fingerprint")
+            == SWITCH_BUFFER_LARGE_DRAFT_FINGERPRINT
             and snapshot.get("compose_point")
             == SWITCH_BUFFER_LARGE_DRAFT_POINT
             and snapshot.get("compose_mark")
@@ -809,9 +849,12 @@ def assert_switch_buffer_large_draft(snapshot: dict[str, Any],
     """Require the exact E2E large draft, point, and mark after ACTION."""
     if not switch_buffer_large_draft_state_p(snapshot):
         text = snapshot.get("compose_text")
-        length = len(text) if isinstance(text, str) else None
+        logged_length = len(text) if isinstance(text, str) else None
         raise DriverError(
-            f"large compose state changed after {action}: length={length}, "
+            f"large compose state changed after {action}: "
+            f"length={snapshot.get('compose_length')!r}, "
+            f"fingerprint={snapshot.get('compose_fingerprint')!r}, "
+            f"logged_length={logged_length}, "
             f"point={snapshot.get('compose_point')!r}, "
             f"mark={snapshot.get('compose_mark')!r}"
         )
@@ -1058,7 +1101,10 @@ def set_compose_state(session: McCLIMGuiSession, text: str, point: int) -> None:
 def switch_buffer_with_keyboard(session: McCLIMGuiSession, query: str,
                                 expected_name: str, expected_text: str,
                                 expected_point: int, *,
-                                minimum_matches: int = 1) -> dict[str, Any]:
+                                minimum_matches: int = 1,
+                                expected_state: Callable[
+                                    [dict[str, Any]], bool] | None = None,
+                                ) -> dict[str, Any]:
     """Switch buffers through C-x b and prove filtered/closed frame geometry."""
     open_switch_buffer(session)
     after_type = session.latest_sequence()
@@ -1067,7 +1113,7 @@ def switch_buffer_with_keyboard(session: McCLIMGuiSession, query: str,
         session, after_type, f"switch-buffer candidate {query!r}",
         lambda snapshot: (
             snapshot.get("minibuffer_active")
-            and selected_candidate_contains(snapshot, expected_name)
+            and selected_buffer_candidate_name(snapshot) == expected_name
         ),
         timeout=15.0,
     )
@@ -1087,8 +1133,9 @@ def switch_buffer_with_keyboard(session: McCLIMGuiSession, query: str,
         lambda snapshot: (
             snapshot.get("buffer_name") == expected_name
             and not snapshot.get("minibuffer_active")
-            and snapshot.get("compose_text") == expected_text
-            and snapshot.get("compose_point") == expected_point
+            and (expected_state(snapshot) if expected_state is not None
+                 else (snapshot.get("compose_text") == expected_text
+                       and snapshot.get("compose_point") == expected_point))
         ),
         timeout=15.0,
     )
@@ -1131,18 +1178,27 @@ def run_switch_buffer_regression(session: McCLIMGuiSession) -> dict[str, Any]:
     assert_switch_buffer_collapsed(session, cancelled, stressed_height,
                                    "cancellation")
 
-    set_compose_state(session, "alpha-tail", 5)
     switch_buffer_with_keyboard(
         session, "switch-e2e-0", "switch-e2e-0", "", 0,
         minimum_matches=2)
+    set_compose_state(session, "alpha-tail", 5)
+    switch_buffer_with_keyboard(
+        session, "switch-e2e-1", "switch-e2e-1", "", 0,
+        minimum_matches=2)
     set_compose_state(session, "bravo-tail", 2)
     switch_buffer_with_keyboard(
-        session, "clawmacs:e2e", "clawmacs:e2e", "alpha-tail", 5)
-    switch_buffer_with_keyboard(
-        session, "switch-e2e-0", "switch-e2e-0", "bravo-tail", 2,
+        session, "switch-e2e-0", "switch-e2e-0", "alpha-tail", 5,
         minimum_matches=2)
     switch_buffer_with_keyboard(
-        session, "clawmacs:e2e", "clawmacs:e2e", "alpha-tail", 5)
+        session, "switch-e2e-1", "switch-e2e-1", "bravo-tail", 2,
+        minimum_matches=2)
+    restored_large = switch_buffer_with_keyboard(
+        session, "clawmacs:e2e", "clawmacs:e2e", "", 0,
+        expected_state=switch_buffer_large_draft_state_p)
+    assert_switch_buffer_large_draft(restored_large, "buffer round trip")
+    switch_buffer_with_keyboard(
+        session, "switch-e2e-0", "switch-e2e-0", "alpha-tail", 5,
+        minimum_matches=2)
     press_chord(session, "ctrl+a", "ctrl+k")
     wait_compose_state(session, "", 0)
     return screenshot
@@ -1348,6 +1404,7 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     """Exercise default keybindings through the real McCLIM/ESA GUI path."""
     screenshots = prepare_session(session)
     screenshots.append(run_switch_buffer_regression(session))
+    compose_test_buffer = str(session.latest_snapshot().get("buffer_name"))
 
     # Drei-owned compose editing keys should edit text instead of being stolen
     # by the frame command table.
@@ -1499,7 +1556,7 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                               lambda snapshot: snapshot.get("buffer_name") == "*help:keybindings*"
                               and "Key Bindings" in str(snapshot.get("screen_text", "")),
                               timeout=10.0)
-        close_current_buffer_with_key(session, "clawmacs:e2e")
+        close_current_buffer_with_key(session, compose_test_buffer)
 
     for keys, command in [
         (("ctrl+h", "i"), "info-directory-command"),
@@ -1509,7 +1566,7 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
         session.wait_snapshot("info buffer shown",
                               lambda snapshot: snapshot.get("major_mode") == "info",
                               timeout=10.0)
-        close_current_buffer_with_key(session, "clawmacs:e2e")
+        close_current_buffer_with_key(session, compose_test_buffer)
     screenshots.append(session.screenshot("05-help-keybinds"))
 
     # C-x global buffer/session/file commands.  C-x b is the regression path:

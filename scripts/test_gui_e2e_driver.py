@@ -474,6 +474,18 @@ class SwitchBufferAssertionTests(unittest.TestCase):
                          len(DRIVER.SWITCH_BUFFER_LARGE_DRAFT))
         self.assertTrue(DRIVER.SWITCH_BUFFER_LARGE_DRAFT.startswith(
             DRIVER.SWITCH_BUFFER_LARGE_DRAFT_PREFIX))
+        self.assertEqual(409,
+                         DRIVER.SWITCH_BUFFER_LARGE_DRAFT.count("\n"))
+        self.assertLessEqual(
+            max(map(len, DRIVER.SWITCH_BUFFER_LARGE_DRAFT.splitlines())),
+            DRIVER.SWITCH_BUFFER_LARGE_DRAFT_LINE_WIDTH - 1)
+        self.assertEqual(
+            "75B23B0101D8FF16",
+            DRIVER.SWITCH_BUFFER_LARGE_DRAFT_FINGERPRINT)
+        self.assertEqual(
+            DRIVER.SWITCH_BUFFER_LARGE_DRAFT_FINGERPRINT,
+            DRIVER.stable_text_fingerprint(
+                DRIVER.SWITCH_BUFFER_LARGE_DRAFT))
         self.assertLess(DRIVER.SWITCH_BUFFER_LARGE_DRAFT_POINT,
                         DRIVER.SWITCH_BUFFER_LARGE_DRAFT_MARK)
         self.assertLess(DRIVER.SWITCH_BUFFER_LARGE_DRAFT_MARK,
@@ -489,13 +501,45 @@ class SwitchBufferAssertionTests(unittest.TestCase):
         self.assertIn("BackSpace", keys)
 
         snapshot = {
-            "compose_text": DRIVER.SWITCH_BUFFER_LARGE_DRAFT,
+            # The debug logger intentionally sanitizes long strings. Compact
+            # fields must still prove the exact unsanitized editor state.
+            "compose_text": DRIVER.SWITCH_BUFFER_LARGE_DRAFT[:10000]
+                            + "…[truncated]",
+            "compose_length": DRIVER.SWITCH_BUFFER_LARGE_DRAFT_SIZE,
+            "compose_fingerprint": (
+                DRIVER.SWITCH_BUFFER_LARGE_DRAFT_FINGERPRINT),
             "compose_point": DRIVER.SWITCH_BUFFER_LARGE_DRAFT_POINT,
             "compose_mark": DRIVER.SWITCH_BUFFER_LARGE_DRAFT_MARK,
         }
         self.assertTrue(DRIVER.switch_buffer_large_draft_state_p(snapshot))
+        snapshot["compose_fingerprint"] = "0000000000000000"
+        self.assertFalse(DRIVER.switch_buffer_large_draft_state_p(snapshot))
+        snapshot["compose_fingerprint"] = (
+            DRIVER.SWITCH_BUFFER_LARGE_DRAFT_FINGERPRINT)
         snapshot["compose_mark"] = DRIVER.SWITCH_BUFFER_LARGE_DRAFT_MARK - 1
         self.assertFalse(DRIVER.switch_buffer_large_draft_state_p(snapshot))
+
+    def test_selected_buffer_candidate_requires_an_exact_name(self) -> None:
+        snapshot = {
+            "minibuffer_text": (
+                "Switch Buffer: switch-e2e-1\n"
+                ">   switch-e2e-11  [agent] idle  msgs:0\n"
+                "    switch-e2e-1  [agent] idle  msgs:0"),
+        }
+        self.assertEqual(
+            "switch-e2e-11",
+            DRIVER.selected_buffer_candidate_name(snapshot))
+        self.assertNotEqual(
+            "switch-e2e-1",
+            DRIVER.selected_buffer_candidate_name(snapshot))
+
+        snapshot["minibuffer_text"] = (
+            "Switch Buffer: switch-e2e-1\n"
+            "> * switch-e2e-1  [agent] idle  msgs:0\n"
+            "    switch-e2e-11  [agent] idle  msgs:0")
+        self.assertEqual(
+            "switch-e2e-1",
+            DRIVER.selected_buffer_candidate_name(snapshot))
 
     def test_press_keys_uses_one_xdotool_burst(self) -> None:
         calls: list[tuple[object, ...]] = []
@@ -525,7 +569,11 @@ class SwitchBufferAssertionTests(unittest.TestCase):
         calls: list[tuple[object, ...]] = []
         snapshot = {
             **self.expanded_snapshot(),
-            "compose_text": DRIVER.SWITCH_BUFFER_LARGE_DRAFT,
+            "compose_text": DRIVER.SWITCH_BUFFER_LARGE_DRAFT[:10000]
+                            + "…[truncated]",
+            "compose_length": DRIVER.SWITCH_BUFFER_LARGE_DRAFT_SIZE,
+            "compose_fingerprint": (
+                DRIVER.SWITCH_BUFFER_LARGE_DRAFT_FINGERPRINT),
             "compose_point": DRIVER.SWITCH_BUFFER_LARGE_DRAFT_POINT,
             "compose_mark": DRIVER.SWITCH_BUFFER_LARGE_DRAFT_MARK,
             "minibuffer_text": (

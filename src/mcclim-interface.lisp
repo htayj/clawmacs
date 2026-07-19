@@ -1324,6 +1324,7 @@ rendering state."
   "Return semantic GUI state for FRAME as a plist for tests and E2E logs."
   (let* ((frame (chat-frame-e2e-effective-frame frame))
          (buf (and frame (chat-frame-buffer frame)))
+         (compose-text (chat-frame-e2e-compose-text frame))
          (*chat-interaction-state*
            (if frame
                (chat-frame-interaction-state frame)
@@ -1351,7 +1352,10 @@ rendering state."
              :think-selector-active nil
              :session-tree-selector-active *session-tree-selector-active*
              :interaction-kind (chat-interaction-pane-kind)
-             :compose-text (chat-frame-e2e-compose-text frame)
+             :compose-text compose-text
+             :compose-length (length compose-text)
+             :compose-fingerprint
+             (file-checkpoint-content-hash compose-text)
              :minibuffer-text (chat-frame-e2e-minibuffer-text)
              :info-text (chat-frame-e2e-info-line frame)
              :screen-text (chat-frame-e2e-screen-text frame))

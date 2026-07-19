@@ -88,4 +88,7 @@
         (is (search "agent>" screen-text))
         (is (search "CLAWMACS_E2E_HELLO_SENTINEL" screen-text))
         (is (string= "draft" (getf snapshot :compose-text)))
+        (is (= 5 (getf snapshot :compose-length)))
+        (is (string= (clawmacs::file-checkpoint-content-hash "draft")
+                     (getf snapshot :compose-fingerprint)))
         (is-false (search "user> draft" screen-text))))))
