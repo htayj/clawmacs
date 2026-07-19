@@ -1175,6 +1175,35 @@
       (is (equal '("bravo" "alpha" "charlie")
                  (mapcar (lambda (item) (getf item :name)) sorted))))))
 
+(test buffer-recency-sort-preserves-ring-order-without-history
+  "The previous ring buffer remains the default when no selector history exists."
+  (let ((*buffer-selection-history* nil))
+    (let* ((current (list :name "current" :current-p t
+                          :display "* current"))
+           (previous (list :name "zulu" :display "  zulu"))
+           (older (list :name "alpha" :display "  alpha"))
+           (sorted (sort-buffers-by-recency
+                    (list current previous older))))
+      (is (equal '("current" "zulu" "alpha")
+                 (mapcar (lambda (item) (getf item :name)) sorted))))))
+
+(test minibuffer-query-selects-the-highest-scoring-match
+  "Typing after an explicit preselection resets Return to fuzzy result zero."
+  (let ((clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state)))
+    (minibuffer-activate
+     "Pick"
+     (list (list :display "switch-e2e-0")
+           (list :display "switch-e2e-1")
+           (list :display "unrelated"))
+     #'identity)
+    (setf *minibuffer-selected-index* 1)
+    (dolist (character (coerce "switch-e2e-0" 'list))
+      (clawmacs::minibuffer-insert-char character))
+    (is (= 0 *minibuffer-selected-index*))
+    (is (string= "switch-e2e-0"
+                 (getf (first *minibuffer-filtered-items*) :display)))))
+
 (test visible-buffer-selector-return-defaults-to-another-buffer
   "Unfiltered Return selects a non-current buffer instead of doing nothing."
   (let ((*buffer-ring* nil)
@@ -1189,6 +1218,17 @@
       (add-buffer-to-ring current)
       (clawmacs::minibuffer-select-buffer-command current)
       (is-true *minibuffer-active*)
+      (is (eq other
+              (getf (nth *minibuffer-selected-index*
+                         *minibuffer-filtered-items*)
+                    :buffer)))
+      (dolist (character (coerce "selector-current" 'list))
+        (clawmacs::minibuffer-insert-char character))
+      (is (eq current
+              (getf (first *minibuffer-filtered-items*) :buffer)))
+      (dotimes (ignored (length "selector-current"))
+        (declare (ignore ignored))
+        (clawmacs::minibuffer-delete-backward))
       (is (eq other
               (getf (nth *minibuffer-selected-index*
                          *minibuffer-filtered-items*)

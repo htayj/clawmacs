@@ -1400,8 +1400,7 @@ Returns true when KEY was consumed by completion."
                                 (getf item :package-name))
                          :test #'string=)))
     (when index
-      (setf *minibuffer-selected-index* index)
-      (minibuffer-ensure-visible))))
+      (minibuffer-preselect-index index))))
 
 (defun activate-package-toggle-minibuffer (buffer &optional selected-package-name)
   "Open the installed package enablement selector."
@@ -1569,8 +1568,7 @@ Returns true when KEY was consumed by completion."
   "Move the minibuffer selection to the active item in ITEMS when present."
   (let ((active-idx (position-if (lambda (item) (getf item :active-p)) items)))
     (when active-idx
-      (setf *minibuffer-selected-index* active-idx)
-      (minibuffer-ensure-visible))))
+      (minibuffer-preselect-index active-idx))))
 
 (defun resolve-agent-display-config (agent-name)
   "Return AGENT-NAME's effective provider, model, and think level for UI display."
@@ -1721,7 +1719,7 @@ to navigate."
 (defun minibuffer-select-buffer-command (buffer)
   "Open the minibuffer buffer selector with fuzzy search (helm/ivy/vertico style).
 Activates the minibuffer with all open buffers as candidates, sorted by
-recency then alphabetically. The user can type to fuzzy-filter and use C-n/C-p
+recorded and ring recency. The user can type to fuzzy-filter and use C-n/C-p
 to navigate. Shows buffer name, agent, status, and message count."
   (declare (ignore buffer))
   (let* ((current (current-buffer))
@@ -1740,7 +1738,7 @@ to navigate. Shows buffer name, agent, status, and message count."
                                   :current-p current-p
                                   :display display)))
                         *buffer-ring*))
-         ;; Sort: by recency (from history), then current buffer, then alphabetical
+         ;; Sort: explicit selector history, then the buffer ring's MRU order.
          (sorted (sort-buffers-by-recency items)))
     (minibuffer-activate
      "Switch Buffer" sorted
@@ -1760,8 +1758,7 @@ to navigate. Shows buffer name, agent, status, and message count."
     (let ((index (position-if-not (lambda (item) (getf item :current-p))
                                   sorted)))
       (when index
-        (setf *minibuffer-selected-index* index)
-        (minibuffer-ensure-visible)))))
+        (minibuffer-preselect-index index)))))
 (defcommand minibuffer-select-buffer-command)
 
 (defun new-buffer-command (buffer)
@@ -2176,8 +2173,7 @@ already open elsewhere."
                                           (getf item :session-name))
                                    :test #'string=)))
               (when index
-                (setf *minibuffer-selected-index* index)
-                (minibuffer-ensure-visible)))))
+                (minibuffer-preselect-index index)))))
         (buffer-insert-system-message
          buffer
          "[No saved sessions available.]"))))

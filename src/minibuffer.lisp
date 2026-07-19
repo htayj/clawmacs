@@ -60,6 +60,8 @@
                                :accessor interaction-minibuffer-match-positions)
    (minibuffer-selected-index :initform 0
                               :accessor interaction-minibuffer-selected-index)
+   (minibuffer-default-index :initform 0
+                             :accessor interaction-minibuffer-default-index)
    (minibuffer-scroll-offset :initform 0
                              :accessor interaction-minibuffer-scroll-offset)
    (minibuffer-callback :initform nil
@@ -193,6 +195,7 @@ advanced first so every presentation created from the old state is stale."
         (interaction-minibuffer-filtered-items state) nil
         (interaction-minibuffer-match-positions state) nil
         (interaction-minibuffer-selected-index state) 0
+        (interaction-minibuffer-default-index state) 0
         (interaction-minibuffer-scroll-offset state) 0
         (interaction-minibuffer-callback state) nil
         (interaction-session-tree-active-p state) nil
@@ -259,6 +262,8 @@ advanced first so every presentation created from the old state is stale."
   (interaction-minibuffer-match-positions *chat-interaction-state*))
 (define-symbol-macro *minibuffer-selected-index*
   (interaction-minibuffer-selected-index *chat-interaction-state*))
+(define-symbol-macro *minibuffer-default-index*
+  (interaction-minibuffer-default-index *chat-interaction-state*))
 (define-symbol-macro *minibuffer-scroll-offset*
   (interaction-minibuffer-scroll-offset *chat-interaction-state*))
 (define-symbol-macro *minibuffer-callback*
@@ -390,6 +395,7 @@ and a CALLBACK function to call on confirmation."
         *minibuffer-filtered-items* nil
         *minibuffer-match-positions* nil
         *minibuffer-selected-index* 0
+        *minibuffer-default-index* 0
         *minibuffer-scroll-offset* 0
         *minibuffer-callback* callback)
   (minibuffer-update-filter))
@@ -412,6 +418,7 @@ and a CALLBACK function to call on confirmation."
         *minibuffer-filtered-items* nil
         *minibuffer-match-positions* nil
         *minibuffer-selected-index* 0
+        *minibuffer-default-index* 0
         *minibuffer-scroll-offset* 0
         *minibuffer-callback* nil))
 
@@ -421,8 +428,8 @@ When a non-empty query is present the matching candidates are scored and
 sorted by relevance (highest score first) so the best match floats to the
 top automatically.  Matched character positions are precomputed and stored in
 *minibuffer-match-positions* for the renderer to use for highlighting.
-Clamps *minibuffer-selected-index* to the new filtered list length and
-resets the scroll offset."
+Non-empty query edits select that best match; an empty query preserves an
+explicitly preselected item.  The scroll offset is reset in either case."
   (let ((query *minibuffer-input*))
     (cond
       ((eq *minibuffer-mode* :prompt)
@@ -432,7 +439,8 @@ resets the scroll offset."
        ;; No query — show all items in their original order, no highlights.
        (setf *minibuffer-filtered-items* (copy-list *minibuffer-items*)
              *minibuffer-match-positions* (make-list (length *minibuffer-items*)
-                                                     :initial-element nil)))
+                                                     :initial-element nil)
+             *minibuffer-selected-index* *minibuffer-default-index*))
       (t
        ;; Query present — filter, score, sort, record positions.
        (let* ((matched (remove-if-not
@@ -455,7 +463,8 @@ resets the scroll offset."
                (mapcar (lambda (item)
                          (fuzzy-match-positions query
                                                 (minibuffer-item-match-text item)))
-                       sorted-items))))))
+                       sorted-items)
+               *minibuffer-selected-index* 0)))))
   ;; Clamp selected index to valid range.
   (setf *minibuffer-selected-index*
         (max 0 (min *minibuffer-selected-index*
@@ -464,6 +473,14 @@ resets the scroll offset."
   (setf *minibuffer-scroll-offset* 0)
   (minibuffer-ensure-visible)
   (touch-chat-interaction-state))
+
+(defun minibuffer-preselect-index (index)
+  "Make INDEX the empty-query default and current minibuffer selection."
+  (when (and (integerp index) (<= 0 index))
+    (setf *minibuffer-default-index* index
+          *minibuffer-selected-index* index)
+    (minibuffer-ensure-visible)
+    index))
 
 (defun minibuffer-insert-char (char)
   "Insert CHAR at the current point in the minibuffer input and re-filter."
@@ -679,9 +696,9 @@ are sorted with the currently active model first, then alphabetically."
                      (t (string< a-disp b-disp)))))))
 
 (defun sort-buffers-by-recency (items)
-  "Sort buffer ITEMS by recency (from *buffer-selection-history*) then alphabetically.
+  "Sort buffer ITEMS by recorded recency, then current buffer-ring order.
 Items that were selected more recently appear first. Items not in the history
-are sorted with the current buffer first, then alphabetically."
+retain their input order, with the current buffer promoted when necessary."
   (stable-sort (copy-list items)
                (lambda (a b)
                  (let* ((a-name (getf a :name))
@@ -696,10 +713,11 @@ are sorted with the current buffer first, then alphabetically."
                      (a-pos t)
                      ;; Only b in history: b first
                      (b-pos nil)
-                     ;; Neither: current buffer first, then alphabetical
+                     ;; Neither: current buffer first, then stable input order.
                      ((and (getf a :current-p) (not (getf b :current-p))) t)
                      ((and (getf b :current-p) (not (getf a :current-p))) nil)
-                     (t (string< a-name b-name)))))))
+                     ;; Stable sort preserves the buffer ring's MRU order.
+                     (t nil))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Session Tree Selector
