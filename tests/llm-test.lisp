@@ -595,7 +595,7 @@
     (is (eq :wrap* (clim:stream-end-of-line-action compose)))))
 
 (test mcclim-compose-drei-control-editing-gestures
-  "The Drei compose pane handles C-j and C-Backspace as editor gestures."
+  "Compose-specific control edits remain native, undoable Drei gestures."
   (let* ((editor-table (clim:find-command-table 'drei:editor-table))
          (compose-table
            (clim:find-command-table
@@ -619,6 +619,31 @@
                                     :key-character #\b
                                     :modifier-state
                                     (clim:make-modifier-state :control)))
+         (control-u (make-instance 'clim:key-press-event
+                                   :sheet compose
+                                   :x 0
+                                   :y 0
+                                   :key-name nil
+                                   :key-character #\u
+                                   :modifier-state
+                                   (clim:make-modifier-state :control)))
+         (control-w (make-instance 'clim:key-press-event
+                                   :sheet compose
+                                   :x 0
+                                   :y 0
+                                   :key-name nil
+                                   :key-character #\w
+                                   :modifier-state
+                                   (clim:make-modifier-state :control)))
+         (control-underscore
+           (make-instance 'clim:key-press-event
+                          :sheet compose
+                          :x 0
+                          :y 0
+                          :key-name nil
+                          :key-character #\_
+                          :modifier-state
+                          (clim:make-modifier-state :control)))
          (encoded-control-b (make-instance 'clim:key-press-event
                                             :sheet compose
                                             :x 0
@@ -695,6 +720,12 @@
                  ,clim:*numeric-argument-marker*)
                (test-command-table-key-command compose-table #\Backspace
                                                :modifiers '(:control))))
+    (is (equal `(drei-commands::com-backward-kill-word
+                 ,clim:*numeric-argument-marker*)
+               (test-command-table-key-command compose-table #\w
+                                               :modifiers '(:control))))
+    (is (equal '(drei-commands::com-kill-line 0 t)
+               (clawmacs::chat-compose-drei-direct-command control-u)))
     (is (equal `(drei-commands::com-backward-delete-object
                  ,clim:*numeric-argument-marker*
                  ,clim:*numeric-argument-marker*)
@@ -757,7 +788,22 @@
     (is-true (clawmacs::chat-compose-drei-control-editing-event-p
               control-named-backspace))
     (clawmacs::process-chat-compose-drei-event compose control-named-backspace)
-    (is (string= "hello " (clim:gadget-value compose)))))
+    (is (string= "hello " (clim:gadget-value compose)))
+    (setf (clim:gadget-value compose) "hello world")
+    (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
+          (length (clim:gadget-value compose)))
+    (clawmacs::process-chat-compose-drei-event compose control-w)
+    (is (string= "hello " (clim:gadget-value compose)))
+    (clawmacs::process-chat-compose-drei-event compose control-underscore)
+    (is (string= "hello world" (clim:gadget-value compose)))
+    (setf (clim:gadget-value compose) (format nil "alpha~%beta"))
+    (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
+          (length (clim:gadget-value compose)))
+    (clawmacs::process-chat-compose-drei-event compose control-u)
+    (is (string= (format nil "alpha~%") (clim:gadget-value compose)))
+    (clawmacs::process-chat-compose-drei-event compose control-underscore)
+    (is (string= (format nil "alpha~%beta")
+                 (clim:gadget-value compose)))))
 
 (test pinned-mcclim-word-kill-can-be-yanked
   "Pinned McCLIM's Edward word kill/yank works without application overrides."

@@ -375,18 +375,19 @@ the public ESA and DREI-SYNTAX protocols."
 (defun install-chat-compose-drei-keybindings ()
   "Install Clawmacs compose bindings in its application-owned command table.
 
-Drei already binds the usual C-j representation, but some backends deliver it
-as Control-Newline.  The compose pane also preserves the Clawmacs/Emacs-style
-C-Backspace word deletion binding.  Do not modify Drei's process-global
-INDENT-TABLE or DELETION-TABLE: `additional-command-tables' scopes these
-bindings to `clawmacs-chat-compose-pane'."
+  Drei already binds the usual C-j representation, but some backends deliver it
+  as Control-Newline.  The compose pane also preserves the Clawmacs/Emacs-style
+  C-w and C-Backspace editing bindings.  Do not modify Drei's process-global
+  INDENT-TABLE or DELETION-TABLE: `additional-command-tables' scopes these
+  bindings to `clawmacs-chat-compose-pane'."
   (esa:set-key (chat-compose-drei-command-symbol
                 "COM-NEWLINE-AND-INDENT")
                'clawmacs-chat-compose-editing-table
                '((#\Newline :control)))
   (let ((backward-kill-word
           (chat-compose-drei-command-symbol "COM-BACKWARD-KILL-WORD")))
-    (dolist (gesture '((#\Backspace :control)
+    (dolist (gesture '((#\w :control)
+                       (#\Backspace :control)
                        (#\Rubout :control)))
       (esa:set-key (list backward-kill-word clim:*numeric-argument-marker*)
                    'clawmacs-chat-compose-editing-table
@@ -510,6 +511,34 @@ compose pane fix was broadened from a few control editing keys to every
 modified key event."
   (chat-compose-modified-key-event-p event))
 
+(defun chat-compose-drei-direct-command (event)
+  "Return the native Drei command that must bypass ESA gesture parsing.
+
+ESA consumes C-u as a universal numeric prefix before consulting any command
+table, so an application-owned C-u binding cannot override it.  Dispatch the
+equivalent Drei command through its public command executor instead.  Numeric
+argument zero is Drei's documented kill-from-point-to-line-start operation."
+  (when (eql (chat-compose-event-key event) (code-char 21))
+    (list (chat-compose-drei-command-symbol "COM-KILL-LINE") 0 t)))
+
+(defun execute-chat-compose-drei-command (pane command &key redisplay)
+  "Execute native Drei COMMAND for PANE with undo and gadget propagation."
+  (drei:with-bound-drei-special-variables
+      (pane :prompt (format nil "~A " (first command)))
+    (drei:execute-drei-command pane command)
+    (when redisplay
+      (drei:display-drei pane :redisplay-minibuffer t))
+    ;; Match Drei gadget HANDLE-GESTURE's public value-callback contract after
+    ;; using its exported direct command executor.
+    (let ((view (drei:current-view pane)))
+      (when (drei:modified-p view)
+        (when (clim:gadget-value-changed-callback pane)
+          (clim:value-changed-callback pane
+                                       (clim:gadget-client pane)
+                                       (clim:gadget-id pane)
+                                       (clim:gadget-value pane)))
+        (setf (drei:modified-p view) nil)))))
+
 (defun chat-compose-drei-gesture (pane event)
   "Return the CLIM gesture the compose Drei command processor should see.
 
@@ -562,13 +591,17 @@ and frame-table bindings."
 When REDISPLAY is nil, run just the command processor; this supports unit tests
 without a grafted port. Live event handling uses Drei's normal handler so the
 pane redraws and value callbacks propagate."
-  (let ((gesture (chat-compose-drei-gesture pane event)))
-    (when (and gesture (esa:proper-gesture-p gesture))
-      (drei:with-bound-drei-special-variables
-          (pane :prompt (format nil "~A " (esa:gesture-name gesture)))
-        (if redisplay
-            (drei:handle-gesture pane gesture)
-            (esa:process-gesture pane gesture))))))
+  (let ((direct-command (chat-compose-drei-direct-command event)))
+    (if direct-command
+        (execute-chat-compose-drei-command pane direct-command
+                                           :redisplay redisplay)
+        (let ((gesture (chat-compose-drei-gesture pane event)))
+          (when (and gesture (esa:proper-gesture-p gesture))
+            (drei:with-bound-drei-special-variables
+                (pane :prompt (format nil "~A " (esa:gesture-name gesture)))
+              (if redisplay
+                  (drei:handle-gesture pane gesture)
+                  (esa:process-gesture pane gesture))))))))
 
 (defun chat-compose-application-input-active-p (&optional buffer)
   "Return true when Clawmacs modal input should receive compose keystrokes."
@@ -782,10 +815,10 @@ because they are intentionally absent from the frame table."
 
 Ordinary editing and application keys go through Drei's own HANDLE-EVENT and
 its inherited frame command table.  Direct dispatch remains only for Clawmacs'
-modal input overlays, two intentional editing conflicts, ESC-as-Meta, and
-modified key events that ESA:CONVERT-TO-GESTURE currently drops.  Standalone
-modifier presses are consumed explicitly so a retained prefix never depends
-on backend-specific modifier-event conversion."
+modal input overlays, ESC-as-Meta, and modified key events that
+ESA:CONVERT-TO-GESTURE currently drops.  Standalone modifier presses are
+consumed explicitly so a retained prefix never depends on backend-specific
+modifier-event conversion."
   (let* ((frame (ignore-errors (clim:pane-frame pane)))
          (dispatch
            (lambda ()
@@ -813,8 +846,6 @@ on backend-specific modifier-event conversion."
                        (not *meta-pending*))
                   (setf *meta-pending* t)
                   t)
-                 ((chat-compose-buffer-owned-editing-event-p pane event)
-                  (dispatch-chat-compose-event-to-buffer pane event))
                  (*meta-pending*
                   (let ((gesture-event
                           (prog1 (chat-compose-meta-prefix-event pane event)

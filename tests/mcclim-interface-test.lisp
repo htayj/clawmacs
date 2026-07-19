@@ -324,64 +324,6 @@
                 :key #'car :test #'string=))
     (is (eq :running (clawmacs::chat-frame-lifecycle-state frame)))))
 
-(test chat-compose-direct-command-errors-remain-inside-the-running-frame
-  "A failing buffer-owned compose command cannot unwind the CLIM event loop."
-  (let* ((buf (make-buffer "compose-command-error"
-                           :session-persistence-mode :ephemeral))
-         (frame (clim:make-application-frame
-                 'clawmacs::clawmacs-chat-frame
-                 :buffer buf))
-         (clawmacs::*chat-interaction-state*
-           (clawmacs::chat-frame-interaction-state frame))
-         (pane (make-synthetic-chat-compose-pane frame))
-         (keymap (clawmacs::make-keymap :compose-command-error))
-         (event (make-instance 'clim:key-press-event
-                               :sheet nil
-                               :x 0
-                               :y 0
-                               :key-name nil
-                               :key-character #\u
-                               :modifier-state
-                               (clim:make-modifier-state :control)))
-         (redisplay-requests 0)
-         (debug-events nil)
-         (clawmacs::*before-command-hook* nil)
-         (clawmacs::*after-command-hook* nil)
-         (clawmacs::*buffer-selector-active* nil)
-         (clawmacs::*model-selector-active* nil)
-         (clawmacs::*think-selector-active* nil))
-    (clawmacs::keymap-bind keymap (code-char 21)
-                           'clawmacs::kill-backward-line-command)
-    (setf (buffer-keymap buf) keymap
-          (clawmacs::chat-frame-lifecycle-state frame) :running)
-    (with-mcclim-test-function-override
-        (clawmacs::sync-chat-buffer-input-from-compose-pane
-            (ignored-pane ignored-buffer)
-          (declare (ignore ignored-pane ignored-buffer))
-          nil)
-      (with-mcclim-test-function-override
-          (clawmacs::kill-backward-line-command (ignored-buffer)
-            (declare (ignore ignored-buffer))
-            (error "simulated direct compose command failure"))
-        (with-mcclim-test-function-override
-            (clawmacs::request-chat-frame-redisplay (requested-frame)
-              (is (eq frame requested-frame))
-              (incf redisplay-requests)
-              requested-frame)
-          (with-mcclim-test-function-override
-              (clawmacs::file-debug-event (event-name &rest payload)
-                (declare (ignore payload))
-                (push event-name debug-events))
-            ;; This is the real compose HANDLE-EVENT direct-dispatch branch.
-            (is (null (clim:handle-event pane event)))))))
-    (let ((diagnostic (message-prev (buffer-input-message buf))))
-      (is (eq :system (message-sender diagnostic)))
-      (is (search "simulated direct compose command failure"
-                  (message-text diagnostic))))
-    (is (= 1 redisplay-requests))
-    (is (member "ui-action-error" debug-events :test #'string=))
-    (is (eq :running (clawmacs::chat-frame-lifecycle-state frame)))))
-
 (test chat-compose-minibuffer-callback-errors-remain-inside-the-running-frame
   "A failing prompt callback deactivates cleanly without exiting the frame."
   (let* ((buf (make-buffer "minibuffer-callback-error"
@@ -1627,6 +1569,7 @@
              (clim:find-command-table
               'clawmacs::clawmacs-chat-compose-editing-table))))
       (dolist (gesture '((#\Newline :control)
+                         (#\w :control)
                          (#\Backspace :control)
                          (#\Rubout :control)))
         (is (find gesture bindings :key #'second :test #'equal))))))
