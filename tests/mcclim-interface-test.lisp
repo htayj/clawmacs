@@ -1491,6 +1491,85 @@
     (is (= clawmacs::*chat-minibuffer-line-height*
            (clim:space-requirement-max-height space)))))
 
+(test mcclim-minibuffer-row-height-uses-live-clim-metrics
+  "A grafted pane's CLIM line metric supersedes the conservative startup fallback."
+  (let ((pane (make-instance 'clawmacs::clawmacs-chat-minibuffer-pane
+                             :display-function
+                             'clawmacs::display-chat-minibuffer-pane
+                             :display-time :command-loop
+                             :width 900))
+        (clawmacs::*chat-minibuffer-line-height* 24))
+    (with-mcclim-test-function-override
+        (clim:stream-line-height (stream &key text-style)
+          (declare (ignore stream text-style))
+          29)
+      (is (= 29 (clawmacs::chat-minibuffer-row-pixel-height pane))))))
+
+(test mcclim-minibuffer-sizing-reads-the-frame-owned-interaction
+  "Pane sizing cannot silently consult another frame or the fallback global state."
+  (let* ((buffer (make-buffer "frame-owned-minibuffer-size"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buffer))
+         (pane (make-instance 'clawmacs::clawmacs-chat-minibuffer-pane
+                              :display-function
+                              'clawmacs::display-chat-minibuffer-pane
+                              :display-time :command-loop
+                              :width 900))
+         (state (clawmacs::chat-frame-interaction-state frame))
+         (unrelated-state (clawmacs::make-chat-interaction-state)))
+    (let ((clawmacs::*chat-interaction-state* state))
+      (clawmacs::minibuffer-activate
+       "Frame Owned"
+       (list (list :display "one")
+             (list :display "two")
+             (list :display "three"))
+       #'identity))
+    (let ((clawmacs::*chat-interaction-state* unrelated-state)
+          (expected-height
+            (clawmacs::chat-minibuffer-content-pixel-height pane 4)))
+      (with-mcclim-test-function-override
+          (clim:find-pane-named (requested-frame pane-name)
+            (is (eq frame requested-frame))
+            (is (eq 'clawmacs::minibuffer pane-name))
+            pane)
+        (clawmacs::update-chat-minibuffer-space-requirements frame))
+      (let ((space (clim:compose-space pane)))
+        (is (= expected-height
+               (clim:space-requirement-height space)))
+        (is (= expected-height
+               (clim:space-requirement-min-height space)))
+        (is (= expected-height
+               (clim:space-requirement-max-height space)))))))
+
+(test mcclim-minibuffer-sizing-propagates-to-the-frame
+  "An expanded selector asks CLIM to resize the top-level frame hierarchy."
+  (let* ((buffer (make-buffer "frame-resized-minibuffer"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buffer))
+         (pane (make-instance 'clawmacs::clawmacs-chat-minibuffer-pane
+                              :display-function
+                              'clawmacs::display-chat-minibuffer-pane
+                              :display-time :command-loop
+                              :width 900))
+         (resize-frame-p nil))
+    (with-mcclim-test-function-override
+        (clim:find-pane-named (requested-frame pane-name)
+          (declare (ignore requested-frame pane-name))
+          pane)
+      (with-mcclim-test-function-override
+          (clim:change-space-requirements
+              (requested-pane &rest arguments
+               &key resize-frame &allow-other-keys)
+            (declare (ignore arguments))
+            (is (eq pane requested-pane))
+            (setf resize-frame-p resize-frame))
+        (clawmacs::update-chat-minibuffer-space-requirements frame)))
+    (is-true resize-frame-p)))
+
 (test mcclim-custom-presentation-buffers-append-system-feedback
   "Whole-buffer custom presenters still surface system feedback messages."
   (let ((clawmacs::*buffer-type-registry*

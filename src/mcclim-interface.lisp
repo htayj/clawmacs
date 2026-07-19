@@ -837,7 +837,7 @@ on backend-specific modifier-event conversion."
    :max-height 22))
 
 (defparameter *chat-minibuffer-line-height* 24
-  "Approximate pixel height of one chat minibuffer row.")
+  "Minimum fallback pixel height of one chat minibuffer row.")
 
 (defparameter *chat-minibuffer-max-pixel-height* nil
   "Maximum pixel height for the expanded chat minibuffer pane.
@@ -1445,6 +1445,10 @@ standard input stream, menus, or presentations with some other pane focused.
 When such a command activates modal interaction, return focus to the pane that
 implements that input contract before the next gesture is delivered."
   (declare (ignore command))
+  ;; ESA redisplays frame panes immediately after the effective command method
+  ;; returns.  Apply interaction layout here, before that redisplay, rather than
+  ;; waiting for the separately queued asynchronous refresh.
+  (update-chat-minibuffer-space-requirements frame)
   (when (chat-compose-application-input-active-p (chat-frame-buffer frame))
     (focus-chat-compose-pane frame)))
 
@@ -1815,23 +1819,58 @@ failure releases the reservation while leaving the dirty bit set."
       (:skill (+ 1 (max 1 (skill-completion-visible-item-count))))
       (otherwise 1))))
 
-(defun chat-minibuffer-max-pixel-height ()
-  "Return the maximum expanded minibuffer pane height in pixels."
+(defun chat-minibuffer-row-pixel-height (pane)
+  "Return one CLIM-managed interaction row height for PANE in pixels.
+
+Once PANE has a medium, `clim:stream-line-height' reflects the active backend,
+font, and vertical spacing.  The fixed fallback remains necessary while an
+ungrafted pane is being composed during startup, where some McCLIM builds
+cannot yet answer font metric queries."
+  (max *chat-minibuffer-line-height*
+       (or (and pane
+                (ignore-errors
+                  (clim:stream-line-height pane)))
+           *chat-minibuffer-line-height*)))
+
+(defun chat-minibuffer-baseline-pixel-inset (pane)
+  "Return PANE's non-negative CLIM text baseline inset in pixels."
+  (max 0
+       (or (and pane
+                (ignore-errors (clim:stream-baseline pane)))
+           0)))
+
+(defun chat-minibuffer-content-pixel-height (pane rows)
+  "Return the pixel height required for ROWS complete text lines in PANE."
+  (ceiling (+ (chat-minibuffer-baseline-pixel-inset pane)
+              (* (chat-minibuffer-row-pixel-height pane) rows))))
+
+(defun chat-minibuffer-max-pixel-height (&optional pane)
+  "Return the maximum expanded minibuffer PANE height in pixels."
   (or *chat-minibuffer-max-pixel-height*
-      (* *chat-minibuffer-line-height* *minibuffer-max-height*)))
+      (chat-minibuffer-content-pixel-height
+       pane *minibuffer-max-height*)))
 
 (defun update-chat-minibuffer-space-requirements (frame)
-  "Resize FRAME's minibuffer pane for active completion rows."
-  (let* ((pane (ignore-errors (clim:find-pane-named frame 'minibuffer)))
-         (height (min (chat-minibuffer-max-pixel-height)
-                      (* *chat-minibuffer-line-height*
-                         (chat-minibuffer-desired-row-count)))))
-    (when pane
-      (ignore-errors
-        (clim:change-space-requirements pane
-                                        :height height
-                                        :min-height height
-                                        :max-height height)))))
+  "Resize FRAME's minibuffer pane for its frame-owned completion rows.
+
+Propagate the change through the layout hierarchy so the top-level mirror also
+contains the expanded pane and the pointer-documentation pane below it."
+  (let ((*chat-interaction-state* (chat-frame-interaction-state frame)))
+    (let* ((pane (ignore-errors (clim:find-pane-named frame 'minibuffer)))
+           (kind (chat-interaction-pane-kind))
+           (height
+             (if kind
+                 (min (chat-minibuffer-max-pixel-height pane)
+                      (chat-minibuffer-content-pixel-height
+                       pane (chat-minibuffer-desired-row-count)))
+                 *chat-minibuffer-line-height*)))
+      (when pane
+        (ignore-errors
+          (clim:change-space-requirements pane
+                                          :resize-frame t
+                                          :height height
+                                          :min-height height
+                                          :max-height height))))))
 
 (defun handle-chat-frame-redisplay (frame)
   "Run the canonical redisplay step for FRAME's transcript pane."
