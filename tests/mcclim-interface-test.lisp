@@ -512,6 +512,160 @@
     (is (eq (esa:find-applicable-command-table frame)
             (clim:frame-command-table frame)))))
 
+(test chat-frame-buffer-transition-round-trips-drafts-and-points
+  "A buffer switch saves the source editor and restores the target editor."
+  (let* ((source (make-buffer "transition-source"
+                              :session-persistence-mode :ephemeral))
+         (target (make-buffer "transition-target"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'clawmacs::clawmacs-chat-compose-pane
+                                 :initial-contents "source draft"))
+         (target-message (buffer-input-message target))
+         (clawmacs::*buffer-ring* (list target)))
+    (setf (clim:gadget-value compose) "source draft"
+          (drei-buffer:offset (drei:point (drei:current-view compose))) 6)
+    (set-message-text target-message "target draft")
+    (set-message-point-from-absolute-offset target-message 3)
+    (with-mcclim-test-function-override
+        (clawmacs::request-chat-frame-redisplay (requested-frame)
+          (is (eq frame requested-frame))
+          requested-frame)
+      (is (eq :switched
+              (clawmacs::call-with-chat-frame-buffer-transition
+               frame
+               (lambda (command-buffer)
+                 (is (eq source command-buffer))
+                 (is (eq source (current-buffer)))
+                 (switch-to-buffer target)
+                 :switched)
+               :compose-pane compose))))
+    (is (eq target (clawmacs::chat-frame-buffer frame)))
+    (is (eq target (current-buffer)))
+    (is (string= "source draft"
+                 (message-text (buffer-input-message source))))
+    (is (= 6 (message-point-absolute-offset
+              (buffer-input-message source))))
+    (is (string= "target draft" (clim:gadget-value compose)))
+    (is (= 3 (clawmacs::chat-compose-pane-point-offset compose)))))
+
+(test switch-buffer-keyboard-confirmation-round-trips-compose-state
+  "The real frame-command/modal-key path switches drafts without stale text."
+  (clawmacs::init-default-keymap)
+  (let* ((source (make-buffer "keyboard-switch-source"
+                              :session-persistence-mode :ephemeral))
+         (target (make-buffer "keyboard-switch-target"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'synthetic-chat-compose-pane
+                                 :initial-contents "keyboard source draft"))
+         (state (clawmacs::chat-frame-interaction-state frame))
+         (return-event
+           (make-instance 'clim:key-press-event
+                          :sheet compose :x 0 :y 0
+                          :key-name nil
+                          :key-character #\Return
+                          :modifier-state (clim:make-modifier-state)))
+         (target-message (buffer-input-message target))
+         (original-find-pane (symbol-function 'clim:find-pane-named))
+         (clim:*application-frame* frame)
+         (clawmacs::*chat-interaction-state* state)
+         (clawmacs::*buffer-ring* (list source target)))
+    (setf (synthetic-chat-compose-pane-frame compose) frame
+          (buffer-keymap source) clawmacs::*default-keymap*
+          (buffer-keymap target) clawmacs::*default-keymap*
+          (clim:gadget-value compose) "keyboard source draft"
+          (drei-buffer:offset (drei:point (drei:current-view compose))) 8)
+    (set-message-text target-message "keyboard target draft")
+    (set-message-point-from-absolute-offset target-message 4)
+    (with-mcclim-test-function-override
+        (clim:find-pane-named (requested-frame pane-name)
+          (if (and (eq frame requested-frame)
+                   (eq 'clawmacs::compose pane-name))
+              compose
+              (funcall original-find-pane requested-frame pane-name)))
+      (with-mcclim-test-function-override
+          (clawmacs::request-chat-frame-redisplay (requested-frame)
+            (is (eq frame requested-frame))
+            requested-frame)
+        (clim:execute-frame-command
+         frame '(clawmacs::com-chat-dispatch-key (:ctrl-x #\b)))
+        (is-true clawmacs::*minibuffer-active*)
+        (is (string= "keyboard source draft"
+                     (message-text (buffer-input-message source))))
+        (let ((target-index
+                (position target clawmacs::*minibuffer-filtered-items*
+                          :key (lambda (item) (getf item :buffer))
+                          :test #'eq)))
+          (is-true (integerp target-index))
+          (setf clawmacs::*minibuffer-selected-index* target-index))
+        (is-true
+         (clawmacs::dispatch-chat-compose-event-to-buffer
+          compose return-event))))
+    (is-false clawmacs::*minibuffer-active*)
+    (is (eq target (clawmacs::chat-frame-buffer frame)))
+    (is (string= "keyboard target draft" (clim:gadget-value compose)))
+    (is (= 4 (clawmacs::chat-compose-pane-point-offset compose)))
+    (is (= 8 (message-point-absolute-offset
+              (buffer-input-message source))))))
+
+(test switch-buffer-presentation-confirmation-round-trips-compose-state
+  "A semantic pointer choice uses the same draft/point transaction as keys."
+  (let* ((source (make-buffer "pointer-switch-source"
+                              :session-persistence-mode :ephemeral))
+         (target (make-buffer "pointer-switch-target"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'clawmacs::clawmacs-chat-compose-pane
+                                 :initial-contents "pointer source draft"))
+         (state (clawmacs::chat-frame-interaction-state frame))
+         (target-item (list :buffer target
+                            :name (buffer-name target)
+                            :display "pointer target"))
+         (source-item (list :buffer source
+                            :name (buffer-name source)
+                            :display "pointer source"))
+         (target-message (buffer-input-message target))
+         (clawmacs::*chat-interaction-state* state)
+         (clawmacs::*buffer-ring* (list source target)))
+    (setf (clim:gadget-value compose) "pointer source draft"
+          (drei-buffer:offset (drei:point (drei:current-view compose))) 7)
+    (set-message-text target-message "pointer target draft")
+    (set-message-point-from-absolute-offset target-message 5)
+    (clawmacs::minibuffer-activate
+     "Switch Buffer"
+     (list source-item target-item)
+     (lambda (item)
+       (switch-to-buffer (getf item :buffer))))
+    (let ((ref (clawmacs::make-chat-interaction-candidate-ref
+                state
+                (clawmacs::chat-interaction-state-generation state)
+                :minibuffer 1 target-item)))
+      (with-mcclim-test-function-override
+          (clim:find-pane-named (requested-frame pane-name)
+            (declare (ignore requested-frame))
+            (and (eq 'clawmacs::compose pane-name) compose))
+        (with-mcclim-test-function-override
+            (clawmacs::request-chat-frame-redisplay (requested-frame)
+              (is (eq frame requested-frame))
+              requested-frame)
+          (is-true
+           (clawmacs::choose-chat-interaction-candidate frame ref)))))
+    (is-false clawmacs::*minibuffer-active*)
+    (is (eq target (clawmacs::chat-frame-buffer frame)))
+    (is (string= "pointer source draft"
+                 (message-text (buffer-input-message source))))
+    (is (= 7 (message-point-absolute-offset
+              (buffer-input-message source))))
+    (is (string= "pointer target draft" (clim:gadget-value compose)))
+    (is (= 5 (clawmacs::chat-compose-pane-point-offset compose)))))
+
 (test chat-frame-redisplay-request-before-graft-does-not-wedge
   "A failed pre-graft wakeup leaves dirty state retryable, not pending forever."
   (let* ((buf (make-buffer "redisplay-before-graft"

@@ -641,19 +641,6 @@ pane redraws and value callbacks propagate."
          (or (eql key-character #\Esc)
              (eq key-name :escape)))))
 
-(defun sync-chat-frame-after-command-dispatch (frame &key focus-compose)
-  "Synchronize FRAME after a command mutates buffer/UI state."
-  (let ((current (current-buffer)))
-    (when current
-      (setf (chat-frame-buffer frame) current)))
-  (request-chat-frame-redisplay frame)
-  (when focus-compose
-    (let ((compose (ignore-errors (clim:find-pane-named frame 'compose))))
-      (when compose
-        (ignore-errors
-          (clim:stream-set-input-focus compose)))))
-  frame)
-
 (defun chat-compose-pane-point-offset (pane)
   "Return PANE's Drei point as a flat character offset, or NIL."
   (ignore-errors
@@ -682,8 +669,37 @@ pane redraws and value callbacks propagate."
   (when (and pane buffer)
     (let* ((message (buffer-input-message buffer))
            (offset (message-point-absolute-offset message)))
-      (setf (clim:gadget-value pane) (message-text message))
+      (ignore-errors
+        (setf (clim:gadget-value pane) (message-text message)))
       (set-chat-compose-pane-point-offset pane offset))))
+
+(defun call-with-chat-frame-buffer-transition
+    (frame function &key compose-pane focus-compose)
+  "Call FUNCTION as one FRAME buffer/compose-state transition.
+
+FRAME's buffer is authoritative at entry.  Save its Drei draft and point,
+establish it as the process-level current buffer for legacy commands, then run
+FUNCTION with that source buffer.  On normal return, adopt the buffer selected
+by the command and load that buffer's draft and point back into Drei.  This
+keeps keyboard commands, presentation choices, and menu commands on the same
+transaction boundary."
+  (let* ((source (chat-frame-buffer frame))
+         (compose (or compose-pane
+                      (ignore-errors
+                        (clim:find-pane-named frame 'compose)))))
+    (sync-chat-buffer-input-from-compose-pane compose source)
+    (unless (member source *buffer-ring* :test #'eq)
+      (add-buffer-to-ring source))
+    (unless (eq source (current-buffer))
+      (switch-to-buffer source))
+    (multiple-value-prog1
+        (funcall function source)
+      (let ((target (or (current-buffer) source)))
+        (setf (esa:esa-current-buffer frame) target)
+        (sync-chat-compose-pane-from-buffer compose target)
+        (request-chat-frame-redisplay frame)
+        (when focus-compose
+          (focus-chat-compose-pane frame))))))
 
 (defun chat-compose-buffer-owned-editing-event-p (pane event)
   "Return true when EVENT should use Clawmacs' buffer editing command.
@@ -703,9 +719,6 @@ buffer keymap after synchronizing the Drei text/point."
 (defun dispatch-chat-compose-event-to-buffer (pane event)
   "Dispatch EVENT through Clawmacs' buffer key handler and refresh the frame."
   (let* ((frame (clim:pane-frame pane))
-         (buf (chat-frame-buffer frame))
-         (modal-input-p (chat-compose-application-input-active-p buf))
-         (pending-input-p (and buf (buffer-user-input-pending buf)))
          (raw-key (chat-compose-event-key event))
          (key (cond
                 ((and raw-key *meta-pending*)
@@ -713,18 +726,14 @@ buffer keymap after synchronizing the Drei text/point."
                  (list :meta raw-key))
                 (t raw-key))))
     (when key
-      (unless modal-input-p
-        (sync-chat-buffer-input-from-compose-pane pane buf))
-      (let ((result (handle-key-event buf key)))
-        (when (eq result :quit)
-          (clim:frame-exit frame))
-        (sync-chat-frame-after-command-dispatch frame)
-        (cond
-          (pending-input-p
-           (sync-chat-compose-pane-from-buffer pane buf))
-          ((not modal-input-p)
-           (sync-chat-compose-pane-from-buffer pane (chat-frame-buffer frame))))
-        t))))
+      (call-with-chat-frame-buffer-transition
+       frame
+       (lambda (source)
+         (let ((result (handle-key-event source key)))
+           (when (eq result :quit)
+             (clim:frame-exit frame))
+           t))
+       :compose-pane pane))))
 
 (defclass clawmacs-chat-compose-pane (drei:drei-gadget-pane)
   ()
@@ -2214,25 +2223,27 @@ contains the expanded pane and the pointer-documentation pane below it."
       (return-from choose-chat-interaction-candidate nil))
     (let ((kind (chat-interaction-candidate-ref-kind ref))
           (index (chat-interaction-candidate-ref-index ref))
-          (item (chat-interaction-candidate-ref-item ref))
-          (buffer (chat-frame-buffer frame)))
-      (case kind
-        (:minibuffer
-         (setf *minibuffer-selected-index* index)
-         (minibuffer-confirm))
-        (:session-tree
-         (let ((callback *session-tree-selector-callback*))
-           (session-tree-selector-deactivate)
-           (when callback
-             (funcall callback item))))
-        (:slash
-         (setf *slash-completion-selected-index* index)
-         (insert-selected-slash-completion buffer))
-        (:skill
-         (setf *skill-completion-selected-index* index)
-         (insert-selected-skill-completion buffer)))
-      (sync-chat-frame-after-command-dispatch frame :focus-compose t)
-      t)))
+          (item (chat-interaction-candidate-ref-item ref)))
+      (call-with-chat-frame-buffer-transition
+       frame
+       (lambda (buffer)
+         (case kind
+           (:minibuffer
+            (setf *minibuffer-selected-index* index)
+            (minibuffer-confirm))
+           (:session-tree
+            (let ((callback *session-tree-selector-callback*))
+              (session-tree-selector-deactivate)
+              (when callback
+                (funcall callback item))))
+           (:slash
+            (setf *slash-completion-selected-index* index)
+            (insert-selected-slash-completion buffer))
+           (:skill
+            (setf *skill-completion-selected-index* index)
+            (insert-selected-skill-completion buffer)))
+         t)
+       :focus-compose t))))
 
 (define-clawmacs-chat-frame-command
     (com-chat-select-interaction-candidate :name nil)
@@ -2415,18 +2426,13 @@ compose pane while leaving text editing keys to Drei's editor tables."
     (com-chat-dispatch-key :name nil)
     ((key 't))
   (clim:with-application-frame (frame)
-    (let ((buf (chat-frame-buffer frame)))
-      (unless (member buf *buffer-ring* :test #'eq)
-        (add-buffer-to-ring buf))
-      (unless (eq (current-buffer) buf)
-        (switch-to-buffer buf))
-      (let ((result (handle-key-event buf key)))
-        (when (eq result :quit)
-          (clim:frame-exit frame))
-        (let ((current (current-buffer)))
-          (when current
-            (setf (chat-frame-buffer frame) current)))
-        (request-chat-frame-redisplay frame)))))
+    (call-with-chat-frame-buffer-transition
+     frame
+     (lambda (buffer)
+       (let ((result (handle-key-event buffer key)))
+         (when (eq result :quit)
+           (clim:frame-exit frame))
+         result)))))
 
 (install-chat-frame-keybindings)
 
@@ -2465,8 +2471,9 @@ compose pane while leaving text editing keys to Drei's editor tables."
     (com-chat-open-package-dashboard :name "Open Package Dashboard")
     ()
   (clim:with-application-frame (frame)
-    (package-dashboard-command (chat-frame-buffer frame))
-    (sync-chat-frame-after-command-dispatch frame)))
+    (call-with-chat-frame-buffer-transition
+     frame #'package-dashboard-command
+     :focus-compose t)))
 
 (define-clawmacs-chat-frame-command
     (com-chat-open-skill-selector :name "Toggle Skill")
