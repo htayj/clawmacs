@@ -62,6 +62,10 @@ The harness:
 - canonicalizes relative or repository-absolute artifact paths to an absolute
   `/workspace/...` path before deriving `HOME` and `XDG_CACHE_HOME`, because
   ASDF requires absolute cache roots;
+- clears run-owned logs, process IDs, summaries, actions, and screenshots when
+  an explicit artifact directory is reused, while retaining only its isolated
+  `home/` and `cache/`; stale `frame-ready` data can therefore never satisfy a
+  new launch;
 - launches SBCL in a new session and has the inner session leader publish its
   exact PGID; this remains correct whether util-linux `setsid --wait` execs in
   place or forks a distinct waitable owner;
@@ -87,6 +91,11 @@ an empty private cache and never shares writable cache state.
 After the semantic `frame-stopped` event, the natural SBCL exit is bounded to
 30 seconds. Set `CLAWMACS_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS` to a positive
 integer to override that teardown deadline.
+
+Every external driver helper has a 15-second deadline, and image capture uses
+the shorter 10-second deadline. A vanished X window therefore becomes a
+diagnostic `DriverError` with any partial command output instead of leaving the
+harness blocked in ImageMagick or `xwd`.
 
 The harness runs SBCL non-interactively with the debugger disabled, preserves
 ordinary command exit status, and maps `INT`/`TERM` to nonzero status while
@@ -121,6 +130,14 @@ preserves sibling cache state:
 
 ```sh
 sh ./scripts/test-gui-e2e-cache.sh
+```
+
+The artifact-lifecycle regression seeds a stale `frame-ready` event, window
+ID, summary, action log, and nested screenshot, then proves a reset removes
+every run-owned output while preserving the artifact-private home and cache:
+
+```sh
+sh ./scripts/test-gui-e2e-artifacts.sh
 ```
 
 The Xvfb namespace regression proves the fresh-container retry is bounded,
@@ -163,6 +180,11 @@ Successful adversarial runs retained approximately 67–82 MiB of private cache
 per run. This is intentional isolation evidence, but the harness has no
 automatic artifact-retention policy; remove old run directories manually when
 their evidence is no longer needed.
+
+Passing `--artifact-dir` with an existing directory starts a new evidence run:
+the harness resets the files listed above and `screenshots/`, but deliberately
+reuses `home/` and `cache/`. Preserve an old run under another directory before
+reusing its path when its diagnostics are still needed.
 
 The driver correlates every screenshot with the latest `ui-snapshot` event. The
 snapshot is semantic state (transcript, compose text, status/model line,
@@ -243,9 +265,32 @@ The `keybinds` suite drives the real compose pane and ESA command table with
 physical key chords. It asserts that Drei-owned editing keys still mutate the
 compose text, that application keybindings emit the expected normalized command
 event, and that modal selectors/prompts can be cancelled. The suite covers the
-main default `M-x`, `C-c`, `C-h`, and `C-x` bindings, including the `C-x b`
-regression path: `C-x b` and `C-x C-b` must open the minibuffer buffer selector
-without crashing the frame.
+main default `M-x`, `C-c`, `C-h`, and `C-x` bindings.
+
+Its `C-x b` regression starts the frame with focus deliberately assigned to
+ESA's standard-input stream, then requires selector activation to transfer
+focus to the Drei compose pane that owns non-blocking modal input. The fixture
+creates twelve extra buffer candidates and an exact 32 KiB multiline compose
+draft with distinct point and mark offsets. Bounded physical lines isolate
+selector performance from the upstream Drei long-line redisplay defect
+documented in `MCCLIM-ISSUES.md`. The driver then:
+
+1. proves every visible candidate row fits above the frame's
+   pointer-documentation pane;
+2. sends repeated filters and a 50-key burst without per-key waits, then
+   requires a quiescent focused snapshot within five seconds;
+3. cancels and proves the original buffer, draft, point, and mark are unchanged
+   and the minibuffer has collapsed;
+4. exercises empty-query activation, exact-name ranking among prefix
+   neighbors, and ambiguous fuzzy-query confirmation while checking the
+   selected buffer and retained per-buffer editor state;
+   and
+5. repeats the geometry check after expansion and collapse.
+
+`C-x C-b` remains a separate ordinary activation check. The scenario uses only
+the application's standard CLIM command, pane, focus, and layout contracts;
+coordinates are observed by the external driver solely to verify rendered pane
+separation.
 
 ## Safe reload behavior
 

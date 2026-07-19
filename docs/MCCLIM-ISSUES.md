@@ -1,6 +1,6 @@
 # McCLIM issue classification
 
-Audit date: 2026-07-13 through 2026-07-16
+Audit date: 2026-07-13 through 2026-07-19
 
 ## Tested McCLIM provenance
 
@@ -19,14 +19,82 @@ No fork is recommended yet.
 
 All application-controlled crash triggers have local fixes, and the full
 acceptance suite can run without carrying a McCLIM patch. The pointer-tracking
-defect below is now certainly McCLIM-owned and meets the threshold for an
-upstream issue and patch. It does not yet justify maintaining a fork because
-Clawmacs' stable command-table design avoids the trigger and has passed the
-bounded acceptance and adversarial runs.
+and Drei long-line redisplay defects below are now certainly McCLIM-owned and
+meet the threshold for upstream issues and patches. They do not yet justify
+maintaining a fork: Clawmacs avoids the pointer trigger, and the normal
+multiline compose path passes the bounded acceptance and adversarial runs.
 
-If upstream declines the focused fix, or if Clawmacs again needs live
-command-table replacement before upstream accepts it, prefer a small Guix
-package patch before creating a permanent McCLIM fork.
+If upstream declines either focused fix, if Clawmacs again needs live
+command-table replacement, or if arbitrary single-line compose input must be
+made robust immediately, prefer a small Guix package patch before creating a
+permanent McCLIM fork.
+
+## Switch-buffer investigation: application-owned fixes
+
+The two reported July 19 switch-buffer failures do not add a McCLIM fork
+candidate.
+
+The apparently hung selector was an application focus-ownership error. The
+visible minibuffer is a CLIM application pane that renders completion
+presentations, while Clawmacs' non-blocking modal key adapter lives on the Drei
+compose pane. A command invoked while the transcript or standard-input stream
+had focus activated the selector without returning focus to compose. Clawmacs
+now uses `stream-set-input-focus` at its frame-command boundary whenever an
+application interaction becomes active.
+
+The black strip that covered the final candidates is the frame's standard
+pointer-documentation pane. The minibuffer had requested too little layout
+space; the pointer-documentation pane itself behaved correctly. Clawmacs now
+derives complete-row height from live CLIM stream metrics and asks CLIM to
+resize the frame through `change-space-requirements`, preserving the declared
+pane layout instead of drawing around or over another pane.
+
+The related draft, point, mark, dirty-state, default-selection, modal-key
+performance, and undo defects were also in Clawmacs' integration. Buffer
+changes now use the public ESA current-buffer setter as one transactional
+contract. `C-w` runs a native Drei command from the pane-owned command table.
+Because pinned ESA consumes `C-u` as a universal argument before command-table
+lookup, the narrow compose adapter invokes Drei's exported command executor
+for its Emacs-style kill operation and retains normal Drei undo.
+
+Private-Xvfb focus, layout, burst-input, cancellation, confirmation, and editor
+state regressions cover these paths. No custom repaint loop, output-record
+mutation, direct medium/sheet manipulation, or semantic coordinate hit testing
+was introduced. The two confirmed McCLIM defects below remain real and are not
+the cause of the reported selector hang or candidate overlap.
+
+## Confirmed McCLIM Drei long-line redisplay defect
+
+The first post-fix adversarial fixture restored a 32 KiB draft containing one
+physical line. After the real compose pane became available, Drei crashed with
+`SB-KERNEL:INDEX-TOO-LARGE-ERROR`: `displayed-lines-count` was 2 while its
+`displayed-lines` vector contained one element. The backtrace crossed
+`DREI::DRAW-STROKE`, `change-space-requirements`, recursive repaint, and
+`DREI::CLEAR-STALE-LINES`.
+
+This defect is certainly McCLIM-owned. A private-Xvfb control loaded
+`mcclim-clx` and `drei-mcclim`, verified that no `CLAWMACS` package existed,
+and constructed McCLIM's standard `:drei` pane with its default horizontal
+scroller. The same 32 KiB single line reproduced the exact index error and
+`CLEAR-STALE-LINES` stack. Bare Drei controls with the same total text, point,
+and mark passed, as did multiline text and fixed-rack initial/post-enable
+setter controls. The default scroller is therefore an independent reproducer,
+not a safe Clawmacs workaround.
+
+Pinned and current official McCLIM have the same relevant redisplay code.
+`DREI::DRAW-STROKE` changes pane space requirements in the middle of drawing;
+viewport allocation can repaint recursively before the outer line-count
+increment completes. The source already documents the same 0, 0, 1, 2
+recursive-count failure for Drei output-record replay, but that narrow
+workaround does not protect a Drei gadget pane. See the
+[current official Drei redisplay source](https://codeberg.org/McCLIM/McCLIM/raw/commit/537f213e6ab817002f115cc1de3763d9bce27e77/Libraries/Drei/drei-redisplay.lisp).
+
+Clawmacs does not install a private redisplay override or add the crashing
+scroller. Its switch-buffer performance fixture now uses the same exact 32 KiB
+total draft split into bounded physical lines, so it tests selector work and
+buffer-state retention without conflating this renderer defect. Arbitrary very
+long single-line compose input remains a documented upstream risk until
+McCLIM is patched.
 
 ## Confirmed McCLIM pointer-tracking robustness defect
 

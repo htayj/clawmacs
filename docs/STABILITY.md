@@ -1,6 +1,6 @@
 # Stability audit and hardening plan
 
-Audit date: 2026-07-13 through 2026-07-16
+Audit date: 2026-07-13 through 2026-07-19
 
 ## Scope and standard
 
@@ -75,6 +75,13 @@ are classified as harness faults, not Clawmacs or McCLIM crashes.
 | P1 | Image-wide methods replaced McCLIM `basic-medium`, Edward, text-editor lifecycle, Drei command-table, and repaint behavior. These could change unrelated CLIM applications and drift from the pin. | Clawmacs | Remove broad methods and private slot/state manipulation. Retain only pane-specific standard CLIM layout and the narrow pinned-ESA modifier adapter. | Direct pinned-Edward kill/yank test, Drei editing tests, cold GUI startup, expose/resize/key suites. |
 | P1 | Compose setup mutated Drei's process-global indent/deletion tables, and frame setup could begin before cleanup protection existed. | Clawmacs | Install an application command table through `drei-syntax:additional-command-tables` only for `clawmacs-chat-compose-pane`; establish top-level unwind cleanup before pane configuration or hook installation. | Plain Drei panes/global tables remain unchanged, the compose pane retains its gestures, and cleanup tests prove exact hook/buffer retirement despite injected failures. |
 | P1 | Drei's `exclusive-gadget-table` won `M-x` before Clawmacs' inherited table, entered Drei's blocking extended-command workflow, and crashed through an undefined `STREAM` path in the live compose pane. An initial repair also passed list-valued key arguments to ESA unquoted, so ESA tried to call `:META` as a function. | Clawmacs | Use Drei's public pane-specific `additional-command-tables` hook to put the frame application table first. Keep ordinary editor keys in Drei's tables. Store quoted list-valued Clawmacs key arguments because ESA's partial command parser evaluates supplied argument forms. | Headless lookup/parser/real gesture regression plus two fresh live `mx` GUI passes; each opens the non-blocking Clawmacs minibuffer, exits naturally with status zero, and leaves an empty process group. |
+| P1 | `C-x b` could leave the buffer selector visible but unresponsive when the command originated with keyboard focus on the transcript or ESA standard-input stream. The application had activated its non-blocking modal state without returning input ownership to the Drei compose pane that dispatches modal keys. | Clawmacs | After a frame command activates an application interaction, use the standard CLIM input-focus protocol to focus the compose pane before the next gesture. Menus, presentations, and standard-input commands keep the same command path. | A focused command-boundary regression proves selector activation invokes the compose-focus contract. The private-Xvfb `keybinds` scenario deliberately starts on standard input, opens `C-x b`, and requires a focused, responsive selector through cancellation and confirmation. |
+| P1 | A long switch-buffer candidate list expanded past the frame allocation and its final rows were covered by the black pointer-documentation pane. Repeating the same space request also caused needless top-level relayout. | Clawmacs | Derive the required completion height from the active CLIM stream's line height and baseline, cap it by the configured logical row limit, and call `change-space-requirements` with `:resize-frame t`. Leave the pointer-documentation pane in the declared frame layout and skip the request when the composed height already matches. | Layout tests cover live metrics, capped row counts, resize propagation, and the no-op path. A real 14-item selector grew to 315 pixels above the pointer-documentation pane; its last glyph row remained visible, then filtering and confirmation shrank the frame normally. |
+| P1 | Buffer switching could overwrite or resurrect compose drafts, point, and mark because several command paths updated the process current buffer, frame slot, message model, and shared Drei gadget independently. A failed target load could leave those representations split. Modal selector keys also read a large Drei draft on every key. | Clawmacs | Make `(setf esa:esa-current-buffer)` the canonical frame transition. Save the source once, prepare the target before publication, adopt extension-selected buffers into the ring, roll back to the exact source on load failure, and synchronize draft, point, meaningful mark, and file dirty state. A frame-owned synchronization token lets state-only modal keys avoid rereading unchanged Drei text. | Deterministic tests cover same/different-buffer transitions, startup hydration, extension assignment, absent-ring adoption, rollback, command-error reconciliation, marks, file dirty state, and unchanged same-buffer undo. A 100 KiB draft with 200 modal keys performs zero gadget reads or writes and completes under five seconds. |
+| P1 | A restored or hook-seeded initial draft remained in the buffer model but appeared empty when the frame opened. Clawmacs tried to hydrate compose before McCLIM's primary frame-top-level path had made the named panes available; `find-pane-named` returned `NIL`, yet the helper marked the buffer synchronized, so the real Drei pane retained its empty initial contents. | Clawmacs | Hydrate compose in the application top-level only after the real pane is available and before declaring the frame running or accepting input. A missing pane cannot establish the synchronization token. | Deterministic lifecycle tests cover the missing-pane invariant and available-pane hydration of draft, point, and mark. The full private-Xvfb fixture seeds the same state before frame construction and requires it in the first frame-ready snapshot. |
+| P1 | The compose `C-u` and `C-w` compatibility path edited the message model and then replaced the complete Drei gadget value, discarding editor undo. ESA consumes `C-u` as a universal argument before a pane command-table binding can win. | Clawmacs | Bind `C-w` to Drei's native backward-kill-word command in the compose pane's additional command table. Dispatch `C-u` to native kill-line through Drei's exported command executor, then use its normal value callback and redisplay contract. | Focused editor tests prove `C-w` and `C-u` mutate the live Drei editor and `C-_` restores both changes without a destructive gadget rewrite. |
+| P1 | An empty switch-buffer query initially selected the current buffer, and filtering could lose the explicit recent-buffer default because display strings and semantic names were mixed in history/ranking. Pressing Return could therefore appear to do nothing, while an exact name could select a longer prefix neighbor. | Clawmacs | Rank and match by semantic buffer name, preselect the most recent non-current buffer for the empty query, preserve that default while the query remains empty, and select the highest-scoring valid fuzzy match after editing. | Buffer tests cover MRU and ring fallback, current-buffer exclusion, empty-query Return, exact-name ranking among prefix neighbors, fuzzy selection, and restoring the recent default after deleting a query. |
+| P1 | A 32 KiB single physical line exposed Drei's recursive redisplay race: drawing changed space requirements, viewport allocation repainted before the outer display completed, and `displayed-lines-count` became 2 for a one-element vector. | McCLIM | Do not install an application-private redisplay override or the independently crashing horizontal scroller. Keep selector performance proof multiline and document the upstream boundary; patch McCLIM if arbitrary pathological single-line input must be guaranteed. | A Clawmacs-free standard `:drei` horizontal-scroller control reproduces the exact `INDEX-TOO-LARGE-ERROR`/`CLEAR-STALE-LINES` stack. Bare, multiline, fixed-rack, and post-enable setter controls delimit the trigger. Pinned and current official redisplay source retain the race. |
 | P1 | One rapid GUI sequence completed `C-c t` and then lost the shifted `C-c V` prefix, inserting literal `V`. The preserved logs do not include raw key fields, so a deeper cause is not claimed. | Unresolved trigger; mitigated in Clawmacs and harness | Consume every recognized standalone modifier explicitly at the compose-pane boundary so it cannot enter an accumulated command sequence. Preserve prefixes across ESA's identical command-table assignment. In the driver, wait for one toggle's semantic state to settle before starting the next chord. | A backend-spelling modifier regression followed by `C-c V`, an identical-table-assignment-between-gestures regression, the preserved failure, and repeated full live `keybinds` passes covering shifted `C-c V`, `C-c I`, `C-c A`, `C-c S`, `C-c M`, and `C-c R`. |
 | P1 | The now-removed legacy approval presentation could act on a newer pending object after redisplay. | Clawmacs | The original identity repair carried the exact presented object. The later full-trust decision removed the entire approval state, presentation, commands, key mode, and response path, eliminating this interaction class. | Static removed-API sweep plus prompt, Quaestor, managed-tool, and McCLIM suites prove direct dispatch and structured questions remain intact. |
 | P1 | A lone `queue-event` error or a request arriving during a failed redisplay body could leave dirty state without an event. | Clawmacs | Use bounded iterative enqueue retry, transactional reservation release, and generation-aware transfer after both normal and exceptional handler exits. | Lone transient failure, bounded burst, and concurrent request-during-handler-failure tests. |
@@ -92,6 +99,8 @@ are classified as harness faults, not Clawmacs or McCLIM crashes.
 | P1 | Concurrent containers bootstrapped or installed releases into one project Quicklisp tree. Quicklisp's shared temporary archive names are not safe for concurrent writers, the launcher regression itself destructively exercised the production tree and pin file, and a host source registry could make McCLIM provenance ambiguous. | Harness | Hold one host `flock`, outside the replaceable Quicklisp directory, across bootstrap/probe and an exact `:clawmacs` dependency warmup before every payload; release it before the application starts. Give launcher tests a validated test-only repo cache root and bootstrap copy. Retain a warmup log, use the runtime library path, and derive `CL_SOURCE_REGISTRY` from the active Guix profile for warmup and payload execution. | The mocked launcher regression proves that two cold launchers bootstrap once, two warm launchers enter serially, warmup failure gates the payload, owner death releases the lock, production setup/pins remain unchanged, and a hostile host registry is replaced. Separately, the preserved real archive-deletion failure is followed by a green warmed parallel `mx`/`features` rerun; live ASDF inspection resolves the complete CLIM/ESA/Drei stack from the pinned Guix McCLIM tree. |
 | P1 | A relative GUI artifact directory produced relative `HOME` and `XDG_CACHE_HOME` values. ASDF rejected the cache root before Clawmacs started, but Quicklisp collapsed the cause into `Could not load ASDF 3.0 or newer`; parallel GUI validation made the harness fault visible twice. | Harness | Convert repository-absolute host paths to `/workspace`, resolve and validate every inner artifact path before creating it or deriving runtime directories, and reject parent traversal, symlink escapes, and paths outside the shared workspace. | The original unchanged parallel relative-path `smoke`/`keybinds` invocation is the regression gate; both must start, exit naturally, pass artifact scans, and leave empty process groups. |
 | P1 | Documented GUI timeout and stability-iteration overrides were not in Guix's preserved-environment pattern, so the apparent 100-cycle stress silently ran the 24-cycle default. | Harness | Preserve the two timeout and two stability-count variables explicitly at the container boundary. | Mocked launcher arguments must contain all four names, and the live stress action log must contain 100 menu interactions. |
+| P1 | Reusing an explicit GUI artifact directory retained an old `frame-ready` event, window ID, actions, summary, and screenshots. The shell readiness loop could accept the stale event before the current frame existed, invalidating the run. | Harness | Reset every run-owned output before Xvfb/application launch while preserving only artifact-private `home/` and `cache/`. | The focused shell regression seeds all stale outputs and proves exact removal/preservation. A private-Xvfb `keybinds` rerun reuses the prior path and still waits for and drives the new frame. |
+| P1 | Failure capture invoked external X helpers without a deadline. When the application window vanished after a crash, ImageMagick could wait indefinitely and hide the original diagnostic behind a wedged harness. | Harness | Give every driver helper a 15-second subprocess deadline and screenshots a 10-second deadline; translate timeout into a logged `DriverError` with bounded partial output. | Python tests inject `TimeoutExpired` even on the best-effort path and prove screenshot-specific deadline propagation. The reused-directory GUI rerun exits normally with empty stderr. |
 | P1 | Legacy or externally generated Artifactum indexes without `updated_at` reached a parallel `LET` initializer that referenced `created-at` before it was bound, signalling `UNBOUND-VARIABLE`. | Clawmacs | Normalize timestamps with sequential binding and fall back to the supplied or generated creation timestamp when `updated_at` is absent. | Four regressions cover missing creation/update combinations and durable legacy-index reading; the focused Artifactum suite completes 51/51 checks. |
 | P1 | A final semantic GUI state could be accepted before its matching CLIM redisplay had completed, so an immediate screenshot could record stale pixels even though the scenario itself passed. | Harness | Require a same-buffer `redisplay-handled` event with explicit `repeat: false`, or accept an already-handled snapshot only when it carries that state; then perform a separate-connection X server round trip before capture. Keep all synchronization in E2E observability rather than modifying CLIM repainting. | Thirteen dependency-free driver regressions cover stale, wrong-buffer, repeated, and legacy snapshots plus capture ordering; a focused McCLIM event test proves repeat state is emitted. |
 | P1 | Every private GUI run recompiled already-warmed Common Lisp dependencies. The first cache-seed implementation also let a failed conditional `flock` proceed to `cp` because shell `errexit` was suppressed by its calling context. | Harness | Reflink or copy only the warmed `common-lisp` tree under the shared warmup lock into each private cache. Make lock/copy sequencing explicit, reject overlapping roots, clear only a validated private tree in cold mode, preserve sibling state, and fail closed on invalid policy roots. | Cache regressions prove timeout performs no copy and leaves no staging tree, cold reused artifacts are empty, siblings survive, and parallel seeds stay private. Seeded frame readiness fell from roughly 143 seconds to roughly 6 seconds. |
@@ -140,6 +149,8 @@ The change is acceptable only when all of the following are green:
 - a bounded process-resource profile and an extended 250-menu stress run;
 - repeated pointer opening of the stable menu, presentation-based effort
   selection, window resize/expose, and a final responsive compose operation;
+- switch-buffer focus transfer, candidate/pointer-documentation geometry,
+  burst filtering, cancellation, confirmation, and draft/point/mark retention;
 - no `Sheet ... is not grafted`, unhandled debugger, socket-listener debugger,
   or fatal compiler condition in application/harness artifacts;
 - the minimal ESA-only control in `MCCLIM-ISSUES.md` still passes.
@@ -216,6 +227,16 @@ candidates:
     Cross-process `project-create-file :if-exists :error` also has a narrow
     no-clobber race. A future design needs advisory locks or a single storage
     supervisor.
+13. One frame uses one shared Drei compose gadget for all of its buffers. A real
+    cross-buffer transition therefore resets editor undo so undo cannot apply
+    text from the previous buffer. Same-buffer redisplay and assignment avoid
+    replacement and preserve undo. Per-buffer Drei editor state would be
+    required before cross-buffer undo histories could be retained safely.
+14. McCLIM Drei can crash while displaying a very long single physical line
+    when a scroller or parent relayout recursively repaints during
+    `change-space-requirements`. This is independently reproducible without
+    Clawmacs and is tracked in `MCCLIM-ISSUES.md`; multiline compose input is
+    stable, but a complete repair belongs in McCLIM or a Guix package patch.
 
 These follow-ups should be proven with the same rule: a deterministic barrier
 or minimal GUI reproducer first, then a resource-count or responsiveness gate.
@@ -377,3 +398,42 @@ Every other new crash, race, and performance cost above was owned by Clawmacs,
 its tests, or its harness. Successful GUI artifacts currently retain
 approximately 67–82 MiB of private cache per run; cleanup remains an explicit
 evidence-retention decision rather than an automatic policy.
+
+### Switch-buffer closure — 2026-07-19
+
+The reported selector hang and candidate overlap are closed by atomic commits
+`0bebe436` and `892a5acf`. The follow-up work preserves editor state, makes
+switching transactional through ESA's public current-buffer setter, retains
+Drei-native undo, removes redundant relayouts, hydrates the real generated
+compose pane, and ranks candidates by semantic buffer name. The live regression
+and its artifact-lifecycle and capture-timeout hardening are committed in
+`ba6d5eba`, `cc24d45d`, `45064183`, and `1093de91`.
+
+The final proof used the required Guix container with inherited host X disabled
+and a private Xvfb:
+
+- the full FiveAM suite completed 4,864 checks: 4,864 pass, 0 skip, 0 fail;
+- the dependency-free GUI driver completed 21/21 tests, and
+  `scripts/test-gui-e2e-artifacts.sh` passed its stale-run reset regression;
+- a reused-artifact `keybinds` run produced one fresh frame lifecycle, seven
+  screenshots, 568 driver steps, natural application status zero, an empty
+  process group, and empty application and driver stderr. Its `summary.json`
+  reports `"ok": true`. Evidence: `.artifacts/switch-buffer-regression/`;
+- all fourteen selector candidates occupied a 315-pixel minibuffer allocation
+  whose bottom remained above the pointer-documentation pane. Cancellation and
+  confirmation collapsed it to 24 pixels;
+- ten filtering gestures followed by a 50-key no-wait burst settled in
+  0.923176 seconds with compose focus retained; and
+- cancel, empty-query activation, exact-name selection among prefix neighbors,
+  fuzzy confirmation, and repeated cross-buffer round trips preserved the
+  exact 32 KiB multiline draft, point 8192, mark 24576, and fingerprint
+  `75B23B0101D8FF16`.
+
+The investigation also found one independent renderer defect outside the
+switch-buffer repair. A Clawmacs-free standard `:drei` pane with McCLIM's
+default horizontal scroller crashes on a 32 KiB single physical line with the
+same `INDEX-TOO-LARGE-ERROR` and `CLEAR-STALE-LINES` stack. Bare, multiline,
+fixed-rack, and post-enable controls delimit the trigger. Evidence:
+`.artifacts/switch-buffer-investigation/drei-long-line/`. This is documented as
+McCLIM-owned in `MCCLIM-ISSUES.md`; no private renderer workaround or fork was
+introduced.
