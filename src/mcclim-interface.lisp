@@ -2036,8 +2036,27 @@ contains the expanded pane and the pointer-documentation pane below it."
                  (min (chat-minibuffer-max-pixel-height pane)
                       (chat-minibuffer-content-pixel-height
                        pane (chat-minibuffer-desired-row-count)))
-                 *chat-minibuffer-line-height*)))
-      (when pane
+                 *chat-minibuffer-line-height*))
+           (space (and pane (ignore-errors (clim:compose-space pane))))
+           (current-height
+             (and space
+                  (ignore-errors
+                    (clim:space-requirement-height space))))
+           (current-min-height
+             (and space
+                  (ignore-errors
+                    (clim:space-requirement-min-height space))))
+           (current-max-height
+             (and space
+                  (ignore-errors
+                    (clim:space-requirement-max-height space)))))
+      (when (and pane
+                 (not (and (numberp current-height)
+                           (numberp current-min-height)
+                           (numberp current-max-height)
+                           (= height current-height)
+                           (= height current-min-height)
+                           (= height current-max-height))))
         (ignore-errors
           (clim:change-space-requirements pane
                                           :resize-frame t

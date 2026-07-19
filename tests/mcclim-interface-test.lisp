@@ -2032,7 +2032,14 @@
                               'clawmacs::display-chat-minibuffer-pane
                               :display-time :command-loop
                               :width 900))
+         (state (clawmacs::chat-frame-interaction-state frame))
          (resize-frame-p nil))
+    (let ((clawmacs::*chat-interaction-state* state))
+      (clawmacs::minibuffer-activate
+       "Resize Frame"
+       (list (list :display "one")
+             (list :display "two"))
+       #'identity))
     (with-mcclim-test-function-override
         (clim:find-pane-named (requested-frame pane-name)
           (declare (ignore requested-frame pane-name))
@@ -2046,6 +2053,67 @@
             (setf resize-frame-p resize-frame))
         (clawmacs::update-chat-minibuffer-space-requirements frame)))
     (is-true resize-frame-p)))
+
+(test mcclim-minibuffer-sizing-skips-redundant-frame-layout
+  "An unchanged collapsed pane does not make CLIM relayout the whole frame."
+  (let* ((buffer (make-buffer "unchanged-minibuffer-size"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buffer))
+         (pane (make-instance 'clawmacs::clawmacs-chat-minibuffer-pane
+                              :display-function
+                              'clawmacs::display-chat-minibuffer-pane
+                              :display-time :command-loop
+                              :width 900))
+         (change-called-p nil))
+    (with-mcclim-test-function-override
+        (clim:find-pane-named (requested-frame pane-name)
+          (declare (ignore requested-frame pane-name))
+          pane)
+      (with-mcclim-test-function-override
+          (clim:change-space-requirements
+              (requested-pane &rest arguments)
+            (declare (ignore requested-pane arguments))
+            (setf change-called-p t))
+        (clawmacs::update-chat-minibuffer-space-requirements frame)))
+    (is-false change-called-p)))
+
+(test mcclim-minibuffer-sizing-skips-repeated-expanded-layout
+  "An already-expanded selector does not repeatedly resize the top-level frame."
+  (let* ((buffer (make-buffer "unchanged-expanded-minibuffer-size"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer buffer))
+         (pane (make-instance 'clawmacs::clawmacs-chat-minibuffer-pane
+                              :display-function
+                              'clawmacs::display-chat-minibuffer-pane
+                              :display-time :command-loop
+                              :width 900))
+         (state (clawmacs::chat-frame-interaction-state frame))
+         (repeat-change-called-p nil))
+    (let ((clawmacs::*chat-interaction-state* state))
+      (clawmacs::minibuffer-activate
+       "Expanded"
+       (list (list :display "one")
+             (list :display "two")
+             (list :display "three"))
+       #'identity))
+    (with-mcclim-test-function-override
+        (clim:find-pane-named (requested-frame pane-name)
+          (declare (ignore requested-frame pane-name))
+          pane)
+      ;; First apply the real CLIM space requirement, then prove the guard
+      ;; suppresses the identical request on the next redisplay pass.
+      (clawmacs::update-chat-minibuffer-space-requirements frame)
+      (with-mcclim-test-function-override
+          (clim:change-space-requirements
+              (requested-pane &rest arguments)
+            (declare (ignore requested-pane arguments))
+            (setf repeat-change-called-p t))
+        (clawmacs::update-chat-minibuffer-space-requirements frame)))
+    (is-false repeat-change-called-p)))
 
 (test mcclim-custom-presentation-buffers-append-system-feedback
   "Whole-buffer custom presenters still surface system feedback messages."
