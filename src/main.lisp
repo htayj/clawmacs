@@ -1753,7 +1753,15 @@ to navigate. Shows buffer name, agent, status, and message count."
            (setf *buffer-selection-history*
                  (cons name
                        (remove name *buffer-selection-history*
-                               :test #'string=)))))))))
+                               :test #'string=)))))))
+    ;; Return should perform a useful switch when the user has not typed a
+    ;; query.  Keep the current buffer visible and marked, but select the most
+    ;; recent non-current candidate when one exists.
+    (let ((index (position-if-not (lambda (item) (getf item :current-p))
+                                  sorted)))
+      (when index
+        (setf *minibuffer-selected-index* index)
+        (minibuffer-ensure-visible)))))
 (defcommand minibuffer-select-buffer-command)
 
 (defun new-buffer-command (buffer)

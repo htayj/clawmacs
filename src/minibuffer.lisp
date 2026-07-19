@@ -684,11 +684,11 @@ Items that were selected more recently appear first. Items not in the history
 are sorted with the current buffer first, then alphabetically."
   (stable-sort (copy-list items)
                (lambda (a b)
-                 (let* ((a-disp (getf a :display))
-                        (b-disp (getf b :display))
+                 (let* ((a-name (getf a :name))
+                        (b-name (getf b :name))
                         (history *buffer-selection-history*)
-                        (a-pos (position a-disp history :test #'string=))
-                        (b-pos (position b-disp history :test #'string=)))
+                        (a-pos (position a-name history :test #'string=))
+                        (b-pos (position b-name history :test #'string=)))
                    (cond
                      ;; Both in history: lower position (more recent) first
                      ((and a-pos b-pos) (< a-pos b-pos))
@@ -699,7 +699,7 @@ are sorted with the current buffer first, then alphabetically."
                      ;; Neither: current buffer first, then alphabetical
                      ((and (getf a :current-p) (not (getf b :current-p))) t)
                      ((and (getf b :current-p) (not (getf a :current-p))) nil)
-                     (t (string< a-disp b-disp)))))))
+                     (t (string< a-name b-name)))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Session Tree Selector

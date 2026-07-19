@@ -1160,6 +1160,44 @@
 ;;; Buffer Selector Tests
 ;;; --------------------------------------------------------------------------
 
+(test buffer-recency-sort-compares-history-with-buffer-names
+  "Decorated selector rows still honor the plain names stored in history."
+  (let ((*buffer-selection-history* '("bravo" "alpha")))
+    (let* ((alpha (list :name "alpha"
+                        :display "  alpha [idle] msgs:0"))
+           (bravo (list :name "bravo"
+                        :display "  bravo [idle] msgs:0"))
+           (charlie (list :name "charlie"
+                          :current-p t
+                          :display "* charlie [idle] msgs:0"))
+           (sorted (sort-buffers-by-recency
+                    (list charlie alpha bravo))))
+      (is (equal '("bravo" "alpha" "charlie")
+                 (mapcar (lambda (item) (getf item :name)) sorted))))))
+
+(test visible-buffer-selector-return-defaults-to-another-buffer
+  "Unfiltered Return selects a non-current buffer instead of doing nothing."
+  (let ((*buffer-ring* nil)
+        (*buffer-selection-history* nil)
+        (clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state)))
+    (let ((current (make-buffer "selector-current"
+                                :session-persistence-mode :ephemeral))
+          (other (make-buffer "selector-other"
+                              :session-persistence-mode :ephemeral)))
+      (add-buffer-to-ring other)
+      (add-buffer-to-ring current)
+      (clawmacs::minibuffer-select-buffer-command current)
+      (is-true *minibuffer-active*)
+      (is (eq other
+              (getf (nth *minibuffer-selected-index*
+                         *minibuffer-filtered-items*)
+                    :buffer)))
+      (minibuffer-confirm)
+      (is (eq other (current-buffer)))
+      (is (string= "selector-other"
+                   (first *buffer-selection-history*))))))
+
 (test list-buffers-command-uses-visible-minibuffer
   "The legacy command name delegates to the visible minibuffer selector."
   (let ((*buffer-ring* nil)
