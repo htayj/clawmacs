@@ -1736,7 +1736,8 @@ to navigate. Shows buffer name, agent, status, and message count."
                             (list :buffer buf
                                   :name name
                                   :current-p current-p
-                                  :display display)))
+                                  :display display
+                                  :match-text name)))
                         *buffer-ring*))
          ;; Sort: explicit selector history, then the buffer ring's MRU order.
          (sorted (sort-buffers-by-recency items)))

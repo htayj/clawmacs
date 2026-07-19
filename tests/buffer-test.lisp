@@ -1204,6 +1204,30 @@
     (is (string= "switch-e2e-0"
                  (getf (first *minibuffer-filtered-items*) :display)))))
 
+(test buffer-selector-fuzzy-matches-semantic-names
+  "An exact buffer name outranks prefix neighbors despite decorated rows."
+  (let ((*buffer-selection-history* nil)
+        (clawmacs::*chat-interaction-state*
+          (clawmacs::make-chat-interaction-state)))
+    (let* ((current (make-buffer "selector-origin"
+                                 :session-persistence-mode :ephemeral))
+           (exact (make-buffer "switch-e2e-1"
+                               :session-persistence-mode :ephemeral))
+           (neighbor-10 (make-buffer "switch-e2e-10"
+                                     :session-persistence-mode :ephemeral))
+           (neighbor-11 (make-buffer "switch-e2e-11"
+                                     :session-persistence-mode :ephemeral))
+           (*buffer-ring* (list current neighbor-11 neighbor-10 exact)))
+      (clawmacs::minibuffer-select-buffer-command current)
+      (is (every (lambda (item)
+                   (string= (getf item :name)
+                            (getf item :match-text)))
+                 *minibuffer-items*))
+      (dolist (character (coerce "switch-e2e-1" 'list))
+        (clawmacs::minibuffer-insert-char character))
+      (is (string= "switch-e2e-1"
+                   (getf (first *minibuffer-filtered-items*) :name))))))
+
 (test visible-buffer-selector-return-defaults-to-another-buffer
   "Unfiltered Return selects a non-current buffer instead of doing nothing."
   (let ((*buffer-ring* nil)
