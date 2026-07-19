@@ -978,6 +978,35 @@
     (is (string= "a" clawmacs::*minibuffer-input*))
     (is (eql (code-char 7) (clawmacs::chat-compose-event-key control-event)))))
 
+(test frame-command-activation-focuses-the-modal-input-owner
+  "Selectors opened outside compose cannot leave keyboard input on ESA's stream."
+  (clawmacs::init-default-keymap)
+  (let* ((current (make-buffer "focus-current"
+                               :session-persistence-mode :ephemeral))
+         (other (make-buffer "focus-other"
+                             :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer current))
+         (focused-frames nil)
+         (clawmacs::*buffer-ring* (list current other)))
+    (setf (buffer-keymap current) clawmacs::*default-keymap*
+          (buffer-keymap other) clawmacs::*default-keymap*)
+    (with-mcclim-test-function-override
+        (clawmacs::focus-chat-compose-pane (requested-frame)
+          (push requested-frame focused-frames)
+          :compose)
+      (with-mcclim-test-function-override
+          (clawmacs::request-chat-frame-redisplay (requested-frame)
+            requested-frame)
+        (clim:execute-frame-command
+         frame
+         '(clawmacs::com-chat-dispatch-key (:ctrl-x #\b)))))
+    (is-true
+     (clawmacs::interaction-minibuffer-active-p
+      (clawmacs::chat-frame-interaction-state frame)))
+    (is (equal (list frame) focused-frames))))
+
 (test mcclim-compose-normalizes-backtab-variants-for-modal-input
   "Shift-Tab/Backtab backend variants route to the minibuffer previous item key."
   (let ((shift-tab (make-instance 'clim:key-press-event

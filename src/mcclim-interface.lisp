@@ -1434,6 +1434,20 @@ frame-local table still goes through the standard CLIM setter and menu update."
         (clim:stream-set-input-focus compose))
       compose)))
 
+(defmethod clim:execute-frame-command :after
+    ((frame clawmacs-chat-frame) command)
+  "Keep non-blocking Clawmacs interaction input on FRAME's compose pane.
+
+The visible minibuffer pane is an application pane: it displays semantic
+completion presentations, while the Drei compose pane deliberately owns the
+non-blocking keyboard event adapter.  Commands may be invoked through ESA's
+standard input stream, menus, or presentations with some other pane focused.
+When such a command activates modal interaction, return focus to the pane that
+implements that input contract before the next gesture is delivered."
+  (declare (ignore command))
+  (when (chat-compose-application-input-active-p (chat-frame-buffer frame))
+    (focus-chat-compose-pane frame)))
+
 (defun run-clawmacs-chat-top-level (frame)
   "Run FRAME with ESA command processing and compose focused initially."
   (bt:with-lock-held ((chat-frame-redisplay-lock frame))
