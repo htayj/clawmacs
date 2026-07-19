@@ -51,6 +51,8 @@ SWITCH_BUFFER_LARGE_DRAFT_POINT = 8192
 SWITCH_BUFFER_LARGE_DRAFT_MARK = 24576
 SWITCH_BUFFER_STRESS_QUERY = "switch-e2e"
 SWITCH_BUFFER_STRESS_BUDGET_SECONDS = 5.0
+HELPER_TIMEOUT_SECONDS = 15.0
+SCREENSHOT_TIMEOUT_SECONDS = 10.0
 
 
 class DriverError(RuntimeError):
@@ -85,10 +87,28 @@ class McCLIMGuiSession:
         with self.action_log.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, sort_keys=True) + "\n")
 
-    def run(self, argv: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        self.log_action("run", argv=argv)
-        result = subprocess.run(argv, text=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, check=False)
+    def run(self, argv: list[str], *, check: bool = True,
+            timeout: float = HELPER_TIMEOUT_SECONDS
+            ) -> subprocess.CompletedProcess[str]:
+        self.log_action("run", argv=argv, timeout_seconds=timeout)
+        try:
+            result = subprocess.run(
+                argv, text=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, check=False, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            self.log_action("run_timeout", argv=argv,
+                            timeout_seconds=timeout)
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode("utf-8", errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            raise DriverError(
+                f"command timed out after {timeout:g}s: {' '.join(argv)}\n"
+                f"stdout: {stdout[-1000:]}\n"
+                f"stderr: {stderr[-1000:]}"
+            ) from exc
         if check and result.returncode != 0:
             raise DriverError(
                 f"command failed ({result.returncode}): {' '.join(argv)}\n"
@@ -152,7 +172,7 @@ class McCLIMGuiSession:
             screenshot_format = "xwd"
         else:
             raise DriverError("no screenshot command available")
-        self.run(argv)
+        self.run(argv, timeout=SCREENSHOT_TIMEOUT_SECONDS)
         snapshot = self.latest_event("ui-snapshot") or {}
         record = {
             "name": name,

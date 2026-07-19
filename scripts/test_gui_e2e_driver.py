@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -190,6 +191,53 @@ class EventLogReaderTests(unittest.TestCase):
                     + min(len(initial), DRIVER.DEBUG_LOG_ANCHOR_BYTES))
         self.assertEqual(expected, bytes_read)
         self.assertEqual(101, len(self.session._events()))
+
+
+class ExternalCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        root = Path(self.temporary_directory.name)
+        self.session = DRIVER.McCLIMGuiSession(
+            window_id="4242",
+            window_title="test",
+            debug_log=root / "debug.log",
+            artifact_dir=root / "artifacts",
+        )
+
+    def test_helper_timeout_is_reported_even_for_best_effort_commands(self) -> None:
+        expired = subprocess.TimeoutExpired(
+            ["import", "-window", "4242"], 0.25,
+            output=b"partial stdout", stderr=b"partial stderr")
+        with mock.patch.object(DRIVER.subprocess, "run",
+                               side_effect=expired):
+            with self.assertRaisesRegex(
+                    DRIVER.DriverError,
+                    r"(?s)command timed out after 0\.25s: import.*partial stdout"
+                    r".*partial stderr"):
+                self.session.run(
+                    ["import", "-window", "4242"],
+                    check=False, timeout=0.25)
+
+        self.assertEqual(
+            ["run", "run_timeout"],
+            [step["action"] for step in self.session.steps])
+        self.assertEqual(0.25, self.session.steps[-1]["timeout_seconds"])
+
+    def test_screenshot_uses_the_shorter_capture_deadline(self) -> None:
+        with mock.patch.object(DRIVER.shutil, "which",
+                               side_effect=lambda name: (
+                                   "/bin/import" if name == "import" else None)), \
+             mock.patch.object(self.session, "run") as run, \
+             mock.patch.object(self.session, "latest_event",
+                               return_value=None):
+            record = self.session.screenshot("failure")
+
+        expected_path = self.session.screenshot_dir / "failure.png"
+        run.assert_called_once_with(
+            ["import", "-window", "4242", str(expected_path)],
+            timeout=DRIVER.SCREENSHOT_TIMEOUT_SECONDS)
+        self.assertEqual(str(expected_path), record["path"])
 
 
 class FinalStateScreenshotTests(unittest.TestCase):
