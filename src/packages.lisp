@@ -151,6 +151,7 @@
    #:set-message-point-from-absolute-offset
    #:message-mark-active-p
    #:message-mark-absolute-offset
+   #:set-message-mark-from-absolute-offset
    #:message-set-mark-at-point
    #:message-clear-mark
    #:message-region-bounds

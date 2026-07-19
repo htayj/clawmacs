@@ -194,6 +194,15 @@
     (is-false (message-mark-active-p m))
     (is (= 6 (clawmacs::message-point-absolute-offset m)))))
 
+(test message-mark-can-be-restored-from-an-absolute-offset
+  "Editor adapters can round-trip a mark independently from point."
+  (let ((m (make-message :user)))
+    (clawmacs::set-message-text m (format nil "alpha~%beta"))
+    (clawmacs:set-message-mark-from-absolute-offset m 7)
+    (clawmacs::set-message-point-from-absolute-offset m 2)
+    (is (= 7 (message-mark-absolute-offset m)))
+    (is (= 2 (clawmacs::message-point-absolute-offset m)))))
+
 (test message-mark-whole-buffer-and-replacement-insert
   "Self insertion replaces an active region."
   (let ((m (make-message :user)))

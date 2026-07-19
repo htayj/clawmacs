@@ -675,79 +675,135 @@ pane redraws and value callbacks propagate."
              (eq key-name :escape)))))
 
 (defun chat-compose-pane-point-offset (pane)
-  "Return PANE's Drei point as a flat character offset, or NIL."
-  (ignore-errors
-    (drei-buffer:offset (drei:point (drei:current-view pane)))))
+  "Return PANE's Drei point as a flat character offset."
+  (drei-buffer:offset (drei:point (drei:current-view pane))))
 
 (defun set-chat-compose-pane-point-offset (pane offset)
   "Set PANE's Drei point to OFFSET when its public view is available."
   (when offset
-    (ignore-errors
-      (setf (drei-buffer:offset (drei:point (drei:current-view pane)))
-            offset))))
+    (setf (drei-buffer:offset (drei:point (drei:current-view pane)))
+          offset)))
+
+(defun chat-compose-pane-mark-offset (pane)
+  "Return PANE's Drei mark as a flat character offset."
+  (drei-buffer:offset (drei:mark (drei:current-view pane))))
+
+(defun set-chat-compose-pane-mark-offset (pane offset)
+  "Set PANE's Drei mark to OFFSET."
+  (setf (drei-buffer:offset (drei:mark (drei:current-view pane))) offset))
 
 (defun sync-chat-buffer-input-from-compose-pane (pane buffer)
-  "Reflect compose PANE's text and point into BUFFER's input message."
+  "Reflect compose PANE's text, point, and meaningful mark into BUFFER."
   (when (and pane buffer)
-    (let* ((value (ignore-errors (clim:gadget-value pane)))
+    (let* ((value (clim:gadget-value pane))
            (offset (chat-compose-pane-point-offset pane))
-           (message (buffer-input-message buffer)))
-      (when (stringp value)
-        (set-message-text message value)
-        (when offset
-          (set-message-point-from-absolute-offset message offset))))))
+           (message (buffer-input-message buffer))
+           (mark-offset (chat-compose-pane-mark-offset pane)))
+      (unless (stringp value)
+        (error "Compose pane returned a non-string draft: ~S" value))
+      ;; Rebuilding either representation is destructive: SET-MESSAGE-TEXT
+      ;; clears point/mark, while Drei's GADGET-VALUE setter clears undo.
+      ;; Only replace text when the editor actually changed it.
+      (unless (string= value (message-text message))
+        (if (file-buffer-p buffer)
+            (setf (file-buffer-text buffer) value)
+            (set-message-text message value)))
+      (set-message-point-from-absolute-offset message offset)
+      ;; Drei always owns a mark, while the message model uses NIL for no
+      ;; meaningful region.  Persist only a non-empty Drei region so a real
+      ;; C-SPC selection survives switching without manufacturing one.
+      (if (= mark-offset offset)
+          (message-clear-mark message)
+          (set-message-mark-from-absolute-offset message mark-offset)))))
 
-(defun sync-chat-compose-pane-from-buffer (pane buffer)
+(defun sync-chat-compose-pane-from-buffer (pane buffer &key force)
   "Reflect BUFFER's input editor text and point in compose PANE."
   (when (and pane buffer)
     (let* ((message (buffer-input-message buffer))
-           (offset (message-point-absolute-offset message)))
-      (ignore-errors
-        (setf (clim:gadget-value pane) (message-text message)))
+           (text (message-text message))
+           (offset (message-point-absolute-offset message))
+           (mark-offset (or (message-mark-absolute-offset message) offset)))
+      (if force
+          ;; A real buffer change must replace the single Drei buffer and its
+          ;; undo history.  Do not first allocate the outgoing large draft.
+          (setf (clim:gadget-value pane) text)
+          (let ((visible-text (clim:gadget-value pane)))
+            (unless (stringp visible-text)
+              (error "Compose pane returned a non-string draft: ~S"
+                     visible-text))
+            (unless (string= visible-text text)
+              (setf (clim:gadget-value pane) text))))
+      (set-chat-compose-pane-mark-offset pane mark-offset)
       (set-chat-compose-pane-point-offset pane offset))))
 
+(defun initialize-chat-frame-compose-pane (frame pane)
+  "Configure PANE and hydrate it from FRAME's initial buffer before input."
+  (configure-chat-compose-pane pane)
+  (sync-chat-compose-pane-from-buffer pane (chat-frame-buffer frame) :force t)
+  (setf (chat-frame-compose-synchronized-buffer frame)
+        (chat-frame-buffer frame))
+  pane)
+
+(defvar *chat-frame-transition-compose-pane* nil
+  "Dynamically selected compose pane for one frame buffer transition.")
+
+(defvar *chat-frame-transition-synchronized-buffer* nil
+  "Source buffer already saved by the active frame transition, or NIL.")
+
 (defun call-with-chat-frame-buffer-transition
-    (frame function &key compose-pane focus-compose)
+    (frame function &key compose-pane focus-compose state-only)
   "Call FUNCTION as one FRAME buffer/compose-state transition.
 
 FRAME's buffer is authoritative at entry.  Save its Drei draft and point,
 establish it as the process-level current buffer for legacy commands, then run
-FUNCTION with that source buffer.  On normal return, adopt the buffer selected
-by the command and load that buffer's draft and point back into Drei.  This
-keeps keyboard commands, presentation choices, and menu commands on the same
-transaction boundary."
+FUNCTION with that source buffer.  On normal return, or before re-signalling an
+ordinary application error, adopt the buffer selected by the command and load
+that buffer's draft, mark, and point back into Drei.  CLIM control transfers
+such as frame exit are not intercepted.  STATE-ONLY promises that FUNCTION
+changes only frame interaction state unless it selects another buffer; this
+lets modal navigation avoid materializing a large compose draft on every key."
   (let* ((source (chat-frame-buffer frame))
          (compose (or compose-pane
-                      (ignore-errors
-                        (clim:find-pane-named frame 'compose)))))
-    (sync-chat-buffer-input-from-compose-pane compose source)
-    (unless (member source *buffer-ring* :test #'eq)
-      (add-buffer-to-ring source))
-    (unless (eq source (current-buffer))
-      (switch-to-buffer source))
-    (multiple-value-prog1
-        (funcall function source)
-      (let ((target (or (current-buffer) source)))
-        (setf (esa:esa-current-buffer frame) target)
-        (sync-chat-compose-pane-from-buffer compose target)
-        (request-chat-frame-redisplay frame)
-        (when focus-compose
-          (focus-chat-compose-pane frame))))))
+                      (clim:find-pane-named frame 'compose))))
+    (let ((*chat-frame-transition-compose-pane* compose)
+          (*chat-frame-transition-synchronized-buffer* nil))
+      (unless (eq source (chat-frame-compose-synchronized-buffer frame))
+        (sync-chat-buffer-input-from-compose-pane compose source)
+        (setf (chat-frame-compose-synchronized-buffer frame) source))
+      (setf *chat-frame-transition-synchronized-buffer* source)
+      (unless (member source *buffer-ring* :test #'eq)
+        (add-buffer-to-ring source))
+      (unless (eq source (current-buffer))
+        (switch-to-buffer source))
+      (labels ((finish-transition ()
+                 (let ((target (or (current-buffer) source)))
+                   (if (and state-only
+                            (eq target source)
+                            (eq source
+                                (chat-frame-compose-synchronized-buffer frame)))
+                       (request-chat-frame-redisplay frame)
+                       (setf (esa:esa-current-buffer frame) target))
+                   (when focus-compose
+                     (focus-chat-compose-pane frame)))))
+        (multiple-value-prog1
+            (handler-case
+                (funcall function source)
+              (error (condition)
+                (handler-case
+                    (finish-transition)
+                  (error (reconciliation-error)
+                    (error "Application command failed (~A); buffer reconciliation also failed (~A)."
+                           condition reconciliation-error)))
+                (error condition)))
+          (finish-transition))))))
 
-(defun chat-compose-buffer-owned-editing-event-p (pane event)
-  "Return true when EVENT should use Clawmacs' buffer editing command.
-
-Most editing keys are handled by Drei, but Drei reserves C-u as a universal
-argument and C-w as kill-region.  Clawmacs documents those as kill-backward-line
-and backward-kill-word in chat compose buffers, so route them through the
-buffer keymap after synchronizing the Drei text/point."
-  (let* ((frame (clim:pane-frame pane))
-         (buf (and frame (chat-frame-buffer frame)))
-         (key (chat-compose-event-key event))
-         (command (and buf key (keymap-lookup (buffer-keymap buf) key))))
-    (and (member key (list (code-char 21) (code-char 23)) :test #'eql)
-         (member command '(kill-backward-line-command backward-kill-word-command)
-                 :test #'eq))))
+(defun chat-compose-state-only-modal-key-p (key)
+  "Return true when modal KEY cannot invoke a buffer-changing callback."
+  (let ((base-key (minibuffer-base-key key)))
+    (and (or *minibuffer-active* *session-tree-selector-active*)
+         (not (and (characterp base-key)
+                   (or (char= base-key #\Return)
+                       (char= base-key #\Newline)))))))
 
 (defun dispatch-chat-compose-event-to-buffer (pane event)
   "Dispatch EVENT through Clawmacs' buffer key handler and refresh the frame."
@@ -766,7 +822,8 @@ buffer keymap after synchronizing the Drei text/point."
            (when (eq result :quit)
              (clim:frame-exit frame))
            t))
-       :compose-pane pane))))
+       :compose-pane pane
+       :state-only (chat-compose-state-only-modal-key-p key)))))
 
 (defclass clawmacs-chat-compose-pane (drei:drei-gadget-pane)
   ()
@@ -809,6 +866,14 @@ because they are intentionally absent from the frame table."
                  :modifier-state (logior (clim:event-modifier-state event)
                                           clim:+meta-key+)))
 
+(defmethod clim:handle-event :before
+    ((pane clawmacs-chat-compose-pane) (event clim:pointer-event))
+  "Invalidate compose/model synchronization before Drei handles a pointer."
+  (declare (ignore event))
+  (let ((frame (clim:pane-frame pane)))
+    (when (typep frame 'clawmacs-chat-frame)
+      (setf (chat-frame-compose-synchronized-buffer frame) nil))))
+
 (defmethod clim:handle-event :around
     ((pane clawmacs-chat-compose-pane) (event clim:key-press-event))
   "Normalize only key forms that upstream Drei cannot process directly.
@@ -823,6 +888,11 @@ modifier-event conversion."
          (dispatch
            (lambda ()
              (let ((buf (and frame (chat-frame-buffer frame))))
+               ;; A non-modal Drei gesture may edit text or move point/mark.
+               ;; Modal keys are consumed by Clawmacs and leave Drei intact.
+               (when (and buf
+                          (not (chat-compose-application-input-active-p buf)))
+                 (setf (chat-frame-compose-synchronized-buffer frame) nil))
                (cond
                  ((chat-compose-modifier-key-name-p
                    (clim:keyboard-event-key-name event))
@@ -1281,6 +1351,11 @@ and avoids the backend-independent metric probe."
            :accessor chat-frame-buffer)
    (interaction-state :initform (make-chat-interaction-state)
                       :reader chat-frame-interaction-state)
+   (compose-synchronized-buffer
+    :initform nil
+    :accessor chat-frame-compose-synchronized-buffer
+    :documentation
+    "Frame buffer whose draft/point/mark currently match the Drei pane.")
    (redisplay-lock :initform (bt:make-lock "clawmacs chat redisplay")
                    :reader chat-frame-redisplay-lock)
    (lifecycle-state :initform :created
@@ -1444,12 +1519,70 @@ frame-local table still goes through the standard CLIM setter and menu update."
   "Return FRAME's current Clawmacs buffer."
   (chat-frame-buffer frame))
 
+(defun restore-chat-frame-source-after-load-error
+    (frame compose source load-error)
+  "Restore FRAME, ring, and COMPOSE to SOURCE, then re-signal LOAD-ERROR."
+  (let ((restore-error nil))
+    (when source
+      (unless (member source *buffer-ring* :test #'eq)
+        (add-buffer-to-ring source))
+      (switch-to-buffer source)
+      (setf (chat-frame-buffer frame) source)
+      (handler-case
+          (progn
+            (sync-chat-compose-pane-from-buffer compose source :force t)
+            (setf (chat-frame-compose-synchronized-buffer frame) source))
+        (error (condition)
+          (setf restore-error condition
+                (chat-frame-compose-synchronized-buffer frame) nil))))
+    (request-chat-frame-redisplay frame)
+    (if restore-error
+        (error "Target compose load failed (~A); restoring the source compose state also failed (~A)."
+               load-error restore-error)
+        (error load-error))))
+
 (defmethod (setf esa:esa-current-buffer) ((new-buffer buffer)
                                           (frame clawmacs-chat-frame))
-  "Switch FRAME to NEW-BUFFER using Clawmacs buffer-ring semantics."
-  (setf (chat-frame-buffer frame) new-buffer)
-  (when (member new-buffer *buffer-ring* :test #'eq)
-    (switch-to-buffer new-buffer))
+  "Synchronize FRAME's compose editor and switch it to NEW-BUFFER.
+
+This is the canonical frame-level transition contract for built-in commands
+and extensions.  It saves the old frame buffer, installs the new draft in
+Drei, adopts the new buffer into the process-level ring, and requests CLIM
+redisplay.  Loading a genuinely different buffer deliberately resets the
+single shared Drei gadget's undo history so undo cannot cross buffers."
+  (let* ((old-buffer (chat-frame-buffer frame))
+         (changed-p (not (eq old-buffer new-buffer)))
+         (helper-synchronized-p
+           (eq old-buffer *chat-frame-transition-synchronized-buffer*))
+         (compose
+           (or *chat-frame-transition-compose-pane*
+               (clim:find-pane-named frame 'compose))))
+    (cond
+      ;; A direct same-buffer assignment means "adopt the live editor".  Save
+      ;; it and do not invoke Drei's destructive replacement setter.
+      ((and (not changed-p) (not helper-synchronized-p))
+       (sync-chat-buffer-input-from-compose-pane compose old-buffer)
+       (setf (chat-frame-compose-synchronized-buffer frame) old-buffer))
+      (t
+       (when (and changed-p old-buffer (not helper-synchronized-p))
+         (sync-chat-buffer-input-from-compose-pane compose old-buffer)
+         (setf (chat-frame-compose-synchronized-buffer frame) old-buffer))
+       ;; Prepare the visible editor before publishing NEW-BUFFER as frame or
+       ;; ring state.  A failed or partially applied Drei replacement rolls
+       ;; every application-owned current-buffer representation back to OLD.
+       (handler-case
+           (progn
+             (sync-chat-compose-pane-from-buffer
+              compose new-buffer :force changed-p)
+             (setf (chat-frame-compose-synchronized-buffer frame) new-buffer))
+         (error (condition)
+           (restore-chat-frame-source-after-load-error
+            frame compose old-buffer condition)))))
+    (unless (member new-buffer *buffer-ring* :test #'eq)
+      (add-buffer-to-ring new-buffer))
+    (switch-to-buffer new-buffer)
+    (setf (chat-frame-buffer frame) new-buffer)
+    (request-chat-frame-redisplay frame))
   new-buffer)
 
 (defmethod esa:esa-current-window ((frame clawmacs-chat-frame))
@@ -2695,7 +2828,8 @@ remaining buffers from being cancelled, or leave the frame marked running."
                    (chat-frame-redisplay-handling-p frame) nil))
            (let ((transcript (clim:find-pane-named frame 'transcript)))
              (setf (esa:windows frame) (and transcript (list transcript))))
-           (configure-chat-compose-pane (clim:find-pane-named frame 'compose))
+           (initialize-chat-frame-compose-pane
+            frame (clim:find-pane-named frame 'compose))
            (setf hook
                  (lambda (buf reason)
                    (when (and (or (eq reason :runtime-stopped-pending)

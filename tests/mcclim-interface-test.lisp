@@ -18,15 +18,32 @@
     (clawmacs::clawmacs-chat-compose-pane)
   ((test-frame :accessor synthetic-chat-compose-pane-frame))
   (:metaclass esa-utils:modual-class)
-  (:documentation "Uninitialized compose pane used for headless event tests."))
+  (:documentation "Initialized compose pane used for headless event tests."))
 
 (defmethod clim:pane-frame ((pane synthetic-chat-compose-pane))
   (synthetic-chat-compose-pane-frame pane))
 
+(defvar *synthetic-compose-gadget-value-writes* nil
+  "When numeric, count test writes through the public Drei gadget setter.")
+
+(defvar *synthetic-compose-gadget-value-reads* nil
+  "When numeric, count test reads through the public Drei gadget getter.")
+
+(defmethod clim:gadget-value :around ((pane synthetic-chat-compose-pane))
+  (when (integerp *synthetic-compose-gadget-value-reads*)
+    (incf *synthetic-compose-gadget-value-reads*))
+  (call-next-method))
+
+(defmethod (setf clim:gadget-value) :around
+    (new-value (pane synthetic-chat-compose-pane) &key invoke-callback)
+  (when (integerp *synthetic-compose-gadget-value-writes*)
+    (incf *synthetic-compose-gadget-value-writes*))
+  (call-next-method new-value pane :invoke-callback invoke-callback))
+
 (defun make-synthetic-chat-compose-pane (frame)
   "Return a headless compose pane whose public PANE-FRAME is FRAME."
-  (let ((pane (allocate-instance
-               (find-class 'synthetic-chat-compose-pane))))
+  (let ((pane (make-instance 'synthetic-chat-compose-pane
+                             :initial-contents "")))
     (setf (synthetic-chat-compose-pane-frame pane) frame)
     pane))
 
@@ -370,7 +387,9 @@
       (is (eq :system (message-sender diagnostic)))
       (is (search "simulated minibuffer callback failure"
                   (message-text diagnostic))))
-    (is (= 1 redisplay-requests))
+    ;; Reconciliation and the subsequently appended UI diagnostic each make
+    ;; one coalesced redisplay request.
+    (is (= 2 redisplay-requests))
     (is (member "ui-action-error" debug-events :test #'string=))
     (is (eq :running (clawmacs::chat-frame-lifecycle-state frame)))))
 
@@ -455,7 +474,7 @@
             (clim:frame-command-table frame)))))
 
 (test chat-frame-buffer-transition-round-trips-drafts-and-points
-  "A buffer switch saves the source editor and restores the target editor."
+  "A buffer switch saves source text/selection and restores the target."
   (let* ((source (make-buffer "transition-source"
                               :session-persistence-mode :ephemeral))
          (target (make-buffer "transition-target"
@@ -468,9 +487,11 @@
          (target-message (buffer-input-message target))
          (clawmacs::*buffer-ring* (list target)))
     (setf (clim:gadget-value compose) "source draft"
-          (drei-buffer:offset (drei:point (drei:current-view compose))) 6)
+          (drei-buffer:offset (drei:point (drei:current-view compose))) 6
+          (drei-buffer:offset (drei:mark (drei:current-view compose))) 2)
     (set-message-text target-message "target draft")
     (set-message-point-from-absolute-offset target-message 3)
+    (clawmacs:set-message-mark-from-absolute-offset target-message 8)
     (with-mcclim-test-function-override
         (clawmacs::request-chat-frame-redisplay (requested-frame)
           (is (eq frame requested-frame))
@@ -490,8 +511,367 @@
                  (message-text (buffer-input-message source))))
     (is (= 6 (message-point-absolute-offset
               (buffer-input-message source))))
+    (is (= 2 (message-mark-absolute-offset
+              (buffer-input-message source))))
     (is (string= "target draft" (clim:gadget-value compose)))
-    (is (= 3 (clawmacs::chat-compose-pane-point-offset compose)))))
+    (is (= 3 (clawmacs::chat-compose-pane-point-offset compose)))
+    (is (= 8 (clawmacs::chat-compose-pane-mark-offset compose)))
+    (with-mcclim-test-function-override
+        (clawmacs::request-chat-frame-redisplay (requested-frame)
+          (is (eq frame requested-frame))
+          requested-frame)
+      (clawmacs::call-with-chat-frame-buffer-transition
+       frame
+       (lambda (command-buffer)
+         (is (eq target command-buffer))
+         (switch-to-buffer source))
+       :compose-pane compose))
+    (is (string= "source draft" (clim:gadget-value compose)))
+    (is (= 6 (clawmacs::chat-compose-pane-point-offset compose)))
+    (is (= 2 (clawmacs::chat-compose-pane-mark-offset compose)))))
+
+(test chat-frame-buffer-transition-does-not-rewrite-an-unchanged-draft
+  "Selector-only commands preserve Drei undo state and avoid O(draft) writes."
+  (let* ((draft (make-string 100000 :initial-element #\x))
+         (source (make-buffer "transition-noop-source"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'synthetic-chat-compose-pane
+                                 :initial-contents draft))
+         (clawmacs::*buffer-ring* (list source)))
+    (setf (synthetic-chat-compose-pane-frame compose) frame)
+    (set-message-text (buffer-input-message source) draft)
+    (let ((*synthetic-compose-gadget-value-writes* 0))
+      (with-mcclim-test-function-override
+          (clawmacs::request-chat-frame-redisplay (requested-frame)
+            (is (eq frame requested-frame))
+            requested-frame)
+        (is (eq :unchanged
+                (clawmacs::call-with-chat-frame-buffer-transition
+                 frame
+                 (lambda (buffer)
+                   (is (eq source buffer))
+                   :unchanged)
+                 :compose-pane compose))))
+      (is (= 0 *synthetic-compose-gadget-value-writes*)))))
+
+(test switch-buffer-modal-keys-do-not-materialize-the-compose-draft
+  "Sustained selector filtering stays O(selector), not O(compose draft)."
+  (let* ((draft (make-string 100000 :initial-element #\x))
+         (source (make-buffer "transition-modal-fast-source"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'synthetic-chat-compose-pane
+                                 :initial-contents draft))
+         (state (clawmacs::chat-frame-interaction-state frame))
+         (event (make-instance 'clim:key-press-event
+                               :sheet compose :x 0 :y 0
+                               :key-name nil
+                               :key-character #\x
+                               :modifier-state
+                               (clim:make-modifier-state)))
+         (clawmacs::*buffer-ring* (list source))
+         (clawmacs::*chat-interaction-state* state))
+    (setf (synthetic-chat-compose-pane-frame compose) frame)
+    (set-message-text (buffer-input-message source) draft)
+    (with-mcclim-test-function-override
+        (clawmacs::request-chat-frame-redisplay (requested-frame)
+          (is (eq frame requested-frame))
+          requested-frame)
+      ;; This is the selector-opening transition.  It establishes the frame's
+      ;; compose/model synchronization token once.
+      (clawmacs::call-with-chat-frame-buffer-transition
+       frame
+       (lambda (buffer)
+         (declare (ignore buffer))
+         (clawmacs::minibuffer-activate
+          "Large Draft"
+          (loop :for index :below 20
+                :collect (list :display (format nil "candidate-~D" index)))
+          #'identity))
+       :compose-pane compose)
+      (let ((*synthetic-compose-gadget-value-reads* 0)
+            (*synthetic-compose-gadget-value-writes* 0)
+            (started (get-internal-real-time)))
+        (dotimes (index 200)
+          (declare (ignore index))
+          (is-true
+           (clawmacs::dispatch-chat-compose-event-to-buffer compose event)))
+        (let ((elapsed-seconds
+                (/ (- (get-internal-real-time) started)
+                   internal-time-units-per-second)))
+          (is (< elapsed-seconds 5)))
+        (is (= 0 *synthetic-compose-gadget-value-reads*))
+        (is (= 0 *synthetic-compose-gadget-value-writes*))))
+    (is (string= draft (clim:gadget-value compose)))
+    (is (string= draft (message-text (buffer-input-message source))))))
+
+(test drei-compose-edit-invalidates-the-modal-synchronization-token
+  "A later selector must save ordinary Drei edits before using its fast path."
+  (let* ((source (make-buffer "transition-invalidation-source"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'synthetic-chat-compose-pane
+                                 :initial-contents "draft"))
+         (state (clawmacs::chat-frame-interaction-state frame))
+         (event (make-instance 'clim:key-press-event
+                               :sheet compose :x 0 :y 0
+                               :key-name nil
+                               :key-character #\z
+                               :modifier-state
+                               (clim:make-modifier-state)))
+         (clim:*application-frame* frame)
+         (clawmacs::*buffer-ring* (list source))
+         (clawmacs::*chat-interaction-state* state))
+    (setf (synthetic-chat-compose-pane-frame compose) frame
+          (clawmacs::chat-frame-compose-synchronized-buffer frame) source
+          (clawmacs::chat-frame-lifecycle-state frame) :running)
+    (clim:handle-event compose event)
+    (is (null (clawmacs::chat-frame-compose-synchronized-buffer frame)))
+    ;; The headless pane has no live port, so apply the same public Drei
+    ;; gesture processor explicitly after proving the frame adapter invalidated
+    ;; its token.
+    (clawmacs::process-chat-compose-drei-event compose event)
+    (is (string= "zdraft" (clim:gadget-value compose)))
+    (clawmacs::minibuffer-activate
+     "After Edit" (list (list :display "candidate")) #'identity)
+    (with-mcclim-test-function-override
+        (clawmacs::request-chat-frame-redisplay (requested-frame)
+          (is (eq frame requested-frame))
+          requested-frame)
+      (is-true
+       (clawmacs::dispatch-chat-compose-event-to-buffer compose event)))
+    (is (string= "zdraft" (message-text (buffer-input-message source))))))
+
+(test chat-frame-buffer-transition-marks-edited-files-dirty
+  "Saving a file-buffer draft through Drei preserves project dirty state."
+  (let* ((source (make-buffer "transition-file-source"
+                              :kind :file
+                              :original-text "saved text"
+                              :session-persistence-mode :ephemeral))
+         (target (make-buffer "transition-file-target"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'synthetic-chat-compose-pane
+                                 :initial-contents "edited text"))
+         (clawmacs::*buffer-ring* (list source target)))
+    (setf (synthetic-chat-compose-pane-frame compose) frame)
+    (set-message-text (buffer-input-message source) "saved text")
+    (with-mcclim-test-function-override
+        (clawmacs::request-chat-frame-redisplay (requested-frame)
+          (is (eq frame requested-frame))
+          requested-frame)
+      (clawmacs::call-with-chat-frame-buffer-transition
+       frame
+       (lambda (buffer)
+         (is (eq source buffer))
+         (switch-to-buffer target))
+       :compose-pane compose))
+    (is (string= "edited text" (file-buffer-text source)))
+    (is-true (buffer-dirty-p source))))
+
+(test chat-frame-buffer-transition-reconciles-a-switch-before-an-error
+  "An ordinary command failure cannot leave frame and compose state divergent."
+  (let* ((source (make-buffer "transition-error-source"
+                              :session-persistence-mode :ephemeral))
+         (target (make-buffer "transition-error-target"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'synthetic-chat-compose-pane
+                                 :initial-contents "source text"))
+         (target-message (buffer-input-message target))
+         (caught nil)
+         (clawmacs::*buffer-ring* (list source target)))
+    (setf (synthetic-chat-compose-pane-frame compose) frame)
+    (set-message-text (buffer-input-message source) "source text")
+    (set-message-text target-message "target after error")
+    (handler-case
+        (with-mcclim-test-function-override
+            (clawmacs::request-chat-frame-redisplay (requested-frame)
+              (is (eq frame requested-frame))
+              requested-frame)
+          (clawmacs::call-with-chat-frame-buffer-transition
+           frame
+           (lambda (buffer)
+             (declare (ignore buffer))
+             (switch-to-buffer target)
+             (error "simulated failure after switch"))
+           :compose-pane compose))
+      (error (condition)
+        (setf caught condition)))
+    (is-true caught)
+    (is (search "simulated failure after switch" (princ-to-string caught)))
+    (is (eq target (current-buffer)))
+    (is (eq target (clawmacs::chat-frame-buffer frame)))
+    (is (string= "target after error" (clim:gadget-value compose)))))
+
+(test chat-frame-buffer-transition-rolls-back-a-failed-error-reconciliation
+  "A broken target load restores source frame, ring, and visible editor state."
+  (let* ((source (make-buffer "transition-rollback-source"
+                              :session-persistence-mode :ephemeral))
+         (target (make-buffer "transition-rollback-target"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'synthetic-chat-compose-pane
+                                 :initial-contents "rollback source"))
+         (original-sync
+           (symbol-function 'clawmacs::sync-chat-compose-pane-from-buffer))
+         (caught nil)
+         (clawmacs::*buffer-ring* (list source target)))
+    (setf (synthetic-chat-compose-pane-frame compose) frame)
+    (set-message-text (buffer-input-message source) "rollback source")
+    (set-message-text (buffer-input-message target) "unloadable target")
+    (with-mcclim-test-function-override
+        (clawmacs::sync-chat-compose-pane-from-buffer
+            (requested-pane requested-buffer &key force)
+          (if (eq requested-buffer target)
+              (error "simulated target load failure")
+              (funcall original-sync requested-pane requested-buffer
+                       :force force)))
+      (with-mcclim-test-function-override
+          (clawmacs::request-chat-frame-redisplay (requested-frame)
+            (is (eq frame requested-frame))
+            requested-frame)
+        (handler-case
+            (clawmacs::call-with-chat-frame-buffer-transition
+             frame
+             (lambda (buffer)
+               (declare (ignore buffer))
+               (switch-to-buffer target)
+               (error "simulated command failure"))
+             :compose-pane compose)
+          (error (condition)
+            (setf caught condition)))))
+    (is-true caught)
+    (let ((text (princ-to-string caught)))
+      (is (search "simulated command failure" text))
+      (is (search "simulated target load failure" text)))
+    (is (eq source (current-buffer)))
+    (is (eq source (clawmacs::chat-frame-buffer frame)))
+    (is (eq source
+            (clawmacs::chat-frame-compose-synchronized-buffer frame)))
+    (is (string= "rollback source" (clim:gadget-value compose)))))
+
+(test chat-frame-runtime-hydrates-the-initial-compose-draft
+  "A restored initial buffer is loaded before the first frame command."
+  (let* ((source (make-buffer "initial-compose-source"
+                              :session-persistence-mode :ephemeral))
+         (message (buffer-input-message source))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'synthetic-chat-compose-pane
+                                 :initial-contents ""))
+         (clawmacs::*buffer-ring* (list source)))
+    (setf (synthetic-chat-compose-pane-frame compose) frame)
+    (set-message-text message "restored initial draft")
+    (set-message-point-from-absolute-offset message 12)
+    (clawmacs:set-message-mark-from-absolute-offset message 3)
+    (clawmacs::initialize-chat-frame-compose-pane frame compose)
+    (is (string= "restored initial draft" (clim:gadget-value compose)))
+    (is (= 12 (clawmacs::chat-compose-pane-point-offset compose)))
+    (is (= 3 (clawmacs::chat-compose-pane-mark-offset compose)))
+    (is (eq source
+            (clawmacs::chat-frame-compose-synchronized-buffer frame)))
+    (let ((*synthetic-compose-gadget-value-writes* 0))
+      (with-mcclim-test-function-override
+          (clawmacs::request-chat-frame-redisplay (requested-frame)
+            (is (eq frame requested-frame))
+            requested-frame)
+        (clawmacs::call-with-chat-frame-buffer-transition
+         frame #'identity
+         :compose-pane compose
+         :state-only t))
+      (is (= 0 *synthetic-compose-gadget-value-writes*)))
+    (is (string= "restored initial draft" (message-text message)))))
+
+(test esa-current-buffer-setter-is-the-canonical-compose-transition
+  "Extensions using ESA's setter save and load drafts through the frame API."
+  (let* ((source (make-buffer "esa-setter-source"
+                              :session-persistence-mode :ephemeral))
+         (target (make-buffer "esa-setter-target"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'synthetic-chat-compose-pane
+                                 :initial-contents "edited source"))
+         (original-find-pane (symbol-function 'clim:find-pane-named))
+         ;; TARGET intentionally starts outside the ring: the canonical setter
+         ;; must register and adopt extension-created buffers itself.
+         (clawmacs::*buffer-ring* (list source)))
+    (setf (synthetic-chat-compose-pane-frame compose) frame)
+    (set-message-text (buffer-input-message source) "old source")
+    (set-message-text (buffer-input-message target) "loaded target")
+    (let ((*synthetic-compose-gadget-value-reads* 0))
+      (with-mcclim-test-function-override
+          (clim:find-pane-named (requested-frame pane-name)
+            (if (and (eq requested-frame frame)
+                     (eq pane-name 'clawmacs::compose))
+                compose
+                (funcall original-find-pane requested-frame pane-name)))
+        (with-mcclim-test-function-override
+            (clawmacs::request-chat-frame-redisplay (requested-frame)
+              (is (eq frame requested-frame))
+              requested-frame)
+          (setf (esa:esa-current-buffer frame) target)))
+      ;; One source save read; forced target replacement performs no second
+      ;; outgoing-draft materialization.
+      (is (= 1 *synthetic-compose-gadget-value-reads*)))
+    (is (string= "edited source"
+                 (message-text (buffer-input-message source))))
+    (is (string= "loaded target" (clim:gadget-value compose)))
+    (is (member target clawmacs::*buffer-ring* :test #'eq))
+    (is (eq target (current-buffer)))
+    (is (eq target (esa:esa-current-buffer frame)))))
+
+(test esa-current-buffer-same-target-adopts-live-drei-without-replacement
+  "A direct same-target setter saves newer editor state and preserves undo."
+  (let* ((source (make-buffer "esa-setter-same-source"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source))
+         (compose (make-instance 'synthetic-chat-compose-pane
+                                 :initial-contents "newer live draft"))
+         (original-find-pane (symbol-function 'clim:find-pane-named))
+         (clawmacs::*buffer-ring* (list source)))
+    (setf (synthetic-chat-compose-pane-frame compose) frame
+          (drei-buffer:offset (drei:point (drei:current-view compose))) 9
+          (drei-buffer:offset (drei:mark (drei:current-view compose))) 3)
+    (set-message-text (buffer-input-message source) "stale model draft")
+    (let ((*synthetic-compose-gadget-value-writes* 0))
+      (with-mcclim-test-function-override
+          (clim:find-pane-named (requested-frame pane-name)
+            (if (and (eq requested-frame frame)
+                     (eq pane-name 'clawmacs::compose))
+                compose
+                (funcall original-find-pane requested-frame pane-name)))
+        (with-mcclim-test-function-override
+            (clawmacs::request-chat-frame-redisplay (requested-frame)
+              (is (eq frame requested-frame))
+              requested-frame)
+          (setf (esa:esa-current-buffer frame) source)))
+      (is (= 0 *synthetic-compose-gadget-value-writes*)))
+    (is (string= "newer live draft"
+                 (message-text (buffer-input-message source))))
+    (is (= 9 (message-point-absolute-offset
+              (buffer-input-message source))))
+    (is (= 3 (message-mark-absolute-offset
+              (buffer-input-message source))))
+    (is (string= "newer live draft" (clim:gadget-value compose)))))
 
 (test switch-buffer-keyboard-confirmation-round-trips-compose-state
   "The real frame-command/modal-key path switches drafts without stale text."

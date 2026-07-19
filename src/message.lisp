@@ -244,6 +244,24 @@ identity, and links to adjacent messages in the buffer."))
                     (incf offset (1+ (length (line-content line)))))
             :finally (return nil)))))
 
+(declaim (ftype (function (message integer) message)
+                set-message-mark-from-absolute-offset))
+(defun set-message-mark-from-absolute-offset (msg offset)
+  "Move MSG's active mark to absolute text OFFSET and return MSG."
+  (let ((remaining (max 0 offset)))
+    (loop :for line := (message-first-line msg) :then (line-next line)
+          :while line
+          :for len := (length (line-content line))
+          :do (cond
+                ((or (<= remaining len) (null (line-next line)))
+                 (setf (message-mark-line msg) line
+                       (message-mark-offset msg)
+                       (max 0 (min remaining len)))
+                 (return msg))
+                (t
+                 (decf remaining (1+ len))))
+          :finally (return msg))))
+
 (declaim (ftype (function (message) message) message-set-mark-at-point))
 (defun message-set-mark-at-point (msg)
   "Set MSG mark to the current point."
