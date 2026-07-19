@@ -738,10 +738,12 @@ pane redraws and value callbacks propagate."
 
 (defun initialize-chat-frame-compose-pane (frame pane)
   "Configure PANE and hydrate it from FRAME's initial buffer before input."
-  (configure-chat-compose-pane pane)
-  (sync-chat-compose-pane-from-buffer pane (chat-frame-buffer frame) :force t)
-  (setf (chat-frame-compose-synchronized-buffer frame)
-        (chat-frame-buffer frame))
+  (when pane
+    (configure-chat-compose-pane pane)
+    (sync-chat-compose-pane-from-buffer
+     pane (chat-frame-buffer frame) :force t)
+    (setf (chat-frame-compose-synchronized-buffer frame)
+          (chat-frame-buffer frame)))
   pane)
 
 (defvar *chat-frame-transition-compose-pane* nil
@@ -1754,17 +1756,29 @@ implements that input contract before the next gesture is delivered."
   (when (chat-compose-application-input-active-p (chat-frame-buffer frame))
     (focus-chat-compose-pane frame)))
 
+(defun initialize-chat-frame-top-level-panes (frame)
+  "Initialize FRAME's panes after CLIM has generated and adopted them."
+  ;; CLIM generates and adopts the declared panes before invoking the
+  ;; application top-level.  Hydrate Drei only now: FIND-PANE-NAMED returns NIL
+  ;; in the outer RUN-FRAME-TOP-LEVEL :AROUND method, before the primary CLIM
+  ;; lifecycle has created the panes.
+  (let ((transcript (clim:find-pane-named frame 'transcript)))
+    (setf (esa:windows frame) (and transcript (list transcript))))
+  (initialize-chat-frame-compose-pane
+   frame (clim:find-pane-named frame 'compose)))
+
 (defun run-clawmacs-chat-top-level (frame)
   "Run FRAME with ESA command processing and compose focused initially."
-  (bt:with-lock-held ((chat-frame-redisplay-lock frame))
-    (setf (chat-frame-lifecycle-state frame) :running
-          (chat-frame-redisplay-pending-p frame) nil
-          (chat-frame-redisplay-handling-p frame) nil))
   (unless (eq (clim:frame-state frame) :enabled)
     (clim:enable-frame frame)
     (file-debug-event "frame-enabled"
                       :buffer-name (buffer-name (chat-frame-buffer frame))
                       :state (clim:frame-state frame)))
+  (initialize-chat-frame-top-level-panes frame)
+  (bt:with-lock-held ((chat-frame-redisplay-lock frame))
+    (setf (chat-frame-lifecycle-state frame) :running
+          (chat-frame-redisplay-pending-p frame) nil
+          (chat-frame-redisplay-handling-p frame) nil))
   ;; Requests made during construction remain dirty. Drain them only after
   ;; CLIM has enabled and grafted the frame, so a pre-adoption miss cannot be
   ;; the last scheduling attempt.
@@ -2974,10 +2988,6 @@ remaining buffers from being cancelled, or leave the frame marked running."
              (setf (chat-frame-lifecycle-state frame) :starting
                    (chat-frame-redisplay-pending-p frame) nil
                    (chat-frame-redisplay-handling-p frame) nil))
-           (let ((transcript (clim:find-pane-named frame 'transcript)))
-             (setf (esa:windows frame) (and transcript (list transcript))))
-           (initialize-chat-frame-compose-pane
-            frame (clim:find-pane-named frame 'compose))
            (setf hook
                  (lambda (buf reason)
                    (when (and (or (eq reason :runtime-stopped-pending)

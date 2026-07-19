@@ -764,8 +764,25 @@
             (clawmacs::chat-frame-compose-synchronized-buffer frame)))
     (is (string= "rollback source" (clim:gadget-value compose)))))
 
-(test chat-frame-runtime-hydrates-the-initial-compose-draft
-  "A restored initial buffer is loaded before the first frame command."
+(test chat-frame-compose-initialization-without-a-pane-keeps-model-authority
+  "A pre-generation NIL pane cannot claim model/editor synchronization."
+  (let* ((source (make-buffer "initial-compose-no-pane"
+                              :session-persistence-mode :ephemeral))
+         (message (buffer-input-message source))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer source)))
+    (set-message-text message "restored before panes")
+    (set-message-point-from-absolute-offset message 8)
+    (clawmacs:set-message-mark-from-absolute-offset message 2)
+    (is (null (clawmacs::initialize-chat-frame-compose-pane frame nil)))
+    (is (null (clawmacs::chat-frame-compose-synchronized-buffer frame)))
+    (is (string= "restored before panes" (message-text message)))
+    (is (= 8 (message-point-absolute-offset message)))
+    (is (= 2 (message-mark-absolute-offset message)))))
+
+(test chat-frame-top-level-pane-initialization-hydrates-the-initial-draft
+  "The post-generation top-level seam hydrates before marking the frame live."
   (let* ((source (make-buffer "initial-compose-source"
                               :session-persistence-mode :ephemeral))
          (message (buffer-input-message source))
@@ -774,17 +791,29 @@
                  :buffer source))
          (compose (make-instance 'synthetic-chat-compose-pane
                                  :initial-contents ""))
+         (original-find-pane (symbol-function 'clim:find-pane-named))
          (clawmacs::*buffer-ring* (list source)))
-    (setf (synthetic-chat-compose-pane-frame compose) frame)
+    (setf (synthetic-chat-compose-pane-frame compose) frame
+          (clawmacs::chat-frame-lifecycle-state frame) :starting)
     (set-message-text message "restored initial draft")
     (set-message-point-from-absolute-offset message 12)
     (clawmacs:set-message-mark-from-absolute-offset message 3)
-    (clawmacs::initialize-chat-frame-compose-pane frame compose)
+    (with-mcclim-test-function-override
+        (clim:find-pane-named (requested-frame pane-name)
+          (if (eq requested-frame frame)
+              (case pane-name
+                (clawmacs::compose compose)
+                (clawmacs::transcript nil)
+                (otherwise
+                 (funcall original-find-pane requested-frame pane-name)))
+              (funcall original-find-pane requested-frame pane-name)))
+      (clawmacs::initialize-chat-frame-top-level-panes frame))
     (is (string= "restored initial draft" (clim:gadget-value compose)))
     (is (= 12 (clawmacs::chat-compose-pane-point-offset compose)))
     (is (= 3 (clawmacs::chat-compose-pane-mark-offset compose)))
     (is (eq source
             (clawmacs::chat-frame-compose-synchronized-buffer frame)))
+    (is (eq :starting (clawmacs::chat-frame-lifecycle-state frame)))
     (let ((*synthetic-compose-gadget-value-writes* 0))
       (with-mcclim-test-function-override
           (clawmacs::request-chat-frame-redisplay (requested-frame)
