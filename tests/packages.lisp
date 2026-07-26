@@ -46,6 +46,10 @@
   :description "Bitmap font editor tests"
   :in clawmacs-suite)
 
+(def-suite appearance-suite
+  :description "Appearance declaration and resolution tests"
+  :in clawmacs-suite)
+
 (def-suite sexed-suite
   :description "Agent-oriented s-expression editing tests"
   :in clawmacs-suite)

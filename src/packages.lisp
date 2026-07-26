@@ -344,6 +344,80 @@
    #:font-editor-export-bdf-command
    #:font-editor-set-sample-string-command
    #:font-editor-extract-genera-fonts-command
+
+   ;; Appearance declarations and resolution
+   #:*appearance-unspecified*
+   #:appearance-unspecified-p
+   #:+appearance-logical-sizes+
+   #:+appearance-relative-sizes+
+   #:appearance-condition
+   #:appearance-condition-origin
+   #:appearance-condition-role
+   #:appearance-condition-axis
+   #:appearance-condition-value
+   #:appearance-condition-path
+   #:appearance-condition-port
+   #:appearance-condition-available-choices
+   #:appearance-condition-fatal-p
+   #:appearance-condition-suggested-repairs
+   #:unknown-appearance-role
+   #:invalid-appearance-component
+   #:appearance-theme-cycle
+   #:appearance-role-cycle
+   #:missing-appearance-parent
+   #:unsupported-role-axis
+   #:ambiguous-font-family
+   #:ambiguous-font-face
+   #:font-unavailable
+   #:font-size-unavailable
+   #:relative-size-base-invalid
+   #:device-font-port-mismatch
+   #:appearance-contrast-warning
+   #:appearance-live-update-unsupported
+   #:appearance-activation-failed
+   #:appearance-typography-spec
+   #:make-appearance-typography-spec
+   #:appearance-typography-spec-family
+   #:appearance-typography-spec-face
+   #:appearance-typography-spec-size
+   #:appearance-ink-spec
+   #:make-appearance-ink-spec
+   #:appearance-ink-spec-foreground
+   #:appearance-surface-spec
+   #:make-appearance-surface-spec
+   #:appearance-surface-spec-background
+   #:appearance-decoration-spec
+   #:make-appearance-decoration-spec
+   #:appearance-decoration-spec-kind
+   #:appearance-decoration-spec-parameters
+   #:appearance-role-style
+   #:make-appearance-role-style
+   #:appearance-role-style-typography
+   #:appearance-role-style-foreground-ink
+   #:appearance-role-style-surface
+   #:appearance-role-style-decoration
+   #:appearance-role-definition
+   #:make-appearance-role-definition
+   #:appearance-role-definition-id
+   #:appearance-role-definition-kind
+   #:appearance-role-definition-documentation
+   #:appearance-role-definition-fallback-role
+   #:appearance-role-definition-supported-axes
+   #:appearance-role-definition-owner
+   #:appearance-role-supported-axes
+   #:appearance-role-supports-axis-p
+   #:validate-appearance-role-style
+   #:appearance-theme-definition
+   #:make-appearance-theme-definition
+   #:appearance-theme-definition-id
+   #:appearance-theme-definition-documentation
+   #:appearance-theme-definition-parent-theme
+   #:appearance-theme-definition-role-overlays
+   #:appearance-theme-definition-owner
+   #:appearance-profile
+   #:make-appearance-profile
+   #:appearance-profile-selected-theme
+   #:appearance-profile-role-overrides
    #:buffer-clear-history-before-input
    #:buffer-insert-read-only-message
    #:buffer-insert-agent-message
