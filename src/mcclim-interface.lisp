@@ -154,6 +154,12 @@
   (:documentation
    "One immutable appearance request delivered to the owning CLIM frame process."))
 
+(defclass clawmacs-chat-appearance-catalog-event (clim:window-manager-event)
+  ((reservation :initarg :reservation
+                :reader chat-appearance-catalog-event-reservation)
+   (token :initarg :token :reader chat-appearance-catalog-event-token))
+  (:documentation "An admitted package appearance catalog transition."))
+
 (defclass clawmacs-chat-font-inventory-refresh-event (clim:window-manager-event)
   ()
   (:documentation
@@ -163,6 +169,57 @@
   "When non-nil, buffer display hooks should not queue chat redisplay events.
 This is bound while a chat frame is already applying provider stream state to
 avoid recursive update→notify→redisplay loops in the CLIM event thread.")
+
+(defvar *package-appearance-live-chat-frames* nil)
+(defvar *package-appearance-live-chat-frames-lock*
+  (bt:make-lock "package appearance live chat frames"))
+(defvar *package-appearance-frame-batch-lock*
+  (bt:make-lock "package appearance frame batch"))
+(defvar *active-package-appearance-frame-batch* nil)
+(defvar *package-appearance-user-edit-admitted-p* nil)
+(defparameter *appearance-package-transition-timeout-seconds* 5)
+(defvar *appearance-package-prepared-frame-resume-hook* (constantly nil)
+  "Test/diagnostic seam run outside the barrier lock before target install.")
+
+(defun call-with-package-appearance-user-edit (continuation)
+  "Run CONTINUATION only when no package appearance batch owns admission.
+
+The acquisition is deliberately nonblocking: a frame event loop reports busy
+instead of parking behind Safe Reload and deadlocking a frame barrier."
+  (if *package-appearance-user-edit-admitted-p*
+      (funcall continuation)
+      (progn
+        (unless (bt:acquire-lock *package-appearance-frame-batch-lock* nil)
+          (error "Appearance editing is busy during package reconciliation."))
+        (unwind-protect
+             (let ((*package-appearance-user-edit-admitted-p* t))
+               (funcall continuation))
+          (bt:release-lock *package-appearance-frame-batch-lock*)))))
+
+(defun package-appearance-live-chat-frames ()
+  (bt:with-lock-held (*package-appearance-live-chat-frames-lock*)
+    (copy-list *package-appearance-live-chat-frames*)))
+
+(defun register-package-appearance-live-chat-frame (frame)
+  ;; Catalog publication already takes the catalog lock before enumerating the
+  ;; live-frame registry.  Registration takes the same locks in the same order,
+  ;; so a frame is either absent from the complete transaction or joins with
+  ;; its exact committed catalog after that transaction finishes.
+  (bt:with-lock-held (*package-appearance-frame-batch-lock*)
+    (bt:with-lock-held (clawmacs::*package-appearance-catalog-lock*)
+      (bt:with-lock-held (*package-appearance-live-chat-frames-lock*)
+        (setf (slot-value frame 'appearance-catalog)
+              (clawmacs::package-appearance-current-catalog-under-lock))
+        (pushnew frame *package-appearance-live-chat-frames* :test #'eq))))
+  frame)
+
+(defun unregister-package-appearance-live-chat-frame (frame)
+  (bt:with-lock-held (*package-appearance-frame-batch-lock*)
+    (bt:with-lock-held (clawmacs::*package-appearance-catalog-lock*)
+      (bt:with-lock-held (*package-appearance-live-chat-frames-lock*)
+        (setf *package-appearance-live-chat-frames*
+              (remove frame *package-appearance-live-chat-frames* :test #'eq)))))
+  frame)
 
 (defparameter *chat-transcript-follow-tail* t
   "When non-nil, the chat transcript scrolls to the bottom after redisplay.")
@@ -1586,7 +1643,7 @@ rendering state."
                        :documentation
                        "Immutable profile selected for this frame at construction.")
    (appearance-catalog :initarg :appearance-catalog
-                       :initform (make-classic-appearance-catalog)
+                       :initform (current-package-appearance-catalog)
                        :reader chat-frame-appearance-catalog
                        :documentation
                        "Immutable appearance declarations resolved by this frame.")
@@ -1844,13 +1901,15 @@ rendering state."
 
 (defun appearance-editor-stage-profile (frame profile operation)
   "Install an immutable candidate for PROFILE without changing active state."
-  (setf (slot-value frame 'appearance-staged-candidate)
-        (make-appearance-candidate profile))
-  (appearance-editor-record-status frame operation :staged)
-  (when (chat-frame-appearance-editor-buffer frame)
-    (notify-buffer-display-change
-     (chat-frame-appearance-editor-buffer frame) :appearance-staged))
-  (chat-frame-appearance-staged-candidate frame))
+  (call-with-package-appearance-user-edit
+   (lambda ()
+     (setf (slot-value frame 'appearance-staged-candidate)
+           (make-appearance-candidate profile))
+     (appearance-editor-record-status frame operation :staged)
+     (when (chat-frame-appearance-editor-buffer frame)
+       (notify-buffer-display-change
+        (chat-frame-appearance-editor-buffer frame) :appearance-staged))
+     (chat-frame-appearance-staged-candidate frame))))
 
 (defun appearance-editor-resolved-font-style (frame profile role)
   "Return ROLE's already validated port text style for PROFILE, or NIL."
@@ -1881,7 +1940,9 @@ rendering state."
 
 (defun appearance-editor-stage-role-font (frame size)
   "Stage the selected role's named port font at SIZE."
-  (let* ((profile (appearance-editor-profile frame))
+  (call-with-package-appearance-user-edit
+   (lambda ()
+    (let* ((profile (appearance-editor-profile frame))
          (role (chat-frame-appearance-editor-role frame))
          (family (chat-frame-appearance-editor-font-family frame))
          (face (chat-frame-appearance-editor-font-face frame))
@@ -1933,7 +1994,7 @@ rendering state."
                     (appearance-profile-structural-key
                      (appearance-candidate-profile candidate))
                     :text-style resolved-text-style))
-        candidate))))
+        candidate))))))
 
 (defun appearance-editor-open-buffer (frame origin)
   "Build or focus FRAME's dedicated appearance presentation buffer."
@@ -1986,7 +2047,9 @@ rendering state."
 (defun save-appearance-command (frame)
   "Atomically persist FRAME's staged profile without activating it."
   (setf frame (appearance-command-frame frame))
-  (let ((candidate (chat-frame-appearance-staged-candidate frame)))
+  (call-with-package-appearance-user-edit
+   (lambda ()
+    (let ((candidate (chat-frame-appearance-staged-candidate frame)))
     (if (null candidate)
         (appearance-editor-record-status frame :save :no-staged-candidate)
         (handler-case
@@ -1997,18 +2060,23 @@ rendering state."
                                                :path (appearance-config-pathname)))
           (error (condition)
             (appearance-editor-record-status
-             frame :save :failed :diagnostic (princ-to-string condition)))))))
+             frame :save :failed :diagnostic
+             (princ-to-string condition)))))))))
 
 (defun revert-staged-appearance-command (frame)
   "Discard FRAME's staged candidate while retaining active state."
   (setf frame (appearance-command-frame frame))
-  (setf (slot-value frame 'appearance-staged-candidate) nil)
-  (appearance-editor-record-status frame :revert :reverted))
+  (call-with-package-appearance-user-edit
+   (lambda ()
+     (setf (slot-value frame 'appearance-staged-candidate) nil)
+     (appearance-editor-record-status frame :revert :reverted))))
 
 (defun reload-appearance-file-command (frame)
   "Reload a valid profile into staging, retaining active and staged state on failure."
   (setf frame (appearance-command-frame frame))
-  (let ((active (chat-frame-appearance-profile frame))
+  (call-with-package-appearance-user-edit
+   (lambda ()
+    (let ((active (chat-frame-appearance-profile frame))
         (old-staged (chat-frame-appearance-staged-candidate frame)))
     (multiple-value-bind (profile loaded-p)
         (reload-appearance-file-profile active)
@@ -2019,7 +2087,8 @@ rendering state."
             (appearance-editor-record-status frame :reload :loaded))
           (progn
             (setf (slot-value frame 'appearance-staged-candidate) old-staged)
-            (appearance-editor-record-status frame :reload :retained-active))))))
+            (appearance-editor-record-status
+             frame :reload :retained-active))))))))
 
 (defun describe-current-appearance-command (frame)
   "Return a structured distinction between active, staged, and persisted state."
@@ -2028,7 +2097,10 @@ rendering state."
       (multiple-value-bind (disk-profile disk-status)
           (read-appearance-profile-file)
         (when (eq disk-status :valid)
-          (setf (chat-frame-appearance-persisted-profile frame) disk-profile))
+          (call-with-package-appearance-user-edit
+           (lambda ()
+             (setf (chat-frame-appearance-persisted-profile frame)
+                   disk-profile))))
         (let ((description
                 (list :active (chat-frame-appearance-profile frame)
                       :staged (let ((candidate
@@ -3026,7 +3098,263 @@ handler, which is delivered by the frame's normal CLIM event process."
   (unless (typep candidate 'appearance-candidate)
     (error-appearance-condition 'invalid-appearance-component
                                 :axis :appearance-candidate :value candidate))
-  (queue-chat-frame-appearance-activation-event frame candidate))
+  (call-with-package-appearance-user-edit
+   (lambda ()
+     (queue-chat-frame-appearance-activation-event frame candidate))))
+
+(defun package-appearance-frame-transition-plan (frame catalog)
+  "Admit FRAME's complete replacement bundle without changing frame state."
+  (let* ((expected-catalog (chat-frame-appearance-catalog frame))
+         (current (chat-frame-appearance-profile frame))
+         (expected-bundle (chat-frame-appearance-active-bundle frame))
+         (expected-revision (chat-frame-appearance-revision frame))
+         (expected-staged (chat-frame-appearance-staged-candidate frame))
+         (expected-persisted
+           (chat-frame-appearance-persisted-profile frame))
+         (expected-font-inventory
+           (chat-frame-appearance-font-inventory frame))
+         (expected-font-generation
+           (chat-frame-appearance-font-inventory-generation frame))
+         (theme (appearance-profile-selected-theme current))
+         (profile (if (find-appearance-theme-definition catalog theme)
+                      current
+                      (make-appearance-profile
+                       :selected-theme :classic
+                       :strict-contrast (appearance-profile-strict-contrast current)
+                       :role-overrides (appearance-profile-role-overrides current))))
+         (port (chat-frame-appearance-live-port frame))
+         (staged expected-staged)
+         (persisted expected-persisted))
+    (handler-case
+        (handler-bind
+            ((appearance-contrast-warning
+               (lambda (condition)
+                 (let ((restart (find-restart 'muffle-warning condition)))
+                   (when restart (invoke-restart restart))))))
+          (progn
+          (unless port
+            (error "A running frame without an adopted port cannot classify appearance."))
+          ;; This validates all roles/overlays and thus rejects a fallback
+          ;; which would leave a persisted or staged profile dangling.
+          (let* ((active
+                   (or expected-bundle
+                       (resolve-appearance-profile-bundle
+                        expected-catalog current
+                        :profile-revision expected-revision
+                        :font-inventory-generation
+                        expected-font-generation
+                        :port-identity port)))
+                 (bundle
+                   (resolve-appearance-profile-bundle
+                    catalog profile
+                    :profile-revision
+                    (1+ expected-revision)
+                    :font-inventory-generation
+                    expected-font-generation
+                    :port-identity port))
+                 (classification
+                   (classify-appearance-bundle-delta catalog active bundle))
+                 (classification-status
+                   (appearance-activation-classification-status
+                    classification)))
+            (validate-appearance-profile-contrast catalog profile)
+            ;; Safe Reload/catalog reconciliation must never discard a valid
+            ;; unsaved candidate or persisted profile.  Validate both against
+            ;; the proposed catalog before admitting any frame transition; a
+            ;; removed package theme in either is a refusal, not silent loss.
+            (dolist (candidate-profile
+                     (remove nil
+                             (list (and staged
+                                        (appearance-candidate-profile staged))
+                                   persisted)))
+              (validate-appearance-profile-contrast catalog candidate-profile)
+              (resolve-appearance-profile-bundle
+               catalog candidate-profile
+               :profile-revision expected-revision
+               :font-inventory-generation
+               expected-font-generation
+               :port-identity port))
+            (case classification-status
+              ((:no-op :render-boundary-live)
+               (list :status (if (eq classification-status :no-op)
+                                 :no-op
+                                 :ready)
+                     :profile profile
+                     :bundle bundle
+                     :classification classification
+                     :staged-candidate staged
+                     :persisted-profile persisted
+                     :expected-catalog expected-catalog
+                     :expected-profile current
+                     :expected-bundle expected-bundle
+                     :expected-revision expected-revision
+                     :expected-staged expected-staged
+                     :expected-persisted expected-persisted
+                     :expected-font-inventory expected-font-inventory
+                     :expected-font-generation expected-font-generation))
+              ((:restart-required :unsupported)
+               (list :status :failed
+                     :condition
+                     (make-appearance-condition
+                      'appearance-live-update-unsupported
+                      :axis :package-catalog-transition
+                      :value classification-status
+                      :suggested-repairs '(:restart-clawmacs))))
+              (otherwise
+               (list :status :failed :condition classification-status))))))
+      (condition (condition)
+        (list :status :failed :condition condition)))))
+
+(defun reserve-package-appearance-frame-transition (frame plan catalog token)
+  "Return a side-effect-free event reservation for one admitted transition."
+  (let ((sheet (chat-frame-grafted-top-level-sheet frame))
+        (profile (getf plan :profile))
+        (bundle (getf plan :bundle)))
+    (let ((reservation
+            (and sheet profile bundle
+                 (list :sheet sheet
+               :frame frame
+               :catalog catalog
+               :profile profile
+               :bundle bundle
+               :target-revision
+               (resolved-appearance-bundle-profile-revision bundle)
+               :token token
+               :expected-catalog (getf plan :expected-catalog)
+               :expected-profile (getf plan :expected-profile)
+               :expected-bundle (getf plan :expected-bundle)
+               :expected-revision (getf plan :expected-revision)
+               :expected-staged (getf plan :expected-staged)
+               :expected-persisted (getf plan :expected-persisted)
+               :expected-font-inventory
+               (getf plan :expected-font-inventory)
+               :expected-font-generation
+               (getf plan :expected-font-generation)
+               :expected-resolved-roles
+               (copy-package-runtime-hash-table
+                (chat-frame-appearance-resolved-roles frame))
+               :expected-role-keys
+               (copy-package-runtime-hash-table
+                (chat-frame-appearance-role-keys frame))
+               :origin-frame-p
+               (eq frame clim:*application-frame*)))))
+      (and reservation
+           (package-appearance-reservation-current-p reservation)
+           reservation))))
+
+(defun release-package-appearance-frame-transition (reservation)
+  "Queue RESERVATION only after the catalog transaction is committed."
+  (when (getf reservation :origin-frame-p)
+    (return-from release-package-appearance-frame-transition t))
+  (handler-case
+      (let ((sheet (getf reservation :sheet)))
+        (clim:queue-event
+         sheet
+         (make-instance 'clawmacs-chat-appearance-catalog-event
+                        :sheet sheet
+                        :reservation reservation
+                        :token (getf reservation :token)))
+        t)
+    (error () nil)))
+
+(defun appearance-package-transition-notify-all (token)
+  #+sbcl
+  (sb-thread:condition-broadcast
+   (clawmacs::appearance-package-transition-token-condition token))
+  #-sbcl
+  (bt:condition-notify
+   (clawmacs::appearance-package-transition-token-condition token)))
+
+(defun wait-for-appearance-package-transition-count
+    (token count-reader expected deadline &key (stop-on-failure-p t))
+  "Wait with TOKEN locked until COUNT-READER reaches EXPECTED or fails."
+  (loop
+    (when (and stop-on-failure-p
+               (clawmacs::appearance-package-transition-token-failure token))
+      (return nil))
+    (when (>= (funcall count-reader token) expected)
+      (return t))
+    (when (>= (get-internal-real-time) deadline)
+      (setf (clawmacs::appearance-package-transition-token-failure token)
+            :frame-transition-timeout)
+      (return nil))
+    (bt:condition-wait
+     (clawmacs::appearance-package-transition-token-condition token)
+     (clawmacs::appearance-package-transition-token-lock token)
+     :timeout 0.05)))
+
+(defun finalize-package-appearance-frame-transition
+    (token reservations commit-function rollback-function)
+  "Run a two-phase owning-frame barrier around global catalog publication."
+  (declare (ignore rollback-function))
+  (let ((deadline (+ (get-internal-real-time)
+                     (* *appearance-package-transition-timeout-seconds*
+                        internal-time-units-per-second))))
+    (bt:with-lock-held
+        ((clawmacs::appearance-package-transition-token-lock token))
+      (let ((expected
+              (clawmacs::appearance-package-transition-token-expected-count
+               token))
+            (origin
+              (find-if (lambda (reservation)
+                         (getf reservation :origin-frame-p))
+                       reservations)))
+        ;; A command may initiate reload on its own CLIM event thread.  That
+        ;; frame cannot consume a queued barrier event while this coordinator
+        ;; is waiting, so stage and commit its exact reservation synchronously
+        ;; on the already-correct owning process.
+        (when origin
+          (unless (package-appearance-reservation-current-p origin)
+            (setf
+             (clawmacs::appearance-package-transition-token-failure token)
+             :origin-frame-state-changed))
+          (incf
+           (clawmacs::appearance-package-transition-token-ready-count token)))
+        (unless
+            (wait-for-appearance-package-transition-count
+             token
+             #'clawmacs::appearance-package-transition-token-ready-count
+             expected deadline)
+          (setf (clawmacs::appearance-package-transition-token-state token)
+                :aborted)
+          (appearance-package-transition-notify-all token)
+          (error "Appearance frame transition preparation failed: ~A"
+                 (clawmacs::appearance-package-transition-token-failure token)))
+        (funcall commit-function)
+        (setf (clawmacs::appearance-package-transition-token-state token)
+              :committing)
+        (appearance-package-transition-notify-all token)
+        ;; Every non-origin owning process is now parked in its event handler,
+        ;; and the origin is already executing on its owner.  Nothing can
+        ;; change the captured slots between prepare and this bounded install,
+        ;; so commit contains no fallible resolution or compensating rollback.
+        (when origin
+          (apply-package-appearance-frame-reservation-target origin)
+          (incf
+           (clawmacs::appearance-package-transition-token-applied-count token)))
+        (unless
+            (wait-for-appearance-package-transition-count
+             token
+             #'clawmacs::appearance-package-transition-token-applied-count
+             expected
+             (+ (get-internal-real-time)
+                (* *appearance-package-transition-timeout-seconds*
+                   internal-time-units-per-second))
+             :stop-on-failure-p nil)
+          ;; Global state is already committed.  Never manufacture split-brain
+          ;; by unwinding it after any frame has installed the same commit.
+          ;; Prepared owners retain their immutable reservation and complete
+          ;; recovery-forward when their event process resumes.
+          (ignore-errors
+            (warn
+             "Committed appearance transition is still settling on ~D frame(s)."
+             (- expected
+                (clawmacs::appearance-package-transition-token-applied-count
+                 token)))))
+        (setf (clawmacs::appearance-package-transition-token-state token)
+              :committed)
+        (appearance-package-transition-notify-all token)
+        t))))
 
 (defun chat-frame-appearance-live-port (frame)
   "Return FRAME's public frame-manager port only after engraftment.
@@ -3212,11 +3540,11 @@ keys only; pane construction and low-level rendering objects are untouched."
     (push diagnostic (slot-value frame 'appearance-activation-diagnostics)))
   result)
 
-(defun handle-chat-frame-appearance-activation (frame candidate)
+(defun %handle-chat-frame-appearance-activation (frame candidate)
   "Resolve and conditionally publish CANDIDATE on FRAME's CLIM event process."
   (let ((port (chat-frame-appearance-live-port frame)))
     (unless port
-      (return-from handle-chat-frame-appearance-activation
+      (return-from %handle-chat-frame-appearance-activation
         (record-chat-frame-appearance-result
          frame
          (%make-appearance-activation-result
@@ -3245,6 +3573,12 @@ keys only; pane construction and low-level rendering objects are untouched."
        (setf (slot-value frame 'appearance-staged-candidate) candidate))
       ((:failed :no-op) nil))
       (record-chat-frame-appearance-result frame result))))
+
+(defun handle-chat-frame-appearance-activation (frame candidate)
+  "Admit one owning-process appearance activation without blocking on reload."
+  (call-with-package-appearance-user-edit
+   (lambda ()
+     (%handle-chat-frame-appearance-activation frame candidate))))
 
 (defun handle-queued-chat-frame-appearance-activation (frame candidate)
   "Apply CANDIDATE only while it remains FRAME's exact staged request."
@@ -3531,6 +3865,28 @@ contains the expanded pane and the pointer-documentation pane below it."
                           :axis :activation :value (format nil "~A" condition))))))
             (record-chat-frame-appearance-result frame result)))))))
 
+(defun handle-chat-frame-font-inventory-refresh (frame)
+  "Refresh FRAME's fonts only when package reconciliation is not active."
+  (handler-case
+      (call-with-package-appearance-user-edit
+       (lambda ()
+         (let ((result
+                 (refresh-chat-frame-font-inventory
+                  frame :invalidate-cache t)))
+           (when result
+             (record-chat-frame-appearance-result frame result)))))
+    (error (condition)
+      (record-chat-frame-appearance-result
+       frame
+       (%make-appearance-activation-result
+        :status :failed
+        :diagnostics
+        (list
+         (make-appearance-condition
+          'appearance-activation-failed
+          :axis :font-inventory-refresh
+          :value (format nil "~A" condition))))))))
+
 (defmethod clim:handle-event
     ((sheet clime:top-level-sheet-mixin)
      (event clawmacs-chat-font-inventory-refresh-event))
@@ -3538,9 +3894,130 @@ contains the expanded pane and the pointer-documentation pane below it."
   (declare (ignore event))
   (let ((frame (ignore-errors (clim:pane-frame sheet))))
     (when (typep frame 'clawmacs-chat-frame)
-      (let ((result (refresh-chat-frame-font-inventory frame :invalidate-cache t)))
-        (when result
-          (record-chat-frame-appearance-result frame result))))))
+      (handle-chat-frame-font-inventory-refresh frame))))
+
+(defun publish-admitted-package-appearance-frame-state
+    (frame catalog profile bundle &key revision)
+  "Atomically install one preclassified package appearance transition.
+
+Only the owning CLIM event handler calls this in production.  Keeping the
+bounded frame-state commit separate makes the no-skew invariant deterministic
+to test without manufacturing a backend top-level sheet."
+  (setf (slot-value frame 'appearance-catalog) catalog
+        (chat-frame-appearance-profile frame) profile
+        (slot-value frame 'appearance-active-bundle) bundle
+        (slot-value frame 'appearance-revision)
+        (or revision
+            (resolved-appearance-bundle-profile-revision bundle)))
+  (clrhash (chat-frame-appearance-resolved-roles frame))
+  (clrhash (chat-frame-appearance-role-keys frame))
+  (ignore-errors (request-chat-frame-redisplay frame))
+  bundle)
+
+(defun apply-package-appearance-frame-reservation-target (reservation)
+  "Install RESERVATION's admitted target on its owning frame."
+  (let ((frame (getf reservation :frame)))
+    (publish-admitted-package-appearance-frame-state
+     frame
+     (getf reservation :catalog)
+     (getf reservation :profile)
+     (getf reservation :bundle)
+     :revision (getf reservation :target-revision))
+    (when (getf reservation :target-state-p)
+      (setf (slot-value frame 'appearance-staged-candidate)
+            (getf reservation :target-staged)
+            (chat-frame-appearance-persisted-profile frame)
+            (getf reservation :target-persisted)))
+    (when (getf reservation :target-font-state-p)
+      (setf (slot-value frame 'appearance-font-inventory)
+            (getf reservation :target-font-inventory)
+            (slot-value frame 'appearance-font-inventory-generation)
+            (getf reservation :target-font-generation)))
+    (when (getf reservation :target-cache-p)
+      (clrhash (chat-frame-appearance-resolved-roles frame))
+      (maphash
+       (lambda (key value)
+         (setf (gethash key (chat-frame-appearance-resolved-roles frame))
+               value))
+       (getf reservation :target-resolved-roles))
+      (clrhash (chat-frame-appearance-role-keys frame))
+      (maphash
+       (lambda (key value)
+         (setf (gethash key (chat-frame-appearance-role-keys frame)) value))
+       (getf reservation :target-role-keys)))
+    frame))
+
+(defun package-appearance-reservation-current-p (reservation)
+  "Return true when RESERVATION still names the exact captured frame state."
+  (let ((frame (getf reservation :frame)))
+    (and (eq (getf reservation :expected-catalog)
+             (chat-frame-appearance-catalog frame))
+         (eq (getf reservation :expected-profile)
+             (chat-frame-appearance-profile frame))
+         (eq (getf reservation :expected-bundle)
+             (chat-frame-appearance-active-bundle frame))
+         (= (getf reservation :expected-revision)
+            (chat-frame-appearance-revision frame))
+         (eq (getf reservation :expected-staged)
+             (chat-frame-appearance-staged-candidate frame))
+         (eq (getf reservation :expected-persisted)
+             (chat-frame-appearance-persisted-profile frame))
+         (eq (getf reservation :expected-font-inventory)
+             (chat-frame-appearance-font-inventory frame))
+         (= (getf reservation :expected-font-generation)
+            (chat-frame-appearance-font-inventory-generation frame)))))
+
+(defun handle-package-appearance-frame-reservation
+    (frame reservation token)
+  "Participate in TOKEN from FRAME's owning event process."
+  (let ((commit-p nil))
+    (bt:with-lock-held
+        ((clawmacs::appearance-package-transition-token-lock token))
+      (unless (and (typep frame 'clawmacs-chat-frame)
+                   (eq frame (getf reservation :frame))
+                   (package-appearance-reservation-current-p reservation))
+        (setf (clawmacs::appearance-package-transition-token-failure token)
+              :frame-state-changed))
+      (incf (clawmacs::appearance-package-transition-token-ready-count token))
+      (appearance-package-transition-notify-all token)
+      (loop :while
+              (eq :preparing
+                  (clawmacs::appearance-package-transition-token-state token))
+            :do
+               (bt:condition-wait
+                (clawmacs::appearance-package-transition-token-condition token)
+                (clawmacs::appearance-package-transition-token-lock token)))
+      (setf commit-p
+            (member
+             (clawmacs::appearance-package-transition-token-state token)
+             '(:committing :committed)
+             :test #'eq)))
+    (when commit-p
+      ;; Preparation parked this owning event loop after its only CAS.  The
+      ;; target install contains no resolution, I/O, or extension callback.
+      ;; The diagnostic hook is outside the token lock so a stalled owner can
+      ;; never prevent the coordinator from publishing recovery-forward.
+      (funcall *appearance-package-prepared-frame-resume-hook*
+               frame reservation)
+      (apply-package-appearance-frame-reservation-target reservation)
+      (bt:with-lock-held
+          ((clawmacs::appearance-package-transition-token-lock token))
+        (incf
+         (clawmacs::appearance-package-transition-token-applied-count token))
+        (appearance-package-transition-notify-all token))))
+  (when (eq :committed
+            (clawmacs::appearance-package-transition-token-state token))
+    (ignore-errors (request-chat-frame-redisplay frame)))
+  nil)
+
+(defmethod clim:handle-event
+    ((sheet clime:top-level-sheet-mixin)
+     (event clawmacs-chat-appearance-catalog-event))
+  "Publish an already-admitted catalog transition on FRAME's event process."
+  (handle-package-appearance-frame-reservation
+   (ignore-errors (clim:pane-frame sheet))
+   (chat-appearance-catalog-event-reservation event)
+   (chat-appearance-catalog-event-token event)))
 
 (defun run-chat-frame-buffer-command (frame command)
   "Run COMMAND on FRAME's buffer and refresh frame UI state."
@@ -4427,6 +4904,7 @@ remaining buffers from being cancelled, or leave the frame marked running."
       (file-debug-event "frame-stopped"
                         :buffer-name
                         (buffer-name (chat-frame-buffer frame)))))
+  (unregister-package-appearance-live-chat-frame frame)
   frame)
 
 (defun call-with-chat-frame-runtime (frame continuation)
@@ -4442,6 +4920,7 @@ remaining buffers from being cancelled, or leave the frame marked running."
              (setf (chat-frame-lifecycle-state frame) :starting
                    (chat-frame-redisplay-pending-p frame) nil
                    (chat-frame-redisplay-handling-p frame) nil))
+           (register-package-appearance-live-chat-frame frame)
            (setf hook
                  (lambda (buf reason)
                    (when (and (or (eq reason :runtime-stopped-pending)
@@ -4454,6 +4933,223 @@ remaining buffers from being cancelled, or leave the frame marked running."
 
 (defmethod clim:run-frame-top-level :around ((frame clawmacs-chat-frame) &key)
   (call-with-chat-frame-runtime frame (lambda () (call-next-method))))
+
+(defun snapshot-package-appearance-frame-state (frame)
+  "Capture FRAME's exact package-reconciliation state."
+  (list :frame frame
+        :sheet (chat-frame-grafted-top-level-sheet frame)
+        :catalog (chat-frame-appearance-catalog frame)
+        :profile (chat-frame-appearance-profile frame)
+        :bundle (chat-frame-appearance-active-bundle frame)
+        :revision (chat-frame-appearance-revision frame)
+        :staged (chat-frame-appearance-staged-candidate frame)
+        :persisted (chat-frame-appearance-persisted-profile frame)
+        :font-inventory (chat-frame-appearance-font-inventory frame)
+        :font-generation
+        (chat-frame-appearance-font-inventory-generation frame)
+        :resolved-roles
+        (copy-package-runtime-hash-table
+         (chat-frame-appearance-resolved-roles frame))
+        :role-keys
+        (copy-package-runtime-hash-table
+         (chat-frame-appearance-role-keys frame))))
+
+(defun copy-package-appearance-declaration-registry ()
+  "Return a private owner/declaration registry snapshot."
+  (copy-package-runtime-hash-table
+   clawmacs::*package-appearance-declarations*))
+
+(defun restore-package-appearance-declaration-registry (snapshot)
+  "Atomically publish a private declaration-registry copy."
+  (setf clawmacs::*package-appearance-declarations*
+        (copy-package-runtime-hash-table snapshot)))
+
+(defun begin-package-appearance-frame-batch ()
+  "Exclude frame registration and snapshot the whole appearance transaction."
+  (bt:acquire-lock *package-appearance-frame-batch-lock*)
+  (handler-case
+      (bt:with-lock-held (clawmacs::*package-appearance-catalog-lock*)
+        (bt:with-lock-held (*package-appearance-live-chat-frames-lock*)
+          (let ((frames
+                  (mapcar #'snapshot-package-appearance-frame-state
+                          *package-appearance-live-chat-frames*)))
+            (setf *active-package-appearance-frame-batch*
+                  (list
+                   :lock-held-p t
+                   :catalog
+                   (clawmacs::package-appearance-current-catalog-under-lock)
+                   :declarations (copy-package-appearance-declaration-registry)
+                   :frames frames
+                   :expected-frames (copy-list frames)
+                   :concurrent-change-p nil)))))
+    (error (condition)
+      (bt:release-lock *package-appearance-frame-batch-lock*)
+      (error condition))))
+
+(defun package-appearance-reservation-matches-frame-snapshot-p
+    (reservation snapshot)
+  "Return true when RESERVATION began at the last batch checkpoint."
+  (and (eq (getf reservation :frame) (getf snapshot :frame))
+       (eq (getf reservation :expected-catalog) (getf snapshot :catalog))
+       (eq (getf reservation :expected-profile) (getf snapshot :profile))
+       (eq (getf reservation :expected-bundle) (getf snapshot :bundle))
+       (= (getf reservation :expected-revision) (getf snapshot :revision))
+       (eq (getf reservation :expected-staged) (getf snapshot :staged))
+       (eq (getf reservation :expected-persisted)
+           (getf snapshot :persisted))
+       (eq (getf reservation :expected-font-inventory)
+           (getf snapshot :font-inventory))
+       (= (getf reservation :expected-font-generation)
+          (getf snapshot :font-generation))))
+
+(defun package-appearance-reservation-target-snapshot (reservation)
+  "Return the logical committed frame state of RESERVATION."
+  (list
+   :frame (getf reservation :frame)
+   :sheet (getf reservation :sheet)
+   :catalog (getf reservation :catalog)
+   :profile (getf reservation :profile)
+   :bundle (getf reservation :bundle)
+   :revision (getf reservation :target-revision)
+   :staged (if (getf reservation :target-state-p)
+               (getf reservation :target-staged)
+               (getf reservation :expected-staged))
+   :persisted (if (getf reservation :target-state-p)
+                  (getf reservation :target-persisted)
+                  (getf reservation :expected-persisted))
+   :font-inventory
+   (if (getf reservation :target-font-state-p)
+       (getf reservation :target-font-inventory)
+       (getf reservation :expected-font-inventory))
+   :font-generation
+   (if (getf reservation :target-font-state-p)
+       (getf reservation :target-font-generation)
+       (getf reservation :expected-font-generation))
+   :resolved-roles
+   (if (getf reservation :target-cache-p)
+       (getf reservation :target-resolved-roles)
+       (make-hash-table :test #'equal))
+   :role-keys
+   (if (getf reservation :target-cache-p)
+       (getf reservation :target-role-keys)
+       (make-hash-table :test #'equal))))
+
+(defun checkpoint-package-appearance-frame-batch (reservations)
+  "Advance the batch CAS checkpoint after one package-owned commit."
+  (let ((batch *active-package-appearance-frame-batch*))
+    (when batch
+      (dolist (reservation reservations)
+        (let ((expected
+                (find (getf reservation :frame)
+                      (getf batch :expected-frames)
+                      :key (lambda (snapshot) (getf snapshot :frame))
+                      :test #'eq)))
+          (unless (and expected
+                       (package-appearance-reservation-matches-frame-snapshot-p
+                        reservation expected))
+            (setf (getf batch :concurrent-change-p) t))))
+      (setf (getf batch :expected-frames)
+            (mapcar
+             (lambda (snapshot)
+               (let ((reservation
+                       (find (getf snapshot :frame) reservations
+                             :key (lambda (entry)
+                                    (getf entry :frame))
+                             :test #'eq)))
+                 (if reservation
+                     (package-appearance-reservation-target-snapshot
+                      reservation)
+                     snapshot)))
+             (getf batch :frames)))))
+  nil)
+
+(defun make-package-appearance-batch-restoration-reservation
+    (frame-snapshot expected-snapshot token)
+  "Make a CAS reservation restoring one FRAME-SNAPSHOT."
+  (let ((frame (getf frame-snapshot :frame)))
+    (list
+     :sheet (getf frame-snapshot :sheet)
+     :frame frame
+     :catalog (getf frame-snapshot :catalog)
+     :profile (getf frame-snapshot :profile)
+     :bundle (getf frame-snapshot :bundle)
+     :target-revision (getf frame-snapshot :revision)
+     :target-state-p t
+     :target-staged (getf frame-snapshot :staged)
+     :target-persisted (getf frame-snapshot :persisted)
+     :target-font-state-p t
+     :target-font-inventory (getf frame-snapshot :font-inventory)
+     :target-font-generation (getf frame-snapshot :font-generation)
+     :target-cache-p t
+     :target-resolved-roles (getf frame-snapshot :resolved-roles)
+     :target-role-keys (getf frame-snapshot :role-keys)
+     :token token
+     :expected-catalog (getf expected-snapshot :catalog)
+     :expected-profile (getf expected-snapshot :profile)
+     :expected-bundle (getf expected-snapshot :bundle)
+     :expected-revision (getf expected-snapshot :revision)
+     :expected-staged (getf expected-snapshot :staged)
+     :expected-persisted (getf expected-snapshot :persisted)
+     :expected-font-inventory (getf expected-snapshot :font-inventory)
+     :expected-font-generation (getf expected-snapshot :font-generation)
+     :expected-resolved-roles (getf expected-snapshot :resolved-roles)
+     :expected-role-keys (getf expected-snapshot :role-keys)
+     :origin-frame-p (eq frame clim:*application-frame*))))
+
+(defun restore-package-appearance-frame-batch (snapshot)
+  "Restore all catalog, declaration, and owning-frame state in SNAPSHOT."
+  (when (getf snapshot :concurrent-change-p)
+    (error "Appearance batch rollback refused: a frame changed outside package reconciliation."))
+  (let ((token (make-appearance-package-transition-token))
+        (reservations nil))
+    (bt:with-lock-held (clawmacs::*package-appearance-catalog-lock*)
+      (setf reservations
+            (mapcar
+             (lambda (frame-snapshot)
+               (let ((expected
+                       (find (getf frame-snapshot :frame)
+                             (getf snapshot :expected-frames)
+                             :key (lambda (state) (getf state :frame))
+                             :test #'eq)))
+                 (make-package-appearance-batch-restoration-reservation
+                  frame-snapshot expected token)))
+             (getf snapshot :frames))
+            (appearance-package-transition-token-expected-count token)
+            (length reservations))
+      (unwind-protect
+           (progn
+             (dolist (reservation reservations)
+               (unless (release-package-appearance-frame-transition reservation)
+                 (error "Appearance batch restoration release failed.")))
+             (let ((current-catalog *package-appearance-catalog*)
+                   (current-declarations
+                     (copy-package-appearance-declaration-registry)))
+               (finalize-package-appearance-frame-transition
+                token reservations
+                (lambda ()
+                  (setf *package-appearance-catalog*
+                        (getf snapshot :catalog))
+                  (restore-package-appearance-declaration-registry
+                   (getf snapshot :declarations)))
+                (lambda ()
+                  (setf *package-appearance-catalog* current-catalog)
+                  (restore-package-appearance-declaration-registry
+                   current-declarations)))))
+        (unless
+            (member (appearance-package-transition-token-state token)
+                    '(:committing :committed)
+                    :test #'eq)
+          (abort-appearance-package-transition token)))))
+  t)
+
+(defun end-package-appearance-frame-batch (snapshot)
+  "Release the registration exclusion held by SNAPSHOT."
+  (when (getf snapshot :lock-held-p)
+    (when (eq snapshot *active-package-appearance-frame-batch*)
+      (setf *active-package-appearance-frame-batch* nil))
+    (setf (getf snapshot :lock-held-p) nil)
+    (bt:release-lock *package-appearance-frame-batch-lock*))
+  nil)
 
 (defun run-clawmacs-chat-frame
     (buffer &key window-title (appearance-profile (make-appearance-profile)))
@@ -4471,3 +5167,24 @@ the existing Drei/ESA pane declarations."
                       :buffer-name (buffer-name buffer)
                       :window-title (or window-title "Clawmacs"))
     (clim:run-frame-top-level frame)))
+
+;; The declaration layer remains CLIM-free; this is its concrete McCLIM
+;; adapter.  It plans before catalog publication and queues the actual frame
+;; change through the regular window-manager event loop.
+(setf *appearance-package-live-frame-provider* #'package-appearance-live-chat-frames
+      *appearance-package-frame-transition-planner*
+      #'package-appearance-frame-transition-plan
+      *appearance-package-frame-transition-reserver*
+      #'reserve-package-appearance-frame-transition
+      *appearance-package-frame-transition-publisher*
+      #'release-package-appearance-frame-transition
+      *appearance-package-frame-transition-finalizer*
+      #'finalize-package-appearance-frame-transition
+      *appearance-package-batch-checkpoint-function*
+      #'checkpoint-package-appearance-frame-batch
+      *package-appearance-batch-begin-function*
+      #'begin-package-appearance-frame-batch
+      *package-appearance-batch-restore-function*
+      #'restore-package-appearance-frame-batch
+      *package-appearance-batch-end-function*
+      #'end-package-appearance-frame-batch)

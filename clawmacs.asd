@@ -30,6 +30,7 @@
                              (:file "windows")
                              (:file "debug")
                              (:file "package-manager")
+                             (:file "appearance-packages")
                              (:file "modelaria-core")
                              (:file "artifactum-core")
                              (:file "media-core")

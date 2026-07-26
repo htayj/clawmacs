@@ -2743,6 +2743,171 @@ these tests exercise construction-time space requirements only."
             (clawmacs::chat-frame-appearance-staged-candidate frame)))
     (is (eq active (clawmacs::chat-frame-appearance-profile frame)))))
 
+(test package-appearance-catalog-plan-preserves-active-staged-and-persisted-state
+  "A same-owner catalog replacement validates, but never clears, frame-local profiles.
+
+The fake adopted port keeps this a deterministic frame transaction test: it
+exercises the normal complete-bundle resolver without opening a CLX window."
+  (let* ((buffer (make-buffer "appearance-package-preservation"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame :buffer buffer))
+         (active (clawmacs::chat-frame-appearance-profile frame))
+         (staged (make-appearance-candidate active))
+         (persisted (make-appearance-profile :selected-theme :classic))
+         (old-catalog (clawmacs::chat-frame-appearance-catalog frame))
+         (replacement
+           (make-appearance-catalog
+            :role-definitions (appearance-catalog-role-definitions old-catalog)
+            :theme-definitions (appearance-catalog-theme-definitions old-catalog)
+            :built-in-overlays (appearance-catalog-built-in-overlays old-catalog)
+            :generation (1+ (appearance-catalog-generation old-catalog))))
+         (clawmacs::*appearance-configuration-access-count* 23)
+         (clawmacs::*appearance-startup-resolution-count* 29))
+    (setf (slot-value frame 'clawmacs::appearance-staged-candidate) staged
+          (clawmacs::chat-frame-appearance-persisted-profile frame) persisted)
+    (with-mcclim-test-function-override
+        (clawmacs::chat-frame-appearance-live-port (requested-frame)
+          (declare (ignore requested-frame)) :package-test-port)
+      (let ((plan (clawmacs::package-appearance-frame-transition-plan
+                   frame replacement)))
+        (is (eq :no-op (getf plan :status)))
+        (is (eq active (getf plan :profile)))
+        (is (typep (getf plan :bundle) 'resolved-appearance-bundle))
+        (is (eq staged (getf plan :staged-candidate)))
+        (is (eq persisted (getf plan :persisted-profile)))))
+    ;; The planner/event preparation path is declaration-only: it neither
+    ;; reads preferences nor starts initialization, and it leaves both
+    ;; non-active profile objects untouched for the committed event.
+    (is (eq active (clawmacs::chat-frame-appearance-profile frame)))
+    (is (eq staged (clawmacs::chat-frame-appearance-staged-candidate frame)))
+    (is (eq persisted (clawmacs::chat-frame-appearance-persisted-profile frame)))
+    (is (= 23 clawmacs::*appearance-configuration-access-count*))
+    (is (= 29 clawmacs::*appearance-startup-resolution-count*))))
+
+(test package-appearance-active-theme-fallback-is-classified-and-published-atomically
+  "Package-theme removal falls back only when its complete bundle is live-safe."
+  (labels ((package-theme-catalog (overlays)
+             (let ((classic (make-classic-appearance-catalog)))
+               (make-appearance-catalog
+                :role-definitions
+                (appearance-catalog-role-definitions classic)
+                :theme-definitions
+                (append
+                 (appearance-catalog-theme-definitions classic)
+                 (list
+                  (make-appearance-theme-definition
+                   :id '(:package "org.example.theme" "active")
+                   :parent-theme :classic
+                   :role-overlays overlays
+                   :owner "org.example.theme")))
+                :built-in-overlays
+                (appearance-catalog-built-in-overlays classic)
+                :generation 7)))
+           (make-frame-for-catalog (catalog)
+             (let* ((frame
+                      (clim:make-application-frame
+                       'clawmacs::clawmacs-chat-frame
+                       :buffer
+                       (make-buffer
+                        (format nil "package-theme-~D"
+                                (get-internal-real-time))
+                        :session-persistence-mode :ephemeral)))
+                    (profile
+                      (make-appearance-profile
+                       :selected-theme
+                       '(:package "org.example.theme" "active")))
+                    (bundle
+                      (resolve-appearance-profile-bundle
+                       catalog profile
+                       :profile-revision 0
+                       :font-inventory-generation 0
+                       :port-identity :package-test-port)))
+               (setf (slot-value frame 'clawmacs::appearance-catalog) catalog
+                     (clawmacs::chat-frame-appearance-profile frame) profile
+                     (slot-value frame 'clawmacs::appearance-active-bundle)
+                     bundle)
+               frame)))
+    (let* ((candidate (make-classic-appearance-catalog))
+           (old-catalog (package-theme-catalog nil))
+           (frame (make-frame-for-catalog old-catalog)))
+      (with-mcclim-test-function-override
+          (clawmacs::chat-frame-appearance-live-port (requested-frame)
+            (declare (ignore requested-frame))
+            :package-test-port)
+        (let* ((plan
+                 (clawmacs::package-appearance-frame-transition-plan
+                  frame candidate))
+               (bundle (getf plan :bundle))
+               (token
+                 (clawmacs::make-appearance-package-transition-token)))
+          (is (eq :no-op (getf plan :status)))
+          (is (eq :classic
+                  (appearance-profile-selected-theme (getf plan :profile))))
+          (setf (clawmacs::appearance-package-transition-token-state token)
+                :committed)
+          (let ((clawmacs::*package-appearance-catalog* candidate))
+            (clawmacs::publish-admitted-package-appearance-frame-state
+             frame candidate (getf plan :profile) bundle))
+          (is (eq candidate
+                  (clawmacs::chat-frame-appearance-catalog frame)))
+          (is (eq bundle
+                  (clawmacs::chat-frame-appearance-active-bundle frame)))
+          (is (eq :classic
+                  (appearance-profile-selected-theme
+                   (clawmacs::chat-frame-appearance-profile frame))))
+          (is (= (resolved-appearance-bundle-profile-revision bundle)
+                 (clawmacs::chat-frame-appearance-revision frame))))))
+    (let* ((red-default
+             (make-appearance-role-style
+              :foreground-ink
+              (make-appearance-ink-spec :foreground '(:rgb 0.8 0.1 0.1))))
+           (old-catalog
+             (package-theme-catalog (list (cons :default-text red-default))))
+           (frame (make-frame-for-catalog old-catalog))
+           (candidate (make-classic-appearance-catalog)))
+      (with-mcclim-test-function-override
+          (clawmacs::chat-frame-appearance-live-port (requested-frame)
+            (declare (ignore requested-frame))
+            :package-test-port)
+        (let ((old-profile (clawmacs::chat-frame-appearance-profile frame))
+              (old-bundle
+                (clawmacs::chat-frame-appearance-active-bundle frame))
+              (plan
+                (clawmacs::package-appearance-frame-transition-plan
+                 frame candidate)))
+          (is (eq :failed (getf plan :status)))
+          (is (eq old-profile
+                  (clawmacs::chat-frame-appearance-profile frame)))
+          (is (eq old-bundle
+                  (clawmacs::chat-frame-appearance-active-bundle frame))))))
+    (let* ((old-catalog (package-theme-catalog nil))
+           (frame (make-frame-for-catalog old-catalog))
+           (active-classic (make-appearance-profile :selected-theme :classic))
+           (staged
+             (make-appearance-candidate
+              (make-appearance-profile
+               :selected-theme '(:package "org.example.theme" "active"))))
+           (candidate (make-classic-appearance-catalog)))
+      (setf (clawmacs::chat-frame-appearance-profile frame) active-classic
+            (slot-value frame 'clawmacs::appearance-staged-candidate) staged
+            (slot-value frame 'clawmacs::appearance-active-bundle)
+            (resolve-appearance-profile-bundle
+             old-catalog active-classic
+             :profile-revision 0
+             :font-inventory-generation 0
+             :port-identity :package-test-port))
+      (with-mcclim-test-function-override
+          (clawmacs::chat-frame-appearance-live-port (requested-frame)
+            (declare (ignore requested-frame))
+            :package-test-port)
+        (let ((plan
+                (clawmacs::package-appearance-frame-transition-plan
+                 frame candidate)))
+          (is (eq :failed (getf plan :status)))
+          (is (eq staged
+                  (clawmacs::chat-frame-appearance-staged-candidate frame))))))))
+
 (test appearance-editor-command-surface-is-static-and-discoverable
   "The menu and M-x registry expose the primary commands without legacy drift."
   (let* ((frame-table
@@ -2954,3 +3119,387 @@ these tests exercise construction-time space requirements only."
                  (binding #\h)))
       (is (equal '(clawmacs::com-chat-customize-appearance)
                  (binding #\c))))))
+
+(defun make-package-transition-test-frame ()
+  "Return a headless frame with one fully resolved classic bundle."
+  (let* ((catalog (make-classic-appearance-catalog))
+         (profile (make-appearance-profile))
+         (frame
+           (clim:make-application-frame
+            'clawmacs::clawmacs-chat-frame
+            :buffer
+            (make-buffer
+             (format nil "package-transition-~D"
+                     (get-internal-real-time))
+             :session-persistence-mode :ephemeral)))
+         (bundle
+           (resolve-appearance-profile-bundle
+            catalog profile :profile-revision 0
+            :font-inventory-generation 0 :port-identity :test-port)))
+    (setf (slot-value frame 'clawmacs::appearance-catalog) catalog
+          (clawmacs::chat-frame-appearance-profile frame) profile
+          (slot-value frame 'clawmacs::appearance-active-bundle) bundle)
+    frame))
+
+(defun make-package-transition-test-reservation (frame token &key origin-p)
+  "Return an admitted revision-only transition for FRAME."
+  (let* ((catalog (clawmacs::chat-frame-appearance-catalog frame))
+         (profile (clawmacs::chat-frame-appearance-profile frame))
+         (bundle
+           (resolve-appearance-profile-bundle
+            catalog profile
+            :profile-revision
+            (1+ (clawmacs::chat-frame-appearance-revision frame))
+            :font-inventory-generation 0 :port-identity :test-port)))
+    (list
+     :frame frame :sheet :test-sheet
+     :catalog catalog :profile profile :bundle bundle
+     :target-revision
+     (resolved-appearance-bundle-profile-revision bundle)
+     :token token
+     :expected-catalog catalog
+     :expected-profile profile
+     :expected-bundle
+     (clawmacs::chat-frame-appearance-active-bundle frame)
+     :expected-revision
+     (clawmacs::chat-frame-appearance-revision frame)
+     :expected-staged
+     (clawmacs::chat-frame-appearance-staged-candidate frame)
+     :expected-persisted
+     (clawmacs::chat-frame-appearance-persisted-profile frame)
+     :expected-font-inventory
+     (clawmacs::chat-frame-appearance-font-inventory frame)
+     :expected-font-generation
+     (clawmacs::chat-frame-appearance-font-inventory-generation frame)
+     :expected-resolved-roles
+     (clawmacs::copy-package-runtime-hash-table
+      (clawmacs::chat-frame-appearance-resolved-roles frame))
+     :expected-role-keys
+     (clawmacs::copy-package-runtime-hash-table
+      (clawmacs::chat-frame-appearance-role-keys frame))
+     :origin-frame-p origin-p)))
+
+(test package-appearance-barrier-handles-origin-frame-synchronously
+  "A command-origin frame never waits for an event it cannot consume."
+  (let* ((frame (make-package-transition-test-frame))
+         (token (clawmacs::make-appearance-package-transition-token))
+         (reservation
+           (make-package-transition-test-reservation
+            frame token :origin-p t))
+         (committed-p nil))
+    (setf (clawmacs::appearance-package-transition-token-expected-count token)
+          1)
+    (is-true
+     (clawmacs::finalize-package-appearance-frame-transition
+      token (list reservation)
+      (lambda () (setf committed-p t))
+      (lambda () (setf committed-p nil))))
+    (is-true committed-p)
+    (is (eq :committed
+            (clawmacs::appearance-package-transition-token-state token)))
+    (is (= 1 (clawmacs::chat-frame-appearance-revision frame)))))
+
+(test package-appearance-barrier-aborts-on-origin-cas-change
+  "Every captured frame state component remains a compare-and-swap precondition."
+  (let* ((frame (make-package-transition-test-frame))
+         (token (clawmacs::make-appearance-package-transition-token))
+         (reservation
+           (make-package-transition-test-reservation
+            frame token :origin-p t))
+         (committed-p nil))
+    (setf (clawmacs::appearance-package-transition-token-expected-count token)
+          1
+          (slot-value frame 'clawmacs::appearance-staged-candidate)
+          (make-appearance-candidate (make-appearance-profile)))
+    (signals error
+      (clawmacs::finalize-package-appearance-frame-transition
+       token (list reservation)
+       (lambda () (setf committed-p t))
+       (lambda () (setf committed-p nil))))
+    (is-false committed-p)
+    (is (= 0 (clawmacs::chat-frame-appearance-revision frame)))))
+
+(test package-appearance-barrier-coordinates-two-owning-processes
+  "No frame commits until every owning process has parked at the barrier."
+  (let* ((left (make-package-transition-test-frame))
+         (right (make-package-transition-test-frame))
+         (token (clawmacs::make-appearance-package-transition-token))
+         (left-reservation
+           (make-package-transition-test-reservation left token))
+         (right-reservation
+           (make-package-transition-test-reservation right token))
+         (threads
+           (list
+            (bt:make-thread
+             (lambda ()
+               (clawmacs::handle-package-appearance-frame-reservation
+                left left-reservation token)))
+            (bt:make-thread
+             (lambda ()
+               (clawmacs::handle-package-appearance-frame-reservation
+                right right-reservation token))))))
+    (setf (clawmacs::appearance-package-transition-token-expected-count token)
+          2)
+    (unwind-protect
+         (is-true
+          (clawmacs::finalize-package-appearance-frame-transition
+           token (list left-reservation right-reservation)
+           (lambda () t) (lambda () nil)))
+      (dolist (thread threads)
+        (bt:join-thread thread)))
+    (is (= 1 (clawmacs::chat-frame-appearance-revision left)))
+    (is (= 1 (clawmacs::chat-frame-appearance-revision right)))))
+
+(test package-appearance-barrier-refuses-a-nonresponsive-frame
+  "A missing frame acknowledgement cannot publish the process catalog."
+  (let* ((frame (make-package-transition-test-frame))
+         (token (clawmacs::make-appearance-package-transition-token))
+         (reservation
+           (make-package-transition-test-reservation frame token))
+         (committed-p nil)
+         (clawmacs::*appearance-package-transition-timeout-seconds* 0.05))
+    (setf (clawmacs::appearance-package-transition-token-expected-count token)
+          1)
+    (signals error
+      (clawmacs::finalize-package-appearance-frame-transition
+       token (list reservation)
+       (lambda () (setf committed-p t))
+       (lambda () (setf committed-p nil))))
+    (is-false committed-p)
+    (is (= 0 (clawmacs::chat-frame-appearance-revision frame)))))
+
+(test package-appearance-committed-frame-settlement-recovers-forward
+  "A prepared stalled owner resumes the committed target; globals never unwind."
+  (let* ((frame (make-package-transition-test-frame))
+         (token (clawmacs::make-appearance-package-transition-token))
+         (reservation
+           (make-package-transition-test-reservation frame token))
+         (resume-entered-p nil)
+         (resume-frame-correct-p nil)
+         (release-resume-p nil)
+         (global-committed-p nil)
+         (global-rolled-back-p nil)
+         (clawmacs::*appearance-package-transition-timeout-seconds* 0.5)
+         (resume-hook
+           (lambda (requested-frame requested-reservation)
+             (declare (ignore requested-reservation))
+             (setf resume-frame-correct-p (eq frame requested-frame))
+             (setf resume-entered-p t)
+             (loop :until release-resume-p :do (sleep 0.005))))
+         (thread
+           (bt:make-thread
+            (lambda ()
+              (let
+                  ((clawmacs::*appearance-package-prepared-frame-resume-hook*
+                     resume-hook))
+                (clawmacs::handle-package-appearance-frame-reservation
+                 frame reservation token))))))
+    (setf (clawmacs::appearance-package-transition-token-expected-count token)
+          1)
+    (unwind-protect
+         (handler-bind
+             ((warning
+                (lambda (condition)
+                  (let ((restart (find-restart 'muffle-warning condition)))
+                    (when restart (invoke-restart restart))))))
+           (is-true
+            (clawmacs::finalize-package-appearance-frame-transition
+             token (list reservation)
+             (lambda () (setf global-committed-p t))
+             (lambda () (setf global-rolled-back-p t))))
+           (is-true resume-entered-p)
+           (is-true resume-frame-correct-p)
+           (is-true global-committed-p)
+           (is-false global-rolled-back-p)
+           (is (eq :committed
+                   (clawmacs::appearance-package-transition-token-state
+                    token)))
+           (is (= 0 (clawmacs::chat-frame-appearance-revision frame)))
+           (setf release-resume-p t)
+           (bt:join-thread thread)
+           (setf thread nil)
+           (is (= 1 (clawmacs::chat-frame-appearance-revision frame))))
+      (setf release-resume-p t)
+      (when thread (bt:join-thread thread)))))
+
+(test package-appearance-reservation-rejects-a-stale-frame-plan
+  "A user or font change between planning and reservation forces re-planning."
+  (let* ((frame (make-package-transition-test-frame))
+         (catalog (clawmacs::chat-frame-appearance-catalog frame))
+         (token (clawmacs::make-appearance-package-transition-token))
+         (plan nil))
+    (with-mcclim-test-function-override
+        (clawmacs::chat-frame-appearance-live-port (requested-frame)
+          (is (eq frame requested-frame))
+          :test-port)
+      (setf plan
+            (clawmacs::package-appearance-frame-transition-plan
+             frame catalog)))
+    (setf (slot-value frame 'clawmacs::appearance-staged-candidate)
+          (make-appearance-candidate
+           (make-appearance-profile :selected-theme :dark)))
+    (incf (slot-value frame 'clawmacs::appearance-font-inventory-generation))
+    (with-mcclim-test-function-override
+        (clawmacs::chat-frame-grafted-top-level-sheet (requested-frame)
+          (is (eq frame requested-frame))
+          :test-sheet)
+      (is (null
+           (clawmacs::reserve-package-appearance-frame-transition
+            frame plan catalog token))))))
+
+(test package-appearance-batch-refuses-user-edit-and-fully-restores
+  "An overlapping edit returns busy; package A can then roll back exactly."
+  (let* ((frame (make-package-transition-test-frame))
+         (clim:*application-frame* frame)
+         (batch nil))
+    (clawmacs::register-package-appearance-live-chat-frame frame)
+    (unwind-protect
+         (progn
+           (setf batch (clawmacs::begin-package-appearance-frame-batch))
+           (signals error
+             (clawmacs::appearance-editor-stage-profile
+              frame
+              (make-appearance-profile :selected-theme :dark)
+              :overlapping-user-edit))
+           (is (null
+                (clawmacs::chat-frame-appearance-staged-candidate frame)))
+           ;; Model package A's coordinated commit and checkpoint, followed by
+           ;; package B's entrypoint failure and the outer batch restoration.
+           (let* ((token
+                    (clawmacs::make-appearance-package-transition-token))
+                  (reservation
+                    (make-package-transition-test-reservation
+                     frame token :origin-p t)))
+             (setf
+              (clawmacs::appearance-package-transition-token-expected-count
+               token)
+              1)
+             (clawmacs::finalize-package-appearance-frame-transition
+              token (list reservation) (lambda () t) (lambda () nil))
+             (clawmacs::checkpoint-package-appearance-frame-batch
+              (list reservation)))
+           (is (= 1 (clawmacs::chat-frame-appearance-revision frame)))
+           (clawmacs::restore-package-appearance-frame-batch batch)
+           (is (= 0 (clawmacs::chat-frame-appearance-revision frame)))
+           (is (null
+                (clawmacs::chat-frame-appearance-staged-candidate frame))))
+      (when batch
+        (clawmacs::end-package-appearance-frame-batch batch))
+      (clawmacs::unregister-package-appearance-live-chat-frame frame))))
+
+(test package-appearance-batch-refuses-font-refresh-before-mutation
+  "A queued font event reports busy without changing inventory or generation."
+  (let* ((frame (make-package-transition-test-frame))
+         (old-inventory
+           (clawmacs::chat-frame-appearance-font-inventory frame))
+         (old-generation
+           (clawmacs::chat-frame-appearance-font-inventory-generation frame))
+         (called-p nil)
+         (batch nil))
+    (clawmacs::register-package-appearance-live-chat-frame frame)
+    (unwind-protect
+         (progn
+           (setf batch (clawmacs::begin-package-appearance-frame-batch))
+           (with-mcclim-test-function-override
+               (clawmacs::refresh-chat-frame-font-inventory
+                   (requested-frame &key invalidate-cache)
+                 (declare (ignore requested-frame invalidate-cache))
+                 (setf called-p t))
+             (let ((result
+                     (clawmacs::handle-chat-frame-font-inventory-refresh
+                      frame)))
+               (is (eq :failed
+                       (appearance-activation-result-status result)))))
+           (is-false called-p)
+           (is (eq old-inventory
+                   (clawmacs::chat-frame-appearance-font-inventory frame)))
+           (is (= old-generation
+                  (clawmacs::chat-frame-appearance-font-inventory-generation
+                   frame))))
+      (when batch
+        (clawmacs::end-package-appearance-frame-batch batch))
+      (clawmacs::unregister-package-appearance-live-chat-frame frame))))
+
+(test package-appearance-frame-registration-adopts-one-committed-catalog
+  "Registration cannot interleave between global publication and enumeration."
+  (let* ((frame (make-package-transition-test-frame))
+         (candidate
+           (make-appearance-catalog
+            :role-definitions
+            (appearance-catalog-role-definitions
+             (make-classic-appearance-catalog))
+            :theme-definitions
+            (appearance-catalog-theme-definitions
+             (make-classic-appearance-catalog))
+            :built-in-overlays
+            (appearance-catalog-built-in-overlays
+             (make-classic-appearance-catalog))
+            :generation 99))
+         (old-catalog clawmacs::*package-appearance-catalog*)
+         (finished-p nil)
+         (thread nil))
+    (bt:acquire-lock clawmacs::*package-appearance-catalog-lock*)
+    (unwind-protect
+         (progn
+           (setf thread
+                 (bt:make-thread
+                  (lambda ()
+                    (clawmacs::register-package-appearance-live-chat-frame
+                     frame)
+                    (setf finished-p t))))
+           (sleep 0.02)
+           (is-false finished-p)
+           (setf clawmacs::*package-appearance-catalog* candidate)
+           (bt:release-lock clawmacs::*package-appearance-catalog-lock*)
+           (bt:join-thread thread)
+           (setf thread nil)
+           (is-true finished-p)
+           (is (eq candidate
+                   (clawmacs::chat-frame-appearance-catalog frame))))
+      (when thread
+        (ignore-errors
+          (bt:release-lock clawmacs::*package-appearance-catalog-lock*))
+        (bt:join-thread thread))
+      (clawmacs::unregister-package-appearance-live-chat-frame frame)
+      (bt:with-lock-held (clawmacs::*package-appearance-catalog-lock*)
+        (setf clawmacs::*package-appearance-catalog* old-catalog)))))
+
+(test package-appearance-planning-muffles-warnings-but-refuses-strict-errors
+  "Warning-only contrast remains admissible; strict contrast remains fatal."
+  (let* ((frame (make-package-transition-test-frame))
+         (catalog (clawmacs::chat-frame-appearance-catalog frame)))
+    (with-mcclim-test-function-override
+        (clawmacs::chat-frame-appearance-live-port (requested-frame)
+          (declare (ignore requested-frame))
+          :test-port)
+      (with-mcclim-test-function-override
+          (clawmacs::validate-appearance-profile-contrast
+              (requested-catalog requested-profile &key role-stacks)
+            (declare
+             (ignore requested-catalog requested-profile role-stacks))
+            (clawmacs::warn-appearance-condition
+             'appearance-contrast-warning
+             :origin :test :axis :contrast :value :warning))
+        (handler-bind
+            ((warning
+               (lambda (condition)
+                 (error "Unmuffled planning warning: ~A" condition))))
+          (is (member
+               (getf
+                (clawmacs::package-appearance-frame-transition-plan
+                 frame catalog)
+                :status)
+               '(:ready :no-op)))))
+      (with-mcclim-test-function-override
+          (clawmacs::validate-appearance-profile-contrast
+              (requested-catalog requested-profile &key role-stacks)
+            (declare
+             (ignore requested-catalog requested-profile role-stacks))
+            (clawmacs::error-appearance-condition
+             'appearance-contrast-warning
+             :origin :test :axis :contrast :value :strict))
+        (is (eq :failed
+                (getf
+                 (clawmacs::package-appearance-frame-transition-plan
+                  frame catalog)
+                 :status)))))))

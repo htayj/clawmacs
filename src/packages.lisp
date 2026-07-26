@@ -1316,6 +1316,12 @@
    #:*package-configuration-path*
    #:*packages-directory*
    #:*current-clawmacs-package*
+   ;; Package-owned appearance declarations
+   #:current-package-appearance-catalog
+   #:register-package-appearance-declarations
+   #:register-package-appearance-role
+   #:register-package-appearance-theme
+   #:register-package-appearance-defaults
    #:register-package-channel
    #:list-package-channels
    #:reload-package-channels

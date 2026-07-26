@@ -21,6 +21,18 @@
        (setf clawmacs::*safe-reload-preflight-function* old-preflight
              clawmacs::*safe-reload-live-function* old-live))))
 
+(defmacro with-safe-reload-function-override
+    ((name lambda-list &body implementation) &body body)
+  "Temporarily replace NAME during a serial Safe Reload unit test."
+  (let ((original (gensym "ORIGINAL")))
+    `(let ((,original (symbol-function ',name)))
+       (unwind-protect
+            (progn
+              (setf (symbol-function ',name)
+                    (lambda ,lambda-list ,@implementation))
+              ,@body)
+         (setf (symbol-function ',name) ,original)))))
+
 (defmacro with-safe-reload-test-async-runtime
     ((completion-dispatch &optional worker-constructor) &body body)
   "Run BODY with test-owned worker construction and completion dispatch."
@@ -849,6 +861,255 @@
       (is (string= "ok" (cdr (assoc :status event))))
       (is (search "Preflight and live reload completed"
                   (cdr (assoc :summary event)))))))
+
+(test reload-active-packages-is-one-outer-rollback-transaction
+  "Failure of package B restores package A and swaps complete registries."
+  (let* ((a (make-package-definition
+             :name "org.example.a" :root #P"/tmp/" :description "a"))
+         (b (make-package-definition
+             :name "org.example.b" :root #P"/tmp/" :description "b"))
+         (original-table (make-hash-table :test #'equal))
+         (clawmacs::*tool-table* original-table)
+         (appearance-state :before)
+         (batch-events nil))
+    (setf (gethash "before" original-table) :present)
+    (let ((clawmacs::*package-appearance-batch-begin-function*
+            (lambda ()
+              (push :begin batch-events)
+              appearance-state))
+          (clawmacs::*package-appearance-batch-restore-function*
+            (lambda (snapshot)
+              (push :restore batch-events)
+              (setf appearance-state snapshot)))
+          (clawmacs::*package-appearance-batch-end-function*
+            (lambda (snapshot)
+              (declare (ignore snapshot))
+              (push :end batch-events))))
+      (with-safe-reload-function-override
+          (clawmacs::active-package-names (&key buffer agent-name)
+            (declare (ignore buffer agent-name))
+            '("org.example.a" "org.example.b"))
+        (with-safe-reload-function-override
+            (clawmacs:find-installed-package (name &key buffer)
+              (declare (ignore buffer))
+              (if (string= name "org.example.a") a b))
+          (with-safe-reload-function-override
+              (clawmacs::reload-clawmacs-package (definition)
+                (if (string= (package-definition-name definition)
+                             "org.example.a")
+                    (progn
+                      (setf (gethash "from-a" clawmacs::*tool-table*)
+                            :partial)
+                      definition)
+                    (error "package B failed")))
+            (signals error
+              (clawmacs::%reload-active-packages))))))
+    (is (eq :before appearance-state))
+    (is (equal '(:begin :end) (nreverse batch-events)))
+    (is (eq :present (gethash "before" clawmacs::*tool-table*)))
+    (is (null (gethash "from-a" clawmacs::*tool-table*)))
+    ;; Registry identity is intentionally not part of the package API.  Whole
+    ;; table replacement prevents concurrent readers observing partial rebuild.
+    (is-false (eq original-table clawmacs::*tool-table*))))
+
+(defun stage-safe-reload-package-appearance
+    (definition &optional role-local-name)
+  "Stage one complete reload declaration batch for DEFINITION."
+  (let* ((owner (package-definition-name definition))
+         (clawmacs::*current-clawmacs-package* owner)
+         (clawmacs::*current-package-resource-types* '(:appearance))
+         (clawmacs::*package-appearance-entrypoint-reload-p* t)
+         (clawmacs::*package-appearance-entrypoint-staging*
+           (clawmacs::begin-package-appearance-entrypoint-staging definition)))
+    (when role-local-name
+      (register-package-appearance-role
+       (make-appearance-role-definition
+        :id (list :package owner role-local-name)
+        :kind :content)))
+    (clawmacs::commit-package-appearance-entrypoint-staging
+     clawmacs::*package-appearance-entrypoint-staging*)))
+
+(test reload-active-packages-discards-deferred-appearance-before-late-failure
+  "Package A cannot publish appearance state before package B succeeds."
+  (let* ((a (make-package-definition
+             :name "org.example.a" :root #P"/tmp/" :description "a"))
+         (b (make-package-definition
+             :name "org.example.b" :root #P"/tmp/" :description "b"))
+         (clawmacs::*package-appearance-declarations*
+           (make-hash-table :test #'equal))
+         (clawmacs::*package-appearance-catalog*
+           (make-classic-appearance-catalog))
+         (before clawmacs::*package-appearance-catalog*)
+         (plans 0)
+         (releases 0)
+         (finalizations 0)
+         (checkpoints 0)
+         (restores 0)
+         (clawmacs::*appearance-package-frame-transition-planner*
+           (lambda (frame catalog)
+             (declare (ignore frame catalog))
+             (incf plans)
+             (list :status :ready)))
+         (clawmacs::*appearance-package-frame-transition-publisher*
+           (lambda (reservation)
+             (declare (ignore reservation))
+             (incf releases)
+             t))
+         (clawmacs::*appearance-package-frame-transition-finalizer*
+           (lambda (token reservations commit rollback)
+             (declare (ignore token reservations rollback))
+             (incf finalizations)
+             (funcall commit)
+             t))
+         (clawmacs::*appearance-package-batch-checkpoint-function*
+           (lambda (reservations)
+             (declare (ignore reservations))
+             (incf checkpoints)))
+         (clawmacs::*appearance-package-live-frame-provider*
+           (lambda () (list :frame)))
+         (clawmacs::*package-appearance-batch-begin-function*
+           (constantly nil))
+         (clawmacs::*package-appearance-batch-restore-function*
+           (lambda (snapshot)
+             (declare (ignore snapshot))
+             (incf restores)))
+         (clawmacs::*package-appearance-batch-end-function*
+           (lambda (snapshot) (declare (ignore snapshot)))))
+    (with-safe-reload-function-override
+        (clawmacs::active-package-names (&key buffer agent-name)
+          (declare (ignore buffer agent-name))
+          '("org.example.a" "org.example.b"))
+      (with-safe-reload-function-override
+          (clawmacs:find-installed-package (name &key buffer)
+            (declare (ignore buffer))
+            (if (string= name "org.example.a") a b))
+        (with-safe-reload-function-override
+            (clawmacs::register-package-agent-tool-provider-definitions
+                (owner)
+              (declare (ignore owner))
+              t)
+          (with-safe-reload-function-override
+              (clawmacs::reload-clawmacs-package (definition)
+                (if (string= (package-definition-name definition)
+                             "org.example.a")
+                    (progn
+                      (stage-safe-reload-package-appearance
+                       definition "staged")
+                      definition)
+                    (error "package B failed")))
+            (signals error
+              (clawmacs::%reload-active-packages))))))
+    (is (eq before clawmacs::*package-appearance-catalog*))
+    (is (= 0
+           (hash-table-count
+            clawmacs::*package-appearance-declarations*)))
+    (is (= 0 plans))
+    (is (= 0 releases))
+    (is (= 0 finalizations))
+    (is (= 0 checkpoints))
+    (is (= 0 restores))))
+
+(test reload-active-packages-publishes-one-combined-appearance-transition
+  "All owners, including an empty removal, publish in one generation/frame transaction."
+  (let* ((a (make-package-definition
+             :name "org.example.a" :root #P"/tmp/" :description "a"))
+         (b (make-package-definition
+             :name "org.example.b" :root #P"/tmp/" :description "b"))
+         (clawmacs::*package-appearance-declarations*
+           (make-hash-table :test #'equal))
+         (clawmacs::*package-appearance-catalog*
+           (make-classic-appearance-catalog))
+         (clawmacs::*appearance-package-live-frame-provider*
+           (constantly nil)))
+    ;; Establish B's old declaration outside the deferred outer transaction.
+    (stage-safe-reload-package-appearance b "removed")
+    (let* ((before-generation
+            (appearance-catalog-generation
+             clawmacs::*package-appearance-catalog*))
+          (plans 0)
+          (reservations 0)
+          (releases 0)
+          (finalizations 0)
+          (checkpoints 0)
+          (clawmacs::*appearance-package-live-frame-provider*
+            (lambda () (list :frame)))
+          (clawmacs::*appearance-package-frame-transition-planner*
+            (lambda (frame catalog)
+              (declare (ignore frame catalog))
+              (incf plans)
+              (list :status :ready)))
+          (clawmacs::*appearance-package-frame-transition-reserver*
+            (lambda (frame plan catalog token)
+              (incf reservations)
+              (list frame plan catalog token)))
+          (clawmacs::*appearance-package-frame-transition-publisher*
+            (lambda (reservation)
+              (declare (ignore reservation))
+              (incf releases)
+              t))
+          (clawmacs::*appearance-package-frame-transition-finalizer*
+            (lambda (token frame-reservations commit rollback)
+              (declare (ignore frame-reservations rollback))
+              (incf finalizations)
+              (funcall commit)
+              (setf
+               (clawmacs::appearance-package-transition-token-state token)
+               :committed)
+              t))
+          (clawmacs::*appearance-package-batch-checkpoint-function*
+            (lambda (frame-reservations)
+              (declare (ignore frame-reservations))
+              (incf checkpoints)))
+          (clawmacs::*package-appearance-batch-begin-function*
+            (constantly nil))
+          (clawmacs::*package-appearance-batch-restore-function*
+            (lambda (snapshot) (declare (ignore snapshot))))
+          (clawmacs::*package-appearance-batch-end-function*
+            (lambda (snapshot) (declare (ignore snapshot)))))
+      (with-safe-reload-function-override
+          (clawmacs::active-package-names (&key buffer agent-name)
+            (declare (ignore buffer agent-name))
+            '("org.example.a" "org.example.b"))
+        (with-safe-reload-function-override
+            (clawmacs:find-installed-package (name &key buffer)
+              (declare (ignore buffer))
+              (if (string= name "org.example.a") a b))
+          (with-safe-reload-function-override
+              (clawmacs::register-package-agent-tool-provider-definitions
+                  (owner)
+                (declare (ignore owner))
+                t)
+            (with-safe-reload-function-override
+                (clawmacs::reload-clawmacs-package (definition)
+                  (stage-safe-reload-package-appearance
+                   definition
+                   (and (string= (package-definition-name definition)
+                                 "org.example.a")
+                        "replacement"))
+                  definition)
+              (is (= 2
+                     (length
+                      (clawmacs::%reload-active-packages))))))))
+      (is (= (1+ before-generation)
+             (appearance-catalog-generation
+              clawmacs::*package-appearance-catalog*)))
+      (is (find-appearance-role-definition
+           clawmacs::*package-appearance-catalog*
+           '(:package "org.example.a" "replacement")))
+      (is (null
+           (find-appearance-role-definition
+            clawmacs::*package-appearance-catalog*
+            '(:package "org.example.b" "removed"))))
+      (is (gethash "org.example.a"
+                   clawmacs::*package-appearance-declarations*))
+      (is (null
+           (gethash "org.example.b"
+                    clawmacs::*package-appearance-declarations*)))
+      (is (= 1 plans))
+      (is (= 1 reservations))
+      (is (= 1 releases))
+      (is (= 1 finalizations))
+      (is (= 1 checkpoints)))))
 
 (test safe-reload-stress-overlapping-requests
   "A burst of concurrent reload requests yields one reload and busy results for the overlap."

@@ -2,6 +2,459 @@
 
 (in-suite appearance-suite)
 
+;;; Package declaration transactions ------------------------------------------------
+
+(defun package-appearance-test-definition (&optional (name "org.example.theme"))
+  (make-package-definition :name name :description "appearance test"
+                           :root #P"/tmp/" :entrypoint #P"/tmp/entrypoint.lisp"))
+
+(defun package-appearance-test-id (local &optional (owner "org.example.theme"))
+  (list :package owner local))
+
+(defun package-appearance-test-role (local &key fallback)
+  (make-appearance-role-definition
+   :id (package-appearance-test-id local) :kind :content :fallback-role fallback))
+
+(defun package-appearance-test-theme (local &key parent overlays)
+  (make-appearance-theme-definition
+   :id (package-appearance-test-id local) :parent-theme parent
+   :role-overlays overlays))
+
+(defmacro with-package-appearance-test-state ((&key (owner "org.example.theme")
+                                                     (frames nil) planner reserver
+                                                     publisher finalizer)
+                                               &body body)
+  `(let* ((definition (package-appearance-test-definition ,owner))
+          (clawmacs::*package-appearance-declarations* (make-hash-table :test #'equal))
+          (clawmacs::*package-appearance-catalog* (make-classic-appearance-catalog))
+          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
+          (clawmacs::*current-clawmacs-package* ,owner)
+          (clawmacs::*current-package-resource-types* '(:appearance))
+          (clawmacs::*package-appearance-entrypoint-staging*
+            (clawmacs::begin-package-appearance-entrypoint-staging definition))
+          (clawmacs::*appearance-package-live-frame-provider*
+            (lambda () ,frames))
+          (clawmacs::*appearance-package-frame-transition-planner*
+            (or ,planner (lambda (frame catalog)
+                           (declare (ignore frame catalog)) (list :status :ready))))
+          (clawmacs::*appearance-package-frame-transition-reserver*
+            (or ,reserver (lambda (frame plan catalog token)
+                            (list frame plan catalog token))))
+          (clawmacs::*appearance-package-frame-transition-publisher*
+            (or ,publisher (lambda (reservation) (declare (ignore reservation)) t)))
+          (clawmacs::*appearance-package-frame-transition-finalizer*
+            (or ,finalizer
+                (lambda (token reservations commit rollback)
+                  (declare (ignore reservations rollback))
+                  (funcall commit)
+                  (setf
+                   (clawmacs::appearance-package-transition-token-state token)
+                   :committed)
+                  t))))
+     ,@body))
+
+(test package-appearance-ids-are-tagged-data-without-interning
+  "Owner/local preferences remain tagged strings even if a Lisp package unloads."
+  (let* ((owner "org.example.theme")
+         (local "night")
+         (symbol-name "ORG.EXAMPLE.THEME/NIGHT"))
+    (is (null (find-symbol symbol-name :cl-user)))
+    (let ((id (parse-appearance-theme-selector "org.example.theme/night")))
+      (is (equal (list :package owner local) id))
+      (is (string= "org.example.theme/night"
+                   (clawmacs::appearance-id-external-string id))))
+    (is (null (find-symbol symbol-name :cl-user)))))
+
+(test package-appearance-requires-explicit-allowlist-and-normalized-owner
+  "Legacy NIL resource policy is not permission for appearance declarations."
+  (with-package-appearance-test-state ()
+    (let ((clawmacs::*current-package-resource-types* nil))
+      (signals appearance-error
+        (register-package-appearance-role (package-appearance-test-role "entry"))))
+    (signals appearance-error
+      (register-package-appearance-role
+       (make-appearance-role-definition
+        :id '(:package "Org.Example.Theme" "entry") :kind :content)))))
+
+(test package-appearance-transaction-validates-graphs-and-collisions
+  "A missing same-owner dependency or duplicate catalog key publishes nothing."
+  (with-package-appearance-test-state ()
+    (let ((before (current-package-appearance-catalog)))
+      (register-package-appearance-role
+       (package-appearance-test-role
+        "entry" :fallback (package-appearance-test-id "missing")))
+      (signals appearance-error
+        (clawmacs::commit-package-appearance-entrypoint-staging
+         clawmacs::*package-appearance-entrypoint-staging*))
+      (is (eq before (current-package-appearance-catalog)))))
+  (with-package-appearance-test-state ()
+    (let ((role (package-appearance-test-role "entry")))
+      (register-package-appearance-declarations :roles (list role role))
+      (signals appearance-error
+        (clawmacs::commit-package-appearance-entrypoint-staging
+         clawmacs::*package-appearance-entrypoint-staging*)))))
+
+(test package-appearance-validates-every-candidate-overlay-before-publication
+  "Dangling roles and unsupported axes never enter the published catalog."
+  (flet ((surface-style ()
+           (make-appearance-role-style
+            :surface
+            (make-appearance-surface-spec :background '(:rgb 0.1 0.2 0.3)))))
+    (with-package-appearance-test-state ()
+      (let ((before (current-package-appearance-catalog)))
+        (register-package-appearance-theme
+         (package-appearance-test-theme
+          "dangling"
+          :overlays
+          (list (cons (package-appearance-test-id "missing")
+                      (make-appearance-role-style
+                       :foreground-ink
+                       (make-appearance-ink-spec :foreground :red))))))
+        (signals appearance-error
+          (clawmacs::commit-package-appearance-entrypoint-staging
+           clawmacs::*package-appearance-entrypoint-staging*))
+        (is (eq before (current-package-appearance-catalog)))))
+    (with-package-appearance-test-state ()
+      (register-package-appearance-defaults
+       (list (cons (package-appearance-test-id "missing")
+                   (make-appearance-role-style
+                    :foreground-ink
+                    (make-appearance-ink-spec :foreground :red)))))
+      (signals appearance-error
+        (clawmacs::commit-package-appearance-entrypoint-staging
+         clawmacs::*package-appearance-entrypoint-staging*)))
+    (with-package-appearance-test-state ()
+      (register-package-appearance-role (package-appearance-test-role "content"))
+      (register-package-appearance-theme
+       (package-appearance-test-theme
+        "unsupported"
+        :overlays
+        (list (cons (package-appearance-test-id "content")
+                    (surface-style)))))
+      (signals unsupported-role-axis
+        (clawmacs::commit-package-appearance-entrypoint-staging
+         clawmacs::*package-appearance-entrypoint-staging*)))))
+
+(test package-appearance-partial-style-sentinels-are-portable
+  "Internal inheritance sentinels in partial typography/decoration are inert data."
+  (with-package-appearance-test-state ()
+    (let ((role (package-appearance-test-role "partial")))
+      (register-package-appearance-role
+       role
+       :defaults
+       (list
+        (cons (package-appearance-test-id "partial")
+              (make-appearance-role-style
+               :typography (make-appearance-typography-spec :face :bold)
+               :decoration
+               (make-appearance-decoration-spec :kind :none)))))
+      (is (clawmacs::commit-package-appearance-entrypoint-staging
+           clawmacs::*package-appearance-entrypoint-staging*))
+      (is (find-appearance-role-definition
+           (current-package-appearance-catalog)
+           (package-appearance-test-id "partial"))))))
+
+(test package-appearance-publishes-after-two-frame-reservations
+  "No frame release occurs until both live frames have admitted the catalog."
+  (let ((trace nil) (frame-a (list :frame :a)) (frame-b (list :frame :b)))
+    (with-package-appearance-test-state
+        (:frames (list frame-a frame-b)
+         :reserver (lambda (frame plan catalog token)
+                      (declare (ignore plan catalog token))
+                      (push (list :reserve frame) trace) frame)
+         :publisher (lambda (reservation)
+                      (push (list :release reservation) trace) t))
+      (register-package-appearance-role (package-appearance-test-role "entry"))
+      (clawmacs::commit-package-appearance-entrypoint-staging
+       clawmacs::*package-appearance-entrypoint-staging*)
+      (is (equal (reverse trace)
+                 (list (list :reserve frame-a) (list :reserve frame-b)
+                       (list :release frame-a) (list :release frame-b)))))))
+
+(test package-appearance-refusal-rolls-back-catalog-and-owner-batch
+  "A frame refusal preserves the exact published catalog and declarations."
+  (with-package-appearance-test-state
+      (:frames (list :frame)
+       :planner (lambda (frame catalog)
+                  (declare (ignore frame catalog)) (list :status :failed)))
+    (let ((before (current-package-appearance-catalog)))
+      (register-package-appearance-role (package-appearance-test-role "entry"))
+      (signals appearance-error
+        (clawmacs::commit-package-appearance-entrypoint-staging
+         clawmacs::*package-appearance-entrypoint-staging*))
+      (is (eq before (current-package-appearance-catalog)))
+      (is (= 0 (hash-table-count clawmacs::*package-appearance-declarations*))))))
+
+(test package-appearance-release-failure-aborts-transaction
+  "A failed post-publication release restores the catalog and marks its token aborted."
+  (let ((token nil))
+    (with-package-appearance-test-state
+        (:frames (list :frame)
+         :reserver (lambda (frame plan catalog candidate-token)
+                      (declare (ignore frame plan catalog))
+                      (setf token candidate-token)
+                      (list :reservation))
+         :publisher (lambda (reservation) (declare (ignore reservation)) nil))
+      (let ((before (current-package-appearance-catalog)))
+        (register-package-appearance-role (package-appearance-test-role "entry"))
+        (signals error
+          (clawmacs::commit-package-appearance-entrypoint-staging
+           clawmacs::*package-appearance-entrypoint-staging*))
+        (is (eq before (current-package-appearance-catalog)))
+        (is (eq :aborted
+                (clawmacs::appearance-package-transition-token-state token)))))))
+
+(test package-appearance-refused-unload-preserves-loaded-marker-and-files
+  "Removal refusal happens before package runtime state or installed files change."
+  (let* ((root (uiop:ensure-directory-pathname
+                (merge-pathnames (format nil "clawmacs-appearance-unload-~D/"
+                                         (get-internal-real-time))
+                                 #P"/tmp/")))
+         (entrypoint (merge-pathnames "entrypoint.lisp" root))
+         (definition (make-package-definition :name "org.example.theme"
+                                              :description "unload test"
+                                              :root root :entrypoint entrypoint)))
+    (ensure-directories-exist entrypoint)
+    (with-open-file (stream entrypoint :direction :output :if-exists :supersede)
+      (write-string ";; retained on refusal" stream))
+    (unwind-protect
+         (with-package-appearance-test-state
+             (:frames (list :live-frame)
+              :planner (lambda (frame catalog)
+                         (declare (ignore frame catalog)) (list :status :failed)))
+           (register-package-appearance-role (package-appearance-test-role "entry"))
+           ;; Publish the owner batch before installing the refusing frame seam.
+           (let ((clawmacs::*appearance-package-live-frame-provider* (constantly nil)))
+             (clawmacs::commit-package-appearance-entrypoint-staging
+              clawmacs::*package-appearance-entrypoint-staging*))
+           (let ((key (clawmacs::package-install-key root))
+                 (catalog (current-package-appearance-catalog)))
+             (setf (gethash key clawmacs::*loaded-packages*) "org.example.theme")
+             (signals appearance-error (clawmacs::%reset-package-runtime-state definition))
+             (is (eq catalog (current-package-appearance-catalog)))
+             (is (gethash key clawmacs::*loaded-packages*))
+             (is (probe-file entrypoint))))
+      (when (probe-file root)
+        (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))))
+
+(test package-appearance-unload-admission-failures-restore-ordinary-runtime
+  "Reservation and event-release failures roll back marker and registrations."
+  (dolist (failure '(:reserve :publish))
+    (let* ((root
+             (temp-package-test-directory
+              (format nil "appearance-unload-~A" failure)))
+           (entrypoint (merge-pathnames "entrypoint.lisp" root))
+           (definition
+             (make-package-definition
+              :name "org.example.theme"
+              :description "appearance unload rollback"
+              :root root
+              :entrypoint entrypoint))
+           (key (clawmacs::package-install-key root))
+           (section
+             (clawmacs::make-package-prompt-section
+              :name "appearance-rollback"
+              :package "org.example.theme"
+              :body "committed"))
+           (metadata
+             (clawmacs::make-command-metadata
+              :name 'package-appearance-rollback-command
+              :docstring "committed"
+              :package "org.example.theme")))
+      (write-test-file entrypoint ";; retained after failed unload")
+      (unwind-protect
+           (with-package-appearance-test-state ()
+             (register-package-appearance-role
+              (package-appearance-test-role "entry"))
+             (clawmacs::commit-package-appearance-entrypoint-staging
+              clawmacs::*package-appearance-entrypoint-staging*)
+             (setf (gethash key clawmacs::*loaded-packages*)
+                   "org.example.theme")
+             (let ((clawmacs::*package-prompt-sections* (list section))
+                   (clawmacs::*command-table* (make-hash-table :test #'eq))
+                   (clawmacs::*appearance-package-live-frame-provider*
+                     (lambda () (list :live-frame)))
+                   (clawmacs::*appearance-package-frame-transition-planner*
+                     (lambda (frame catalog)
+                       (declare (ignore frame catalog))
+                       (list :status :ready)))
+                   (clawmacs::*appearance-package-frame-transition-reserver*
+                     (if (eq failure :reserve)
+                         (lambda (&rest arguments)
+                           (declare (ignore arguments)) nil)
+                         (lambda (frame plan catalog token)
+                           (list frame plan catalog token))))
+                   (clawmacs::*appearance-package-frame-transition-publisher*
+                     (if (eq failure :publish)
+                         (lambda (reservation)
+                           (declare (ignore reservation)) nil)
+                         (lambda (reservation)
+                           (declare (ignore reservation)) t))))
+               (setf (gethash 'package-appearance-rollback-command
+                              clawmacs::*command-table*)
+                     metadata)
+               (let ((catalog (current-package-appearance-catalog)))
+                 (signals error
+                   (clawmacs::%reset-package-runtime-state definition))
+                 (is (eq catalog (current-package-appearance-catalog)))
+                 (is (eq section
+                         (first clawmacs::*package-prompt-sections*)))
+                 (is (eq metadata
+                         (gethash 'package-appearance-rollback-command
+                                  clawmacs::*command-table*)))
+                 (is (gethash key clawmacs::*loaded-packages*))
+                 (is (probe-file entrypoint)))))
+        (when (probe-file root)
+          (uiop:delete-directory-tree root
+                                      :validate t
+                                      :if-does-not-exist :ignore))))))
+
+(test failed-same-owner-reload-restores-runtime-and-propagates
+  "Invalid declarations and frame refusal cannot turn a failed reload into OK."
+  (let* ((root (temp-package-test-directory "appearance-reload-rollback"))
+         (entrypoint (merge-pathnames "entrypoint.lisp" root))
+         (definition
+           (make-package-definition
+            :name "org.example.theme"
+            :description "reload rollback"
+            :root root
+            :entrypoint entrypoint))
+         (key (clawmacs::package-install-key root)))
+    (unwind-protect
+         (let ((clawmacs::*package-appearance-declarations*
+                 (make-hash-table :test #'equal))
+               (clawmacs::*package-appearance-catalog*
+                 (make-classic-appearance-catalog))
+               (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
+               (clawmacs::*package-prompt-sections* nil)
+               (clawmacs::*package-runtime-maintenance-admitted-p* t)
+               (clawmacs::*appearance-package-live-frame-provider*
+                 (constantly nil)))
+           (clawmacs::write-package-install-record
+            root
+            (clawmacs::package-install-record-plist
+             definition
+             :source-type :path
+             :source root
+             :scope :global
+             :resource-types '(:appearance :prompt-section)))
+           (write-test-file
+            entrypoint
+            "(clawmacs:register-package-appearance-role
+               (clawmacs:make-appearance-role-definition
+                :id '(:package \"org.example.theme\" \"old\")
+                :kind :content))
+             (clawmacs:register-package-prompt-section
+              \"org.example.theme\" \"committed\"
+              :package \"org.example.theme\")")
+           (is (clawmacs::load-package-definition-entrypoint definition))
+           (let ((catalog (current-package-appearance-catalog))
+                 (section (first clawmacs::*package-prompt-sections*)))
+             (write-test-file
+              entrypoint
+              "(clawmacs:register-package-prompt-section
+                 \"org.example.theme\" \"invalid replacement\"
+                 :package \"org.example.theme\")
+               (clawmacs:register-package-appearance-theme
+                (clawmacs:make-appearance-theme-definition
+                 :id '(:package \"org.example.theme\" \"broken\")
+                 :role-overlays
+                 (list
+                  (cons '(:package \"org.example.theme\" \"missing\")
+                        (clawmacs:make-appearance-role-style
+                         :foreground-ink
+                         (clawmacs:make-appearance-ink-spec
+                          :foreground :red))))))")
+             (signals appearance-error
+               (clawmacs::%reload-clawmacs-package definition))
+             (is (eq catalog (current-package-appearance-catalog)))
+             (is (eq section (first clawmacs::*package-prompt-sections*)))
+             (is (gethash key clawmacs::*loaded-packages*)))
+           ;; A valid replacement which a live frame refuses must propagate
+           ;; through the same reload boundary and preserve the old state.
+           (let ((catalog (current-package-appearance-catalog))
+                 (section (first clawmacs::*package-prompt-sections*))
+                 (clawmacs::*appearance-package-live-frame-provider*
+                   (lambda () (list :live-frame)))
+                 (clawmacs::*appearance-package-frame-transition-planner*
+                   (lambda (frame candidate-catalog)
+                     (declare (ignore frame candidate-catalog))
+                     (list :status :failed))))
+             (write-test-file
+              entrypoint
+              "(clawmacs:register-package-appearance-role
+                 (clawmacs:make-appearance-role-definition
+                  :id '(:package \"org.example.theme\" \"new\")
+                  :kind :content))")
+             (signals appearance-error
+               (clawmacs::%reload-clawmacs-package definition))
+             (is (eq catalog (current-package-appearance-catalog)))
+             (is (eq section (first clawmacs::*package-prompt-sections*)))
+             (is (gethash key clawmacs::*loaded-packages*))))
+      (when (probe-file root)
+        (uiop:delete-directory-tree root
+                                    :validate t
+                                    :if-does-not-exist :ignore)))))
+
+(test safe-reload-appearance-isolation-does-not-read-or-write-preferences
+  "Runtime registration refresh never performs appearance file/init startup work."
+  (let ((clawmacs::*appearance-configuration-access-count* 17)
+        (clawmacs::*appearance-startup-resolution-count* 19)
+        (clawmacs::*package-channels* nil)
+        (clawmacs::*available-packages* nil)
+        (clawmacs::*package-registry-loaded-p* nil))
+    (clawmacs::safe-reload-refresh-runtime-registrations nil)
+    (is (= 17 clawmacs::*appearance-configuration-access-count*))
+    (is (= 19 clawmacs::*appearance-startup-resolution-count*))))
+
+(test package-appearance-catalog-generation-and-owner-replacement
+  "One owner batch increments generation once and a reload replaces its own IDs."
+  (with-package-appearance-test-state ()
+    (register-package-appearance-role (package-appearance-test-role "first"))
+    (clawmacs::commit-package-appearance-entrypoint-staging
+     clawmacs::*package-appearance-entrypoint-staging*)
+    (let ((generation (appearance-catalog-generation (current-package-appearance-catalog))))
+      (let ((clawmacs::*package-appearance-entrypoint-staging*
+              (clawmacs::begin-package-appearance-entrypoint-staging
+               (package-appearance-test-definition))))
+        (register-package-appearance-role (package-appearance-test-role "second"))
+        (clawmacs::commit-package-appearance-entrypoint-staging
+         clawmacs::*package-appearance-entrypoint-staging*))
+      (is (= (1+ generation)
+             (appearance-catalog-generation (current-package-appearance-catalog))))
+      (is (null (find-appearance-role-definition
+                 (current-package-appearance-catalog)
+                 (package-appearance-test-id "first"))))
+      (is (find-appearance-role-definition
+           (current-package-appearance-catalog)
+           (package-appearance-test-id "second"))))))
+
+(test empty-same-owner-reload-removes-the-prior-declaration-batch
+  "An entrypoint which stops declaring appearance replaces its old batch with empty."
+  (with-package-appearance-test-state ()
+    (register-package-appearance-role (package-appearance-test-role "old"))
+    (clawmacs::commit-package-appearance-entrypoint-staging
+     clawmacs::*package-appearance-entrypoint-staging*)
+    (let ((generation
+            (appearance-catalog-generation
+             (current-package-appearance-catalog)))
+          (clawmacs::*package-appearance-entrypoint-reload-p* t)
+          (clawmacs::*package-appearance-entrypoint-staging*
+            (clawmacs::begin-package-appearance-entrypoint-staging
+             (package-appearance-test-definition))))
+      (clawmacs::commit-package-appearance-entrypoint-staging
+       clawmacs::*package-appearance-entrypoint-staging*)
+      (is (= (1+ generation)
+             (appearance-catalog-generation
+              (current-package-appearance-catalog))))
+      (is (null
+           (find-appearance-role-definition
+            (current-package-appearance-catalog)
+            (package-appearance-test-id "old"))))
+      (is (= 0
+             (hash-table-count
+              clawmacs::*package-appearance-declarations*))))))
+
 (test appearance-specifications-distinguish-unspecified-components
   "Every appearance axis has an explicit internal inheritance value."
   (let ((typography (make-appearance-typography-spec :face :bold))
@@ -828,6 +1281,42 @@
     (is (eq :no-op
             (appearance-activation-classification-status
              (appearance-activation-result-classification noop))))))
+
+(test appearance-classification-ignores-new-unused-catalog-roles
+  "Installing an unreferenced package role does not change every live axis."
+  (let* ((classic (make-classic-appearance-catalog))
+         (catalog
+           (make-appearance-catalog
+            :role-definitions
+            (append
+             (appearance-catalog-role-definitions classic)
+             (list
+              (make-appearance-role-definition
+               :id '(:package "org.example.theme" "unused")
+               :kind :content
+               :fallback-role :default-text)))
+            :theme-definitions
+            (appearance-catalog-theme-definitions classic)
+            :built-in-overlays
+            (appearance-catalog-built-in-overlays classic)
+            :generation
+            (1+ (appearance-catalog-generation classic))))
+         (profile (make-appearance-profile))
+         (active
+           (resolve-appearance-profile-bundle
+            classic profile :profile-revision 0
+            :font-inventory-generation 0 :port-identity :test-port))
+         (candidate
+           (resolve-appearance-profile-bundle
+            catalog profile :profile-revision 1
+            :font-inventory-generation 0 :port-identity :test-port))
+         (classification
+           (clawmacs::classify-appearance-bundle-delta
+            catalog active candidate)))
+    (is (eq :no-op
+            (appearance-activation-classification-status classification)))
+    (is (null
+         (appearance-activation-classification-deltas classification)))))
 
 (test appearance-activation-preparation-retains-a-structured-resolution-diagnostic
   "A missing candidate theme fails before any caller could publish a bundle."

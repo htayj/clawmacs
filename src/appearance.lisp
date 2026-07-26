@@ -1626,14 +1626,18 @@ decorations deliberately remain outside its live scope."
                (and active-entry
                     (resolved-appearance-role-style (cdr active-entry)))))
         (dolist (axis '(:typography :foreground-ink :surface :decoration))
-          (unless (equal (and active-style
-                              (appearance-role-style-axis-value active-style axis))
-                         (appearance-role-style-axis-value candidate-style axis))
-            (push (list :role role-id
-                        :axis axis
-                        :classification
-                        (classify-appearance-delta-axis catalog role-id axis))
-                  deltas)))))
+          ;; A newly declared semantic role has no active rendered output.
+          ;; Merely adding it cannot change the existing frame, so defer delta
+          ;; classification until some profile/output stack actually uses it.
+          (when active-entry
+            (unless (equal
+                     (appearance-role-style-axis-value active-style axis)
+                     (appearance-role-style-axis-value candidate-style axis))
+              (push (list :role role-id
+                          :axis axis
+                          :classification
+                          (classify-appearance-delta-axis catalog role-id axis))
+                    deltas))))))
     (let ((deltas (nreverse deltas)))
       (%make-appearance-activation-classification
        :status (cond ((null deltas) :no-op)

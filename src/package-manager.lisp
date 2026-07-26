@@ -130,6 +130,148 @@ Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
   "Dynamic list of allowed resource types while loading one package entrypoint.
 When NIL, all package-owned resource types are allowed.")
 
+(defvar *package-appearance-entrypoint-staging* nil
+  "Dynamic appearance declaration batch for one package entrypoint.
+The implementation is defined by appearance-packages.lisp; defining the
+special here lets the loader establish its dynamic extent before it is used.")
+
+(defvar *defer-package-appearance-removal-p* nil
+  "True while a package reload retains its old declaration batch until replacement.")
+
+(defvar *package-appearance-entrypoint-reload-p* nil
+  "True only for the entrypoint half of an owner-scoped staged reload.")
+
+(defvar *package-appearance-publication-batch* nil
+  "Opaque deferred appearance candidate for one outer active-package reload.")
+
+(defvar *propagate-package-entrypoint-errors-p* nil
+  "True when a transactional reload requires an entrypoint failure to escape.")
+
+(defvar *package-appearance-batch-begin-function* (lambda () nil)
+  "Return an opaque snapshot while excluding frame registration from a batch.")
+
+(defvar *package-appearance-batch-restore-function*
+  (lambda (snapshot) (declare (ignore snapshot)) nil)
+  "Restore the complete appearance/frame snapshot after a batch failure.")
+
+(defvar *package-appearance-batch-end-function*
+  (lambda (snapshot) (declare (ignore snapshot)) nil)
+  "Release coordination acquired by the batch begin function.")
+
+(defstruct package-runtime-registry-snapshot
+  "Registered package resources retained across a destructive attempt.
+
+This deliberately does not promise rollback of arbitrary entrypoint side
+effects or arbitrary function redefinition.  Package lifecycle transactions
+cover only resources installed through the documented package registration
+APIs, whose registries and registered advice targets are listed below."
+  entries
+  hook-values
+  advice-fdefinitions)
+
+(defparameter *package-runtime-registry-symbols*
+  '(*package-prompt-sections*
+    *tool-table*
+    *agent-tool-metadata-table*
+    *agent-tool-name-table*
+    *agent-definition-registry*
+    *pipeline-definition-registry*
+    *pipeline-test-profile-registry*
+    *hook-metadata-table*
+    *package-hook-registrations*
+    *advice-table*
+    *media-provider-registry*
+    *media-default-provider*
+    *command-table*
+    *slash-command-table*
+    *buffer-type-registry*
+    *buffer-input-presentation-providers*
+    *extended-docs*
+    *loaded-packages*)
+  "Ordinary registries changed by package entrypoints and package reset.")
+
+(defun copy-package-runtime-hash-table (table &key value-copier)
+  "Return a private shallow copy of TABLE, optionally copying each value."
+  (let ((copy (make-hash-table :test (hash-table-test table)
+                               :size (max 1 (hash-table-count table)))))
+    (maphash (lambda (key value)
+               (setf (gethash key copy)
+                     (if value-copier (funcall value-copier value) value)))
+             table)
+    copy))
+
+(defun copy-package-runtime-registry-value (symbol value)
+  "Copy one registry VALUE without copying immutable registered definitions."
+  (cond
+    ((hash-table-p value)
+     (copy-package-runtime-hash-table
+      value
+      :value-copier
+      (and (eq symbol '*advice-table*)
+           (lambda (state)
+             (let ((copy (copy-structure state)))
+               (setf (advice-state-entries copy)
+                     (copy-list (advice-state-entries state)))
+               copy)))))
+    ((listp value) (copy-list value))
+    (t value)))
+
+(defun snapshot-package-runtime-registries ()
+  "Capture ordinary package registries while runtime admission is closed."
+  (let ((entries nil)
+        (hook-values nil)
+        (advice-fdefinitions nil))
+    (dolist (symbol *package-runtime-registry-symbols*)
+      (when (boundp symbol)
+        (let ((value (symbol-value symbol)))
+          (push (list symbol value
+                      (copy-package-runtime-registry-value symbol value))
+                entries))))
+    (when (boundp '*package-hook-registrations*)
+      (dolist (registration *package-hook-registrations*)
+        (let ((hook-var (package-hook-registration-hook-var registration)))
+          (when (and (boundp hook-var)
+                     (not (assoc hook-var hook-values :test #'eq)))
+            (push (cons hook-var (copy-list (symbol-value hook-var)))
+                  hook-values)))))
+    (when (boundp '*advice-table*)
+      (maphash (lambda (symbol state)
+                 (declare (ignore state))
+                 (when (fboundp symbol)
+                   (push (cons symbol (fdefinition symbol))
+                         advice-fdefinitions)))
+               *advice-table*))
+    (make-package-runtime-registry-snapshot
+     :entries entries
+     :hook-values hook-values
+     :advice-fdefinitions advice-fdefinitions)))
+
+(defun restore-package-runtime-registries (snapshot package-name-or-names)
+  "Restore SNAPSHOT after one or more package reset/reload attempts fail."
+  ;; First remove hook/advice effects introduced by the failed entrypoint,
+  ;; including targets which were not present in the old snapshot.
+  (dolist (package-name
+           (if (listp package-name-or-names)
+               package-name-or-names
+               (list package-name-or-names)))
+    (ignore-errors (remove-package-hook-registrations package-name))
+    (ignore-errors (remove-package-advices package-name)))
+  (dolist (entry (package-runtime-registry-snapshot-entries snapshot))
+    (destructuring-bind (symbol original saved) entry
+      (declare (ignore original))
+      ;; Publish one complete private value.  Readers can observe either the
+      ;; failed-attempt registry or the restored registry, never a CLRHASH /
+      ;; MAPHASH interval exposing a partially rebuilt live table.  Documented
+      ;; package APIs do not promise registry object identity.
+      (setf (symbol-value symbol)
+            (copy-package-runtime-registry-value symbol saved))))
+  (dolist (entry (package-runtime-registry-snapshot-hook-values snapshot))
+    (setf (symbol-value (car entry)) (copy-list (cdr entry))))
+  (dolist (entry
+           (package-runtime-registry-snapshot-advice-fdefinitions snapshot))
+    (setf (fdefinition (car entry)) (cdr entry)))
+  nil)
+
 (defvar *package-install-record-file-name* "packrat.json"
   "Sidecar metadata file stored alongside each installed package.")
 
@@ -1664,10 +1806,19 @@ Returns a normalized plist or NIL on failure."
     (handler-case
         (let ((*default-pathname-defaults* (package-definition-root definition))
               (*package* (find-package :clawmacs))
-              (*current-clawmacs-package* package-name))
+              (*current-clawmacs-package* package-name)
+              (*package-appearance-entrypoint-staging*
+                (and (fboundp 'begin-package-appearance-entrypoint-staging)
+                     (funcall 'begin-package-appearance-entrypoint-staging definition))))
           (load entrypoint :verbose nil :print nil)
           (register-package-manifest-prompt-section definition)
           (register-package-manifest-slash-commands definition)
+          ;; Appearance declarations are collected for the entire entrypoint,
+          ;; then validated and published exactly once.  This permits mutually
+          ;; referring same-owner declarations without exposing partial graphs.
+          (when *package-appearance-entrypoint-staging*
+            (funcall 'commit-package-appearance-entrypoint-staging
+                     *package-appearance-entrypoint-staging*))
           (setf (gethash install-key *loaded-packages*) package-name)
           (file-debug-log "package"
                           "loaded package ~A from ~A"
@@ -1678,7 +1829,9 @@ Returns a normalized plist or NIL on failure."
         (emit-package-warning "Failed to load package ~A from ~A: ~A"
                               package-name
                               (namestring entrypoint)
-                              e)))))
+                              e)
+        (when *propagate-package-entrypoint-errors-p*
+          (error e))))))
 
 (defun load-package-definition-entrypoint (definition)
   "Load DEFINITION's entrypoint exactly once across concurrent callers."
@@ -1701,34 +1854,54 @@ Returns a normalized plist or NIL on failure."
          (name (and definition (package-definition-name definition))))
     (unless definition
       (return-from %reset-package-runtime-state nil))
-    (setf *package-prompt-sections*
-          (remove name
-                  *package-prompt-sections*
-                  :key #'package-prompt-section-package
-                  :test #'string=))
-    (dolist (metadata (package-owned-tool-metadata name))
-      (unregister-agent-tool-metadata (agent-tool-metadata-symbol metadata)))
-    (when (fboundp 'remove-registered-tool-definitions-for-package)
-      (funcall (symbol-function 'remove-registered-tool-definitions-for-package)
+    (let ((runtime-snapshot (snapshot-package-runtime-registries)))
+      (handler-case
+          ;; Refuse unsafe package appearance removal before deleting ordinary
+          ;; registrations.  Reservation/release failures later in the same
+          ;; transaction restore this complete ordinary runtime snapshot.
+          (multiple-value-bind
+                (appearance-catalog appearance-plans appearance-owner)
+              (if (and (not *defer-package-appearance-removal-p*)
+                       (fboundp 'prepare-package-appearance-removal))
+                  (funcall 'prepare-package-appearance-removal definition)
+                  (values nil nil nil))
+            (setf *package-prompt-sections*
+                  (remove name
+                          *package-prompt-sections*
+                          :key #'package-prompt-section-package
+                          :test #'string=))
+            (dolist (metadata (package-owned-tool-metadata name))
+              (unregister-agent-tool-metadata
+               (agent-tool-metadata-symbol metadata)))
+            (when (fboundp 'remove-registered-tool-definitions-for-package)
+              (funcall
+               (symbol-function
+                'remove-registered-tool-definitions-for-package)
                name))
-    (when (fboundp 'remove-agent-definitions-for-package)
-      (funcall 'remove-agent-definitions-for-package name))
-    (when (fboundp 'remove-pipeline-registrations-for-package)
-      (funcall 'remove-pipeline-registrations-for-package name))
-    (when (fboundp 'remove-package-hook-registrations)
-      (funcall 'remove-package-hook-registrations name))
-    (when (fboundp 'remove-package-advices)
-      (funcall 'remove-package-advices name))
-    (when (fboundp 'remove-media-providers-for-package)
-      (funcall 'remove-media-providers-for-package name))
-    (remove-command-metadata-for-package name)
-    (remove-slash-commands-for-package name)
-    (remove-buffer-types-for-package name)
-    (remove-buffer-input-presentation-providers-for-package name)
-    (remove-extended-docs-for-package name)
-    (remhash (package-install-key (package-definition-root definition))
-             *loaded-packages*)
-    definition))
+            (when (fboundp 'remove-agent-definitions-for-package)
+              (funcall 'remove-agent-definitions-for-package name))
+            (when (fboundp 'remove-pipeline-registrations-for-package)
+              (funcall 'remove-pipeline-registrations-for-package name))
+            (when (fboundp 'remove-package-hook-registrations)
+              (funcall 'remove-package-hook-registrations name))
+            (when (fboundp 'remove-package-advices)
+              (funcall 'remove-package-advices name))
+            (when (fboundp 'remove-media-providers-for-package)
+              (funcall 'remove-media-providers-for-package name))
+            (remove-command-metadata-for-package name)
+            (remove-slash-commands-for-package name)
+            (remove-buffer-types-for-package name)
+            (remove-buffer-input-presentation-providers-for-package name)
+            (remove-extended-docs-for-package name)
+            (remhash (package-install-key (package-definition-root definition))
+                     *loaded-packages*)
+            (when appearance-catalog
+              (funcall 'commit-package-appearance-removal
+                       appearance-catalog appearance-plans appearance-owner))
+            definition)
+        (error (condition)
+          (restore-package-runtime-registries runtime-snapshot name)
+          (error condition))))))
 
 (defun reset-package-runtime-state (package)
   "Remove PACKAGE registrations only after process quiescence is proven."
@@ -1738,9 +1911,28 @@ Returns a normalized plist or NIL on failure."
 
 (defun %reload-clawmacs-package (package)
   "Reload PACKAGE by removing package-owned runtime state, then loading it."
-  (let ((definition (reset-package-runtime-state package)))
-    (when definition
-      (load-clawmacs-package definition))))
+  (let* ((definition (typecase package
+                       (package-definition package)
+                       (t (find-installed-package package))))
+         (name (and definition (package-definition-name definition))))
+    (unless definition
+      (return-from %reload-clawmacs-package nil))
+    (let ((runtime-snapshot (snapshot-package-runtime-registries))
+          (*defer-package-appearance-removal-p* t)
+          (*package-appearance-entrypoint-reload-p* t)
+          (*propagate-package-entrypoint-errors-p* t)
+          (completed-p nil))
+      (unwind-protect
+           (let ((reset-definition (reset-package-runtime-state definition)))
+             (unless reset-definition
+               (error "Package ~A could not be reset for reload." name))
+             (let ((result (load-clawmacs-package reset-definition)))
+               (unless result
+                 (error "Package ~A entrypoint did not reload." name))
+               (setf completed-p t)
+               result))
+        (unless completed-p
+          (restore-package-runtime-registries runtime-snapshot name))))))
 
 (defun reload-clawmacs-package (package)
   "Reload PACKAGE only after process quiescence is proven."
@@ -1750,23 +1942,79 @@ Returns a normalized plist or NIL on failure."
 
 (defun %reload-active-packages (&key buffer agent-name)
   "Reload packages active for BUFFER/AGENT-NAME and return loaded definitions."
-  (let ((loaded nil))
-    (dolist (name (active-package-names :buffer buffer :agent-name agent-name))
-      (let ((definition (find-installed-package name :buffer buffer)))
-        (cond
-          ((null definition)
-           (emit-package-warning "Enabled Clawmacs package ~A is not installed"
-                                 name))
-          (t
-           (let ((result (reload-clawmacs-package definition)))
-             (when result
-               (when (fboundp 'register-package-agent-tool-provider-definitions)
-                 (funcall
-                  (symbol-function
-                   'register-package-agent-tool-provider-definitions)
-                  (package-definition-name result)))
-               (push result loaded)))))))
-    (nreverse loaded)))
+  (let* ((names (active-package-names
+                 :buffer buffer :agent-name agent-name))
+         (loaded nil)
+         (runtime-snapshot (snapshot-package-runtime-registries))
+         (appearance-snapshot nil)
+         (appearance-batch-started-p nil)
+         (*package-appearance-publication-batch* nil)
+         (completed-p nil))
+    (unwind-protect
+         (progn
+           ;; Establish cleanup before the deferred candidate constructor can
+           ;; fail.  The frame batch excludes user edits while its catalog
+           ;; base is captured.
+           (setf appearance-snapshot
+                 (funcall *package-appearance-batch-begin-function*)
+                 appearance-batch-started-p t)
+           (setf *package-appearance-publication-batch*
+                 (and (fboundp
+                       'begin-package-appearance-publication-batch)
+                      (funcall
+                       'begin-package-appearance-publication-batch)))
+           (handler-case
+               (progn
+                 (dolist (name names)
+                   (let ((definition
+                           (find-installed-package name :buffer buffer)))
+                     (cond
+                       ((null definition)
+                        (emit-package-warning
+                         "Enabled Clawmacs package ~A is not installed"
+                         name))
+                       (t
+                        (let ((result (reload-clawmacs-package definition)))
+                          (unless result
+                            (error "Active package ~A failed to reload." name))
+                          (when
+                              (fboundp
+                               'register-package-agent-tool-provider-definitions)
+                            (funcall
+                             (symbol-function
+                              'register-package-agent-tool-provider-definitions)
+                             (package-definition-name result)))
+                          (push result loaded))))))
+                 ;; Appearance publication is deliberately last.  Every
+                 ;; entrypoint and every ordinary package registration above
+                 ;; must succeed before one combined catalog/frame transaction
+                 ;; becomes visible.
+                 (when (and *package-appearance-publication-batch*
+                            (fboundp
+                             'commit-package-appearance-publication-batch))
+                   (funcall 'commit-package-appearance-publication-batch
+                            *package-appearance-publication-batch*))
+                 (setf completed-p t)
+                 (nreverse loaded))
+             (error (condition)
+               (restore-package-runtime-registries
+                runtime-snapshot names)
+               ;; A deferred batch has not published anything when its final
+               ;; combined commit fails.  Restoring its frame snapshot would
+               ;; itself create the appearance transaction this boundary is
+               ;; designed to avoid.  Keep the legacy fallback only when the
+               ;; appearance module cannot supply deferred publication.
+               (unless *package-appearance-publication-batch*
+                 (funcall *package-appearance-batch-restore-function*
+                          appearance-snapshot))
+               (error condition))))
+      (when appearance-batch-started-p
+        (funcall *package-appearance-batch-end-function*
+                 appearance-snapshot))
+      (unless completed-p
+        ;; The handler performs rollback before unwinding.  This flag exists
+        ;; only to make that sequencing explicit at the cleanup boundary.
+        nil))))
 
 (defun reload-active-packages (&key buffer agent-name)
   "Reload active packages only after process quiescence is proven."
