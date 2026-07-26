@@ -1059,7 +1059,7 @@ use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
              into diagnostics
              when (= (length diagnostics) +appearance-runtime-diagnostic-limit+)
                do (return diagnostics)
-             finally (return diagnostics))))))
+             finally (return diagnostics)))))))
 
 (defun make-classic-appearance-catalog ()
   "Return the version-1 :CLASSIC declarations and exact current output goldens."
