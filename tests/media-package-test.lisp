@@ -379,7 +379,8 @@
        (lambda (_request)
          (declare (ignore _request))
          (clawmacs:make-media-provider-outcome :status :failed
-                                                :public-error "not used"))))
+                                                :public-error "not used")))
+      )
     (clawmacs:set-media-default-provider "owned-fake")
     (is (clawmacs:find-media-provider "owned-fake"))
     (clawmacs::reset-package-runtime-state "media")
