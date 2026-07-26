@@ -81,6 +81,90 @@ these tests exercise construction-time space requirements only."
      :inherited nil)
     (nreverse entries)))
 
+(test classic-appearance-wire-adapter-preserves-the-exact-role-contract
+  "Legacy presentation faces map to the resolved v1 role stacks exactly."
+  (dolist (entry '((:default-text (:default-text))
+                   (:selector-title (:selector-title))
+                   (:selector-header (:selector-header))
+                   (:selector-entry (:selector-entry))
+                   (:selector-selected (:selector-entry :selector-selection))
+                   (:selector-separator (:selector-separator))
+                   (:selector-footer (:selector-footer))
+                   (:tool-result (:tool-result))
+                   (:system (:system))
+                   (:disabled (:default-text :disabled))
+                   (:error (:error))))
+    (is (equal (second entry)
+               (clawmacs::chat-appearance-wire-role-stack (first entry)))))
+  (let* ((frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "classic-appearance-wire"
+                                      :session-persistence-mode :ephemeral)))
+         (selected
+           (clawmacs::chat-frame-resolve-appearance-role
+            frame '(:selector-entry :selector-selection)))
+         (style (resolved-appearance-role-style selected)))
+    (is (equal '(0.10 0.38 0.65)
+               (appearance-ink-spec-foreground
+                (appearance-role-style-foreground-ink style))))
+    (is (eq :bold
+            (appearance-typography-spec-face
+             (appearance-role-style-typography style))))
+    (is (equal '(:transcript-pane :transcript-user)
+               (clawmacs::chat-message-appearance-role-stack
+                (make-message :user))))
+    (is (equal '(:transcript-pane :transcript-tool)
+               (clawmacs::chat-message-appearance-role-stack
+                (make-message :tool-result))))))
+
+(test chat-frame-appearance-state-is-isolated-by-frame
+  "Profiles, role keys, and runtime unknown-role diagnostics never cross frames."
+  (let* ((default-profile (make-appearance-profile))
+         (overridden-profile
+           (make-appearance-profile
+            :role-overrides
+            (list
+             (cons :transcript-user
+                   (make-appearance-role-style
+                    :foreground-ink
+                    (make-appearance-ink-spec :foreground '(0.80 0.20 0.30)))))))
+         (first (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "appearance-frame-one"
+                                      :session-persistence-mode :ephemeral)
+                 :appearance-profile default-profile))
+         (second (clim:make-application-frame
+                  'clawmacs::clawmacs-chat-frame
+                  :buffer (make-buffer "appearance-frame-two"
+                                       :session-persistence-mode :ephemeral)
+                  :appearance-profile overridden-profile))
+         (first-role (clawmacs::chat-frame-resolve-appearance-role
+                      first '(:transcript-pane :transcript-user)))
+         (second-role (clawmacs::chat-frame-resolve-appearance-role
+                       second '(:transcript-pane :transcript-user))))
+    (is (equal '(0.10 0.25 0.55)
+               (appearance-ink-spec-foreground
+                (appearance-role-style-foreground-ink
+                 (resolved-appearance-role-style first-role)))))
+    (is (equal '(0.80 0.20 0.30)
+               (appearance-ink-spec-foreground
+                (appearance-role-style-foreground-ink
+                 (resolved-appearance-role-style second-role)))))
+    (is-false (eq (clawmacs::chat-frame-appearance-resolved-roles first)
+                  (clawmacs::chat-frame-appearance-resolved-roles second)))
+    (is-false (equal (clawmacs::chat-frame-appearance-role-key
+                      first '(:transcript-pane :transcript-user))
+                     (clawmacs::chat-frame-appearance-role-key
+                      second '(:transcript-pane :transcript-user))))
+    (clawmacs::chat-frame-resolve-appearance-role first '(:unknown-wire-face))
+    (clawmacs::chat-frame-resolve-appearance-role first '(:unknown-wire-face))
+    (clawmacs::chat-frame-resolve-appearance-role second '(:unknown-wire-face))
+    (is (= 1 (length (clawmacs::chat-frame-appearance-runtime-diagnostics first))))
+    (is (= 1 (length (clawmacs::chat-frame-appearance-runtime-diagnostics second))))
+    (is (equal '(0 :unknown-wire-face)
+               (appearance-diagnostic-deduplication-key
+                (first (clawmacs::chat-frame-appearance-runtime-diagnostics first)))))))
+
 (test compose-meta-x-prefers-frame-command-and-preserves-the-key-form
   "M-x resolves to Clawmacs and ESA parses its list-valued key as data."
   (clawmacs::init-default-keymap)

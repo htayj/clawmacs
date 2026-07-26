@@ -1369,7 +1369,7 @@ rendering state."
         (emit-chat-frame-e2e-snapshot
          frame :reason "pane-rendered" :pane pane-name)))))
 
-(defun display-minibuffer-candidate-row (stream row kind)
+(defun display-minibuffer-candidate-row (frame stream row kind)
   "Display one semantic interaction ROW on STREAM as a presentation."
   (let* ((item (getf row :item))
          (index (getf row :index))
@@ -1382,10 +1382,12 @@ rendering state."
                kind index item)))
     (flet ((emit-row ()
              (format stream " ~A " marker)
-             (if selected-p
-                 (clim:with-text-face (stream :bold)
-                   (format stream "~A" display))
-                 (format stream "~A" display))))
+             (call-with-chat-appearance-role
+              frame stream
+              (if selected-p
+                  '(:minibuffer-pane :selector-entry :selector-selection)
+                  '(:minibuffer-pane :selector-entry))
+              (lambda () (format stream "~A" display)))))
       (clim:with-output-as-presentation
           (stream ref 'chat-interaction-candidate :single-box t)
         (emit-row)))))
@@ -1395,17 +1397,22 @@ rendering state."
   (let ((*chat-interaction-state* (chat-frame-interaction-state frame)))
     (let ((kind (chat-interaction-pane-kind)))
       (when kind
-        (write-char #\Space stream)
-        (write-chat-interaction-prompt-line
-         stream kind :display-cursor-p t)
+        (call-with-chat-appearance-role
+         frame stream '(:minibuffer-pane :default-text)
+         (lambda ()
+           (write-char #\Space stream)
+           (write-chat-interaction-prompt-line
+            stream kind :display-cursor-p t)))
         (let ((rows (chat-interaction-pane-rows kind)))
           (if rows
               (dolist (row rows)
                 (terpri stream)
-                (display-minibuffer-candidate-row stream row kind))
+                (display-minibuffer-candidate-row frame stream row kind))
               (unless (and (eq kind :minibuffer)
                            (eq *minibuffer-mode* :prompt))
-                (format stream "~%   No matches")))))
+                (call-with-chat-appearance-role
+                 frame stream '(:minibuffer-pane :selector-separator)
+                 (lambda () (format stream "~%   No matches"))))))
       (emit-chat-pane-rendered frame "minibuffer"
                                :active (not (null kind))
                                :kind kind
@@ -1413,7 +1420,6 @@ rendering state."
 
 (defun display-chat-info-pane (frame stream)
   "Display an Emacs-style status line for FRAME."
-  (declare (ignore frame))
   (let* ((pane (and (typep stream 'esa:info-pane) stream))
          (master (and pane (ignore-errors (esa:master-pane pane))))
          (frame (or (and master (ignore-errors (clim:pane-frame master)))
@@ -1424,13 +1430,16 @@ rendering state."
       (multiple-value-bind (provider model)
           (handler-case (resolve-buffer-provider-and-model buf)
             (error () (values nil nil)))
-        (format stream " ~A  ~A  ~A  ~A"
-                (buffer-name buf)
-                (buffer-major-mode buf)
-                (chat-frame-buffer-status-label buf)
-                (if (and provider model)
-                    (model-selector-display provider model)
-                    "no model")))
+        (call-with-chat-appearance-role
+         frame stream '(:info-pane :modeline)
+         (lambda ()
+           (format stream " ~A  ~A  ~A  ~A"
+                   (buffer-name buf)
+                   (buffer-major-mode buf)
+                   (chat-frame-buffer-status-label buf)
+                   (if (and provider model)
+                       (model-selector-display provider model)
+                       "no model"))))
       (emit-chat-pane-rendered frame "info"
                                :text (chat-frame-e2e-info-line frame)))))
 
@@ -1438,6 +1447,32 @@ rendering state."
     (esa:esa-frame-mixin clim:standard-application-frame)
   ((buffer :initarg :buffer
            :accessor chat-frame-buffer)
+   (appearance-profile :initarg :appearance-profile
+                       :initform (make-appearance-profile)
+                       :reader chat-frame-appearance-profile
+                       :documentation
+                       "Immutable profile selected for this frame at construction.")
+   (appearance-catalog :initarg :appearance-catalog
+                       :initform (make-classic-appearance-catalog)
+                       :reader chat-frame-appearance-catalog
+                       :documentation
+                       "Immutable appearance declarations resolved by this frame.")
+   (appearance-revision :initform 0
+                        :reader chat-frame-appearance-revision
+                        :documentation
+                        "Frame-local appearance state revision; it is not a render key.")
+   (appearance-resolved-roles :initform (make-hash-table :test #'equal)
+                              :reader chat-frame-appearance-resolved-roles
+                              :documentation
+                              "Frame-local cache from role stacks to resolved styles.")
+   (appearance-role-keys :initform (make-hash-table :test #'equal)
+                         :reader chat-frame-appearance-role-keys
+                         :documentation
+                         "Frame-local structural render keys, one per role stack.")
+   (appearance-runtime-diagnostic-keys :initform (make-hash-table :test #'equal)
+                                       :reader chat-frame-appearance-runtime-diagnostic-keys)
+   (appearance-runtime-diagnostics :initform nil
+                                   :accessor chat-frame-appearance-runtime-diagnostics)
    (interaction-state :initform (make-chat-interaction-state)
                       :reader chat-frame-interaction-state)
    (compose-synchronized-buffer
@@ -1779,15 +1814,136 @@ implements that input contract before the next gesture is delivered."
   (emit-chat-frame-e2e-snapshot frame :reason "frame-ready")
   (esa:esa-top-level frame))
 
-(defun display-chat-message (stream msg)
+(defun chat-appearance-wire-role-stack (face)
+  "Return the exact appearance role stack for legacy presentation FACE.
+
+Unknown runtime faces deliberately remain in the returned stack.  The pure
+runtime resolver maps them to :DEFAULT-TEXT and produces a catalog-generation
+keyed diagnostic that this frame records once."
+  (case face
+    (:default-text '(:default-text))
+    (:selector-title '(:selector-title))
+    (:selector-header '(:selector-header))
+    (:selector-entry '(:selector-entry))
+    (:selector-selected '(:selector-entry :selector-selection))
+    (:selector-separator '(:selector-separator))
+    (:selector-footer '(:selector-footer))
+    (:tool-result '(:tool-result))
+    (:system '(:system))
+    (:disabled '(:default-text :disabled))
+    (:error '(:error))
+    (t (list face))))
+
+(defun chat-frame-resolve-appearance-role (frame role-stack)
+  "Resolve ROLE-STACK through FRAME's immutable appearance state.
+
+The cache and all diagnostic de-duplication are frame-local.  Cache entries
+are keyed by semantic roles, while callers use the resolver's structural key
+for incremental redisplay so an unrelated role never invalidates this output."
+  (let* ((roles (copy-list role-stack))
+         (cache (chat-frame-appearance-resolved-roles frame))
+         (missing (gensym "MISSING"))
+         (cached (gethash roles cache missing)))
+    (if (not (eq cached missing))
+        cached
+        (let* ((profile (chat-frame-appearance-profile frame))
+               (resolved
+                 (resolve-runtime-appearance-role-stack
+                  (chat-frame-appearance-catalog frame)
+                  (appearance-profile-selected-theme profile)
+                  roles
+                  :unsaved-overrides
+                  (appearance-profile-role-overrides profile))))
+          (setf (gethash roles cache) resolved
+                (gethash roles (chat-frame-appearance-role-keys frame))
+                (resolved-appearance-role-structural-key resolved))
+          (dolist (diagnostic (resolved-appearance-role-diagnostics resolved))
+            (let ((key (appearance-diagnostic-deduplication-key diagnostic)))
+              (unless (gethash key (chat-frame-appearance-runtime-diagnostic-keys frame))
+                (setf (gethash key
+                               (chat-frame-appearance-runtime-diagnostic-keys frame))
+                      t)
+                (push diagnostic (chat-frame-appearance-runtime-diagnostics frame)))))
+          resolved))))
+
+(defun chat-frame-appearance-role-key (frame role-stack)
+  "Return FRAME's structural incremental-redisplay key for ROLE-STACK."
+  (let ((roles (copy-list role-stack)))
+    (chat-frame-resolve-appearance-role frame roles)
+    (copy-tree (gethash roles (chat-frame-appearance-role-keys frame)))))
+
+(defun appearance-foreground-ink (foreground)
+  "Translate the persisted portable RGB representation to a CLIM ink."
+  (cond
+    ((and (listp foreground)
+          (= (length foreground) 3)
+          (every #'realp foreground))
+     (apply #'clim:make-rgb-color foreground))
+    ((and (listp foreground)
+          (eq (first foreground) :rgb)
+          (= (length foreground) 4)
+          (every #'realp (rest foreground)))
+     (apply #'clim:make-rgb-color (rest foreground)))
+    (t foreground)))
+
+(defun resolved-appearance-text-style (resolved)
+  "Return a portable partial CLIM text style for RESOLVED, or NIL.
+
+NIL components intentionally inherit the target stream's existing text style;
+this is the standard CLIM composition used by WITH-TEXT-STYLE."
+  (let ((typography
+          (appearance-role-style-typography
+           (resolved-appearance-role-style resolved))))
+    (unless (appearance-unspecified-p typography)
+      (let ((family (appearance-typography-spec-family typography))
+            (face (appearance-typography-spec-face typography))
+            (size (appearance-typography-spec-size typography)))
+        (unless (and (appearance-unspecified-p family)
+                     (appearance-unspecified-p face)
+                     (appearance-unspecified-p size))
+          (list (if (appearance-unspecified-p family) nil family)
+                (if (appearance-unspecified-p face) nil face)
+                (if (appearance-unspecified-p size) nil size)))))))
+
+(defun call-with-chat-appearance-role (frame stream role-stack function)
+  "Call FUNCTION with FRAME's resolved ROLE-STACK bound at STREAM's output edge."
+  (let* ((resolved (chat-frame-resolve-appearance-role frame role-stack))
+         (style (resolved-appearance-role-style resolved))
+         (ink-spec (appearance-role-style-foreground-ink style))
+         (foreground (and (not (appearance-unspecified-p ink-spec))
+                          (appearance-ink-spec-foreground ink-spec)))
+         (text-style (resolved-appearance-text-style resolved)))
+    (labels ((call-with-text-style ()
+               (if text-style
+                   (clim:with-text-style (stream text-style)
+                     (funcall function))
+                   (funcall function))))
+      (if (appearance-unspecified-p foreground)
+          (call-with-text-style)
+          (clim:with-drawing-options
+              (stream :ink (appearance-foreground-ink foreground))
+            (call-with-text-style))))))
+
+(defun chat-message-appearance-role-stack (msg)
+  "Return the transcript role stack for MSG."
+  (list :transcript-pane
+        (ecase (chat-message-kind msg)
+          (:user :transcript-user)
+          (:agent :transcript-agent)
+          (:tool :transcript-tool)
+          (:system :transcript-system))))
+
+(defun display-chat-message (frame stream msg)
   "Display MSG as one chat-message presentation on STREAM."
   (let ((sender (chat-message-label msg))
         (text (message-text msg)))
     (clim:with-output-as-presentation
         (stream msg 'chat-message :single-box t)
-      (clim:with-drawing-options (stream :ink (chat-message-ink msg))
-        (format stream "~A>~%" sender)
-        (write-string text stream)))
+      (call-with-chat-appearance-role
+       frame stream (chat-message-appearance-role-stack msg)
+       (lambda ()
+         (format stream "~A>~%" sender)
+         (write-string text stream))))
     (terpri stream)
     (terpri stream)))
 
@@ -1805,47 +1961,34 @@ implements that input contract before the next gesture is delivered."
       (format stream "~%  ~D tool result~:P"
               (chat-tool-activity-summary-result-count summary)))))
 
-(defun display-chat-tool-activity-summary (stream summary)
+(defun display-chat-tool-activity-summary (frame stream summary)
   "Display SUMMARY as one collapsed tool-activity presentation."
   (clim:with-output-as-presentation
       (stream summary 'tool-activity-summary :single-box t)
-    (clim:with-drawing-options (stream :ink (clim:make-rgb-color 0.12 0.34 0.18))
-      (write-string (chat-tool-activity-summary-text summary) stream)))
+    (call-with-chat-appearance-role
+     frame stream '(:transcript-pane :transcript-tool)
+     (lambda ()
+       (write-string (chat-tool-activity-summary-text summary) stream))))
   (terpri stream)
   (terpri stream))
 
-(defun display-chat-display-item (stream item)
+(defun display-chat-display-item (frame stream item)
   "Display one transcript ITEM."
   (if (chat-tool-activity-summary-p item)
-      (display-chat-tool-activity-summary stream item)
-      (display-chat-message stream item)))
+      (display-chat-tool-activity-summary frame stream item)
+      (display-chat-message frame stream item)))
 
-(defun buffer-presentation-entry-ink (entry)
-  "Return the ink for one generic buffer presentation ENTRY."
-  (case (getf entry :face)
-    (:selector-title (clim:make-rgb-color 0.16 0.22 0.45))
-    (:selector-header (clim:make-rgb-color 0.18 0.36 0.20))
-    (:selector-footer (clim:make-rgb-color 0.35 0.35 0.35))
-    (:selector-selected (clim:make-rgb-color 0.10 0.38 0.65))
-    (:selector-entry (clim:make-rgb-color 0.20 0.20 0.20))
-    (:tool-result (clim:make-rgb-color 0.12 0.34 0.18))
-    (:system (clim:make-rgb-color 0.45 0.45 0.45))
-    (:disabled (clim:make-rgb-color 0.45 0.45 0.45))
-    (:error (clim:make-rgb-color 0.60 0.12 0.12))
-    (t clim:+foreground-ink+)))
-
-(defun display-buffer-presentation-entry (stream entry)
+(defun display-buffer-presentation-entry (frame stream entry)
   "Display one generic buffer presentation ENTRY on STREAM."
   (let ((text (getf entry :text ""))
         (object (getf entry :object))
         (presentation-type (getf entry :presentation-type)))
     (flet ((emit ()
-             (clim:with-drawing-options
-                 (stream :ink (buffer-presentation-entry-ink entry))
-               (if (eq (getf entry :face) :selector-title)
-                   (clim:with-text-face (stream :bold)
-                     (write-string text stream))
-                   (write-string text stream)))))
+             (call-with-chat-appearance-role
+              frame stream
+              (append '(:transcript-pane)
+                      (chat-appearance-wire-role-stack (getf entry :face)))
+              (lambda () (write-string text stream)))))
       (if (and object presentation-type)
           (clim:with-output-as-presentation
               (stream object presentation-type :single-box t)
@@ -1853,7 +1996,7 @@ implements that input contract before the next gesture is delivered."
           (emit))))
   (terpri stream))
 
-(defun display-buffer-presentation-entries (stream entries &key (namespace :buffer))
+(defun display-buffer-presentation-entries (frame stream entries &key (namespace :buffer))
   "Display generic presentation ENTRIES on STREAM with incremental redisplay."
   (loop :for entry :in entries
         :for index :from 0
@@ -1863,9 +2006,15 @@ implements that input contract before the next gesture is delivered."
                 :unique-id (or (getf entry :unique-id)
                                (list namespace index (getf entry :text "")))
                 :id-test #'equal
-                :cache-value entry
+                :cache-value
+                (list entry
+                      (chat-frame-appearance-role-key
+                       frame
+                       (append '(:transcript-pane)
+                               (chat-appearance-wire-role-stack
+                                (getf entry :face)))))
                 :cache-test #'equal)
-             (display-buffer-presentation-entry stream entry))))
+             (display-buffer-presentation-entry frame stream entry))))
 
 (defun stream-buffer-presentation-columns (stream)
   "Return an approximate text column count available on STREAM."
@@ -1880,16 +2029,16 @@ implements that input contract before the next gesture is delivered."
       *buffer-presentation-default-columns*))
 
 (defun display-buffer-presentation-function
-    (stream buffer function &key (namespace :buffer) columns)
+    (frame stream buffer function &key (namespace :buffer) columns)
   "Display BUFFER entries produced by FUNCTION and return the entry count."
   (let ((entries (call-buffer-presentation-function
                   function
                   buffer
                   (or columns *buffer-presentation-default-columns*))))
-    (display-buffer-presentation-entries stream entries :namespace namespace)
+    (display-buffer-presentation-entries frame stream entries :namespace namespace)
     (length entries)))
 
-(defun display-chat-transcript-feedback (stream buffer)
+(defun display-chat-transcript-feedback (frame stream buffer)
   "Display presentation-buffer feedback messages and return count."
   (let ((items (buffer-presentation-feedback-items buffer))
         (count 0))
@@ -1899,9 +2048,14 @@ implements that input contract before the next gesture is delivered."
           (stream
            :unique-id (chat-display-item-output-id item)
            :id-test #'equal
-           :cache-value (chat-display-item-cache-value item)
+           :cache-value
+           (list (chat-display-item-cache-value item)
+                 (chat-frame-appearance-role-key
+                  frame (if (chat-tool-activity-summary-p item)
+                            '(:transcript-pane :transcript-tool)
+                            (chat-message-appearance-role-stack item))))
            :cache-test #'equal)
-        (display-chat-display-item stream item)))))
+        (display-chat-display-item frame stream item)))))
 
 (defun display-chat-transcript (frame stream)
   "Display FRAME's transcript on STREAM."
@@ -1916,10 +2070,10 @@ implements that input contract before the next gesture is delivered."
       (presentation-function
        (incf item-count
              (display-buffer-presentation-function
-              stream buf presentation-function
+              frame stream buf presentation-function
               :namespace :buffer-presentation
               :columns columns))
-       (incf item-count (display-chat-transcript-feedback stream buf)))
+       (incf item-count (display-chat-transcript-feedback frame stream buf)))
       (items
        (dolist (item items)
          (incf item-count)
@@ -1927,19 +2081,24 @@ implements that input contract before the next gesture is delivered."
              (stream
               :unique-id (chat-display-item-output-id item)
               :id-test #'equal
-              :cache-value (chat-display-item-cache-value item)
+              :cache-value
+              (list (chat-display-item-cache-value item)
+                    (chat-frame-appearance-role-key
+                     frame (if (chat-tool-activity-summary-p item)
+                               '(:transcript-pane :transcript-tool)
+                               (chat-message-appearance-role-stack item))))
               :cache-test #'equal)
-           (display-chat-display-item stream item))))
+           (display-chat-display-item frame stream item))))
       (t
-       (clim:with-drawing-options
-           (stream :ink (clim:make-rgb-color 0.45 0.45 0.45))
-         (format stream "No messages yet.~%"))))
+       (call-with-chat-appearance-role
+        frame stream '(:transcript-pane :transcript-empty)
+        (lambda () (format stream "No messages yet.~%")))))
     (when input-functions
       (let ((*buffer-input-presentation-text* (chat-frame-e2e-compose-text frame)))
         (dolist (input-function input-functions)
           (incf item-count
                 (display-buffer-presentation-function
-                 stream buf input-function
+                 frame stream buf input-function
                  :namespace :buffer-input-presentation
                  :columns columns)))))
     (emit-chat-pane-rendered frame "transcript"
