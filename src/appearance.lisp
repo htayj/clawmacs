@@ -24,6 +24,8 @@
     (:content . (:typography :foreground-ink :decoration))
     (:state . (:typography :foreground-ink :decoration))))
 
+(defconstant +appearance-runtime-diagnostic-limit+ 16)
+
 (defun appearance-logical-sizes ()
   "Return a fresh stable-order copy of supported logical text sizes."
   (copy-list +appearance-logical-sizes+))
@@ -57,23 +59,10 @@
                      (appearance-condition-axis condition)
                      (appearance-condition-value condition)))))
 
-(defmethod initialize-instance :after ((condition appearance-condition) &key)
-  "Defensively copy diagnostic payloads before a condition becomes observable."
-  (dolist (slot '(origin role axis value path port available-choices
-                  suggested-repairs))
-    (setf (slot-value condition slot)
-          (copy-appearance-value (slot-value condition slot)))))
-
 (defun copy-appearance-condition-initargs (initargs)
   "Copy all diagnostic initarg values before condition initialization."
   (loop :for (key value) :on initargs :by #'cddr
         :append (list key (copy-appearance-value value))))
-
-(defmethod shared-initialize :around ((condition appearance-condition)
-                                      slot-names &rest initargs)
-  "Make MAKE-CONDITION and WARN retain no caller-owned diagnostic payload."
-  (apply #'call-next-method condition slot-names
-         (copy-appearance-condition-initargs initargs)))
 
 (defmethod appearance-condition-origin :around ((condition appearance-condition))
   (copy-appearance-value (call-next-method)))
@@ -137,10 +126,39 @@
        copy))
     (t value)))
 
+(defun make-appearance-condition (condition-class &rest initargs)
+  "Construct an appearance condition with copied diagnostic payloads.
+
+Appearance condition classes are public handling types.  Application code
+must construct them through this function rather than CL:MAKE-CONDITION, whose
+implementation-specific initialization path cannot provide this copy boundary."
+  (unless (nth-value 0 (subtypep condition-class 'appearance-condition))
+    (error "~S is not an appearance condition class." condition-class))
+  (apply #'make-condition condition-class
+         (copy-appearance-condition-initargs initargs)))
+
+(defun signal-appearance-condition (condition-class &rest initargs)
+  "Construct and signal an appearance condition through the mandatory boundary."
+  (let ((condition (apply #'make-appearance-condition condition-class initargs)))
+    (cond ((typep condition 'warning) (warn condition))
+          ((typep condition 'error) (error condition))
+          (t (signal condition)))))
+
+(defun error-appearance-condition (condition-class &rest initargs)
+  "Construct and signal an appearance error through the mandatory boundary."
+  (error (apply #'make-appearance-condition condition-class initargs)))
+
+(defun warn-appearance-condition (condition-class &rest initargs)
+  "Construct and warn an appearance warning through the mandatory boundary."
+  (let ((condition (apply #'make-appearance-condition condition-class initargs)))
+    (unless (typep condition 'warning)
+      (error "~S is not an appearance warning class." condition-class))
+    (warn condition)))
+
 (defun validate-appearance-component (value axis)
   "Reject NIL as an appearance style component and return VALUE."
   (when (null value)
-    (error 'invalid-appearance-component :axis axis :value value))
+    (error-appearance-condition 'invalid-appearance-component :axis axis :value value))
   value)
 
 (defstruct (appearance-typography-spec
@@ -227,8 +245,10 @@
 (defun validate-appearance-leaf (value axis &key allow-none-p)
   "Return VALUE when it is a permitted explicit leaf for AXIS."
   (validate-appearance-component value axis)
+  (when (eq value :unspecified)
+    (error-appearance-condition 'invalid-appearance-component :axis axis :value value))
   (when (and (eq value :none) (not allow-none-p))
-    (error 'invalid-appearance-component :axis axis :value value))
+    (error-appearance-condition 'invalid-appearance-component :axis axis :value value))
   value)
 
 (defun make-appearance-typography-spec
@@ -285,15 +305,15 @@
   "Construct a version-1 deterministic decoration declaration."
   (when (and (not (appearance-unspecified-p kind))
              (not (member kind '(:none :selection-marker) :test #'eq)))
-    (error 'invalid-appearance-component :axis :decoration :value kind))
+    (error-appearance-condition 'invalid-appearance-component :axis :decoration :value kind))
   (when (and (not (appearance-unspecified-p parameters))
              (or (not (and (listp parameters)
                            (= (length parameters) 2)
                            (eq (first parameters) :marker)
                            (stringp (second parameters))))
                  (not (eq kind :selection-marker))))
-    (error 'invalid-appearance-component :axis :decoration-parameters
-           :value parameters))
+    (error-appearance-condition 'invalid-appearance-component
+                                :axis :decoration-parameters :value parameters))
   (%make-appearance-decoration-spec
    :kind (if (appearance-unspecified-p kind)
              *appearance-unspecified*
@@ -314,7 +334,7 @@
   (cond
     ((appearance-unspecified-p value) value)
     ((typep value expected-type) value)
-    (t (error 'invalid-appearance-component :axis axis :value value))))
+    (t (error-appearance-condition 'invalid-appearance-component :axis axis :value value))))
 
 (defun make-appearance-role-style
     (&key (typography *appearance-unspecified*)
@@ -350,7 +370,7 @@
 (defun validate-appearance-role-kind (kind)
   "Return KIND if it is one of the fixed semantic role kinds."
   (unless (member kind +appearance-role-kinds+ :test #'eq)
-    (error 'invalid-appearance-component :axis :role-kind :value kind))
+    (error-appearance-condition 'invalid-appearance-component :axis :role-kind :value kind))
   kind)
 
 (defun validate-appearance-supported-axes (kind supported-axes)
@@ -364,8 +384,8 @@
                              supported-axes))
                  (/= (length supported-axes)
                      (length (remove-duplicates supported-axes :test #'eq)))))
-    (error 'invalid-appearance-component :axis :supported-axes
-           :value supported-axes))
+    (error-appearance-condition 'invalid-appearance-component :axis :supported-axes
+                                :value supported-axes))
   (copy-appearance-value supported-axes))
 
 (defun make-appearance-role-definition
@@ -403,14 +423,14 @@
 (defun validate-appearance-overlays (overlays axis)
   "Validate a role-to-style overlay alist and return a deep immutable copy."
   (unless (listp overlays)
-    (error 'invalid-appearance-component :axis axis :value overlays))
+    (error-appearance-condition 'invalid-appearance-component :axis axis :value overlays))
   (let ((seen nil))
     (dolist (entry overlays)
       (unless (and (consp entry)
                    (not (null (car entry)))
                    (typep (cdr entry) 'appearance-role-style)
                    (not (member (car entry) seen :test #'equal)))
-        (error 'invalid-appearance-component :axis axis :value entry))
+        (error-appearance-condition 'invalid-appearance-component :axis axis :value entry))
       (push (car entry) seen)))
   (copy-appearance-value overlays))
 
@@ -445,8 +465,8 @@
   "Construct an immutable frame profile with an explicit contrast policy."
   (validate-appearance-component selected-theme :selected-theme)
   (unless (typep strict-contrast 'boolean)
-    (error 'invalid-appearance-component :axis :strict-contrast
-           :value strict-contrast))
+    (error-appearance-condition 'invalid-appearance-component :axis :strict-contrast
+                                :value strict-contrast))
   (%make-appearance-profile
    :selected-theme (copy-appearance-value selected-theme)
    :strict-contrast strict-contrast
@@ -478,11 +498,12 @@
 (defun validate-appearance-role-style (role-definition style &key origin)
   "Validate STYLE's axis applicability for ROLE-DEFINITION and return STYLE."
   (unless (typep role-definition 'appearance-role-definition)
-    (error 'invalid-appearance-component :origin origin :axis :role-definition
-           :value role-definition))
+    (error-appearance-condition 'invalid-appearance-component
+                                :origin origin :axis :role-definition
+                                :value role-definition))
   (unless (typep style 'appearance-role-style)
-    (error 'invalid-appearance-component :origin origin :axis :role-style
-           :value style))
+    (error-appearance-condition 'invalid-appearance-component
+                                :origin origin :axis :role-style :value style))
   (dolist (axis '((:typography . appearance-role-style-typography)
                   (:foreground-ink . appearance-role-style-foreground-ink)
                   (:surface . appearance-role-style-surface)
@@ -490,23 +511,33 @@
     (unless (appearance-unspecified-p
              (funcall (cdr axis) style))
       (unless (appearance-role-supports-axis-p role-definition (car axis))
-        (error 'unsupported-role-axis
-               :origin origin
-               :role (appearance-role-definition-id role-definition)
-               :axis (car axis)
-               :value (funcall (cdr axis) style)))))
+        (error-appearance-condition 'unsupported-role-axis
+                                    :origin origin
+                                    :role (appearance-role-definition-id role-definition)
+                                    :axis (car axis)
+                                    :value (funcall (cdr axis) style)))))
   style)
 
 ;;;; Pure catalogs and role cascade
 
 (defstruct (appearance-catalog
             (:constructor %make-appearance-catalog
-                (&key role-definitions theme-definitions built-in-overlays))
+                (&key role-definitions theme-definitions built-in-overlays generation))
             (:conc-name %appearance-catalog-))
   "Immutable declarations available to a resolver; it contains no active frame."
   (role-definitions nil :type list :read-only t)
   (theme-definitions nil :type list :read-only t)
-  (built-in-overlays nil :type list :read-only t))
+  (built-in-overlays nil :type list :read-only t)
+  (generation 0 :type (integer 0 *) :read-only t))
+
+(defstruct (appearance-diagnostic
+            (:constructor %make-appearance-diagnostic
+                (&key catalog-generation unknown-role condition))
+            (:conc-name %appearance-diagnostic-))
+  "Pure runtime diagnostic event, keyed for frame-level deduplication."
+  (catalog-generation 0 :type (integer 0 *) :read-only t)
+  (unknown-role nil :read-only t)
+  (condition nil :type appearance-condition :read-only t))
 
 (defstruct (resolved-appearance-role
             (:constructor %make-resolved-appearance-role
@@ -523,14 +554,14 @@
   (unless (and (listp definitions)
                (every (lambda (definition) (typep definition expected-type))
                       definitions))
-    (error 'invalid-appearance-component :axis axis :value definitions))
+    (error-appearance-condition 'invalid-appearance-component :axis axis :value definitions))
   (let ((seen nil))
     (dolist (definition definitions)
       (let ((id (if (eq expected-type 'appearance-role-definition)
                     (appearance-role-definition-id definition)
                     (appearance-theme-definition-id definition))))
         (when (member id seen :test #'equal)
-          (error 'invalid-appearance-component :axis axis :value id))
+          (error-appearance-condition 'invalid-appearance-component :axis axis :value id))
         (push id seen))))
   (copy-list definitions))
 
@@ -545,21 +576,21 @@
         (loop
           (let ((id (appearance-role-definition-id current)))
             (when (member id seen :test #'equal)
-              (error 'appearance-role-cycle :role id :path (reverse seen)))
+              (error-appearance-condition 'appearance-role-cycle :role id :path (reverse seen)))
             (push id seen))
           (let ((fallback (appearance-role-definition-fallback-role current)))
             (unless fallback
               (return))
             (let ((fallback-definition (find-role fallback)))
               (unless fallback-definition
-                (error 'missing-appearance-parent
-                       :role (appearance-role-definition-id current)
-                       :axis :fallback-role :value fallback))
+                (error-appearance-condition 'missing-appearance-parent
+                                            :role (appearance-role-definition-id current)
+                                            :axis :fallback-role :value fallback))
               (unless (eq (appearance-role-definition-kind current)
                           (appearance-role-definition-kind fallback-definition))
-                (error 'invalid-appearance-fallback
-                       :role (appearance-role-definition-id current)
-                       :axis :fallback-role :value fallback))
+                (error-appearance-condition 'invalid-appearance-fallback
+                                            :role (appearance-role-definition-id current)
+                                            :axis :fallback-role :value fallback))
               (setf current fallback-definition)))))))
 
 (defun validate-appearance-theme-topology (theme-definitions)
@@ -573,20 +604,24 @@
         (loop
           (let ((id (appearance-theme-definition-id current)))
             (when (member id seen :test #'equal)
-              (error 'appearance-theme-cycle :value id :path (reverse seen)))
+              (error-appearance-condition 'appearance-theme-cycle :value id :path (reverse seen)))
             (push id seen))
           (let ((parent (appearance-theme-definition-parent-theme current)))
             (unless parent
               (return))
             (let ((parent-definition (find-theme parent)))
               (unless parent-definition
-                (error 'missing-appearance-parent :axis :parent-theme
-                       :value parent))
-              (setf current parent-definition)))))))
+                (error-appearance-condition 'missing-appearance-parent
+                                            :axis :parent-theme :value parent))
+              (setf current parent-definition))))))))
 
 (defun make-appearance-catalog
-    (&key (role-definitions nil) (theme-definitions nil) (built-in-overlays nil))
+    (&key (role-definitions nil) (theme-definitions nil) (built-in-overlays nil)
+       (generation 0))
   "Construct an immutable catalog without resolving themes or roles."
+  (unless (and (integerp generation) (not (minusp generation)))
+    (error-appearance-condition 'invalid-appearance-component
+                                :axis :catalog-generation :value generation))
   (let ((roles (validate-appearance-definitions
                 role-definitions 'appearance-role-definition :role-definitions))
         (themes (validate-appearance-definitions
@@ -596,6 +631,7 @@
     (%make-appearance-catalog
      :role-definitions roles
      :theme-definitions themes
+     :generation generation
      :built-in-overlays (validate-appearance-overlays
                          built-in-overlays :built-in-overlays))))
 
@@ -608,6 +644,10 @@
 (defun appearance-catalog-built-in-overlays (catalog)
   (copy-appearance-value (%appearance-catalog-built-in-overlays catalog)))
 
+(defun appearance-catalog-generation (catalog)
+  "Return CATALOG's immutable generation used in runtime diagnostic keys."
+  (%appearance-catalog-generation catalog))
+
 (defun resolved-appearance-role-style (resolved-role)
   (%resolved-appearance-role-style resolved-role))
 
@@ -619,6 +659,20 @@
 
 (defun resolved-appearance-role-diagnostics (resolved-role)
   (copy-list (%resolved-appearance-role-diagnostics resolved-role)))
+
+(defun appearance-diagnostic-catalog-generation (diagnostic)
+  (%appearance-diagnostic-catalog-generation diagnostic))
+
+(defun appearance-diagnostic-unknown-role (diagnostic)
+  (copy-appearance-value (%appearance-diagnostic-unknown-role diagnostic)))
+
+(defun appearance-diagnostic-condition (diagnostic)
+  (%appearance-diagnostic-condition diagnostic))
+
+(defun appearance-diagnostic-deduplication-key (diagnostic)
+  "Return the stable `(catalog-generation unknown-role)' key for DIAGNOSTIC."
+  (list (appearance-diagnostic-catalog-generation diagnostic)
+        (appearance-diagnostic-unknown-role diagnostic)))
 
 (defun find-appearance-role-definition (catalog id)
   "Return the catalog role with ID, or NIL when it is not declared."
@@ -633,12 +687,14 @@
 (defun require-appearance-role-definition (catalog id origin)
   "Return a declared role or signal a configuration/declaration error."
   (or (find-appearance-role-definition catalog id)
-      (error 'unknown-appearance-role :origin origin :role id :value id)))
+      (error-appearance-condition 'unknown-appearance-role
+                                  :origin origin :role id :value id)))
 
 (defun require-appearance-theme-definition (catalog id origin)
   "Return a declared theme or signal a configuration/declaration error."
   (or (find-appearance-theme-definition catalog id)
-      (error 'missing-appearance-parent :origin origin :value id)))
+      (error-appearance-condition 'missing-appearance-parent
+                                  :origin origin :value id)))
 
 (defun appearance-role-fallback-chain (catalog role-id &key (origin :catalog))
   "Return ROLE-ID's fallback chain from root to requested role, rejecting cycles."
@@ -647,8 +703,9 @@
         (current role-id))
     (loop
       (when (member current seen :test #'equal)
-        (error 'appearance-role-cycle :origin origin :role role-id
-               :path (nreverse (cons current seen))))
+        (error-appearance-condition 'appearance-role-cycle
+                                    :origin origin :role role-id
+                                    :path (nreverse (cons current seen))))
       (let ((definition (require-appearance-role-definition catalog current origin)))
         (push current seen)
         (push definition chain)
@@ -664,8 +721,9 @@
         (current theme-id))
     (loop
       (when (member current seen :test #'equal)
-        (error 'appearance-theme-cycle :origin origin :value theme-id
-               :path (nreverse (cons current seen))))
+        (error-appearance-condition 'appearance-theme-cycle
+                                    :origin origin :value theme-id
+                                    :path (nreverse (cons current seen))))
       (let ((definition (require-appearance-theme-definition catalog current origin)))
         (push current seen)
         (push definition chain)
@@ -682,8 +740,9 @@
   "Consume RELATIVE-SIZE once against BASE-SIZE and clamp to the logical ladder."
   (let ((index (appearance-logical-size-index base-size)))
     (unless index
-      (error 'relative-size-base-invalid :origin origin :axis :typography-size
-             :value relative-size))
+      (error-appearance-condition 'relative-size-base-invalid
+                                  :origin origin :axis :typography-size
+                                  :value relative-size))
     (nth (max 0 (min (1- (length +appearance-logical-sizes+))
                      (+ index (ecase relative-size
                                 (:smaller -1)
@@ -932,7 +991,8 @@ must exist and the stack must have at most one role of each kind."
       (let ((definition (require-appearance-role-definition catalog role-id
                                                              :configuration)))
         (when (gethash (appearance-role-definition-kind definition) by-kind)
-          (error 'invalid-appearance-component :axis :role-stack :value role-ids))
+          (error-appearance-condition 'invalid-appearance-component
+                                      :axis :role-stack :value role-ids))
         (setf (gethash (appearance-role-definition-kind definition) by-kind)
               role-id)))
     (dolist (kind '(:surface :content :state))
@@ -955,8 +1015,10 @@ must exist and the stack must have at most one role of each kind."
 (defun resolve-runtime-appearance-role-stack (catalog theme-id role-ids &rest keys)
   "Resolve a display stack, mapping unknown runtime roles to :DEFAULT-TEXT.
 
-Returns the resolved role and a bounded diagnostic list. Configuration parsers
-must use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
+Returns the resolved role and at most sixteen pure diagnostic events.  Each
+event has a stable `(catalog-generation unknown-role)' deduplication key;
+frame code owns any longer-lived logging policy.  Configuration parsers must
+use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
   (let ((unknown-role-ids nil)
         (by-kind (make-hash-table :test #'eq)))
     (dolist (role-id role-ids)
@@ -979,15 +1041,25 @@ must use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
        :style (resolved-appearance-role-style resolved)
        :provenance (resolved-appearance-role-provenance resolved)
        :structural-key (resolved-appearance-role-structural-key resolved)
-       ;; The pure resolver emits one aggregate diagnostic. Frame-level code
-       ;; can therefore deduplicate this stable report per catalog generation.
-       :diagnostics (if unknown-role-ids
-                        (list (make-condition 'unknown-appearance-role
-                                              :origin :runtime
-                                              :role :default-text
-                                              :value (nreverse unknown-role-ids)
-                                              :fatal-p nil))
-                        nil))))))
+       :diagnostics
+       (loop with seen = nil
+             for unknown-role in (nreverse unknown-role-ids)
+             unless (member unknown-role seen :test #'equal)
+               do (push unknown-role seen)
+               and collect
+               (%make-appearance-diagnostic
+                :catalog-generation (appearance-catalog-generation catalog)
+                :unknown-role (copy-appearance-value unknown-role)
+                :condition
+                (make-appearance-condition 'unknown-appearance-role
+                                           :origin :runtime
+                                           :role unknown-role
+                                           :value unknown-role
+                                           :fatal-p nil))
+             into diagnostics
+             when (= (length diagnostics) +appearance-runtime-diagnostic-limit+)
+               do (return diagnostics)
+             finally (return diagnostics))))))
 
 (defun make-classic-appearance-catalog ()
   "Return the version-1 :CLASSIC declarations and exact current output goldens."

@@ -75,15 +75,17 @@
   (signals invalid-appearance-component
     (make-appearance-ink-spec :foreground :none))
   (signals invalid-appearance-component
+    (make-appearance-ink-spec :foreground :unspecified))
+  (signals invalid-appearance-component
     (make-appearance-role-style :typography :bold))
   (signals invalid-appearance-component
     (make-appearance-role-definition :id :bad :kind :unknown)))
 
-(test appearance-condition-payloads-are-defensive-and-contrast-is-a-warning
-  "MAKE-CONDITION and WARN preserve diagnostic data without caller aliases."
+(test appearance-condition-factory-copies-payloads-before-signaling
+  "The required factory and warning boundary preserve no caller-owned payload."
   (let* ((payload (list "original"))
-         (condition (make-condition 'appearance-contrast-warning
-                                    :value payload :role :default-text))
+         (condition (make-appearance-condition 'appearance-contrast-warning
+                                               :value payload :role :default-text))
          (captured nil))
     (setf (car payload) "changed")
     (handler-bind ((appearance-contrast-warning
@@ -97,6 +99,19 @@
       (setf (car reported) "changed-again")
       (is (string= "original"
                    (car (appearance-condition-value captured)))))))
+
+(test appearance-warning-factory-boundary-copies-signaled-payloads
+  "WARN-APPEARANCE-CONDITION copies payloads before a handler can observe them."
+  (let ((payload (list "original"))
+        (captured nil))
+    (handler-bind ((appearance-contrast-warning
+                     (lambda (warning)
+                       (setf captured warning)
+                       (muffle-warning warning))))
+      (warn-appearance-condition 'appearance-contrast-warning
+                                 :value payload :role :default-text))
+    (setf (car payload) "changed")
+    (is (string= "original" (car (appearance-condition-value captured))))))
 
 (test appearance-vocabulary-accessors-return-fresh-lists
   "The internal vocabulary cannot be modified through its public accessors."
@@ -143,7 +158,7 @@
                           (make-appearance-decoration-spec :kind decoration)))))
     (apply #'make-appearance-role-style arguments)))
 
-(defun make-test-appearance-catalog (&key role-cycle-p theme-cycle-p)
+(defun make-test-appearance-catalog (&key role-cycle-p theme-cycle-p (generation 0))
   "Return a compact catalog exercising fallbacks, parent themes, and stacks."
   (make-appearance-catalog
    :role-definitions
@@ -170,7 +185,8 @@
           :role-overlays
           (list (cons :title (test-appearance-style :face :bold :size :larger))
                 (cons :selected (test-appearance-style :foreground :white
-                                                       :face :bold)))))))
+                                                       :face :bold)))))
+   :generation generation))
 
 (test appearance-role-resolution-obeys-the-exact-layer-order
   "Every source layer wins over lower layers while role fallback stays root-first."
@@ -277,7 +293,8 @@
                    (make-test-appearance-catalog) :child '(:unknown))))
     (is (= 1 (length (resolved-appearance-role-diagnostics resolved))))
     (is-false (appearance-condition-fatal-p
-               (first (resolved-appearance-role-diagnostics resolved))))
+               (appearance-diagnostic-condition
+                (first (resolved-appearance-role-diagnostics resolved)))))
     (is (eq :black
             (appearance-ink-spec-foreground
              (appearance-role-style-foreground-ink
@@ -293,15 +310,27 @@
              (appearance-role-style-typography
               (resolved-appearance-role-style resolved)))))))
 
-(test appearance-runtime-diagnostics-are-bounded-per-resolution
-  "Several unknown wire roles produce one aggregate catalog-generation report."
+(test appearance-runtime-diagnostics-have-bounded-deduplication-keys
+  "Each unknown role gets one bounded event keyed by catalog generation and role."
+  (let ((resolved (resolve-runtime-appearance-role-stack
+                   (make-test-appearance-catalog :generation 17) :child
+                   '(:unknown-one :unknown-two :title))))
+    (is (= 2 (length (resolved-appearance-role-diagnostics resolved))))
+    (is (equal '(:unknown-one :unknown-two)
+               (mapcar #'appearance-diagnostic-unknown-role
+                       (resolved-appearance-role-diagnostics resolved))))
+    (is (equal '(17 :unknown-one)
+               (appearance-diagnostic-deduplication-key
+                (first (resolved-appearance-role-diagnostics resolved)))))))
+
+(test appearance-runtime-diagnostics-bound-distinct-unknown-roles
+  "The pure resolver cannot produce an unbounded diagnostic list."
   (let ((resolved (resolve-runtime-appearance-role-stack
                    (make-test-appearance-catalog) :child
-                   '(:unknown-one :unknown-two :title))))
-    (is (= 1 (length (resolved-appearance-role-diagnostics resolved))))
-    (is (equal '(:unknown-one :unknown-two)
-               (appearance-condition-value
-                (first (resolved-appearance-role-diagnostics resolved)))))))
+                   (loop for index below 20
+                         collect (intern (format nil "UNKNOWN-~D" index)
+                                         :keyword)))))
+    (is (= 16 (length (resolved-appearance-role-diagnostics resolved)))))
 
 (test appearance-supported-axis-accessors-do-not-expose-constant-lists
   "Default axis vocabulary copies are fresh even when they originate in constants."

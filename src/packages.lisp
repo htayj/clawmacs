@@ -361,6 +361,10 @@
    #:appearance-condition-available-choices
    #:appearance-condition-fatal-p
    #:appearance-condition-suggested-repairs
+   #:make-appearance-condition
+   #:signal-appearance-condition
+   #:error-appearance-condition
+   #:warn-appearance-condition
    #:unknown-appearance-role
    #:invalid-appearance-component
    #:appearance-theme-cycle
@@ -426,6 +430,7 @@
    #:appearance-catalog-role-definitions
    #:appearance-catalog-theme-definitions
    #:appearance-catalog-built-in-overlays
+   #:appearance-catalog-generation
    #:find-appearance-role-definition
    #:find-appearance-theme-definition
    #:appearance-role-fallback-chain
@@ -440,6 +445,11 @@
    #:resolved-appearance-role-provenance
    #:resolved-appearance-role-structural-key
    #:resolved-appearance-role-diagnostics
+   #:appearance-diagnostic
+   #:appearance-diagnostic-catalog-generation
+   #:appearance-diagnostic-unknown-role
+   #:appearance-diagnostic-condition
+   #:appearance-diagnostic-deduplication-key
    #:resolve-appearance-role
    #:resolve-appearance-role-stack
    #:resolve-runtime-appearance-role-stack
