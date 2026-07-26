@@ -72,7 +72,9 @@
                  :sizes sizes :scalable-p scalable-p))
 
 (defun make-test-font-inventory (&key scalable-p (sizes '(10 12))
-                                      (mapping-valid-p t) duplicate-family-p)
+                                      (mapping-valid-p t) duplicate-family-p
+                                      (metric-medium
+                                        (make-instance 'test-font-medium)))
   (let* ((port (make-instance 'test-font-port :families nil
                               :mapping-valid-p mapping-valid-p))
          (first (make-test-font-family port "Test Family" nil))
@@ -87,7 +89,8 @@
                 (setf (test-font-family-faces second) (list second-face))
                 (list first second))
               (list first)))
-    (values port (enumerate-port-font-inventory port))))
+    (values port (enumerate-port-font-inventory
+                  port :metric-medium metric-medium))))
 
 (defun test-enumerated-choice (&optional (size 10))
   (make-enumerated-font-choice :family-display "Test Family"
@@ -159,6 +162,36 @@
                                                :medium (make-instance 'test-font-medium :fixed-p nil)
                                                :scope :transcript)
                'clim:text-style))))
+
+(test enumerated-font-resolution-requires-metric-context-without-cache-poisoning
+  "Every successful named-font resolution validates metrics and editable width."
+  (multiple-value-bind (port inventory)
+      (make-test-font-inventory :metric-medium nil)
+    (declare (ignore port))
+    (dolist (scope '(:compose :minibuffer :transcript))
+      (let ((condition
+              (handler-case
+                  (progn
+                    (resolve-enumerated-font-choice
+                     inventory (test-enumerated-choice) :scope scope)
+                    nil)
+                (font-metric-medium-unavailable (caught) caught))))
+        (is (typep condition 'font-metric-medium-unavailable))
+        (is (eq :font-metric-medium
+                (appearance-condition-axis condition)))
+        (is (equal (list :choice '("Test Family" "Regular" 10)
+                         :scope scope)
+                   (appearance-condition-value condition)))))
+    ;; A missing frame metric context is infrastructure state, not a negative
+    ;; fact about the named font.  Retrying with a valid context must succeed.
+    (is (= 0 (hash-table-count
+              (clawmacs::%appearance-font-inventory-negative-cache inventory))))
+    (is (typep
+         (resolve-enumerated-font-choice
+          inventory (test-enumerated-choice)
+          :medium (make-instance 'test-font-medium)
+          :scope :compose)
+         'clim:text-style))))
 
 (test font-negative-cache-is-inventory-local-and-ports-do-not-leak
   (multiple-value-bind (first-port first) (make-test-font-inventory)

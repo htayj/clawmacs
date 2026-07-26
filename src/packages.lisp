@@ -382,6 +382,7 @@
    #:invalid-fixed-font-size
    #:font-mapping-invalid
    #:font-metrics-invalid
+   #:font-metric-medium-unavailable
    #:fixed-width-font-required
    #:relative-size-base-invalid
    #:device-font-port-mismatch

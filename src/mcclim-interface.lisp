@@ -2288,15 +2288,17 @@ runtime bundle before ordinary CLIM adoption has completed."
       (clim:port (clim:frame-manager frame)))))
 
 (defun chat-frame-font-metric-medium (frame)
-  "Return an existing adopted non-Drei pane for public font metric queries.
+  "Return an existing adopted pane's public medium for font metric queries.
 
-CLIM's public text-style metric and fixed-width functions accept a sheet and
-acquire its existing medium themselves.  This deliberately never creates a
-pane, initializes Drei, or mutates a medium."
+The pinned McCLIM exposes sheet methods for basic metrics, but its public
+TEXT-STYLE-FIXED-WIDTH-P method is defined on mediums.  Read the existing
+pane's public SHEET-MEDIUM; never create a pane, initialize Drei, or mutate
+the medium."
   (when (chat-frame-grafted-top-level-sheet frame)
     (loop :for name :in '(transcript info minibuffer)
           :for pane := (ignore-errors (clim:find-pane-named frame name))
-          :when pane :return pane)))
+          :for medium := (and pane (ignore-errors (clim:sheet-medium pane)))
+          :when medium :return medium)))
 
 (defun appearance-bundles-same-typography-p (left right)
   "Return true when LEFT and RIGHT differ only outside effective typography."
@@ -2356,9 +2358,11 @@ and render keys while recording a copied structured diagnostic."
            (old-generation (chat-frame-appearance-font-inventory-generation frame))
            (next-generation (if invalidate-cache (1+ old-generation) old-generation)))
       (handler-case
-          (let* ((inventory (enumerate-port-font-inventory
+          (let* ((metric-medium (chat-frame-font-metric-medium frame))
+                 (inventory (enumerate-port-font-inventory
                              port :invalidate-cache invalidate-cache
-                             :generation next-generation))
+                             :generation next-generation
+                             :metric-medium metric-medium))
                  (bundle (resolve-appearance-profile-bundle
                           (chat-frame-appearance-catalog frame)
                           (chat-frame-appearance-profile frame)

@@ -14,6 +14,7 @@
 (define-condition invalid-fixed-font-size (font-size-unavailable) ())
 (define-condition font-mapping-invalid (font-unavailable) ())
 (define-condition font-metrics-invalid (font-unavailable) ())
+(define-condition font-metric-medium-unavailable (font-metrics-invalid) ())
 (define-condition fixed-width-font-required (font-unavailable) ())
 
 (defstruct (portable-font-descriptor
@@ -90,13 +91,16 @@ exact comparison against one target port's public font inventory."
 
 (defstruct (appearance-font-inventory
             (:constructor %make-appearance-font-inventory
-                (&key port generation entries choices negative-cache))
+                (&key port generation entries choices metric-medium negative-cache))
             (:conc-name %appearance-font-inventory-))
   "Frame-owned opaque port inventory with data-only public choice access."
   port
   (generation 0 :type (integer 0 *) :read-only t)
   (entries nil :type list :read-only t)
   (choices nil :type list :read-only t)
+  ;; Private frame-local validation context.  Public inventory accessors never
+  ;; expose the pane medium.
+  metric-medium
   negative-cache)
 
 (defun appearance-font-inventory-generation (inventory)
@@ -140,7 +144,8 @@ exact comparison against one target port's public font inventory."
           (scalable-p (list 12))
           (t nil))))
 
-(defun enumerate-port-font-inventory (port &key invalidate-cache generation)
+(defun enumerate-port-font-inventory
+    (port &key invalidate-cache generation metric-medium)
   "Enumerate PORT through McCLIM's documented public font protocol.
 
 The returned inventory is local to this invocation.  It contains private
@@ -167,6 +172,7 @@ display descriptors."
      :generation (or generation 0)
      :entries entries
      :choices (sort choices #'font-choice<)
+     :metric-medium metric-medium
      :negative-cache (make-hash-table :test #'equal))))
 
 (defun matching-font-entries (inventory family-display face-display &key family)
@@ -193,7 +199,9 @@ display descriptors."
          ;; Metric and fixed-width failures depend on the requested scope.
          ;; They must not poison a later noneditable resolution of the same
          ;; descriptor in this otherwise bundle-local cache.
-         (key (append choice-key (and scope (list :scope scope))))
+         (key (append choice-key
+                      (and scope (list :scope scope))
+                      (list :condition condition-class)))
          (cached (gethash key (%appearance-font-inventory-negative-cache inventory)))
          (class (or cached condition-class)))
     (unless cached
@@ -207,6 +215,23 @@ display descriptors."
                          inventory :family-display (first choice-key))
      :suggested-repairs '(:refresh-font-inventory :choose-listed-font))))
 
+(defun signal-font-metric-medium-unavailable (inventory choice scope)
+  "Reject named-font resolution without a public metric context.
+
+This infrastructure failure is deliberately not entered in the inventory's
+negative font cache: the same descriptor may be valid when retried from an
+adopted frame with its public pane medium."
+  (error-appearance-condition
+   'font-metric-medium-unavailable
+   :axis :font-metric-medium
+   :value (list :choice (enumerated-font-choice-key choice) :scope scope)
+   :port (%appearance-font-inventory-port inventory)
+   :available-choices
+   (inventory-choice-summaries
+    inventory
+    :family-display (%enumerated-font-choice-family-display choice))
+   :suggested-repairs '(:use-adopted-frame-pane :retry-font-resolution)))
+
 (defun validate-enumerated-font-metrics (inventory style medium choice scope)
   "Validate public mapping and metrics without changing the port mapping cache."
   (unless (typep style 'clim:text-style)
@@ -216,18 +241,19 @@ display descriptors."
                     (%appearance-font-inventory-port inventory) style))))
     (unless mapping
       (signal-font-resolution-error inventory choice 'font-mapping-invalid :scope scope)))
-  (when medium
-    (let ((ascent (ignore-errors (clim:text-style-ascent style medium)))
-          (descent (ignore-errors (clim:text-style-descent style medium)))
-          (width (ignore-errors (clim:text-style-width style medium))))
-      (unless (and (realp ascent) (not (minusp ascent))
-                   (realp descent) (not (minusp descent))
-                   (realp width) (plusp width))
-        (signal-font-resolution-error inventory choice 'font-metrics-invalid :scope scope))
-      (when (member scope '(:compose :compose-pane :minibuffer :minibuffer-pane))
-        (unless (ignore-errors (clim:text-style-fixed-width-p style medium))
-          (signal-font-resolution-error
-           inventory choice 'fixed-width-font-required :scope scope)))))
+  (unless medium
+    (signal-font-metric-medium-unavailable inventory choice scope))
+  (let ((ascent (ignore-errors (clim:text-style-ascent style medium)))
+        (descent (ignore-errors (clim:text-style-descent style medium)))
+        (width (ignore-errors (clim:text-style-width style medium))))
+    (unless (and (realp ascent) (not (minusp ascent))
+                 (realp descent) (not (minusp descent))
+                 (realp width) (plusp width))
+      (signal-font-resolution-error inventory choice 'font-metrics-invalid :scope scope))
+    (when (member scope '(:compose :compose-pane :minibuffer :minibuffer-pane))
+      (unless (ignore-errors (clim:text-style-fixed-width-p style medium))
+        (signal-font-resolution-error
+         inventory choice 'fixed-width-font-required :scope scope))))
   style)
 
 (defun resolve-enumerated-font-choice (inventory choice &key medium scope)
@@ -273,4 +299,7 @@ frame activation layer."
                        (error ()
                          (signal-font-resolution-error
                           inventory choice 'font-size-unavailable :scope scope)))))
-          (validate-enumerated-font-metrics inventory style medium choice scope)))))))
+          (validate-enumerated-font-metrics
+           inventory style
+           (or medium (%appearance-font-inventory-metric-medium inventory))
+           choice scope)))))))

@@ -36,7 +36,12 @@
       (clawmacs::chat-frame-appearance-live-port (requested-frame)
         (is (eq frame requested-frame))
         port)
-    (clawmacs::refresh-chat-frame-font-inventory frame :invalidate-cache invalidate-cache)))
+    (with-mcclim-test-function-override
+        (clawmacs::chat-frame-font-metric-medium (requested-frame)
+          (is (eq frame requested-frame))
+          (make-instance 'test-font-medium))
+      (clawmacs::refresh-chat-frame-font-inventory
+       frame :invalidate-cache invalidate-cache))))
 
 (defclass synthetic-chat-compose-pane
     (clawmacs::clawmacs-chat-compose-pane)
@@ -410,6 +415,18 @@ these tests exercise construction-time space requirements only."
                                                               :invalidate-cache nil)))
       (is (eq :ready (appearance-activation-result-status initial)))
       (is (eq :ready (appearance-activation-result-status other)))
+      ;; Production refresh obtains the adopted frame's metric context and
+      ;; stores it privately in that frame-local inventory.  A later caller
+      ;; therefore cannot bypass compose fixed-width validation by omitting
+      ;; :MEDIUM.
+      (let* ((inventory
+               (clawmacs::chat-frame-appearance-font-inventory first))
+             (choice
+               (first (appearance-font-inventory-choices inventory))))
+        (is (typep
+             (resolve-enumerated-font-choice
+              inventory choice :scope :compose)
+             'clim:text-style)))
       (let ((old-key (resolved-appearance-bundle-bundle-key
                       (clawmacs::chat-frame-appearance-active-bundle first)))
             (other-bundle (clawmacs::chat-frame-appearance-active-bundle second)))
