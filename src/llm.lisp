@@ -1096,7 +1096,7 @@ through this path must consume the user's Codex/ChatGPT allowance rather than
 silently switching to separately billed OpenAI API credentials."
   (let ((auth-json (read-openai-codex-auth-json)))
     (unless auth-json
-      (error "Codex image auth is unavailable: ~/.codex/auth.json was not found."))
+      (error "Codex image auth is unavailable: ~~/.codex/auth.json was not found."))
     (unless (eq (openai-codex-resolved-auth-mode auth-json) :chatgpt)
       (error "Codex image generation requires ChatGPT subscription auth, not API-key mode."))
     (let ((effective-auth
@@ -3405,7 +3405,7 @@ reasoning_content is present, falls back to reasoning_content."
   "Call the OpenAI Responses API for Codex and normalize the response shape."
   (let* ((auth (or (resolve-openai-codex-auth)
                    (error 'simple-error
-                          :format-control "No OpenAI Codex auth. Save a bearer token to ~/.config/clawmacs/openai-codex-token or sign in via ~/.codex/auth.json")))
+                          :format-control "No OpenAI Codex auth. Save a bearer token to ~~/.config/clawmacs/openai-codex-token or sign in via ~~/.codex/auth.json")))
          (request-body (openai-codex-responses-request-body
                         messages model max-tokens tools
                         :system-prompt system-prompt
@@ -4440,7 +4440,7 @@ loses to cancellation."
          (let* ((auth
                   (or (resolve-openai-codex-auth)
                       (error 'simple-error
-                             :format-control "No OpenAI Codex auth. Save a bearer token to ~/.config/clawmacs/openai-codex-token or sign in via ~/.codex/auth.json")))
+                             :format-control "No OpenAI Codex auth. Save a bearer token to ~~/.config/clawmacs/openai-codex-token or sign in via ~~/.codex/auth.json")))
                 (request-body
                   (openai-codex-responses-request-body
                    messages model max-tokens tools
