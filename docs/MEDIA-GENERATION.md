@@ -69,7 +69,7 @@ those packages should preserve user-selected provider and billing boundaries.
 
 ## Sources
 
-- [Codex image-generation documentation](https://developers.openai.com/codex/images/)
+- [Codex image-generation documentation](https://developers.openai.com/codex/image-generation/)
 - [Codex source: image-generation extension (revision 61a44880a85d2fd0d8770908dea5733495e571c8)](https://github.com/openai/codex/tree/61a44880a85d2fd0d8770908dea5733495e571c8/codex-rs/ext/image-generation)
 - [OpenAI Image API guide](https://platform.openai.com/docs/guides/image-generation)
 - [xAI image generation](https://docs.x.ai/docs/guides/image-generation) and [video generation](https://docs.x.ai/docs/guides/video-generation)
