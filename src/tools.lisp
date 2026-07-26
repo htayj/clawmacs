@@ -390,6 +390,21 @@ Temporary tools override same-named global tools for the dynamic extent.")
 (defvar *tool-effect-recorder* nil
   "Dynamically bound callback recording deferred non-buffer tool effects.")
 
+(defvar *tool-cancellation-registration-function* nil
+  "Worker-local callback accepting a bounded cooperative cancellation function.")
+
+(defun register-current-tool-cancellation-function (function)
+  "Register FUNCTION to run if the owning interactive tool is cancelled.
+
+The function is invoked outside runtime locks.  Registration returns true when
+cancellation had already been requested, allowing a tool to avoid beginning a
+provider request after the frame has withdrawn it."
+  (unless (functionp function)
+    (error "Tool cancellation handler must be a function, got ~S." function))
+  (if *tool-cancellation-registration-function*
+      (funcall *tool-cancellation-registration-function* function)
+      nil))
+
 (defstruct (tool-hook-effect
             (:constructor make-tool-hook-effect (phase tool-name args result)))
   "Immutable tool hook call deferred to the frame process."

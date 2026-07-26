@@ -276,6 +276,7 @@ protocol-complete result even if a hook cancels the buffer before dispatch."
   error
   (done-p nil :type boolean)
   (cancel-requested-p nil :type boolean)
+  cancel-function
   worker
   settlement-waiter
   (settlement-waiter-done-p nil :type boolean)
@@ -1118,9 +1119,19 @@ the CLIM command boundary; ordinary tools run in managed workers."
 Arbitrary in-process Lisp tool functions cannot be interrupted safely.  This
 prevents a not-yet-started call and makes its eventual result inapplicable; a
 tool already executing must return through its own cancellation mechanism."
-  (when state
-    (bt:with-lock-held ((interactive-tool-execution-lock state))
-      (setf (interactive-tool-execution-cancel-requested-p state) t)))
+  (let ((cancel-function nil))
+    (when state
+      (bt:with-lock-held ((interactive-tool-execution-lock state))
+        (setf (interactive-tool-execution-cancel-requested-p state) t
+              cancel-function (interactive-tool-execution-cancel-function state)))
+      (when cancel-function
+        (handler-case
+            (funcall cancel-function)
+          (error (condition)
+            (file-debug-event
+             "runtime-tool-cancellation-error"
+             :tool-name (interactive-tool-execution-tool-name state)
+             :condition (format nil "~A" condition))))))
   state)
 
 (defun make-interactive-tool-worker-thread
@@ -1266,6 +1277,21 @@ value and never unwinds the command loop."
                                                       (not (null execution-plan)))
                                                     (*tool-effect-recorder*
                                                       #'record-tool-effect)
+                                                    (*tool-cancellation-registration-function*
+                                                      (lambda (cancel-function)
+                                                        (let ((cancel-now-p nil))
+                                                          (bt:with-lock-held
+                                                              ((interactive-tool-execution-lock
+                                                                state))
+                                                            (setf (interactive-tool-execution-cancel-function
+                                                                   state)
+                                                                  cancel-function
+                                                                  cancel-now-p
+                                                                  (interactive-tool-execution-cancel-requested-p
+                                                                   state)))
+                                                          (when cancel-now-p
+                                                            (funcall cancel-function))
+                                                          cancel-now-p)))
                                                     (*buffer-message-effect-recorder*
                                                       #'record-message-effect))
                                                 (setf result-text

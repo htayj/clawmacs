@@ -55,6 +55,15 @@
                        :initial-contents '(137 80 78 71 13 10 26 10))
    :metadata '((:seed . 7))))
 
+(defun media-test-create-fifo (path)
+  "Create PATH as a FIFO when the test host provides mkfifo, else return NIL."
+  (handler-case
+      (progn
+        (uiop:run-program (list "mkfifo" (namestring path))
+                          :output nil :error-output nil)
+        (probe-file path))
+    (error () nil)))
+
 (test media-package-registers-a-background-image-tool
   "The bundled package exposes one narrow background image-generation tool."
   (with-media-package-state
@@ -92,6 +101,74 @@
       (is (string= "fake" (clawmacs:media-default-provider)))
       (signals error
         (clawmacs:make-media-generation-request :audio "not supported")))))
+
+(test media-provider-owner-and-running-job-invariants-are-canonical
+  "Provider ownership and asynchronous backend identifiers cannot be ambiguous."
+  (with-media-package-state
+    (let ((provider
+            (clawmacs:register-media-provider
+             "owner-fake" '(:image)
+             (lambda (_request)
+               (declare (ignore _request))
+               (clawmacs:make-media-provider-outcome :status :failed))
+             :package " Media ")))
+      (is (string= "media" (clawmacs:media-provider-package provider)))
+      (is (equal '("owner-fake")
+                 (clawmacs:remove-media-providers-for-package "MEDIA")))
+      (is-false (clawmacs:find-media-provider "owner-fake")))
+    (signals error
+      (clawmacs:register-media-provider
+       "bad-owner" '(:image) (lambda (_request) (declare (ignore _request)))
+       :package "   "))
+    (clawmacs:register-media-provider
+     "missing-job" '(:image)
+     (lambda (_request)
+       (declare (ignore _request))
+       (clawmacs:make-media-provider-outcome :status :running :backend-id "  ")))
+    (clawmacs:set-media-default-provider "missing-job")
+    (let ((operation (clawmacs:start-media-operation
+                      (clawmacs:make-media-generation-request :image "job"))))
+      (is (eq :failed (clawmacs:media-operation-status operation)))
+      (is (search "backend id" (clawmacs:media-operation-error operation))))))
+
+(test media-request-constructor-enforces-regular-reference-files
+  "Direct callers cannot bypass the tool's bounded regular-file reference rule."
+  (with-media-package-state
+    (let* ((root (temp-package-test-directory "media-reference"))
+           (regular (merge-pathnames "reference.png" root))
+           (directory (merge-pathnames "directory/" root))
+           (fifo (merge-pathnames "reference.fifo" root)))
+      (ensure-directories-exist (merge-pathnames #P".keep" root))
+      (with-open-file (stream regular :direction :output
+                               :element-type '(unsigned-byte 8)
+                               :if-exists :supersede
+                               :if-does-not-exist :create)
+        (write-sequence #(1 2 3) stream))
+      (ensure-directories-exist (merge-pathnames #P".keep" directory))
+      (let ((request (clawmacs:make-media-generation-request
+                      :image "regular reference"
+                      :referenced-image-paths (vector (namestring regular)))))
+        (is (equal (list (namestring (truename regular)))
+                   (clawmacs:media-request-referenced-image-paths request))))
+      (signals error
+        (clawmacs:make-media-generation-request
+         :image "relative" :referenced-image-paths #("relative.png")))
+      (signals error
+        (clawmacs:make-media-generation-request
+         :image "directory" :referenced-image-paths (vector (namestring directory))))
+      (signals error
+        (clawmacs:make-media-generation-request
+         :image "empty" :referenced-image-paths #()))
+      (signals error
+        (clawmacs:make-media-generation-request
+         :image "too many"
+         :referenced-image-paths (make-array 6 :initial-element (namestring regular))))
+      (when (media-test-create-fifo fifo)
+        (unwind-protect
+             (signals error
+               (clawmacs:make-media-generation-request
+                :image "fifo" :referenced-image-paths (vector (namestring fifo))))
+          (ignore-errors (delete-file fifo)))))))
 
 (test media-image-tool-validates-input-and-persists-successful-assets
   "The tool accepts only prompt plus up to five existing absolute references."
@@ -190,6 +267,108 @@
                            (clawmacs:media-operation-id operation))))
         (is (= 1 cancel-count))
         (is (eq :cancelled (clawmacs:media-operation-status operation))))))
+
+(test media-cancellation-bridges-the-managed-background-tool-boundary
+  "Interactive cancellation invokes provider cancellation before a late start settles."
+  (with-media-package-state
+    (let ((entered (bt:make-semaphore :name "media-start-entered"))
+          (release (bt:make-semaphore :name "media-start-release"))
+          (cancelled (bt:make-semaphore :name "media-cancelled"))
+          (start-count 0)
+          (cancel-count 0)
+          (cancelled-operation nil)
+          (buffer (make-media-test-buffer "cancel-bridge")))
+      (clawmacs:register-media-provider
+       "cancel-fake" '(:image)
+       (lambda (_request)
+         (declare (ignore _request))
+         (incf start-count)
+         (bt:signal-semaphore entered)
+         (unless (bt:wait-on-semaphore release :timeout 5.0)
+           (error "Timed out releasing media start."))
+         (clawmacs:make-media-provider-outcome
+          :status :succeeded :assets (list (media-test-png-asset))))
+       :cancel-fn (lambda (operation)
+                    (setf cancelled-operation operation)
+                    (incf cancel-count)
+                    (bt:signal-semaphore cancelled)
+                    (clawmacs:make-media-provider-outcome :status :cancelled)))
+      (clawmacs:set-media-default-provider "cancel-fake")
+      (let ((state (clawmacs::start-interactive-tool-execution
+                    buffer "media_generate_image"
+                    '((:prompt . "cancel this image")) "media-cancel-1")))
+        (unwind-protect
+             (progn
+               (is state)
+               (is-true (bt:wait-on-semaphore entered :timeout 2.0))
+               (clawmacs::cancel-interactive-tool-execution state)
+               (is-true (bt:wait-on-semaphore cancelled :timeout 2.0))
+               (is (= 1 start-count))
+               (is (= 1 cancel-count))
+               (is (eq :cancelled
+                       (clawmacs:media-operation-status cancelled-operation)))
+               ;; The late successful start result loses deterministically to
+               ;; cancellation and cannot create an Artifactum artifact.
+               (bt:signal-semaphore release)
+               (loop :repeat 400
+                     :while (bt:thread-alive-p
+                             (clawmacs::interactive-tool-execution-worker state))
+                     :do (sleep 0.005))
+               (is (eq :cancelled
+                       (clawmacs:media-operation-status cancelled-operation)))
+               (is (null (clawmacs:artifactum-session-records buffer))))
+          (bt:signal-semaphore release))))))
+
+(test media-cancellation-before-run-skips-the-provider-start
+  "A published pending operation can be cancelled before any provider call."
+  (with-media-package-state
+    (let ((starts 0))
+      (clawmacs:register-media-provider
+       "pending-cancel" '(:image)
+       (lambda (_request)
+         (declare (ignore _request))
+         (incf starts)
+         (clawmacs:make-media-provider-outcome
+          :status :succeeded :assets (list (media-test-png-asset)))))
+      (clawmacs:set-media-default-provider "pending-cancel")
+      (let ((operation (clawmacs::begin-media-operation
+                        (clawmacs:make-media-generation-request :image "do not start"))))
+        (clawmacs:cancel-media-operation operation)
+        (clawmacs::run-media-operation operation)
+        (is (eq :cancelled (clawmacs:media-operation-status operation)))
+        (is (= 0 starts))))))
+
+(test media-artifact-write-failures-have-a-stable-media-category
+  "Artifactum write failures retain media operation context for a tool result."
+  (with-media-package-state
+    (let ((buffer (make-media-test-buffer "artifact-write-failure")))
+      (clawmacs:register-media-provider
+       "write-fail" '(:image)
+       (lambda (_request)
+         (declare (ignore _request))
+         (clawmacs:make-media-provider-outcome
+          :status :succeeded :assets (list (media-test-png-asset)))))
+      (clawmacs:set-media-default-provider "write-fail")
+      (let* ((operation (clawmacs:start-media-operation
+                         (clawmacs:make-media-generation-request :image "write fails")))
+             (original (symbol-function 'clawmacs:artifactum-create-from-octets)))
+        (unwind-protect
+             (progn
+               (setf (symbol-function 'clawmacs:artifactum-create-from-octets)
+                     (lambda (&rest _arguments)
+                       (declare (ignore _arguments))
+                       (error "simulated artifact storage failure")))
+               (handler-case
+                   (progn
+                     (clawmacs:persist-media-operation-assets buffer operation)
+                     (fail "Expected a media artifact write failure."))
+                 (clawmacs::media-artifact-write-failed (condition)
+                   (is (eq operation
+                           (clawmacs::media-artifact-write-failed-operation condition)))
+                   (is (search "simulated artifact storage failure"
+                               (format nil "~A" condition))))))
+          (setf (symbol-function 'clawmacs:artifactum-create-from-octets)
+                original))))))
 
 (test media-provider-cleanup-follows-package-reset-and-reload
   "Package lifecycle reset removes provider registrations owned by that package."

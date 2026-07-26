@@ -21,28 +21,12 @@
     (t (error "~A must be a string, got ~S." field-name value))))
 
 (defun media-tool-referenced-image-paths (args)
-  "Validate optional absolute local image paths supplied to the image tool."
+  "Read optional reference image paths; the media core validates them."
   (multiple-value-bind (value supplied-p)
       (media-tool-argument args :referenced-image-paths "referenced_image_paths")
     (unless supplied-p
       (return-from media-tool-referenced-image-paths nil))
-    (unless (or (listp value) (vectorp value))
-      (error "referenced_image_paths must be an array of absolute file paths."))
-    (let ((paths (coerce value 'list)))
-      (when (> (length paths) 5)
-        (error "referenced_image_paths accepts at most 5 paths."))
-      (mapcar (lambda (path)
-                (let* ((text (media-tool-string path "referenced image path"))
-                       (pathname (pathname text)))
-                  (unless (uiop:absolute-pathname-p pathname)
-                    (error "referenced image path must be absolute: ~A" text))
-                  (let ((resolved (probe-file pathname)))
-                    (unless resolved
-                      (error "referenced image path does not exist: ~A" text))
-                    (when (uiop:directory-pathname-p resolved)
-                      (error "referenced image path must name a regular file: ~A" text))
-                    (namestring (truename resolved)))))
-              paths))))
+    value))
 
 (defun media-tool-reject-provider-selection (args)
   "Reject transport, provider, and destination selectors from agent tool calls."
@@ -70,7 +54,13 @@
          (paths (media-tool-referenced-image-paths args))
          (request (make-media-generation-request
                    :image prompt :referenced-image-paths paths))
-         (operation (start-media-operation request)))
+         ;; Publish the operation before START-FN runs, so an interactive
+         ;; cancellation arriving at the start boundary can prevent billing.
+         (operation (begin-media-operation request)))
+    (register-current-tool-cancellation-function
+     (lambda ()
+       (cancel-media-operation operation)))
+    (run-media-operation operation)
     (when (eq (media-operation-status operation) :succeeded)
       (persist-media-operation-assets (media-tool-current-buffer) operation))
     (lisp-data-string

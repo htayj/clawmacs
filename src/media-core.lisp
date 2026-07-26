@@ -45,13 +45,23 @@ video jobs without exposing provider or billing selection to an agent tool."
   (id "" :type string :read-only t)
   (provider-id "" :type string :read-only t)
   (request nil :type media-request :read-only t)
-  (status :running :type keyword)
+  (status :pending :type keyword)
   (backend-id nil :type (or null string))
   (outcome nil :type (or null media-provider-outcome))
   (error nil :type (or null string))
   (artifact-records nil :type list)
+  (persisting-p nil :type boolean)
   (started-at 0 :type integer :read-only t)
   (updated-at 0 :type integer))
+
+(define-condition media-artifact-write-failed (error)
+  ((operation :initarg :operation :reader media-artifact-write-failed-operation)
+   (cause :initarg :cause :reader media-artifact-write-failed-cause))
+  (:report (lambda (condition stream)
+             (format stream "Media artifact write failed for operation ~A: ~A"
+                     (media-operation-id
+                      (media-artifact-write-failed-operation condition))
+                     (media-artifact-write-failed-cause condition)))))
 
 (defvar *media-provider-registry* (make-hash-table :test #'equal)
   "Registry of installed package-owned MEDIA-PROVIDER definitions.")
@@ -73,6 +83,41 @@ video jobs without exposing provider or billing selection to an agent tool."
 
 (defparameter *media-outcome-statuses* '(:succeeded :running :failed :cancelled)
   "Terminal and non-terminal provider outcome statuses.")
+
+#+sbcl
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  ;; STAT resolves symlinks without opening their target.  That lets request
+  ;; validation reject FIFOs, sockets, devices, and directories before a media
+  ;; adapter could block while trying to read an alleged reference image.
+  (require :sb-posix))
+
+#+sbcl
+(defvar *media-posix-stat-function*
+  (let ((symbol (and (find-package "SB-POSIX")
+                     (find-symbol "STAT" "SB-POSIX"))))
+    (and symbol (fboundp symbol) (symbol-function symbol)))
+  "Resolved SB-POSIX STAT function used for fail-closed media file checks.")
+
+#+sbcl
+(defvar *media-posix-stat-mode-function*
+  (let ((symbol (and (find-package "SB-POSIX")
+                     (find-symbol "STAT-MODE" "SB-POSIX"))))
+    (and symbol (fboundp symbol) (symbol-function symbol)))
+  "Resolved SB-POSIX STAT-MODE accessor used for media file checks.")
+
+#+sbcl
+(defvar *media-posix-file-type-mask*
+  (let ((symbol (and (find-package "SB-POSIX")
+                     (find-symbol "S-IFMT" "SB-POSIX"))))
+    (and symbol (boundp symbol) (symbol-value symbol)))
+  "SB-POSIX bit mask selecting the POSIX file type from a stat mode.")
+
+#+sbcl
+(defvar *media-posix-regular-file-type*
+  (let ((symbol (and (find-package "SB-POSIX")
+                     (find-symbol "S-IFREG" "SB-POSIX"))))
+    (and symbol (boundp symbol) (symbol-value symbol)))
+  "SB-POSIX mode value representing a regular file.")
 
 (defun normalize-media-provider-id (value)
   "Return VALUE as a non-empty lowercase provider id."
@@ -98,6 +143,71 @@ video jobs without exposing provider or billing selection to an agent tool."
   (and *current-clawmacs-package*
        (manifest-package-name *current-clawmacs-package*)))
 
+(defun normalize-media-provider-package-owner (package)
+  "Return PACKAGE as a canonical package owner, or signal for an invalid name."
+  (when package
+    (or (manifest-package-name package)
+        (error "Media provider package owner must be a non-empty package name, got ~S."
+               package))))
+
+(defun media-regular-file-pathname-p (pathname)
+  "Return true only when PATHNAME resolves to a POSIX regular file.
+
+Symlinks are intentionally accepted when their resolved target is regular.
+This check performs stat metadata lookup only; it never opens the candidate.
+Non-SBCL implementations fail closed because the supported runtime is SBCL."
+  #+sbcl
+  (and *media-posix-stat-function*
+       *media-posix-stat-mode-function*
+       *media-posix-file-type-mask*
+       *media-posix-regular-file-type*
+       (handler-case
+           (let* ((status (funcall *media-posix-stat-function*
+                                   (namestring pathname)))
+                  (mode (funcall *media-posix-stat-mode-function* status)))
+             (= (logand mode *media-posix-file-type-mask*)
+                *media-posix-regular-file-type*))
+         (error () nil)))
+  #-sbcl
+  (declare (ignore pathname))
+  #-sbcl
+  nil)
+
+(defun normalize-media-reference-image-paths (paths)
+  "Return PATHS as resolved absolute regular files for a media request.
+
+NIL means no references.  Any nonempty list or vector must contain at most
+five nonblank absolute paths whose resolved targets are regular files."
+  (cond
+    ((null paths) nil)
+    ((not (or (listp paths) (vectorp paths)))
+     (error "referenced_image_paths must be a list or vector of absolute regular files."))
+    (t
+     (let ((items (coerce paths 'list)))
+       (when (null items)
+         (error "referenced_image_paths must be omitted or contain at least one path."))
+       (when (> (length items) 5)
+         (error "referenced_image_paths accepts at most 5 paths."))
+       (mapcar
+        (lambda (item)
+          (unless (stringp item)
+            (error "referenced image path must be a string, got ~S." item))
+          (let* ((text (string-trim '(#\Space #\Tab #\Newline #\Return) item))
+                 (pathname (pathname text)))
+            (unless (plusp (length text))
+              (error "referenced image path must be non-empty."))
+            (unless (uiop:absolute-pathname-p pathname)
+              (error "referenced image path must be absolute: ~A" text))
+            (let ((resolved (probe-file pathname)))
+              (unless resolved
+                (error "referenced image path does not exist: ~A" text))
+              (let ((true-path (truename resolved)))
+                (unless (media-regular-file-pathname-p true-path)
+                  (error "referenced image path must resolve to a regular file: ~A"
+                         text))
+                (namestring true-path)))))
+        items)))))
+
 (defun media-next-operation-id-unlocked ()
   "Return one registry-unique media operation id while the registry is locked."
   (format nil "media-~36R-~36R"
@@ -113,7 +223,8 @@ asynchronous providers such as video generation services."
          (normalized-kinds (remove-duplicates
                             (mapcar #'normalize-media-kind kinds)
                             :test #'eq))
-         (owner (or package (media-registry-owner-name))))
+         (owner (or (normalize-media-provider-package-owner package)
+                    (media-registry-owner-name))))
     (unless normalized-kinds
       (error "Media provider ~A must declare at least one kind." normalized-id))
     (unless (functionp start-fn)
@@ -188,7 +299,9 @@ function is intentionally configuration-facing."
                                     (get-internal-real-time))
                         :kind normalized-kind
                         :prompt normalized-prompt
-                        :referenced-image-paths (copy-list referenced-image-paths))))
+                        :referenced-image-paths
+                        (normalize-media-reference-image-paths
+                         referenced-image-paths))))
 
 (defun validate-media-provider-outcome (outcome)
   "Return OUTCOME after checking the narrow provider callback contract."
@@ -198,7 +311,13 @@ function is intentionally configuration-facing."
   (unless (member (media-provider-outcome-status outcome)
                   *media-outcome-statuses* :test #'eq)
     (error "Media provider returned unsupported outcome status ~S."
-           (media-provider-outcome-status outcome)))
+             (media-provider-outcome-status outcome)))
+  (when (eq (media-provider-outcome-status outcome) :running)
+    (let ((backend-id (media-provider-outcome-backend-id outcome)))
+      (unless (and (stringp backend-id)
+                   (plusp (length (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                               backend-id))))
+        (error "Running media provider outcomes require a non-empty backend id."))))
   (dolist (asset (media-provider-outcome-assets outcome))
     (unless (typep asset 'media-asset)
       (error "Media provider outcomes must contain MEDIA-ASSET values, got ~S."
@@ -212,18 +331,24 @@ function is intentionally configuration-facing."
   "Apply OUTCOME to OPERATION and return OPERATION."
   (let ((validated (validate-media-provider-outcome outcome)))
     (bt:with-lock-held (*media-provider-registry-lock*)
-      (setf (media-operation-status operation)
-            (media-provider-outcome-status validated)
-            (media-operation-outcome operation) validated
-            (media-operation-backend-id operation)
-            (media-provider-outcome-backend-id validated)
-            (media-operation-error operation)
-            (media-provider-outcome-public-error validated)
-            (media-operation-updated-at operation) (get-universal-time)))
+      ;; Cancellation wins over a late START-FN response.  An adapter may have
+      ;; completed remotely after the caller cancelled, but that result must
+      ;; never become a successful local operation or durable artifact.
+      (unless (and (eq (media-operation-status operation) :cancelled)
+                   (not (eq (media-provider-outcome-status validated)
+                            :cancelled)))
+        (setf (media-operation-status operation)
+              (media-provider-outcome-status validated)
+              (media-operation-outcome operation) validated
+              (media-operation-backend-id operation)
+              (media-provider-outcome-backend-id validated)
+              (media-operation-error operation)
+              (media-provider-outcome-public-error validated)
+              (media-operation-updated-at operation) (get-universal-time))))
     operation))
 
-(defun start-media-operation (request &key provider-id)
-  "Start REQUEST through the configured provider and return a MEDIA-OPERATION.
+(defun begin-media-operation (request &key provider-id)
+  "Publish a pending operation for REQUEST without invoking its provider.
 
 PROVIDER-ID is for trusted configuration and adapter code.  Agent-facing tools
 must call this without it, thereby using *MEDIA-DEFAULT-PROVIDER*."
@@ -239,28 +364,47 @@ must call this without it, thereby using *MEDIA-DEFAULT-PROVIDER*."
                     :test #'eq)
       (error "Media provider ~A does not support ~A generation."
              (media-provider-id provider) (media-request-kind request)))
-    (let ((operation
-            (bt:with-lock-held (*media-provider-registry-lock*)
-              (let ((created (make-media-operation
-                              :id (media-next-operation-id-unlocked)
-                              :provider-id (media-provider-id provider)
-                              :request request
-                              :started-at (get-universal-time)
-                              :updated-at (get-universal-time))))
-                (setf (gethash (media-operation-id created)
-                               *media-operation-registry*)
-                      created)
-                created))))
-      (handler-case
-          (apply-media-provider-outcome
-           operation
-           (funcall (media-provider-start-fn provider) request))
-        (error (condition)
-          (apply-media-provider-outcome
-           operation
-           (make-media-provider-outcome
-            :status :failed
-            :public-error (format nil "Media provider request failed: ~A" condition))))))))
+    (bt:with-lock-held (*media-provider-registry-lock*)
+      (let ((created (make-media-operation
+                      :id (media-next-operation-id-unlocked)
+                      :provider-id (media-provider-id provider)
+                      :request request
+                      :started-at (get-universal-time)
+                      :updated-at (get-universal-time))))
+        (setf (gethash (media-operation-id created) *media-operation-registry*)
+              created)
+        created))))
+
+(defun run-media-operation (operation)
+  "Invoke OPERATION's START-FN once unless cancellation arrived first."
+  (unless (typep operation 'media-operation)
+    (error "Expected a MEDIA-OPERATION, got ~S." operation))
+  (let ((provider (find-media-provider (media-operation-provider-id operation))))
+    (unless provider
+      (error "Media provider ~A is no longer registered."
+             (media-operation-provider-id operation)))
+    (unless (bt:with-lock-held (*media-provider-registry-lock*)
+              (when (eq (media-operation-status operation) :pending)
+                (setf (media-operation-status operation) :running
+                      (media-operation-updated-at operation) (get-universal-time))
+                t))
+      (return-from run-media-operation operation))
+    (handler-case
+        (apply-media-provider-outcome
+         operation
+         (funcall (media-provider-start-fn provider)
+                  (media-operation-request operation)))
+      (error (condition)
+        (apply-media-provider-outcome
+         operation
+         (make-media-provider-outcome
+          :status :failed
+          :public-error (format nil "Media provider request failed: ~A" condition))))))
+  operation)
+
+(defun start-media-operation (request &key provider-id)
+  "Publish and immediately start REQUEST through the configured provider."
+  (run-media-operation (begin-media-operation request :provider-id provider-id)))
 
 (defun find-media-operation (id)
   "Return a tracked media operation by ID, or NIL."
@@ -297,8 +441,30 @@ must call this without it, thereby using *MEDIA-DEFAULT-PROVIDER*."
                         (find-media-operation operation-or-id))))
     (unless operation
       (error "Unknown media operation ~S." operation-or-id))
-    (unless (eq (media-operation-status operation) :running)
-      (return-from cancel-media-operation operation))
+    (let ((status (bt:with-lock-held (*media-provider-registry-lock*)
+                    (media-operation-status operation))))
+      (when (eq status :pending)
+        (return-from cancel-media-operation
+          (apply-media-provider-outcome
+           operation
+           (make-media-provider-outcome :status :cancelled))))
+      ;; Until Artifactum persistence begins, cancellation wins over a just
+      ;; returned successful START-FN outcome.  Once bytes are being written,
+      ;; success wins: the durable write is irreversible and never races a
+      ;; cancellation into a half-published operation.
+      (when (eq status :succeeded)
+        (bt:with-lock-held (*media-provider-registry-lock*)
+          (when (and (eq (media-operation-status operation) :succeeded)
+                     (not (media-operation-persisting-p operation))
+                     (null (media-operation-artifact-records operation)))
+            (setf (media-operation-status operation) :cancelled
+                  (media-operation-outcome operation)
+                  (make-media-provider-outcome :status :cancelled)
+                  (media-operation-error operation) nil
+                  (media-operation-updated-at operation) (get-universal-time))))
+        (return-from cancel-media-operation operation))
+      (unless (eq status :running)
+        (return-from cancel-media-operation operation)))
     (let* ((provider (find-media-provider (media-operation-provider-id operation)))
            (cancel-fn (and provider (media-provider-cancel-fn provider))))
       (unless cancel-fn
@@ -334,26 +500,48 @@ The operation retains the normalized artifact records so callers can safely
 report them without recalculating filenames or source paths."
   (unless (typep operation 'media-operation)
     (error "Expected a MEDIA-OPERATION, got ~S." operation))
-  (unless (eq (media-operation-status operation) :succeeded)
-    (error "Only successful media operations can be persisted, got ~S."
-           (media-operation-status operation)))
-  (or (media-operation-artifact-records operation)
-      (let ((records
-              (mapcar (lambda (asset)
-                        (artifactum-create-from-octets
-                         buffer
-                         (media-asset-name asset)
-                         (media-asset-octets asset)
-                         :mime-type (media-asset-mime-type asset)
-                         :kind "generated-media"
-                         :author "agent"
-                         :metadata (media-operation-artifact-metadata operation asset)
-                         :provenance (media-operation-artifact-provenance operation)))
-                      (media-provider-outcome-assets
-                       (media-operation-outcome operation)))))
+  (let ((existing
+          (bt:with-lock-held (*media-provider-registry-lock*)
+            (unless (eq (media-operation-status operation) :succeeded)
+              (error "Only successful media operations can be persisted, got ~S."
+                     (media-operation-status operation)))
+            (or (media-operation-artifact-records operation)
+                (progn
+                  (when (media-operation-persisting-p operation)
+                    (error "Media operation ~A is already persisting artifacts."
+                           (media-operation-id operation)))
+                  (setf (media-operation-persisting-p operation) t)
+                  nil)))))
+    (when existing
+      (return-from persist-media-operation-assets existing))
+    (handler-case
+        (let ((records
+                (mapcar (lambda (asset)
+                          (artifactum-create-from-octets
+                           buffer
+                           (media-asset-name asset)
+                           (media-asset-octets asset)
+                           :mime-type (media-asset-mime-type asset)
+                           :kind "generated-media"
+                           :author "agent"
+                           :metadata (media-operation-artifact-metadata operation asset)
+                           :provenance (media-operation-artifact-provenance operation)))
+                        (media-provider-outcome-assets
+                         (media-operation-outcome operation)))))
+          (bt:with-lock-held (*media-provider-registry-lock*)
+            (setf (media-operation-artifact-records operation) records
+                  (media-operation-persisting-p operation) nil))
+          records)
+      (media-artifact-write-failed (condition)
         (bt:with-lock-held (*media-provider-registry-lock*)
-          (setf (media-operation-artifact-records operation) records))
-        records)))
+          (setf (media-operation-persisting-p operation) nil))
+        (error condition))
+      (error (condition)
+        (bt:with-lock-held (*media-provider-registry-lock*)
+          (setf (media-operation-persisting-p operation) nil))
+        (error 'media-artifact-write-failed
+               :operation operation
+               :cause condition)))))
 
 (defun media-operation-data (operation &key include-artifacts-p)
   "Return provider-safe data describing OPERATION for a tool result."
