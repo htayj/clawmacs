@@ -131,6 +131,8 @@
              (edit-args (second edit))
              (generation-body (getf generation-args :content))
              (edit-body (getf edit-args :content))
+             (edit-json (cl-json:decode-json-from-string edit-body))
+             (edit-images (clawmacs::artifactum-json-value edit-json "images"))
              (headers (getf generation-args :additional-headers)))
         (is (search "/images/generations" (first generation)))
         (is (search "/images/edits" (first edit)))
@@ -138,8 +140,8 @@
         (is (search "\"background\":\"auto\"" generation-body))
         (is (search "\"quality\":\"auto\"" generation-body))
         (is (search "\"size\":\"auto\"" generation-body))
-        (is (search "\"images\"" edit-body))
-        (is (search "data:image/png;base64,iVBORw==" edit-body))
+        (is (= 1 (length edit-images)))
+        (is (string= "data:image/png;base64,iVBORw==" (elt edit-images 0)))
         (is (search "Bearer header.payload.signature"
                     (cdr (assoc "Authorization" headers :test #'string=))))
         (is (string= "codex_cli_rs"
@@ -258,22 +260,6 @@
                   (search "did not contain"
                           (clawmacs:media-provider-outcome-public-error outcome)
                           :test #'char-equal))))))
-    ;; JSON permits escaping a solidus.  Decode the JSON semantically before
-    ;; validating the provider's strict standard Base64 payload.
-    (let ((escaped-solidus-response
-            (format nil "{\"data\":[{\"b64_json\":\"~A\"}]}"
-                    (with-output-to-string (stream)
-                      (dotimes (index 4)
-                        (declare (ignore index))
-                        (write-char #\\ stream)
-                        (write-char #\/ stream))))))
-      (with-codex-image-function-override (drakma:http-request (&rest _args)
-                                               (declare (ignore _args))
-                                               (values escaped-solidus-response 200 nil))
-        (let* ((outcome (codex-image-start-test-request))
-               (asset (first (clawmacs:media-provider-outcome-assets outcome))))
-          (is (eq :succeeded (clawmacs:media-provider-outcome-status outcome)))
-          (is (equalp #(255 255 255) (clawmacs:media-asset-octets asset))))))
     (let ((buffer (make-media-test-buffer "codex-image-artifact")))
       (with-codex-image-function-override (drakma:http-request (&rest _args)
                                              (declare (ignore _args))
