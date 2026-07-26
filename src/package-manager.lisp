@@ -1719,6 +1719,8 @@ Returns a normalized plist or NIL on failure."
       (funcall 'remove-package-hook-registrations name))
     (when (fboundp 'remove-package-advices)
       (funcall 'remove-package-advices name))
+    (when (fboundp 'remove-media-providers-for-package)
+      (funcall 'remove-media-providers-for-package name))
     (remove-command-metadata-for-package name)
     (remove-slash-commands-for-package name)
     (remove-buffer-types-for-package name)

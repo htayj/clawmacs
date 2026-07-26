@@ -664,6 +664,55 @@
      #:artifactum-buffer-state-serializer
      #:artifactum-buffer-state-restorer
      #:artifactum-artifact-buffer-open-record
+     ;; Provider-neutral generated media
+     #:media-provider
+     #:make-media-provider
+     #:media-provider-id
+     #:media-provider-kinds
+     #:media-provider-start-fn
+     #:media-provider-poll-fn
+     #:media-provider-cancel-fn
+     #:media-provider-package
+     #:media-request
+     #:media-request-id
+     #:media-request-kind
+     #:media-request-prompt
+     #:media-request-referenced-image-paths
+     #:media-asset
+     #:make-media-asset
+     #:media-asset-name
+     #:media-asset-mime-type
+     #:media-asset-octets
+     #:media-asset-metadata
+     #:media-provider-outcome
+     #:make-media-provider-outcome
+     #:media-provider-outcome-status
+     #:media-provider-outcome-assets
+     #:media-provider-outcome-revised-prompt
+     #:media-provider-outcome-backend-id
+     #:media-provider-outcome-public-error
+     #:media-operation
+     #:media-operation-id
+     #:media-operation-provider-id
+     #:media-operation-request
+     #:media-operation-status
+     #:media-operation-backend-id
+     #:media-operation-outcome
+     #:media-operation-error
+     #:media-operation-artifact-records
+     #:register-media-provider
+     #:find-media-provider
+     #:list-media-providers
+     #:remove-media-providers-for-package
+     #:media-default-provider
+     #:set-media-default-provider
+     #:make-media-generation-request
+     #:start-media-operation
+     #:find-media-operation
+     #:poll-media-operation
+     #:cancel-media-operation
+     #:persist-media-operation-assets
+     #:media-operation-data
      #:*boot-file-names*
      #:load-boot-files
      #:*agent-defaults-path*

@@ -94,6 +94,10 @@
   :description "Attachment and durable artifact package tests"
   :in clawmacs-suite)
 
+(def-suite media-package-suite
+  :description "Provider-neutral generated media package tests"
+  :in clawmacs-suite)
+
 (def-suite interop-suite
   :description "App-server, JSONL, and structured-output interop tests"
   :in clawmacs-suite)

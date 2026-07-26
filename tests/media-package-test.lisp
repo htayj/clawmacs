@@ -1,0 +1,222 @@
+(in-package :clawmacs/tests)
+
+(in-suite media-package-suite)
+
+(defmacro with-media-package-state (&body body)
+  "Run BODY with isolated media, package, tool, and session registries."
+  `(with-package-state-override ((default-package-test-channels))
+     (let* ((*sessions-dir* (temp-session-test-directory "media"))
+            (clawmacs::*tool-working-directory* *sessions-dir*)
+            (clawmacs::*buffer-ring* nil)
+            (clawmacs::*buffer-counter* 0)
+            (clawmacs::*default-keymap* nil)
+            (clawmacs::*scratch-keymap* nil)
+            (clawmacs::*file-keymap* nil)
+            (clawmacs::*command-table* (make-hash-table :test #'eq))
+            (clawmacs::*extended-docs* (make-hash-table :test #'eq))
+            (clawmacs::*agent-tool-metadata-table* (make-hash-table :test #'eq))
+            (clawmacs::*agent-tool-name-table* (make-hash-table :test #'equal))
+            (clawmacs::*tool-table* (make-hash-table :test #'equal))
+            (clawmacs::*slash-command-table* (make-hash-table :test #'equal))
+            (clawmacs::*media-provider-registry* (make-hash-table :test #'equal))
+            (clawmacs::*media-operation-registry* (make-hash-table :test #'equal))
+            (clawmacs::*media-provider-registry-lock*
+             (bt:make-lock "test media provider registry"))
+            (clawmacs::*media-default-provider* nil)
+            (clawmacs::*media-operation-counter* 0))
+       (set-package-enablement-scope "media" :global)
+       (load-active-packages)
+       (clawmacs::init-default-keymap)
+       ,@body)))
+
+(defun make-media-test-buffer (label)
+  "Return a persistent chat buffer suitable for durable generated media."
+  (let ((root (merge-pathnames (format nil "~A/" label)
+                               clawmacs::*tool-working-directory*)))
+    (ensure-directories-exist (merge-pathnames #P".keep" root))
+    (let ((buffer (clawmacs::make-chat-buffer label :working-directory root)))
+      (setf (clawmacs::buffer-keymap buffer) clawmacs::*default-keymap*)
+      (add-buffer-to-ring buffer)
+      (switch-to-buffer buffer)
+      buffer)))
+
+(defun media-test-tool-result (args)
+  "Execute the media image tool and decode its Lisp data result."
+  (nth-value 0
+    (clawmacs::lisp-data-read
+     (clawmacs:execute-tool "media_generate_image" args))))
+
+(defun media-test-png-asset ()
+  "Return a deterministic tiny PNG-shaped binary asset for provider tests."
+  (clawmacs:make-media-asset
+   :name "fake-image.png"
+   :mime-type "image/png"
+   :octets (make-array 8 :element-type '(unsigned-byte 8)
+                       :initial-contents '(137 80 78 71 13 10 26 10))
+   :metadata '((:seed . 7))))
+
+(test media-package-registers-a-background-image-tool
+  "The bundled package exposes one narrow background image-generation tool."
+  (with-media-package-state
+    (let* ((*current-caller* :user)
+           (tools (coerce (tool-definitions-for-api) 'list))
+           (definition (find "media_generate_image" tools
+                             :key (lambda (tool) (cdr (assoc :name tool)))
+                             :test #'string=))
+           (metadata (clawmacs:find-agent-tool-metadata
+                      'clawmacs::media-generate-image-tool)))
+      (is definition)
+      (is (eq :background (clawmacs:agent-tool-metadata-execution metadata)))
+      (is (search "Generated media with media" (render-package-prompt-sections)))
+      (is (not (find "provider"
+                     (clawmacs:agent-tool-metadata-args metadata)
+                     :key (lambda (arg) (getf arg :name))
+                     :test #'string=))))))
+
+(test media-provider-registry-enforces-capabilities-and-default-selection
+  "Providers are package-owned and selected through trusted configuration."
+  (with-media-package-state
+    (let ((provider
+            (clawmacs:register-media-provider
+             "fake" '(:image)
+             (lambda (_request)
+               (declare (ignore _request))
+               (clawmacs:make-media-provider-outcome
+                :status :succeeded
+                :assets (list (media-test-png-asset)))))))
+      (is (string= "fake" (clawmacs:media-provider-id provider)))
+      (is (equal '(:image) (clawmacs:media-provider-kinds provider)))
+      (is (eq provider (clawmacs:find-media-provider "FAKE")))
+      (signals error (clawmacs:set-media-default-provider "missing"))
+      (is (string= "fake" (clawmacs:set-media-default-provider "fake")))
+      (is (string= "fake" (clawmacs:media-default-provider)))
+      (signals error
+        (clawmacs:make-media-generation-request :audio "not supported")))))
+
+(test media-image-tool-validates-input-and-persists-successful-assets
+  "The tool accepts only prompt plus up to five existing absolute references."
+  (with-media-package-state
+    (let* ((buffer (make-media-test-buffer "success"))
+           (reference (merge-pathnames "reference.png"
+                                       (clawmacs:buffer-working-directory buffer)))
+           (directory-reference (merge-pathnames "directory-reference/"
+                                                 (clawmacs:buffer-working-directory buffer)))
+           (seen-request nil))
+      (with-open-file (stream reference
+                              :direction :output
+                              :element-type '(unsigned-byte 8)
+                              :if-exists :supersede
+                              :if-does-not-exist :create)
+        (write-sequence #(1 2 3) stream))
+      (clawmacs:register-media-provider
+       "fake" '(:image)
+       (lambda (request)
+         (setf seen-request request)
+         (clawmacs:make-media-provider-outcome
+          :status :succeeded
+          :assets (list (media-test-png-asset))
+          :revised-prompt "a revised fake image"
+          :backend-id "fake-1")))
+      (clawmacs:set-media-default-provider "fake")
+      (let* ((clawmacs::*current-tool-buffer* buffer)
+             (result (media-test-tool-result
+                      `((:prompt . " draw a test image ")
+                        (:referenced_image_paths . ,(vector (namestring reference))))))
+             (records (clawmacs:artifactum-session-records buffer))
+             (artifact (first (coerce (getf result :artifacts) 'list))))
+        (is (string= "succeeded" (getf result :status)))
+        (is (string= "fake-1" (getf result :backend-id)))
+        (is (string= "draw a test image"
+                     (clawmacs:media-request-prompt seen-request)))
+        (is (equal (list (namestring (truename reference)))
+                   (clawmacs:media-request-referenced-image-paths seen-request)))
+        (is (= 1 (length records)))
+        (is (string= "generated-media" (getf artifact :kind)))
+        (is (probe-file (pathname (getf artifact :path))))
+        (is (string= "fake"
+                     (clawmacs::artifactum-json-value
+                      (getf artifact :metadata) "provider")))
+        (signals error
+          (media-test-tool-result
+           '((:prompt . "x") (:provider . "fake"))))
+        (signals error
+          (media-test-tool-result
+           '((:prompt . "x") (:referenced_image_paths . #("relative.png")))))
+        (ensure-directories-exist (merge-pathnames #P".keep" directory-reference))
+        (signals error
+          (media-test-tool-result
+           `((:prompt . "x")
+             (:referenced_image_paths . ,(vector (namestring directory-reference))))))
+        (signals error
+          (media-test-tool-result
+           `((:prompt . "x")
+             (:referenced_image_paths . ,(make-array 6 :initial-element
+                                                       (namestring reference))))))))))
+
+(test media-operation-supports-running-poll-and-cancel-lifecycles
+  "The same contract handles future asynchronous video providers."
+  (with-media-package-state
+    (let ((poll-count 0)
+          (cancel-count 0))
+      (clawmacs:register-media-provider
+       "async-fake" '(:image :video)
+       (lambda (_request)
+         (declare (ignore _request))
+         (clawmacs:make-media-provider-outcome :status :running :backend-id "job-1"))
+       :poll-fn (lambda (_operation)
+                  (declare (ignore _operation))
+                  (incf poll-count)
+                  (clawmacs:make-media-provider-outcome
+                   :status :succeeded :backend-id "job-1"
+                   :assets (list (media-test-png-asset))))
+       :cancel-fn (lambda (_operation)
+                    (declare (ignore _operation))
+                    (incf cancel-count)
+                    (clawmacs:make-media-provider-outcome
+                     :status :cancelled :backend-id "job-1")))
+      (clawmacs:set-media-default-provider "async-fake")
+      (let ((operation (clawmacs:start-media-operation
+                        (clawmacs:make-media-generation-request :video "animate"))))
+        (is (eq :running (clawmacs:media-operation-status operation)))
+        (is (eq operation (clawmacs:find-media-operation
+                           (clawmacs:media-operation-id operation))))
+        (is (eq operation (clawmacs:poll-media-operation operation)))
+        (is (= 1 poll-count))
+        (is (eq :succeeded (clawmacs:media-operation-status operation))))
+      (let ((operation (clawmacs:start-media-operation
+                        (clawmacs:make-media-generation-request :image "cancel"))))
+        (is (eq :running (clawmacs:media-operation-status operation)))
+        (is (eq operation (clawmacs:cancel-media-operation
+                           (clawmacs:media-operation-id operation))))
+        (is (= 1 cancel-count))
+        (is (eq :cancelled (clawmacs:media-operation-status operation))))))
+
+(test media-provider-cleanup-follows-package-reset-and-reload
+  "Package lifecycle reset removes provider registrations owned by that package."
+  (with-media-package-state
+    (let ((clawmacs::*current-clawmacs-package* "media"))
+      (clawmacs:register-media-provider
+       "owned-fake" '(:image)
+       (lambda (_request)
+         (declare (ignore _request))
+         (clawmacs:make-media-provider-outcome :status :failed
+                                                :public-error "not used"))))
+    (clawmacs:set-media-default-provider "owned-fake")
+    (is (clawmacs:find-media-provider "owned-fake"))
+    (clawmacs::reset-package-runtime-state "media")
+    (is-false (clawmacs:find-media-provider "owned-fake"))
+    (is-false (clawmacs:media-default-provider))))
+
+(test media-provider-failures-are-returned-as-operation-data
+  "Provider exceptions become public failed outcomes instead of crashing a tool worker."
+  (with-media-package-state
+    (clawmacs:register-media-provider
+     "broken" '(:image)
+     (lambda (_request)
+       (declare (ignore _request))
+       (error "intentional fake failure")))
+    (clawmacs:set-media-default-provider "broken")
+    (let ((operation (clawmacs:start-media-operation
+                      (clawmacs:make-media-generation-request :image "broken"))))
+      (is (eq :failed (clawmacs:media-operation-status operation)))
+      (is (search "intentional fake failure" (clawmacs:media-operation-error operation))))))
