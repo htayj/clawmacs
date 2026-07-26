@@ -835,12 +835,19 @@
 (defmethod (setf clim:stream-end-of-line-action) (action (pane soft-wrap-test-pane))
   (setf (soft-wrap-test-pane-end-of-line-action pane) action))
 
+(defclass no-soft-wrap-test-pane () ())
+
 (test mcclim-compose-pane-uses-mcclim-soft-wrap-when-supported
   "The chat compose configuration uses CLIM stream soft wrapping when supported."
   (let ((pane (make-instance 'soft-wrap-test-pane)))
     (is (eq :scroll (clim:stream-end-of-line-action pane)))
     (clawmacs::configure-chat-compose-pane pane)
     (is (eq :wrap* (clim:stream-end-of-line-action pane)))))
+
+(test mcclim-compose-pane-skips-soft-wrap-when-unsupported
+  "The compatibility helper leaves panes without the CLIM writer untouched."
+  (let ((pane (make-instance 'no-soft-wrap-test-pane)))
+    (is (eq pane (clawmacs::configure-chat-compose-pane pane)))))
 
 (test mcclim-compose-pane-does-not-hard-wrap-text-editor-value
   "Current McCLIM text-editor gadgets do not get approximate hard newlines inserted."

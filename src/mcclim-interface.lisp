@@ -411,7 +411,10 @@ the public ESA and DREI-SYNTAX protocols."
 New chat panes declare this policy with their construction initargs.  Retain
 the public helper for headless callers that construct a compose pane directly;
 it never changes space requirements or requests layout."
-  (when pane
+  (when (and pane
+             (compute-applicable-methods
+              (fdefinition '(setf clim:stream-end-of-line-action))
+              (list :wrap* pane)))
     (setf (clim:stream-end-of-line-action pane) :wrap*))
   pane)
 
