@@ -122,8 +122,8 @@ read-modify-supersede update of artifacts/index.json.")
             :when (and (consp entry)
                        (let ((entry-key (car entry)))
                          (and (typep entry-key '(or string symbol))
-                              (string= name (artifactum-json-key entry-key))))
-              :return (cdr entry))))))
+                              (string= name (artifactum-json-key entry-key)))))
+              :return (cdr entry)))))
 
 (defun artifactum-session-root (session)
   "Return SESSION's artifact root pathname."

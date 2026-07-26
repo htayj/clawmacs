@@ -57,6 +57,15 @@
       (read-sequence octets stream)
       octets)))
 
+(test artifactum-json-value-accepts-normalized-keys-and-skips-invalid-entries
+  "JSON lookup returns the first matching string or symbol key."
+  (let ((object '((42 . "ignored")
+                  ("provider-name" . "OpenAI")
+                  (:provider_name . "later match"))))
+    (is (string= "OpenAI"
+                 (clawmacs::artifactum-json-value object :provider_name)))
+    (is (null (clawmacs::artifactum-json-value object "missing")))))
+
 (test artifactum-normalizes-record-without-updated-timestamp
   "Legacy records use their creation timestamp when updated_at is absent."
   (let ((record (clawmacs::normalize-artifactum-record
