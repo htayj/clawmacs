@@ -99,8 +99,8 @@ if [ "$sbcl_dynamic_space_size" -le 0 ]; then
   exit 1
 fi
 
-clean_build=${CLAWMACS_RUN_CLEAN_BUILD:-0}
-export CLAWMACS_RUN_CLEAN_BUILD="$clean_build"
+: "${CLAWMACS_RUN_CLEAN_BUILD:=0}"
+export CLAWMACS_RUN_CLEAN_BUILD
 
 cd "$SCRIPT_DIR"
-exec sbcl --dynamic-space-size "$sbcl_dynamic_space_size" --noinform --script scripts/run-ultralisp.lisp "$clean_build" "$@"
+exec sbcl --dynamic-space-size "$sbcl_dynamic_space_size" --noinform --script scripts/run-ultralisp.lisp "$@"
