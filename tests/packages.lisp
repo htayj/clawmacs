@@ -54,6 +54,10 @@
   :description "Persisted appearance configuration and startup selector tests"
   :in clawmacs-suite)
 
+(def-suite mcclim-interface-suite
+  :description "Frame-local McCLIM interface and lifecycle tests"
+  :in clawmacs-suite)
+
 (def-suite sexed-suite
   :description "Agent-oriented s-expression editing tests"
   :in clawmacs-suite)

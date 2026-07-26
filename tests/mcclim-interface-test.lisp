@@ -1,6 +1,6 @@
 (in-package :clawmacs/tests)
 
-(in-suite clawmacs-suite)
+(in-suite mcclim-interface-suite)
 
 (defmacro with-mcclim-test-function-override
     ((name lambda-list &body implementation) &body body)
@@ -13,6 +13,22 @@
                     (lambda ,lambda-list ,@implementation))
               ,@body)
          (setf (symbol-function ',name) ,original)))))
+
+(defun handle-chat-appearance-activation-with-fake-port (frame candidate port)
+  "Run one frame-process activation through a deterministic opaque port seam."
+  (with-mcclim-test-function-override
+      (clawmacs::chat-frame-appearance-live-port (requested-frame)
+        (is (eq frame requested-frame))
+        port)
+    (clawmacs::handle-chat-frame-appearance-activation frame candidate)))
+
+(defun refresh-chat-appearance-bundle-with-fake-port (frame port)
+  "Construct a post-adoption bundle through the public-style test resolver."
+  (with-mcclim-test-function-override
+      (clawmacs::chat-frame-appearance-live-port (requested-frame)
+        (is (eq frame requested-frame))
+        port)
+    (clawmacs::refresh-chat-frame-appearance-port-bundle frame)))
 
 (defclass synthetic-chat-compose-pane
     (clawmacs::clawmacs-chat-compose-pane)
@@ -202,7 +218,8 @@ these tests exercise construction-time space requirements only."
                      :foreground-ink
                      (make-appearance-ink-spec :foreground '(0.80 0.20 0.30))))))))
          (queued nil)
-         (redisplays 0))
+         (redisplays 0)
+         (port (make-symbol "FAKE-PORT")))
     (with-mcclim-test-function-override
         (clawmacs::queue-chat-frame-appearance-activation-event
             (requested-frame requested-candidate)
@@ -223,7 +240,8 @@ these tests exercise construction-time space requirements only."
           requested-frame)
       ;; This is the body invoked only by the CLIM appearance event handler.
       (let ((result
-              (clawmacs::handle-chat-frame-appearance-activation frame queued)))
+              (handle-chat-appearance-activation-with-fake-port
+               frame queued port)))
         (is (eq :ready (appearance-activation-result-status result)))))
     (is (= (1+ old-revision) (clawmacs::chat-frame-appearance-revision frame)))
     (is (= 1 redisplays))
@@ -249,14 +267,16 @@ these tests exercise construction-time space requirements only."
          (candidate
            (make-appearance-candidate
             (make-appearance-profile :selected-theme :dark)))
+         (port (make-symbol "FAKE-PORT"))
+         (initial (refresh-chat-appearance-bundle-with-fake-port frame port))
          (result
-           (clawmacs::handle-chat-frame-appearance-activation frame candidate)))
+           (handle-chat-appearance-activation-with-fake-port frame candidate port)))
     (is (eq :restart-required (appearance-activation-result-status result)))
     (is (eq candidate (clawmacs::chat-frame-appearance-staged-candidate frame)))
     (is (eq :classic (appearance-profile-selected-theme
                       (clawmacs::chat-frame-appearance-profile frame))))
     (is (eq old-profile (clawmacs::chat-frame-appearance-profile frame)))
-    (is (null (clawmacs::chat-frame-appearance-active-bundle frame)))
+    (is (eq initial (clawmacs::chat-frame-appearance-active-bundle frame)))
     (is (eq old-cache (clawmacs::chat-frame-appearance-resolved-roles frame)))
     (is (equal old-key
                (clawmacs::chat-frame-appearance-role-key frame role-stack)))))
@@ -272,16 +292,18 @@ these tests exercise construction-time space requirements only."
          (dark (make-appearance-candidate
                 (make-appearance-profile :selected-theme :dark)))
          (broken (make-appearance-candidate
-                  (make-appearance-profile :selected-theme :no-such-theme))))
-    (clawmacs::handle-chat-frame-appearance-activation frame dark)
+                  (make-appearance-profile :selected-theme :no-such-theme)))
+         (port (make-symbol "FAKE-PORT"))
+         (initial (refresh-chat-appearance-bundle-with-fake-port frame port)))
+    (handle-chat-appearance-activation-with-fake-port frame dark port)
     (let ((result
-            (clawmacs::handle-chat-frame-appearance-activation frame broken)))
+            (handle-chat-appearance-activation-with-fake-port frame broken port)))
       (is (eq :failed (appearance-activation-result-status result)))
       (is-true (appearance-activation-result-diagnostics result)))
     (is (eq dark (clawmacs::chat-frame-appearance-staged-candidate frame)))
     (is (eq :classic (appearance-profile-selected-theme
                       (clawmacs::chat-frame-appearance-profile frame))))
-    (is (null (clawmacs::chat-frame-appearance-active-bundle frame)))
+    (is (eq initial (clawmacs::chat-frame-appearance-active-bundle frame)))
     (is (equal old-key
                (clawmacs::chat-frame-appearance-role-key frame role-stack)))
     (is-true (clawmacs::chat-frame-appearance-activation-diagnostics frame))))
@@ -306,14 +328,15 @@ these tests exercise construction-time space requirements only."
               (cons :transcript-user
                     (make-appearance-role-style
                      :foreground-ink
-                     (make-appearance-ink-spec :foreground '(0.80 0.20 0.30))))))))
+                    (make-appearance-ink-spec :foreground '(0.80 0.20 0.30))))))))
+         (first-port (make-symbol "FAKE-FIRST-PORT"))
          (first-result
-           (clawmacs::handle-chat-frame-appearance-activation first live))
+           (handle-chat-appearance-activation-with-fake-port first live first-port))
          (revision (clawmacs::chat-frame-appearance-revision first))
          (noop-result
-           (clawmacs::handle-chat-frame-appearance-activation
+           (handle-chat-appearance-activation-with-fake-port
             first (make-appearance-candidate
-                   (clawmacs::chat-frame-appearance-profile first)))))
+                   (clawmacs::chat-frame-appearance-profile first)) first-port)))
     (is (eq :ready (appearance-activation-result-status first-result)))
     (is (eq :no-op (appearance-activation-result-status noop-result)))
     (is (= revision (clawmacs::chat-frame-appearance-revision first)))
@@ -321,6 +344,42 @@ these tests exercise construction-time space requirements only."
                       (clawmacs::chat-frame-appearance-profile second))))
     (is (equal second-key
                (clawmacs::chat-frame-appearance-role-key second role-stack)))))
+
+(test chat-frame-port-bundle-waits-for-adoption-and-remains-frame-local
+  "Construction is profile-only; each adopted frame receives only its own port bundle."
+  (let* ((first (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "appearance-port-first"
+                                      :session-persistence-mode :ephemeral)))
+         (second (clim:make-application-frame
+                  'clawmacs::clawmacs-chat-frame
+                  :buffer (make-buffer "appearance-port-second"
+                                       :session-persistence-mode :ephemeral)))
+         (first-port (make-symbol "FIRST-PORT"))
+         (second-port (make-symbol "SECOND-PORT")))
+    ;; An ordinary unadopted frame has only a portable profile, never a fake
+    ;; runtime bundle or a port-derived font inventory.
+    (is (null (clawmacs::chat-frame-appearance-active-bundle first)))
+    (is (null (clawmacs::refresh-chat-frame-appearance-port-bundle first)))
+    (let ((first-bundle
+            (refresh-chat-appearance-bundle-with-fake-port first first-port))
+          (second-bundle
+            (refresh-chat-appearance-bundle-with-fake-port second second-port)))
+      (is (eq first-bundle (clawmacs::chat-frame-appearance-active-bundle first)))
+      (is (eq second-bundle (clawmacs::chat-frame-appearance-active-bundle second)))
+      (is-false (eq first-bundle second-bundle))
+      (is (eq first-port (resolved-appearance-bundle-port-identity first-bundle)))
+      (is (eq second-port (resolved-appearance-bundle-port-identity second-bundle)))
+      (is-false (equal (resolved-appearance-bundle-bundle-key first-bundle)
+                       (resolved-appearance-bundle-bundle-key second-bundle)))
+      ;; Refreshing one frame's explicitly supplied generation cannot replace
+      ;; the other frame's active bundle.
+      (setf (slot-value first 'clawmacs::appearance-font-inventory-generation) 1)
+      (refresh-chat-appearance-bundle-with-fake-port first first-port)
+      (is (= 1 (resolved-appearance-bundle-font-inventory-generation
+                (clawmacs::chat-frame-appearance-active-bundle first))))
+      (is (eq second-bundle
+              (clawmacs::chat-frame-appearance-active-bundle second))))))
 
 (test chat-frame-construction-passes-a-fresh-classic-profile
   "Startup construction carries profile data without changing pane construction."

@@ -1388,13 +1388,22 @@ are validated."
 
 (defstruct (resolved-appearance-bundle
             (:constructor %make-resolved-appearance-bundle
-                (&key catalog-generation profile roles role-keys bundle-key))
+                (&key catalog-generation profile profile-revision
+                      font-inventory-generation port-identity role-table
+                      surface-defaults role-keys provenance bundle-key))
             (:conc-name %resolved-appearance-bundle-))
-  "Complete pure resolution of one profile against one appearance catalog."
+  "Complete immutable resolution of one profile for one opaque target port."
   (catalog-generation 0 :type (integer 0 *) :read-only t)
   (profile nil :type appearance-profile :read-only t)
-  (roles nil :type list :read-only t)
+  (profile-revision 0 :type (integer 0 *) :read-only t)
+  (font-inventory-generation 0 :type (integer 0 *) :read-only t)
+  ;; This deliberately retains the opaque identity object.  No other bundle
+  ;; field may rely on object identity for its structural comparison.
+  port-identity
+  (role-table nil :type list :read-only t)
+  (surface-defaults nil :type list :read-only t)
   (role-keys nil :type list :read-only t)
+  (provenance nil :type list :read-only t)
   (bundle-key nil :read-only t))
 
 (defstruct (appearance-activation-classification
@@ -1436,11 +1445,34 @@ are validated."
 (defun resolved-appearance-bundle-profile (bundle)
   (copy-appearance-profile (%resolved-appearance-bundle-profile bundle)))
 
+(defun resolved-appearance-bundle-catalog-generation (bundle)
+  (%resolved-appearance-bundle-catalog-generation bundle))
+
+(defun resolved-appearance-bundle-profile-revision (bundle)
+  (%resolved-appearance-bundle-profile-revision bundle))
+
+(defun resolved-appearance-bundle-font-inventory-generation (bundle)
+  (%resolved-appearance-bundle-font-inventory-generation bundle))
+
+(defun resolved-appearance-bundle-port-identity (bundle)
+  "Return BUNDLE's deliberately opaque target-port identity unchanged."
+  (%resolved-appearance-bundle-port-identity bundle))
+
+(defun resolved-appearance-bundle-role-table (bundle)
+  (copy-appearance-value (%resolved-appearance-bundle-role-table bundle)))
+
 (defun resolved-appearance-bundle-roles (bundle)
-  (copy-appearance-value (%resolved-appearance-bundle-roles bundle)))
+  "Compatibility accessor for BUNDLE's immutable resolved role table."
+  (resolved-appearance-bundle-role-table bundle))
+
+(defun resolved-appearance-bundle-surface-defaults (bundle)
+  (copy-appearance-value (%resolved-appearance-bundle-surface-defaults bundle)))
 
 (defun resolved-appearance-bundle-role-keys (bundle)
   (copy-appearance-value (%resolved-appearance-bundle-role-keys bundle)))
+
+(defun resolved-appearance-bundle-provenance (bundle)
+  (copy-appearance-value (%resolved-appearance-bundle-provenance bundle)))
 
 (defun resolved-appearance-bundle-bundle-key (bundle)
   (copy-appearance-value (%resolved-appearance-bundle-bundle-key bundle)))
@@ -1469,14 +1501,42 @@ are validated."
 (defun appearance-activation-result-bundle (result)
   (%appearance-activation-result-bundle result))
 
-(defun resolve-appearance-profile-bundle (catalog profile)
-  "Resolve every declared role for PROFILE before any activation decision."
+(defun appearance-profile-structural-key (profile)
+  "Return PROFILE's deterministic declaration key without object identity."
+  (list :selected-theme (copy-appearance-value
+                         (appearance-profile-selected-theme profile))
+        :strict-contrast (appearance-profile-strict-contrast profile)
+        :role-overrides
+        (mapcar (lambda (entry)
+                  (list (copy-appearance-value (car entry))
+                        (appearance-role-style-key (cdr entry))))
+                (appearance-profile-role-overrides profile))))
+
+(defun valid-appearance-generation-p (value axis)
+  (unless (and (integerp value) (not (minusp value)))
+    (error-appearance-condition 'invalid-appearance-component
+                                :axis axis :value value))
+  value)
+
+(defun resolve-appearance-profile-bundle
+    (catalog profile &key profile-revision font-inventory-generation port-identity)
+  "Resolve every declared role for PROFILE against an explicit opaque port.
+
+PROFILE-REVISION and FONT-INVENTORY-GENERATION are frame-owned inputs.  This
+builder enumerates neither fonts nor ports: callers supply the port identity
+only after the frame manager has adopted and engrafted the target frame."
   (unless (typep profile 'appearance-profile)
     (error-appearance-condition 'invalid-appearance-component
                                 :axis :appearance-profile :value profile))
+  (valid-appearance-generation-p profile-revision :profile-revision)
+  (valid-appearance-generation-p font-inventory-generation
+                                 :font-inventory-generation)
+  (when (null port-identity)
+    (error-appearance-condition 'invalid-appearance-component
+                                :axis :port-identity :value port-identity))
   (let* ((theme-id (appearance-profile-selected-theme profile))
          (overrides (appearance-profile-role-overrides profile))
-         (roles
+         (role-table
            (loop for definition in (appearance-catalog-role-definitions catalog)
                  for role-id = (appearance-role-definition-id definition)
                  collect
@@ -1487,18 +1547,45 @@ are validated."
            (mapcar (lambda (entry)
                      (cons (car entry)
                            (resolved-appearance-role-structural-key (cdr entry))))
-                   roles)))
+                   role-table))
+         (surface-defaults
+           (loop for definition in (appearance-catalog-role-definitions catalog)
+                 for role-id = (appearance-role-definition-id definition)
+                 when (eq :surface (appearance-role-definition-kind definition))
+                   collect
+                   (cons (copy-appearance-value role-id)
+                         (resolved-appearance-role-style
+                          (cdr (assoc role-id role-table :test #'equal))))))
+         (provenance
+           (mapcar (lambda (entry)
+                     (cons (copy-appearance-value (car entry))
+                           (resolved-appearance-role-provenance (cdr entry))))
+                   role-table))
+         (profile-key (appearance-profile-structural-key profile)))
     (%make-resolved-appearance-bundle
      :catalog-generation (appearance-catalog-generation catalog)
      :profile (copy-appearance-profile profile)
-     :roles roles
+     :profile-revision profile-revision
+     :font-inventory-generation font-inventory-generation
+     :port-identity port-identity
+     :role-table role-table
+     :surface-defaults surface-defaults
      :role-keys role-keys
-     :bundle-key (list (appearance-catalog-generation catalog)
-                       (mapcar (lambda (entry)
-                                 (list (car entry)
-                                       (resolved-appearance-role-structural-key
-                                        (cdr entry))))
-                               roles)))))
+     :provenance provenance
+     :bundle-key
+     (list :catalog-generation (appearance-catalog-generation catalog)
+           :profile profile-key
+           :profile-revision profile-revision
+           :font-inventory-generation font-inventory-generation
+           ;; The intentional opaque identity component.  It is not copied or
+           ;; derived from backend/private port fields.
+           :port-identity port-identity
+           :roles (copy-appearance-value role-keys)
+           :surface-defaults
+           (mapcar (lambda (entry)
+                     (list (copy-appearance-value (car entry))
+                           (appearance-role-style-key (cdr entry))))
+                   surface-defaults)))))
 
 (defun appearance-role-style-axis-value (style axis)
   "Return STYLE's structural effective AXIS value for delta comparison.
@@ -1528,12 +1615,12 @@ decorations deliberately remain outside its live scope."
 (defun classify-appearance-bundle-delta (catalog active candidate)
   "Classify all effective differences between ACTIVE and CANDIDATE bundles."
   (let ((deltas nil))
-    (dolist (candidate-entry (%resolved-appearance-bundle-roles candidate))
+    (dolist (candidate-entry (%resolved-appearance-bundle-role-table candidate))
       (let* ((role-id (car candidate-entry))
              (candidate-style
                (resolved-appearance-role-style (cdr candidate-entry)))
              (active-entry
-               (assoc role-id (%resolved-appearance-bundle-roles active)
+               (assoc role-id (%resolved-appearance-bundle-role-table active)
                       :test #'equal))
              (active-style
                (and active-entry
@@ -1562,7 +1649,9 @@ decorations deliberately remain outside its live scope."
                      (t :restart-required))
        :deltas deltas))))
 
-(defun prepare-appearance-activation (catalog active-profile candidate)
+(defun prepare-appearance-activation
+    (catalog active-profile candidate
+     &key (profile-revision 0) (font-inventory-generation 0) port-identity)
   "Resolve, contrast-validate, and classify CANDIDATE without publishing it.
 
 The returned result is always structured.  Errors become copied appearance
@@ -1575,10 +1664,20 @@ diagnostics, leaving the caller free to retain its active frame state exactly."
                  (push condition diagnostics)
                  (let ((restart (find-restart 'muffle-warning condition)))
                    (when restart (invoke-restart restart))))))
-          (let* ((active (resolve-appearance-profile-bundle catalog active-profile))
+          (let* ((active
+                   (resolve-appearance-profile-bundle
+                    catalog active-profile
+                    :profile-revision profile-revision
+                    :font-inventory-generation font-inventory-generation
+                    :port-identity port-identity))
                  (profile (appearance-candidate-profile candidate)))
             (validate-appearance-profile-contrast catalog profile)
-            (let* ((bundle (resolve-appearance-profile-bundle catalog profile))
+            (let* ((bundle
+                     (resolve-appearance-profile-bundle
+                      catalog profile
+                      :profile-revision (1+ profile-revision)
+                      :font-inventory-generation font-inventory-generation
+                      :port-identity port-identity))
                    (classification
                      (classify-appearance-bundle-delta catalog active bundle))
                    (status (case (%appearance-activation-classification-status classification)

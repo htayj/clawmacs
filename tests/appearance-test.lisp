@@ -787,7 +787,8 @@
              (list
               (cons :transcript-user
                     (test-appearance-style :foreground '(0.80 0.20 0.30)))))))
-         (result (clawmacs::prepare-appearance-activation catalog active candidate))
+         (result (clawmacs::prepare-appearance-activation
+                  catalog active candidate :port-identity :test-port))
          (classification (appearance-activation-result-classification result)))
     (is (eq :ready (appearance-activation-result-status result)))
     (is (eq :render-boundary-live
@@ -805,12 +806,14 @@
   (let* ((catalog (make-classic-appearance-catalog))
          (active (make-appearance-profile))
          (dark (clawmacs::prepare-appearance-activation
-                catalog active
+                 catalog active
                 (make-appearance-candidate
-                 (make-appearance-profile :selected-theme :dark))))
+                 (make-appearance-profile :selected-theme :dark))
+                :port-identity :test-port))
          (noop (clawmacs::prepare-appearance-activation
                 catalog active
-                (make-appearance-candidate (make-appearance-profile)))))
+                (make-appearance-candidate (make-appearance-profile))
+                :port-identity :test-port)))
     (is (eq :restart-required (appearance-activation-result-status dark)))
     (is (eq :restart-required
             (appearance-activation-classification-status
@@ -834,9 +837,88 @@
          (result
            (clawmacs::prepare-appearance-activation
             (make-classic-appearance-catalog)
-            (make-appearance-profile) candidate)))
+            (make-appearance-profile) candidate :port-identity :test-port)))
     (is (eq :failed (appearance-activation-result-status result)))
     (is (null (appearance-activation-result-bundle result)))
     (is-true
      (some (lambda (diagnostic) (typep diagnostic 'appearance-condition))
            (appearance-activation-result-diagnostics result)))))
+
+(test appearance-port-bundles-are-structural-port-local-and-immutable
+  "A supplied opaque port is the sole identity-bearing bundle-key component."
+  (let* ((catalog (make-classic-appearance-catalog))
+         (profile (make-appearance-profile))
+         (port-one (make-symbol "OPAQUE-PORT"))
+         (port-two (make-symbol "OPAQUE-PORT"))
+         (first (resolve-appearance-profile-bundle
+                 catalog profile :profile-revision 4
+                 :font-inventory-generation 7 :port-identity port-one))
+         (same (resolve-appearance-profile-bundle
+                catalog profile :profile-revision 4
+                :font-inventory-generation 7 :port-identity port-one))
+         (other-port (resolve-appearance-profile-bundle
+                      catalog profile :profile-revision 4
+                      :font-inventory-generation 7 :port-identity port-two))
+         (other-inventory (resolve-appearance-profile-bundle
+                           catalog profile :profile-revision 4
+                           :font-inventory-generation 8 :port-identity port-one))
+         (other-revision (resolve-appearance-profile-bundle
+                          catalog profile :profile-revision 5
+                          :font-inventory-generation 7 :port-identity port-one))
+         (other-catalog
+           (make-appearance-catalog
+            :role-definitions (appearance-catalog-role-definitions catalog)
+            :theme-definitions (appearance-catalog-theme-definitions catalog)
+            :built-in-overlays (appearance-catalog-built-in-overlays catalog)
+            :generation 9))
+         (other-generation (resolve-appearance-profile-bundle
+                            other-catalog profile :profile-revision 4
+                            :font-inventory-generation 7 :port-identity port-one)))
+    (is (equal (resolved-appearance-bundle-bundle-key first)
+               (resolved-appearance-bundle-bundle-key same)))
+    (is-false (equal (resolved-appearance-bundle-bundle-key first)
+                     (resolved-appearance-bundle-bundle-key other-port)))
+    (is-false (equal (resolved-appearance-bundle-bundle-key first)
+                     (resolved-appearance-bundle-bundle-key other-inventory)))
+    (is-false (equal (resolved-appearance-bundle-bundle-key first)
+                     (resolved-appearance-bundle-bundle-key other-revision)))
+    (is-false (equal (resolved-appearance-bundle-bundle-key first)
+                     (resolved-appearance-bundle-bundle-key other-generation)))
+    (is (eq port-one (resolved-appearance-bundle-port-identity first)))
+    (is (= 7 (resolved-appearance-bundle-font-inventory-generation first)))
+    (is-true (resolved-appearance-bundle-surface-defaults first))
+    (is-true (assoc :transcript-user
+                    (resolved-appearance-bundle-provenance first)
+                    :test #'equal))
+    (let ((keys (resolved-appearance-bundle-role-keys first)))
+      (setf (caar keys) :mutated)
+      (is (assoc :transcript-user
+                 (resolved-appearance-bundle-role-keys first)
+                 :test #'equal)))))
+
+(test appearance-port-bundle-role-keys-change-only-with-effective-role-output
+  "A transcript-user override leaves unrelated role render keys untouched."
+  (let* ((catalog (make-classic-appearance-catalog))
+         (port (make-symbol "OPAQUE-PORT"))
+         (base (resolve-appearance-profile-bundle
+                catalog (make-appearance-profile) :profile-revision 0
+                :font-inventory-generation 0 :port-identity port))
+         (changed (resolve-appearance-profile-bundle
+                   catalog
+                   (make-appearance-profile
+                    :role-overrides
+                    (list (cons :transcript-user
+                                (test-appearance-style
+                                 :foreground '(0.80 0.20 0.30)))))
+                   :profile-revision 1 :font-inventory-generation 0
+                   :port-identity port)))
+    (is-false (equal (resolved-appearance-bundle-bundle-key base)
+                     (resolved-appearance-bundle-bundle-key changed)))
+    (is-false (equal (cdr (assoc :transcript-user
+                                 (resolved-appearance-bundle-role-keys base)))
+                     (cdr (assoc :transcript-user
+                                 (resolved-appearance-bundle-role-keys changed)))))
+    (is (equal (cdr (assoc :transcript-agent
+                           (resolved-appearance-bundle-role-keys base)))
+               (cdr (assoc :transcript-agent
+                           (resolved-appearance-bundle-role-keys changed)))))))

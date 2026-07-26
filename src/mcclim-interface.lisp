@@ -1467,6 +1467,10 @@ rendering state."
                         :reader chat-frame-appearance-revision
                         :documentation
                         "Frame-local appearance state revision; it is not a render key.")
+   (appearance-font-inventory-generation :initform 0
+                                         :reader chat-frame-appearance-font-inventory-generation
+                                         :documentation
+                                         "Frame-local supplied font inventory generation; enumeration is deferred.")
    (appearance-active-bundle :initform nil
                              :reader chat-frame-appearance-active-bundle
                              :documentation
@@ -1815,6 +1819,11 @@ implements that input contract before the next gesture is delivered."
     (file-debug-event "frame-enabled"
                       :buffer-name (buffer-name (chat-frame-buffer frame))
                       :state (clim:frame-state frame)))
+  ;; Ordinary MAKE-APPLICATION-FRAME construction is profile-only.  The
+  ;; top-level sheet is now adopted and grafted, so this is the first legal
+  ;; point to obtain the selected port through the public frame-manager path.
+  ;; The bundle is frame-local data only; it does not change panes or mappings.
+  (refresh-chat-frame-appearance-port-bundle frame)
   (initialize-chat-frame-top-level-panes frame)
   (bt:with-lock-held ((chat-frame-redisplay-lock frame))
     (setf (chat-frame-lifecycle-state frame) :running
@@ -2236,6 +2245,39 @@ handler, which is delivered by the frame's normal CLIM event process."
                                 :axis :appearance-candidate :value candidate))
   (queue-chat-frame-appearance-activation-event frame candidate))
 
+(defun chat-frame-appearance-live-port (frame)
+  "Return FRAME's public frame-manager port only after engraftment.
+
+The frame manager owns the selected port.  Requiring its top-level sheet to be
+grafted prevents construction-time profile resolution from manufacturing a
+runtime bundle before ordinary CLIM adoption has completed."
+  (when (chat-frame-grafted-top-level-sheet frame)
+    (ignore-errors
+      (clim:port (clim:frame-manager frame)))))
+
+(defun refresh-chat-frame-appearance-port-bundle (frame)
+  "Build or replace FRAME's local bundle after adoption on its event process.
+
+Tests replace CHAT-FRAME-APPEARANCE-LIVE-PORT with a public-style fake resolver.
+This function performs no font enumeration, port-cache invalidation, pane
+reinitialization, or medium work."
+  (let ((port (chat-frame-appearance-live-port frame)))
+    (when port
+      (let ((bundle
+              (resolve-appearance-profile-bundle
+               (chat-frame-appearance-catalog frame)
+               (chat-frame-appearance-profile frame)
+               :profile-revision (chat-frame-appearance-revision frame)
+               :font-inventory-generation
+               (chat-frame-appearance-font-inventory-generation frame)
+               :port-identity port)))
+        (unless (and (chat-frame-appearance-active-bundle frame)
+                     (equal (resolved-appearance-bundle-bundle-key bundle)
+                            (resolved-appearance-bundle-bundle-key
+                             (chat-frame-appearance-active-bundle frame))))
+          (setf (slot-value frame 'appearance-active-bundle) bundle))
+        bundle))))
+
 (defun publish-chat-frame-appearance-bundle (frame result)
   "Atomically publish one already validated live RESULT on FRAME.
 
@@ -2267,11 +2309,26 @@ keys only; pane construction and low-level rendering objects are untouched."
 
 (defun handle-chat-frame-appearance-activation (frame candidate)
   "Resolve and conditionally publish CANDIDATE on FRAME's CLIM event process."
-  (let ((result
-          (prepare-appearance-activation
-           (chat-frame-appearance-catalog frame)
-           (chat-frame-appearance-profile frame)
-           candidate)))
+  (let ((port (chat-frame-appearance-live-port frame)))
+    (unless port
+      (return-from handle-chat-frame-appearance-activation
+        (record-chat-frame-appearance-result
+         frame
+         (%make-appearance-activation-result
+          :status :failed :candidate candidate
+          :diagnostics
+          (list (make-appearance-condition
+                 'appearance-activation-failed
+                 :axis :port-identity :value :frame-not-engrafted))))))
+    (let ((result
+            (prepare-appearance-activation
+             (chat-frame-appearance-catalog frame)
+             (chat-frame-appearance-profile frame)
+             candidate
+             :profile-revision (chat-frame-appearance-revision frame)
+             :font-inventory-generation
+             (chat-frame-appearance-font-inventory-generation frame)
+             :port-identity port)))
     ;; A candidate is staged only after whole-profile resolution succeeded.
     ;; In particular, a failed candidate never overwrites the last valid
     ;; staged profile, while active profile/bundle/keys remain untouched.
@@ -2282,7 +2339,7 @@ keys only; pane construction and low-level rendering objects are untouched."
       ((:restart-required :unsupported)
        (setf (slot-value frame 'appearance-staged-candidate) candidate))
       ((:failed :no-op) nil))
-    (record-chat-frame-appearance-result frame result)))
+      (record-chat-frame-appearance-result frame result))))
 
 (defun chat-frame-grafted-top-level-sheet (frame)
   "Return FRAME's grafted top-level sheet, or NIL before FRAME is running."

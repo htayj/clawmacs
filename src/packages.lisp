@@ -465,6 +465,18 @@
    #:resolve-appearance-role-stack
    #:resolve-runtime-appearance-role-stack
    #:make-classic-appearance-catalog
+   #:resolved-appearance-bundle
+   #:resolved-appearance-bundle-catalog-generation
+   #:resolved-appearance-bundle-profile
+   #:resolved-appearance-bundle-profile-revision
+   #:resolved-appearance-bundle-font-inventory-generation
+   #:resolved-appearance-bundle-port-identity
+   #:resolved-appearance-bundle-role-table
+   #:resolved-appearance-bundle-surface-defaults
+   #:resolved-appearance-bundle-role-keys
+   #:resolved-appearance-bundle-provenance
+   #:resolved-appearance-bundle-bundle-key
+   #:resolve-appearance-profile-bundle
    #:appearance-candidate
    #:make-appearance-candidate
    #:appearance-candidate-profile
