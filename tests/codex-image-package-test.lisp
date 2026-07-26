@@ -50,7 +50,7 @@
   "The package owns a media provider and does not expose transport knobs."
   (with-codex-image-package-state
     (let ((provider (clawmacs:find-media-provider "codex-image")))
-      (is provider)
+      (is-true provider)
       (is (equal '(:image) (clawmacs:media-provider-kinds provider)))
       (is (string= "codex-image" (clawmacs:media-default-provider)))
       (is (search "Codex subscription image generation"
@@ -258,6 +258,22 @@
                   (search "did not contain"
                           (clawmacs:media-provider-outcome-public-error outcome)
                           :test #'char-equal))))))
+    ;; JSON permits escaping a solidus.  Decode the JSON semantically before
+    ;; validating the provider's strict standard Base64 payload.
+    (let ((escaped-solidus-response
+            (format nil "{\"data\":[{\"b64_json\":\"~A\"}]}"
+                    (with-output-to-string (stream)
+                      (dotimes (index 4)
+                        (declare (ignore index))
+                        (write-char #\\ stream)
+                        (write-char #\/ stream))))))
+      (with-codex-image-function-override (drakma:http-request (&rest _args)
+                                               (declare (ignore _args))
+                                               (values escaped-solidus-response 200 nil))
+        (let* ((outcome (codex-image-start-test-request))
+               (asset (first (clawmacs:media-provider-outcome-assets outcome))))
+          (is (eq :succeeded (clawmacs:media-provider-outcome-status outcome)))
+          (is (equalp #(255 255 255) (clawmacs:media-asset-octets asset))))))
     (let ((buffer (make-media-test-buffer "codex-image-artifact")))
       (with-codex-image-function-override (drakma:http-request (&rest _args)
                                              (declare (ignore _args))
