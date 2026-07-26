@@ -154,7 +154,10 @@
   (with-artifactum-test-state
     (let* ((buffer (make-artifactum-test-buffer "metadata"))
            (record (clawmacs:artifactum-create-from-octets
-                    buffer "image.webp" #(82 73 70 70)
+                    buffer "image.webp"
+                    (make-array 4
+                                :element-type '(unsigned-byte 8)
+                                :initial-contents '(82 73 70 70))
                     :mime-type "image/webp"
                     :metadata '((:Provider-Name . "OpenAI")
                                 (:Settings . ((:Quality . "high"))))
@@ -177,6 +180,11 @@
                     (getf read-back :provenance) "request_id")))
       (is (search "\"provider_name\"" index))
       (is (search "\"request_id\"" index)))))
+
+(test artifactum-create-from-octets-rejects-general-vectors
+  "Artifact byte writes require an explicitly specialized octet vector."
+  (signals error
+    (clawmacs:artifactum-create-from-octets nil "image.webp" #(82 73 70 70))))
 
 (test artifactum-record-normalization-keeps-legacy-and-skips-malformed-attributes
   "Malformed optional fields do not make legacy durable records unreadable."
