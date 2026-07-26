@@ -497,6 +497,10 @@ export OPENROUTER_API_KEY="..."
 OpenAI Codex uses the shared Codex auth store or a token file as described
 above.
 
+Interactive sessions default to =zai/glm-5.2=. The model selector retains
+older GLM releases for explicitly pinned configurations; GLM-5.2 exposes its
+documented =high= and =max= reasoning-effort choices.
+
 ** User Init File
 
 Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:

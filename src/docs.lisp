@@ -650,7 +650,7 @@ documentation in *extended-docs*."
 (defdoc buffer-model-override
   :category "buffer"
   :usage "(buffer-model-override BUF:buffer) — (buffer-model-override (current-buffer))"
-  :returns "string or nil — \"glm-5\" or nil to use default."
+  :returns "string or nil — \"glm-5.2\" or nil to use default."
   :see-also (set-buffer-model-override clear-buffer-model-override buffer-provider-override))
 
 (defdoc buffer-think-level-override
@@ -668,7 +668,7 @@ documentation in *extended-docs*."
 
 (defdoc set-buffer-model-override
   :category "buffer"
-  :usage "(set-buffer-model-override BUF:buffer MODEL:string) — (set-buffer-model-override buf \"glm-5\")"
+  :usage "(set-buffer-model-override BUF:buffer MODEL:string) — (set-buffer-model-override buf \"glm-5.2\")"
   :returns "buffer — The modified buffer."
   :side-effects "Sets the buffer's model override."
   :see-also (buffer-model-override clear-buffer-model-override set-buffer-provider-override))
@@ -1514,7 +1514,7 @@ documentation in *extended-docs*."
 
 (defdoc *default-model*
   :category "llm"
-  :usage "*default-model* → \"glm-5\""
+  :usage "*default-model* → \"glm-5.2\""
   :returns "string — The default model name."
   :see-also (*default-provider* *provider-fallback-models* resolve-buffer-provider-and-model)
   :side-effects "Changing this affects all new buffers that lack both an agent-specific and provider-fallback model.")
@@ -1772,7 +1772,7 @@ documentation in *extended-docs*."
 
 (defdoc set-agent-default
   :category "llm"
-  :usage "(set-agent-default AGENT-NAME:string PROVIDER:keyword &key MODEL:string) — (set-agent-default \"coder\" :zai :model \"glm-5\")"
+  :usage "(set-agent-default AGENT-NAME:string PROVIDER:keyword &key MODEL:string) — (set-agent-default \"coder\" :zai :model \"glm-5.2\")"
   :returns "keyword — The normalized provider."
   :side-effects "Updates the agent defaults registry and persists to disk."
   :see-also (agent-default save-agent-defaults resolve-buffer-provider-and-model))
@@ -1787,7 +1787,7 @@ documentation in *extended-docs*."
 (defdoc resolve-buffer-provider-and-model
   :category "llm"
   :usage "(resolve-buffer-provider-and-model BUF:buffer) — (resolve-buffer-provider-and-model (current-buffer))"
-  :returns "values provider:keyword model:string think-level:(or null string) — e.g. :ZAI, \"glm-5\", nil"
+  :returns "values provider:keyword model:string think-level:(or null string) — e.g. :ZAI, \"glm-5.2\", nil"
   :see-also (buffer-provider-override buffer-model-override buffer-think-level-override agent-default))
 
 (defdoc provider-model-supported-think-levels
@@ -1838,7 +1838,7 @@ documentation in *extended-docs*."
 (defdoc provider-known-models
   :category "llm"
   :usage "(provider-known-models PROVIDER:keyword) — (provider-known-models :zai)"
-  :returns "list of strings — (\"glm-5\" \"glm-5-turbo\" ...)"
+  :returns "list of strings — (\"glm-5.2\" \"glm-5\" ...)"
   :see-also (*provider-known-models* provider-has-token-p available-models-for-selector))
 
 (defdoc provider-has-token-p

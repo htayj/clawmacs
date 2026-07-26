@@ -12,7 +12,7 @@
   "The default LLM provider to use when no agent-specific override is set.
 Must be a keyword matching a known provider (:openai-codex, :zai, :openrouter).")
 
-(defvar *default-model* "glm-5"
+(defvar *default-model* "glm-5.2"
   "The default model to use when no agent-specific or provider-fallback model
 is configured. Should be a valid model name for *default-provider*.")
 
@@ -53,9 +53,9 @@ Set to NIL to avoid requesting provider-supplied reasoning summaries.")
   "Optional prompt_cache_retention sent with OpenAI Codex Responses requests.")
 
 ;;; Z.AI (Zhipu AI) Configuration
-(defvar *zai-model* "glm-5"
+(defvar *zai-model* "glm-5.2"
   "The Z.AI model to use for chat completions.
-GLM-5 is the flagship model with 200K context window.")
+GLM-5.2 is the current coding model with a 1M context window.")
 
 (defvar *zai-api-url* "https://api.z.ai/api/coding/paas/v4/chat/completions"
   "The Z.AI Chat Completions API endpoint for GLM Coding plan subscribers.
@@ -1966,6 +1966,7 @@ respected."
      "gpt-5.1-codex-mini"
      "gpt-5.2")
     (:zai
+     "glm-5.2"
      "glm-5"
      "glm-5-turbo"
      "glm-4.7"
@@ -2005,6 +2006,10 @@ These are used by the model selector overlay.")
   "Supported reasoning effort values for known OpenAI-Codex models.
 Values are ordered from lowest to highest effort, excluding the synthetic
 \"default\" selector entry handled by the UI.")
+
+(defparameter *zai-model-think-levels*
+  '(("glm-5.2" "high" "max"))
+  "Supported reasoning effort values for known Z.AI models.")
 
 (defun provider-known-models (provider)
   "Return the list of known model names for PROVIDER.
@@ -2072,10 +2077,14 @@ nil to force a refresh. Returns the static fallback list on any error."
 
 (defun provider-model-supported-think-levels (provider model)
   "Return the supported think levels for PROVIDER and MODEL, or NIL."
-  (when (and (eq provider :openai-codex)
-             (stringp model))
-    (copy-list (cdr (assoc model *openai-codex-model-think-levels*
-                           :test #'string=)))))
+  (when (stringp model)
+    (copy-list
+     (cdr
+      (assoc model
+             (case provider
+               (:openai-codex *openai-codex-model-think-levels*)
+               (:zai *zai-model-think-levels*))
+             :test #'string=)))))
 
 (defun think-level-supported-p (provider model think-level)
   "Return non-nil when THINK-LEVEL is supported by PROVIDER and MODEL."
@@ -3252,11 +3261,15 @@ reasoning_content is present, falls back to reasoning_content."
                        (list :service-tier service-tier))))
        (apply #'openai-codex-request messages request-args)))
     (:zai
-     (zai-request messages
-                  :model model
-                  :max-tokens max-tokens
-                  :tools tools
-                  :system-prompt system-prompt))
+     (let ((request-args (list :model model
+                               :max-tokens max-tokens
+                               :tools tools
+                               :system-prompt system-prompt)))
+       (when reasoning-effort
+         (setf request-args
+               (append request-args
+                       (list :reasoning-effort reasoning-effort))))
+       (apply #'zai-request messages request-args)))
     (:openrouter
      (openrouter-request messages
                          :model model
@@ -3296,11 +3309,18 @@ reasoning_content is present, falls back to reasoning_content."
               callback
               request-args)))
     (:zai
-     (zai-request-streaming messages callback
-                            :model model
-                            :max-tokens max-tokens
-                            :tools tools
-                            :system-prompt system-prompt))
+     (let ((request-args (list :model model
+                               :max-tokens max-tokens
+                               :tools tools
+                               :system-prompt system-prompt)))
+       (when reasoning-effort
+         (setf request-args
+               (append request-args
+                       (list :reasoning-effort reasoning-effort))))
+       (apply #'zai-request-streaming
+              messages
+              callback
+              request-args)))
     (:openrouter
      (openrouter-request-streaming messages callback
                                    :model model
@@ -4559,6 +4579,7 @@ Uses the OpenAI-compatible chat completions protocol."
 (defun zai-request (messages &key (model *zai-model*)
                                    (max-tokens *default-max-tokens*)
                                    tools
+                                   reasoning-effort
                                    (system-prompt (build-system-prompt)))
   "Call Z.AI Chat Completions API and normalize the response shape.
 Uses the coding plan endpoint (api.z.ai/api/coding/paas/v4) which is
@@ -4576,6 +4597,8 @@ The API follows the OpenAI Chat Completions format."
                                                'vector)))))
               (when (and tools (plusp (length tools)))
                 (push `(:tools . ,(tool-definitions->openai-tools tools)) body))
+              (when reasoning-effort
+                (push `(:reasoning--effort . ,reasoning-effort) body))
               (api-json-encode body))))
     (multiple-value-bind (body status-code)
         (provider-http-request-with-retries
@@ -4605,6 +4628,7 @@ The API follows the OpenAI Chat Completions format."
                                &key (model *zai-model*)
                                     (max-tokens *default-max-tokens*)
                                     tools
+                                    reasoning-effort
                                     (system-prompt (build-system-prompt)))
   "Start an asynchronous Z.AI SSE request and return its STATE."
   (let ((state (make-stream-state :callback callback)))
@@ -4634,7 +4658,10 @@ The API follows the OpenAI Chat Completions format."
                     (when (and tools (plusp (length tools)))
                       (push `(:tools
                               . ,(tool-definitions->openai-tools tools))
-                            body))
+                            body)
+                      (push '(:tool--stream . t) body))
+                    (when reasoning-effort
+                      (push `(:reasoning--effort . ,reasoning-effort) body))
                     (api-json-encode body))))
            (unless (stream-state-active-p-safe worker-state)
              (return-from request))

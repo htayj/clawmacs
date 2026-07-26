@@ -6057,9 +6057,9 @@ same
   "Z.AI is recognized as a known provider."
   (is-true (clawmacs::known-provider-p :zai)))
 
-(test zai-fallback-model-is-glm-5
-  "Z.AI fallback model is glm-5."
-  (is (string= "glm-5"
+(test zai-fallback-model-is-glm-5-2
+  "Z.AI fallback model is glm-5.2."
+  (is (string= "glm-5.2"
                (clawmacs::provider-fallback-model :zai))))
 
 (test zai-normalize-provider-keyword
@@ -6106,6 +6106,25 @@ same
                  (cdr (assoc "Accept-Language" captured-headers :test #'string=))))
     (let ((body (clawmacs::api-json-decode captured-body)))
       (is (string= "glm-5" (cdr (assoc :model body)))))))
+
+(test zai-request-sends-glm-5-2-reasoning-effort
+  "Z.AI non-streaming requests preserve a selected GLM-5.2 effort."
+  (let ((captured-body nil))
+    (with-function-override (drakma:http-request (url &rest args)
+                              (declare (ignore url))
+                              (setf captured-body (getf args :content))
+                              (values "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"ok\"}}]}"
+                                      200))
+      (with-function-override (clawmacs::read-provider-token (provider)
+                                (declare (ignore provider))
+                                "zai-key-test")
+        (clawmacs::zai-request
+         '()
+         :model "glm-5.2"
+         :reasoning-effort "high")))
+    (let ((body (clawmacs::api-json-decode captured-body)))
+      (is (string= "glm-5.2" (cdr (assoc :model body))))
+      (is (string= "high" (cdr (assoc :reasoning--effort body)))))))
 
 (test zai-request-normalizes-response
   "Z.AI non-streaming normalizes the OpenAI-compatible response to canonical shape."
@@ -6304,6 +6323,60 @@ same
                         (:input . ((:command . "ls")))))
                      (bt:with-lock-held ((clawmacs::stream-state-lock state))
                        (reverse (clawmacs::stream-state-content-blocks state))))))))))
+
+(test zai-streaming-sends-glm-5-2-tool-options
+  "Z.AI streaming opts into tool argument streaming and preserves effort."
+  (let ((captured-body nil)
+        (payloads '("data: {\"choices\":[{\"finish_reason\":\"stop\"}]}"
+                    ""
+                    "data: [DONE]"
+                    ""))
+        (tools (vector
+                '((:name . "artifactum_list")
+                  (:description . "List artifacts.")
+                  (:input--schema
+                   (:type . "object")
+                   (:properties)
+                   (:required . #()))))))
+    (with-function-override (drakma:http-request (url &rest args)
+                              (declare (ignore url))
+                              (setf captured-body (getf args :content))
+                              (values (make-string-input-stream
+                                       (format nil "~{~A~%~}" payloads))
+                                      200
+                                      nil))
+      (with-function-override (clawmacs::read-provider-token (provider)
+                                (declare (ignore provider))
+                                "zai-key-test")
+        (let ((state
+                (clawmacs::zai-request-streaming
+                 '()
+                 (lambda (stream-state)
+                   (declare (ignore stream-state)))
+                 :model "glm-5.2"
+                 :reasoning-effort "max"
+                 :tools tools)))
+          (loop repeat 100
+                until (bt:with-lock-held
+                          ((clawmacs::stream-state-lock state))
+                        (clawmacs::stream-state-done-p state))
+                do (sleep 0.01)))))
+    (let ((body (clawmacs::api-json-decode captured-body)))
+      (is (eq t (cdr (assoc :tool--stream body))))
+      (is (string= "max" (cdr (assoc :reasoning--effort body)))))))
+
+(test zai-provider-dispatch-preserves-reasoning-effort
+  "provider-request forwards supported Z.AI reasoning effort."
+  (let ((captured-effort nil))
+    (with-function-override
+        (clawmacs::zai-request
+         (messages &key model max-tokens tools reasoning-effort system-prompt)
+         (declare (ignore messages model max-tokens tools system-prompt))
+         (setf captured-effort reasoning-effort)
+         '((:stop--reason . "end_turn") (:content . #())))
+      (clawmacs::provider-request
+       :zai '() :model "glm-5.2" :reasoning-effort "high")
+      (is (string= "high" captured-effort)))))
 
 (test zai-provider-dispatch-routes-correctly
   "provider-request dispatches :zai to zai-request."
@@ -6508,6 +6581,9 @@ same
     (is (equal '("none" "low" "medium" "high" "xhigh") gpt-54))
     (is (equal '("low" "medium" "high" "xhigh") gpt-53-codex))
     (is (equal '("none" "low" "medium" "high") gpt-51-max))
+    (is (equal '("high" "max")
+               (clawmacs::provider-model-supported-think-levels
+                :zai "glm-5.2")))
     (is (null (clawmacs::provider-model-supported-think-levels
                :zai "glm-5")))))
 
@@ -6516,6 +6592,8 @@ same
   (let ((models (clawmacs::provider-known-models :zai)))
     (is (listp models))
     (is (plusp (length models)))
+    (is (string= "glm-5.2" (first models)))
+    (is (member "glm-5.2" models :test #'string=))
     (is (member "glm-5" models :test #'string=))
     ;; Should include turbo and older variants
     (is (member "glm-5-turbo" models :test #'string=))
