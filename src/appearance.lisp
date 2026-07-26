@@ -712,7 +712,7 @@ implementation-specific initialization path cannot provide this copy boundary."
         (let ((fallback (appearance-role-definition-fallback-role definition)))
           (if fallback
               (setf current fallback)
-              (return chain))))))))
+              (return chain)))))))
 
 (defun appearance-theme-parent-chain (catalog theme-id &key (origin :catalog))
   "Return THEME-ID's parent chain from root to selected theme, rejecting cycles."
