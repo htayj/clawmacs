@@ -723,7 +723,7 @@ Resource prompt body.")
            (templata (find "templata" definitions
                            :key #'clawmacs:package-definition-name
                            :test #'string=)))
-      (is (equal '("artifactum" "git" "lispi" "mcp-bridge" "modelaria"
+      (is (equal '("artifactum" "codex-image" "git" "lispi" "mcp-bridge" "modelaria"
                    "netcons" "organa" "packrat" "pipelines" "prove"
                    "quaestor" "sexed" "slop" "speculum" "subagent"
                    "templata")
@@ -807,6 +807,7 @@ Resource prompt body.")
       (is (not (null (clawmacs:find-available-package "organa"))))
       (is (not (null (clawmacs:find-available-package "modelaria"))))
       (is (not (null (clawmacs:find-available-package "artifactum"))))
+      (is (not (null (clawmacs:find-available-package "codex-image"))))
       (is (not (null (clawmacs:find-available-package "pipelines"))))
       (is (not (null (clawmacs:find-available-package "prove"))))
       (is (not (null (clawmacs:find-available-package "quaestor"))))

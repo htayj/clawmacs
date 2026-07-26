@@ -1087,6 +1087,39 @@ Precedence: clawmacs override token file, then shared ~/.codex/auth.json."
                   auth-json)))
         (openai-codex-auth-descriptor-from-auth-json effective-auth)))))
 
+(defun resolve-openai-codex-chatgpt-image-auth (&key (refresh-if-needed t))
+  "Resolve ChatGPT OAuth credentials for subscription-backed Codex images.
+
+Unlike `RESOLVE-OPENAI-CODEX-AUTH', this deliberately ignores Clawmacs's
+static token override and refuses auth.json API-key mode.  Image generation
+through this path must consume the user's Codex/ChatGPT allowance rather than
+silently switching to separately billed OpenAI API credentials."
+  (let ((auth-json (read-openai-codex-auth-json)))
+    (unless auth-json
+      (error "Codex image auth is unavailable: ~/.codex/auth.json was not found."))
+    (unless (eq (openai-codex-resolved-auth-mode auth-json) :chatgpt)
+      (error "Codex image generation requires ChatGPT subscription auth, not API-key mode."))
+    (let ((effective-auth
+            (if (and refresh-if-needed
+                     (openai-codex-chatgpt-auth-stale-p auth-json))
+                (or (refresh-openai-codex-auth-json auth-json)
+                    (error "Codex image auth refresh failed."))
+                auth-json)))
+      ;; This descriptor performs the access-token and account-id validation.
+      ;; It also fixes the base URL and header mode to the Codex ChatGPT route.
+      (openai-codex-auth-descriptor-from-auth-json effective-auth))))
+
+(defun refresh-openai-codex-chatgpt-image-auth ()
+  "Force-refresh subscription image auth and return its request descriptor.
+
+The narrow helper cannot fall back to API-key or static-token credentials."
+  (let ((auth-json (read-openai-codex-auth-json)))
+    (when (and auth-json
+               (eq (openai-codex-resolved-auth-mode auth-json) :chatgpt))
+      (let ((updated (refresh-openai-codex-auth-json auth-json)))
+        (and updated
+             (openai-codex-auth-descriptor-from-auth-json updated))))))
+
 (defun refresh-openai-codex-oauth-token (refresh-token)
   "Refresh the OpenAI Codex ChatGPT OAuth token and return the new access token."
   (declare (ignore refresh-token))

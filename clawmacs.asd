@@ -80,6 +80,7 @@
                               (:file "modelaria-package-test")
                               (:file "artifactum-package-test")
                               (:file "media-package-test")
+                              (:file "codex-image-package-test")
                               (:file "interop-test")
                               (:file "mcp-bridge-package-test")
                               (:file "reference-test")
