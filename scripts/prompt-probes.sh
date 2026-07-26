@@ -6,8 +6,8 @@ usage() {
 Usage: scripts/prompt-probes.sh [--only NAME] [--provider PROVIDER] [--model MODEL] [--fallback-provider PROVIDER] [--fallback-model MODEL] [--no-fallback] [--think LEVEL] [--keep-logs]
 
 Runs live prompt.sh harness probes in an isolated prompt environment.
-By default probes use openai-codex/gpt-5.3-codex, then retry once with
-openrouter/openai/gpt-5.3-codex if the primary provider fails.
+By default probes use openai-codex/gpt-5.6-sol, then retry once with
+openrouter/openai/gpt-5.6-sol if the primary provider fails.
 
 Probes:
   docs          Local CL spec and imported-library discovery.
@@ -19,9 +19,9 @@ EOF
 
 ONLY=""
 PROVIDER="${CLAWMACS_PROMPT_PROBE_PROVIDER:-openai-codex}"
-MODEL="${CLAWMACS_PROMPT_PROBE_MODEL:-gpt-5.3-codex}"
+MODEL="${CLAWMACS_PROMPT_PROBE_MODEL:-gpt-5.6-sol}"
 FALLBACK_PROVIDER="${CLAWMACS_PROMPT_PROBE_FALLBACK_PROVIDER:-openrouter}"
-FALLBACK_MODEL="${CLAWMACS_PROMPT_PROBE_FALLBACK_MODEL:-openai/gpt-5.3-codex}"
+FALLBACK_MODEL="${CLAWMACS_PROMPT_PROBE_FALLBACK_MODEL:-openai/gpt-5.6-sol}"
 THINK=""
 KEEP_LOGS=0
 EXPLICIT_PROVIDER=0
@@ -101,7 +101,7 @@ done
 if [ "$EXPLICIT_PROVIDER" -eq 1 ] && [ "$EXPLICIT_MODEL" -eq 0 ]; then
   case "$PROVIDER" in
     openai-codex)
-      MODEL="gpt-5.3-codex"
+      MODEL="gpt-5.6-sol"
       ;;
     openrouter)
       MODEL="$FALLBACK_MODEL"
