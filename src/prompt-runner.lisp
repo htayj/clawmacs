@@ -1249,8 +1249,23 @@ value and never unwinds the command loop."
                    (t
                     (when (null worker-start-error)
                       (handler-case
-                          (setf worker
-                                (make-interactive-tool-worker-thread
+                          (let ((media-thread-bindings
+                                  ;; Bordeaux Threads does not inherit dynamic
+                                  ;; bindings.  Generated-media providers use
+                                  ;; these registries to publish, find, and
+                                  ;; cancel their operation, so preserve the
+                                  ;; application context explicitly at this
+                                  ;; background-tool boundary.
+                                  (list (cons '*media-provider-registry*
+                                              *media-provider-registry*)
+                                        (cons '*media-operation-registry*
+                                              *media-operation-registry*)
+                                        (cons '*media-provider-registry-lock*
+                                              *media-provider-registry-lock*)
+                                        (cons '*media-default-provider*
+                                              *media-default-provider*))))
+                            (setf worker
+                                  (make-interactive-tool-worker-thread
                                   (lambda ()
                                     (bt:with-lock-held (start-gate))
                                     (let ((result-text nil)
@@ -1328,9 +1343,10 @@ value and never unwinds the command loop."
                                   ;; Caller-local notification suppression is
                                   ;; not portably inherited by Bordeaux Threads.
                                   :initial-bindings
-                                  (acons '*suppress-chat-redisplay-requests*
-                                         nil
-                                         bt:*default-special-bindings*)))
+                                  (append media-thread-bindings
+                                          (acons '*suppress-chat-redisplay-requests*
+                                                 nil
+                                                 bt:*default-special-bindings*)))))
                         (error (condition)
                           (setf worker-start-error
                                 (format nil "~A" condition)))))
