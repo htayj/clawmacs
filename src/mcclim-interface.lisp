@@ -1441,7 +1441,7 @@ rendering state."
                        (model-selector-display provider model)
                        "no model"))))
       (emit-chat-pane-rendered frame "info"
-                               :text (chat-frame-e2e-info-line frame)))))
+                               :text (chat-frame-e2e-info-line frame))))))
 
 (clim:define-application-frame clawmacs-chat-frame
     (esa:esa-frame-mixin clim:standard-application-frame)
