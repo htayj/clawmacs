@@ -83,11 +83,11 @@
 
 (test appearance-condition-factory-copies-payloads-before-signaling
   "The required factory and warning boundary preserve no caller-owned payload."
-  (let* ((payload (list "original"))
+  (let* ((payload (list (copy-seq "original")))
          (condition (make-appearance-condition 'appearance-contrast-warning
                                                :value payload :role :default-text))
          (captured nil))
-    (setf (car payload) "changed")
+    (setf (char (first payload) 0) #\c)
     (handler-bind ((appearance-contrast-warning
                      (lambda (warning)
                        (setf captured warning)
@@ -96,13 +96,13 @@
     (is (typep captured 'warning))
     (is (string= "original" (car (appearance-condition-value captured))))
     (let ((reported (appearance-condition-value captured)))
-      (setf (car reported) "changed-again")
+      (setf (char (first reported) 0) #\c)
       (is (string= "original"
                    (car (appearance-condition-value captured)))))))
 
 (test appearance-warning-factory-boundary-copies-signaled-payloads
   "WARN-APPEARANCE-CONDITION copies payloads before a handler can observe them."
-  (let ((payload (list "original"))
+  (let ((payload (list (copy-seq "original")))
         (captured nil))
     (handler-bind ((appearance-contrast-warning
                      (lambda (warning)
@@ -110,7 +110,7 @@
                        (muffle-warning warning))))
       (warn-appearance-condition 'appearance-contrast-warning
                                  :value payload :role :default-text))
-    (setf (car payload) "changed")
+    (setf (char (first payload) 0) #\c)
     (is (string= "original" (car (appearance-condition-value captured))))))
 
 (test appearance-vocabulary-accessors-return-fresh-lists

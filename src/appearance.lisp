@@ -591,7 +591,7 @@ implementation-specific initialization path cannot provide this copy boundary."
                 (error-appearance-condition 'invalid-appearance-fallback
                                             :role (appearance-role-definition-id current)
                                             :axis :fallback-role :value fallback))
-              (setf current fallback-definition)))))))
+              (setf current fallback-definition))))))))
 
 (defun validate-appearance-theme-topology (theme-definitions)
   "Reject missing and cyclic parent graphs before a catalog is published."
@@ -730,7 +730,7 @@ implementation-specific initialization path cannot provide this copy boundary."
         (let ((parent (appearance-theme-definition-parent-theme definition)))
           (if parent
               (setf current parent)
-              (return chain))))))))
+              (return chain)))))))
 
 (defun appearance-logical-size-index (size)
   "Return SIZE's logical ladder index, or NIL when it is not logical."
