@@ -703,8 +703,11 @@ Resource prompt body.")
                            :key #'clawmacs:package-definition-name
                            :test #'string=))
            (modelaria (find "modelaria" definitions
-                            :key #'clawmacs:package-definition-name
-                            :test #'string=))
+                           :key #'clawmacs:package-definition-name
+                           :test #'string=))
+           (media (find "media" definitions
+                        :key #'clawmacs:package-definition-name
+                        :test #'string=))
            (artifactum (find "artifactum" definitions
                              :key #'clawmacs:package-definition-name
                              :test #'string=))
@@ -723,7 +726,7 @@ Resource prompt body.")
            (templata (find "templata" definitions
                            :key #'clawmacs:package-definition-name
                            :test #'string=)))
-      (is (equal '("artifactum" "codex-image" "git" "lispi" "mcp-bridge" "modelaria"
+      (is (equal '("artifactum" "codex-image" "git" "lispi" "mcp-bridge" "media" "modelaria"
                    "netcons" "organa" "packrat" "pipelines" "prove"
                    "quaestor" "sexed" "slop" "speculum" "subagent"
                    "templata")
@@ -763,6 +766,10 @@ Resource prompt body.")
       (is (eq :builtin (clawmacs:package-definition-source-tier modelaria)))
       (is (clawmacs:package-definition-autoload modelaria))
       (is (probe-file (clawmacs:package-definition-entrypoint modelaria)))
+      (is (not (null media)))
+      (is (eq :builtin (clawmacs:package-definition-source-tier media)))
+      (is (clawmacs:package-definition-autoload media))
+      (is (probe-file (clawmacs:package-definition-entrypoint media)))
       (is (not (null artifactum)))
       (is (eq :builtin (clawmacs:package-definition-source-tier artifactum)))
       (is (clawmacs:package-definition-autoload artifactum))
