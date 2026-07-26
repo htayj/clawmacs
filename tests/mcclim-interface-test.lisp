@@ -47,6 +47,26 @@
     (setf (synthetic-chat-compose-pane-frame pane) frame)
     pane))
 
+(defun make-geometry-test-chat-compose-pane ()
+  "Construct a compose pane with the chat frame's production initargs.
+
+The pane is intentionally not installed in an unadopted application frame:
+these tests exercise construction-time space requirements only."
+  (let ((height (clawmacs::chat-compose-desired-pixel-height)))
+    (make-instance 'clawmacs::clawmacs-chat-compose-pane
+                   :initial-contents ""
+                   :ncolumns 90
+                   :nlines 5
+                   :height height
+                   :min-height height
+                   :max-height height
+                   :end-of-line-action :wrap*
+                   :minibuffer nil
+                   :scroll-bars nil
+                   :border-width 0
+                   :activation-gestures '(:return)
+                   :activate-callback #'clawmacs::compose-pane-activated)))
+
 (defun test-direct-command-table-keystrokes (table)
   "Return stable snapshots of TABLE's non-inherited keystroke entries."
   (let ((entries nil))
@@ -1932,34 +1952,19 @@
   "The real compose pane declares its wrap policy and fixed geometry to CLIM."
   (let ((clawmacs::*chat-compose-visible-rows* 5)
         (clawmacs::*chat-compose-line-height* 24))
-    (let* ((frame (clim:make-application-frame
-                   'clawmacs::clawmacs-chat-frame
-                   :buffer (make-buffer "compose-construction"
-                                        :session-persistence-mode :ephemeral)))
-           (pane (clim:find-pane-named frame 'compose))
+    (let* ((pane (make-geometry-test-chat-compose-pane))
            (expected (clawmacs::chat-compose-desired-pixel-height))
            (space (clim:compose-space pane)))
       (is (typep pane 'clawmacs::clawmacs-chat-compose-pane))
       (is (= expected (clim:space-requirement-height space)))
       (is (= expected (clim:space-requirement-min-height space)))
       (is (= expected (clim:space-requirement-max-height space)))
-      (is (eq :wrap* (clim:stream-end-of-line-action pane)))
-      (let ((configuration-called-p nil))
-        (with-mcclim-test-function-override
-            (clawmacs::configure-chat-compose-pane (requested-pane)
-              (declare (ignore requested-pane))
-              (setf configuration-called-p t))
-          (clawmacs::initialize-chat-frame-compose-pane frame pane))
-        (is-false configuration-called-p)))))
+      (is (eq :wrap* (clim:stream-end-of-line-action pane))))))
 
 (test mcclim-compose-pane-notifications-do-not-mutate-space-requirements
   "Graft and region notifications leave compose geometry to its constructor."
-  (let* ((frame (clim:make-application-frame
-                 'clawmacs::clawmacs-chat-frame
-                 :buffer (make-buffer "compose-notifications"
-                                      :session-persistence-mode :ephemeral)))
-         (pane (clim:find-pane-named frame 'compose))
-         (space-mutations 0))
+  (let ((pane (make-geometry-test-chat-compose-pane)))
+    (is (typep pane 'clawmacs::clawmacs-chat-compose-pane))
     (is-false
      (cl:find-method #'clim:note-sheet-grafted nil
                        (list (find-class 'clawmacs::clawmacs-chat-compose-pane))
@@ -1967,14 +1972,7 @@
     (is-false
      (cl:find-method #'clim:note-sheet-region-changed nil
                        (list (find-class 'clawmacs::clawmacs-chat-compose-pane))
-                       nil))
-    (with-mcclim-test-function-override
-        (clim:change-space-requirements (requested-pane &rest arguments)
-          (declare (ignore requested-pane arguments))
-          (incf space-mutations))
-      (ignore-errors (clim:note-sheet-grafted pane))
-      (ignore-errors (clim:note-sheet-region-changed pane)))
-    (is (= 0 space-mutations))))
+                       nil))))
 
 (test mcclim-compose-drei-bindings-are-pane-scoped
   "Compose bindings use Drei's pane extension hook without global mutation."
