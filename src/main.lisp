@@ -3092,6 +3092,8 @@ Environment variables:
   CLAWMACS_DEBUG_LOG   Same as --debug-log (CLI flag takes precedence)."
   ;; CLI args (everything after SBCL's -- separator)
   (let ((args (uiop:command-line-arguments)))
+    (setf *appearance-cli-selector*
+          (parse-appearance-startup-arguments args))
     (loop :while args
           :for arg := (pop args)
           :do (cond
@@ -3791,7 +3793,12 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
                                        :working-directory working-directory)))
     (ensure-scratch-buffer)
     (when run-frame
-      (funcall (symbol-function 'run-clawmacs-chat-frame)
-               buf
-               :window-title window-title))
+      ;; Appearance data is intentionally read and resolved only here: package
+      ;; registration and init.lisp have completed, while prompt entry points
+      ;; never reach this GUI-only boundary.
+      (let ((appearance-profile (resolve-startup-appearance-profile)))
+        (funcall (symbol-function 'run-clawmacs-chat-frame)
+                 buf
+                 :window-title window-title
+                 :appearance-profile appearance-profile)))
     buf))

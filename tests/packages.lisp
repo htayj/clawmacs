@@ -50,6 +50,10 @@
   :description "Appearance declaration and resolution tests"
   :in clawmacs-suite)
 
+(def-suite appearance-config-suite
+  :description "Persisted appearance configuration and startup selector tests"
+  :in clawmacs-suite)
+
 (def-suite sexed-suite
   :description "Agent-oriented s-expression editing tests"
   :in clawmacs-suite)

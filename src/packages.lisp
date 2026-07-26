@@ -425,6 +425,17 @@
    #:appearance-profile-selected-theme
    #:appearance-profile-strict-contrast
    #:appearance-profile-role-overrides
+   #:appearance-config-pathname
+   #:read-appearance-profile-file
+   #:write-appearance-profile-file
+   #:serialize-appearance-profile
+   #:parse-appearance-theme-selector
+   #:parse-appearance-startup-arguments
+   #:resolve-startup-appearance-profile
+   #:reload-appearance-file-profile
+   #:save-staged-appearance-profile
+   #:*appearance-startup-resolution-count*
+   #:*appearance-configuration-access-count*
    #:appearance-catalog
    #:make-appearance-catalog
    #:appearance-catalog-role-definitions
