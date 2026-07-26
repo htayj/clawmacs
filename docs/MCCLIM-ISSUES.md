@@ -1,6 +1,6 @@
 # McCLIM issue classification
 
-Audit date: 2026-07-13 through 2026-07-19
+Audit date: 2026-07-13 through 2026-07-26
 
 ## Tested McCLIM provenance
 
@@ -65,36 +65,56 @@ the cause of the reported selector hang or candidate overlap.
 
 ## Confirmed McCLIM Drei long-line redisplay defect
 
-The first post-fix adversarial fixture restored a 32 KiB draft containing one
-physical line. After the real compose pane became available, Drei crashed with
-`SB-KERNEL:INDEX-TOO-LARGE-ERROR`: `displayed-lines-count` was 2 while its
-`displayed-lines` vector contained one element. The backtrace crossed
+This defect is certainly McCLIM-owned. A private-Xvfb control loads only
+`mcclim-clx` and `drei-mcclim`, verifies that no `CLAWMACS` package exists, and
+creates a standard McCLIM application frame with an ordinary `:drei` pane and
+its default horizontal scroller. It crashes without any Clawmacs class,
+package, or compose integration.
+
+The 32 KiB single-physical-line draft used in the original adversarial run was
+only a stress fixture, not a requirement for the failure. The focused control
+now reproduces it with a 112-character single physical line. Drei splits that
+line into strokes `0..100` and `100..112`; during initial or reentrant layout,
+`displayed-lines-count` becomes 2 while the backing `displayed-lines` vector
+still has length 1. `CLIM:BOUNDING-RECTANGLE*` then evaluates `ELT` at index 1,
+signalling `SB-KERNEL:INDEX-TOO-LARGE-ERROR`. The backtrace crosses
 `DREI::DRAW-STROKE`, `change-space-requirements`, recursive repaint, and
 `DREI::CLEAR-STALE-LINES`.
 
-This defect is certainly McCLIM-owned. A private-Xvfb control loaded
-`mcclim-clx` and `drei-mcclim`, verified that no `CLAWMACS` package existed,
-and constructed McCLIM's standard `:drei` pane with its default horizontal
-scroller. The same 32 KiB single line reproduced the exact index error and
-`CLEAR-STALE-LINES` stack. Bare Drei controls with the same total text, point,
-and mark passed, as did multiline text and fixed-rack initial/post-enable
-setter controls. The default scroller is therefore an independent reproducer,
-not a safe Clawmacs workaround.
+In Clawmacs, entering `M-x` after composing a single physical line is safe at
+100 characters and crashes at both 101 and 112 characters. That is an
+application-observed transition threshold, not a claim that every Drei usage
+with 101 characters must fail. Bare Drei controls with the same total text,
+point, and mark passed in the earlier controls, as did the tested multiline and
+fixed-rack initial/post-enable cases. The standard-pane control is the
+independent reproducer; the scroller is not a safe Clawmacs workaround.
 
-Pinned and current official McCLIM have the same relevant redisplay code.
-`DREI::DRAW-STROKE` changes pane space requirements in the middle of drawing;
-viewport allocation can repaint recursively before the outer line-count
-increment completes. The source already documents the same 0, 0, 1, 2
-recursive-count failure for Drei output-record replay, but that narrow
-workaround does not protect a Drei gadget pane. See the
-[current official Drei redisplay source](https://codeberg.org/McCLIM/McCLIM/raw/commit/537f213e6ab817002f115cc1de3763d9bce27e77/Libraries/Drei/drei-redisplay.lisp).
+The pinned `1.0.0-koliada` revision
+[`2577ea3569bb96e2c46ccc8abed4ce6c327e8ed6`](https://codeberg.org/McCLIM/McCLIM/commit/2577ea3569bb96e2c46ccc8abed4ce6c327e8ed6)
+and then-current official master
+[`92b8f12b880cd752bdf817fe1a36258a03d96aff`](https://codeberg.org/McCLIM/McCLIM/commit/92b8f12b880cd752bdf817fe1a36258a03d96aff)
+have identical relevant
+[`drei-redisplay.lisp` source at the pin](https://codeberg.org/McCLIM/McCLIM/raw/commit/2577ea3569bb96e2c46ccc8abed4ce6c327e8ed6/Libraries/Drei/drei-redisplay.lisp)
+and [source at then-current master](https://codeberg.org/McCLIM/McCLIM/raw/commit/92b8f12b880cd752bdf817fe1a36258a03d96aff/Libraries/Drei/drei-redisplay.lisp);
+the latter is not evidence of a fix or of general master stability.
+The related limited
+[`326a97bbc623c261aab4248598cb40ef4fe2bef1`](https://codeberg.org/McCLIM/McCLIM/commit/326a97bbc623c261aab4248598cb40ef4fe2bef1)
+repair does not cover this ordinary Drei-pane path. The source still documents
+the related `0, 0, 1, 2` recursive-count case for Drei output-record replay,
+but that narrow repair is not a complete renderer fix.
 
-Clawmacs does not install a private redisplay override or add the crashing
-scroller. Its switch-buffer performance fixture now uses the same exact 32 KiB
-total draft split into bounded physical lines, so it tests selector work and
-buffer-state retention without conflating this renderer defect. Arbitrary very
-long single-line compose input remains a documented upstream risk until
-McCLIM is patched.
+Clawmacs mitigates its specific trigger in local commit `866003f` by declaring
+the compose pane's fixed preferred, minimum, and maximum height
+and wrapping at construction, then removing the repaint-time compose
+`change-space-requirements` request. The exact compose-geometry regression
+passes 100-, 101-, and 112-character single-line inputs twice each. This
+removes the known Clawmacs `M-x` resize transition; it does not change Drei's
+displayed-line invariant or establish safety during a genuine resize or another
+McCLIM-triggered relayout.
+
+The fork and Guix-package-patch decision remains deferred: this record
+establishes a minimal upstream reproducer and an application mitigation, not a
+complete upstream repair or a live upstream issue response.
 
 ## Confirmed McCLIM pointer-tracking robustness defect
 

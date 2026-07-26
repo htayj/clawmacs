@@ -81,7 +81,7 @@ are classified as harness faults, not Clawmacs or McCLIM crashes.
 | P1 | A restored or hook-seeded initial draft remained in the buffer model but appeared empty when the frame opened. Clawmacs tried to hydrate compose before McCLIM's primary frame-top-level path had made the named panes available; `find-pane-named` returned `NIL`, yet the helper marked the buffer synchronized, so the real Drei pane retained its empty initial contents. | Clawmacs | Hydrate compose in the application top-level only after the real pane is available and before declaring the frame running or accepting input. A missing pane cannot establish the synchronization token. | Deterministic lifecycle tests cover the missing-pane invariant and available-pane hydration of draft, point, and mark. The full private-Xvfb fixture seeds the same state before frame construction and requires it in the first frame-ready snapshot. |
 | P1 | The compose `C-u` and `C-w` compatibility path edited the message model and then replaced the complete Drei gadget value, discarding editor undo. ESA consumes `C-u` as a universal argument before a pane command-table binding can win. | Clawmacs | Bind `C-w` to Drei's native backward-kill-word command in the compose pane's additional command table. Dispatch `C-u` to native kill-line through Drei's exported command executor, then use its normal value callback and redisplay contract. | Focused editor tests prove `C-w` and `C-u` mutate the live Drei editor and `C-_` restores both changes without a destructive gadget rewrite. |
 | P1 | An empty switch-buffer query initially selected the current buffer, and filtering could lose the explicit recent-buffer default because display strings and semantic names were mixed in history/ranking. Pressing Return could therefore appear to do nothing, while an exact name could select a longer prefix neighbor. | Clawmacs | Rank and match by semantic buffer name, preselect the most recent non-current buffer for the empty query, preserve that default while the query remains empty, and select the highest-scoring valid fuzzy match after editing. | Buffer tests cover MRU and ring fallback, current-buffer exclusion, empty-query Return, exact-name ranking among prefix neighbors, fuzzy selection, and restoring the recent default after deleting a query. |
-| P1 | A 32 KiB single physical line exposed Drei's recursive redisplay race: drawing changed space requirements, viewport allocation repainted before the outer display completed, and `displayed-lines-count` became 2 for a one-element vector. | McCLIM | Do not install an application-private redisplay override or the independently crashing horizontal scroller. Keep selector performance proof multiline and document the upstream boundary; patch McCLIM if arbitrary pathological single-line input must be guaranteed. | A Clawmacs-free standard `:drei` horizontal-scroller control reproduces the exact `INDEX-TOO-LARGE-ERROR`/`CLEAR-STALE-LINES` stack. Bare, multiline, fixed-rack, and post-enable setter controls delimit the trigger. Pinned and current official redisplay source retain the race. |
+| P1 | An earlier 32 KiB single physical line exposed Drei's recursive redisplay race; the focused reproducer now needs only 112 characters. Drawing changed space requirements, viewport allocation repainted before the outer display completed, and `displayed-lines-count` became 2 for a one-element vector. | McCLIM | Do not install an application-private redisplay override or treat the scroller as a workaround. Clawmacs constructor geometry removes its repaint-time `M-x` relayout trigger, but a McCLIM repair is still required to guarantee the invariant during genuine resizing. | A Clawmacs-free standard `:drei` horizontal-scroller control reproduces the exact `INDEX-TOO-LARGE-ERROR`/`CLEAR-STALE-LINES` stack at 112 characters. Bare, multiline, fixed-rack, and post-enable setter controls delimit the trigger. The pin and then-current master retain the relevant source; Clawmacs 100/101/112-character regression passes twice. |
 | P1 | One rapid GUI sequence completed `C-c t` and then lost the shifted `C-c V` prefix, inserting literal `V`. The preserved logs do not include raw key fields, so a deeper cause is not claimed. | Unresolved trigger; mitigated in Clawmacs and harness | Consume every recognized standalone modifier explicitly at the compose-pane boundary so it cannot enter an accumulated command sequence. Preserve prefixes across ESA's identical command-table assignment. In the driver, wait for one toggle's semantic state to settle before starting the next chord. | A backend-spelling modifier regression followed by `C-c V`, an identical-table-assignment-between-gestures regression, the preserved failure, and repeated full live `keybinds` passes covering shifted `C-c V`, `C-c I`, `C-c A`, `C-c S`, `C-c M`, and `C-c R`. |
 | P1 | The now-removed legacy approval presentation could act on a newer pending object after redisplay. | Clawmacs | The original identity repair carried the exact presented object. The later full-trust decision removed the entire approval state, presentation, commands, key mode, and response path, eliminating this interaction class. | Static removed-API sweep plus prompt, Quaestor, managed-tool, and McCLIM suites prove direct dispatch and structured questions remain intact. |
 | P1 | A lone `queue-event` error or a request arriving during a failed redisplay body could leave dirty state without an event. | Clawmacs | Use bounded iterative enqueue retry, transactional reservation release, and generation-aware transfer after both normal and exceptional handler exits. | Lone transient failure, bounded burst, and concurrent request-during-handler-failure tests. |
@@ -232,11 +232,15 @@ candidates:
     text from the previous buffer. Same-buffer redisplay and assignment avoid
     replacement and preserve undo. Per-buffer Drei editor state would be
     required before cross-buffer undo histories could be retained safely.
-14. McCLIM Drei can crash while displaying a very long single physical line
-    when a scroller or parent relayout recursively repaints during
-    `change-space-requirements`. This is independently reproducible without
-    Clawmacs and is tracked in `MCCLIM-ISSUES.md`; multiline compose input is
-    stable, but a complete repair belongs in McCLIM or a Guix package patch.
+14. McCLIM Drei has an independently reproducible renderer defect: an ordinary
+    pane can crash on a 112-character single physical line when initial or
+    reentrant layout recurses through `change-space-requirements`. The earlier
+    32 KiB line was a stress fixture, not the minimum required input. Commit
+    `866003f` removes Clawmacs' repaint-time compose relayout and declares fixed
+    constructor geometry; its 100/101/112-character compose regression passes
+    twice. That removes the known `M-x` trigger but does not repair Drei's
+    invariant or eliminate genuine-resize risk. `MCCLIM-ISSUES.md` records the
+    minimal control and the deferred McCLIM/Guix-patch choice.
 
 These follow-ups should be proven with the same rule: a deterministic barrier
 or minimal GUI reproducer first, then a resource-count or responsiveness gate.
@@ -431,9 +435,10 @@ and a private Xvfb:
 
 The investigation also found one independent renderer defect outside the
 switch-buffer repair. A Clawmacs-free standard `:drei` pane with McCLIM's
-default horizontal scroller crashes on a 32 KiB single physical line with the
-same `INDEX-TOO-LARGE-ERROR` and `CLEAR-STALE-LINES` stack. Bare, multiline,
+default horizontal scroller reproduces the `INDEX-TOO-LARGE-ERROR` and
+`CLEAR-STALE-LINES` stack on a 112-character single physical line; the earlier
+32 KiB case was only the stress fixture that exposed it first. Bare, multiline,
 fixed-rack, and post-enable controls delimit the trigger. Evidence:
 `.artifacts/switch-buffer-investigation/drei-long-line/`. This is documented as
 McCLIM-owned in `MCCLIM-ISSUES.md`; no private renderer workaround or fork was
-introduced.
+introduced at that point.
