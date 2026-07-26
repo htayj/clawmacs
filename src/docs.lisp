@@ -1792,7 +1792,7 @@ documentation in *extended-docs*."
 
 (defdoc provider-model-supported-think-levels
   :category "llm"
-  :usage "(provider-model-supported-think-levels PROVIDER:keyword MODEL:string) — (provider-model-supported-think-levels :openai-codex \"gpt-5.4\")"
+  :usage "(provider-model-supported-think-levels PROVIDER:keyword MODEL:string) — (provider-model-supported-think-levels :openai-codex \"gpt-5.6-sol\")"
   :returns "list of strings or nil — e.g. (\"none\" \"low\" \"medium\" \"high\" \"xhigh\")"
   :see-also (resolve-buffer-provider-and-model select-think-level-command))
 
@@ -2854,7 +2854,7 @@ documentation in *extended-docs*."
   :category "main"
   :usage "(clawmacs-prompt-main) — CLI entry point used by prompt.sh."
   :returns "does not return — Exits the Lisp image with status 0 or 1."
-  :side-effects "Parses command-line options, defaults plain prompt.sh runs to openai-codex/gpt-5.3-codex unless --agent, --provider, or --model supplies routing, initializes the clawmacs runtime without starting McCLIM, runs one prompt through run-single-prompt, and writes the final response or JSON result to stdout."
+  :side-effects "Parses command-line options, defaults plain prompt.sh runs to openai-codex/gpt-5.6-sol unless --agent, --provider, or --model supplies routing, initializes the clawmacs runtime without starting McCLIM, runs one prompt through run-single-prompt, and writes the final response or JSON result to stdout."
   :see-also (run-single-prompt *prompt-max-tool-iterations* clawmacs-main))
 
 (defdoc clawmacs-main

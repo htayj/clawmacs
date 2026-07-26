@@ -33,7 +33,7 @@ is configured. Should be a valid model name for *default-provider*.")
 (defvar *default-max-tokens* 8192
   "Default maximum tokens for LLM responses across all providers.")
 
-(defvar *openai-codex-model* "gpt-5.3-codex"
+(defvar *openai-codex-model* "gpt-5.6-sol"
   "The OpenAI Codex model to use for chat completions.")
 
 (defvar *openai-codex-api-base-url* "https://api.openai.com/v1"
@@ -1956,6 +1956,9 @@ respected."
 
 (defparameter *provider-known-models*
   '((:openai-codex
+     "gpt-5.6-sol"
+     "gpt-5.6-terra"
+     "gpt-5.6-luna"
      "gpt-5.3-codex"
      "gpt-5.4"
      "gpt-5.2-codex"
@@ -1989,7 +1992,10 @@ an API key is configured; this static list is used as a fallback.
 These are used by the model selector overlay.")
 
 (defparameter *openai-codex-model-think-levels*
-  '(("gpt-5.4" "none" "low" "medium" "high" "xhigh")
+  '(("gpt-5.6-sol" "none" "low" "medium" "high" "xhigh" "max")
+    ("gpt-5.6-terra" "none" "low" "medium" "high" "xhigh" "max")
+    ("gpt-5.6-luna" "none" "low" "medium" "high" "xhigh" "max")
+    ("gpt-5.4" "none" "low" "medium" "high" "xhigh")
     ("gpt-5.3-codex" "low" "medium" "high" "xhigh")
     ("gpt-5.2-codex" "low" "medium" "high" "xhigh")
     ("gpt-5.2" "none" "low" "medium" "high" "xhigh")

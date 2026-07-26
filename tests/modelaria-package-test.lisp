@@ -81,7 +81,7 @@
       (multiple-value-bind (provider model think-level)
           (clawmacs::resolve-buffer-provider-and-model buffer)
         (is (eq :openai-codex provider))
-        (is (string= "gpt-5.4" model))
+        (is (string= "gpt-5.6-sol" model))
         (is (string= "high" think-level))
         (is (string= "priority"
                      (clawmacs::resolve-buffer-service-tier buffer))))
@@ -95,8 +95,8 @@
       (multiple-value-bind (_provider model think-level)
           (clawmacs::resolve-buffer-provider-and-model buffer)
         (declare (ignore _provider))
-        (is (string= "gpt-5.1-codex-max" model))
-        (is (string= "high" think-level)))
+        (is (string= "gpt-5.6-sol" model))
+        (is (string= "max" think-level)))
       (setf (clawmacs::buffer-next-turn-model-role-override buffer) nil)
       (clawmacs::clear-buffer-provider-override buffer)
       (clawmacs::clear-buffer-model-override buffer)
@@ -104,8 +104,8 @@
       (multiple-value-bind (_provider model think-level)
           (clawmacs::resolve-buffer-provider-and-model buffer)
         (declare (ignore _provider))
-        (is (string= "gpt-5.1-codex-max" model))
-        (is (string= "high" think-level))))))
+        (is (string= "gpt-5.6-sol" model))
+        (is (string= "max" think-level))))))
 
 (test modelaria-cycle-uses-effective-role-set
   "Cycling uses the scoped role set rather than the flat global model list."
@@ -117,6 +117,33 @@
       (is (string= "slow" (clawmacs::buffer-model-role-override buffer)))
       (clawmacs::modelaria-cycle-role-command buffer)
       (is (string= "cheap" (clawmacs::buffer-model-role-override buffer))))))
+
+(test modelaria-built-in-roles-use-gpt-5.6-family
+  "Built-in roles retain their quality and cost intent on GPT-5.6."
+  (multiple-value-bind (provider model think-level)
+      (clawmacs::modelaria-role-routing
+       "cheap" :openai-codex "gpt-5.6-sol" nil)
+    (is (eq :openai-codex provider))
+    (is (string= "gpt-5.6-luna" model))
+    (is (string= "low" think-level)))
+  (multiple-value-bind (provider model think-level)
+      (clawmacs::modelaria-role-routing
+       "plan" :openai-codex "gpt-5.6-sol" nil)
+    (is (eq :openai-codex provider))
+    (is (string= "gpt-5.6-sol" model))
+    (is (string= "high" think-level)))
+  (multiple-value-bind (provider model think-level)
+      (clawmacs::modelaria-role-routing
+       "slow" :openai-codex "gpt-5.6-sol" nil)
+    (is (eq :openai-codex provider))
+    (is (string= "gpt-5.6-sol" model))
+    (is (string= "max" think-level)))
+  (multiple-value-bind (provider model think-level)
+      (clawmacs::modelaria-role-routing
+       "cheap" :openrouter "openai/gpt-5.6-sol" nil)
+    (is (eq :openrouter provider))
+    (is (string= "openai/gpt-5.6-luna" model))
+    (is (null think-level))))
 
 (test modelaria-usage-report-estimates-cost-and-context-pressure
   "Usage reports aggregate token/cache counts, cost, and context pressure."

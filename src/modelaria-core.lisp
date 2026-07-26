@@ -12,7 +12,10 @@
   "Built-in ordered model roles used when no scoped role set is configured.")
 
 (defparameter *modelaria-openai-price-table*
-  '(("gpt-5.4" :input 2.50d0 :cached-input 0.25d0 :output 15.00d0)
+  '(("gpt-5.6-sol" :input 5.00d0 :cached-input 0.50d0 :output 30.00d0)
+    ("gpt-5.6-terra" :input 2.50d0 :cached-input 0.25d0 :output 15.00d0)
+    ("gpt-5.6-luna" :input 1.00d0 :cached-input 0.10d0 :output 6.00d0)
+    ("gpt-5.4" :input 2.50d0 :cached-input 0.25d0 :output 15.00d0)
     ("gpt-5.2-codex" :input 1.75d0 :cached-input 0.175d0 :output 14.00d0)
     ("gpt-5.2" :input 1.75d0 :cached-input 0.175d0 :output 14.00d0)
     ("gpt-5.1-codex-max" :input 1.25d0 :cached-input 0.125d0 :output 10.00d0))
@@ -229,27 +232,27 @@ Hyphens and underscores are treated as equivalent."
       ((string= normalized "cheap")
        (cond
          ((eq provider :openrouter)
-          (values provider "openai/gpt-4o" nil))
+          (values provider "openai/gpt-5.6-luna" nil))
          (t
-          (values :openai-codex "gpt-5.2-codex" "low"))))
+          (values :openai-codex "gpt-5.6-luna" "low"))))
       ((string= normalized "plan")
        (cond
          ((eq provider :openrouter)
-          (values provider "openai/gpt-5.2" nil))
+          (values provider "openai/gpt-5.6-sol" nil))
          (t
-          (values :openai-codex "gpt-5.4" "high"))))
+          (values :openai-codex "gpt-5.6-sol" "high"))))
       ((string= normalized "review")
        (cond
          ((eq provider :openrouter)
-          (values provider "openai/gpt-5.2" nil))
+          (values provider "openai/gpt-5.6-sol" nil))
          (t
-          (values :openai-codex "gpt-5.4" "high"))))
+          (values :openai-codex "gpt-5.6-sol" "high"))))
       ((string= normalized "slow")
        (cond
          ((eq provider :openrouter)
-          (values provider "openai/gpt-5.1" nil))
+          (values provider "openai/gpt-5.6-sol" nil))
          (t
-          (values :openai-codex "gpt-5.1-codex-max" "high"))))
+          (values :openai-codex "gpt-5.6-sol" "max"))))
       (t
        (values provider model think-level)))))
 

@@ -436,13 +436,13 @@ by default:
 #+begin_src sh
 ./prompt.sh 'Use lisp_eval with mode="isolated" to inspect the current default provider.'
 ./prompt.sh --show-tools --show-metadata "List the exported clawmacs functions."
-./prompt.sh --json --provider openai-codex --model gpt-5.3-codex "Summarize this repo."
+./prompt.sh --json --provider openai-codex --model gpt-5.6-sol "Summarize this repo."
 ./prompt.sh --clean-build "Run this prompt after clearing cached Lisp build artifacts."
 ./prompt.sh --isolated --show-tools "Exercise project APIs without user config state."
 ./prompt.sh --isolated --skill-root /tmp/my-skills 'Use $demo to answer.'
 #+end_src
 
-Plain =prompt.sh= runs default to =openai-codex/gpt-5.3-codex=. Passing
+Plain =prompt.sh= runs default to =openai-codex/gpt-5.6-sol=. Passing
 =--agent= lets that agent's routing decide unless =--provider= or =--model=
 is also supplied. Interactive =run.sh= sessions use the normal Clawmacs
 defaults and any overrides from =~/.clawmacs.d/init.lisp=.
@@ -480,8 +480,8 @@ classified separately, with minimal controls and a strict fork threshold, in
 The probes run through =prompt.sh --isolated=, write logs under =/tmp=, and
 check real agent behavior for docs discovery, skill loading, transactional
 project edits, and scratch/file-buffer workflows. By default they use
-=openai-codex/gpt-5.3-codex= first, then retry with
-=openrouter/openai/gpt-5.3-codex= if the primary provider fails.
+=openai-codex/gpt-5.6-sol= first, then retry with
+=openrouter/openai/gpt-5.6-sol= if the primary provider fails.
 
 ** Provider Credentials
 
@@ -504,8 +504,8 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
 #+begin_src lisp
 ;; Switch default provider and model
 (setf clawmacs:*default-provider* :openai-codex)
-(setf clawmacs:*default-model* "gpt-5.4")
-(setf clawmacs:*openai-codex-model* "gpt-5.4")
+(setf clawmacs:*default-model* "gpt-5.6-sol")
+(setf clawmacs:*openai-codex-model* "gpt-5.6-sol")
 
 ;; Override the default personality prompt or point to a different prompt file
 (setf clawmacs:*default-personality-prompt* "You are a pragmatic pair programmer.")
@@ -516,7 +516,7 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
 (clawmacs:register-agent-definition
  "writer"
  :provider :openai-codex
- :model "gpt-5.4"
+ :model "gpt-5.6-sol"
  :think-level "high"
  :core-prompt "Use lisp_eval only with mode=isolated for concrete work. Inspect first, then modify."
  :personality-prompt "You are a concise writing partner focused on structure and tone.")

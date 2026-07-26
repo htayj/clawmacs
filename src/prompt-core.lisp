@@ -10,7 +10,7 @@
 (defparameter +prompt-default-provider+ "openai-codex"
   "Default provider used by prompt.sh when no agent or provider is specified.")
 
-(defparameter +prompt-default-model+ "gpt-5.3-codex"
+(defparameter +prompt-default-model+ "gpt-5.6-sol"
   "Default model used by prompt.sh when no agent or model is specified.")
 
 (defparameter +session-prompt-default-session-name+ "clawmacs:session-prompt"

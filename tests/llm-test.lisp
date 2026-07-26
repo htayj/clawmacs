@@ -2626,12 +2626,12 @@ same
                    (clawmacs::default-session-prompt-session-name))))))
 
 (test parse-clawmacs-prompt-args-defaults-to-codex-for-plain-prompt-sh
-  "Plain prompt.sh runs default to Codex 5.3 without overriding explicit routing."
+  "Plain prompt.sh runs default to GPT-5.6 Sol without overriding explicit routing."
   (let ((options (clawmacs::parse-clawmacs-prompt-args
                   '("summarize" "this"))))
     (is (string= "openai-codex"
                  (clawmacs::prompt-options-provider options)))
-    (is (string= "gpt-5.3-codex"
+    (is (string= "gpt-5.6-sol"
                  (clawmacs::prompt-options-model options))))
   (let ((options (clawmacs::parse-clawmacs-prompt-args
                   '("--agent" "writer" "summarize" "this"))))
@@ -2652,7 +2652,7 @@ same
   "prompt.sh help renders its default provider/model without FORMAT errors."
   (let ((usage (clawmacs::prompt-usage-string)))
     (is (search "Default without --agent: openai-codex" usage))
-    (is (search "Default without --agent: gpt-5.3-codex" usage))
+    (is (search "Default without --agent: gpt-5.6-sol" usage))
     (is (search "--model-role ROLE" usage))
     (is (search "--service-tier TIER" usage))
     (is (search "--package NAME" usage))
@@ -3915,7 +3915,7 @@ same
       (multiple-value-bind (provider model think-level)
           (clawmacs::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
-        (is (string= "gpt-5.3-codex" model))
+        (is (string= "gpt-5.6-sol" model))
         (is (null think-level))))))
 
 (test resolve-buffer-provider-and-model-agent-default-model
@@ -3955,7 +3955,7 @@ same
       (multiple-value-bind (provider model think-level)
           (clawmacs::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
-        (is (string= "gpt-5.3-codex" model))
+        (is (string= "gpt-5.6-sol" model))
         (is (null think-level))))))
 
 (test resolve-buffer-provider-and-model-unsupported-think-returns-nil
@@ -6468,6 +6468,9 @@ same
   (let ((models (clawmacs::provider-known-models :openai-codex)))
     (is (listp models))
     (is (plusp (length models)))
+    (is (member "gpt-5.6-sol" models :test #'string=))
+    (is (member "gpt-5.6-terra" models :test #'string=))
+    (is (member "gpt-5.6-luna" models :test #'string=))
     (is (member "gpt-5.3-codex" models :test #'string=))
     (is (member "gpt-5.4" models :test #'string=))
     (is (member "gpt-5.2-codex" models :test #'string=))
@@ -6475,7 +6478,7 @@ same
     (is (member "gpt-5.1-codex-mini" models :test #'string=))
     (is (member "gpt-5.2" models :test #'string=))
     (is (member clawmacs::*openai-codex-model* models :test #'string=))
-    (is (= 6 (length models)))))
+    (is (= 9 (length models)))))
 
 (test normalize-provider-openai-codex-storage-forms
   "normalize-provider accepts both kebab-case and JSON camelCase storage forms."
@@ -6486,12 +6489,22 @@ same
 
 (test provider-model-supported-think-levels-openai-codex
   "OpenAI-Codex think levels are model-specific."
-  (let ((gpt-54 (clawmacs::provider-model-supported-think-levels
+  (let ((gpt-56-sol (clawmacs::provider-model-supported-think-levels
+                     :openai-codex "gpt-5.6-sol"))
+        (gpt-56-terra (clawmacs::provider-model-supported-think-levels
+                       :openai-codex "gpt-5.6-terra"))
+        (gpt-56-luna (clawmacs::provider-model-supported-think-levels
+                      :openai-codex "gpt-5.6-luna"))
+        (gpt-54 (clawmacs::provider-model-supported-think-levels
                  :openai-codex "gpt-5.4"))
         (gpt-53-codex (clawmacs::provider-model-supported-think-levels
                        :openai-codex "gpt-5.3-codex"))
         (gpt-51-max (clawmacs::provider-model-supported-think-levels
                      :openai-codex "gpt-5.1-codex-max")))
+    (is (equal '("none" "low" "medium" "high" "xhigh" "max")
+               gpt-56-sol))
+    (is (equal gpt-56-sol gpt-56-terra))
+    (is (equal gpt-56-sol gpt-56-luna))
     (is (equal '("none" "low" "medium" "high" "xhigh") gpt-54))
     (is (equal '("low" "medium" "high" "xhigh") gpt-53-codex))
     (is (equal '("none" "low" "medium" "high") gpt-51-max))
