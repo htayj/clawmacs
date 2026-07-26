@@ -561,6 +561,10 @@
              (muffle-warning warning))))
       (is-true (clawmacs::validate-appearance-profile-contrast catalog profile)))
     (is (equal '(:transcript-pane :error) (appearance-condition-role captured)))
+    (is (equal '((:foreground-ink . :unsaved)
+                 (:surface :theme :dark :owner :builtin))
+               (appearance-condition-origin captured)))
+    (is (equal '(:transcript-pane :error) (appearance-condition-path captured)))
     (is (eq :contrast (appearance-condition-axis captured)))
     (is (numberp (appearance-condition-value captured)))
     (is-false (appearance-condition-fatal-p captured))
@@ -577,7 +581,7 @@
     (let* ((dark (find-appearance-theme-definition catalog :dark))
            (broken-dark
              (make-appearance-theme-definition
-              :id :dark :parent-theme :classic
+              :id :dark :parent-theme :classic :owner :builtin
               :role-overlays
               (cons (cons :error (test-appearance-style :foreground :black))
                     (remove :error (appearance-theme-definition-role-overlays dark)
@@ -593,3 +597,181 @@
       (signals appearance-contrast-warning
         (clawmacs::validate-appearance-profile-contrast
          broken-catalog (make-appearance-profile :selected-theme :dark))))))
+
+(defun appearance-test-catalog-with-package-theme (owner)
+  "Return a dark-derived package theme whose error foreground has low contrast."
+  (let* ((catalog (make-classic-appearance-catalog))
+         (package-theme-id '(:package "org.example.appearance" "low-dark"))
+         (package-theme
+           (make-appearance-theme-definition
+            :id package-theme-id
+            :parent-theme :dark
+            :owner owner
+            :role-overlays
+            (list (cons :error (test-appearance-style :foreground :black))))))
+    (values
+     (make-appearance-catalog
+      :role-definitions (appearance-catalog-role-definitions catalog)
+      :theme-definitions
+      (append (appearance-catalog-theme-definitions catalog)
+              (list package-theme))
+      :built-in-overlays (appearance-catalog-built-in-overlays catalog))
+     package-theme-id)))
+
+(defun appearance-test-catalog-with-package-defaults (owner)
+  "Return package-owned surface/content role defaults with low contrast."
+  (let* ((catalog (make-classic-appearance-catalog))
+         (surface-id '(:package "org.example.appearance" "low-surface"))
+         (content-id '(:package "org.example.appearance" "low-content")))
+    (values
+     (make-appearance-catalog
+      :role-definitions
+      (append
+       (appearance-catalog-role-definitions catalog)
+       (list (make-appearance-role-definition
+              :id surface-id :kind :surface :owner owner)
+             (make-appearance-role-definition
+              :id content-id :kind :content :owner owner)))
+      :theme-definitions (appearance-catalog-theme-definitions catalog)
+      :built-in-overlays
+      (append
+       (appearance-catalog-built-in-overlays catalog)
+       (list (cons surface-id
+                   (test-appearance-style
+                    :background '(:rgb 13/255 17/255 23/255)))
+             (cons content-id
+                   (test-appearance-style :foreground :black)))))
+     (list surface-id content-id))))
+
+(test appearance-contrast-provenance-identifies-built-in-contributions-by-owner
+  "Core origins are explicitly owned; theme names and NIL never imply built-in."
+  (let* ((catalog (make-classic-appearance-catalog))
+         (resolved (resolve-appearance-role-stack
+                    catalog :dark '(:transcript-pane :error)))
+         (provenance (resolved-appearance-role-provenance resolved)))
+    (is (every (lambda (role)
+                 (eq :builtin (appearance-role-definition-owner role)))
+               (appearance-catalog-role-definitions catalog)))
+    (is (every (lambda (theme)
+                 (eq :builtin (appearance-theme-definition-owner theme)))
+               (appearance-catalog-theme-definitions catalog)))
+    (is (equal '((:foreground-ink :theme :dark :owner :builtin)
+                 (:surface :theme :dark :owner :builtin))
+               provenance))
+    (is-true (clawmacs::appearance-built-in-contrast-provenance-p provenance))
+    (is-false
+     (clawmacs::appearance-built-in-contrast-provenance-p
+      '((:foreground-ink :theme :dark :owner nil)
+        (:surface :theme :dark :owner :builtin))))))
+
+(test appearance-package-theme-contrast-provenance-warns-and-strictly-fails
+  "A package theme contributes at the theme layer and never counts as built-in."
+  (multiple-value-bind (catalog theme-id)
+      (appearance-test-catalog-with-package-theme "org.example.appearance")
+    (let ((captured nil))
+      (handler-bind
+          ((appearance-contrast-warning
+             (lambda (warning)
+               (setf captured warning)
+               (muffle-warning warning))))
+        (is-true
+         (clawmacs::validate-appearance-profile-contrast
+          catalog (make-appearance-profile :selected-theme theme-id))))
+      (is-false (appearance-condition-fatal-p captured))
+      (is (equal
+           `((:foreground-ink :theme ,theme-id
+                              :owner "org.example.appearance")
+             (:surface :theme :dark :owner :builtin))
+           (appearance-condition-origin captured)))
+      (is (equal '(:transcript-pane :error)
+                 (appearance-condition-role captured)))
+      (signals appearance-contrast-warning
+        (clawmacs::validate-appearance-profile-contrast
+         catalog (make-appearance-profile
+                  :selected-theme theme-id :strict-contrast t))))))
+
+(test appearance-package-role-default-contrast-provenance-warns-and-strictly-fails
+  "Package role defaults retain the defaults layer and owner-aware policy."
+  (multiple-value-bind (catalog role-stack)
+      (appearance-test-catalog-with-package-defaults "org.example.appearance")
+    (let ((captured nil))
+      (handler-bind
+          ((appearance-contrast-warning
+             (lambda (warning)
+               (setf captured warning)
+               (muffle-warning warning))))
+        (is-true
+         (clawmacs::validate-appearance-profile-contrast
+          catalog (make-appearance-profile :selected-theme :dark)
+          :role-stacks (list role-stack))))
+      (is-false (appearance-condition-fatal-p captured))
+      (is (equal
+           `((:foreground-ink :role-default ,(second role-stack)
+                              :owner "org.example.appearance")
+             (:surface :role-default ,(first role-stack)
+                       :owner "org.example.appearance"))
+           (appearance-condition-origin captured)))
+      (signals appearance-contrast-warning
+        (clawmacs::validate-appearance-profile-contrast
+         catalog
+         (make-appearance-profile :selected-theme :dark :strict-contrast t)
+         :role-stacks (list role-stack))))))
+
+(test appearance-nil-owned-contribution-warns-and-mixed-owners-remain-visible
+  "NIL ownership is non-built-in and mixed effective contributors are preserved."
+  (multiple-value-bind (catalog theme-id)
+      (appearance-test-catalog-with-package-theme nil)
+    (let ((captured nil))
+      (handler-bind
+          ((appearance-contrast-warning
+             (lambda (warning)
+               (setf captured warning)
+               (muffle-warning warning))))
+        (is-true
+         (clawmacs::validate-appearance-profile-contrast
+          catalog (make-appearance-profile :selected-theme theme-id))))
+      (is-false (appearance-condition-fatal-p captured))
+      (is (equal
+           `((:foreground-ink :theme ,theme-id :owner nil)
+             (:surface :theme :dark :owner :builtin))
+           (appearance-condition-origin captured)))
+      (is-false
+       (clawmacs::appearance-built-in-contrast-provenance-p
+        (appearance-condition-origin captured))))))
+
+(test appearance-classic-custom-contrast-is-validated-while-built-in-is-inert
+  "Classic skips its unknown backend surface only until a custom stack touches it."
+  (let* ((catalog (make-classic-appearance-catalog))
+         (overrides
+           (list (cons :base
+                       (test-appearance-style
+                        :background '(:rgb 13/255 17/255 23/255)))
+                 (cons :default-text
+                       (test-appearance-style :foreground :black))))
+         (profile (make-appearance-profile
+                   :selected-theme :classic :role-overrides overrides))
+         (captured nil))
+    (is-true
+     (clawmacs::validate-appearance-profile-contrast
+      catalog (make-appearance-profile :selected-theme :classic)
+      :role-stacks '((:transcript-pane :default-text))))
+    (handler-bind
+        ((appearance-contrast-warning
+           (lambda (warning)
+             (setf captured warning)
+             (muffle-warning warning))))
+      (is-true
+       (clawmacs::validate-appearance-profile-contrast
+        catalog profile
+        :role-stacks '((:transcript-pane :default-text)))))
+    (is-false (appearance-condition-fatal-p captured))
+    (is (equal '((:foreground-ink . :unsaved)
+                 (:surface . :unsaved))
+               (appearance-condition-origin captured)))
+    (signals appearance-contrast-warning
+      (clawmacs::validate-appearance-profile-contrast
+       catalog
+       (make-appearance-profile
+        :selected-theme :classic :strict-contrast t
+        :role-overrides overrides)
+       :role-stacks '((:transcript-pane :default-text))))))

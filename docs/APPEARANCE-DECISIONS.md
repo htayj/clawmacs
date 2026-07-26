@@ -353,7 +353,11 @@ without acquiring a new bold declaration.
 Built-ins fail validation below 4.5:1 after their final surface/content/state
 composition. The large-text exception is not used. A stack whose declarations
 and overlays are entirely untouched built-ins is always fatal at activation and
-Save; `:strict-contrast` cannot relax it. Any stack touched by a user,
+Save; `:strict-contrast` cannot relax it. "Untouched built-in" means every
+effective axis contribution has the explicit declaration owner `:builtin` and
+no appearance-file, `init.lisp`, environment, command-line, unsaved, or profile
+override contributes to the resolved stack. A missing (`nil`) owner is never
+treated as built-in. Any stack touched by a user,
 appearance-file, `init.lisp`, environment, command-line, interactive, or
 package declaration/override follows the user/package rule: issue a typed
 warning containing the resolved stack and ratio when strict validation is
@@ -393,6 +397,19 @@ ink outside the opaque RGB/standard-token subset), `port` and
 `suggested-repairs` is `(:increase-foreground-contrast :change-surface)`.
 The condition is signaled as a warning when nonfatal and as the same typed
 condition through the error boundary when fatal. Neither path changes a color.
+
+Declaration contribution origins are structured exactly as
+`(:role-default ROLE-ID :owner OWNER)` and
+`(:theme THEME-ID :owner OWNER)`. Package role defaults remain in the existing
+lowest-precedence defaults layer, and package theme overlays remain in the
+existing parent/selected-theme layers; package registration adds no source
+cascade layer. At stack composition, provenance retains only the final
+contributor for each effective axis.
+
+An untouched `:classic` stack remains contrast-inert because its backend
+surface is deliberately unspecified. Once a user or package contribution
+touches that stack, it follows the same warning/strict policy and is validated
+even though the selected theme remains `:classic`.
 - **Revert** discards the candidate. **Describe** distinguishes active, staged,
   and persisted profiles.
 

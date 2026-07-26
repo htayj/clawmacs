@@ -950,6 +950,22 @@ implementation-specific initialization path cannot provide this copy boundary."
                             (remove axis result :key #'car :test #'eq)))))
     result))
 
+(defun appearance-declaration-origin (kind id owner)
+  "Return copied structured provenance for one declaration contribution."
+  (list kind (copy-appearance-value id) :owner (copy-appearance-value owner)))
+
+(defun merge-resolved-provenance (provenance style overlay-provenance)
+  "Merge only STYLE's effective axes from OVERLAY-PROVENANCE into PROVENANCE."
+  (let ((result (copy-appearance-value provenance)))
+    (dolist (axis '(:typography :foreground-ink :surface :decoration))
+      (when (appearance-style-axis-specified-p style axis)
+        (let ((origin (cdr (assoc axis overlay-provenance :test #'eq))))
+          (when origin
+            (setf result
+                  (acons axis (copy-appearance-value origin)
+                         (remove axis result :key #'car :test #'eq)))))))
+    result))
+
 (defun resolve-appearance-role (catalog theme-id role-id
                                 &key (file-overrides nil) (init-overrides nil)
                                   (environment-overrides nil)
@@ -967,8 +983,9 @@ use RESOLVE-RUNTIME-APPEARANCE-ROLE-STACK for the documented fallback behavior."
                  (validate-appearance-role-style definition overlay :origin origin)
                  (setf style (merge-appearance-role-style style overlay origin)
                        provenance (merge-provenance provenance overlay origin)))))
-      ;; Role definitions supply fallback topology. Built-in overlays carry
-      ;; current visual goldens; later UI work supplies pane-default surfaces.
+      ;; Role definitions supply fallback topology. Default overlays belong to
+      ;; the declaration which owns their role; this lets later package-owned
+      ;; defaults remain at the existing lowest-precedence layer.
       (validate-appearance-overlays-for-catalog
        catalog (appearance-catalog-built-in-overlays catalog) :built-in)
       (dolist (definition chain)
@@ -976,18 +993,24 @@ use RESOLVE-RUNTIME-APPEARANCE-ROLE-STACK for the documented fallback behavior."
                      (find-appearance-overlay
                       (appearance-catalog-built-in-overlays catalog)
                       (appearance-role-definition-id definition))
-                     :built-in))
+                     (appearance-declaration-origin
+                      :role-default
+                      (appearance-role-definition-id definition)
+                      (appearance-role-definition-owner definition))))
       (dolist (theme (appearance-theme-parent-chain catalog theme-id
                                                     :origin :theme))
-        (validate-appearance-overlays-for-catalog
-         catalog (appearance-theme-definition-role-overlays theme)
-         (list :theme (appearance-theme-definition-id theme)))
-        (dolist (definition chain)
-          (apply-style definition
-                       (find-appearance-overlay
-                        (appearance-theme-definition-role-overlays theme)
-                        (appearance-role-definition-id definition))
-                       (list :theme (appearance-theme-definition-id theme)))))
+        (let ((origin (appearance-declaration-origin
+                       :theme
+                       (appearance-theme-definition-id theme)
+                       (appearance-theme-definition-owner theme))))
+          (validate-appearance-overlays-for-catalog
+           catalog (appearance-theme-definition-role-overlays theme) origin)
+          (dolist (definition chain)
+            (apply-style definition
+                         (find-appearance-overlay
+                          (appearance-theme-definition-role-overlays theme)
+                          (appearance-role-definition-id definition))
+                         origin))))
       (dolist (layer (list (cons :appearance-file file-overrides)
                            (cons :init init-overrides)
                            (cons :environment environment-overrides)
@@ -1032,9 +1055,11 @@ state roles in their supplied order."
             (setf style (merge-appearance-role-style
                          style (resolved-appearance-role-style resolved)
                          (list :stack kind))
-                  provenance (append provenance
-                                     (resolved-appearance-role-provenance
-                                      resolved)))))))
+                  provenance
+                  (merge-resolved-provenance
+                   provenance
+                   (resolved-appearance-role-style resolved)
+                   (resolved-appearance-role-provenance resolved)))))))
     (%make-resolved-appearance-role
      :style style
      :provenance provenance
@@ -1164,13 +1189,12 @@ standard-solid-ink subset; it never changes either color."
            (+ (min foreground-luminance background-luminance) 0.05d0))))))
 
 (defun appearance-built-in-contrast-provenance-p (provenance)
-  "Return true when PROVENANCE contains only core built-in declaration layers."
+  "Return true when every effective contribution is explicitly built-in-owned."
   (every (lambda (entry)
            (let ((origin (cdr entry)))
-             (or (eq origin :built-in)
-                 (and (consp origin)
-                      (eq (first origin) :theme)
-                      (member (second origin) '(:classic :dark) :test #'eq)))))
+             (and (consp origin)
+                  (member (first origin) '(:role-default :theme) :test #'eq)
+                  (eq (getf (cddr origin) :owner) :builtin))))
          provenance))
 
 (defun signal-appearance-contrast-violation
@@ -1193,45 +1217,52 @@ standard-solid-ink subset; it never changes either color."
 (defun validate-appearance-profile-contrast
     (catalog profile &key (file-overrides nil) (init-overrides nil)
        (environment-overrides nil) (command-line-overrides nil)
-       (unsaved-overrides nil))
-  "Validate every active dark text stack in PROFILE without recoloring it.
+       (unsaved-overrides nil) (role-stacks +dark-appearance-text-stacks+))
+  "Validate every contrast-applicable text stack in PROFILE without recoloring it.
 
 Untouched built-in failures are fatal.  A user, file, init, environment,
 command-line, unsaved, or package-touched failure warns by default and is
 fatal when PROFILE requests strict contrast.  The function returns true when
-no fatal violation was signaled."
+no fatal violation was signaled.  Untouched classic stacks remain inert because
+their backend surface is deliberately unspecified; customized classic stacks
+are validated."
   (let ((theme-id (appearance-profile-selected-theme profile))
         (profile-overrides (appearance-profile-role-overrides profile)))
-    (if (not (eq theme-id :dark))
-        t
-        (dolist (role-stack +dark-appearance-text-stacks+ t)
-          (let* ((resolved
-                   (resolve-appearance-role-stack
-                    catalog theme-id role-stack
-                    :file-overrides file-overrides
-                    :init-overrides init-overrides
-                    :environment-overrides environment-overrides
-                    :command-line-overrides command-line-overrides
-                    :unsaved-overrides
-                    (append profile-overrides unsaved-overrides)))
-                 (style (resolved-appearance-role-style resolved))
-                 (foreground (appearance-ink-spec-foreground
-                              (appearance-role-style-foreground-ink style)))
-                 (background (appearance-surface-spec-background
-                              (appearance-role-style-surface style)))
-                 (ratio (appearance-contrast-ratio foreground background))
-                 (provenance (resolved-appearance-role-provenance resolved)))
-            (unless (and ratio (>= ratio +appearance-minimum-text-contrast+))
-              (let ((built-in-p (appearance-built-in-contrast-provenance-p provenance)))
-                (signal-appearance-contrast-violation
-                 role-stack ratio provenance
-                 (or built-in-p (appearance-profile-strict-contrast profile))))))))))
+    (dolist (role-stack role-stacks t)
+      (let* ((resolved
+               (resolve-appearance-role-stack
+                catalog theme-id role-stack
+                :file-overrides file-overrides
+                :init-overrides init-overrides
+                :environment-overrides environment-overrides
+                :command-line-overrides command-line-overrides
+                :unsaved-overrides
+                (append profile-overrides unsaved-overrides)))
+             (style (resolved-appearance-role-style resolved))
+             (foreground (appearance-ink-spec-foreground
+                          (appearance-role-style-foreground-ink style)))
+             (background (appearance-surface-spec-background
+                          (appearance-role-style-surface style)))
+             (ratio (appearance-contrast-ratio foreground background))
+             (provenance (resolved-appearance-role-provenance resolved))
+             (built-in-p
+               (appearance-built-in-contrast-provenance-p provenance)))
+        ;; Classic's backend surface is intentionally unspecified.  It is
+        ;; inert only while every effective contribution remains built-in;
+        ;; any custom contribution makes the stack contrast-applicable.
+        (when (or (not (eq theme-id :classic)) (not built-in-p))
+          (unless (and ratio (>= ratio +appearance-minimum-text-contrast+))
+            (signal-appearance-contrast-violation
+             role-stack ratio provenance
+             (or built-in-p
+                 (appearance-profile-strict-contrast profile)))))))))
 
 (defun make-classic-appearance-catalog ()
   "Return the version-1 :CLASSIC declarations and exact current output goldens."
   (labels ((role (id kind &optional fallback)
              (make-appearance-role-definition :id id :kind kind
-                                               :fallback-role fallback))
+                                               :fallback-role fallback
+                                               :owner :builtin))
            (foreground (value &key face marker)
              (let ((arguments
                      (list :foreground-ink
@@ -1284,10 +1315,11 @@ no fatal violation was signaled."
       (role :minibuffer-selection-emphasis :state)
       (role :disabled :state))
      :theme-definitions
-     (list (make-appearance-theme-definition :id :classic)
+     (list (make-appearance-theme-definition :id :classic :owner :builtin)
            (make-appearance-theme-definition
             :id :dark
             :parent-theme :classic
+            :owner :builtin
             :role-overlays
             (list
              (cons :base (surface '(:rgb 13/255 17/255 23/255)))
