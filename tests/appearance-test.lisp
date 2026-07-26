@@ -216,7 +216,7 @@
              (appearance-role-style-typography style))))
     (is (equal :unsaved
                (cdr (assoc :foreground-ink
-                           (resolved-appearance-role-provenance resolved))))))
+                           (resolved-appearance-role-provenance resolved)))))))
 
 (test appearance-typography-merges-components-and-clamps-relative-sizes
   "Family/face/size cascade independently and each relative request is consumed."
