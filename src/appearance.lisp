@@ -988,20 +988,21 @@ use RESOLVE-RUNTIME-APPEARANCE-ROLE-STACK for the documented fallback behavior."
   "Resolve surface, content, and state ROLE-IDS into one pure result.
 
 This is the strict configuration/declaration entry point: every supplied role
-must exist and the stack must have at most one role of each kind."
+must exist.  A stack has at most one surface and content role, then may layer
+state roles in their supplied order."
   (let ((by-kind (make-hash-table :test #'eq))
         (style (merge-appearance-role-style nil nil :initial))
         (provenance nil))
     (dolist (role-id role-ids)
-      (let ((definition (require-appearance-role-definition catalog role-id
-                                                             :configuration)))
-        (when (gethash (appearance-role-definition-kind definition) by-kind)
+      (let* ((definition (require-appearance-role-definition catalog role-id
+                                                              :configuration))
+             (kind (appearance-role-definition-kind definition)))
+        (when (and (not (eq kind :state)) (gethash kind by-kind))
           (error-appearance-condition 'invalid-appearance-component
                                       :axis :role-stack :value role-ids))
-        (setf (gethash (appearance-role-definition-kind definition) by-kind)
-              role-id)))
+        (push role-id (gethash kind by-kind))))
     (dolist (kind '(:surface :content :state))
-      (let ((role-id (gethash kind by-kind)))
+      (dolist (role-id (nreverse (gethash kind by-kind)))
         (when role-id
           (let ((resolved (apply #'resolve-appearance-role catalog theme-id
                                  role-id keys)))
@@ -1025,23 +1026,31 @@ event has a stable `(catalog-generation unknown-role)' deduplication key;
 frame code owns any longer-lived logging policy.  Configuration parsers must
 use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
   (let ((unknown-role-ids nil)
-        (by-kind (make-hash-table :test #'eq)))
+        (surface-role nil)
+        (content-role nil)
+        (state-roles nil))
     (dolist (role-id role-ids)
       (let ((known (find-appearance-role-definition catalog role-id)))
         (if known
-            ;; A valid same-kind role always supersedes a previous unknown
-            ;; fallback, regardless of input ordering.
-            (setf (gethash (appearance-role-definition-kind known) by-kind)
-                  (appearance-role-definition-id known))
+            (let ((kind (appearance-role-definition-kind known)))
+              ;; A valid surface/content role supersedes a previous unknown
+              ;; fallback.  State roles intentionally compose in input order.
+              (ecase kind
+                (:surface
+                 (setf surface-role (appearance-role-definition-id known)))
+                (:content
+                 (setf content-role (appearance-role-definition-id known)))
+                (:state
+                 (push (appearance-role-definition-id known) state-roles))))
             (progn
               (push role-id unknown-role-ids)
-              (unless (gethash :content by-kind)
-                (setf (gethash :content by-kind) :default-text))))))
-    (let ((known-roles (remove nil
-                               (mapcar (lambda (kind) (gethash kind by-kind))
-                                       '(:surface :content :state)))))
-    (let ((resolved (apply #'resolve-appearance-role-stack catalog theme-id
-                           known-roles keys)))
+              (unless content-role
+                (setf content-role :default-text))))))
+    (let* ((known-roles (append (when surface-role (list surface-role))
+                                (when content-role (list content-role))
+                                (nreverse state-roles)))
+           (resolved (apply #'resolve-appearance-role-stack catalog theme-id
+                            known-roles keys)))
       (%make-resolved-appearance-role
        :style (resolved-appearance-role-style resolved)
        :provenance (resolved-appearance-role-provenance resolved)
@@ -1064,7 +1073,7 @@ use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
              into diagnostics
              when (= (length diagnostics) +appearance-runtime-diagnostic-limit+)
                do (return diagnostics)
-             finally (return diagnostics)))))))
+             finally (return diagnostics))))))
 
 (defun make-classic-appearance-catalog ()
   "Return the version-1 :CLASSIC declarations and exact current output goldens."
@@ -1115,6 +1124,7 @@ use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
       (role :selector-separator :content :default-text)
       (role :selector-footer :content :default-text)
       (role :selector-selection :state)
+      (role :minibuffer-selection-emphasis :state)
       (role :disabled :state))
      :theme-definitions
      (list (make-appearance-theme-definition :id :classic))
@@ -1130,7 +1140,10 @@ use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
       (cons :selector-header (foreground '(0.18 0.36 0.20)))
       (cons :selector-footer (foreground '(0.35 0.35 0.35)))
       (cons :selector-selection
-            (foreground '(0.10 0.38 0.65) :face :bold :marker ">"))
+            (foreground '(0.10 0.38 0.65) :marker ">"))
+      (cons :minibuffer-selection-emphasis
+            (make-appearance-role-style
+             :typography (make-appearance-typography-spec :face :bold)))
       (cons :selector-entry (foreground '(0.20 0.20 0.20)))
       (cons :system (foreground '(0.45 0.45 0.45)))
       (cons :disabled (foreground '(0.45 0.45 0.45)))

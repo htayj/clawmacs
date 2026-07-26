@@ -1385,7 +1385,8 @@ rendering state."
              (call-with-chat-appearance-role
               frame stream
               (if selected-p
-                  '(:minibuffer-pane :selector-entry :selector-selection)
+                  '(:minibuffer-pane :selector-entry :selector-selection
+                    :minibuffer-selection-emphasis)
                   '(:minibuffer-pane :selector-entry))
               (lambda () (format stream "~A" display)))))
       (clim:with-output-as-presentation

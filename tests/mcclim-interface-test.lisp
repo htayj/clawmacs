@@ -100,16 +100,34 @@ these tests exercise construction-time space requirements only."
                  'clawmacs::clawmacs-chat-frame
                  :buffer (make-buffer "classic-appearance-wire"
                                       :session-persistence-mode :ephemeral)))
-         (selected
+         (generic-selected
            (clawmacs::chat-frame-resolve-appearance-role
             frame '(:selector-entry :selector-selection)))
-         (style (resolved-appearance-role-style selected)))
+         (minibuffer-selected
+           (clawmacs::chat-frame-resolve-appearance-role
+            frame '(:minibuffer-pane :selector-entry :selector-selection
+                    :minibuffer-selection-emphasis)))
+         (generic-style (resolved-appearance-role-style generic-selected))
+         (minibuffer-style
+           (resolved-appearance-role-style minibuffer-selected)))
     (is (equal '(0.10 0.38 0.65)
                (appearance-ink-spec-foreground
-                (appearance-role-style-foreground-ink style))))
+                (appearance-role-style-foreground-ink generic-style))))
+    (is-true (appearance-unspecified-p
+              (appearance-typography-spec-face
+               (appearance-role-style-typography generic-style))))
     (is (eq :bold
             (appearance-typography-spec-face
-             (appearance-role-style-typography style))))
+             (appearance-role-style-typography minibuffer-style))))
+    (is (equal '(:marker ">")
+               (appearance-decoration-spec-parameters
+                (appearance-role-style-decoration minibuffer-style))))
+    (is-false
+     (equal (clawmacs::chat-frame-appearance-role-key
+             frame '(:selector-entry :selector-selection))
+            (clawmacs::chat-frame-appearance-role-key
+             frame '(:minibuffer-pane :selector-entry :selector-selection
+                     :minibuffer-selection-emphasis))))
     (is (equal '(:transcript-pane :transcript-user)
                (clawmacs::chat-message-appearance-role-stack
                 (make-message :user))))

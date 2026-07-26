@@ -402,11 +402,37 @@
                                             :selector-title)))
            (selection (resolved-appearance-role-style
                        (resolve-appearance-role classic-catalog :classic
-                                                :selector-selection))))
+                                                :selector-selection)))
+           (minibuffer-emphasis
+             (resolved-appearance-role-style
+              (resolve-appearance-role classic-catalog :classic
+                                       :minibuffer-selection-emphasis)))
+           (generic-selected
+             (resolved-appearance-role-style
+              (resolve-appearance-role-stack
+               classic-catalog :classic
+               '(:selector-entry :selector-selection))))
+           (minibuffer-selected
+             (resolved-appearance-role-style
+              (resolve-appearance-role-stack
+               classic-catalog :classic
+               '(:minibuffer-pane :selector-entry :selector-selection
+                 :minibuffer-selection-emphasis)))))
       (is (eq :bold (appearance-typography-spec-face
                      (appearance-role-style-typography title))))
-      (is (eq :bold (appearance-typography-spec-face
-                     (appearance-role-style-typography selection))))
+      (is-true (appearance-unspecified-p
+                (appearance-typography-spec-face
+                 (appearance-role-style-typography selection))))
       (is (equal '(:marker ">")
                  (appearance-decoration-spec-parameters
-                  (appearance-role-style-decoration selection)))))))
+                  (appearance-role-style-decoration selection))))
+      (is (eq :bold (appearance-typography-spec-face
+                     (appearance-role-style-typography minibuffer-emphasis))))
+      (is-true (appearance-unspecified-p
+                (appearance-typography-spec-face
+                 (appearance-role-style-typography generic-selected))))
+      (is (eq :bold (appearance-typography-spec-face
+                     (appearance-role-style-typography minibuffer-selected))))
+      (is (equal '(:marker ">")
+                 (appearance-decoration-spec-parameters
+                  (appearance-role-style-decoration minibuffer-selected)))))))

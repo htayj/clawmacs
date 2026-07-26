@@ -155,7 +155,7 @@ error.
 |---|---|
 | Surface | `:base`, `:transcript-pane`, `:info-pane`, `:compose-pane`, `:minibuffer-pane`, `:help-pane`, `:pointer-documentation` |
 | Content | `:default-text`, `:transcript-user`, `:transcript-agent`, `:transcript-tool`, `:transcript-system`, `:transcript-empty`, `:system`, `:error`, `:tool-result`, `:modeline`, `:selector-title`, `:selector-header`, `:selector-entry`, `:selector-separator`, `:selector-footer` |
-| State | `:selector-selection`, `:disabled` |
+| State | `:selector-selection`, `:minibuffer-selection-emphasis`, `:disabled` |
 
 Surface roles may specify all axes. Content and state roles may specify
 typography, foreground, and decoration; background/surface is rejected for
@@ -179,9 +179,15 @@ generation.
 | `:disabled` | `(:default-text :disabled)` |
 | `:error` | `(:error)` |
 
-The minibuffer selected candidate uses the same `:selector-selection` state
-role and preserves its existing `">"` marker. Existing presentations stay in
-place; roles never replace presentation types, translators, or input contexts.
+The legacy `:selector-selected` wire stack remains
+`(:selector-entry :selector-selection)`. In `:classic`, its shared selection
+state retains the existing marker and foreground but is deliberately not bold.
+The minibuffer selected candidate uses
+`(:minibuffer-pane :selector-entry :selector-selection
+:minibuffer-selection-emphasis)` so its real first-party control boundary
+retains the existing `">"` marker and bold emphasis. Existing presentations
+stay in place; roles never replace presentation types, translators, or input
+contexts.
 
 ## 3. Resolution, typography, and render keys
 
@@ -206,8 +212,8 @@ override consequently affects its fallbacks, while a same-layer specific role
 override wins.
 
 For a display stack, resolve roles independently then overlay surface, content,
-and state. A render key is structural: it contains only the effective output
-of the role stack, not a raw profile revision. No-op candidates therefore do
+and state roles in stack order. A render key is structural: it contains only
+the effective output of the role stack, not a raw profile revision. No-op candidates therefore do
 not invalidate incremental output; a transcript-user change does not invalidate
 agent output.
 
@@ -298,7 +304,7 @@ pane construction. Existing current output values remain exact:
 | transcript system | `(0.36 0.36 0.36)` |
 | selector title/header/footer/selected/entry | `(0.16 0.22 0.45)`, `(0.18 0.36 0.20)`, `(0.35 0.35 0.35)`, `(0.10 0.38 0.65)`, `(0.20 0.20 0.20)` |
 | generic system/disabled/error | `(0.45 0.45 0.45)`, `(0.45 0.45 0.45)`, `(0.60 0.12 0.12)` |
-| selected semantic row | `">"` marker plus `:bold` |
+| selected minibuffer candidate | `">"` marker plus `:bold` |
 
 This matches the current literals in `src/mcclim-interface.lisp`; it does not
 claim a backend-independent RGB background.
