@@ -1961,11 +1961,11 @@
          (pane (clim:find-pane-named frame 'compose))
          (space-mutations 0))
     (is-false
-     (clim:find-method #'clim:note-sheet-grafted nil
+     (cl:find-method #'clim:note-sheet-grafted nil
                        (list (find-class 'clawmacs::clawmacs-chat-compose-pane))
                        nil))
     (is-false
-     (clim:find-method #'clim:note-sheet-region-changed nil
+     (cl:find-method #'clim:note-sheet-region-changed nil
                        (list (find-class 'clawmacs::clawmacs-chat-compose-pane))
                        nil))
     (with-mcclim-test-function-override
