@@ -69,8 +69,9 @@
 (test artifactum-normalize-string-preserves-absent-values
   "Absent JSON strings remain absent instead of becoming the symbol name NIL."
   (is (null (clawmacs::artifactum-normalize-string nil)))
-  (is (null (clawmacs::artifactum-normalize-string " \t\n")))
-  (is (string= "artifact" (clawmacs::artifactum-normalize-string :artifact))))
+  (is (null (clawmacs::artifactum-normalize-string
+             (coerce (list #\Space #\Tab #\Newline) 'string))))
+  (is (string= "ARTIFACT" (clawmacs::artifactum-normalize-string :artifact))))
 
 (test artifactum-normalizes-source-path-and-mime-type-json-keys
   "Normalized JSON keys retain source paths and MIME types in legacy records."
