@@ -1123,7 +1123,8 @@ tool already executing must return through its own cancellation mechanism."
     (when state
       (bt:with-lock-held ((interactive-tool-execution-lock state))
         (setf (interactive-tool-execution-cancel-requested-p state) t
-              cancel-function (interactive-tool-execution-cancel-function state)))
+              cancel-function (interactive-tool-execution-cancel-function state)
+              (interactive-tool-execution-cancel-function state) nil))
       (when cancel-function
         (handler-case
             (funcall cancel-function)
@@ -1132,7 +1133,7 @@ tool already executing must return through its own cancellation mechanism."
              "runtime-tool-cancellation-error"
              :tool-name (interactive-tool-execution-tool-name state)
              :condition (format nil "~A" condition))))))
-  state)
+    state))
 
 (defun make-interactive-tool-worker-thread
     (function name &key initial-bindings)
@@ -1283,12 +1284,13 @@ value and never unwinds the command loop."
                                                           (bt:with-lock-held
                                                               ((interactive-tool-execution-lock
                                                                 state))
-                                                            (setf (interactive-tool-execution-cancel-function
-                                                                   state)
-                                                                  cancel-function
-                                                                  cancel-now-p
+                                                            (setf cancel-now-p
                                                                   (interactive-tool-execution-cancel-requested-p
-                                                                   state)))
+                                                                   state))
+                                                            (unless cancel-now-p
+                                                              (setf (interactive-tool-execution-cancel-function
+                                                                     state)
+                                                                    cancel-function)))
                                                           (when cancel-now-p
                                                             (funcall cancel-function))
                                                           cancel-now-p)))

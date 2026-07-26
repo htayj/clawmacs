@@ -13,10 +13,24 @@ exec "$SCRIPT_DIR/guix-container.sh" --mode run -- \
     }
     trap cleanup EXIT INT TERM
     export XDG_CACHE_HOME="$cache_root"
+    export CLAWMACS_FRESH_BUILD_CACHE="$cache_root/asdf/"
+    export ASDF_OUTPUT_TRANSLATIONS="(:output-translations (t (\"$CLAWMACS_FRESH_BUILD_CACHE\" :implementation)) :ignore-inherited-configuration)"
+    malformed_source="$cache_root/expected-reader-error.lisp"
+    malformed_log="$cache_root/expected-reader-error.log"
+    printf "%s\n" "(defun expected-reader-error (" > "$malformed_source"
+    if sbcl --noinform --non-interactive --compile-file "$malformed_source" \
+         >"$malformed_log" 2>&1
+    then
+      cat "$malformed_log" >&2
+      echo "fresh-system-build: malformed source unexpectedly compiled" >&2
+      exit 1
+    fi
     cd "$1"
-    sbcl --noinform \
+    sbcl --noinform --non-interactive \
       --load "$CLAWMACS_QUICKLISP_SETUP" \
       --eval "(push (truename \".\") asdf:*central-registry*)" \
-      --eval "(asdf:load-system :clawmacs :force t)" \
-      --eval "(multiple-value-bind (output warnings-p failure-p) (compile-file \"src/artifactum-core.lisp\") (declare (ignore output warnings-p)) (unless failure-p (format t \"~&fresh-source-compile: ok~%\")) (uiop:quit (if failure-p 1 0)))"' \
+      --eval "(asdf:clear-output-translations)" \
+      --eval "(asdf:initialize-output-translations)" \
+      --eval "(asdf:load-system :clawmacs :force :all)" \
+      --eval "(let ((cache (truename (uiop:ensure-directory-pathname (uiop:getenv \"CLAWMACS_FRESH_BUILD_CACHE\")))) (count 0)) (labels ((walk (component) (when (typep component (find-class (quote asdf:cl-source-file))) (incf count) (dolist (output (asdf:output-files (quote asdf:compile-op) component)) (unless (and (probe-file output) (uiop:subpathp (truename output) cache)) (error \"Fresh build output missing or escaped isolated cache for ~A: ~A\" component output)))) (when (typep component (find-class (quote asdf:parent-component))) (map nil (function walk) (asdf:component-children component))))) (walk (asdf:find-system :clawmacs)) (unless (plusp count) (error \"Fresh build found no Common Lisp source components.\")) (format t \"~&fresh-system-build: compiled ~D clawmacs source components into ~A~%\" count cache)))"' \
   sh "$REPO_ROOT"

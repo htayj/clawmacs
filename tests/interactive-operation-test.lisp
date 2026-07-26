@@ -571,6 +571,26 @@
       (when (bt:thread-alive-p updater)
         (bt:join-thread updater)))))
 
+(test interactive-tool-cancellation-callback-is-once-only-and-outside-lock
+  "Managed tool cancellation invokes its cooperative callback once outside the state lock."
+  (let* ((calls 0)
+         (state (clawmacs::make-interactive-tool-execution
+                 :tool-name "cancellable-test")))
+    (setf (clawmacs::interactive-tool-execution-cancel-function state)
+          (lambda ()
+            ;; Reacquiring the state lock proves cancellation did not invoke
+            ;; extension code while holding the runtime owner lock.
+            (bt:with-lock-held
+                ((clawmacs::interactive-tool-execution-lock state))
+              (incf calls))))
+    (is (eq state (clawmacs::cancel-interactive-tool-execution state)))
+    (is (eq state (clawmacs::cancel-interactive-tool-execution state)))
+    (is (= 1 calls))
+    (is-true
+     (clawmacs::interactive-tool-execution-cancel-requested-p state))
+    (is (null
+         (clawmacs::interactive-tool-execution-cancel-function state)))))
+
 (test managed-operation-public-hooks-run-only-after-frame-application
   "Completion and settlement wake privately; applied observers are frame-owned."
   (let* ((buffer (make-buffer "operation-frame-owned-public-hook"
