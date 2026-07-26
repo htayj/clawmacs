@@ -133,6 +133,8 @@
              (edit-body (getf edit-args :content))
              (edit-json (cl-json:decode-json-from-string edit-body))
              (edit-images (clawmacs::artifactum-json-value edit-json "images"))
+             (edit-image-url
+               (clawmacs::artifactum-json-value (elt edit-images 0) "image_url"))
              (headers (getf generation-args :additional-headers)))
         (is (search "/images/generations" (first generation)))
         (is (search "/images/edits" (first edit)))
@@ -141,7 +143,7 @@
         (is (search "\"quality\":\"auto\"" generation-body))
         (is (search "\"size\":\"auto\"" generation-body))
         (is (= 1 (length edit-images)))
-        (is (string= "data:image/png;base64,iVBORw==" (elt edit-images 0)))
+        (is (string= "data:image/png;base64,iVBORw==" edit-image-url))
         (is (search "Bearer header.payload.signature"
                     (cdr (assoc "Authorization" headers :test #'string=))))
         (is (string= "codex_cli_rs"
