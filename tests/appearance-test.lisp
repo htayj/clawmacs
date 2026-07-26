@@ -330,7 +330,7 @@
                    (loop for index below 20
                          collect (intern (format nil "UNKNOWN-~D" index)
                                          :keyword)))))
-    (is (= 16 (length (resolved-appearance-role-diagnostics resolved)))))
+    (is (= 16 (length (resolved-appearance-role-diagnostics resolved))))))
 
 (test appearance-supported-axis-accessors-do-not-expose-constant-lists
   "Default axis vocabulary copies are fresh even when they originate in constants."
