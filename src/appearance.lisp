@@ -26,6 +26,29 @@
 
 (defconstant +appearance-runtime-diagnostic-limit+ 16)
 
+(defconstant +appearance-minimum-text-contrast+ 4.5d0)
+
+(defparameter +dark-appearance-text-stacks+
+  '((:transcript-pane :default-text)
+    (:transcript-pane :transcript-agent)
+    (:help-pane :default-text)
+    (:compose-pane :default-text)
+    (:transcript-pane :transcript-user)
+    (:transcript-pane :transcript-tool)
+    (:transcript-pane :tool-result)
+    (:transcript-pane :transcript-system)
+    (:transcript-pane :system)
+    (:transcript-pane :transcript-empty)
+    (:transcript-pane :error)
+    (:info-pane :modeline)
+    (:minibuffer-pane :selector-title)
+    (:minibuffer-pane :selector-header)
+    (:minibuffer-pane :selector-entry)
+    (:minibuffer-pane :selector-separator)
+    (:minibuffer-pane :selector-footer)
+    (:minibuffer-pane :selector-entry :selector-selection)
+    (:minibuffer-pane :selector-entry :disabled)))
+
 (defun appearance-logical-sizes ()
   "Return a fresh stable-order copy of supported logical text sizes."
   (copy-list +appearance-logical-sizes+))
@@ -1075,6 +1098,135 @@ use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
                do (return diagnostics)
              finally (return diagnostics))))))
 
+(defun appearance-rgb-components (ink)
+  "Return INK's three opaque RGB components, or NIL for an unsupported ink."
+  (cond ((and (listp ink)
+              (= (length ink) 4)
+              (eq (first ink) :rgb)
+              (every (lambda (component)
+                       (and (realp component)
+                            (<= 0 component 1)))
+                     (rest ink)))
+         (rest ink))
+        ((and (listp ink)
+              (= (length ink) 3)
+              (every (lambda (component)
+                       (and (realp component)
+                            (<= 0 component 1)))
+                     ink))
+         ink)
+        ((assoc ink '((:black . (0 0 0))
+                      (:white . (1 1 1))
+                      (:red . (1 0 0))
+                      (:green . (0 1 0))
+                      (:blue . (0 0 1))
+                      (:cyan . (0 1 1))
+                      (:magenta . (1 0 1))
+                      (:yellow . (1 1 0))
+                      (:gray . (1/2 1/2 1/2)))
+                :test #'eq)
+         (copy-list (cdr (assoc ink '((:black . (0 0 0))
+                                      (:white . (1 1 1))
+                                      (:red . (1 0 0))
+                                      (:green . (0 1 0))
+                                      (:blue . (0 0 1))
+                                      (:cyan . (0 1 1))
+                                      (:magenta . (1 0 1))
+                                      (:yellow . (1 1 0))
+                                      (:gray . (1/2 1/2 1/2)))
+                                :test #'eq))))))
+
+(defun appearance-srgb-linear-component (component)
+  "Convert one sRGB COMPONENT to its WCAG relative-luminance value."
+  (let ((component (coerce component 'double-float)))
+    (if (<= component 0.04045d0)
+        (/ component 12.92d0)
+        (expt (/ (+ component 0.055d0) 1.055d0) 2.4d0))))
+
+(defun appearance-relative-luminance (rgb)
+  "Return the WCAG relative luminance of the three-component RGB value."
+  (destructuring-bind (red green blue) rgb
+    (+ (* 0.2126d0 (appearance-srgb-linear-component red))
+       (* 0.7152d0 (appearance-srgb-linear-component green))
+       (* 0.0722d0 (appearance-srgb-linear-component blue)))))
+
+(defun appearance-contrast-ratio (foreground background)
+  "Return the WCAG contrast ratio for two opaque RGB inks.
+
+The function returns NIL when either ink is outside version 1's opaque RGB or
+standard-solid-ink subset; it never changes either color."
+  (let ((foreground-rgb (appearance-rgb-components foreground))
+        (background-rgb (appearance-rgb-components background)))
+    (when (and foreground-rgb background-rgb)
+      (let ((foreground-luminance (appearance-relative-luminance foreground-rgb))
+            (background-luminance (appearance-relative-luminance background-rgb)))
+        (/ (+ (max foreground-luminance background-luminance) 0.05d0)
+           (+ (min foreground-luminance background-luminance) 0.05d0))))))
+
+(defun appearance-built-in-contrast-provenance-p (provenance)
+  "Return true when PROVENANCE contains only core built-in declaration layers."
+  (every (lambda (entry)
+           (let ((origin (cdr entry)))
+             (or (eq origin :built-in)
+                 (and (consp origin)
+                      (eq (first origin) :theme)
+                      (member (second origin) '(:classic :dark) :test #'eq)))))
+         provenance))
+
+(defun signal-appearance-contrast-violation
+    (role-stack ratio provenance fatal-p)
+  "Signal the contract payload for one below-threshold resolved stack."
+  (let ((initargs (list :origin provenance
+                        :role role-stack
+                        :axis :contrast
+                        :value ratio
+                        :path role-stack
+                        :port nil
+                        :available-choices nil
+                        :fatal-p fatal-p
+                        :suggested-repairs
+                        '(:increase-foreground-contrast :change-surface))))
+    (if fatal-p
+        (apply #'error-appearance-condition 'appearance-contrast-warning initargs)
+        (apply #'warn-appearance-condition 'appearance-contrast-warning initargs))))
+
+(defun validate-appearance-profile-contrast
+    (catalog profile &key (file-overrides nil) (init-overrides nil)
+       (environment-overrides nil) (command-line-overrides nil)
+       (unsaved-overrides nil))
+  "Validate every active dark text stack in PROFILE without recoloring it.
+
+Untouched built-in failures are fatal.  A user, file, init, environment,
+command-line, unsaved, or package-touched failure warns by default and is
+fatal when PROFILE requests strict contrast.  The function returns true when
+no fatal violation was signaled."
+  (let ((theme-id (appearance-profile-selected-theme profile))
+        (profile-overrides (appearance-profile-role-overrides profile)))
+    (if (not (eq theme-id :dark))
+        t
+        (dolist (role-stack +dark-appearance-text-stacks+ t)
+          (let* ((resolved
+                   (resolve-appearance-role-stack
+                    catalog theme-id role-stack
+                    :file-overrides file-overrides
+                    :init-overrides init-overrides
+                    :environment-overrides environment-overrides
+                    :command-line-overrides command-line-overrides
+                    :unsaved-overrides
+                    (append profile-overrides unsaved-overrides)))
+                 (style (resolved-appearance-role-style resolved))
+                 (foreground (appearance-ink-spec-foreground
+                              (appearance-role-style-foreground-ink style)))
+                 (background (appearance-surface-spec-background
+                              (appearance-role-style-surface style)))
+                 (ratio (appearance-contrast-ratio foreground background))
+                 (provenance (resolved-appearance-role-provenance resolved)))
+            (unless (and ratio (>= ratio +appearance-minimum-text-contrast+))
+              (let ((built-in-p (appearance-built-in-contrast-provenance-p provenance)))
+                (signal-appearance-contrast-violation
+                 role-stack ratio provenance
+                 (or built-in-p (appearance-profile-strict-contrast profile))))))))))
+
 (defun make-classic-appearance-catalog ()
   "Return the version-1 :CLASSIC declarations and exact current output goldens."
   (labels ((role (id kind &optional fallback)
@@ -1097,7 +1249,10 @@ use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
                                      (make-appearance-decoration-spec
                                       :kind :selection-marker
                                       :parameters (list :marker marker))))))
-               (apply #'make-appearance-role-style arguments))))
+               (apply #'make-appearance-role-style arguments)))
+           (surface (value)
+             (make-appearance-role-style
+              :surface (make-appearance-surface-spec :background value))))
     (make-appearance-catalog
      :role-definitions
      (list
@@ -1107,7 +1262,9 @@ use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
       (role :compose-pane :surface :base)
       (role :minibuffer-pane :surface :base)
       (role :help-pane :surface :base)
-      (role :pointer-documentation :surface :base)
+      ;; Pointer documentation is deliberately outside the dark surface
+      ;; cascade: version 1 leaves the pinned McCLIM implementation unthemed.
+      (role :pointer-documentation :surface)
       (role :default-text :content)
       (role :transcript-user :content :default-text)
       (role :transcript-agent :content :default-text)
@@ -1127,7 +1284,36 @@ use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
       (role :minibuffer-selection-emphasis :state)
       (role :disabled :state))
      :theme-definitions
-     (list (make-appearance-theme-definition :id :classic))
+     (list (make-appearance-theme-definition :id :classic)
+           (make-appearance-theme-definition
+            :id :dark
+            :parent-theme :classic
+            :role-overlays
+            (list
+             (cons :base (surface '(:rgb 13/255 17/255 23/255)))
+             (cons :transcript-pane (surface '(:rgb 13/255 17/255 23/255)))
+             (cons :compose-pane (surface '(:rgb 13/255 17/255 23/255)))
+             (cons :help-pane (surface '(:rgb 13/255 17/255 23/255)))
+             (cons :info-pane (surface '(:rgb 22/255 27/255 34/255)))
+             (cons :minibuffer-pane (surface '(:rgb 22/255 27/255 34/255)))
+             (cons :default-text (foreground '(:rgb 230/255 237/255 243/255)))
+             (cons :transcript-agent (foreground '(:rgb 230/255 237/255 243/255)))
+             (cons :modeline (foreground '(:rgb 230/255 237/255 243/255)))
+             (cons :selector-entry (foreground '(:rgb 230/255 237/255 243/255)))
+             (cons :transcript-user (foreground '(:rgb 121/255 192/255 255/255)))
+             (cons :transcript-tool (foreground '(:rgb 126/255 231/255 135/255)))
+             (cons :tool-result (foreground '(:rgb 126/255 231/255 135/255)))
+             (cons :selector-header (foreground '(:rgb 126/255 231/255 135/255)))
+             (cons :transcript-system (foreground '(:rgb 177/255 186/255 196/255)))
+             (cons :system (foreground '(:rgb 177/255 186/255 196/255)))
+             (cons :transcript-empty (foreground '(:rgb 139/255 148/255 158/255)))
+             (cons :selector-separator (foreground '(:rgb 139/255 148/255 158/255)))
+             (cons :selector-footer (foreground '(:rgb 139/255 148/255 158/255)))
+             (cons :error (foreground '(:rgb 255/255 123/255 114/255)))
+             (cons :selector-title (foreground '(:rgb 165/255 214/255 255/255)))
+             ;; Typography and marker declarations remain those of :classic.
+             (cons :selector-selection (foreground '(:rgb 255/255 255/255 255/255)))
+             (cons :disabled (foreground '(:rgb 139/255 148/255 158/255))))))
      :built-in-overlays
      (list
       (cons :transcript-user (foreground '(0.10 0.25 0.55)))

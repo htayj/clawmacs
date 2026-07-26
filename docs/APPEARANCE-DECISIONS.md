@@ -326,7 +326,7 @@ dark override in version 1.
 | Content | `:transcript-empty`, `:selector-separator`, `:selector-footer` | `#8B949E` |
 | Content | `:error` | `#FF7B72` |
 | Content | `:selector-title` | `#A5D6FF`, bold |
-| State | `:selector-selection` | `#FFFFFF`, bold, existing marker |
+| State | `:selector-selection` | `#FFFFFF`, existing marker |
 | State | `:disabled` | `#8B949E` |
 
 Computed WCAG relative-luminance ratios for every active stack are:
@@ -344,6 +344,11 @@ Computed WCAG relative-luminance ratios for every active stack are:
 | selector entry on `#161B22` | 14.64:1 |
 | separator/footer/disabled on `#161B22` | 5.62:1 |
 | selected selector entry on `#161B22` | 17.30:1 |
+
+Dark changes palette axes only. Its typography is identical to `:classic`, so
+the existing title boldness and minibuffer-only selected-candidate emphasis
+remain in force, while the ordinary selector selection retains its marker
+without acquiring a new bold declaration.
 
 Built-ins fail validation below 4.5:1 after their final surface/content/state
 composition. The large-text exception is not used. A stack whose declarations
@@ -377,8 +382,17 @@ it in a separate CLIM preview pane. It does not alter the main frame.
   restart-required candidates it says “Saved for next start; active appearance
   unchanged.” Save does not imply Apply. An untouched built-in contrast failure
   always makes the candidate invalid. A contrast warning in a user/package
-  overlay is saveable when `:strict-contrast nil`; with `:strict-contrast t`,
-  it is invalid and neither Apply nor Save is offered.
+overlay is saveable when `:strict-contrast nil`; with `:strict-contrast t`,
+it is invalid and neither Apply nor Save is offered.
+
+The `appearance-contrast-warning` payload is exact: `origin` is the copied
+resolved-axis provenance, `role` and `path` are the copied effective role
+stack, `axis` is `:contrast`, `value` is the computed ratio (or `nil` for an
+ink outside the opaque RGB/standard-token subset), `port` and
+`available-choices` are `nil`, `fatal-p` records the policy result, and
+`suggested-repairs` is `(:increase-foreground-contrast :change-surface)`.
+The condition is signaled as a warning when nonfatal and as the same typed
+condition through the error boundary when fatal. Neither path changes a color.
 - **Revert** discards the candidate. **Describe** distinguishes active, staged,
   and persisted profiles.
 

@@ -436,3 +436,160 @@
       (is (equal '(:marker ">")
                  (appearance-decoration-spec-parameters
                   (appearance-role-style-decoration minibuffer-selected)))))))
+
+(defun appearance-test-dark-foreground (catalog role)
+  "Return ROLE's exact dark foreground declaration for palette goldens."
+  (appearance-ink-spec-foreground
+   (appearance-role-style-foreground-ink
+    (resolved-appearance-role-style
+     (resolve-appearance-role catalog :dark role)))) )
+
+(defun appearance-test-dark-surface (catalog role)
+  "Return ROLE's exact dark surface declaration for palette goldens."
+  (appearance-surface-spec-background
+   (appearance-role-style-surface
+    (resolved-appearance-role-style
+     (resolve-appearance-role catalog :dark role)))))
+
+(test appearance-dark-profile-has-the-exact-opaque-rgb-palette
+  "Every Section-5 dark palette declaration is exact, opaque RGB data."
+  (let ((catalog (make-classic-appearance-catalog)))
+    (dolist (golden '((:base (:rgb 13/255 17/255 23/255))
+                      (:transcript-pane (:rgb 13/255 17/255 23/255))
+                      (:compose-pane (:rgb 13/255 17/255 23/255))
+                      (:help-pane (:rgb 13/255 17/255 23/255))
+                      (:info-pane (:rgb 22/255 27/255 34/255))
+                      (:minibuffer-pane (:rgb 22/255 27/255 34/255))))
+      (is (equal (second golden)
+                 (appearance-test-dark-surface catalog (first golden)))))
+    (dolist (golden '((:default-text (:rgb 230/255 237/255 243/255))
+                      (:transcript-agent (:rgb 230/255 237/255 243/255))
+                      (:modeline (:rgb 230/255 237/255 243/255))
+                      (:selector-entry (:rgb 230/255 237/255 243/255))
+                      (:transcript-user (:rgb 121/255 192/255 255/255))
+                      (:transcript-tool (:rgb 126/255 231/255 135/255))
+                      (:tool-result (:rgb 126/255 231/255 135/255))
+                      (:selector-header (:rgb 126/255 231/255 135/255))
+                      (:transcript-system (:rgb 177/255 186/255 196/255))
+                      (:system (:rgb 177/255 186/255 196/255))
+                      (:transcript-empty (:rgb 139/255 148/255 158/255))
+                      (:selector-separator (:rgb 139/255 148/255 158/255))
+                      (:selector-footer (:rgb 139/255 148/255 158/255))
+                      (:error (:rgb 255/255 123/255 114/255))
+                      (:selector-title (:rgb 165/255 214/255 255/255))
+                      (:selector-selection (:rgb 255/255 255/255 255/255))
+                      (:disabled (:rgb 139/255 148/255 158/255))))
+      (is (equal (second golden)
+                 (appearance-test-dark-foreground catalog (first golden)))))))
+
+(test appearance-dark-profile-preserves-classic-typography-and-pointer-documentation
+  "Dark changes no typography and leaves pointer documentation outside its base."
+  (let ((catalog (make-classic-appearance-catalog)))
+    (dolist (role '(:default-text :transcript-user :transcript-agent
+                    :transcript-tool :transcript-system :transcript-empty
+                    :system :error :tool-result :modeline :selector-title
+                    :selector-header :selector-entry :selector-separator
+                    :selector-footer :selector-selection
+                    :minibuffer-selection-emphasis :disabled))
+      (is (equal
+           (appearance-role-style-key
+            (make-appearance-role-style
+             :typography
+             (appearance-role-style-typography
+              (resolved-appearance-role-style
+               (resolve-appearance-role catalog :classic role)))))
+           (appearance-role-style-key
+            (make-appearance-role-style
+             :typography
+             (appearance-role-style-typography
+              (resolved-appearance-role-style
+               (resolve-appearance-role catalog :dark role))))))))
+    (let ((pointer-style
+            (resolved-appearance-role-style
+             (resolve-appearance-role catalog :dark :pointer-documentation))))
+      (is-true (appearance-unspecified-p
+                (appearance-surface-spec-background
+                 (appearance-role-style-surface pointer-style)))))))
+
+(test appearance-dark-profile-contrast-goldens-cover-every-built-in-stack
+  "All active dark stacks compose surface < content < state at 4.5:1 or better."
+  (let ((catalog (make-classic-appearance-catalog)))
+    (dolist (golden '(((:transcript-pane :default-text) 16.02d0)
+                      ((:transcript-pane :transcript-agent) 16.02d0)
+                      ((:help-pane :default-text) 16.02d0)
+                      ((:compose-pane :default-text) 16.02d0)
+                      ((:transcript-pane :transcript-user) 9.73d0)
+                      ((:transcript-pane :transcript-tool) 12.32d0)
+                      ((:transcript-pane :tool-result) 12.32d0)
+                      ((:transcript-pane :transcript-system) 9.63d0)
+                      ((:transcript-pane :system) 9.63d0)
+                      ((:transcript-pane :transcript-empty) 6.15d0)
+                      ((:transcript-pane :error) 7.51d0)
+                      ((:info-pane :modeline) 14.64d0)
+                      ((:minibuffer-pane :selector-title) 11.25d0)
+                      ((:minibuffer-pane :selector-header) 11.26d0)
+                      ((:minibuffer-pane :selector-entry) 14.64d0)
+                      ((:minibuffer-pane :selector-separator) 5.62d0)
+                      ((:minibuffer-pane :selector-footer) 5.62d0)
+                      ((:minibuffer-pane :selector-entry :selector-selection) 17.30d0)
+                      ((:minibuffer-pane :selector-entry :disabled) 5.62d0)))
+      (let* ((stack (first golden))
+             (style (resolved-appearance-role-style
+                     (resolve-appearance-role-stack catalog :dark stack)))
+             (ratio (clawmacs::appearance-contrast-ratio
+                     (appearance-ink-spec-foreground
+                      (appearance-role-style-foreground-ink style))
+                     (appearance-surface-spec-background
+                      (appearance-role-style-surface style)))))
+        (is (<= (abs (- ratio (second golden))) 0.01d0))
+        (is (>= ratio 4.5d0))))
+    (is-true (clawmacs::validate-appearance-profile-contrast
+              catalog (make-appearance-profile :selected-theme :dark)))))
+
+(test appearance-dark-profile-contrast-policy-is-typed-and-never-recolors
+  "User-touched low contrast warns unless strict; built-in failures are fatal."
+  (let* ((catalog (make-classic-appearance-catalog))
+         (override (test-appearance-style :foreground :black))
+         (profile (make-appearance-profile
+                   :selected-theme :dark
+                   :role-overrides (list (cons :error override))))
+         (captured nil))
+    (handler-bind
+        ((appearance-contrast-warning
+           (lambda (warning)
+             (setf captured warning)
+             (muffle-warning warning))))
+      (is-true (clawmacs::validate-appearance-profile-contrast catalog profile)))
+    (is (equal '(:transcript-pane :error) (appearance-condition-role captured)))
+    (is (eq :contrast (appearance-condition-axis captured)))
+    (is (numberp (appearance-condition-value captured)))
+    (is-false (appearance-condition-fatal-p captured))
+    (is (equal '(:increase-foreground-contrast :change-surface)
+               (appearance-condition-suggested-repairs captured)))
+    (is (eq :black
+            (appearance-ink-spec-foreground
+             (appearance-role-style-foreground-ink override))))
+    (signals appearance-contrast-warning
+      (clawmacs::validate-appearance-profile-contrast
+       catalog (make-appearance-profile
+                :selected-theme :dark :strict-contrast t
+                :role-overrides (list (cons :error override)))))
+    (let* ((dark (find-appearance-theme-definition catalog :dark))
+           (broken-dark
+             (make-appearance-theme-definition
+              :id :dark :parent-theme :classic
+              :role-overlays
+              (cons (cons :error (test-appearance-style :foreground :black))
+                    (remove :error (appearance-theme-definition-role-overlays dark)
+                            :key #'car :test #'eq))))
+           (broken-catalog
+             (make-appearance-catalog
+              :role-definitions (appearance-catalog-role-definitions catalog)
+              :theme-definitions
+              (cons broken-dark
+                    (remove :dark (appearance-catalog-theme-definitions catalog)
+                            :key #'appearance-theme-definition-id :test #'eq))
+              :built-in-overlays (appearance-catalog-built-in-overlays catalog))))
+      (signals appearance-contrast-warning
+        (clawmacs::validate-appearance-profile-contrast
+         broken-catalog (make-appearance-profile :selected-theme :dark))))))
