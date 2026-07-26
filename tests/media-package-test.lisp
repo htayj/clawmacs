@@ -266,7 +266,7 @@
         (is (eq operation (clawmacs:cancel-media-operation
                            (clawmacs:media-operation-id operation))))
         (is (= 1 cancel-count))
-        (is (eq :cancelled (clawmacs:media-operation-status operation))))))
+        (is (eq :cancelled (clawmacs:media-operation-status operation)))))))
 
 (test media-cancellation-bridges-the-managed-background-tool-boundary
   "Interactive cancellation invokes provider cancellation before a late start settles."
@@ -379,8 +379,7 @@
        (lambda (_request)
          (declare (ignore _request))
          (clawmacs:make-media-provider-outcome :status :failed
-                                                :public-error "not used")))
-      )
+                                                :public-error "not used"))))
     (clawmacs:set-media-default-provider "owned-fake")
     (is (clawmacs:find-media-provider "owned-fake"))
     (clawmacs::reset-package-runtime-state "media")
