@@ -238,7 +238,7 @@
           (clawmacs:cancel-media-operation operation)
           (clawmacs::run-media-operation operation)
           (is (eq :cancelled (clawmacs:media-operation-status operation))))
-      (is (= 0 http-calls)))))
+      (is (= 0 http-calls))))))
 
 (test codex-image-validates-response-base64-and-persists-safe-artifact-provenance
   "Malformed response data fails safely; success is persisted through Artifactum."
@@ -257,7 +257,7 @@
                          :test #'char-equal)
                   (search "did not contain"
                           (clawmacs:media-provider-outcome-public-error outcome)
-                          :test #'char-equal)))))
+                          :test #'char-equal))))))
     (let ((buffer (make-media-test-buffer "codex-image-artifact")))
       (with-codex-image-function-override (drakma:http-request (&rest _args)
                                              (declare (ignore _args))
