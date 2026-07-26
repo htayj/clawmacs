@@ -376,6 +376,13 @@
    #:ambiguous-font-face
    #:font-unavailable
    #:font-size-unavailable
+   #:missing-font-family
+   #:missing-font-face
+   #:invalid-scalable-font-size
+   #:invalid-fixed-font-size
+   #:font-mapping-invalid
+   #:font-metrics-invalid
+   #:fixed-width-font-required
    #:relative-size-base-invalid
    #:device-font-port-mismatch
    #:appearance-contrast-warning
@@ -386,6 +393,22 @@
    #:appearance-typography-spec-family
    #:appearance-typography-spec-face
    #:appearance-typography-spec-size
+   #:portable-font-descriptor
+   #:make-portable-font-descriptor
+   #:portable-font-descriptor-family
+   #:portable-font-descriptor-face
+   #:portable-font-descriptor-size
+   #:enumerated-font-choice
+   #:make-enumerated-font-choice
+   #:enumerated-font-choice-family-display
+   #:enumerated-font-choice-face-display
+   #:enumerated-font-choice-size
+   #:font-choice-kind
+   #:appearance-font-inventory
+   #:appearance-font-inventory-generation
+   #:appearance-font-inventory-choices
+   #:enumerate-port-font-inventory
+   #:resolve-enumerated-font-choice
    #:appearance-ink-spec
    #:make-appearance-ink-spec
    #:appearance-ink-spec-foreground

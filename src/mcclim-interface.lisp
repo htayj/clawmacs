@@ -58,6 +58,11 @@
   (:documentation
    "One immutable appearance request delivered to the owning CLIM frame process."))
 
+(defclass clawmacs-chat-font-inventory-refresh-event (clim:window-manager-event)
+  ()
+  (:documentation
+   "One explicit port-font inventory refresh delivered to the owning frame process."))
+
 (defvar *suppress-chat-redisplay-requests* nil
   "When non-nil, buffer display hooks should not queue chat redisplay events.
 This is bound while a chat frame is already applying provider stream state to
@@ -1471,6 +1476,14 @@ rendering state."
                                          :reader chat-frame-appearance-font-inventory-generation
                                          :documentation
                                          "Frame-local supplied font inventory generation; enumeration is deferred.")
+   (appearance-font-inventory :initform nil
+                              :reader chat-frame-appearance-font-inventory
+                              :documentation
+                              "Private, frame-local McCLIM font protocol inventory after adoption.")
+   (appearance-font-refresh-diagnostics :initform nil
+                                        :reader chat-frame-appearance-font-refresh-diagnostics
+                                        :documentation
+                                        "Structured failures from this frame's explicit font refreshes.")
    (appearance-active-bundle :initform nil
                              :reader chat-frame-appearance-active-bundle
                              :documentation
@@ -2235,6 +2248,25 @@ frame construction remains the profile-application path for that case."
                             :condition (format nil "~A" condition))
           nil)))))
 
+(defun queue-chat-frame-font-inventory-refresh-event (frame)
+  "Queue FRAME's explicit font refresh on its canonical CLIM event process."
+  (let ((sheet (chat-frame-grafted-top-level-sheet frame)))
+    (when sheet
+      (handler-case
+          (progn
+            (clim:queue-event
+             sheet
+             (make-instance 'clawmacs-chat-font-inventory-refresh-event :sheet sheet))
+            t)
+        (error (condition)
+          (file-debug-event "font-inventory-refresh-queue-failed"
+                            :condition (format nil "~A" condition))
+          nil)))))
+
+(defun refresh-font-inventory-command (frame)
+  "Request a frame-local named-font inventory refresh without caller mutation."
+  (queue-chat-frame-font-inventory-refresh-event frame))
+
 (defun request-chat-frame-appearance-activation (frame candidate)
   "Request immutable CANDIDATE activation without mutating FRAME on the caller.
 
@@ -2255,28 +2287,144 @@ runtime bundle before ordinary CLIM adoption has completed."
     (ignore-errors
       (clim:port (clim:frame-manager frame)))))
 
+(defun chat-frame-font-metric-medium (frame)
+  "Return an existing adopted non-Drei pane for public font metric queries.
+
+CLIM's public text-style metric and fixed-width functions accept a sheet and
+acquire its existing medium themselves.  This deliberately never creates a
+pane, initializes Drei, or mutates a medium."
+  (when (chat-frame-grafted-top-level-sheet frame)
+    (loop :for name :in '(transcript info minibuffer)
+          :for pane := (ignore-errors (clim:find-pane-named frame name))
+          :when pane :return pane)))
+
+(defun appearance-bundles-same-typography-p (left right)
+  "Return true when LEFT and RIGHT differ only outside effective typography."
+  (labels ((same-typography-p (left-style right-style)
+             (let ((left (appearance-role-style-typography left-style))
+                   (right (appearance-role-style-typography right-style)))
+               ;; Do not compare typography structs by identity: each complete
+               ;; bundle owns independently immutable declarations.
+               (and (equal (appearance-typography-spec-family left)
+                           (appearance-typography-spec-family right))
+                    (equal (appearance-typography-spec-face left)
+                           (appearance-typography-spec-face right))
+                    (equal (appearance-typography-spec-size left)
+                           (appearance-typography-spec-size right))))))
+    (and left right
+       (let ((left-table (%resolved-appearance-bundle-role-table left))
+             (right-table (%resolved-appearance-bundle-role-table right)))
+         (and (= (length left-table) (length right-table))
+              (every
+               (lambda (left-entry)
+                 (let ((right-entry (assoc (car left-entry) right-table :test #'equal)))
+                   (and right-entry
+                        (same-typography-p
+                         (resolved-appearance-role-style (cdr left-entry))
+                         (resolved-appearance-role-style (cdr right-entry))))))
+               left-table))))))
+
+(defun record-chat-frame-font-refresh-diagnostic (frame condition)
+  "Store one copied refresh failure without changing active appearance state."
+  (push (make-appearance-condition
+         (type-of condition)
+         :origin (appearance-condition-origin condition)
+         :role (appearance-condition-role condition)
+         :axis (appearance-condition-axis condition)
+         :value (appearance-condition-value condition)
+         :path (appearance-condition-path condition)
+         :port (appearance-condition-port condition)
+         :available-choices (appearance-condition-available-choices condition)
+         :fatal-p (appearance-condition-fatal-p condition)
+         :suggested-repairs (appearance-condition-suggested-repairs condition))
+        (slot-value frame 'appearance-font-refresh-diagnostics))
+  condition)
+
+(defun refresh-chat-frame-font-inventory (frame &key (invalidate-cache t))
+  "Atomically refresh FRAME's own post-adoption McCLIM font inventory.
+
+The explicit refresh path alone asks McCLIM to invalidate its font-list cache.
+It first builds the next inventory and complete bundle off-frame.  A candidate
+whose effective role typography differs is restart-required and is not partly
+published.  Any error retains the old inventory, generation, bundle, profile,
+and render keys while recording a copied structured diagnostic."
+  (let ((port (chat-frame-appearance-live-port frame)))
+    (unless port
+      (return-from refresh-chat-frame-font-inventory nil))
+    (let* ((old-inventory (chat-frame-appearance-font-inventory frame))
+           (old-bundle (chat-frame-appearance-active-bundle frame))
+           (old-generation (chat-frame-appearance-font-inventory-generation frame))
+           (next-generation (if invalidate-cache (1+ old-generation) old-generation)))
+      (handler-case
+          (let* ((inventory (enumerate-port-font-inventory
+                             port :invalidate-cache invalidate-cache
+                             :generation next-generation))
+                 (bundle (resolve-appearance-profile-bundle
+                          (chat-frame-appearance-catalog frame)
+                          (chat-frame-appearance-profile frame)
+                          :profile-revision (chat-frame-appearance-revision frame)
+                          :font-inventory-generation next-generation
+                          :port-identity port)))
+            ;; Current v1 profiles only contain portable typography, but keep
+            ;; this guard so a future named-font profile cannot publish a new
+            ;; inventory generation while changing an active text style.
+            (if (and old-bundle
+                     (not (appearance-bundles-same-typography-p old-bundle bundle)))
+                (%make-appearance-activation-result
+                 :status :restart-required
+                 :diagnostics
+                 (list (make-appearance-condition
+                        'appearance-live-update-unsupported
+                        :axis :typography :value :font-inventory-refresh
+                        :port port
+                        :suggested-repairs '(:restart-clawmacs))))
+                (progn
+                  (setf (slot-value frame 'appearance-font-inventory) inventory
+                        (slot-value frame 'appearance-font-inventory-generation)
+                        next-generation
+                        (slot-value frame 'appearance-active-bundle) bundle)
+                  (%make-appearance-activation-result :status :ready :bundle bundle))))
+        (appearance-condition (condition)
+          (record-chat-frame-font-refresh-diagnostic frame condition)
+          (%make-appearance-activation-result :status :failed
+                                               :diagnostics (list condition)))
+        (error (condition)
+          (let ((diagnostic
+                  (make-appearance-condition
+                   'appearance-activation-failed
+                   :axis :font-inventory-refresh
+                   :value (format nil "~A" condition)
+                   :port port
+                   :suggested-repairs '(:refresh-font-inventory))))
+            (record-chat-frame-font-refresh-diagnostic frame diagnostic)
+            (%make-appearance-activation-result :status :failed
+                                                 :diagnostics (list diagnostic))))))))
+
 (defun refresh-chat-frame-appearance-port-bundle (frame)
   "Build or replace FRAME's local bundle after adoption on its event process.
 
-Tests replace CHAT-FRAME-APPEARANCE-LIVE-PORT with a public-style fake resolver.
-This function performs no font enumeration, port-cache invalidation, pane
-reinitialization, or medium work."
+For a real adopted CLIM port this also creates the initial noninvalidating
+frame-local inventory.  Test-only opaque ports retain the old bundle seam."
   (let ((port (chat-frame-appearance-live-port frame)))
     (when port
-      (let ((bundle
-              (resolve-appearance-profile-bundle
-               (chat-frame-appearance-catalog frame)
-               (chat-frame-appearance-profile frame)
-               :profile-revision (chat-frame-appearance-revision frame)
-               :font-inventory-generation
-               (chat-frame-appearance-font-inventory-generation frame)
-               :port-identity port)))
-        (unless (and (chat-frame-appearance-active-bundle frame)
-                     (equal (resolved-appearance-bundle-bundle-key bundle)
-                            (resolved-appearance-bundle-bundle-key
-                             (chat-frame-appearance-active-bundle frame))))
-          (setf (slot-value frame 'appearance-active-bundle) bundle))
-        bundle))))
+      (if (ignore-errors (typep port 'clim:port))
+          (let ((result (refresh-chat-frame-font-inventory frame :invalidate-cache nil)))
+            (and (eq :ready (appearance-activation-result-status result))
+                 (appearance-activation-result-bundle result)))
+          (let ((bundle
+                  (resolve-appearance-profile-bundle
+                   (chat-frame-appearance-catalog frame)
+                   (chat-frame-appearance-profile frame)
+                   :profile-revision (chat-frame-appearance-revision frame)
+                   :font-inventory-generation
+                   (chat-frame-appearance-font-inventory-generation frame)
+                   :port-identity port)))
+            (unless (and (chat-frame-appearance-active-bundle frame)
+                         (equal (resolved-appearance-bundle-bundle-key bundle)
+                                (resolved-appearance-bundle-bundle-key
+                                 (chat-frame-appearance-active-bundle frame))))
+              (setf (slot-value frame 'appearance-active-bundle) bundle))
+            bundle)))))
 
 (defun publish-chat-frame-appearance-bundle (frame result)
   "Atomically publish one already validated live RESULT on FRAME.
@@ -2609,6 +2757,17 @@ contains the expanded pane and the pointer-documentation pane below it."
                           'appearance-activation-failed
                           :axis :activation :value (format nil "~A" condition))))))
             (record-chat-frame-appearance-result frame result)))))))
+
+(defmethod clim:handle-event
+    ((sheet clime:top-level-sheet-mixin)
+     (event clawmacs-chat-font-inventory-refresh-event))
+  "Run the explicit font refresh through the owning frame's event process."
+  (declare (ignore event))
+  (let ((frame (ignore-errors (clim:pane-frame sheet))))
+    (when (typep frame 'clawmacs-chat-frame)
+      (let ((result (refresh-chat-frame-font-inventory frame :invalidate-cache t)))
+        (when result
+          (record-chat-frame-appearance-result frame result))))))
 
 (defun run-chat-frame-buffer-command (frame command)
   "Run COMMAND on FRAME's buffer and refresh frame UI state."
@@ -3166,6 +3325,12 @@ compose pane while leaving text editing keys to Drei's editor tables."
   (clim:with-application-frame (frame)
     (safe-reload-clawmacs-command (chat-frame-buffer frame))
     (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-refresh-font-inventory :name "Refresh Font Inventory")
+    ()
+  (clim:with-application-frame (frame)
+    (refresh-font-inventory-command frame)))
 
 (define-clawmacs-chat-frame-command
     (com-chat-recurse :name "Recurse")

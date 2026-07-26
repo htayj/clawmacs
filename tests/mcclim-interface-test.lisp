@@ -30,6 +30,14 @@
         port)
     (clawmacs::refresh-chat-frame-appearance-port-bundle frame)))
 
+(defun refresh-chat-font-inventory-with-fake-port (frame port &key (invalidate-cache t))
+  "Run one complete port-local font transaction through a deterministic fake."
+  (with-mcclim-test-function-override
+      (clawmacs::chat-frame-appearance-live-port (requested-frame)
+        (is (eq frame requested-frame))
+        port)
+    (clawmacs::refresh-chat-frame-font-inventory frame :invalidate-cache invalidate-cache)))
+
 (defclass synthetic-chat-compose-pane
     (clawmacs::clawmacs-chat-compose-pane)
   ((test-frame :accessor synthetic-chat-compose-pane-frame))
@@ -380,6 +388,108 @@ these tests exercise construction-time space requirements only."
                 (clawmacs::chat-frame-appearance-active-bundle first))))
       (is (eq second-bundle
               (clawmacs::chat-frame-appearance-active-bundle second))))))
+
+(test chat-font-refresh-publishes-only-a-complete-target-frame-transaction
+  "A successful explicit refresh changes one frame's generation and bundle only."
+  (let* ((first (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "font-refresh-first" :session-persistence-mode :ephemeral)))
+         (second (clim:make-application-frame
+                  'clawmacs::clawmacs-chat-frame
+                  :buffer (make-buffer "font-refresh-second" :session-persistence-mode :ephemeral)))
+         (first-port (make-instance 'test-font-port :families nil))
+         (second-port (make-instance 'test-font-port :families nil)))
+    (dolist (port (list first-port second-port))
+      (let* ((family (make-test-font-family port "Test Family" nil))
+             (face (make-test-font-face family "Regular" :sizes '(10))))
+        (setf (test-font-family-faces family) (list face)
+              (test-font-port-families port) (list family))))
+    (let ((initial (refresh-chat-font-inventory-with-fake-port first first-port
+                                                                :invalidate-cache nil))
+          (other (refresh-chat-font-inventory-with-fake-port second second-port
+                                                              :invalidate-cache nil)))
+      (is (eq :ready (appearance-activation-result-status initial)))
+      (is (eq :ready (appearance-activation-result-status other)))
+      (let ((old-key (resolved-appearance-bundle-bundle-key
+                      (clawmacs::chat-frame-appearance-active-bundle first)))
+            (other-bundle (clawmacs::chat-frame-appearance-active-bundle second)))
+        (let ((result (refresh-chat-font-inventory-with-fake-port first first-port)))
+          (is (eq :ready (appearance-activation-result-status result)))
+          (is (= 1 (clawmacs::chat-frame-appearance-font-inventory-generation first)))
+          (is (= 0 (clawmacs::chat-frame-appearance-font-inventory-generation second)))
+          (is (= 1 (test-font-port-invalidations first-port)))
+          (is (eq other-bundle (clawmacs::chat-frame-appearance-active-bundle second)))
+          (is-false (equal old-key
+                           (resolved-appearance-bundle-bundle-key
+                            (clawmacs::chat-frame-appearance-active-bundle first)))))))))
+
+(test chat-font-refresh-failure-rolls-back-and-isolates-two-frames
+  "Enumeration errors never replace active state, generations, or a sibling frame."
+  (let* ((first (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "font-refresh-fail-first" :session-persistence-mode :ephemeral)))
+         (second (clim:make-application-frame
+                  'clawmacs::clawmacs-chat-frame
+                  :buffer (make-buffer "font-refresh-fail-second" :session-persistence-mode :ephemeral)))
+         (port (make-instance 'test-font-port :families nil)))
+    (let* ((family (make-test-font-family port "Test Family" nil))
+           (face (make-test-font-face family "Regular" :sizes '(10))))
+      (setf (test-font-family-faces family) (list face)
+            (test-font-port-families port) (list family)))
+    (refresh-chat-font-inventory-with-fake-port first port :invalidate-cache nil)
+    (let ((old-bundle (clawmacs::chat-frame-appearance-active-bundle first))
+          (old-generation (clawmacs::chat-frame-appearance-font-inventory-generation first))
+          (second-profile (clawmacs::chat-frame-appearance-profile second)))
+      (with-mcclim-test-function-override
+          (clawmacs::chat-frame-appearance-live-port (frame)
+            (if (eq frame first) port nil))
+        (with-mcclim-test-function-override
+            (clawmacs::enumerate-port-font-inventory (requested-port &rest arguments)
+              (declare (ignore requested-port arguments))
+              (error-appearance-condition 'font-unavailable :axis :font :value :broken))
+          (let ((result (clawmacs::refresh-chat-frame-font-inventory first)))
+            (is (eq :failed (appearance-activation-result-status result)))))
+      (is (eq old-bundle (clawmacs::chat-frame-appearance-active-bundle first)))
+      (is (= old-generation (clawmacs::chat-frame-appearance-font-inventory-generation first)))
+      (is-true (clawmacs::chat-frame-appearance-font-refresh-diagnostics first))
+      (is (eq second-profile (clawmacs::chat-frame-appearance-profile second)))))))
+
+(test chat-font-refresh-request-is-an-event-handoff-and-restart-is-inert
+  "The caller only queues; an unsafe candidate never partially publishes."
+  (let* ((frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "font-refresh-event" :session-persistence-mode :ephemeral)))
+         (port (make-instance 'test-font-port :families nil))
+         (family (make-test-font-family port "Test Family" nil))
+         (face (make-test-font-face family "Regular" :sizes '(10)))
+         (queued nil))
+    (setf (test-font-family-faces family) (list face)
+          (test-font-port-families port) (list family))
+    (refresh-chat-font-inventory-with-fake-port frame port :invalidate-cache nil)
+    (let ((old-bundle (clawmacs::chat-frame-appearance-active-bundle frame))
+          (old-inventory (clawmacs::chat-frame-appearance-font-inventory frame))
+          (old-generation (clawmacs::chat-frame-appearance-font-inventory-generation frame)))
+      (with-mcclim-test-function-override
+          (clawmacs::queue-chat-frame-font-inventory-refresh-event (requested-frame)
+            (is (eq frame requested-frame))
+            (setf queued t)
+            t)
+        (is-true (clawmacs::refresh-font-inventory-command frame)))
+      ;; The request caller owns no publish path.
+      (is-true queued)
+      (is (eq old-bundle (clawmacs::chat-frame-appearance-active-bundle frame)))
+      (is (= old-generation (clawmacs::chat-frame-appearance-font-inventory-generation frame)))
+      (with-mcclim-test-function-override
+          (clawmacs::chat-frame-appearance-live-port (requested-frame)
+            (is (eq frame requested-frame)) port)
+        (with-mcclim-test-function-override
+            (clawmacs::appearance-bundles-same-typography-p (left right)
+              (declare (ignore left right)) nil)
+          (let ((result (clawmacs::refresh-chat-frame-font-inventory frame)))
+            (is (eq :restart-required (appearance-activation-result-status result)))))
+      (is (eq old-bundle (clawmacs::chat-frame-appearance-active-bundle frame)))
+      (is (eq old-inventory (clawmacs::chat-frame-appearance-font-inventory frame)))
+      (is (= old-generation (clawmacs::chat-frame-appearance-font-inventory-generation frame)))))))
 
 (test chat-frame-construction-passes-a-fresh-classic-profile
   "Startup construction carries profile data without changing pane construction."
