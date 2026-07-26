@@ -1147,6 +1147,15 @@
    #:minibuffer-toggle-package-command
    #:describe-installed-package-command
    #:package-dashboard-command
+   #:switch-appearance-theme-command
+   #:describe-current-appearance-command
+   #:customize-appearance-command
+   #:customize-face-command
+   #:apply-staged-appearance-command
+   #:save-appearance-command
+   #:revert-staged-appearance-command
+   #:reload-appearance-file-command
+   #:refresh-font-inventory-command
 
    ;; Model selector (overlay)
    #:*model-selector-active*

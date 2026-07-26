@@ -2649,5 +2649,308 @@ these tests exercise construction-time space requirements only."
                                   :kind :broken-view
                                   :session-persistence-mode :ephemeral))
              (text (clawmacs::chat-frame-e2e-transcript-text buffer)))
-        (is (search "Presentation error" text))
-        (is (search "broken presenter" text))))))
+          (is (search "Presentation error" text))
+          (is (search "broken presenter" text))))))
+
+(test appearance-editor-stages-and-previews-without-mutating-active-profile
+  "Opening and switching the editor changes only immutable staged state."
+  (let* ((buffer (make-buffer "appearance-editor-stage"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame :buffer buffer))
+         (active (clawmacs::chat-frame-appearance-profile frame))
+         (clim:*application-frame* frame)
+         (clawmacs::*buffer-ring* (list buffer)))
+    (clawmacs::customize-appearance-command buffer)
+    (let ((editor (clawmacs::chat-frame-appearance-editor-buffer frame)))
+      (is (eq editor (current-buffer)))
+      (is (eq :appearance-editor (buffer-kind editor)))
+      (clawmacs::switch-appearance-theme-command frame :dark)
+      (is (eq active (clawmacs::chat-frame-appearance-profile frame)))
+      (is (eq :dark
+              (appearance-profile-selected-theme
+               (appearance-candidate-profile
+                (clawmacs::chat-frame-appearance-staged-candidate frame)))))
+      (let ((entries (clawmacs::appearance-editor-display-entries editor)))
+        (is (find 'clawmacs::appearance-theme-ref entries
+                  :key (lambda (entry) (getf entry :presentation-type))))
+        (is (find 'clawmacs::appearance-role-ref entries
+                  :key (lambda (entry) (getf entry :presentation-type))))
+        (is (some (lambda (entry)
+                    (and (getf entry :appearance-profile)
+                         (getf entry :role-stack)))
+                  entries))))))
+
+(test appearance-editor-font-choices-are-dependent-and-data-only
+  "Family, face, and size choices derive only from the frame inventory."
+  (let* ((buffer (make-buffer "appearance-editor-fonts"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame :buffer buffer))
+         (choices
+           (list (make-enumerated-font-choice
+                  :family-display "Alpha" :face-display "Book" :size 12)
+                 (make-enumerated-font-choice
+                  :family-display "Alpha" :face-display "Bold" :size 14)
+                 (make-enumerated-font-choice
+                  :family-display "Alpha" :face-display "Book" :size 16)
+                 (make-enumerated-font-choice
+                  :family-display "Beta" :face-display "Regular" :size 10)))
+         (inventory
+           (clawmacs::%make-appearance-font-inventory
+            :port :test :generation 1 :entries nil :choices choices
+            :metric-medium nil :negative-cache (make-hash-table :test #'equal))))
+    (setf (slot-value frame 'clawmacs::appearance-font-inventory) inventory)
+    (is (equal '("Alpha" "Beta")
+               (clawmacs::appearance-editor-font-families frame)))
+    (is (equal '("Bold" "Book")
+               (clawmacs::appearance-editor-font-faces frame "Alpha")))
+    (is (equal '(12 16)
+               (clawmacs::appearance-editor-font-sizes
+                frame "Alpha" "Book")))
+    (is (null (clawmacs::appearance-editor-font-sizes
+               frame "Beta" "Book")))))
+
+(test appearance-editor-apply-is-a-queue-and-reload-failure-retains-state
+  "Apply never publishes directly and failed reload preserves active and staging."
+  (let* ((buffer (make-buffer "appearance-editor-actions"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame :buffer buffer))
+         (active (clawmacs::chat-frame-appearance-profile frame))
+         (candidate (make-appearance-candidate
+                     (make-appearance-profile :selected-theme :dark)))
+         (queued nil))
+    (setf (slot-value frame 'clawmacs::appearance-staged-candidate) candidate)
+    (with-mcclim-test-function-override
+        (clawmacs::request-chat-frame-appearance-activation
+            (requested-frame requested-candidate)
+          (setf queued (list requested-frame requested-candidate))
+          t)
+      (is (eq :queued
+              (getf (clawmacs::apply-staged-appearance-command frame)
+                    :status))))
+    (is (equal (list frame candidate) queued))
+    (is (eq active (clawmacs::chat-frame-appearance-profile frame)))
+    (with-mcclim-test-function-override
+        (clawmacs:reload-appearance-file-profile (requested-active)
+          (is (eq active requested-active))
+          (values requested-active nil))
+      (is (eq :retained-active
+              (getf (clawmacs::reload-appearance-file-command frame)
+                    :status))))
+    (is (eq candidate
+            (clawmacs::chat-frame-appearance-staged-candidate frame)))
+    (is (eq active (clawmacs::chat-frame-appearance-profile frame)))))
+
+(test appearance-editor-command-surface-is-static-and-discoverable
+  "The menu and M-x registry expose the primary commands without legacy drift."
+  (let* ((frame-table
+           (clim:find-command-table 'clawmacs::clawmacs-chat-frame))
+         (appearance-table
+           (clim:command-menu-item-value
+            (clim:find-menu-item "Appearance" frame-table :errorp t))))
+    (is (equal '("Customize Appearance..."
+                 "Switch Appearance Theme..."
+                 "Describe Current Appearance"
+                 "Apply Staged Appearance"
+                 "Save Appearance"
+                 "Revert Staged Appearance"
+                 "Reload Appearance File"
+                 "Refresh Font Inventory")
+               (let ((labels nil))
+                 (clim:map-over-command-table-menu-items
+                  (lambda (name keystroke item)
+                    (declare (ignore keystroke item))
+                    (push name labels))
+                  appearance-table :inherited nil)
+                 (nreverse labels))))
+    (dolist (command
+             '(clawmacs::customize-appearance-command
+               clawmacs::customize-face-command
+               clawmacs::switch-appearance-theme-command
+               clawmacs::describe-current-appearance-command
+               clawmacs::apply-staged-appearance-command
+               clawmacs::save-appearance-command
+               clawmacs::revert-staged-appearance-command
+               clawmacs::reload-appearance-file-command
+               clawmacs::refresh-font-inventory-command))
+      (is (clawmacs::find-command-metadata command)))
+    (is-false (fboundp 'clawmacs::customize-appearance))
+    (is-false (fboundp 'clawmacs::customize-drawing-style-command))))
+
+(test customize-face-compatibility-diagnostic-is-bounded
+  "The deprecated forwarder reports once and only on explicit invocation."
+  (let* ((buffer (make-buffer "appearance-editor-compat"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame :buffer buffer))
+         (clim:*application-frame* frame)
+         (clawmacs::*buffer-ring* (list buffer))
+         (clawmacs::*customize-face-deprecation-reported-p* nil)
+         (events 0))
+    (with-mcclim-test-function-override
+        (clawmacs::file-debug-event (event &rest fields)
+          (declare (ignore fields))
+          (when (string= event "deprecated-command")
+            (incf events)))
+      (is (= 0 events))
+      (clawmacs::customize-face-command buffer)
+      (clawmacs::customize-face-command buffer)
+      (is (= 1 events)))))
+
+(test appearance-editor-supports-tagged-package-identifiers
+  "Theme and role completion use stable owner/local strings for tagged IDs."
+  (let* ((buffer (make-buffer "appearance-editor-package-ids"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame :buffer buffer))
+         (catalog (clawmacs::chat-frame-appearance-catalog frame))
+         (role-id '(:package "demo" "accent"))
+         (theme-id '(:package "demo" "night"))
+         (extended
+           (make-appearance-catalog
+            :generation (appearance-catalog-generation catalog)
+            :role-definitions
+            (append (appearance-catalog-role-definitions catalog)
+                    (list (make-appearance-role-definition
+                           :id role-id :kind :content
+                           :fallback-role :default-text :owner "demo")))
+            :theme-definitions
+            (append (appearance-catalog-theme-definitions catalog)
+                    (list (make-appearance-theme-definition
+                           :id theme-id :parent-theme :classic
+                           :role-overlays nil :owner "demo")))
+            :built-in-overlays
+            (appearance-catalog-built-in-overlays catalog))))
+    (setf (slot-value frame 'clawmacs::appearance-catalog) extended)
+    (is (equal role-id
+               (find role-id
+                     (clawmacs::appearance-editor-role-ids frame)
+                     :test #'equal)))
+    (is (equal theme-id
+               (find theme-id
+                     (clawmacs::appearance-editor-theme-ids frame)
+                     :test #'equal)))
+    (is (string= "demo/accent"
+                 (clawmacs::appearance-editor-id-string role-id)))
+    (is (string= "demo/night"
+                 (clawmacs::appearance-editor-id-string theme-id)))))
+
+(test appearance-editor-validates-selected-font-through-port-inventory
+  "A named font is resolved against the exact frame inventory before staging."
+  (let* ((buffer (make-buffer "appearance-editor-font-resolution"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame :buffer buffer))
+         (choice (make-enumerated-font-choice
+                  :family-display "Alpha" :face-display "Book" :size 12))
+         (inventory
+           (clawmacs::%make-appearance-font-inventory
+            :port :test :generation 1 :entries nil :choices (list choice)
+            :metric-medium :test-medium
+            :negative-cache (make-hash-table :test #'equal)))
+         (resolved 0))
+    (setf (slot-value frame 'clawmacs::appearance-font-inventory) inventory
+          (clawmacs::chat-frame-appearance-editor-font-family frame) "Alpha"
+          (clawmacs::chat-frame-appearance-editor-font-face frame) "Book")
+    (with-mcclim-test-function-override
+        (clawmacs:resolve-enumerated-font-choice
+            (requested-inventory requested-choice &key medium scope)
+          (is (eq inventory requested-inventory))
+          (is (string= "Alpha"
+                       (enumerated-font-choice-family-display requested-choice)))
+          (is (string= "Book"
+                       (enumerated-font-choice-face-display requested-choice)))
+          (is (= 12 (enumerated-font-choice-size requested-choice)))
+          (is (null medium))
+          (is (eq :default-text scope))
+          (incf resolved)
+          '(:fix :roman 12))
+      (clawmacs::appearance-editor-stage-role-font frame 12))
+    (is (= 1 resolved))
+    (is (eq :choose-font
+            (getf (clawmacs::chat-frame-appearance-editor-status frame)
+                  :operation)))))
+
+(test appearance-editor-superseded-apply-cannot-discard-newer-staging
+  "Queued candidates become inert after a newer stage or explicit Revert."
+  (let* ((buffer (make-buffer "appearance-editor-stale-apply"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame :buffer buffer))
+         (old (make-appearance-candidate
+               (make-appearance-profile :selected-theme :dark)))
+         (new (make-appearance-candidate
+               (make-appearance-profile :selected-theme :classic)))
+         (handled 0))
+    (setf (slot-value frame 'clawmacs::appearance-staged-candidate) new)
+    (with-mcclim-test-function-override
+        (clawmacs::handle-chat-frame-appearance-activation
+            (requested-frame requested-candidate)
+          (declare (ignore requested-frame requested-candidate))
+          (incf handled))
+      (is (eq :no-op
+              (appearance-activation-result-status
+               (clawmacs::handle-queued-chat-frame-appearance-activation
+                frame old)))))
+    (is (= 0 handled))
+    (is (eq new (clawmacs::chat-frame-appearance-staged-candidate frame)))
+    (clawmacs::revert-staged-appearance-command frame)
+    (with-mcclim-test-function-override
+        (clawmacs::handle-chat-frame-appearance-activation
+            (requested-frame requested-candidate)
+          (declare (ignore requested-frame requested-candidate))
+          (incf handled))
+      (clawmacs::handle-queued-chat-frame-appearance-activation frame new))
+    (is (= 0 handled))
+    (is (null (clawmacs::chat-frame-appearance-staged-candidate frame)))))
+
+(test appearance-editor-revert-reports-no-staged-profile
+  "The editor distinguishes preview fallback from actual staged state."
+  (let* ((buffer (make-buffer "appearance-editor-revert-label"
+                              :session-persistence-mode :ephemeral))
+         (frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame :buffer buffer))
+         (clim:*application-frame* frame)
+         (clawmacs::*buffer-ring* (list buffer)))
+    (clawmacs::customize-appearance-command buffer)
+    (clawmacs::revert-staged-appearance-command frame)
+    (let ((entries
+            (clawmacs::appearance-editor-display-entries
+             (clawmacs::chat-frame-appearance-editor-buffer frame))))
+      (is (find "Staged: none" entries :test #'string=
+                :key (lambda (entry) (getf entry :text)))))))
+
+(test appearance-editor-keys-dispatch-the-primary-frame-command
+  "C-h F and C-c F enter through the canonical frame command."
+  (clawmacs::init-default-keymap)
+  (clawmacs::install-chat-frame-keybindings)
+  (let ((table (clim:find-command-table 'clawmacs::clawmacs-chat-frame)))
+    (flet ((binding (prefix)
+             (let* ((prefix-event
+                      (make-instance
+                       'clim:key-press-event :sheet nil :x 0 :y 0
+                       :key-name nil :key-character prefix
+                       :modifier-state
+                       (clim:make-modifier-state :control)))
+                    (prefix-item
+                      (clim:find-keystroke-item
+                       prefix-event table :errorp nil))
+                    (prefix-table
+                      (clim:find-command-table
+                       (clim:command-menu-item-value prefix-item)))
+                    (final-event
+                      (make-instance
+                       'clim:key-press-event :sheet nil :x 0 :y 0
+                       :key-name nil :key-character #\F
+                       :modifier-state
+                       (clim:make-modifier-state :shift)))
+                    (final-item
+                      (clim:find-keystroke-item
+                       final-event prefix-table :errorp nil)))
+               (clim:command-menu-item-value final-item))))
+      (is (equal '(clawmacs::com-chat-customize-appearance)
+                 (binding #\h)))
+      (is (equal '(clawmacs::com-chat-customize-appearance)
+                 (binding #\c))))))

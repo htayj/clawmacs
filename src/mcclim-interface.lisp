@@ -17,6 +17,102 @@
 (clim:define-presentation-type tool-activity-summary ())
 (clim:define-presentation-type chat-interaction-candidate ())
 (clim:define-presentation-type package-dashboard-entry-ref ())
+(clim:define-presentation-type appearance-theme-ref ())
+(clim:define-presentation-type appearance-role-ref ())
+(clim:define-presentation-type appearance-port-font-family-ref ())
+(clim:define-presentation-type appearance-port-font-face-ref ())
+(clim:define-presentation-type appearance-port-font-size-ref ())
+(clim:define-presentation-type appearance-activation-ref ())
+(clim:define-presentation-type appearance-diagnostic-ref ())
+
+(defstruct (appearance-editor-ref
+             (:constructor make-appearance-editor-ref (frame kind value)))
+  "Semantic identity for one frame-local appearance editor value."
+  frame
+  kind
+  value)
+
+(defun appearance-editor-ref-kind-p (object kind)
+  "Return true when OBJECT is an appearance editor reference of KIND."
+  (and (typep object 'appearance-editor-ref)
+       (eq kind (appearance-editor-ref-kind object))))
+
+(macrolet ((define-appearance-ref-typep (type kind)
+             `(clim:define-presentation-method clim:presentation-typep
+                  (object (type ,type))
+                (appearance-editor-ref-kind-p object ,kind))))
+  (define-appearance-ref-typep appearance-theme-ref :theme)
+  (define-appearance-ref-typep appearance-role-ref :role)
+  (define-appearance-ref-typep appearance-port-font-family-ref :font-family)
+  (define-appearance-ref-typep appearance-port-font-face-ref :font-face)
+  (define-appearance-ref-typep appearance-port-font-size-ref :font-size)
+  (define-appearance-ref-typep appearance-activation-ref :activation)
+  (define-appearance-ref-typep appearance-diagnostic-ref :diagnostic))
+
+(defun accept-appearance-editor-suggestions (stream kind values)
+  "Accept one semantic appearance value from VALUES using CLIM completion."
+  (let ((frame clim:*application-frame*))
+    (values
+     (clim:completing-from-suggestions (stream)
+       (dolist (value values)
+         (clim:suggest (if (member kind '(:theme :role) :test #'eq)
+                           (appearance-editor-id-string value)
+                           (format nil "~A" value))
+                       (make-appearance-editor-ref frame kind value)))))))
+
+(clim:define-presentation-method clim:accept
+    ((type appearance-theme-ref) stream (view clim:textual-view) &key)
+  (accept-appearance-editor-suggestions
+   stream :theme
+   (appearance-editor-theme-ids clim:*application-frame*)))
+
+(clim:define-presentation-method clim:accept
+    ((type appearance-role-ref) stream (view clim:textual-view) &key)
+  (accept-appearance-editor-suggestions
+   stream :role
+   (appearance-editor-role-ids clim:*application-frame*)))
+
+(clim:define-presentation-method clim:accept
+    ((type appearance-port-font-family-ref) stream
+     (view clim:textual-view) &key)
+  (accept-appearance-editor-suggestions
+   stream :font-family
+   (appearance-editor-font-families clim:*application-frame*)))
+
+(clim:define-presentation-method clim:accept
+    ((type appearance-port-font-face-ref) stream
+     (view clim:textual-view) &key)
+  (let ((frame clim:*application-frame*))
+    (accept-appearance-editor-suggestions
+     stream :font-face
+     (appearance-editor-font-faces
+      frame (chat-frame-appearance-editor-font-family frame)))))
+
+(clim:define-presentation-method clim:accept
+    ((type appearance-port-font-size-ref) stream
+     (view clim:textual-view) &key)
+  (let ((frame clim:*application-frame*))
+    (accept-appearance-editor-suggestions
+     stream :font-size
+     (appearance-editor-font-sizes
+      frame
+      (chat-frame-appearance-editor-font-family frame)
+      (chat-frame-appearance-editor-font-face frame)))))
+
+(clim:define-presentation-method clim:accept
+    ((type appearance-activation-ref) stream
+     (view clim:textual-view) &key)
+  (accept-appearance-editor-suggestions
+   stream :activation '(:apply :save :revert :reload :refresh-fonts)))
+
+(clim:define-presentation-method clim:accept
+    ((type appearance-diagnostic-ref) stream
+     (view clim:textual-view) &key)
+  (let ((frame clim:*application-frame*))
+    (accept-appearance-editor-suggestions
+     stream :diagnostic
+     (append (chat-frame-appearance-activation-diagnostics frame)
+             (chat-frame-appearance-font-refresh-diagnostics frame)))))
 
 (defstruct (chat-interaction-candidate-ref
              (:constructor make-chat-interaction-candidate-ref
@@ -114,6 +210,32 @@ avoid recursive update→notify→redisplay loops in the CLIM event thread.")
          ("Recurse"
           :command com-chat-recurse
           :documentation "Open a fresh nested Clawmacs frame in a new process.")))
+
+(clim:define-command-table clawmacs-chat-appearance-menu
+  :menu (("Customize Appearance..."
+          :command com-chat-customize-appearance
+          :documentation "Open the frame-local staged appearance editor.")
+         ("Switch Appearance Theme..."
+          :command com-chat-switch-appearance-theme
+          :documentation "Stage a theme selected through CLIM completion.")
+         ("Describe Current Appearance"
+          :command com-chat-describe-current-appearance
+          :documentation "Describe active, staged, and persisted appearance state.")
+         ("Apply Staged Appearance"
+          :command com-chat-apply-staged-appearance
+          :documentation "Queue the staged candidate for transactional activation.")
+         ("Save Appearance"
+          :command com-chat-save-appearance
+          :documentation "Atomically persist the staged candidate.")
+         ("Revert Staged Appearance"
+          :command com-chat-revert-staged-appearance
+          :documentation "Discard the staged candidate.")
+         ("Reload Appearance File"
+          :command com-chat-reload-appearance-file
+          :documentation "Reload the appearance file without changing active state.")
+         ("Refresh Font Inventory"
+          :command com-chat-refresh-font-inventory
+          :documentation "Queue a frame-local port font inventory refresh.")))
 
 (defun chat-message-kind (msg)
   "Return MSG's high-level display kind."
@@ -1492,6 +1614,26 @@ rendering state."
                                 :reader chat-frame-appearance-staged-candidate
                                 :documentation
                                 "Last requested immutable candidate, distinct from active state.")
+   (appearance-editor-buffer :initform nil
+                             :accessor chat-frame-appearance-editor-buffer
+                             :documentation
+                             "Dedicated presentation buffer for this frame's staged editor.")
+   (appearance-editor-status :initform nil
+                             :accessor chat-frame-appearance-editor-status
+                             :documentation
+                             "Last structured editor operation result.")
+   (appearance-persisted-profile :initform nil
+                                 :accessor chat-frame-appearance-persisted-profile
+                                 :documentation
+                                 "Last profile successfully read from or written to disk.")
+   (appearance-editor-role :initform :default-text
+                           :accessor chat-frame-appearance-editor-role)
+   (appearance-editor-font-family :initform nil
+                                  :accessor chat-frame-appearance-editor-font-family)
+   (appearance-editor-font-face :initform nil
+                                :accessor chat-frame-appearance-editor-font-face)
+   (appearance-editor-font-styles :initform (make-hash-table :test #'equal)
+                                  :reader chat-frame-appearance-editor-font-styles)
    (appearance-last-activation-result :initform nil
                                       :reader chat-frame-appearance-last-activation-result)
    (appearance-activation-diagnostics :initform nil
@@ -1543,6 +1685,9 @@ rendering state."
                           ("Effort" :menu clawmacs-chat-effort-menu
                            :documentation
                            "Select model reasoning effort for this chat.")
+                          ("Appearance" :menu clawmacs-chat-appearance-menu
+                           :documentation
+                           "Stage, preview, apply, and save appearance profiles.")
                           ("System" :menu clawmacs-chat-system-menu
                            :documentation
                            "Launch nested frames and system actions."))))
@@ -1599,6 +1744,549 @@ rendering state."
       info
       minibuffer)))
   (:top-level (run-clawmacs-chat-top-level)))
+
+(defparameter +appearance-editor-buffer-name+ "*Appearance*")
+
+(defparameter +appearance-editor-preview-roles+
+  '(:default-text :transcript-user :transcript-agent :transcript-tool
+    :transcript-system :modeline :selector-title :selector-header
+    :selector-entry :selector-selection :system :disabled :error)
+  "Core semantic roles sampled by the appearance editor.")
+
+(defvar *customize-face-deprecation-reported-p* nil
+  "Whether the compatibility command has emitted its sole process diagnostic.")
+
+(defun appearance-command-frame (context)
+  "Return the active chat frame for frame- or buffer-originated CONTEXT."
+  (cond
+    ((typep context 'clawmacs-chat-frame) context)
+    ((typep clim:*application-frame* 'clawmacs-chat-frame)
+     clim:*application-frame*)
+    (t
+     (error "Appearance commands require a running Clawmacs chat frame."))))
+
+(defun appearance-editor-profile (frame)
+  "Return FRAME's staged profile, falling back to its active profile."
+  (let ((candidate (chat-frame-appearance-staged-candidate frame)))
+    (if candidate
+        (appearance-candidate-profile candidate)
+        (chat-frame-appearance-profile frame))))
+
+(defun appearance-editor-staged-profile (frame)
+  "Return FRAME's staged profile, or NIL when no candidate is staged."
+  (let ((candidate (chat-frame-appearance-staged-candidate frame)))
+    (and candidate (appearance-candidate-profile candidate))))
+
+(defun appearance-editor-id-string (id)
+  "Return the stable external spelling for a core or package appearance ID."
+  (appearance-id-external-string id))
+
+(defun appearance-editor-record-status (frame operation status &rest details)
+  "Record and return one bounded structured editor operation result."
+  (setf (chat-frame-appearance-editor-status frame)
+        (list* :operation operation :status status details)))
+
+(defun appearance-editor-theme-ids (frame)
+  "Return FRAME's theme IDs in deterministic display order."
+  (sort (mapcar #'appearance-theme-definition-id
+                (appearance-catalog-theme-definitions
+                 (chat-frame-appearance-catalog frame)))
+        #'string< :key #'appearance-editor-id-string))
+
+(defun appearance-editor-role-ids (frame)
+  "Return FRAME's role IDs in deterministic display order."
+  (sort (mapcar #'appearance-role-definition-id
+                (appearance-catalog-role-definitions
+                 (chat-frame-appearance-catalog frame)))
+        #'string< :key #'appearance-editor-id-string))
+
+(defun appearance-editor-font-choices (frame)
+  "Return copied choices from FRAME's adopted font inventory."
+  (let ((inventory (chat-frame-appearance-font-inventory frame)))
+    (if inventory (appearance-font-inventory-choices inventory) nil)))
+
+(defun appearance-editor-font-families (frame)
+  "Return unique port font family names available to FRAME."
+  (sort (remove-duplicates
+         (mapcar #'enumerated-font-choice-family-display
+                 (appearance-editor-font-choices frame))
+         :test #'string=)
+        #'string<))
+
+(defun appearance-editor-font-faces (frame family)
+  "Return unique port font faces available under FAMILY."
+  (if (not (stringp family))
+      nil
+      (sort (remove-duplicates
+             (loop :for choice :in (appearance-editor-font-choices frame)
+                   :when (string= family
+                                  (enumerated-font-choice-family-display choice))
+                     :collect (enumerated-font-choice-face-display choice))
+             :test #'string=)
+            #'string<)))
+
+(defun appearance-editor-font-sizes (frame family face)
+  "Return unique sorted port font sizes available under FAMILY and FACE."
+  (if (not (and (stringp family) (stringp face)))
+      nil
+      (sort (remove-duplicates
+             (loop :for choice :in (appearance-editor-font-choices frame)
+                   :when
+                   (and (string=
+                         family
+                         (enumerated-font-choice-family-display choice))
+                        (string=
+                         face
+                         (enumerated-font-choice-face-display choice)))
+                     :collect (enumerated-font-choice-size choice))
+             :test #'equal)
+            #'<)))
+
+(defun appearance-editor-stage-profile (frame profile operation)
+  "Install an immutable candidate for PROFILE without changing active state."
+  (setf (slot-value frame 'appearance-staged-candidate)
+        (make-appearance-candidate profile))
+  (appearance-editor-record-status frame operation :staged)
+  (when (chat-frame-appearance-editor-buffer frame)
+    (notify-buffer-display-change
+     (chat-frame-appearance-editor-buffer frame) :appearance-staged))
+  (chat-frame-appearance-staged-candidate frame))
+
+(defun appearance-editor-resolved-font-style (frame profile role)
+  "Return ROLE's already validated port text style for PROFILE, or NIL."
+  (let ((entry (gethash role
+                        (chat-frame-appearance-editor-font-styles frame))))
+    (and entry
+         (equal (getf entry :profile-key)
+                (appearance-profile-structural-key profile))
+         (getf entry :text-style))))
+
+(defun switch-appearance-theme-command (frame theme)
+  "Stage THEME for FRAME without activating it."
+  (setf frame (appearance-command-frame frame))
+  (let* ((theme (if (typep theme 'appearance-editor-ref)
+                    (appearance-editor-ref-value theme)
+                    theme))
+         (profile (appearance-editor-profile frame)))
+    (unless (find theme (appearance-editor-theme-ids frame) :test #'equal)
+      (error-appearance-condition 'missing-appearance-parent
+                                  :origin :appearance-editor :value theme))
+    (appearance-editor-stage-profile
+     frame
+     (make-appearance-profile
+      :selected-theme theme
+      :strict-contrast (appearance-profile-strict-contrast profile)
+      :role-overrides (appearance-profile-role-overrides profile))
+     :switch-theme)))
+
+(defun appearance-editor-stage-role-font (frame size)
+  "Stage the selected role's named port font at SIZE."
+  (let* ((profile (appearance-editor-profile frame))
+         (role (chat-frame-appearance-editor-role frame))
+         (family (chat-frame-appearance-editor-font-family frame))
+         (face (chat-frame-appearance-editor-font-face frame))
+         (overrides (appearance-profile-role-overrides profile))
+         (old-style (cdr (assoc role overrides :test #'equal)))
+         (inventory (chat-frame-appearance-font-inventory frame)))
+    (unless (and family face
+                 (member size (appearance-editor-font-sizes frame family face)
+                         :test #'equal))
+      (error-appearance-condition
+       'invalid-appearance-component :origin :appearance-editor
+       :axis :font-choice :value (list family face size)))
+    (let ((resolved-text-style
+            (resolve-enumerated-font-choice
+             inventory
+             (make-enumerated-font-choice
+              :family-display family :face-display face :size size)
+             :medium (chat-frame-font-metric-medium frame)
+             :scope role))
+          (style
+            (make-appearance-role-style
+             :typography (make-appearance-typography-spec
+                          :family family :face face :size size)
+             :foreground-ink
+             (if old-style
+                 (appearance-role-style-foreground-ink old-style)
+                 *appearance-unspecified*)
+             :surface
+             (if old-style
+                 (appearance-role-style-surface old-style)
+                 *appearance-unspecified*)
+             :decoration
+             (if old-style
+                 (appearance-role-style-decoration old-style)
+                 *appearance-unspecified*))))
+      (let ((candidate
+              (appearance-editor-stage-profile
+               frame
+               (make-appearance-profile
+                :selected-theme (appearance-profile-selected-theme profile)
+                :strict-contrast (appearance-profile-strict-contrast profile)
+                :role-overrides
+                (acons role style
+                       (remove role overrides :key #'car :test #'equal)))
+               :choose-font)))
+        (setf (gethash role
+                       (chat-frame-appearance-editor-font-styles frame))
+              (list :profile-key
+                    (appearance-profile-structural-key
+                     (appearance-candidate-profile candidate))
+                    :text-style resolved-text-style))
+        candidate))))
+
+(defun appearance-editor-open-buffer (frame origin)
+  "Build or focus FRAME's dedicated appearance presentation buffer."
+  (let ((editor (chat-frame-appearance-editor-buffer frame)))
+    (unless (and editor (member editor *buffer-ring* :test #'eq))
+      (setf editor
+            (make-buffer +appearance-editor-buffer-name+
+                         :agent-name "appearance"
+                         :kind :appearance-editor
+                         :working-directory (buffer-working-directory origin))
+            (chat-frame-appearance-editor-buffer frame) editor)
+      (initialize-buffer-display-defaults editor)
+      (setf (buffer-major-mode editor) "appearance-editor")
+      (add-buffer-to-ring editor))
+    (switch-to-buffer editor)
+    editor))
+
+(defun customize-appearance-command (buffer)
+  "Open the owning frame's staged CLIM appearance editor."
+  (let ((frame clim:*application-frame*))
+    (unless (typep frame 'clawmacs-chat-frame)
+      (error "Customize Appearance requires a running Clawmacs chat frame."))
+    (unless (chat-frame-appearance-staged-candidate frame)
+      (appearance-editor-stage-profile
+       frame (chat-frame-appearance-profile frame) :customize))
+    (appearance-editor-open-buffer frame buffer)))
+
+(defun customize-face-command (buffer)
+  "Deprecated compatibility forwarder for CUSTOMIZE-APPEARANCE-COMMAND."
+  (unless *customize-face-deprecation-reported-p*
+    (setf *customize-face-deprecation-reported-p* t)
+    (file-debug-event
+     "deprecated-command"
+     :command 'customize-face-command
+     :replacement 'customize-appearance-command))
+  (customize-appearance-command buffer))
+
+(defun apply-staged-appearance-command (frame)
+  "Queue FRAME's complete staged candidate for transactional activation."
+  (setf frame (appearance-command-frame frame))
+  (let ((candidate (chat-frame-appearance-staged-candidate frame)))
+    (cond
+      ((null candidate)
+       (appearance-editor-record-status frame :apply :no-staged-candidate))
+      ((request-chat-frame-appearance-activation frame candidate)
+       (appearance-editor-record-status frame :apply :queued))
+      (t
+       (appearance-editor-record-status frame :apply :not-running)))))
+
+(defun save-appearance-command (frame)
+  "Atomically persist FRAME's staged profile without activating it."
+  (setf frame (appearance-command-frame frame))
+  (let ((candidate (chat-frame-appearance-staged-candidate frame)))
+    (if (null candidate)
+        (appearance-editor-record-status frame :save :no-staged-candidate)
+        (handler-case
+            (let ((profile (appearance-candidate-profile candidate)))
+              (save-staged-appearance-profile profile)
+              (setf (chat-frame-appearance-persisted-profile frame) profile)
+              (appearance-editor-record-status frame :save :saved
+                                               :path (appearance-config-pathname)))
+          (error (condition)
+            (appearance-editor-record-status
+             frame :save :failed :diagnostic (princ-to-string condition)))))))
+
+(defun revert-staged-appearance-command (frame)
+  "Discard FRAME's staged candidate while retaining active state."
+  (setf frame (appearance-command-frame frame))
+  (setf (slot-value frame 'appearance-staged-candidate) nil)
+  (appearance-editor-record-status frame :revert :reverted))
+
+(defun reload-appearance-file-command (frame)
+  "Reload a valid profile into staging, retaining active and staged state on failure."
+  (setf frame (appearance-command-frame frame))
+  (let ((active (chat-frame-appearance-profile frame))
+        (old-staged (chat-frame-appearance-staged-candidate frame)))
+    (multiple-value-bind (profile loaded-p)
+        (reload-appearance-file-profile active)
+      (if loaded-p
+          (progn
+            (setf (chat-frame-appearance-persisted-profile frame) profile)
+            (appearance-editor-stage-profile frame profile :reload)
+            (appearance-editor-record-status frame :reload :loaded))
+          (progn
+            (setf (slot-value frame 'appearance-staged-candidate) old-staged)
+            (appearance-editor-record-status frame :reload :retained-active))))))
+
+(defun describe-current-appearance-command (frame)
+  "Return a structured distinction between active, staged, and persisted state."
+  (setf frame (appearance-command-frame frame))
+  (handler-case
+      (multiple-value-bind (disk-profile disk-status)
+          (read-appearance-profile-file)
+        (when (eq disk-status :valid)
+          (setf (chat-frame-appearance-persisted-profile frame) disk-profile))
+        (let ((description
+                (list :active (chat-frame-appearance-profile frame)
+                      :staged (let ((candidate
+                                      (chat-frame-appearance-staged-candidate frame)))
+                                (and candidate
+                                     (appearance-candidate-profile candidate)))
+                      :persisted (or disk-profile
+                                     (chat-frame-appearance-persisted-profile frame))
+                      :persisted-status disk-status
+                      :activation
+                      (chat-frame-appearance-last-activation-result frame)
+                      :diagnostics
+                      (append
+                       (chat-frame-appearance-activation-diagnostics frame)
+                       (chat-frame-appearance-font-refresh-diagnostics frame)))))
+          (appearance-editor-record-status frame :describe :described
+                                           :description description)
+          description))
+    (error (condition)
+      (let ((description
+              (list :active (chat-frame-appearance-profile frame)
+                    :staged (let ((candidate
+                                    (chat-frame-appearance-staged-candidate frame)))
+                              (and candidate
+                                   (appearance-candidate-profile candidate)))
+                    :persisted (chat-frame-appearance-persisted-profile frame)
+                    :persisted-status :invalid
+                    :diagnostic (princ-to-string condition))))
+        (appearance-editor-record-status frame :describe :invalid-file
+                                         :description description)
+        description))))
+
+(defun appearance-editor-profile-label (profile)
+  "Return a concise stable label for PROFILE."
+  (if profile
+      (format nil "~A~:[~; (strict contrast)~]"
+              (appearance-editor-id-string
+               (appearance-profile-selected-theme profile))
+              (appearance-profile-strict-contrast profile))
+      "none"))
+
+(defun appearance-editor-diagnostic-text (diagnostic)
+  "Return bounded display text for a structured appearance DIAGNOSTIC."
+  (format nil "~(~A~): ~A"
+          (type-of diagnostic)
+          (or (appearance-condition-value diagnostic)
+              (appearance-condition-axis diagnostic)
+              "no details")))
+
+(defun appearance-editor-display-entries (buffer &optional columns)
+  "Return ordinary CLIM presentation entries for BUFFER's owning frame."
+  (declare (ignore columns))
+  (let ((frame clim:*application-frame*))
+    (unless (and (typep frame 'clawmacs-chat-frame)
+                 (eq buffer (chat-frame-appearance-editor-buffer frame)))
+      (return-from appearance-editor-display-entries
+        (list (list :text "[Appearance editor is not attached to this frame.]"
+                    :face :error))))
+    (let* ((active (chat-frame-appearance-profile frame))
+           (preview-profile (appearance-editor-profile frame))
+           (staged (appearance-editor-staged-profile frame))
+           (persisted (chat-frame-appearance-persisted-profile frame))
+           (status (chat-frame-appearance-editor-status frame))
+           (activation (chat-frame-appearance-last-activation-result frame))
+           (role (chat-frame-appearance-editor-role frame))
+           (family (chat-frame-appearance-editor-font-family frame))
+           (face (chat-frame-appearance-editor-font-face frame))
+           (entries
+             (list
+              (list :text "Appearance"
+                    :face :selector-title
+                    :unique-id :appearance-title)
+              (list :text "Select a theme or role. Apply is transactional; Save persists staging."
+                    :face :selector-footer
+                    :unique-id :appearance-help)
+              (list :text (format nil "Active: ~A"
+                                  (appearance-editor-profile-label active))
+                    :face :selector-header
+                    :unique-id :appearance-active)
+              (list :text (format nil "Staged: ~A"
+                                  (appearance-editor-profile-label staged))
+                    :face :selector-header
+                    :unique-id :appearance-staged)
+              (list :text (format nil "Persisted: ~A"
+                                  (appearance-editor-profile-label persisted))
+                    :face :selector-header
+                    :unique-id :appearance-persisted)
+              (list :text (format nil "Last operation: ~S" status)
+                    :face :system
+                    :unique-id :appearance-status)
+              (list :text
+                    (format nil "Activation: ~(~A~)"
+                            (if activation
+                                (appearance-activation-result-status activation)
+                                :not-requested))
+                    :face
+                    (if (and activation
+                             (eq :failed
+                                 (appearance-activation-result-status activation)))
+                        :error
+                        :system)
+                    :unique-id :appearance-activation-status)
+              (list :text "Actions"
+                    :face :selector-title
+                    :unique-id :appearance-actions))))
+      (dolist (action '((:apply . "Apply staged appearance")
+                        (:save . "Save staged appearance")
+                        (:revert . "Revert staged appearance")
+                        (:reload . "Reload appearance file")
+                        (:refresh-fonts . "Refresh port font inventory")))
+        (setf entries
+              (nconc entries
+                     (list
+                      (list :text (cdr action)
+                            :face :selector-entry
+                            :object
+                            (make-appearance-editor-ref frame :activation
+                                                        (car action))
+                            :presentation-type 'appearance-activation-ref
+                            :unique-id (list :appearance-action (car action)))))))
+      (setf entries
+            (nconc entries
+                   (list (list :text "Themes" :face :selector-title
+                               :unique-id :appearance-themes))))
+      (dolist (theme (appearance-editor-theme-ids frame))
+        (setf entries
+              (nconc entries
+                     (list
+                      (list :text
+                            (format nil "~:[  ~;> ~]~A"
+                                    (equal theme
+                                           (appearance-profile-selected-theme
+                                            preview-profile))
+                                    (appearance-editor-id-string theme))
+                            :face (if (equal theme
+                                             (appearance-profile-selected-theme
+                                              preview-profile))
+                                      :selector-selection
+                                      :selector-entry)
+                            :object (make-appearance-editor-ref frame :theme theme)
+                            :presentation-type 'appearance-theme-ref
+                            :unique-id (list :appearance-theme theme))))))
+      (setf entries
+            (nconc entries
+                   (list (list :text "Preview roles"
+                               :face :selector-title
+                               :unique-id :appearance-preview))))
+      (dolist (preview-role +appearance-editor-preview-roles+)
+        (setf entries
+              (nconc entries
+                     (list
+                      (list :text (format nil "~:[  ~;> ~]~(~A~): The quick brown fox 0123"
+                                          (equal preview-role role) preview-role)
+                            :face preview-role
+                            :appearance-profile preview-profile
+                            :role-stack (list :transcript-pane preview-role)
+                            :resolved-text-style
+                            (appearance-editor-resolved-font-style
+                             frame preview-profile preview-role)
+                            :object
+                            (make-appearance-editor-ref frame :role preview-role)
+                            :presentation-type 'appearance-role-ref
+                            :unique-id (list :appearance-role preview-role))))))
+      (setf entries
+            (nconc entries
+                   (list
+                    (list :text
+                          (format nil "Port fonts for ~(~A~)~@[ — ~A~]~@[ / ~A~]"
+                                  role family face)
+                          :face :selector-title
+                          :unique-id :appearance-fonts))))
+      (cond
+        ((null (appearance-editor-font-choices frame))
+         (setf entries
+               (nconc entries
+                      (list (list :text "Refresh the port font inventory to choose a named font."
+                                  :face :disabled
+                                  :unique-id :appearance-no-fonts)))))
+        ((null family)
+         (dolist (choice (appearance-editor-font-families frame))
+           (setf entries
+                 (nconc entries
+                        (list
+                         (list :text choice :face :selector-entry
+                               :object
+                               (make-appearance-editor-ref
+                                frame :font-family choice)
+                               :presentation-type
+                               'appearance-port-font-family-ref
+                               :unique-id (list :appearance-font-family choice)))))))
+        ((null face)
+         (dolist (choice (appearance-editor-font-faces frame family))
+           (setf entries
+                 (nconc entries
+                        (list
+                         (list :text choice :face :selector-entry
+                               :object
+                               (make-appearance-editor-ref frame :font-face choice)
+                               :presentation-type 'appearance-port-font-face-ref
+                               :unique-id
+                               (list :appearance-font-face family choice)))))))
+        (t
+         (dolist (choice (appearance-editor-font-sizes frame family face))
+           (setf entries
+                 (nconc entries
+                        (list
+                         (list :text (format nil "~A" choice)
+                               :face :selector-entry
+                               :object
+                               (make-appearance-editor-ref frame :font-size choice)
+                               :presentation-type 'appearance-port-font-size-ref
+                               :unique-id
+                               (list :appearance-font-size
+                                     family face choice))))))))
+      (let ((diagnostics
+              (append (chat-frame-appearance-activation-diagnostics frame)
+                      (chat-frame-appearance-font-refresh-diagnostics frame))))
+        (when diagnostics
+          (setf entries
+                (nconc entries
+                       (list (list :text "Diagnostics" :face :selector-title
+                                   :unique-id :appearance-diagnostics))))
+          (loop :for diagnostic :in diagnostics
+                :for index :from 0
+                :do
+                   (setf entries
+                         (nconc entries
+                                (list
+                                 (list
+                                  :text
+                                  (appearance-editor-diagnostic-text diagnostic)
+                                  :face :error
+                                  :object
+                                  (make-appearance-editor-ref
+                                   frame :diagnostic diagnostic)
+                                  :presentation-type
+                                  'appearance-diagnostic-ref
+                                  :unique-id
+                                  (list :appearance-diagnostic index))))))))
+      entries)))
+
+(register-buffer-type
+ :appearance-editor
+ :description "Frame-local staged CLIM appearance editor."
+ :major-mode "appearance-editor"
+ :presentation-function 'appearance-editor-display-entries)
+
+(register-command-metadata 'customize-appearance-command)
+(register-command-metadata 'customize-face-command)
+(register-command-metadata
+ 'switch-appearance-theme-command
+ :prompts '((theme :prompt "Appearance theme"
+                   :reader parse-appearance-theme-selector)))
+(register-command-metadata 'describe-current-appearance-command)
+(register-command-metadata 'apply-staged-appearance-command)
+(register-command-metadata 'save-appearance-command)
+(register-command-metadata 'revert-staged-appearance-command)
+(register-command-metadata 'reload-appearance-file-command)
 
 (defun call-chat-frame-ui-action-safely (frame action function)
   "Call FUNCTION as a user UI ACTION, containing ordinary application errors.
@@ -1964,6 +2652,47 @@ this is the standard CLIM composition used by WITH-TEXT-STYLE."
               (stream :ink (appearance-foreground-ink foreground))
             (call-with-text-style))))))
 
+(defun call-with-appearance-profile-role
+    (frame stream profile role-stack function &optional resolved-text-style)
+  "Call FUNCTION using PROFILE's resolved role without publishing frame state."
+  (let* ((resolved
+           (resolve-runtime-appearance-role-stack
+            (chat-frame-appearance-catalog frame)
+            (appearance-profile-selected-theme profile)
+            role-stack
+            :unsaved-overrides (appearance-profile-role-overrides profile)))
+         (style (resolved-appearance-role-style resolved))
+         (ink-spec (appearance-role-style-foreground-ink style))
+         (foreground (and (not (appearance-unspecified-p ink-spec))
+                          (appearance-ink-spec-foreground ink-spec)))
+         (typography (appearance-role-style-typography style))
+         (text-style
+           (or resolved-text-style
+               (unless (appearance-unspecified-p typography)
+             (let ((family (appearance-typography-spec-family typography))
+                   (face (appearance-typography-spec-face typography))
+                   (size (appearance-typography-spec-size typography)))
+               ;; Named font display strings must cross the explicit
+               ;; port-inventory resolver before reaching a rendering call.
+               (unless (or (stringp family)
+                           (stringp face)
+                           (and (appearance-unspecified-p family)
+                                (appearance-unspecified-p face)
+                                (appearance-unspecified-p size)))
+                 (list (if (appearance-unspecified-p family) nil family)
+                       (if (appearance-unspecified-p face) nil face)
+                       (if (appearance-unspecified-p size) nil size))))))))
+    (labels ((emit ()
+               (if text-style
+                   (clim:with-text-style (stream text-style)
+                     (funcall function))
+                   (funcall function))))
+      (if (appearance-unspecified-p foreground)
+          (emit)
+          (clim:with-drawing-options
+              (stream :ink (appearance-foreground-ink foreground))
+            (emit))))))
+
 (defun chat-message-appearance-role-stack (msg)
   "Return the transcript role stack for MSG."
   (list :transcript-pane
@@ -2024,17 +2753,36 @@ this is the standard CLIM composition used by WITH-TEXT-STYLE."
         (object (getf entry :object))
         (presentation-type (getf entry :presentation-type)))
     (flet ((emit ()
-             (call-with-chat-appearance-role
-              frame stream
-              (append '(:transcript-pane)
-                      (chat-appearance-wire-role-stack (getf entry :face)))
-              (lambda () (write-string text stream)))))
+             (let ((profile (getf entry :appearance-profile))
+                   (role-stack (getf entry :role-stack)))
+               (if (and profile role-stack)
+                   (call-with-appearance-profile-role
+                    frame stream profile role-stack
+                    (lambda () (write-string text stream))
+                    (getf entry :resolved-text-style))
+                   (call-with-chat-appearance-role
+                    frame stream
+                    (append '(:transcript-pane)
+                            (chat-appearance-wire-role-stack (getf entry :face)))
+                    (lambda () (write-string text stream)))))))
       (if (and object presentation-type)
           (clim:with-output-as-presentation
               (stream object presentation-type :single-box t)
             (emit))
           (emit))))
   (terpri stream))
+
+(defun buffer-presentation-entry-cache-value (entry)
+  "Return ENTRY's structural redisplay value without semantic object identity."
+  (or (getf entry :cache-value)
+      (loop :for (key value) :on entry :by #'cddr
+            :unless (eq key :object)
+              :append
+              (list key
+                    (if (and (eq key :appearance-profile)
+                             (typep value 'appearance-profile))
+                        (appearance-profile-structural-key value)
+                        value)))))
 
 (defun display-buffer-presentation-entries (frame stream entries &key (namespace :buffer))
   "Display generic presentation ENTRIES on STREAM with incremental redisplay."
@@ -2047,7 +2795,7 @@ this is the standard CLIM composition used by WITH-TEXT-STYLE."
                                (list namespace index (getf entry :text "")))
                 :id-test #'equal
                 :cache-value
-                (list entry
+                (list (buffer-presentation-entry-cache-value entry)
                       (chat-frame-appearance-role-key
                        frame
                        (append '(:transcript-pane)
@@ -2265,7 +3013,10 @@ frame construction remains the profile-application path for that case."
 
 (defun refresh-font-inventory-command (frame)
   "Request a frame-local named-font inventory refresh without caller mutation."
+  (setf frame (appearance-command-frame frame))
   (queue-chat-frame-font-inventory-refresh-event frame))
+
+(register-command-metadata 'refresh-font-inventory-command)
 
 (defun request-chat-frame-appearance-activation (frame candidate)
   "Request immutable CANDIDATE activation without mutating FRAME on the caller.
@@ -2442,8 +3193,10 @@ keys only; pane construction and low-level rendering objects are untouched."
       (error "A live appearance result requires a bundle and candidate."))
     (setf (chat-frame-appearance-profile frame)
           (appearance-candidate-profile candidate)
-          (slot-value frame 'appearance-active-bundle) bundle
-          (slot-value frame 'appearance-staged-candidate) nil)
+          (slot-value frame 'appearance-active-bundle) bundle)
+    ;; A newer staged edit must survive completion of an older direct request.
+    (when (eq candidate (chat-frame-appearance-staged-candidate frame))
+      (setf (slot-value frame 'appearance-staged-candidate) nil))
     (incf (slot-value frame 'appearance-revision))
     ;; Structural keys belong to resolved output.  Clearing only after the
     ;; atomic publish lets ordinary display functions acquire the new keys on
@@ -2492,6 +3245,22 @@ keys only; pane construction and low-level rendering objects are untouched."
        (setf (slot-value frame 'appearance-staged-candidate) candidate))
       ((:failed :no-op) nil))
       (record-chat-frame-appearance-result frame result))))
+
+(defun handle-queued-chat-frame-appearance-activation (frame candidate)
+  "Apply CANDIDATE only while it remains FRAME's exact staged request."
+  (if (eq candidate (chat-frame-appearance-staged-candidate frame))
+      (handle-chat-frame-appearance-activation frame candidate)
+      (record-chat-frame-appearance-result
+       frame
+       (%make-appearance-activation-result
+        :status :no-op
+        :candidate candidate
+        :diagnostics
+        (list (make-appearance-condition
+               'appearance-activation-failed
+               :axis :activation
+               :value :superseded-staged-candidate
+               :fatal-p nil))))))
 
 (defun chat-frame-grafted-top-level-sheet (frame)
   "Return FRAME's grafted top-level sheet, or NIL before FRAME is running."
@@ -2746,7 +3515,7 @@ contains the expanded pane and the pointer-documentation pane below it."
   (let ((frame (ignore-errors (clim:pane-frame sheet))))
     (when (typep frame 'clawmacs-chat-frame)
       (handler-case
-          (handle-chat-frame-appearance-activation
+          (handle-queued-chat-frame-appearance-activation
            frame (chat-appearance-activation-event-candidate event))
         (error (condition)
           ;; PREPARE normally turns appearance failures into a structured
@@ -3221,7 +3990,9 @@ compose pane while leaving text editing keys to Drei's editor tables."
                    ;; forms before executing the command.  Quote list-valued
                    ;; keys so (:META #\x) remains data instead of a function
                    ;; call whose operator is :META.
-                   (esa:set-key `(com-chat-dispatch-key ',key)
+                   (esa:set-key (if (eq command 'customize-appearance-command)
+                                    '(com-chat-customize-appearance)
+                                    `(com-chat-dispatch-key ',key))
                                 'clawmacs-chat-frame
                                 key-gestures)
                  (clim:command-already-present () nil)))))))
@@ -3334,7 +4105,136 @@ compose pane while leaving text editing keys to Drei's editor tables."
     (com-chat-refresh-font-inventory :name "Refresh Font Inventory")
     ()
   (clim:with-application-frame (frame)
-    (refresh-font-inventory-command frame)))
+    (refresh-font-inventory-command frame)
+    (appearance-editor-record-status frame :refresh-fonts :queued)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-customize-appearance :name "Customize Appearance")
+    ()
+  (clim:with-application-frame (frame)
+    (call-with-chat-frame-buffer-transition
+     frame #'customize-appearance-command
+     :focus-compose t)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-switch-appearance-theme :name "Switch Appearance Theme")
+    ((theme 'appearance-theme-ref))
+  (clim:with-application-frame (frame)
+    (switch-appearance-theme-command frame theme)
+    (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-describe-current-appearance :name "Describe Current Appearance")
+    ()
+  (clim:with-application-frame (frame)
+    (describe-current-appearance-command frame)
+    (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-apply-staged-appearance :name "Apply Staged Appearance")
+    ()
+  (clim:with-application-frame (frame)
+    (apply-staged-appearance-command frame)
+    (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-save-appearance :name "Save Appearance")
+    ()
+  (clim:with-application-frame (frame)
+    (save-appearance-command frame)
+    (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-revert-staged-appearance :name "Revert Staged Appearance")
+    ()
+  (clim:with-application-frame (frame)
+    (revert-staged-appearance-command frame)
+    (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-reload-appearance-file :name "Reload Appearance File")
+    ()
+  (clim:with-application-frame (frame)
+    (reload-appearance-file-command frame)
+    (request-chat-frame-redisplay frame)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-activate-appearance-editor-ref :name nil)
+    ((ref 'appearance-activation-ref))
+  (let ((frame (appearance-editor-ref-frame ref)))
+    (when (eq frame clim:*application-frame*)
+      (case (appearance-editor-ref-value ref)
+        (:apply (apply-staged-appearance-command frame))
+        (:save (save-appearance-command frame))
+        (:revert (revert-staged-appearance-command frame))
+        (:reload (reload-appearance-file-command frame))
+        (:refresh-fonts
+         (refresh-font-inventory-command frame)
+         (appearance-editor-record-status frame :refresh-fonts :queued)))
+      (request-chat-frame-redisplay frame))))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-select-appearance-theme :name nil)
+    ((ref 'appearance-theme-ref))
+  (let ((frame (appearance-editor-ref-frame ref)))
+    (when (eq frame clim:*application-frame*)
+      (switch-appearance-theme-command frame ref)
+      (request-chat-frame-redisplay frame))))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-select-appearance-role :name nil)
+    ((ref 'appearance-role-ref))
+  (let ((frame (appearance-editor-ref-frame ref)))
+    (when (eq frame clim:*application-frame*)
+      (setf (chat-frame-appearance-editor-role frame)
+            (appearance-editor-ref-value ref)
+            (chat-frame-appearance-editor-font-family frame) nil
+            (chat-frame-appearance-editor-font-face frame) nil)
+      (appearance-editor-record-status frame :select-role :selected
+                                       :role (appearance-editor-ref-value ref))
+      (request-chat-frame-redisplay frame))))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-select-appearance-font-family :name nil)
+    ((ref 'appearance-port-font-family-ref))
+  (let ((frame (appearance-editor-ref-frame ref)))
+    (when (eq frame clim:*application-frame*)
+      (setf (chat-frame-appearance-editor-font-family frame)
+            (appearance-editor-ref-value ref)
+            (chat-frame-appearance-editor-font-face frame) nil)
+      (appearance-editor-record-status frame :select-font-family :selected
+                                       :family (appearance-editor-ref-value ref))
+      (request-chat-frame-redisplay frame))))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-select-appearance-font-face :name nil)
+    ((ref 'appearance-port-font-face-ref))
+  (let ((frame (appearance-editor-ref-frame ref)))
+    (when (eq frame clim:*application-frame*)
+      (setf (chat-frame-appearance-editor-font-face frame)
+            (appearance-editor-ref-value ref))
+      (appearance-editor-record-status frame :select-font-face :selected
+                                       :face (appearance-editor-ref-value ref))
+      (request-chat-frame-redisplay frame))))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-select-appearance-font-size :name nil)
+    ((ref 'appearance-port-font-size-ref))
+  (let ((frame (appearance-editor-ref-frame ref)))
+    (when (eq frame clim:*application-frame*)
+      (appearance-editor-stage-role-font
+       frame (appearance-editor-ref-value ref))
+      (request-chat-frame-redisplay frame))))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-describe-appearance-diagnostic :name nil)
+    ((ref 'appearance-diagnostic-ref))
+  (let ((frame (appearance-editor-ref-frame ref)))
+    (when (eq frame clim:*application-frame*)
+      (appearance-editor-record-status
+       frame :diagnostic :described
+       :diagnostic (appearance-editor-ref-value ref))
+      (request-chat-frame-redisplay frame))))
 
 (define-clawmacs-chat-frame-command
     (com-chat-recurse :name "Recurse")
@@ -3393,6 +4293,69 @@ compose pane while leaving text editing keys to Drei's editor tables."
      clawmacs-chat-frame
      :gesture :select
      :documentation "Toggle package scope"
+     :menu t)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator activate-appearance-editor-action
+    (appearance-activation-ref com-chat-activate-appearance-editor-ref
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Run appearance action"
+     :menu t)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator select-appearance-theme
+    (appearance-theme-ref com-chat-select-appearance-theme
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Stage theme"
+     :menu t)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator select-appearance-role
+    (appearance-role-ref com-chat-select-appearance-role
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Customize role"
+     :menu t)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator select-appearance-font-family
+    (appearance-port-font-family-ref com-chat-select-appearance-font-family
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Choose font family"
+     :menu t)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator select-appearance-font-face
+    (appearance-port-font-face-ref com-chat-select-appearance-font-face
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Choose font face"
+     :menu t)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator select-appearance-font-size
+    (appearance-port-font-size-ref com-chat-select-appearance-font-size
+     clawmacs-chat-frame
+     :gesture :select
+     :documentation "Stage font size"
+     :menu t)
+    (object)
+  (list object))
+
+(clim:define-presentation-to-command-translator describe-appearance-diagnostic
+    (appearance-diagnostic-ref com-chat-describe-appearance-diagnostic
+     clawmacs-chat-frame
+     :gesture :describe-presentation
+     :documentation "Describe diagnostic"
      :menu t)
     (object)
   (list object))

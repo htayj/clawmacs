@@ -218,6 +218,22 @@ and C-c R to its compatibility command alias."
   (is (eq 'clawmacs::describe-function-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\f)))))
 
+(test default-keymap-appearance-bindings-preserve-neighboring-commands
+  "Uppercase F opens appearance while established lowercase and global keys remain."
+  (clawmacs::init-default-keymap)
+  (is (eq 'clawmacs::customize-appearance-command
+          (keymap-lookup *default-keymap* '(:ctrl-h #\F))))
+  (is (eq 'clawmacs::customize-appearance-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\F))))
+  (is (eq 'clawmacs::describe-function-command
+          (keymap-lookup *default-keymap* '(:ctrl-h #\f))))
+  (is (eq 'clawmacs::describe-function-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\f))))
+  (is (eq 'clawmacs::toggle-tool-results-command
+          (keymap-lookup *default-keymap* '(:ctrl-c #\t))))
+  (is (eq 'clawmacs::font-editor-command
+          (keymap-lookup *default-keymap* '(:ctrl-x #\F)))))
+
 (test default-keymap-describe-bindings-binding
   "Default keymap binds C-c b to describe-bindings-command."
   (clawmacs::init-default-keymap)

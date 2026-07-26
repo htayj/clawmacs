@@ -184,12 +184,14 @@
     ;; prefer avoiding the C-h / Backspace ambiguity.
     (keymap-bind km '(:ctrl-h #\b) 'describe-bindings-command)  ; C-h b = describe keybindings
     (keymap-bind km '(:ctrl-h #\f) 'describe-function-command)  ; C-h f = describe function
+    (keymap-bind km '(:ctrl-h #\F) 'customize-appearance-command) ; C-h F = appearance editor
     (keymap-bind km '(:ctrl-h #\v) 'describe-variable-command)  ; C-h v = describe variable
     (keymap-bind km '(:ctrl-h #\i) 'info-directory-command)     ; C-h i = Info directory
     (keymap-bind km '(:ctrl-h #\I) 'clawmacs-manual-command)    ; C-h I = Clawmacs manual
     (keymap-bind km '(:ctrl-h #\T) 'describe-type-command)      ; C-h T = describe type
     (keymap-bind km '(:ctrl-c #\b) 'describe-bindings-command)  ; compatibility alias
     (keymap-bind km '(:ctrl-c #\f) 'describe-function-command)  ; compatibility alias
+    (keymap-bind km '(:ctrl-c #\F) 'customize-appearance-command) ; appearance editor alias
     (keymap-bind km '(:ctrl-c #\v) 'describe-variable-command)  ; compatibility alias
     (keymap-bind km '(:ctrl-c #\T) 'describe-type-command)      ; compatibility alias
     ;; ----- C-x prefix: global / cross-buffer commands -----
