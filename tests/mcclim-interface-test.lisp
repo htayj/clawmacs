@@ -165,6 +165,28 @@ these tests exercise construction-time space requirements only."
                (appearance-diagnostic-deduplication-key
                 (first (clawmacs::chat-frame-appearance-runtime-diagnostics first)))))))
 
+(test chat-frame-construction-passes-a-fresh-classic-profile
+  "Startup construction carries profile data without changing pane construction."
+  (let ((captured-profiles nil)
+        (buffer (make-buffer "appearance-startup-profile"
+                             :session-persistence-mode :ephemeral)))
+    (with-mcclim-test-function-override
+        (clim:make-application-frame (class &rest initargs)
+          (is (eq 'clawmacs::clawmacs-chat-frame class))
+          (push (getf initargs :appearance-profile) captured-profiles)
+          :captured-chat-frame)
+      (with-mcclim-test-function-override
+          (clim:run-frame-top-level (frame)
+            (is (eq :captured-chat-frame frame))
+            :ran)
+        (is (eq :ran (clawmacs::run-clawmacs-chat-frame buffer)))
+        (is (eq :ran (clawmacs::run-clawmacs-chat-frame buffer)))))
+    (is (= 2 (length captured-profiles)))
+    (dolist (profile captured-profiles)
+      (is (typep profile 'clawmacs::appearance-profile))
+      (is (eq :classic (appearance-profile-selected-theme profile))))
+    (is-false (eq (first captured-profiles) (second captured-profiles)))))
+
 (test compose-meta-x-prefers-frame-command-and-preserves-the-key-form
   "M-x resolves to Clawmacs and ESA parses its list-valued key as data."
   (clawmacs::init-default-keymap)

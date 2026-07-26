@@ -1416,7 +1416,7 @@ rendering state."
       (emit-chat-pane-rendered frame "minibuffer"
                                :active (not (null kind))
                                :kind kind
-                               :text (chat-frame-e2e-minibuffer-text)))))
+                               :text (chat-frame-e2e-minibuffer-text))))))
 
 (defun display-chat-info-pane (frame stream)
   "Display an Emacs-style status line for FRAME."
@@ -3147,11 +3147,17 @@ remaining buffers from being cancelled, or leave the frame marked running."
 (defmethod clim:run-frame-top-level :around ((frame clawmacs-chat-frame) &key)
   (call-with-chat-frame-runtime frame (lambda () (call-next-method))))
 
-(defun run-clawmacs-chat-frame (buffer &key window-title)
-  "Run the fresh McCLIM chat frame for BUFFER."
+(defun run-clawmacs-chat-frame
+    (buffer &key window-title (appearance-profile (make-appearance-profile)))
+  "Run the fresh McCLIM chat frame for BUFFER using an immutable startup profile.
+
+The initial :CLASSIC profile is deliberately passed as frame construction data.
+It does not select a port, install named fonts, change pane defaults, or alter
+the existing Drei/ESA pane declarations."
   (let ((frame (clim:make-application-frame
                 'clawmacs-chat-frame
                 :buffer buffer
+                :appearance-profile appearance-profile
                 :pretty-name (or window-title "Clawmacs"))))
     (file-debug-event "frame-created"
                       :buffer-name (buffer-name buffer)
