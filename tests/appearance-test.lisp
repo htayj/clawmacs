@@ -46,7 +46,7 @@
 
 (test appearance-declarations-defensively-copy-mutable-inputs
   "Published declarations neither retain nor expose mutable caller data."
-  (let* ((parameters (list :marker "sample"))
+  (let* ((parameters (list :marker (copy-seq "sample")))
          (overlays (list (cons :default-text
                                (make-appearance-role-style))))
          (theme (make-appearance-theme-definition
@@ -203,7 +203,7 @@
             :command-line-overrides (list (cons :title
                                                 (test-appearance-style :foreground :cyan)))
             :unsaved-overrides (list (cons :title
-                                        (test-appearance-style :foreground :white))))))
+                                           (test-appearance-style :foreground :white)))))
          (style (resolved-appearance-role-style resolved)))
     (is (eq :white
             (appearance-ink-spec-foreground
@@ -364,6 +364,16 @@
            :decoration (make-appearance-decoration-spec
                         :kind :selection-marker
                         :parameters (list :marker ">"))))))
+    (is (equal '(:typography :unspecified
+                 :foreground-ink :unspecified
+                 :surface :unspecified
+                 :decoration (:selection-marker (:marker ">")))
+               (appearance-role-style-key
+                (make-appearance-role-style
+                 :decoration
+                 (make-appearance-decoration-spec
+                  :kind :selection-marker
+                  :parameters (list :marker ">"))))))
     (is (equal '(0.10 0.25 0.55)
                (appearance-ink-spec-foreground
                 (appearance-role-style-foreground-ink

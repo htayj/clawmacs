@@ -887,31 +887,36 @@ implementation-specific initialization path cannot provide this copy boundary."
 
 (defun appearance-role-style-key (style)
   "Return STYLE's structural output key without catalog/profile revisions."
-  (list :typography
-        (list (appearance-structural-key-value
-               (appearance-typography-spec-family
-                (appearance-role-style-typography style)))
+  (let ((typography (appearance-role-style-typography style))
+        (foreground-ink (appearance-role-style-foreground-ink style))
+        (surface (appearance-role-style-surface style))
+        (decoration (appearance-role-style-decoration style)))
+    (list :typography
+          (if (appearance-unspecified-p typography)
+              :unspecified
+              (list (appearance-structural-key-value
+                     (appearance-typography-spec-family typography))
+                    (appearance-structural-key-value
+                     (appearance-typography-spec-face typography))
+                    (appearance-structural-key-value
+                     (appearance-typography-spec-size typography))))
+          :foreground-ink
+          (if (appearance-unspecified-p foreground-ink)
+              :unspecified
               (appearance-structural-key-value
-               (appearance-typography-spec-face
-                (appearance-role-style-typography style)))
+               (appearance-ink-spec-foreground foreground-ink)))
+          :surface
+          (if (appearance-unspecified-p surface)
+              :unspecified
               (appearance-structural-key-value
-               (appearance-typography-spec-size
-                (appearance-role-style-typography style))))
-        :foreground-ink
-        (appearance-structural-key-value
-         (appearance-ink-spec-foreground
-          (appearance-role-style-foreground-ink style)))
-        :surface
-        (appearance-structural-key-value
-         (appearance-surface-spec-background
-          (appearance-role-style-surface style)))
-        :decoration
-        (list (appearance-structural-key-value
-               (appearance-decoration-spec-kind
-                (appearance-role-style-decoration style)))
-              (appearance-structural-key-value
-               (appearance-decoration-spec-parameters
-                (appearance-role-style-decoration style))))))
+               (appearance-surface-spec-background surface)))
+          :decoration
+          (if (appearance-unspecified-p decoration)
+              :unspecified
+              (list (appearance-structural-key-value
+                     (appearance-decoration-spec-kind decoration))
+                    (appearance-structural-key-value
+                     (appearance-decoration-spec-parameters decoration)))))))
 
 (defun merge-provenance (provenance style origin)
   "Record ORIGIN for each explicitly supplied axis, preserving other origins."
