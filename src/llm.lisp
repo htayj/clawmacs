@@ -1959,14 +1959,18 @@ respected."
      "gpt-5.6-sol"
      "gpt-5.6-terra"
      "gpt-5.6-luna"
+     "gpt-5.5"
      "gpt-5.3-codex"
      "gpt-5.4"
+     "gpt-5.4-mini"
+     "gpt-5.4-nano"
      "gpt-5.2-codex"
      "gpt-5.1-codex-max"
      "gpt-5.1-codex-mini"
      "gpt-5.2")
     (:zai
      "glm-5.2"
+     "glm-5.1"
      "glm-5"
      "glm-5-turbo"
      "glm-4.7"
@@ -1977,7 +1981,11 @@ respected."
      "openai/gpt-5.6-sol"
      "openai/gpt-5.6-terra"
      "openai/gpt-5.6-luna"
+     "openai/gpt-5.5"
+     "openai/gpt-5.4-mini"
+     "openai/gpt-5.4-nano"
      "z-ai/glm-5.2"
+     "z-ai/glm-5.1"
      "anthropic/claude-fable-5"
      "anthropic/claude-opus-5"
      "anthropic/claude-sonnet-5"
@@ -2008,7 +2016,10 @@ These are used by the model selector overlay.")
   '(("gpt-5.6-sol" "none" "low" "medium" "high" "xhigh" "max")
     ("gpt-5.6-terra" "none" "low" "medium" "high" "xhigh" "max")
     ("gpt-5.6-luna" "none" "low" "medium" "high" "xhigh" "max")
+    ("gpt-5.5" "none" "low" "medium" "high" "xhigh")
     ("gpt-5.4" "none" "low" "medium" "high" "xhigh")
+    ("gpt-5.4-mini" "none" "low" "medium" "high" "xhigh")
+    ("gpt-5.4-nano" "none" "low" "medium" "high" "xhigh")
     ("gpt-5.3-codex" "low" "medium" "high" "xhigh")
     ("gpt-5.2-codex" "low" "medium" "high" "xhigh")
     ("gpt-5.2" "none" "low" "medium" "high" "xhigh")

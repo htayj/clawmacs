@@ -6544,14 +6544,17 @@ same
     (is (member "gpt-5.6-sol" models :test #'string=))
     (is (member "gpt-5.6-terra" models :test #'string=))
     (is (member "gpt-5.6-luna" models :test #'string=))
+    (is (member "gpt-5.5" models :test #'string=))
     (is (member "gpt-5.3-codex" models :test #'string=))
     (is (member "gpt-5.4" models :test #'string=))
+    (is (member "gpt-5.4-mini" models :test #'string=))
+    (is (member "gpt-5.4-nano" models :test #'string=))
     (is (member "gpt-5.2-codex" models :test #'string=))
     (is (member "gpt-5.1-codex-max" models :test #'string=))
     (is (member "gpt-5.1-codex-mini" models :test #'string=))
     (is (member "gpt-5.2" models :test #'string=))
     (is (member clawmacs::*openai-codex-model* models :test #'string=))
-    (is (= 9 (length models)))))
+    (is (= 12 (length models)))))
 
 (test normalize-provider-openai-codex-storage-forms
   "normalize-provider accepts both kebab-case and JSON camelCase storage forms."
@@ -6568,8 +6571,14 @@ same
                        :openai-codex "gpt-5.6-terra"))
         (gpt-56-luna (clawmacs::provider-model-supported-think-levels
                       :openai-codex "gpt-5.6-luna"))
+        (gpt-55 (clawmacs::provider-model-supported-think-levels
+                 :openai-codex "gpt-5.5"))
         (gpt-54 (clawmacs::provider-model-supported-think-levels
                  :openai-codex "gpt-5.4"))
+        (gpt-54-mini (clawmacs::provider-model-supported-think-levels
+                      :openai-codex "gpt-5.4-mini"))
+        (gpt-54-nano (clawmacs::provider-model-supported-think-levels
+                      :openai-codex "gpt-5.4-nano"))
         (gpt-53-codex (clawmacs::provider-model-supported-think-levels
                        :openai-codex "gpt-5.3-codex"))
         (gpt-51-max (clawmacs::provider-model-supported-think-levels
@@ -6578,12 +6587,18 @@ same
                gpt-56-sol))
     (is (equal gpt-56-sol gpt-56-terra))
     (is (equal gpt-56-sol gpt-56-luna))
+    (is (equal '("none" "low" "medium" "high" "xhigh") gpt-55))
     (is (equal '("none" "low" "medium" "high" "xhigh") gpt-54))
+    (is (equal gpt-54 gpt-54-mini))
+    (is (equal gpt-54 gpt-54-nano))
     (is (equal '("low" "medium" "high" "xhigh") gpt-53-codex))
     (is (equal '("none" "low" "medium" "high") gpt-51-max))
     (is (equal '("high" "max")
                (clawmacs::provider-model-supported-think-levels
                 :zai "glm-5.2")))
+    ;; GLM-5.1 documents thinking mode but not a reasoning_effort enum.
+    (is (null (clawmacs::provider-model-supported-think-levels
+               :zai "glm-5.1")))
     (is (null (clawmacs::provider-model-supported-think-levels
                :zai "glm-5")))))
 
@@ -6594,6 +6609,7 @@ same
     (is (plusp (length models)))
     (is (string= "glm-5.2" (first models)))
     (is (member "glm-5.2" models :test #'string=))
+    (is (member "glm-5.1" models :test #'string=))
     (is (member "glm-5" models :test #'string=))
     ;; Should include turbo and older variants
     (is (member "glm-5-turbo" models :test #'string=))
@@ -6717,7 +6733,11 @@ when no cached models are present."
       (is (string= "openai/gpt-5.6-sol" (first models)))
       (dolist (model '("openai/gpt-5.6-terra"
                        "openai/gpt-5.6-luna"
+                       "openai/gpt-5.5"
+                       "openai/gpt-5.4-mini"
+                       "openai/gpt-5.4-nano"
                        "z-ai/glm-5.2"
+                       "z-ai/glm-5.1"
                        "anthropic/claude-fable-5"
                        "anthropic/claude-opus-5"
                        "anthropic/claude-sonnet-5"
