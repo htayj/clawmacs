@@ -116,9 +116,15 @@ resolved-appearance-bundle   catalog/profile/font generations, port identity,
                              roles, surface defaults, bundle key
 ```
 
+Version 1 admits only the `:selection-marker` decoration with the precise
+parameter form `(:marker STRING)`; `parameters` is not a generic drawing-data
+extension point.
+
 The internal unspecified sentinel represents inheritance. In every role style
 component, user-visible `nil` is invalid; `:none` is valid only where an axis
-has a real absence meaning, initially decoration. `nil` is valid only as the
+has a real absence meaning, initially decoration. The public keyword
+`:unspecified` is also invalid as a leaf value and cannot stand for the private
+inheritance sentinel. `nil` is valid only as the
 boolean value of profile/configuration `:strict-contrast`. Typography
 components inherit independently. A compound bold-italic face must be
 specified explicitly; resolution must not invent it from separately encountered
@@ -618,6 +624,11 @@ missing parent, unsupported axis, font ambiguity/unavailability, invalid
 relative base, contrast warning, live-update unsupported, and activation
 failure. They carry origin, role, axis, value, path, port, bounded choices,
 fatality, and suggested repair.
+
+Condition classes are public types for handlers. Application code constructs
+and signals them only through the appearance condition factory/signaling
+boundary, which deep-copies diagnostic payloads; callers must not rely on
+arbitrary `CL:MAKE-CONDITION` construction to provide that guarantee.
 
 ### 7.3 Safe Reload and package removal
 
