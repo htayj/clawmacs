@@ -183,6 +183,145 @@ these tests exercise construction-time space requirements only."
                (appearance-diagnostic-deduplication-key
                 (first (clawmacs::chat-frame-appearance-runtime-diagnostics first)))))))
 
+(test chat-frame-live-appearance-activation-publishes-only-at-the-event-boundary
+  "The caller queues an immutable candidate; event handling publishes and invalidates keys."
+  (let* ((frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "appearance-live-event"
+                                      :session-persistence-mode :ephemeral)))
+         (role-stack '(:transcript-pane :transcript-user))
+         (old-key (clawmacs::chat-frame-appearance-role-key frame role-stack))
+         (old-revision (clawmacs::chat-frame-appearance-revision frame))
+         (candidate
+           (make-appearance-candidate
+            (make-appearance-profile
+             :role-overrides
+             (list
+              (cons :transcript-user
+                    (make-appearance-role-style
+                     :foreground-ink
+                     (make-appearance-ink-spec :foreground '(0.80 0.20 0.30))))))))
+         (queued nil)
+         (redisplays 0))
+    (with-mcclim-test-function-override
+        (clawmacs::queue-chat-frame-appearance-activation-event
+            (requested-frame requested-candidate)
+          (is (eq frame requested-frame))
+          (setf queued requested-candidate)
+          t)
+      (is-true
+       (clawmacs::request-chat-frame-appearance-activation frame candidate)))
+    ;; Requesting from the caller leaves all active frame state alone.
+    (is (eq candidate queued))
+    (is (= old-revision (clawmacs::chat-frame-appearance-revision frame)))
+    (is (equal old-key
+               (clawmacs::chat-frame-appearance-role-key frame role-stack)))
+    (with-mcclim-test-function-override
+        (clawmacs::request-chat-frame-redisplay (requested-frame)
+          (is (eq frame requested-frame))
+          (incf redisplays)
+          requested-frame)
+      ;; This is the body invoked only by the CLIM appearance event handler.
+      (let ((result
+              (clawmacs::handle-chat-frame-appearance-activation frame queued)))
+        (is (eq :ready (appearance-activation-result-status result)))))
+    (is (= (1+ old-revision) (clawmacs::chat-frame-appearance-revision frame)))
+    (is (= 1 redisplays))
+    (is-false (equal old-key
+                     (clawmacs::chat-frame-appearance-role-key frame role-stack)))
+    (is (equal '(0.80 0.20 0.30)
+               (appearance-ink-spec-foreground
+                (appearance-role-style-foreground-ink
+                 (resolved-appearance-role-style
+                  (clawmacs::chat-frame-resolve-appearance-role
+                   frame role-stack))))))))
+
+(test chat-frame-dark-activation-stages-without-partial-active-changes
+  "Surface-changing dark stays staged: profile, bundle, and role keys remain active."
+  (let* ((frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "appearance-dark-stage"
+                                      :session-persistence-mode :ephemeral)))
+         (role-stack '(:transcript-pane :transcript-user))
+         (old-profile (clawmacs::chat-frame-appearance-profile frame))
+         (old-key (clawmacs::chat-frame-appearance-role-key frame role-stack))
+         (old-cache (clawmacs::chat-frame-appearance-resolved-roles frame))
+         (candidate
+           (make-appearance-candidate
+            (make-appearance-profile :selected-theme :dark)))
+         (result
+           (clawmacs::handle-chat-frame-appearance-activation frame candidate)))
+    (is (eq :restart-required (appearance-activation-result-status result)))
+    (is (eq candidate (clawmacs::chat-frame-appearance-staged-candidate frame)))
+    (is (eq :classic (appearance-profile-selected-theme
+                      (clawmacs::chat-frame-appearance-profile frame))))
+    (is (eq old-profile (clawmacs::chat-frame-appearance-profile frame)))
+    (is (null (clawmacs::chat-frame-appearance-active-bundle frame)))
+    (is (eq old-cache (clawmacs::chat-frame-appearance-resolved-roles frame)))
+    (is (equal old-key
+               (clawmacs::chat-frame-appearance-role-key frame role-stack)))))
+
+(test chat-frame-appearance-activation-failure-preserves-active-and-valid-staged-state
+  "Resolution failure records a condition but cannot replace active or prior staged state."
+  (let* ((frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "appearance-activation-failure"
+                                      :session-persistence-mode :ephemeral)))
+         (role-stack '(:transcript-pane :transcript-user))
+         (old-key (clawmacs::chat-frame-appearance-role-key frame role-stack))
+         (dark (make-appearance-candidate
+                (make-appearance-profile :selected-theme :dark)))
+         (broken (make-appearance-candidate
+                  (make-appearance-profile :selected-theme :no-such-theme))))
+    (clawmacs::handle-chat-frame-appearance-activation frame dark)
+    (let ((result
+            (clawmacs::handle-chat-frame-appearance-activation frame broken)))
+      (is (eq :failed (appearance-activation-result-status result)))
+      (is-true (appearance-activation-result-diagnostics result)))
+    (is (eq dark (clawmacs::chat-frame-appearance-staged-candidate frame)))
+    (is (eq :classic (appearance-profile-selected-theme
+                      (clawmacs::chat-frame-appearance-profile frame))))
+    (is (null (clawmacs::chat-frame-appearance-active-bundle frame)))
+    (is (equal old-key
+               (clawmacs::chat-frame-appearance-role-key frame role-stack)))
+    (is-true (clawmacs::chat-frame-appearance-activation-diagnostics frame))))
+
+(test chat-frame-appearance-live-activation-isolated-by-frame-and-noop-is-inert
+  "Publishing one frame never clears another frame's cache; no-op has no side effects."
+  (let* ((first (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "appearance-live-first"
+                                      :session-persistence-mode :ephemeral)))
+         (second (clim:make-application-frame
+                  'clawmacs::clawmacs-chat-frame
+                  :buffer (make-buffer "appearance-live-second"
+                                       :session-persistence-mode :ephemeral)))
+         (role-stack '(:transcript-pane :transcript-user))
+         (second-key (clawmacs::chat-frame-appearance-role-key second role-stack))
+         (live
+           (make-appearance-candidate
+            (make-appearance-profile
+             :role-overrides
+             (list
+              (cons :transcript-user
+                    (make-appearance-role-style
+                     :foreground-ink
+                     (make-appearance-ink-spec :foreground '(0.80 0.20 0.30))))))))
+         (first-result
+           (clawmacs::handle-chat-frame-appearance-activation first live))
+         (revision (clawmacs::chat-frame-appearance-revision first))
+         (noop-result
+           (clawmacs::handle-chat-frame-appearance-activation
+            first (make-appearance-candidate
+                   (clawmacs::chat-frame-appearance-profile first)))))
+    (is (eq :ready (appearance-activation-result-status first-result)))
+    (is (eq :no-op (appearance-activation-result-status noop-result)))
+    (is (= revision (clawmacs::chat-frame-appearance-revision first)))
+    (is (eq :classic (appearance-profile-selected-theme
+                      (clawmacs::chat-frame-appearance-profile second))))
+    (is (equal second-key
+               (clawmacs::chat-frame-appearance-role-key second role-stack)))))
+
 (test chat-frame-construction-passes-a-fresh-classic-profile
   "Startup construction carries profile data without changing pane construction."
   (let ((captured-profiles nil)

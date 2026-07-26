@@ -1239,10 +1239,16 @@ are validated."
                 :unsaved-overrides
                 (append profile-overrides unsaved-overrides)))
              (style (resolved-appearance-role-style resolved))
-             (foreground (appearance-ink-spec-foreground
-                          (appearance-role-style-foreground-ink style)))
-             (background (appearance-surface-spec-background
-                          (appearance-role-style-surface style)))
+             ;; A partially customized :CLASSIC stack may still inherit an
+             ;; intentionally unspecified backend surface or foreground.
+             ;; Preserve that as an unavailable ratio rather than trying to
+             ;; call a specification accessor on the inheritance sentinel.
+             (foreground-spec (appearance-role-style-foreground-ink style))
+             (background-spec (appearance-role-style-surface style))
+             (foreground (unless (appearance-unspecified-p foreground-spec)
+                           (appearance-ink-spec-foreground foreground-spec)))
+             (background (unless (appearance-unspecified-p background-spec)
+                           (appearance-surface-spec-background background-spec)))
              (ratio (appearance-contrast-ratio foreground background))
              (provenance (resolved-appearance-role-provenance resolved))
              (built-in-p
@@ -1366,3 +1372,233 @@ are validated."
       (cons :system (foreground '(0.45 0.45 0.45)))
       (cons :disabled (foreground '(0.45 0.45 0.45)))
       (cons :error (foreground '(0.60 0.12 0.12)))))))
+
+;;;; Candidate activation planning
+;;;;
+;;;; These objects deliberately remain independent of application frames and
+;;;; CLIM panes.  A frame event later decides whether a prepared plan is safe
+;;;; to publish.  In particular, no resolver here mutates a pane, medium,
+;;;; sheet, text-style mapping, or output record.
+
+(defstruct (appearance-candidate
+            (:constructor %make-appearance-candidate (&key profile))
+            (:conc-name %appearance-candidate-))
+  "Immutable requested profile awaiting frame-local activation."
+  (profile nil :type appearance-profile :read-only t))
+
+(defstruct (resolved-appearance-bundle
+            (:constructor %make-resolved-appearance-bundle
+                (&key catalog-generation profile roles role-keys bundle-key))
+            (:conc-name %resolved-appearance-bundle-))
+  "Complete pure resolution of one profile against one appearance catalog."
+  (catalog-generation 0 :type (integer 0 *) :read-only t)
+  (profile nil :type appearance-profile :read-only t)
+  (roles nil :type list :read-only t)
+  (role-keys nil :type list :read-only t)
+  (bundle-key nil :read-only t))
+
+(defstruct (appearance-activation-classification
+            (:constructor %make-appearance-activation-classification
+                (&key status deltas))
+            (:conc-name %appearance-activation-classification-))
+  "Classification of every effective bundle delta before publication."
+  (status :no-op :type keyword :read-only t)
+  (deltas nil :type list :read-only t))
+
+(defstruct (appearance-activation-result
+            (:constructor %make-appearance-activation-result
+                (&key status candidate classification diagnostics bundle))
+            (:conc-name %appearance-activation-result-))
+  "Structured outcome retained by the owning frame after one activation event."
+  (status :failed :type keyword :read-only t)
+  (candidate nil :read-only t)
+  (classification nil :read-only t)
+  (diagnostics nil :type list :read-only t)
+  (bundle nil :read-only t))
+
+(defun copy-appearance-profile (profile)
+  "Return a fresh immutable copy of PROFILE."
+  (make-appearance-profile
+   :selected-theme (appearance-profile-selected-theme profile)
+   :strict-contrast (appearance-profile-strict-contrast profile)
+   :role-overrides (appearance-profile-role-overrides profile)))
+
+(defun make-appearance-candidate (profile)
+  "Construct a deep immutable activation candidate for PROFILE."
+  (unless (typep profile 'appearance-profile)
+    (error-appearance-condition 'invalid-appearance-component
+                                :axis :appearance-candidate :value profile))
+  (%make-appearance-candidate :profile (copy-appearance-profile profile)))
+
+(defun appearance-candidate-profile (candidate)
+  (copy-appearance-profile (%appearance-candidate-profile candidate)))
+
+(defun resolved-appearance-bundle-profile (bundle)
+  (copy-appearance-profile (%resolved-appearance-bundle-profile bundle)))
+
+(defun resolved-appearance-bundle-roles (bundle)
+  (copy-appearance-value (%resolved-appearance-bundle-roles bundle)))
+
+(defun resolved-appearance-bundle-role-keys (bundle)
+  (copy-appearance-value (%resolved-appearance-bundle-role-keys bundle)))
+
+(defun resolved-appearance-bundle-bundle-key (bundle)
+  (copy-appearance-value (%resolved-appearance-bundle-bundle-key bundle)))
+
+(defun appearance-activation-classification-deltas (classification)
+  (copy-appearance-value
+   (%appearance-activation-classification-deltas classification)))
+
+(defun appearance-activation-classification-status (classification)
+  (%appearance-activation-classification-status classification))
+
+(defun appearance-activation-result-status (result)
+  (%appearance-activation-result-status result))
+
+(defun appearance-activation-result-classification (result)
+  (%appearance-activation-result-classification result))
+
+(defun appearance-activation-result-candidate (result)
+  (let ((candidate (%appearance-activation-result-candidate result)))
+    (and candidate
+         (make-appearance-candidate (appearance-candidate-profile candidate)))))
+
+(defun appearance-activation-result-diagnostics (result)
+  (copy-list (%appearance-activation-result-diagnostics result)))
+
+(defun appearance-activation-result-bundle (result)
+  (%appearance-activation-result-bundle result))
+
+(defun resolve-appearance-profile-bundle (catalog profile)
+  "Resolve every declared role for PROFILE before any activation decision."
+  (unless (typep profile 'appearance-profile)
+    (error-appearance-condition 'invalid-appearance-component
+                                :axis :appearance-profile :value profile))
+  (let* ((theme-id (appearance-profile-selected-theme profile))
+         (overrides (appearance-profile-role-overrides profile))
+         (roles
+           (loop for definition in (appearance-catalog-role-definitions catalog)
+                 for role-id = (appearance-role-definition-id definition)
+                 collect
+                 (cons role-id
+                       (resolve-appearance-role catalog theme-id role-id
+                                                :unsaved-overrides overrides))))
+         (role-keys
+           (mapcar (lambda (entry)
+                     (cons (car entry)
+                           (resolved-appearance-role-structural-key (cdr entry))))
+                   roles)))
+    (%make-resolved-appearance-bundle
+     :catalog-generation (appearance-catalog-generation catalog)
+     :profile (copy-appearance-profile profile)
+     :roles roles
+     :role-keys role-keys
+     :bundle-key (list (appearance-catalog-generation catalog)
+                       (mapcar (lambda (entry)
+                                 (list (car entry)
+                                       (resolved-appearance-role-structural-key
+                                        (cdr entry))))
+                               roles)))))
+
+(defun appearance-role-style-axis-value (style axis)
+  "Return STYLE's structural effective AXIS value for delta comparison.
+
+Resolved style specifications are distinct immutable structures on each pass,
+so object identity would incorrectly classify an unchanged profile as a delta.
+The established structural role key supplies the value comparison boundary."
+  (getf (appearance-role-style-key style) axis))
+
+(defun classify-appearance-delta-axis (catalog role-id axis)
+  "Return the conservative v1 activation class for one effective delta.
+
+Only non-default content/state foreground changes are proven safe at the
+output boundary in this commit.  Pane defaults, surfaces, typography, and
+decorations deliberately remain outside its live scope."
+  (let ((kind (appearance-role-definition-kind
+               (require-appearance-role-definition catalog role-id :activation))))
+    (cond
+      ((eq axis :surface) :restart-required)
+      ((eq axis :typography) :unsupported)
+      ((eq axis :decoration) :unsupported)
+      ((eq axis :foreground-ink)
+       (if (or (eq kind :surface) (eq role-id :default-text))
+           :restart-required
+           :render-boundary-live)))))
+
+(defun classify-appearance-bundle-delta (catalog active candidate)
+  "Classify all effective differences between ACTIVE and CANDIDATE bundles."
+  (let ((deltas nil))
+    (dolist (candidate-entry (%resolved-appearance-bundle-roles candidate))
+      (let* ((role-id (car candidate-entry))
+             (candidate-style
+               (resolved-appearance-role-style (cdr candidate-entry)))
+             (active-entry
+               (assoc role-id (%resolved-appearance-bundle-roles active)
+                      :test #'equal))
+             (active-style
+               (and active-entry
+                    (resolved-appearance-role-style (cdr active-entry)))))
+        (dolist (axis '(:typography :foreground-ink :surface :decoration))
+          (unless (equal (and active-style
+                              (appearance-role-style-axis-value active-style axis))
+                         (appearance-role-style-axis-value candidate-style axis))
+            (push (list :role role-id
+                        :axis axis
+                        :classification
+                        (classify-appearance-delta-axis catalog role-id axis))
+                  deltas)))))
+    (let ((deltas (nreverse deltas)))
+      (%make-appearance-activation-classification
+       :status (cond ((null deltas) :no-op)
+                     ((every (lambda (delta)
+                               (eq (getf delta :classification)
+                                   :render-boundary-live))
+                             deltas)
+                      :render-boundary-live)
+                     ((some (lambda (delta)
+                              (eq (getf delta :classification) :unsupported))
+                            deltas)
+                      :unsupported)
+                     (t :restart-required))
+       :deltas deltas))))
+
+(defun prepare-appearance-activation (catalog active-profile candidate)
+  "Resolve, contrast-validate, and classify CANDIDATE without publishing it.
+
+The returned result is always structured.  Errors become copied appearance
+diagnostics, leaving the caller free to retain its active frame state exactly."
+  (let ((diagnostics nil))
+    (handler-case
+        (handler-bind
+            ((appearance-contrast-warning
+               (lambda (condition)
+                 (push condition diagnostics)
+                 (let ((restart (find-restart 'muffle-warning condition)))
+                   (when restart (invoke-restart restart))))))
+          (let* ((active (resolve-appearance-profile-bundle catalog active-profile))
+                 (profile (appearance-candidate-profile candidate)))
+            (validate-appearance-profile-contrast catalog profile)
+            (let* ((bundle (resolve-appearance-profile-bundle catalog profile))
+                   (classification
+                     (classify-appearance-bundle-delta catalog active bundle))
+                   (status (case (%appearance-activation-classification-status classification)
+                             (:no-op :no-op)
+                             (:render-boundary-live :ready)
+                             (:restart-required :restart-required)
+                             (:unsupported :unsupported))))
+              (%make-appearance-activation-result
+               :status status :candidate candidate :classification classification
+               :diagnostics (nreverse diagnostics) :bundle bundle))))
+      (appearance-condition (condition)
+        (%make-appearance-activation-result
+         :status :failed :candidate candidate
+         :diagnostics (nreverse (cons condition diagnostics))))
+      (error (condition)
+        (%make-appearance-activation-result
+         :status :failed :candidate candidate
+         :diagnostics
+         (nreverse
+          (cons (make-appearance-condition
+                 'appearance-activation-failed
+                 :axis :activation :value (format nil "~A" condition))
+                diagnostics)))))))

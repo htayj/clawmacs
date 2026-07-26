@@ -775,3 +775,68 @@
         :selected-theme :classic :strict-contrast t
         :role-overrides overrides)
        :role-stacks '((:transcript-pane :default-text))))))
+
+(test appearance-activation-preparation-classifies-whole-bundles-without-publication
+  "Only non-default foreground changes are render-boundary live in commit six."
+  (let* ((catalog (make-classic-appearance-catalog))
+         (active (make-appearance-profile))
+         (candidate
+           (make-appearance-candidate
+            (make-appearance-profile
+             :role-overrides
+             (list
+              (cons :transcript-user
+                    (test-appearance-style :foreground '(0.80 0.20 0.30)))))))
+         (result (clawmacs::prepare-appearance-activation catalog active candidate))
+         (classification (appearance-activation-result-classification result)))
+    (is (eq :ready (appearance-activation-result-status result)))
+    (is (eq :render-boundary-live
+            (appearance-activation-classification-status classification)))
+    (is-true
+     (every (lambda (delta)
+              (eq :render-boundary-live (getf delta :classification)))
+            (appearance-activation-classification-deltas classification)))
+    ;; Preparation is pure: the active profile remains the separate classic
+    ;; value until a frame event decides to publish the prepared result.
+    (is (eq :classic (appearance-profile-selected-theme active)))))
+
+(test appearance-activation-classifies-dark-as-restart-required-and-noop-exactly
+  "Surface/default deltas stage; structurally equal candidates do nothing."
+  (let* ((catalog (make-classic-appearance-catalog))
+         (active (make-appearance-profile))
+         (dark (clawmacs::prepare-appearance-activation
+                catalog active
+                (make-appearance-candidate
+                 (make-appearance-profile :selected-theme :dark))))
+         (noop (clawmacs::prepare-appearance-activation
+                catalog active
+                (make-appearance-candidate (make-appearance-profile)))))
+    (is (eq :restart-required (appearance-activation-result-status dark)))
+    (is (eq :restart-required
+            (appearance-activation-classification-status
+             (appearance-activation-result-classification dark))))
+    (is-true
+     (some (lambda (delta)
+             (and (eq :surface (getf delta :axis))
+                  (eq :restart-required (getf delta :classification))))
+           (appearance-activation-classification-deltas
+            (appearance-activation-result-classification dark))))
+    (is (eq :no-op (appearance-activation-result-status noop)))
+    (is (eq :no-op
+            (appearance-activation-classification-status
+             (appearance-activation-result-classification noop))))))
+
+(test appearance-activation-preparation-retains-a-structured-resolution-diagnostic
+  "A missing candidate theme fails before any caller could publish a bundle."
+  (let* ((candidate
+           (make-appearance-candidate
+            (make-appearance-profile :selected-theme :missing-theme)))
+         (result
+           (clawmacs::prepare-appearance-activation
+            (make-classic-appearance-catalog)
+            (make-appearance-profile) candidate)))
+    (is (eq :failed (appearance-activation-result-status result)))
+    (is (null (appearance-activation-result-bundle result)))
+    (is-true
+     (some (lambda (diagnostic) (typep diagnostic 'appearance-condition))
+           (appearance-activation-result-diagnostics result)))))

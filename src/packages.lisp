@@ -454,6 +454,18 @@
    #:resolve-appearance-role-stack
    #:resolve-runtime-appearance-role-stack
    #:make-classic-appearance-catalog
+   #:appearance-candidate
+   #:make-appearance-candidate
+   #:appearance-candidate-profile
+   #:appearance-activation-classification
+   #:appearance-activation-classification-status
+   #:appearance-activation-classification-deltas
+   #:appearance-activation-result
+   #:appearance-activation-result-status
+   #:appearance-activation-result-candidate
+   #:appearance-activation-result-classification
+   #:appearance-activation-result-diagnostics
+   #:appearance-activation-result-bundle
    #:buffer-clear-history-before-input
    #:buffer-insert-read-only-message
    #:buffer-insert-agent-message

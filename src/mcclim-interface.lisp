@@ -53,6 +53,11 @@
 (defclass clawmacs-chat-redisplay-event (clim:window-manager-event)
   ())
 
+(defclass clawmacs-chat-appearance-activation-event (clim:window-manager-event)
+  ((candidate :initarg :candidate :reader chat-appearance-activation-event-candidate))
+  (:documentation
+   "One immutable appearance request delivered to the owning CLIM frame process."))
+
 (defvar *suppress-chat-redisplay-requests* nil
   "When non-nil, buffer display hooks should not queue chat redisplay events.
 This is bound while a chat frame is already applying provider stream state to
@@ -1450,7 +1455,7 @@ rendering state."
            :accessor chat-frame-buffer)
    (appearance-profile :initarg :appearance-profile
                        :initform (make-appearance-profile)
-                       :reader chat-frame-appearance-profile
+                       :accessor chat-frame-appearance-profile
                        :documentation
                        "Immutable profile selected for this frame at construction.")
    (appearance-catalog :initarg :appearance-catalog
@@ -1462,6 +1467,18 @@ rendering state."
                         :reader chat-frame-appearance-revision
                         :documentation
                         "Frame-local appearance state revision; it is not a render key.")
+   (appearance-active-bundle :initform nil
+                             :reader chat-frame-appearance-active-bundle
+                             :documentation
+                             "Last fully resolved bundle atomically published by this frame.")
+   (appearance-staged-candidate :initform nil
+                                :reader chat-frame-appearance-staged-candidate
+                                :documentation
+                                "Last requested immutable candidate, distinct from active state.")
+   (appearance-last-activation-result :initform nil
+                                      :reader chat-frame-appearance-last-activation-result)
+   (appearance-activation-diagnostics :initform nil
+                                      :reader chat-frame-appearance-activation-diagnostics)
    (appearance-resolved-roles :initform (make-hash-table :test #'equal)
                               :reader chat-frame-appearance-resolved-roles
                               :documentation
@@ -2189,6 +2206,84 @@ CLIM:REDISPLAY-FRAME-PANE."
                             :condition (format nil "~A" condition))
           nil)))))
 
+(defun queue-chat-frame-appearance-activation-event (frame candidate)
+  "Queue CANDIDATE for activation on FRAME's owning CLIM event process.
+
+The caller performs no frame mutation and does not resolve the candidate.  An
+ungrafted frame simply cannot accept an interactive activation yet; normal
+frame construction remains the profile-application path for that case."
+  (let ((sheet (chat-frame-grafted-top-level-sheet frame)))
+    (when sheet
+      (handler-case
+          (progn
+            (clim:queue-event
+             sheet
+             (make-instance 'clawmacs-chat-appearance-activation-event
+                            :sheet sheet :candidate candidate))
+            t)
+        (error (condition)
+          (file-debug-event "appearance-activation-queue-failed"
+                            :condition (format nil "~A" condition))
+          nil)))))
+
+(defun request-chat-frame-appearance-activation (frame candidate)
+  "Request immutable CANDIDATE activation without mutating FRAME on the caller.
+
+Publication is exclusively performed by the appearance activation event
+handler, which is delivered by the frame's normal CLIM event process."
+  (unless (typep candidate 'appearance-candidate)
+    (error-appearance-condition 'invalid-appearance-component
+                                :axis :appearance-candidate :value candidate))
+  (queue-chat-frame-appearance-activation-event frame candidate))
+
+(defun publish-chat-frame-appearance-bundle (frame result)
+  "Atomically publish one already validated live RESULT on FRAME.
+
+This function is called only by HANDLE-CHAT-FRAME-APPEARANCE-ACTIVATION, the
+CLIM event-process boundary.  It touches frame-owned semantic state and cache
+keys only; pane construction and low-level rendering objects are untouched."
+  (let ((bundle (appearance-activation-result-bundle result))
+        (candidate (appearance-activation-result-candidate result)))
+    (unless (and bundle candidate)
+      (error "A live appearance result requires a bundle and candidate."))
+    (setf (chat-frame-appearance-profile frame)
+          (appearance-candidate-profile candidate)
+          (slot-value frame 'appearance-active-bundle) bundle
+          (slot-value frame 'appearance-staged-candidate) nil)
+    (incf (slot-value frame 'appearance-revision))
+    ;; Structural keys belong to resolved output.  Clearing only after the
+    ;; atomic publish lets ordinary display functions acquire the new keys on
+    ;; the next CLIM redisplay; no direct output-record operation is needed.
+    (clrhash (chat-frame-appearance-resolved-roles frame))
+    (clrhash (chat-frame-appearance-role-keys frame))
+    result))
+
+(defun record-chat-frame-appearance-result (frame result)
+  "Retain RESULT and its structured diagnostics in FRAME-local state."
+  (setf (slot-value frame 'appearance-last-activation-result) result)
+  (dolist (diagnostic (appearance-activation-result-diagnostics result))
+    (push diagnostic (slot-value frame 'appearance-activation-diagnostics)))
+  result)
+
+(defun handle-chat-frame-appearance-activation (frame candidate)
+  "Resolve and conditionally publish CANDIDATE on FRAME's CLIM event process."
+  (let ((result
+          (prepare-appearance-activation
+           (chat-frame-appearance-catalog frame)
+           (chat-frame-appearance-profile frame)
+           candidate)))
+    ;; A candidate is staged only after whole-profile resolution succeeded.
+    ;; In particular, a failed candidate never overwrites the last valid
+    ;; staged profile, while active profile/bundle/keys remain untouched.
+    (case (appearance-activation-result-status result)
+      (:ready
+       (publish-chat-frame-appearance-bundle frame result)
+       (ignore-errors (request-chat-frame-redisplay frame)))
+      ((:restart-required :unsupported)
+       (setf (slot-value frame 'appearance-staged-candidate) candidate))
+      ((:failed :no-op) nil))
+    (record-chat-frame-appearance-result frame result)))
+
 (defun chat-frame-grafted-top-level-sheet (frame)
   "Return FRAME's grafted top-level sheet, or NIL before FRAME is running."
   (let ((sheet (ignore-errors (clim:frame-top-level-sheet frame))))
@@ -2434,6 +2529,29 @@ contains the expanded pane and the pointer-documentation pane below it."
   (let ((frame (ignore-errors (clim:pane-frame sheet))))
     (when (typep frame 'clawmacs-chat-frame)
       (handle-chat-frame-redisplay-safely frame))))
+
+(defmethod clim:handle-event
+    ((sheet clime:top-level-sheet-mixin)
+     (event clawmacs-chat-appearance-activation-event))
+  "Deliver appearance publication through the same canonical CLIM event loop."
+  (let ((frame (ignore-errors (clim:pane-frame sheet))))
+    (when (typep frame 'clawmacs-chat-frame)
+      (handler-case
+          (handle-chat-frame-appearance-activation
+           frame (chat-appearance-activation-event-candidate event))
+        (error (condition)
+          ;; PREPARE normally turns appearance failures into a structured
+          ;; result.  This final containment protects the event loop from an
+          ;; unexpected implementation failure without mutating panes.
+          (let ((result
+                  (%make-appearance-activation-result
+                   :status :failed
+                   :candidate (chat-appearance-activation-event-candidate event)
+                   :diagnostics
+                   (list (make-appearance-condition
+                          'appearance-activation-failed
+                          :axis :activation :value (format nil "~A" condition))))))
+            (record-chat-frame-appearance-result frame result)))))))
 
 (defun run-chat-frame-buffer-command (frame command)
   "Run COMMAND on FRAME's buffer and refresh frame UI state."
