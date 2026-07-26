@@ -366,6 +366,7 @@
    #:appearance-theme-cycle
    #:appearance-role-cycle
    #:missing-appearance-parent
+   #:invalid-appearance-fallback
    #:unsupported-role-axis
    #:ambiguous-font-family
    #:ambiguous-font-face

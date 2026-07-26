@@ -64,6 +64,17 @@
     (setf (slot-value condition slot)
           (copy-appearance-value (slot-value condition slot)))))
 
+(defun copy-appearance-condition-initargs (initargs)
+  "Copy all diagnostic initarg values before condition initialization."
+  (loop :for (key value) :on initargs :by #'cddr
+        :append (list key (copy-appearance-value value))))
+
+(defmethod shared-initialize :around ((condition appearance-condition)
+                                      slot-names &rest initargs)
+  "Make MAKE-CONDITION and WARN retain no caller-owned diagnostic payload."
+  (apply #'call-next-method condition slot-names
+         (copy-appearance-condition-initargs initargs)))
+
 (defmethod appearance-condition-origin :around ((condition appearance-condition))
   (copy-appearance-value (call-next-method)))
 
@@ -97,6 +108,7 @@
 (define-condition appearance-theme-cycle (appearance-error) ())
 (define-condition appearance-role-cycle (appearance-error) ())
 (define-condition missing-appearance-parent (appearance-error) ())
+(define-condition invalid-appearance-fallback (appearance-error) ())
 (define-condition unsupported-role-axis (appearance-error) ())
 (define-condition ambiguous-font-family (appearance-error) ())
 (define-condition ambiguous-font-face (appearance-error) ())
@@ -270,7 +282,18 @@
 
 (defun make-appearance-decoration-spec
     (&key (kind *appearance-unspecified*) (parameters *appearance-unspecified*))
-  "Construct an immutable decoration declaration with no executable payload."
+  "Construct a version-1 deterministic decoration declaration."
+  (when (and (not (appearance-unspecified-p kind))
+             (not (member kind '(:none :selection-marker) :test #'eq)))
+    (error 'invalid-appearance-component :axis :decoration :value kind))
+  (when (and (not (appearance-unspecified-p parameters))
+             (or (not (and (listp parameters)
+                           (= (length parameters) 2)
+                           (eq (first parameters) :marker)
+                           (stringp (second parameters))))
+                 (not (eq kind :selection-marker))))
+    (error 'invalid-appearance-component :axis :decoration-parameters
+           :value parameters))
   (%make-appearance-decoration-spec
    :kind (if (appearance-unspecified-p kind)
              *appearance-unspecified*
@@ -278,8 +301,7 @@
               (validate-appearance-leaf kind :decoration :allow-none-p t)))
    :parameters (if (appearance-unspecified-p parameters)
                    *appearance-unspecified*
-                   (copy-appearance-value
-                    (validate-appearance-leaf parameters :decoration-parameters)))))
+                   (list :marker (copy-seq (second parameters))))))
 
 (defun appearance-decoration-spec-kind (spec)
   (copy-appearance-value (%appearance-decoration-spec-kind spec)))
@@ -441,11 +463,12 @@
 
 (defun appearance-role-supported-axes (role-definition)
   "Return ROLE-DEFINITION's accepted axes in stable order."
-  (or (unless (appearance-unspecified-p
-               (appearance-role-definition-supported-axes role-definition))
-        (appearance-role-definition-supported-axes role-definition))
-      (cdr (assoc (appearance-role-definition-kind role-definition)
-                  +appearance-role-axes+))))
+  (copy-list
+   (or (unless (appearance-unspecified-p
+                (appearance-role-definition-supported-axes role-definition))
+         (appearance-role-definition-supported-axes role-definition))
+       (cdr (assoc (appearance-role-definition-kind role-definition)
+                   +appearance-role-axes+)))))
 
 (defun appearance-role-supports-axis-p (role-definition axis)
   "Return true when AXIS is meaningful for ROLE-DEFINITION."
@@ -511,18 +534,70 @@
         (push id seen))))
   (copy-list definitions))
 
+(defun validate-appearance-role-topology (role-definitions)
+  "Reject missing, cross-kind, and cyclic fallback graphs before publication."
+  (labels ((find-role (id)
+             (find id role-definitions :test #'equal
+                   :key #'appearance-role-definition-id)))
+    (dolist (role role-definitions)
+      (let ((seen nil)
+            (current role))
+        (loop
+          (let ((id (appearance-role-definition-id current)))
+            (when (member id seen :test #'equal)
+              (error 'appearance-role-cycle :role id :path (reverse seen)))
+            (push id seen))
+          (let ((fallback (appearance-role-definition-fallback-role current)))
+            (unless fallback
+              (return))
+            (let ((fallback-definition (find-role fallback)))
+              (unless fallback-definition
+                (error 'missing-appearance-parent
+                       :role (appearance-role-definition-id current)
+                       :axis :fallback-role :value fallback))
+              (unless (eq (appearance-role-definition-kind current)
+                          (appearance-role-definition-kind fallback-definition))
+                (error 'invalid-appearance-fallback
+                       :role (appearance-role-definition-id current)
+                       :axis :fallback-role :value fallback))
+              (setf current fallback-definition)))))))
+
+(defun validate-appearance-theme-topology (theme-definitions)
+  "Reject missing and cyclic parent graphs before a catalog is published."
+  (labels ((find-theme (id)
+             (find id theme-definitions :test #'equal
+                   :key #'appearance-theme-definition-id)))
+    (dolist (theme theme-definitions)
+      (let ((seen nil)
+            (current theme))
+        (loop
+          (let ((id (appearance-theme-definition-id current)))
+            (when (member id seen :test #'equal)
+              (error 'appearance-theme-cycle :value id :path (reverse seen)))
+            (push id seen))
+          (let ((parent (appearance-theme-definition-parent-theme current)))
+            (unless parent
+              (return))
+            (let ((parent-definition (find-theme parent)))
+              (unless parent-definition
+                (error 'missing-appearance-parent :axis :parent-theme
+                       :value parent))
+              (setf current parent-definition)))))))
+
 (defun make-appearance-catalog
     (&key (role-definitions nil) (theme-definitions nil) (built-in-overlays nil))
   "Construct an immutable catalog without resolving themes or roles."
-  (%make-appearance-catalog
-   :role-definitions (validate-appearance-definitions
-                      role-definitions 'appearance-role-definition
-                      :role-definitions)
-   :theme-definitions (validate-appearance-definitions
-                       theme-definitions 'appearance-theme-definition
-                       :theme-definitions)
-   :built-in-overlays (validate-appearance-overlays
-                       built-in-overlays :built-in-overlays)))
+  (let ((roles (validate-appearance-definitions
+                role-definitions 'appearance-role-definition :role-definitions))
+        (themes (validate-appearance-definitions
+                 theme-definitions 'appearance-theme-definition :theme-definitions)))
+    (validate-appearance-role-topology roles)
+    (validate-appearance-theme-topology themes)
+    (%make-appearance-catalog
+     :role-definitions roles
+     :theme-definitions themes
+     :built-in-overlays (validate-appearance-overlays
+                         built-in-overlays :built-in-overlays))))
 
 (defun appearance-catalog-role-definitions (catalog)
   (copy-list (%appearance-catalog-role-definitions catalog)))
@@ -580,7 +655,7 @@
         (let ((fallback (appearance-role-definition-fallback-role definition)))
           (if fallback
               (setf current fallback)
-              (return (nreverse chain))))))))
+              (return chain))))))))
 
 (defun appearance-theme-parent-chain (catalog theme-id &key (origin :catalog))
   "Return THEME-ID's parent chain from root to selected theme, rejecting cycles."
@@ -597,7 +672,7 @@
         (let ((parent (appearance-theme-definition-parent-theme definition)))
           (if parent
               (setf current parent)
-              (return (nreverse chain))))))))
+              (return chain))))))))
 
 (defun appearance-logical-size-index (size)
   "Return SIZE's logical ladder index, or NIL when it is not logical."
@@ -745,26 +820,39 @@
       (validate-appearance-role-style definition (cdr entry) :origin origin)))
   overlays)
 
+(defun appearance-structural-key-value (value)
+  "Canonicalize internal inheritance state out of public structural keys."
+  (if (appearance-unspecified-p value)
+      :unspecified
+      (copy-appearance-value value)))
+
 (defun appearance-role-style-key (style)
   "Return STYLE's structural output key without catalog/profile revisions."
   (list :typography
-        (list (appearance-typography-spec-family
-               (appearance-role-style-typography style))
-              (appearance-typography-spec-face
-               (appearance-role-style-typography style))
-              (appearance-typography-spec-size
-               (appearance-role-style-typography style)))
+        (list (appearance-structural-key-value
+               (appearance-typography-spec-family
+                (appearance-role-style-typography style)))
+              (appearance-structural-key-value
+               (appearance-typography-spec-face
+                (appearance-role-style-typography style)))
+              (appearance-structural-key-value
+               (appearance-typography-spec-size
+                (appearance-role-style-typography style))))
         :foreground-ink
-        (appearance-ink-spec-foreground
-         (appearance-role-style-foreground-ink style))
+        (appearance-structural-key-value
+         (appearance-ink-spec-foreground
+          (appearance-role-style-foreground-ink style)))
         :surface
-        (appearance-surface-spec-background
-         (appearance-role-style-surface style))
+        (appearance-structural-key-value
+         (appearance-surface-spec-background
+          (appearance-role-style-surface style)))
         :decoration
-        (list (appearance-decoration-spec-kind
-               (appearance-role-style-decoration style))
-              (appearance-decoration-spec-parameters
-               (appearance-role-style-decoration style)))))
+        (list (appearance-structural-key-value
+               (appearance-decoration-spec-kind
+                (appearance-role-style-decoration style)))
+              (appearance-structural-key-value
+               (appearance-decoration-spec-parameters
+                (appearance-role-style-decoration style))))))
 
 (defun merge-provenance (provenance style origin)
   "Record ORIGIN for each explicitly supplied axis, preserving other origins."
@@ -869,45 +957,61 @@ must exist and the stack must have at most one role of each kind."
 
 Returns the resolved role and a bounded diagnostic list. Configuration parsers
 must use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
-  (let ((diagnostics nil)
-        (known-roles nil))
+  (let ((unknown-role-ids nil)
+        (by-kind (make-hash-table :test #'eq)))
     (dolist (role-id role-ids)
-      (let ((known (or (find-appearance-role-definition catalog role-id)
-                       (progn
-                         (push (make-condition 'unknown-appearance-role
-                                               :origin :runtime :role role-id
-                                               :value role-id :fatal-p nil)
-                               diagnostics)
-                         (require-appearance-role-definition catalog
-                                                              :default-text
-                                                              :runtime)))))
-        (unless (member (appearance-role-definition-kind known) known-roles
-                        :key (lambda (id)
-                               (appearance-role-definition-kind
-                                (require-appearance-role-definition catalog id
-                                                                     :runtime)))
-                        :test #'eq)
-          (push (appearance-role-definition-id known) known-roles))))
-    (setf known-roles (nreverse known-roles))
+      (let ((known (find-appearance-role-definition catalog role-id)))
+        (if known
+            ;; A valid same-kind role always supersedes a previous unknown
+            ;; fallback, regardless of input ordering.
+            (setf (gethash (appearance-role-definition-kind known) by-kind)
+                  (appearance-role-definition-id known))
+            (progn
+              (push role-id unknown-role-ids)
+              (unless (gethash :content by-kind)
+                (setf (gethash :content by-kind) :default-text))))))
+    (let ((known-roles (remove nil
+                               (mapcar (lambda (kind) (gethash kind by-kind))
+                                       '(:surface :content :state)))))
     (let ((resolved (apply #'resolve-appearance-role-stack catalog theme-id
                            known-roles keys)))
       (%make-resolved-appearance-role
        :style (resolved-appearance-role-style resolved)
        :provenance (resolved-appearance-role-provenance resolved)
        :structural-key (resolved-appearance-role-structural-key resolved)
-       :diagnostics (nreverse diagnostics)))))
+       ;; The pure resolver emits one aggregate diagnostic. Frame-level code
+       ;; can therefore deduplicate this stable report per catalog generation.
+       :diagnostics (if unknown-role-ids
+                        (list (make-condition 'unknown-appearance-role
+                                              :origin :runtime
+                                              :role :default-text
+                                              :value (nreverse unknown-role-ids)
+                                              :fatal-p nil))
+                        nil))))))
 
 (defun make-classic-appearance-catalog ()
   "Return the version-1 :CLASSIC declarations and exact current output goldens."
   (labels ((role (id kind &optional fallback)
              (make-appearance-role-definition :id id :kind kind
                                                :fallback-role fallback))
-           (foreground (value &key face)
-             (make-appearance-role-style
-              :foreground-ink (make-appearance-ink-spec :foreground value)
-              :typography (if face
-                              (make-appearance-typography-spec :face face)
-                              (make-appearance-typography-spec)))))
+           (foreground (value &key face marker)
+             (let ((arguments
+                     (list :foreground-ink
+                           (make-appearance-ink-spec :foreground value))))
+               (when face
+                 (setf arguments
+                       (append arguments
+                               (list :typography
+                                     (make-appearance-typography-spec
+                                      :face face)))))
+               (when marker
+                 (setf arguments
+                       (append arguments
+                               (list :decoration
+                                     (make-appearance-decoration-spec
+                                      :kind :selection-marker
+                                      :parameters (list :marker marker))))))
+               (apply #'make-appearance-role-style arguments))))
     (make-appearance-catalog
      :role-definitions
      (list
@@ -944,10 +1048,12 @@ must use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
       (cons :transcript-tool (foreground '(0.12 0.34 0.18)))
       (cons :tool-result (foreground '(0.12 0.34 0.18)))
       (cons :transcript-system (foreground '(0.36 0.36 0.36)))
-      (cons :selector-title (foreground '(0.16 0.22 0.45)))
+      (cons :transcript-empty (foreground '(0.45 0.45 0.45)))
+      (cons :selector-title (foreground '(0.16 0.22 0.45) :face :bold))
       (cons :selector-header (foreground '(0.18 0.36 0.20)))
       (cons :selector-footer (foreground '(0.35 0.35 0.35)))
-      (cons :selector-selection (foreground '(0.10 0.38 0.65) :face :bold))
+      (cons :selector-selection
+            (foreground '(0.10 0.38 0.65) :face :bold :marker ">"))
       (cons :selector-entry (foreground '(0.20 0.20 0.20)))
       (cons :system (foreground '(0.45 0.45 0.45)))
       (cons :disabled (foreground '(0.45 0.45 0.45)))

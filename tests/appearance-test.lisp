@@ -46,7 +46,7 @@
 
 (test appearance-declarations-defensively-copy-mutable-inputs
   "Published declarations neither retain nor expose mutable caller data."
-  (let* ((parameters (vector "sample"))
+  (let* ((parameters (list :marker "sample"))
          (overlays (list (cons :default-text
                                (make-appearance-role-style))))
          (theme (make-appearance-theme-definition
@@ -54,11 +54,11 @@
                  :role-overlays overlays))
          (decoration (make-appearance-decoration-spec
                       :kind :selection-marker :parameters parameters)))
-    (setf (aref parameters 0) "changed"
+    (setf (char (second parameters) 0) #\c
           (caar overlays) :error)
     (is (eq :default-text (caar (appearance-theme-definition-role-overlays theme))))
-    (is (string= "sample" (aref (appearance-decoration-spec-parameters decoration)
-                                  0)))
+    (is (string= "sample"
+                 (second (appearance-decoration-spec-parameters decoration))))
     (let ((published (appearance-theme-definition-role-overlays theme)))
       (setf (caar published) :error)
       (is (eq :default-text
@@ -80,15 +80,17 @@
     (make-appearance-role-definition :id :bad :kind :unknown)))
 
 (test appearance-condition-payloads-are-defensive-and-contrast-is-a-warning
-  "Conditions preserve diagnostic data without retaining mutable caller values."
+  "MAKE-CONDITION and WARN preserve diagnostic data without caller aliases."
   (let* ((payload (list "original"))
+         (condition (make-condition 'appearance-contrast-warning
+                                    :value payload :role :default-text))
          (captured nil))
-    (handler-bind ((appearance-contrast-warning
-                     (lambda (condition)
-                       (setf captured condition)
-                       (muffle-warning condition))))
-      (warn 'appearance-contrast-warning :value payload :role :default-text))
     (setf (car payload) "changed")
+    (handler-bind ((appearance-contrast-warning
+                     (lambda (warning)
+                       (setf captured warning)
+                       (muffle-warning warning))))
+      (warn condition))
     (is (typep captured 'warning))
     (is (string= "original" (car (appearance-condition-value captured))))
     (let ((reported (appearance-condition-value captured)))
@@ -198,7 +200,7 @@
              (appearance-role-style-typography style))))
     (is (equal :unsaved
                (cdr (assoc :foreground-ink
-                           (resolved-appearance-role-provenance resolved)))))))
+                           (resolved-appearance-role-provenance resolved))))))
 
 (test appearance-typography-merges-components-and-clamps-relative-sizes
   "Family/face/size cascade independently and each relative request is consumed."
@@ -218,14 +220,33 @@
     (signals relative-size-base-invalid
       (resolve-appearance-relative-size :not-a-logical-size :larger :test))))
 
-(test appearance-cycles-and-configuration-unknown-roles-are-fatal
-  "Graphs and stored/configuration role references reject invalid declarations."
+(test appearance-chain-builders-return-root-to-leaf-order
+  "Fallback and parent builders independently preserve the cascade direction."
+  (let ((catalog (make-test-appearance-catalog)))
+    (is (equal '(:default-text :title)
+               (mapcar #'appearance-role-definition-id
+                       (appearance-role-fallback-chain catalog :title))))
+    (is (equal '(:root :child)
+               (mapcar #'appearance-theme-definition-id
+                       (appearance-theme-parent-chain catalog :child))))))
+
+(test appearance-catalog-rejects-invalid-graphs-and-configuration-roles
+  "Graphs are rejected before publication; stored/configuration roles are fatal."
   (signals appearance-role-cycle
-    (appearance-role-fallback-chain (make-test-appearance-catalog :role-cycle-p t)
-                                    :default-text))
+    (make-test-appearance-catalog :role-cycle-p t))
   (signals appearance-theme-cycle
-    (appearance-theme-parent-chain (make-test-appearance-catalog :theme-cycle-p t)
-                                   :child))
+    (make-test-appearance-catalog :theme-cycle-p t))
+  (signals missing-appearance-parent
+    (make-appearance-catalog
+     :role-definitions
+     (list (make-appearance-role-definition :id :missing-child :kind :content
+                                             :fallback-role :absent))))
+  (signals invalid-appearance-fallback
+    (make-appearance-catalog
+     :role-definitions
+     (list (make-appearance-role-definition :id :surface :kind :surface
+                                             :fallback-role :content)
+           (make-appearance-role-definition :id :content :kind :content))))
   (signals unknown-appearance-role
     (resolve-appearance-role (make-test-appearance-catalog) :child :missing))
   (signals unknown-appearance-role
@@ -262,20 +283,91 @@
              (appearance-role-style-foreground-ink
               (resolved-appearance-role-style resolved)))))))
 
-(test appearance-structural-keys-ignore-no-op-identity-and-classic-is-golden
-  "Cache keys describe effective output, and classic retains the exact literals."
+(test appearance-runtime-unknown-role-does-not-mask-a-later-valid-role
+  "A valid same-kind wire role wins over a preceding fallback from an unknown."
+  (let ((resolved (resolve-runtime-appearance-role-stack
+                   (make-test-appearance-catalog) :child '(:unknown :title))))
+    (is (= 1 (length (resolved-appearance-role-diagnostics resolved))))
+    (is (eq :bold
+            (appearance-typography-spec-face
+             (appearance-role-style-typography
+              (resolved-appearance-role-style resolved)))))))
+
+(test appearance-runtime-diagnostics-are-bounded-per-resolution
+  "Several unknown wire roles produce one aggregate catalog-generation report."
+  (let ((resolved (resolve-runtime-appearance-role-stack
+                   (make-test-appearance-catalog) :child
+                   '(:unknown-one :unknown-two :title))))
+    (is (= 1 (length (resolved-appearance-role-diagnostics resolved))))
+    (is (equal '(:unknown-one :unknown-two)
+               (appearance-condition-value
+                (first (resolved-appearance-role-diagnostics resolved)))))))
+
+(test appearance-supported-axis-accessors-do-not-expose-constant-lists
+  "Default axis vocabulary copies are fresh even when they originate in constants."
+  (let* ((role (make-appearance-role-definition :id :content :kind :content))
+         (axes (appearance-role-supported-axes role)))
+    (setf (first axes) :changed)
+    (is (eq :typography (first (appearance-role-supported-axes role))))))
+
+(test appearance-structural-keys-and-classic-goldens-are-deterministic
+  "Keys are output-only and classic retains every current literal/style golden."
   (let* ((catalog (make-test-appearance-catalog))
          (first (resolve-appearance-role catalog :child :title))
          (second (resolve-appearance-role catalog :child :title
                                           :unsaved-overrides nil))
          (different (resolve-appearance-role catalog :child :default-text))
-         (classic (resolve-appearance-role (make-classic-appearance-catalog)
-                                           :classic :transcript-user)))
+         (classic-catalog (make-classic-appearance-catalog))
+         (classic (resolve-appearance-role classic-catalog :classic
+                                           :transcript-user)))
     (is (equal (resolved-appearance-role-structural-key first)
                (resolved-appearance-role-structural-key second)))
     (is-false (equal (resolved-appearance-role-structural-key first)
                      (resolved-appearance-role-structural-key different)))
+    (is (equal
+         (appearance-role-style-key
+          (make-appearance-role-style
+           :decoration (make-appearance-decoration-spec
+                        :kind :selection-marker
+                        :parameters (list :marker ">"))))
+         (appearance-role-style-key
+          (make-appearance-role-style
+           :decoration (make-appearance-decoration-spec
+                        :kind :selection-marker
+                        :parameters (list :marker ">"))))))
     (is (equal '(0.10 0.25 0.55)
                (appearance-ink-spec-foreground
                 (appearance-role-style-foreground-ink
-                 (resolved-appearance-role-style classic)))))))
+                 (resolved-appearance-role-style classic)))))
+    (dolist (golden '((:transcript-agent (0.10 0.10 0.10))
+                      (:transcript-tool (0.12 0.34 0.18))
+                      (:tool-result (0.12 0.34 0.18))
+                      (:transcript-system (0.36 0.36 0.36))
+                      (:transcript-empty (0.45 0.45 0.45))
+                      (:selector-title (0.16 0.22 0.45))
+                      (:selector-header (0.18 0.36 0.20))
+                      (:selector-footer (0.35 0.35 0.35))
+                      (:selector-selection (0.10 0.38 0.65))
+                      (:selector-entry (0.20 0.20 0.20))
+                      (:system (0.45 0.45 0.45))
+                      (:disabled (0.45 0.45 0.45))
+                      (:error (0.60 0.12 0.12))))
+      (let* ((resolved (resolve-appearance-role classic-catalog :classic
+                                                 (first golden)))
+             (foreground (appearance-ink-spec-foreground
+                          (appearance-role-style-foreground-ink
+                           (resolved-appearance-role-style resolved)))))
+        (is (equal (second golden) foreground))))
+    (let* ((title (resolved-appearance-role-style
+                   (resolve-appearance-role classic-catalog :classic
+                                            :selector-title)))
+           (selection (resolved-appearance-role-style
+                       (resolve-appearance-role classic-catalog :classic
+                                                :selector-selection))))
+      (is (eq :bold (appearance-typography-spec-face
+                     (appearance-role-style-typography title))))
+      (is (eq :bold (appearance-typography-spec-face
+                     (appearance-role-style-typography selection))))
+      (is (equal '(:marker ">")
+                 (appearance-decoration-spec-parameters
+                  (appearance-role-style-decoration selection)))))))
