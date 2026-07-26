@@ -346,11 +346,12 @@
    #:font-editor-extract-genera-fonts-command
 
    ;; Appearance declarations and resolution
-   #:*appearance-unspecified*
    #:appearance-unspecified-p
-   #:+appearance-logical-sizes+
-   #:+appearance-relative-sizes+
+   #:appearance-logical-sizes
+   #:appearance-relative-sizes
+   #:appearance-role-kinds
    #:appearance-condition
+   #:appearance-error
    #:appearance-condition-origin
    #:appearance-condition-role
    #:appearance-condition-axis
@@ -417,6 +418,7 @@
    #:appearance-profile
    #:make-appearance-profile
    #:appearance-profile-selected-theme
+   #:appearance-profile-strict-contrast
    #:appearance-profile-role-overrides
    #:buffer-clear-history-before-input
    #:buffer-insert-read-only-message
