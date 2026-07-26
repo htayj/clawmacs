@@ -6714,10 +6714,18 @@ when no cached models are present."
       (is (listp models))
       (is (plusp (length models)))
       ;; First static model is the default
-      (is (string= "openai/gpt-5.3-codex" (first models)))
-      (is-false (find-if (lambda (model)
-                           (search "anthropic/" model))
-                         models)))))
+      (is (string= "openai/gpt-5.6-sol" (first models)))
+      (dolist (model '("openai/gpt-5.6-terra"
+                       "openai/gpt-5.6-luna"
+                       "z-ai/glm-5.2"
+                       "anthropic/claude-fable-5"
+                       "anthropic/claude-opus-5"
+                       "anthropic/claude-sonnet-5"
+                       "anthropic/claude-haiku-4.5"
+                       "google/gemini-3.6-flash"
+                       "google/gemini-3.5-flash"
+                       "google/gemini-3.5-flash-lite"))
+        (is (member model models :test #'string=))))))
 
 (test openrouter-provider-known-models-cached
   "provider-known-models returns the cached list when *openrouter-cached-models* is set."

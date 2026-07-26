@@ -62,10 +62,10 @@ GLM-5.2 is the current coding model with a 1M context window.")
 Uses the coding-specific endpoint for subscription-based access.")
 
 ;;; OpenRouter Configuration
-(defvar *openrouter-model* "openai/gpt-5.3-codex"
+(defvar *openrouter-model* "openai/gpt-5.6-sol"
   "The default OpenRouter model to use for chat completions.
-Model names follow the 'provider/model-name' format (e.g. 'openai/gpt-5.3-codex',
-'google/gemini-2.5-pro', 'z-ai/glm-4.6'). These are OpenRouter
+Model names follow the 'provider/model-name' format (e.g. 'openai/gpt-5.6-sol',
+'google/gemini-3.6-flash', 'z-ai/glm-5.2'). These are OpenRouter
 model identifiers and do not imply direct Anthropic provider support.")
 
 (defvar *openrouter-api-url* "https://openrouter.ai/api/v1/chat/completions"
@@ -1974,6 +1974,18 @@ respected."
      "glm-4.5"
      "glm-4.5-air")
     (:openrouter
+     "openai/gpt-5.6-sol"
+     "openai/gpt-5.6-terra"
+     "openai/gpt-5.6-luna"
+     "z-ai/glm-5.2"
+     "anthropic/claude-fable-5"
+     "anthropic/claude-opus-5"
+     "anthropic/claude-sonnet-5"
+     "anthropic/claude-haiku-4.5"
+     "google/gemini-3.6-flash"
+     "google/gemini-3.5-flash"
+     "google/gemini-3.5-flash-lite"
+     "google/gemini-3.1-pro-preview"
      "openai/gpt-5.3-codex"
      "openai/gpt-5.2"
      "openai/gpt-5.1"

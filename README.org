@@ -501,6 +501,12 @@ Interactive sessions default to =zai/glm-5.2=. The model selector retains
 older GLM releases for explicitly pinned configurations; GLM-5.2 exposes its
 documented =high= and =max= reasoning-effort choices.
 
+OpenRouter model discovery uses its live =/api/v1/models= catalog when an API
+key is configured. Without a successful live fetch, Clawmacs falls back to a
+curated tool-capable catalog containing the GPT-5.6 family, GLM-5.2, current
+Claude models, and current Gemini Flash models. Anthropic and Google models are
+OpenRouter routes; Clawmacs does not provide direct adapters for them.
+
 ** User Init File
 
 Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
