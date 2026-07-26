@@ -420,6 +420,29 @@
    #:appearance-profile-selected-theme
    #:appearance-profile-strict-contrast
    #:appearance-profile-role-overrides
+   #:appearance-catalog
+   #:make-appearance-catalog
+   #:appearance-catalog-role-definitions
+   #:appearance-catalog-theme-definitions
+   #:appearance-catalog-built-in-overlays
+   #:find-appearance-role-definition
+   #:find-appearance-theme-definition
+   #:appearance-role-fallback-chain
+   #:appearance-theme-parent-chain
+   #:appearance-logical-size-index
+   #:resolve-appearance-relative-size
+   #:merge-appearance-typography
+   #:merge-appearance-role-style
+   #:appearance-role-style-key
+   #:resolved-appearance-role
+   #:resolved-appearance-role-style
+   #:resolved-appearance-role-provenance
+   #:resolved-appearance-role-structural-key
+   #:resolved-appearance-role-diagnostics
+   #:resolve-appearance-role
+   #:resolve-appearance-role-stack
+   #:resolve-runtime-appearance-role-stack
+   #:make-classic-appearance-catalog
    #:buffer-clear-history-before-input
    #:buffer-insert-read-only-message
    #:buffer-insert-agent-message

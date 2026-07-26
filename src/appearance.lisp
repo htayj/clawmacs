@@ -473,3 +473,482 @@
                :axis (car axis)
                :value (funcall (cdr axis) style)))))
   style)
+
+;;;; Pure catalogs and role cascade
+
+(defstruct (appearance-catalog
+            (:constructor %make-appearance-catalog
+                (&key role-definitions theme-definitions built-in-overlays))
+            (:conc-name %appearance-catalog-))
+  "Immutable declarations available to a resolver; it contains no active frame."
+  (role-definitions nil :type list :read-only t)
+  (theme-definitions nil :type list :read-only t)
+  (built-in-overlays nil :type list :read-only t))
+
+(defstruct (resolved-appearance-role
+            (:constructor %make-resolved-appearance-role
+                (&key style provenance structural-key diagnostics))
+            (:conc-name %resolved-appearance-role-))
+  "Pure result of resolving one surface/content/state role stack."
+  (style nil :read-only t)
+  (provenance nil :type list :read-only t)
+  (structural-key nil :read-only t)
+  (diagnostics nil :type list :read-only t))
+
+(defun validate-appearance-definitions (definitions expected-type axis)
+  "Validate a declaration list with unique IDs and return a copied list."
+  (unless (and (listp definitions)
+               (every (lambda (definition) (typep definition expected-type))
+                      definitions))
+    (error 'invalid-appearance-component :axis axis :value definitions))
+  (let ((seen nil))
+    (dolist (definition definitions)
+      (let ((id (if (eq expected-type 'appearance-role-definition)
+                    (appearance-role-definition-id definition)
+                    (appearance-theme-definition-id definition))))
+        (when (member id seen :test #'equal)
+          (error 'invalid-appearance-component :axis axis :value id))
+        (push id seen))))
+  (copy-list definitions))
+
+(defun make-appearance-catalog
+    (&key (role-definitions nil) (theme-definitions nil) (built-in-overlays nil))
+  "Construct an immutable catalog without resolving themes or roles."
+  (%make-appearance-catalog
+   :role-definitions (validate-appearance-definitions
+                      role-definitions 'appearance-role-definition
+                      :role-definitions)
+   :theme-definitions (validate-appearance-definitions
+                       theme-definitions 'appearance-theme-definition
+                       :theme-definitions)
+   :built-in-overlays (validate-appearance-overlays
+                       built-in-overlays :built-in-overlays)))
+
+(defun appearance-catalog-role-definitions (catalog)
+  (copy-list (%appearance-catalog-role-definitions catalog)))
+
+(defun appearance-catalog-theme-definitions (catalog)
+  (copy-list (%appearance-catalog-theme-definitions catalog)))
+
+(defun appearance-catalog-built-in-overlays (catalog)
+  (copy-appearance-value (%appearance-catalog-built-in-overlays catalog)))
+
+(defun resolved-appearance-role-style (resolved-role)
+  (%resolved-appearance-role-style resolved-role))
+
+(defun resolved-appearance-role-provenance (resolved-role)
+  (copy-appearance-value (%resolved-appearance-role-provenance resolved-role)))
+
+(defun resolved-appearance-role-structural-key (resolved-role)
+  (copy-appearance-value (%resolved-appearance-role-structural-key resolved-role)))
+
+(defun resolved-appearance-role-diagnostics (resolved-role)
+  (copy-list (%resolved-appearance-role-diagnostics resolved-role)))
+
+(defun find-appearance-role-definition (catalog id)
+  "Return the catalog role with ID, or NIL when it is not declared."
+  (find id (%appearance-catalog-role-definitions catalog) :test #'equal
+        :key #'appearance-role-definition-id))
+
+(defun find-appearance-theme-definition (catalog id)
+  "Return the catalog theme with ID, or NIL when it is not declared."
+  (find id (%appearance-catalog-theme-definitions catalog) :test #'equal
+        :key #'appearance-theme-definition-id))
+
+(defun require-appearance-role-definition (catalog id origin)
+  "Return a declared role or signal a configuration/declaration error."
+  (or (find-appearance-role-definition catalog id)
+      (error 'unknown-appearance-role :origin origin :role id :value id)))
+
+(defun require-appearance-theme-definition (catalog id origin)
+  "Return a declared theme or signal a configuration/declaration error."
+  (or (find-appearance-theme-definition catalog id)
+      (error 'missing-appearance-parent :origin origin :value id)))
+
+(defun appearance-role-fallback-chain (catalog role-id &key (origin :catalog))
+  "Return ROLE-ID's fallback chain from root to requested role, rejecting cycles."
+  (let ((seen nil)
+        (chain nil)
+        (current role-id))
+    (loop
+      (when (member current seen :test #'equal)
+        (error 'appearance-role-cycle :origin origin :role role-id
+               :path (nreverse (cons current seen))))
+      (let ((definition (require-appearance-role-definition catalog current origin)))
+        (push current seen)
+        (push definition chain)
+        (let ((fallback (appearance-role-definition-fallback-role definition)))
+          (if fallback
+              (setf current fallback)
+              (return (nreverse chain))))))))
+
+(defun appearance-theme-parent-chain (catalog theme-id &key (origin :catalog))
+  "Return THEME-ID's parent chain from root to selected theme, rejecting cycles."
+  (let ((seen nil)
+        (chain nil)
+        (current theme-id))
+    (loop
+      (when (member current seen :test #'equal)
+        (error 'appearance-theme-cycle :origin origin :value theme-id
+               :path (nreverse (cons current seen))))
+      (let ((definition (require-appearance-theme-definition catalog current origin)))
+        (push current seen)
+        (push definition chain)
+        (let ((parent (appearance-theme-definition-parent-theme definition)))
+          (if parent
+              (setf current parent)
+              (return (nreverse chain))))))))
+
+(defun appearance-logical-size-index (size)
+  "Return SIZE's logical ladder index, or NIL when it is not logical."
+  (position size +appearance-logical-sizes+ :test #'eq))
+
+(defun resolve-appearance-relative-size (base-size relative-size origin)
+  "Consume RELATIVE-SIZE once against BASE-SIZE and clamp to the logical ladder."
+  (let ((index (appearance-logical-size-index base-size)))
+    (unless index
+      (error 'relative-size-base-invalid :origin origin :axis :typography-size
+             :value relative-size))
+    (nth (max 0 (min (1- (length +appearance-logical-sizes+))
+                     (+ index (ecase relative-size
+                                (:smaller -1)
+                                (:larger 1)))))
+         +appearance-logical-sizes+)))
+
+(defun merge-appearance-typography (base overlay origin)
+  "Overlay typed typography while consuming a relative size at this layer."
+  (let* ((base (if (or (null base) (appearance-unspecified-p base))
+                   (make-appearance-typography-spec)
+                   base))
+         (overlay (if (or (null overlay) (appearance-unspecified-p overlay))
+                      (make-appearance-typography-spec)
+                      overlay))
+         (family (appearance-typography-spec-family base))
+         (face (appearance-typography-spec-face base))
+         (size (appearance-typography-spec-size base))
+         (new-family (appearance-typography-spec-family overlay))
+         (new-face (appearance-typography-spec-face overlay))
+         (new-size (appearance-typography-spec-size overlay)))
+    (unless (appearance-unspecified-p new-family)
+      (setf family new-family))
+    (unless (appearance-unspecified-p new-face)
+      (setf face new-face))
+    (unless (appearance-unspecified-p new-size)
+      (setf size (if (member new-size +appearance-relative-sizes+ :test #'eq)
+                     (resolve-appearance-relative-size size new-size origin)
+                     new-size)))
+    (make-appearance-typography-spec :family family :face face :size size)))
+
+(defun merge-appearance-ink (base overlay)
+  "Overlay a foreground ink component without inventing a value."
+  (let ((base (unless (appearance-unspecified-p base) base))
+        (overlay (unless (appearance-unspecified-p overlay) overlay)))
+    (let ((value (if (and overlay
+                        (not (appearance-unspecified-p
+                              (appearance-ink-spec-foreground overlay))))
+                   (appearance-ink-spec-foreground overlay)
+                   (if base
+                       (appearance-ink-spec-foreground base)
+                       *appearance-unspecified*))))
+      (make-appearance-ink-spec :foreground value))))
+
+(defun merge-appearance-surface (base overlay)
+  "Overlay a surface component without inventing a value."
+  (let ((base (unless (appearance-unspecified-p base) base))
+        (overlay (unless (appearance-unspecified-p overlay) overlay)))
+    (let ((value (if (and overlay
+                        (not (appearance-unspecified-p
+                              (appearance-surface-spec-background overlay))))
+                   (appearance-surface-spec-background overlay)
+                   (if base
+                       (appearance-surface-spec-background base)
+                       *appearance-unspecified*))))
+      (make-appearance-surface-spec :background value))))
+
+(defun merge-appearance-decoration (base overlay)
+  "Overlay decoration kind and parameters independently."
+  (let ((base (unless (appearance-unspecified-p base) base))
+        (overlay (unless (appearance-unspecified-p overlay) overlay)))
+    (let ((kind (if (and overlay
+                       (not (appearance-unspecified-p
+                             (appearance-decoration-spec-kind overlay))))
+                  (appearance-decoration-spec-kind overlay)
+                  (if base
+                      (appearance-decoration-spec-kind base)
+                      *appearance-unspecified*)))
+        (parameters (if (and overlay
+                             (not (appearance-unspecified-p
+                                   (appearance-decoration-spec-parameters overlay))))
+                        (appearance-decoration-spec-parameters overlay)
+                        (if base
+                            (appearance-decoration-spec-parameters base)
+                            *appearance-unspecified*))))
+      (make-appearance-decoration-spec :kind kind :parameters parameters))))
+
+(defun appearance-style-axis-specified-p (style axis)
+  "Return whether STYLE explicitly supplies AXIS."
+  (ecase axis
+    (:typography
+     (let ((typography (appearance-role-style-typography style)))
+       (and (not (appearance-unspecified-p typography))
+            (or (not (appearance-unspecified-p
+                      (appearance-typography-spec-family typography)))
+                (not (appearance-unspecified-p
+                      (appearance-typography-spec-face typography)))
+                (not (appearance-unspecified-p
+                      (appearance-typography-spec-size typography)))))))
+    (:foreground-ink
+     (let ((ink (appearance-role-style-foreground-ink style)))
+       (and (not (appearance-unspecified-p ink))
+            (not (appearance-unspecified-p
+                  (appearance-ink-spec-foreground ink))))))
+    (:surface
+     (let ((surface (appearance-role-style-surface style)))
+       (and (not (appearance-unspecified-p surface))
+            (not (appearance-unspecified-p
+                  (appearance-surface-spec-background surface))))))
+    (:decoration
+     (let ((decoration (appearance-role-style-decoration style)))
+       (and (not (appearance-unspecified-p decoration))
+            (or (not (appearance-unspecified-p
+                      (appearance-decoration-spec-kind decoration)))
+                (not (appearance-unspecified-p
+                      (appearance-decoration-spec-parameters decoration)))))))))
+
+(defun merge-appearance-role-style (base overlay origin)
+  "Component-wise merge of BASE and OVERLAY role styles."
+  (let ((base (or base (make-appearance-role-style)))
+        (overlay (or overlay (make-appearance-role-style))))
+    (make-appearance-role-style
+     :typography (merge-appearance-typography
+                  (appearance-role-style-typography base)
+                  (appearance-role-style-typography overlay) origin)
+     :foreground-ink (merge-appearance-ink
+                      (appearance-role-style-foreground-ink base)
+                      (appearance-role-style-foreground-ink overlay))
+     :surface (merge-appearance-surface
+               (appearance-role-style-surface base)
+               (appearance-role-style-surface overlay))
+     :decoration (merge-appearance-decoration
+                  (appearance-role-style-decoration base)
+                  (appearance-role-style-decoration overlay)))))
+
+(defun find-appearance-overlay (overlays role-id)
+  "Return ROLE-ID's partial style from OVERLAYS, or NIL when omitted."
+  (cdr (assoc role-id overlays :test #'equal)))
+
+(defun validate-appearance-overlays-for-catalog (catalog overlays origin)
+  "Reject unknown/configuration overlays before resolving any of their effects."
+  (dolist (entry overlays)
+    (let ((definition (require-appearance-role-definition catalog (car entry)
+                                                          origin)))
+      (validate-appearance-role-style definition (cdr entry) :origin origin)))
+  overlays)
+
+(defun appearance-role-style-key (style)
+  "Return STYLE's structural output key without catalog/profile revisions."
+  (list :typography
+        (list (appearance-typography-spec-family
+               (appearance-role-style-typography style))
+              (appearance-typography-spec-face
+               (appearance-role-style-typography style))
+              (appearance-typography-spec-size
+               (appearance-role-style-typography style)))
+        :foreground-ink
+        (appearance-ink-spec-foreground
+         (appearance-role-style-foreground-ink style))
+        :surface
+        (appearance-surface-spec-background
+         (appearance-role-style-surface style))
+        :decoration
+        (list (appearance-decoration-spec-kind
+               (appearance-role-style-decoration style))
+              (appearance-decoration-spec-parameters
+               (appearance-role-style-decoration style)))))
+
+(defun merge-provenance (provenance style origin)
+  "Record ORIGIN for each explicitly supplied axis, preserving other origins."
+  (let ((result (copy-appearance-value provenance)))
+    (dolist (axis '(:typography :foreground-ink :surface :decoration))
+      (when (appearance-style-axis-specified-p style axis)
+        (setf result (acons axis (copy-appearance-value origin)
+                            (remove axis result :key #'car :test #'eq)))))
+    result))
+
+(defun resolve-appearance-role (catalog theme-id role-id
+                                &key (file-overrides nil) (init-overrides nil)
+                                  (environment-overrides nil)
+                                  (command-line-overrides nil)
+                                  (unsaved-overrides nil))
+  "Resolve one declared role through all version-1 source layers.
+
+Unknown ROLE-ID is a configuration/declaration error. Runtime display callers
+use RESOLVE-RUNTIME-APPEARANCE-ROLE-STACK for the documented fallback behavior."
+  (let ((style (merge-appearance-role-style nil nil :initial))
+        (provenance nil)
+        (chain (appearance-role-fallback-chain catalog role-id :origin :catalog)))
+    (labels ((apply-style (definition overlay origin)
+               (when overlay
+                 (validate-appearance-role-style definition overlay :origin origin)
+                 (setf style (merge-appearance-role-style style overlay origin)
+                       provenance (merge-provenance provenance overlay origin)))))
+      ;; Role definitions supply fallback topology. Built-in overlays carry
+      ;; current visual goldens; later UI work supplies pane-default surfaces.
+      (validate-appearance-overlays-for-catalog
+       catalog (appearance-catalog-built-in-overlays catalog) :built-in)
+      (dolist (definition chain)
+        (apply-style definition
+                     (find-appearance-overlay
+                      (appearance-catalog-built-in-overlays catalog)
+                      (appearance-role-definition-id definition))
+                     :built-in))
+      (dolist (theme (appearance-theme-parent-chain catalog theme-id
+                                                    :origin :theme))
+        (validate-appearance-overlays-for-catalog
+         catalog (appearance-theme-definition-role-overlays theme)
+         (list :theme (appearance-theme-definition-id theme)))
+        (dolist (definition chain)
+          (apply-style definition
+                       (find-appearance-overlay
+                        (appearance-theme-definition-role-overlays theme)
+                        (appearance-role-definition-id definition))
+                       (list :theme (appearance-theme-definition-id theme)))))
+      (dolist (layer (list (cons :appearance-file file-overrides)
+                           (cons :init init-overrides)
+                           (cons :environment environment-overrides)
+                           (cons :command-line command-line-overrides)
+                           (cons :unsaved unsaved-overrides)))
+        (validate-appearance-overlays-for-catalog catalog (cdr layer)
+                                                 (car layer))
+        (dolist (definition chain)
+          (apply-style definition
+                       (find-appearance-overlay (cdr layer)
+                                                (appearance-role-definition-id
+                                                 definition))
+                       (car layer))))
+      (%make-resolved-appearance-role
+       :style style
+       :provenance provenance
+       :structural-key (appearance-role-style-key style)
+       :diagnostics nil))))
+
+(defun resolve-appearance-role-stack (catalog theme-id role-ids &rest keys)
+  "Resolve surface, content, and state ROLE-IDS into one pure result.
+
+This is the strict configuration/declaration entry point: every supplied role
+must exist and the stack must have at most one role of each kind."
+  (let ((by-kind (make-hash-table :test #'eq))
+        (style (merge-appearance-role-style nil nil :initial))
+        (provenance nil))
+    (dolist (role-id role-ids)
+      (let ((definition (require-appearance-role-definition catalog role-id
+                                                             :configuration)))
+        (when (gethash (appearance-role-definition-kind definition) by-kind)
+          (error 'invalid-appearance-component :axis :role-stack :value role-ids))
+        (setf (gethash (appearance-role-definition-kind definition) by-kind)
+              role-id)))
+    (dolist (kind '(:surface :content :state))
+      (let ((role-id (gethash kind by-kind)))
+        (when role-id
+          (let ((resolved (apply #'resolve-appearance-role catalog theme-id
+                                 role-id keys)))
+            (setf style (merge-appearance-role-style
+                         style (resolved-appearance-role-style resolved)
+                         (list :stack kind))
+                  provenance (append provenance
+                                     (resolved-appearance-role-provenance
+                                      resolved)))))))
+    (%make-resolved-appearance-role
+     :style style
+     :provenance provenance
+     :structural-key (appearance-role-style-key style)
+     :diagnostics nil)))
+
+(defun resolve-runtime-appearance-role-stack (catalog theme-id role-ids &rest keys)
+  "Resolve a display stack, mapping unknown runtime roles to :DEFAULT-TEXT.
+
+Returns the resolved role and a bounded diagnostic list. Configuration parsers
+must use RESOLVE-APPEARANCE-ROLE-STACK instead, so unknown stored IDs fail."
+  (let ((diagnostics nil)
+        (known-roles nil))
+    (dolist (role-id role-ids)
+      (let ((known (or (find-appearance-role-definition catalog role-id)
+                       (progn
+                         (push (make-condition 'unknown-appearance-role
+                                               :origin :runtime :role role-id
+                                               :value role-id :fatal-p nil)
+                               diagnostics)
+                         (require-appearance-role-definition catalog
+                                                              :default-text
+                                                              :runtime)))))
+        (unless (member (appearance-role-definition-kind known) known-roles
+                        :key (lambda (id)
+                               (appearance-role-definition-kind
+                                (require-appearance-role-definition catalog id
+                                                                     :runtime)))
+                        :test #'eq)
+          (push (appearance-role-definition-id known) known-roles))))
+    (setf known-roles (nreverse known-roles))
+    (let ((resolved (apply #'resolve-appearance-role-stack catalog theme-id
+                           known-roles keys)))
+      (%make-resolved-appearance-role
+       :style (resolved-appearance-role-style resolved)
+       :provenance (resolved-appearance-role-provenance resolved)
+       :structural-key (resolved-appearance-role-structural-key resolved)
+       :diagnostics (nreverse diagnostics)))))
+
+(defun make-classic-appearance-catalog ()
+  "Return the version-1 :CLASSIC declarations and exact current output goldens."
+  (labels ((role (id kind &optional fallback)
+             (make-appearance-role-definition :id id :kind kind
+                                               :fallback-role fallback))
+           (foreground (value &key face)
+             (make-appearance-role-style
+              :foreground-ink (make-appearance-ink-spec :foreground value)
+              :typography (if face
+                              (make-appearance-typography-spec :face face)
+                              (make-appearance-typography-spec)))))
+    (make-appearance-catalog
+     :role-definitions
+     (list
+      (role :base :surface)
+      (role :transcript-pane :surface :base)
+      (role :info-pane :surface :base)
+      (role :compose-pane :surface :base)
+      (role :minibuffer-pane :surface :base)
+      (role :help-pane :surface :base)
+      (role :pointer-documentation :surface :base)
+      (role :default-text :content)
+      (role :transcript-user :content :default-text)
+      (role :transcript-agent :content :default-text)
+      (role :transcript-tool :content :default-text)
+      (role :transcript-system :content :default-text)
+      (role :transcript-empty :content :default-text)
+      (role :system :content :default-text)
+      (role :error :content :default-text)
+      (role :tool-result :content :default-text)
+      (role :modeline :content :default-text)
+      (role :selector-title :content :default-text)
+      (role :selector-header :content :default-text)
+      (role :selector-entry :content :default-text)
+      (role :selector-separator :content :default-text)
+      (role :selector-footer :content :default-text)
+      (role :selector-selection :state)
+      (role :disabled :state))
+     :theme-definitions
+     (list (make-appearance-theme-definition :id :classic))
+     :built-in-overlays
+     (list
+      (cons :transcript-user (foreground '(0.10 0.25 0.55)))
+      (cons :transcript-agent (foreground '(0.10 0.10 0.10)))
+      (cons :transcript-tool (foreground '(0.12 0.34 0.18)))
+      (cons :tool-result (foreground '(0.12 0.34 0.18)))
+      (cons :transcript-system (foreground '(0.36 0.36 0.36)))
+      (cons :selector-title (foreground '(0.16 0.22 0.45)))
+      (cons :selector-header (foreground '(0.18 0.36 0.20)))
+      (cons :selector-footer (foreground '(0.35 0.35 0.35)))
+      (cons :selector-selection (foreground '(0.10 0.38 0.65) :face :bold))
+      (cons :selector-entry (foreground '(0.20 0.20 0.20)))
+      (cons :system (foreground '(0.45 0.45 0.45)))
+      (cons :disabled (foreground '(0.45 0.45 0.45)))
+      (cons :error (foreground '(0.60 0.12 0.12)))))))
