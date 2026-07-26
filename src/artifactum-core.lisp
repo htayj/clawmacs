@@ -40,6 +40,7 @@ read-modify-supersede update of artifacts/index.json.")
                 artifactum-textual-mime-type-p
                 artifactum-supported-attachment-mime-type-p)
          (ftype (function (t) (or null string)) artifactum-normalize-string
+                artifactum-normalize-artifact-name
                 artifactum-file-extension
                 artifactum-strip-xml-markup
                 artifactum-run-program-string
@@ -60,6 +61,7 @@ read-modify-supersede update of artifacts/index.json.")
                 artifactum-session-records)
          (ftype (function (t list) (or null string)) artifactum-office-xml-text)
          (ftype (function (t) integer) artifactum-file-size)
+         (ftype (function (t) (or null list)) artifactum-normalize-record-attributes)
          (ftype (function (t t) (or null list)) artifactum-find-record)
          (ftype (function (t string) string) artifactum-generate-id-unlocked
                 artifactum-generate-id)
@@ -72,14 +74,24 @@ read-modify-supersede update of artifacts/index.json.")
 (defun artifactum-blank-string-p (value)
   "Return true when VALUE is NIL or ASCII whitespace only."
   (or (null value)
-      (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return)
-                                  (string value))))))
+      (let ((string (typecase value
+                      (string value)
+                      (symbol (symbol-name value))
+                      (character (string value))
+                      (t nil))))
+        (or (null string)
+            (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                        string)))))))
 
 (defun artifactum-normalize-string (value)
   "Return VALUE as a trimmed string, or NIL when blank."
-  (unless (artifactum-blank-string-p value)
-    (string-trim '(#\Space #\Tab #\Newline #\Return)
-                 (string value))))
+  (let ((string (typecase value
+                  (string value)
+                  (symbol (symbol-name value))
+                  (character (string value))
+                  (t nil))))
+    (unless (artifactum-blank-string-p string)
+      (string-trim '(#\Space #\Tab #\Newline #\Return) string))))
 
 (defun artifactum-path-string (path)
   "Return PATH as a stable namestring."
@@ -105,9 +117,13 @@ read-modify-supersede update of artifacts/index.json.")
 (defun artifactum-json-value (alist key)
   "Return KEY's value from decoded JSON ALIST."
   (let ((name (artifactum-json-key key)))
-    (loop :for (entry-key . entry-value) :in alist
-          :when (string= name (artifactum-json-key entry-key))
-            :return entry-value)))
+    (when (listp alist)
+      (loop :for entry :in alist
+            :when (and (consp entry)
+                       (let ((entry-key (car entry)))
+                         (and (typep entry-key '(or string symbol))
+                              (string= name (artifactum-json-key entry-key))))
+              :return (cdr entry))))))
 
 (defun artifactum-session-root (session)
   "Return SESSION's artifact root pathname."
@@ -180,14 +196,38 @@ read-modify-supersede update of artifacts/index.json.")
   (not (null (member mime-type +artifactum-supported-attachment-mime-types+
                      :test #'string=))))
 
-(defun artifactum-sanitize-file-name (name)
-  "Return NAME as a filesystem-safe basename."
-  (let ((safe (session-safe-component
-               (or (artifactum-normalize-string name)
-                   "artifact"))))
-    (if (artifactum-blank-string-p safe)
+(defun artifactum-normalize-artifact-name (name)
+  "Return NAME as a display-safe basename without directory components."
+  (let* ((raw (artifactum-normalize-string name))
+         (slash-normalized (and raw (substitute #\/ #\\ raw)))
+         (separator (and slash-normalized
+                         (position #\/ slash-normalized :from-end t)))
+         (basename (artifactum-normalize-string
+                    (and slash-normalized
+                         (if separator
+                             (subseq slash-normalized (1+ separator))
+                             slash-normalized)))))
+    (if (or (artifactum-blank-string-p basename)
+            (member basename '("." "..") :test #'string=))
         "artifact"
-        safe)))
+        basename)))
+
+(defun artifactum-sanitize-file-name (name)
+  "Return NAME as a filesystem-safe basename while preserving its extension."
+  (let* ((basename (artifactum-normalize-artifact-name name))
+         (pathname (pathname basename))
+         (type (pathname-type pathname))
+         (stem (or (pathname-name pathname) "artifact"))
+         (safe-stem (session-safe-component stem))
+         (safe-type (and type
+                         (with-output-to-string (stream)
+                           (loop :for character :across type
+                                 :when (alphanumericp character)
+                                   :do (write-char (char-downcase character)
+                                                   stream))))))
+    (if (artifactum-blank-string-p safe-type)
+        safe-stem
+        (format nil "~A.~A" safe-stem safe-type))))
 
 (defun artifactum-run-program-string (argv)
   "Run ARGV and return stdout as a string, or NIL on failure."
@@ -325,9 +365,84 @@ read-modify-supersede update of artifacts/index.json.")
   (with-open-file (stream path :element-type '(unsigned-byte 8))
     (file-length stream)))
 
+(defun artifactum-json-object-entry-value (entry)
+  "Return ENTRY's value from Artifactum's dotted-alist representation."
+  (cdr entry))
+
+(defun artifactum-json-object-p (value)
+  "Return true when VALUE is an alist with string or symbol keys."
+  (and (listp value)
+       (every (lambda (entry)
+                (and (consp entry)
+                     (typep (car entry) '(or string symbol))))
+              value)))
+
+(defun artifactum-normalize-json-data (value)
+  "Return VALUE as JSON-compatible data and a flag indicating success."
+  (typecase value
+    (null (values nil t))
+    ((eql t) (values t t))
+    (string (values value t))
+    (integer (values value t))
+    (float (values value t))
+    (symbol (values (string-downcase (symbol-name value)) t))
+    (vector
+     (let ((normalized nil))
+       (loop :for element :across value
+             :do (multiple-value-bind (normalized-element valid-p)
+                     (artifactum-normalize-json-data element)
+                   (unless valid-p
+                     (return-from artifactum-normalize-json-data
+                       (values nil nil)))
+                   (push normalized-element normalized)))
+       (values (coerce (nreverse normalized) 'vector) t)))
+    (list
+     (if (artifactum-json-object-p value)
+         (values (artifactum-normalize-record-attributes value) t)
+         (let ((normalized nil))
+           (dolist (element value)
+             (multiple-value-bind (normalized-element valid-p)
+                 (artifactum-normalize-json-data element)
+               (unless valid-p
+                 (return-from artifactum-normalize-json-data
+                   (values nil nil)))
+               (push normalized-element normalized)))
+           (values (nreverse normalized) t))))
+    (t (values nil nil))))
+
+(defun artifactum-normalize-record-attributes (attributes)
+  "Return ATTRIBUTES as a canonical JSON-object alist, or NIL when invalid.
+
+Metadata and provenance are deliberately data-only: keys are normalized to
+underscored JSON names, nested objects receive the same treatment, and values
+must be JSON-compatible.  Missing or malformed fields on older index records
+therefore remain readable as NIL rather than invalidating the whole record."
+  (when (artifactum-json-object-p attributes)
+    (let ((normalized nil))
+      (dolist (entry attributes)
+        (multiple-value-bind (value valid-p)
+            (artifactum-normalize-json-data
+             (artifactum-json-object-entry-value entry))
+          (unless valid-p
+            (return-from artifactum-normalize-record-attributes nil))
+          (push (cons (artifactum-json-key (car entry)) value) normalized)))
+      (sort (remove-duplicates normalized
+                               :key #'car
+                               :test #'string=
+                               :from-end t)
+            #'string<
+            :key #'car))))
+
+(defun artifactum-normalize-nonnegative-integer (value default)
+  "Return VALUE when it is a nonnegative integer, otherwise DEFAULT."
+  (if (and (integerp value) (not (minusp value)))
+      value
+      default))
+
 (defun normalize-artifactum-record (record)
   "Normalize RECORD into a plist."
-  (let* ((id (artifactum-normalize-string
+  (when (listp record)
+    (let* ((id (artifactum-normalize-string
              (artifactum-json-value record "id")))
         (kind (or (artifactum-normalize-string
                    (artifactum-json-value record "kind"))
@@ -340,7 +455,8 @@ read-modify-supersede update of artifacts/index.json.")
                        "application/octet-stream"))
         (path (artifactum-normalize-string
                (artifactum-json-value record "path")))
-        (size (or (artifactum-json-value record "size") 0))
+        (size (artifactum-normalize-nonnegative-integer
+               (artifactum-json-value record "size") 0))
         (preview (artifactum-normalize-string
                   (artifactum-json-value record "preview")))
         (extracted-text (artifactum-normalize-string
@@ -348,36 +464,49 @@ read-modify-supersede update of artifacts/index.json.")
         (author (or (artifactum-normalize-string
                      (artifactum-json-value record "author"))
                     "agent"))
-        (created-at (or (artifactum-json-value record "created_at")
-                        (get-universal-time)))
-        (updated-at (or (artifactum-json-value record "updated_at")
-                        created-at)))
-    (when (and id path)
-      (list :id id
-            :kind kind
-            :name name
-            :mime-type mime-type
-            :path path
-            :size size
-            :preview preview
-            :extracted-text extracted-text
-            :author author
-            :created-at created-at
-            :updated-at updated-at))))
+        (metadata (artifactum-normalize-record-attributes
+                   (artifactum-json-value record "metadata")))
+        (provenance (artifactum-normalize-record-attributes
+                     (artifactum-json-value record "provenance")))
+        (created-at (artifactum-normalize-nonnegative-integer
+                     (artifactum-json-value record "created_at")
+                     (get-universal-time)))
+        (updated-at (artifactum-normalize-nonnegative-integer
+                     (artifactum-json-value record "updated_at")
+                     created-at)))
+      (when (and id path)
+        (list :id id
+              :kind kind
+              :name name
+              :mime-type mime-type
+              :path path
+              :size size
+              :preview preview
+              :extracted-text extracted-text
+              :author author
+              :metadata metadata
+              :provenance provenance
+              :created-at created-at
+              :updated-at updated-at)))))
 
 (defun artifactum-record-json (record)
   "Return RECORD as a JSON alist."
-  `((:id . ,(getf record :id))
-    (:kind . ,(getf record :kind))
-    (:name . ,(getf record :name))
-    (:mime_type . ,(getf record :mime-type))
-    (:path . ,(getf record :path))
-    (:size . ,(getf record :size))
-    (:preview . ,(getf record :preview))
-    (:extracted_text . ,(getf record :extracted-text))
-    (:author . ,(getf record :author))
-    (:created_at . ,(getf record :created-at))
-    (:updated_at . ,(getf record :updated-at))))
+  (append
+   `((:id . ,(getf record :id))
+     (:kind . ,(getf record :kind))
+     (:name . ,(getf record :name))
+     (:mime_type . ,(getf record :mime-type))
+     (:path . ,(getf record :path))
+     (:size . ,(getf record :size))
+     (:preview . ,(getf record :preview))
+     (:extracted_text . ,(getf record :extracted-text))
+     (:author . ,(getf record :author)))
+   (when (getf record :metadata)
+     `((:metadata . ,(getf record :metadata))))
+   (when (getf record :provenance)
+     `((:provenance . ,(getf record :provenance))))
+   `((:created_at . ,(getf record :created-at))
+     (:updated_at . ,(getf record :updated-at)))))
 
 (defun artifactum-read-index-unlocked (session)
   "Return SESSION's artifact records while the caller owns the index lock."
@@ -554,6 +683,55 @@ read-modify-supersede update of artifacts/index.json.")
                              :updated-at (get-universal-time))))
           (artifactum-upsert-record-unlocked session record))))))
 
+(defun artifactum-create-from-octets (buffer name octets
+                                      &key mime-type
+                                        (kind "generated-media")
+                                        (author "agent")
+                                        metadata provenance)
+  "Persist OCTETS as a durable BUFFER artifact and return its record.
+
+NAME is reduced to a basename before it is recorded and used to derive the
+storage path.  METADATA and PROVENANCE are optional JSON objects; their keys
+are normalized to lowercase underscore names before persistence."
+  (unless (typep octets '(vector (unsigned-byte 8)))
+    (error "Artifact octets must be a vector of (unsigned-byte 8)."))
+  (let* ((session (artifactum-session-for-buffer buffer))
+         (resolved-name (artifactum-normalize-artifact-name name))
+         (resolved-mime (or (artifactum-normalize-string mime-type)
+                            (artifactum-guess-mime-type resolved-name)))
+         (normalized-metadata (artifactum-normalize-record-attributes metadata))
+         (normalized-provenance (artifactum-normalize-record-attributes provenance)))
+    (when (and metadata (null normalized-metadata))
+      (error "Artifact metadata must be a JSON object."))
+    (when (and provenance (null normalized-provenance))
+      (error "Artifact provenance must be a JSON object."))
+    (bt:with-lock-held (*artifactum-index-lock*)
+      (let* ((id (artifactum-generate-id-unlocked session resolved-name))
+             (target (artifactum-store-path session id resolved-name)))
+        (ensure-directories-exist target)
+        (with-open-file (stream target
+                                :direction :output
+                                :element-type '(unsigned-byte 8)
+                                :if-exists :supersede
+                                :if-does-not-exist :create)
+          (write-sequence octets stream))
+        (let* ((extracted-text
+                 (artifactum-extract-text-from-path target resolved-mime))
+               (record (list :id id
+                             :kind kind
+                             :name resolved-name
+                             :mime-type resolved-mime
+                             :path (artifactum-path-string target)
+                             :size (length octets)
+                             :preview (artifactum-preview-text extracted-text)
+                             :extracted-text extracted-text
+                             :author author
+                             :metadata normalized-metadata
+                             :provenance normalized-provenance
+                             :created-at (get-universal-time)
+                             :updated-at (get-universal-time))))
+          (artifactum-upsert-record-unlocked session record))))))
+
 (defun artifactum-update-record (buffer artifact-id
                                   &key name content source-path mime-type)
   "Update BUFFER artifact ARTIFACT-ID from CONTENT or SOURCE-PATH."
@@ -620,6 +798,8 @@ read-modify-supersede update of artifacts/index.json.")
               :size (getf record :size)
               :preview (getf record :preview)
               :extracted-text (getf record :extracted-text)
+              :metadata (getf record :metadata)
+              :provenance (getf record :provenance)
               :content content
               :created-at (getf record :created-at)
               :updated-at (getf record :updated-at))))))

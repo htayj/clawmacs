@@ -657,6 +657,7 @@
      #:artifactum-find-record
      #:artifactum-create-from-file
      #:artifactum-create-from-content
+     #:artifactum-create-from-octets
      #:artifactum-update-record
      #:artifactum-read-record-data
      #:artifactum-reference-text

@@ -49,6 +49,14 @@
     (clawmacs::lisp-data-read
      (clawmacs:execute-tool tool-name args))))
 
+(defun read-artifactum-octets (path)
+  "Return PATH's contents as an octet vector."
+  (with-open-file (stream path :element-type '(unsigned-byte 8))
+    (let ((octets (make-array (file-length stream)
+                              :element-type '(unsigned-byte 8))))
+      (read-sequence octets stream)
+      octets)))
+
 (test artifactum-normalizes-record-without-updated-timestamp
   "Legacy records use their creation timestamp when updated_at is absent."
   (let ((record (clawmacs::normalize-artifactum-record
@@ -98,6 +106,68 @@
         (is (= 34567 (getf (first records) :created-at)))
         (is (= 34567 (getf (first records) :updated-at)))))))
 
+(test artifactum-create-from-octets-preserves-bytes-and-normalizes-name
+  "Generated binary media is byte-exact and never retains path components."
+  (with-artifactum-test-state
+    (let* ((buffer (make-artifactum-test-buffer "octets"))
+           (octets (make-array 6
+                               :element-type '(unsigned-byte 8)
+                               :initial-contents '(0 1 127 128 254 255)))
+           (record (clawmacs:artifactum-create-from-octets
+                    buffer
+                    "../nested/ Generated Image.PNG "
+                    octets
+                    :mime-type "image/png")))
+      (is (string= "Generated Image.PNG" (getf record :name)))
+      (is (string= "png" (pathname-type (pathname (getf record :path)))))
+      (is (not (search "nested" (file-namestring (pathname (getf record :path)))
+                       :test #'char-equal)))
+      (is (= (length octets) (getf record :size)))
+      (is (equalp octets (read-artifactum-octets (getf record :path)))))))
+
+(test artifactum-octet-records-round-trip-normalized-metadata-and-provenance
+  "Media metadata and provenance round-trip through the durable JSON index."
+  (with-artifactum-test-state
+    (let* ((buffer (make-artifactum-test-buffer "metadata"))
+           (record (clawmacs:artifactum-create-from-octets
+                    buffer "image.webp" #(82 73 70 70)
+                    :mime-type "image/webp"
+                    :metadata '((:Provider-Name . "OpenAI")
+                                (:Settings . ((:Quality . "high"))))
+                    :provenance '((:Tool-Name . "image_generate")
+                                  (:Request-Id . "req-123"))))
+           (read-back (first (clawmacs::artifactum-session-records buffer)))
+           (index (uiop:read-file-string
+                   (clawmacs::artifactum-session-index-path
+                    (clawmacs::artifactum-session-for-buffer buffer)))))
+      (is (string= "OpenAI"
+                   (clawmacs::artifactum-json-value
+                    (getf record :metadata) "provider_name")))
+      (is (string= "high"
+                   (clawmacs::artifactum-json-value
+                    (clawmacs::artifactum-json-value
+                     (getf record :metadata) "settings")
+                    "quality")))
+      (is (string= "req-123"
+                   (clawmacs::artifactum-json-value
+                    (getf read-back :provenance) "request_id")))
+      (is (search "\"provider_name\"" index))
+      (is (search "\"request_id\"" index)))))
+
+(test artifactum-record-normalization-keeps-legacy-and-skips-malformed-attributes
+  "Malformed optional fields do not make legacy durable records unreadable."
+  (let ((legacy (clawmacs::normalize-artifactum-record
+                 '((:id . "legacy-media")
+                   (:path . "/tmp/legacy-media.png")
+                   (:created_at . 12345)
+                   (:metadata . "not-an-object")
+                   (:provenance . ((:source . #\x)))))))
+    (is (null (clawmacs::normalize-artifactum-record 42)))
+    (is (string= "legacy-media" (getf legacy :id)))
+    (is (= 12345 (getf legacy :updated-at)))
+    (is (null (getf legacy :metadata)))
+    (is (null (getf legacy :provenance)))))
+
 (test artifactum-package-registers-tools-buffer-type-and-commands
   "Artifactum loads its tools, prompt section, commands, and buffer type."
   (with-artifactum-test-state
@@ -111,6 +181,7 @@
       (is (member "artifactum_read" tool-names :test #'string=))
       (is (member "artifactum_create" tool-names :test #'string=))
       (is (member "artifactum_update" tool-names :test #'string=))
+      (is (fboundp 'artifactum-create-from-octets))
       (is (search "Attachments and artifacts with artifactum" prompt))
       (is (member 'clawmacs::artifactum-attach-file-command commands :test #'eq))
       (is (member 'clawmacs::artifactum-open-artifact-command commands :test #'eq))
