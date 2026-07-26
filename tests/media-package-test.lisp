@@ -74,7 +74,7 @@
                              :test #'string=))
            (metadata (clawmacs:find-agent-tool-metadata
                       'clawmacs::media-generate-image-tool)))
-      (is definition)
+      (is-true definition)
       (is (eq :background (clawmacs:agent-tool-metadata-execution metadata)))
       (is (search "Generated media with media" (render-package-prompt-sections)))
       (is (not (find "provider"
@@ -299,7 +299,7 @@
                     '((:prompt . "cancel this image")) "media-cancel-1")))
         (unwind-protect
              (progn
-               (is state)
+               (is-true state)
                (is-true (bt:wait-on-semaphore entered :timeout 2.0))
                (clawmacs::cancel-interactive-tool-execution state)
                (is-true (bt:wait-on-semaphore cancelled :timeout 2.0))
