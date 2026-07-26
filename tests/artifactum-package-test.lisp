@@ -66,6 +66,21 @@
                  (clawmacs::artifactum-json-value object :provider_name)))
     (is (null (clawmacs::artifactum-json-value object "missing")))))
 
+(test artifactum-normalize-string-preserves-absent-values
+  "Absent JSON strings remain absent instead of becoming the symbol name NIL."
+  (is (null (clawmacs::artifactum-normalize-string nil)))
+  (is (null (clawmacs::artifactum-normalize-string " \t\n")))
+  (is (string= "artifact" (clawmacs::artifactum-normalize-string :artifact))))
+
+(test artifactum-normalizes-source-path-and-mime-type-json-keys
+  "Normalized JSON keys retain source paths and MIME types in legacy records."
+  (let ((record (clawmacs::normalize-artifactum-record
+                 '((:id . "legacy-media")
+                   (:source_path . "/tmp/legacy-media.png")
+                   (:mime_type . "image/png")))))
+    (is (string= "/tmp/legacy-media.png" (getf record :path)))
+    (is (string= "image/png" (getf record :mime-type)))))
+
 (test artifactum-normalizes-record-without-updated-timestamp
   "Legacy records use their creation timestamp when updated_at is absent."
   (let ((record (clawmacs::normalize-artifactum-record

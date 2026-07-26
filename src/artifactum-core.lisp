@@ -86,6 +86,7 @@ read-modify-supersede update of artifacts/index.json.")
 (defun artifactum-normalize-string (value)
   "Return VALUE as a trimmed string, or NIL when blank."
   (let ((string (typecase value
+                  (null nil)
                   (string value)
                   (symbol (symbol-name value))
                   (character (string value))
@@ -454,7 +455,8 @@ therefore remain readable as NIL rather than invalidating the whole record."
                         (artifactum-json-value record "mime_type"))
                        "application/octet-stream"))
         (path (artifactum-normalize-string
-               (artifactum-json-value record "path")))
+               (or (artifactum-json-value record "path")
+                   (artifactum-json-value record "source_path"))))
         (size (artifactum-normalize-nonnegative-integer
                (artifactum-json-value record "size") 0))
         (preview (artifactum-normalize-string
