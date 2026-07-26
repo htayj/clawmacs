@@ -406,29 +406,13 @@ the public ESA and DREI-SYNTAX protocols."
   (* *chat-compose-visible-rows* *chat-compose-line-height*))
 
 (defun configure-chat-compose-pane (pane)
-  "Enable soft wrapping and keep chat compose PANE compact."
+  "Apply the compose pane's non-geometric compatibility configuration.
+
+New chat panes declare this policy with their construction initargs.  Retain
+the public helper for headless callers that construct a compose pane directly;
+it never changes space requirements or requests layout."
   (when pane
-    (ignore-errors
-      (setf (clim:stream-end-of-line-action pane) :wrap*))
-    (let* ((height (chat-compose-desired-pixel-height))
-           (space (ignore-errors (clim:compose-space pane)))
-           (current-height (and space
-                                (ignore-errors
-                                  (clim:space-requirement-height space))))
-           (current-min-height (and space
-                                    (ignore-errors
-                                      (clim:space-requirement-min-height space))))
-           (current-max-height (and space
-                                    (ignore-errors
-                                      (clim:space-requirement-max-height space)))))
-      (unless (and (eql current-height height)
-                   (eql current-min-height height)
-                   (eql current-max-height height))
-        (ignore-errors
-          (clim:change-space-requirements pane
-                                          :height height
-                                          :min-height height
-                                          :max-height height)))))
+    (setf (clim:stream-end-of-line-action pane) :wrap*))
   pane)
 
 (defun chat-compose-submit-event-p (event)
@@ -737,9 +721,8 @@ pane redraws and value callbacks propagate."
       (set-chat-compose-pane-point-offset pane offset))))
 
 (defun initialize-chat-frame-compose-pane (frame pane)
-  "Configure PANE and hydrate it from FRAME's initial buffer before input."
+  "Hydrate construction-configured PANE from FRAME's initial buffer before input."
   (when pane
-    (configure-chat-compose-pane pane)
     (sync-chat-compose-pane-from-buffer
      pane (chat-frame-buffer frame) :force t)
     (setf (chat-frame-compose-synchronized-buffer frame)
@@ -847,15 +830,6 @@ because they are intentionally absent from the frame table."
     (append (when frame
               (list (clim:frame-command-table frame)))
             '(clawmacs-chat-compose-editing-table))))
-
-(defmethod clim:note-sheet-grafted :after ((pane clawmacs-chat-compose-pane))
-  "Apply Clawmacs compose layout only to the application-owned pane."
-  (configure-chat-compose-pane pane))
-
-(defmethod clim:note-sheet-region-changed :after
-    ((pane clawmacs-chat-compose-pane))
-  "Preserve the compact compose height after CLIM layout changes."
-  (configure-chat-compose-pane pane))
 
 (defun chat-compose-meta-prefix-event (pane event)
   "Return EVENT as a Meta-modified key press for an ESC prefix."
@@ -1526,6 +1500,13 @@ rendering state."
      :initial-contents ""
      :ncolumns 90
      :nlines 5
+     ;; Keep the normal compose geometry in the pane's original CLIM space
+     ;; requirement.  Runtime geometry changes during Drei repaint can reenter
+     ;; layout with a partially updated displayed-line vector.
+     :height (chat-compose-desired-pixel-height)
+     :min-height (chat-compose-desired-pixel-height)
+     :max-height (chat-compose-desired-pixel-height)
+     :end-of-line-action :wrap*
      :minibuffer nil
      :scroll-bars nil
      :border-width 0
@@ -2008,7 +1989,6 @@ implements that input contract before the next gesture is delivered."
 
 (defun submit-chat-compose-pane (frame compose-pane)
   "Submit COMPOSE-PANE through FRAME's chat command path."
-  (configure-chat-compose-pane compose-pane)
   (let ((text (clim:gadget-value compose-pane))
         (buf (chat-frame-buffer frame)))
     (file-debug-event "compose-submitted"

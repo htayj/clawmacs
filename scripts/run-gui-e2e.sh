@@ -17,7 +17,7 @@ WINDOW_TITLE='Clawmacs E2E'
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|keybinds|organa|quaestor|reload|stability] [--artifact-dir DIR]
+Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|stability] [--artifact-dir DIR]
 
 Runs an opt-in Clawmacs GUI E2E suite inside an isolated Xvfb display.
 Set CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS to override the 300-second
@@ -183,7 +183,7 @@ fi
 PREWARMED_XDG_CACHE_HOME=${XDG_CACHE_HOME:-}
 
 case "$SUITE" in
-  smoke|mx|features|keybinds|organa|quaestor|reload|stability) ;;
+  smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|stability) ;;
   *) fail "unsupported GUI E2E suite: $SUITE" ;;
 esac
 

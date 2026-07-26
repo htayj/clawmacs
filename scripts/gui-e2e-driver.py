@@ -51,6 +51,7 @@ SWITCH_BUFFER_LARGE_DRAFT_POINT = 8192
 SWITCH_BUFFER_LARGE_DRAFT_MARK = 24576
 SWITCH_BUFFER_STRESS_QUERY = "switch-e2e"
 SWITCH_BUFFER_STRESS_BUDGET_SECONDS = 5.0
+COMPOSE_MX_REGRESSION_LENGTHS = (100, 101, 112)
 HELPER_TIMEOUT_SECONDS = 15.0
 SCREENSHOT_TIMEOUT_SECONDS = 10.0
 
@@ -1679,6 +1680,68 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     return screenshots
 
 
+def run_compose_geometry_regression(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    """Exercise M-x over the smallest failing one-line Drei drafts.
+
+    100 characters is the adjacent safe boundary.  101 is the minimal crash
+    trigger seen in the application and 112 is the user's reported input.  The
+    selector remains open through a real bounded resize, then C-g must retain
+    the exact draft, point, and compose focus.  Repeating each path catches a
+    layout/repaint race without reaching into Drei's renderer.
+    """
+    screenshots = prepare_session(session)
+    for iteration in range(2):
+        for length in COMPOSE_MX_REGRESSION_LENGTHS:
+            draft = "x" * length
+            if session.latest_snapshot().get("compose_text"):
+                press_chord(session, "ctrl+a", "ctrl+k")
+                wait_compose_state(session, "", 0)
+            session.type_text(draft)
+            wait_compose_state(session, draft, length)
+
+            command = expect_key_command(
+                session, ("Escape", "x"), "execute-extended-command")
+            opened = wait_quiescent_snapshot_after(
+                session, event_sequence(command, "M-x command"),
+                f"M-x open over {length}-character draft (iteration {iteration + 1})",
+                lambda snapshot: (
+                    snapshot.get("minibuffer_active")
+                    and "M-x" in str(snapshot.get("minibuffer_text", ""))
+                    and snapshot.get("compose_text") == draft
+                    and snapshot.get("compose_point") == length
+                    and snapshot.get("input_focus_pane") == "compose"
+                ),
+                timeout=15.0,
+            )
+            if length == 112 and iteration == 0:
+                screenshots.append(session.final_state_screenshot(
+                    "02-mx-112-open", final_snapshot=opened, timeout=15.0))
+
+            # This reaches the actual CLX expose/repaint path while the
+            # selector is active. Keep both dimensions comfortably inside the
+            # private 1280x900 Xvfb screen.
+            session.resize(960 - iteration * 80, 720 + iteration * 40)
+            session.x_request_reply_barrier()
+            time.sleep(0.35)
+            cancel_modal_input(session)
+            cancelled = session.wait_snapshot(
+                f"M-x cancelled over {length}-character draft (iteration {iteration + 1})",
+                lambda snapshot: (
+                    not snapshot.get("minibuffer_active")
+                    and snapshot.get("compose_text") == draft
+                    and snapshot.get("compose_point") == length
+                    and snapshot.get("input_focus_pane") == "compose"
+                ),
+                timeout=15.0,
+            )
+            if length == 112 and iteration == 1:
+                screenshots.append(session.final_state_screenshot(
+                    "03-mx-112-cancelled", final_snapshot=cancelled,
+                    timeout=15.0))
+    assert_no_stability_failure_signatures(session)
+    return screenshots
+
+
 def run_features(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     """Exercise broad no-network GUI feature coverage in one Clawmacs session."""
     screenshots = prepare_session(session)
@@ -1937,6 +2000,8 @@ def main(argv: list[str]) -> int:
             screenshots = run_features(session)
         elif args.suite == "keybinds":
             screenshots = run_keybinds(session)
+        elif args.suite == "compose-geometry":
+            screenshots = run_compose_geometry_regression(session)
         elif args.suite == "organa":
             screenshots = run_organa(session)
         elif args.suite == "quaestor":
