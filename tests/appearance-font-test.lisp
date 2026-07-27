@@ -19,6 +19,10 @@
   ((sizes :initarg :sizes :reader test-font-face-sizes)
    (scalable-p :initarg :scalable-p :reader test-font-face-scalable-p)))
 
+(defclass unreadable-test-font-face (test-font-face) ())
+
+(define-condition unreadable-test-font-stream (stream-error) ())
+
 (defclass test-font-medium ()
   ((ascent :initarg :ascent :initform 8 :reader test-font-medium-ascent)
    (descent :initarg :descent :initform 2 :reader test-font-medium-descent)
@@ -35,6 +39,13 @@
 
 (defmethod clim-extensions:font-face-all-sizes ((face test-font-face))
   (copy-list (test-font-face-sizes face)))
+
+(defmethod clim-extensions:font-face-all-sizes ((face unreadable-test-font-face))
+  (declare (ignore face))
+  ;; Models a public McCLIM descriptor whose backing font stream has gone
+  ;; away.  Enumeration must retain independent usable faces and must never
+  ;; let this implementation detail unwind the GUI event that requested it.
+  (error 'unreadable-test-font-stream))
 
 (defmethod clim-extensions:font-face-scalable-p ((face test-font-face))
   (test-font-face-scalable-p face))
@@ -113,6 +124,34 @@
                    (enumerated-font-choice-family-display
                     (first (appearance-font-inventory-choices inventory)))))
       (is (eq :enumerated (font-choice-kind (first choices)))))))
+
+(test font-inventory-isolates-an-unreadable-public-face
+  (let* ((port (make-instance 'test-font-port :families nil))
+         (family (make-test-font-family port "Mixed" nil))
+         (usable (make-test-font-face family "Readable" :sizes '(12)))
+         (unreadable (make-instance 'unreadable-test-font-face
+                                    :family family :name "Stale"
+                                    :sizes '(12) :scalable-p nil)))
+    (setf (test-font-family-faces family) (list unreadable usable)
+          (test-font-port-families port) (list family))
+    (let* ((inventory (enumerate-port-font-inventory port :generation 7))
+           (choices (appearance-font-inventory-choices inventory)))
+      (is (= 7 (appearance-font-inventory-generation inventory)))
+      (is (= 1 (length choices)))
+      (is (string= "Readable"
+                   (enumerated-font-choice-face-display (first choices)))))))
+
+(test font-inventory-all-unreadable-faces-yields-a-valid-empty-choice-set
+  (let* ((port (make-instance 'test-font-port :families nil))
+         (family (make-test-font-family port "Unavailable" nil))
+         (unreadable (make-instance 'unreadable-test-font-face
+                                    :family family :name "Stale"
+                                    :sizes '(12) :scalable-p nil)))
+    (setf (test-font-family-faces family) (list unreadable)
+          (test-font-port-families port) (list family))
+    (let ((inventory (enumerate-port-font-inventory port :generation 7)))
+      (is (= 7 (appearance-font-inventory-generation inventory)))
+      (is (null (appearance-font-inventory-choices inventory))))))
 
 (test enumerated-font-resolution-is-exact-and-reports-family-face-ambiguity
   (multiple-value-bind (port inventory) (make-test-font-inventory)

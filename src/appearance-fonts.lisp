@@ -133,16 +133,27 @@ exact comparison against one target port's public font inventory."
                          (%enumerated-font-choice-size right))))))))
 
 (defun public-font-sizes (face scalable-p)
-  "Copy and sort public FACE sizes; scalable faces may expose a subset."
-  (let ((sizes (remove-if-not #'valid-enumerated-font-size-p
-                              (copy-list
-                               (clim-extensions:font-face-all-sizes face)))))
-    (cond (sizes (sort sizes #'<))
-          ;; A scalable face has infinitely many valid sizes.  One neutral
-          ;; displayed choice keeps the public choice contract finite while
-          ;; resolution still accepts every positive requested size.
-          (scalable-p (list 12))
-          (t nil))))
+  "Copy and sort public FACE sizes; omit an unreadable public descriptor.
+
+The public McCLIM font protocol may expose a family whose backing font stream
+has already been closed by the backend.  That is an unavailable descriptor,
+not a reason to let a refresh event unwind the application frame.  Keep the
+inventory conservative: a face without readable sizes contributes no selectable
+choice, while other public faces on the same port remain available."
+  (handler-case
+      (let ((sizes (remove-if-not #'valid-enumerated-font-size-p
+                                  (copy-list
+                                   (clim-extensions:font-face-all-sizes face)))))
+        (cond (sizes (sort sizes #'<))
+              ;; A scalable face has infinitely many valid sizes.  One neutral
+              ;; displayed choice keeps the public choice contract finite while
+              ;; resolution still accepts every positive requested size.
+              (scalable-p (list 12))
+              (t nil)))
+    ;; SBCL reports a closed backing FD as a STREAM-ERROR.  Catch only that
+    ;; unavailable-descriptor condition here; malformed protocol objects and
+    ;; programming errors must still surface to the caller.
+    (stream-error () nil)))
 
 (defun enumerate-port-font-inventory
     (port &key invalidate-cache generation metric-medium)
@@ -156,17 +167,23 @@ display descriptors."
                      port :invalidate-cache invalidate-cache))
       (let ((family-display (copy-seq (clim-extensions:font-family-name family))))
         (dolist (face (clim-extensions:font-family-all-faces family))
-          (let* ((face-display (copy-seq (clim-extensions:font-face-name face)))
-                 (scalable-p (not (null (clim-extensions:font-face-scalable-p face))))
-                 (sizes (public-font-sizes face scalable-p)))
-            (push (%make-appearance-font-entry
-                   :family-display family-display :face-display face-display
-                   :family family :face face :scalable-p scalable-p :sizes sizes)
-                  entries)
-            (dolist (size sizes)
-              (push (make-enumerated-font-choice
-                     :family-display family-display :face-display face-display :size size)
-                    choices))))))
+          ;; A font backend can retain a stale face object after its source has
+          ;; gone away.  Treat each public descriptor independently so a single
+          ;; bad TTF cannot prevent a frame-local refresh or unrelated faces.
+          (handler-case
+              (let* ((face-display (copy-seq (clim-extensions:font-face-name face)))
+                     (scalable-p
+                       (not (null (clim-extensions:font-face-scalable-p face))))
+                     (sizes (public-font-sizes face scalable-p)))
+                (push (%make-appearance-font-entry
+                       :family-display family-display :face-display face-display
+                       :family family :face face :scalable-p scalable-p :sizes sizes)
+                      entries)
+                (dolist (size sizes)
+                  (push (make-enumerated-font-choice
+                         :family-display family-display :face-display face-display :size size)
+                        choices)))
+            (stream-error () nil)))))
     (%make-appearance-font-inventory
      :port port
      :generation (or generation 0)

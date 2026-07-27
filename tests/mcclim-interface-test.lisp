@@ -440,6 +440,29 @@ these tests exercise construction-time space requirements only."
                            (resolved-appearance-bundle-bundle-key
                             (clawmacs::chat-frame-appearance-active-bundle first)))))))))
 
+(test chat-font-refresh-advances-past-an-unreadable-public-descriptor
+  "One stale public face cannot fail the frame-owned refresh transaction."
+  (let* ((frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "font-refresh-stale-face"
+                                      :session-persistence-mode :ephemeral)))
+         (port (make-instance 'test-font-port :families nil))
+         (family (make-test-font-family port "Mixed" nil))
+         (usable (make-test-font-face family "Readable" :sizes '(10)))
+         (unreadable (make-instance 'unreadable-test-font-face
+                                    :family family :name "Stale"
+                                    :sizes '(10) :scalable-p nil)))
+    (setf (test-font-family-faces family) (list unreadable usable)
+          (test-font-port-families port) (list family))
+    (let ((result (refresh-chat-font-inventory-with-fake-port frame port)))
+      (is (eq :ready (appearance-activation-result-status result)))
+      (is (= 1 (clawmacs::chat-frame-appearance-font-inventory-generation frame)))
+      (let ((choices (appearance-font-inventory-choices
+                      (clawmacs::chat-frame-appearance-font-inventory frame))))
+        (is (= 1 (length choices)))
+        (is (string= "Readable"
+                     (enumerated-font-choice-face-display (first choices))))))))
+
 (test chat-font-refresh-failure-rolls-back-and-isolates-two-frames
   "Enumeration errors never replace active state, generations, or a sibling frame."
   (let* ((first (clim:make-application-frame
