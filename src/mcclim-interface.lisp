@@ -5352,10 +5352,14 @@ the existing Drei/ESA pane declarations."
                 :buffer buffer
                 :appearance-profile appearance-profile
                 :pretty-name (or window-title "Clawmacs"))))
-    (file-debug-event "frame-created"
-                      :buffer-name (buffer-name buffer)
-                      :window-title (or window-title "Clawmacs"))
-    (clim:run-frame-top-level frame)))
+    (let ((*crash-report-frame* frame))
+      (publish-crash-report-runtime-snapshot :phase :frame-created)
+      (file-debug-event "frame-created"
+                        :buffer-name (buffer-name buffer)
+                        :window-title (or window-title "Clawmacs"))
+      (unwind-protect
+           (clim:run-frame-top-level frame)
+        (publish-crash-report-runtime-snapshot :phase :frame-stopped)))))
 
 ;; The declaration layer remains CLIM-free; this is its concrete McCLIM
 ;; adapter.  It plans before catalog publication and queues the actual frame

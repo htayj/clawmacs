@@ -54,6 +54,10 @@
   :description "Persisted appearance configuration and startup selector tests"
   :in clawmacs-suite)
 
+(def-suite crash-report-suite
+  :description "Private bounded fatal crash reports"
+  :in clawmacs-suite)
+
 (def-suite mcclim-interface-suite
   :description "Frame-local McCLIM interface and lifecycle tests"
   :in clawmacs-suite)

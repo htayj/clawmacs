@@ -7,6 +7,8 @@ Audit date: 2026-07-13 through 2026-07-19
 This audit covers application crashes, hangs, lost updates, background-worker
 leaks, teardown races, and failures in the GUI test harness. McCLIM code is
 classified separately in [MCCLIM-ISSUES.md](MCCLIM-ISSUES.md).
+Fatal application diagnostics are described separately in
+[CRASH-REPORTS.md](CRASH-REPORTS.md).
 
 Clawmacs is a full-trust application. The former in-process permission,
 approval, and sandbox-label system was removed after this audit because it did

@@ -3785,20 +3785,27 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
                            (working-directory (truename "."))
                            (run-frame t))
   "Entry point for clawmacs. Initializes state and starts the McCLIM frame."
-  (parse-clawmacs-args)
-  (initialize-clawmacs-runtime)
-  ;; Create initial buffer and initialize global state
-  (reset-interaction-state)
-  (let ((buf (make-initial-chat-buffer session-name agent-name
-                                       :working-directory working-directory)))
-    (ensure-scratch-buffer)
-    (when run-frame
-      ;; Appearance data is intentionally read and resolved only here: package
-      ;; registration and init.lisp have completed, while prompt entry points
-      ;; never reach this GUI-only boundary.
-      (let ((appearance-profile (resolve-startup-appearance-profile)))
-        (funcall (symbol-function 'run-clawmacs-chat-frame)
-                 buf
-                 :window-title window-title
-                 :appearance-profile appearance-profile)))
-    buf))
+  (call-with-installed-crash-reporter
+   (lambda ()
+     (publish-crash-report-runtime-snapshot :phase :startup)
+     (parse-clawmacs-args)
+     (initialize-clawmacs-runtime)
+     (publish-crash-report-runtime-snapshot :phase :initialized)
+     ;; Create initial buffer and initialize global state
+     (reset-interaction-state)
+     (let ((buf (make-initial-chat-buffer
+                 session-name agent-name
+                 :working-directory working-directory)))
+       (publish-crash-report-runtime-snapshot :phase :buffer-ready)
+       (ensure-scratch-buffer)
+       (when run-frame
+         ;; Appearance data is intentionally read and resolved only here:
+         ;; package registration and init.lisp have completed, while prompt
+         ;; entry points never reach this GUI-only boundary.
+         (let ((appearance-profile (resolve-startup-appearance-profile)))
+           (funcall (symbol-function 'run-clawmacs-chat-frame)
+                    buf
+                    :window-title window-title
+                    :appearance-profile appearance-profile)))
+       (publish-crash-report-runtime-snapshot :phase :stopped)
+       buf))))
