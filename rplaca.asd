@@ -1,5 +1,6 @@
 (defsystem "rplaca"
   :description "A Lisp-native Emacs-inspired LLM chat interface"
+  :homepage "https://github.com/htayj/rplaca"
   :version "0.1.0"
   :licence "AGPL-3.0-only"
   :depends-on ("lispi" "mcclim" "esa-mcclim" "drei-mcclim"
@@ -58,7 +59,7 @@
                              (:file "docs")))))
 
 (defsystem "rplaca/tests"
-  :description "Tests for rplaca"
+  :description "Tests for RPLACA"
   :licence "AGPL-3.0-only"
   :depends-on ("rplaca" "fiveam")
   :serial t
@@ -107,7 +108,7 @@
                               (:file "info-test")))))
 
 (defsystem "rplaca/gui-e2e"
-  :description "Opt-in GUI E2E suites for rplaca"
+  :description "Opt-in GUI E2E suites for RPLACA"
   :licence "AGPL-3.0-only"
   :depends-on ("rplaca")
   :perform (test-op (op c)

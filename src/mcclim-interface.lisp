@@ -1009,7 +1009,7 @@ lets modal navigation avoid materializing a large compose draft on every key."
                        (char= base-key #\Newline)))))))
 
 (defun dispatch-chat-compose-event-to-buffer (pane event)
-  "Dispatch EVENT through RPLACA' buffer key handler and refresh the frame."
+  "Dispatch EVENT through RPLACA's buffer key handler and refresh the frame."
   (let* ((frame (clim:pane-frame pane))
          (raw-key (chat-compose-event-key event))
          (key (cond
@@ -1073,7 +1073,7 @@ because they are intentionally absent from the frame table."
   "Normalize only key forms that upstream Drei cannot process directly.
 
 Ordinary editing and application keys go through Drei's own HANDLE-EVENT and
-its inherited frame command table.  Direct dispatch remains only for RPLACA'
+its inherited frame command table.  Direct dispatch remains only for RPLACA's
 modal input overlays, ESC-as-Meta, and modified key events that
 ESA:CONVERT-TO-GESTURE currently drops.  Standalone modifier presses are
 consumed explicitly so a retained prefix never depends on backend-specific

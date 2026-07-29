@@ -1,4 +1,4 @@
-# Clawmacs Interaction Mode System
+# RPLACA Interaction Mode System
 
 - **Status:** accepted v1 design; implementation pending
 - **Decision date:** 2026-07-14
@@ -8,7 +8,7 @@
 
 ## Decision
 
-Clawmacs will expose a general user-facing **Mode** feature. A mode is a named,
+RPLACA will expose a general user-facing **Mode** feature. A mode is a named,
 package-owned workflow composition that can:
 
 1. contribute an additive section to the agent prompt;
@@ -17,12 +17,12 @@ package-owned workflow composition that can:
 
 The core ships a permanent neutral mode named `normal`. A package may use this
 contract to implement planning, research, review, tutoring, or another
-workflow. Core Clawmacs will not hard-code Codex- or Claude-style plan mode.
+workflow. Core RPLACA will not hard-code Codex- or Claude-style plan mode.
 
-A mode is not an authority boundary. Clawmacs deliberately follows a
+A mode is not an authority boundary. RPLACA deliberately follows a
 full-trust, Pi-like execution posture: extensions and tools run with the
-authority of the Clawmacs process. Users who need containment should launch
-Clawmacs inside an external sandbox or container that they control. The mode
+authority of the RPLACA process. Users who need containment should launch
+RPLACA inside an external sandbox or container that they control. The mode
 API must not use words such as `permission`, `approval`, `safe`, `sandbox`, or
 `read-only guarantee` for ordinary workflow filtering.
 
@@ -130,7 +130,7 @@ package visibility rules.
 - Reject blank names and malformed titles, descriptions, or callback
   designators.
 - Reserve `normal`. It cannot be replaced, removed, or owned by a package.
-- Infer package ownership from `*current-clawmacs-package*`; package code must
+- Infer package ownership from `*current-rplaca-package*`; package code must
   not be able to spoof a different owner in the public macro.
 - A name collision between different owners signals an error.
 - The same owner may replace its definition during a package reload.
@@ -230,7 +230,7 @@ or security event.
 The system-prompt order is also fixed:
 
 1. boot/project instruction files;
-2. the core Clawmacs prompt;
+2. the core RPLACA prompt;
 3. active-package prompt sections;
 4. the selected interaction-mode section;
 5. the exact filtered tools section;
@@ -466,13 +466,13 @@ command/helper boundary without raw pointer handling.
 
 ### Command tables and menu
 
-Add a stable `Mode` menu to `clawmacs-chat-frame` with `Select Mode...`. The
+Add a stable `Mode` menu to `rplaca-chat-frame` with `Select Mode...`. The
 menu entry itself is state-independent, so the existing stable application
 command table remains appropriate in v1.
 
 If a future feature needs a menu whose entries genuinely vary by mode, build a
 fresh frame-local command table and install it once at the mode transition.
-Do not mutate the process-global `clawmacs-chat-frame` table. Continue to use
+Do not mutate the process-global `rplaca-chat-frame` table. Continue to use
 `esa:find-applicable-command-table` as the McCLIM/ESA selection point. The
 existing guard against repeatedly reinstalling an identical frame command
 table must remain intact.
@@ -567,7 +567,7 @@ Implementation should proceed in narrow, independently testable phases.
 
 ### Phase 1: Registry and immutable definitions
 
-- Add `src/modes.lisp` to `clawmacs.asd` after `package-manager` and before
+- Add `src/modes.lisp` to `rplaca.asd` after `package-manager` and before
   command, prompt, and tool consumers.
 - Define structures, normalization, conditions, registry lock/snapshot, the
   permanent `normal` definition, lookup/list APIs, and package cleanup.
@@ -575,8 +575,8 @@ Implementation should proceed in narrow, independently testable phases.
 - Add unit tests for normalization, ownership, collisions, replacement,
   snapshot isolation, and concurrent register/list/remove behavior.
 - Put the focused suite in `tests/modes-test.lisp`, register it under
-  `clawmacs-suite` in `tests/packages.lisp`, and add it to the serial test
-  components in `clawmacs.asd`.
+  `rplaca-suite` in `tests/packages.lisp`, and add it to the serial test
+  components in `rplaca.asd`.
 
 ### Phase 2: Buffer selection and persistence
 

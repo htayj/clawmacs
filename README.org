@@ -1,15 +1,17 @@
-#+TITLE: Clawmacs
+#+TITLE: RPLACA
 #+STARTUP: overview
 
 *WARNING: This project is pre-dogfood and under active development.*
 
 Macros for your agent!
 
+Repository: [[https://github.com/htayj/rplaca][github.com/htayj/rplaca]]
+
 * Introduction
 
-Anyone who has used Emacs before knows the benefit of a tight feedback loop. Write lisp code, eval it, instant results. Clawmacs brings that same philosophy to agentic programming: the tighter the feedback loop between you and the agent, and the more the agent can introspect its own environment, the more powerful the collaboration becomes.
+Anyone who has used Emacs before knows the benefit of a tight feedback loop. Write lisp code, eval it, instant results. RPLACA brings that same philosophy to agentic programming: the tighter the feedback loop between you and the agent, and the more the agent can introspect its own environment, the more powerful the collaboration becomes.
 
-Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment while keeping provider work off the CLIM frame process. The agent can read, write, and edit files directly through Lisp data mode, and it can use isolated =lisp_eval= workers to test Common Lisp without freezing or terminating the live UI.
+RPLACA is a Lisp-native, Emacs-inspired LLM chat interface written entirely in Common Lisp. It gives you and your AI agent a shared, programmable environment while keeping provider work off the CLIM frame process. The agent can read, write, and edit files directly through Lisp data mode, and it can use isolated =lisp_eval= workers to test Common Lisp without freezing or terminating the live UI.
 
 #+ATTR_ORG: :width 800
 [[file:docs/img/genera-style.png]]
@@ -18,7 +20,7 @@ Clawmacs is a Lisp-native, Emacs-inspired LLM chat interface written entirely in
 
 ** Multi-Provider LLM Support
 
-Clawmacs supports multiple LLM providers, switchable per buffer:
+RPLACA supports multiple LLM providers, switchable per buffer:
 
 - *Z.AI* (Zhipu AI) --- GLM models
 - *OpenAI Codex* --- with shared Codex OAuth/API-key auth and the Responses API
@@ -30,8 +32,8 @@ Switch agents on the fly with =C-c A=. Switch models on the fly with =C-c C-m= (
 
 OpenAI Codex auth follows Codex's own credential layout:
 
-- =~/.config/clawmacs/openai-codex-token= is the highest-precedence raw bearer override.
-- Otherwise clawmacs reads and refreshes shared Codex credentials from =~/.codex/auth.json=.
+- =~/.config/rplaca/openai-codex-token= is the highest-precedence raw bearer override.
+- Otherwise RPLACA reads and refreshes shared Codex credentials from =~/.codex/auth.json=.
 - The browser login flow uses a localhost callback at =http://localhost:1455/auth/callback= and falls back to another local port if 1455 is busy.
 - ChatGPT-backed Codex auth uses =https://chatgpt.com/backend-api/codex=, while API-key auth uses =https://api.openai.com/v1=.
 
@@ -50,9 +52,9 @@ provider tools as the primary action surface:
 | =lisp_eval=     | Evaluate Common Lisp in an isolated worker (=mode=isolated= required for provider calls) |
 | =recovery_list= | Inspect recent durable tool/eval/checkpoint journal events |
 
-Clawmacs is a full-trust application. Agent tools, package code, init files,
+RPLACA is a full-trust application. Agent tools, package code, init files,
 shell commands, and live Lisp all run with the operating-system authority of
-the Clawmacs process. There is deliberately no in-application permission prompt
+the RPLACA process. There is deliberately no in-application permission prompt
 or sandbox policy. If containment is required, run the entire application in a
 user-controlled container, VM, restricted account, or OS sandbox. Tool and
 package selection controls workflow composition and prompt exposure; it is not
@@ -81,16 +83,16 @@ Its tool result is a printed Lisp plist. Recent calls are available with
 =(eval-history-to-string)=, and the latest success/error are exposed through
 =*last-eval-result*= and
 =*last-eval-condition*=. Isolated mode evaluates in a fresh SBCL worker process
-without mutating or crashing the live Clawmacs image. The worker inherits the
+without mutating or crashing the live RPLACA image. The worker inherits the
 user's filesystem and network authority; this separation is for application
 stability, not containment.
 
-The =safe-reload-clawmacs-command= gives users a deliberate development
-hot-reload path for updated Clawmacs source. It is not exposed as a provider
+The =safe-reload-rplaca-command= gives users a deliberate development
+hot-reload path for updated RPLACA source. It is not exposed as a provider
 tool because live class and method redefinition cannot be safely interleaved
 with a background agent tool worker. The command first loads the current
 checkout in an isolated SBCL worker;
-only if that preflight succeeds does it reload =:clawmacs= in the live image,
+only if that preflight succeeds does it reload =:rplaca= in the live image,
 refresh command/tool/package registrations, and insert a visible system message
 in the current buffer. Existing buffers, sessions, the frame, and compose draft
 are not reset. Preflight, busy, and live reload failures are returned as Lisp
@@ -103,11 +105,11 @@ can summarize recent tool, file, and eval recovery events for repair.
 
 ** Skills
 
-Clawmacs supports Codex-style local skills: a skill is a directory containing a
+RPLACA supports Codex-style local skills: a skill is a directory containing a
 =SKILL.md= file with YAML frontmatter and task-specific instructions. Enabled
 skills are listed in the agent system prompt, can be selected from the UI, and
 can be invoked in chat with =$skill-name=. When a user message mentions a skill,
-Clawmacs injects a Codex-compatible contextual block for that turn:
+RPLACA injects a Codex-compatible contextual block for that turn:
 
 #+begin_example
 <skill>
@@ -118,7 +120,7 @@ Clawmacs injects a Codex-compatible contextual block for that turn:
 #+end_example
 
 Skill discovery scans repo-local =.agents/skills/= directories, then
-=~/.clawmacs.d/skills/=, =~/.agents/skills/=, =~/.clawmacs.d/skills/.system/=,
+=~/.rplaca.d/skills/=, =~/.agents/skills/=, =~/.rplaca.d/skills/.system/=,
 and roots registered from Lisp. Use =C-c s= to insert an exact linked skill
 mention and =C-c S= to toggle skills.
 
@@ -133,12 +135,12 @@ mention and =C-c S= to toggle skills.
 
 Skills do not add new agent tools by themselves. Agents inspect skill
 instructions and resources through =lisp_eval=, and scripts/assets are local
-resources unless other Clawmacs APIs explicitly execute or use them. Skill
+resources unless other RPLACA APIs explicitly execute or use them. Skill
 instructions are trusted input to the full-trust agent workflow.
 
 ** Built-in Packages
 
-Clawmacs ships with a package system for optional tool and UI surfaces. Built-in
+RPLACA ships with a package system for optional tool and UI surfaces. Built-in
 packages cover structural Lisp editing and lookup (=sexed=, =slop=), web access
 (=netcons=), TODO/project management (=organa=), self-observation
 (=speculum=), testing (=prove=), subagents (=subagent=), deterministic
@@ -156,21 +158,21 @@ cycle enablement from the selector.
 
 Project resources back file buffers, structured project APIs, and package-aware
 workflows. They coexist with direct provider tools like =read=, =write=, and
-=edit=. Project definitions can be registered from =~/.clawmacs.d/init.lisp=
+=edit=. Project definitions can be registered from =~/.rplaca.d/init.lisp=
 with =define-project=, and inert manifest files are autoloaded from
 =*project-definitions-directory*=, which defaults to
-=~/.clawmacs.projects.d/=. The user configuration directory is always
+=~/.rplaca.projects.d/=. The user configuration directory is always
 available as the =config= project unless init defines =config= first.
 
 #+begin_src lisp
-(define-project "clawmacs" :root #P"/home/tay/projects/clawmacs/")
+(define-project "rplaca" :root #P"/home/tay/projects/rplaca/")
 (create-project "scratch-work" :root #P"/tmp/scratch-work/" :persist nil)
 (list-projects)
-(project-list-files "clawmacs")
-(project-search-to-string "clawmacs" "send-message")
-(project-read-file "clawmacs" "src/main.lisp")
-(project-save-file "clawmacs" "notes.org" "* Notes\n")
-(project-open-file "clawmacs" "src/main.lisp")
+(project-list-files "rplaca")
+(project-search-to-string "rplaca" "send-message")
+(project-read-file "rplaca" "src/main.lisp")
+(project-save-file "rplaca" "notes.org" "* Notes\n")
+(project-open-file "rplaca" "src/main.lisp")
 #+end_src
 
 Open project resources become editable file buffers. =C-x C-f= opens a project
@@ -185,7 +187,7 @@ applied, discarded, or reverted:
 
 #+begin_src lisp
 (let ((cs (begin-change-set :name "demo-edit")))
-  (stage-project-file "clawmacs" "notes/demo.lisp" "(defun demo () :ok)"
+  (stage-project-file "rplaca" "notes/demo.lisp" "(defun demo () :ok)"
                       :change-set cs)
   (change-set-diff-to-string cs)
   (apply-change-set cs))
@@ -194,38 +196,38 @@ applied, discarded, or reverted:
 Projects can also expose validation and reload hooks through =define-project=:
 
 #+begin_src lisp
-(define-project "clawmacs"
-  :root #P"/home/tay/projects/clawmacs/"
-  :systems '("clawmacs" "clawmacs/tests")
+(define-project "rplaca"
+  :root #P"/home/tay/projects/rplaca/"
+  :systems '("rplaca" "rplaca/tests")
   :check-functions
   (list (lambda (project)
           (declare (ignore project))
           ;; Project-specific checks can call FiveAM, ASDF, or other Lisp APIs.
           :ok)))
 
-(run-project-checks "clawmacs")
-(reload-project-system "clawmacs")
+(run-project-checks "rplaca")
+(reload-project-system "rplaca")
 #+end_src
 
 ** Agent Structural Editing
 
-Clawmacs includes =sexed=, an agent-oriented s-expression editor inspired by
+RPLACA includes =sexed=, an agent-oriented s-expression editor inspired by
 Paredit but exposed as Lisp functions instead of cursor commands. It lets agents
 inspect, select, and edit Lisp forms by structure while rejecting edits that
 would leave unbalanced text.
 
 #+begin_src lisp
-(sexed-project-outline-to-string "clawmacs" "src/main.lisp" :head "defun" :limit 20)
-(sexed-project-form-text "clawmacs" "src/main.lisp"
+(sexed-project-outline-to-string "rplaca" "src/main.lisp" :head "defun" :limit 20)
+(sexed-project-form-text "rplaca" "src/main.lisp"
                          '(:head "defun" :name "ensure-scratch-buffer"))
 (sexed-replace-project-form
- "clawmacs"
+ "rplaca"
  "src/foo.lisp"
  '(:head "defun" :name "foo")
  "(defun foo () :ok)")
 
 (sexed-stage-replace-project-form
- "clawmacs"
+ "rplaca"
  "src/foo.lisp"
  '(:head "defun" :name "foo")
  "(defun foo () :better)")
@@ -243,7 +245,7 @@ Selectors are plists such as =(:head "defun" :name "foo")=, =(:head "let*" :nth 
 or =(:id 7)=. The =:nth= selector is zero-based. Pure functions such as
 =sexed-replace-form= return edited strings; project, file, message, and scratch
 adapters validate the full result before mutating resources or editable
-clawmacs messages.
+RPLACA messages.
 Insert helpers add separator whitespace when adjacent forms would otherwise
 touch.
 
@@ -328,7 +330,7 @@ window.
 | =C-h f=        | Describe function            |
 | =C-h v=        | Describe variable            |
 | =C-h i=        | Info directory               |
-| =C-h I=        | Clawmacs manual buffer       |
+| =C-h I=        | RPLACA manual buffer       |
 | =C-h T=        | Describe type                |
 | =C-h F=        | Customize face (interactive) |
 | =C-h D=        | McCLIM debug status          |
@@ -343,7 +345,7 @@ Agent responses stream in real time via background threads. The event loop polls
 
 ** Face System
 
-Clawmacs has a full face (color/attribute) system inspired by Emacs:
+RPLACA has a full face (color/attribute) system inspired by Emacs:
 
 - Per-sender color schemes (user messages on blue, agent on black, system in cyan)
 - Global faces for modeline, minibuffer, selectors, structured question prompts, and diff highlighting
@@ -355,7 +357,7 @@ Clawmacs has a full face (color/attribute) system inspired by Emacs:
 
 Chat buffers attach durable sessions by default. =C-x C-s= writes a manifest,
 and transcripts are appended to on-disk JSONL sidecars under
-=~/.config/clawmacs/sessions/=. Session history is branch-shaped rather than a
+=~/.config/rplaca/sessions/=. Session history is branch-shaped rather than a
 flat list, and the session tree can be navigated or forked from the UI. On
 compaction, transcript writing rolls to a new segment and records the previous
 segment location. Snapshots are also autosaved as chat buffers change, and each
@@ -364,20 +366,20 @@ header at the top of the transcript.
 
 ** Scratch Buffer
 
-Clawmacs keeps a process-local =*scratch*= buffer loaded in the buffer list for
+RPLACA keeps a process-local =*scratch*= buffer loaded in the buffer list for
 temporary notes and programmatic coordination. It is editable, never killed by
-normal buffer-kill commands, and lasts only until Clawmacs exits.
+normal buffer-kill commands, and lasts only until RPLACA exits.
 
 ** Listener and Manuals
 
-Clawmacs includes a Lisp listener buffer (=C-x l=) for direct evaluation,
+RPLACA includes a Lisp listener buffer (=C-x l=) for direct evaluation,
 comma commands, and =#!=-prefixed shell commands, plus an Info/manual browser.
-=C-h i= opens the system Info directory, and =C-h I= opens the Clawmacs manual
+=C-h i= opens the system Info directory, and =C-h I= opens the RPLACA manual
 buffer placeholder or manual when one is installed.
 
 ** McCLIM Interface
 
-Clawmacs runs as a McCLIM application frame with a presentation-rich transcript
+RPLACA runs as a McCLIM application frame with a presentation-rich transcript
 pane, a Drei-backed compose pane, an info line, and a minibuffer pane. The
 transcript uses CLIM output records, message presentations, and incremental
 redisplay; the minibuffer uses normal CLIM stream output for prompt and
@@ -386,11 +388,11 @@ a small frame event that calls =redisplay-frame-pane= for the transcript.
 
 ** Boot Files
 
-Clawmacs loads optional markdown files at startup to customize the agent's system prompt:
+RPLACA loads optional markdown files at startup to customize the agent's system prompt:
 
 - =AGENTS.md=, =SOUL.md=, =USER.md=, =IDENTITY.md=, =TOOLS.md=
 
-Checked in the working directory first, then =~/.config/clawmacs/=. Compatible with OpenClaw workspace conventions.
+Checked in the working directory first, then =~/.config/rplaca/=. Compatible with OpenClaw workspace conventions.
 
 * Installation
 
@@ -406,7 +408,7 @@ Checked in the working directory first, then =~/.config/clawmacs/=. Compatible w
 ./run.sh --clean-build
 #+end_src
 
-This launches clawmacs in a Guix container with all dependencies (SBCL, McCLIM, OpenSSL, fonts) automatically provisioned. Quicklisp is bootstrapped on first run.
+This launches RPLACA in a Guix container with all dependencies (SBCL, McCLIM, OpenSSL, fonts) automatically provisioned. Quicklisp is bootstrapped on first run.
 
 A native, non-container launcher is also available for machines with local SBCL
 and GUI dependencies installed:
@@ -421,13 +423,13 @@ The native launcher uses the Ultralisp Quicklisp-compatible distribution via
 =scripts/run-ultralisp.lisp=, so it can resolve newer Common Lisp dependencies
 without entering the Guix container. It also constrains McCLIM's native
 TrueType scan to the DejaVu font bundle by default; set
-=CLAWMACS_TRUETYPE_FONT_PATH= to a compact font directory if you need an
-override. Set =CLAWMACS_SBCL_DYNAMIC_SPACE_SIZE= to adjust SBCL's heap size in
+=RPLACA_TRUETYPE_FONT_PATH= to a compact font directory if you need an
+override. Set =RPLACA_SBCL_DYNAMIC_SPACE_SIZE= to adjust SBCL's heap size in
 MiB; the default is =2048=.
 
 By default, =run.sh= reuses cached ASDF/FASL build artifacts for fast startup.
 Pass =--clean-build=, or its alias =--force-clean-build=, to clear the local
-Common Lisp output cache before loading clawmacs.
+Common Lisp output cache before loading RPLACA.
 
 For one-shot, non-interactive harness checks, use =prompt.sh=. It runs inside
 the same Guix container and prints only the final assistant response to stdout
@@ -435,7 +437,7 @@ by default:
 
 #+begin_src sh
 ./prompt.sh 'Use lisp_eval with mode="isolated" to inspect the current default provider.'
-./prompt.sh --show-tools --show-metadata "List the exported clawmacs functions."
+./prompt.sh --show-tools --show-metadata "List the exported rplaca functions."
 ./prompt.sh --json --provider openai-codex --model gpt-5.6-sol "Summarize this repo."
 ./prompt.sh --clean-build "Run this prompt after clearing cached Lisp build artifacts."
 ./prompt.sh --isolated --show-tools "Exercise project APIs without user config state."
@@ -444,12 +446,12 @@ by default:
 
 Plain =prompt.sh= runs default to =openai-codex/gpt-5.6-sol=. Passing
 =--agent= lets that agent's routing decide unless =--provider= or =--model=
-is also supplied. Interactive =run.sh= sessions use the normal Clawmacs
-defaults and any overrides from =~/.clawmacs.d/init.lisp=.
+is also supplied. Interactive =run.sh= sessions use the normal RPLACA
+defaults and any overrides from =~/.rplaca.d/init.lisp=.
 
 By default, =prompt.sh= reuses cached ASDF/FASL build artifacts for fast
 iterations. Pass =--clean-build=, or its alias =--force-clean-build=, to clear
-the local Common Lisp output cache before loading clawmacs. If no prompt
+the local Common Lisp output cache before loading RPLACA. If no prompt
 argument is supplied, =prompt.sh= reads non-interactive stdin.
 
 Live harness regression probes are available through:
@@ -502,28 +504,28 @@ older GLM releases for explicitly pinned configurations; GLM-5.2 exposes its
 documented =high= and =max= reasoning-effort choices.
 
 OpenRouter model discovery uses its live =/api/v1/models= catalog when an API
-key is configured. Without a successful live fetch, Clawmacs falls back to a
+key is configured. Without a successful live fetch, RPLACA falls back to a
 curated tool-capable catalog containing the GPT-5.6 family, GLM-5.2, current
 Claude models, and current Gemini Flash models. Anthropic and Google models are
-OpenRouter routes; Clawmacs does not provide direct adapters for them.
+OpenRouter routes; RPLACA does not provide direct adapters for them.
 
 ** User Init File
 
-Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
+Customize RPLACA by creating =~/.rplaca.d/init.lisp=:
 
 #+begin_src lisp
 ;; Switch default provider and model
-(setf clawmacs:*default-provider* :openai-codex)
-(setf clawmacs:*default-model* "gpt-5.6-sol")
-(setf clawmacs:*openai-codex-model* "gpt-5.6-sol")
+(setf rplaca:*default-provider* :openai-codex)
+(setf rplaca:*default-model* "gpt-5.6-sol")
+(setf rplaca:*openai-codex-model* "gpt-5.6-sol")
 
 ;; Override the default personality prompt or point to a different prompt file
-(setf clawmacs:*default-personality-prompt* "You are a pragmatic pair programmer.")
-(setf clawmacs:*personality-prompt-path* #P"/home/tay/.config/clawmacs/pair-system-prompt.txt")
-(clawmacs:load-personality-prompt-file)
+(setf rplaca:*default-personality-prompt* "You are a pragmatic pair programmer.")
+(setf rplaca:*personality-prompt-path* #P"/home/tay/.config/rplaca/pair-system-prompt.txt")
+(rplaca:load-personality-prompt-file)
 
 ;; Register custom agents for the C-c A selector
-(clawmacs:register-agent-definition
+(rplaca:register-agent-definition
  "writer"
  :provider :openai-codex
  :model "gpt-5.6-sol"
@@ -532,40 +534,40 @@ Customize clawmacs by creating =~/.clawmacs.d/init.lisp=:
  :personality-prompt "You are a concise writing partner focused on structure and tone.")
 
 ;; Register additional skill roots or programmatic skills
-(clawmacs:register-skill-root #P"/home/tay/.local/share/clawmacs/skills/")
-(clawmacs:register-skill-definition
+(rplaca:register-skill-root #P"/home/tay/.local/share/rplaca/skills/")
+(rplaca:register-skill-definition
  "repo-review"
  :description "Review Common Lisp changes in this repository."
  :contents
  (format nil "---~%name: repo-review~%description: Review Common Lisp changes.~%---~%Use project APIs, run tests, and report risks first."))
 
 ;; Customize seeded defaults after startup initialization
-(clawmacs:add-hook
- 'clawmacs:*startup-hook*
+(rplaca:add-hook
+ 'rplaca:*startup-hook*
  (lambda ()
-   (clawmacs:keymap-bind clawmacs:*default-keymap*
+   (rplaca:keymap-bind rplaca:*default-keymap*
                          '(:ctrl-c #\z)
-                         'clawmacs:toggle-debug-mode-command)))
+                         'rplaca:toggle-debug-mode-command)))
 
 ;; Customize the initial buffer before the McCLIM interface starts
-(clawmacs:add-hook
- 'clawmacs:*initial-buffer-hook*
+(rplaca:add-hook
+ 'rplaca:*initial-buffer-hook*
  (lambda (buffer)
-   (clawmacs:buffer-insert-system-message
+   (rplaca:buffer-insert-system-message
     buffer
     "init.lisp customized this buffer")))
 #+end_src
 
 ** Packages
 
-Install and load a package from a git repository in =~/.clawmacs.d/init.lisp=:
+Install and load a package from a git repository in =~/.rplaca.d/init.lisp=:
 
 #+begin_src lisp
-(clawmacs-use-package :src-type :git
+(rplaca-use-package :src-type :git
                       :repo "https://example.com/user/cool-plugin.git")
 #+end_src
 
-Packages are cloned into =~/.clawmacs.d/packages/= and must contain a
+Packages are cloned into =~/.rplaca.d/packages/= and must contain a
 =manifest.lisp= file at the repo root. The manifest is a property list that
 declares the package name and entrypoint file:
 
@@ -622,20 +624,24 @@ The core architecture follows Emacs patterns: buffers hold messages (not file li
 
 * vs Emacs
 
-Clawmacs is not intended to replace GNU Emacs. It is another of the Emacsen --- built from the same philosophical foundations (extensibility, introspection, Lisp as the extension language) but purpose-built for conversational agent interaction rather than text editing.
+RPLACA is not intended to replace GNU Emacs. It is another of the Emacsen --- built from the same philosophical foundations (extensibility, introspection, Lisp as the extension language) but purpose-built for conversational agent interaction rather than text editing.
 
-Where Emacs operates on files and buffers of text, clawmacs operates on conversations and messages. Clawmacs now has both =M-x= for user-facing interactive commands and an agent that can eval arbitrary Lisp. The feedback loop is the same; the domain is different.
+Where Emacs operates on files and buffers of text, RPLACA operates on conversations and messages. RPLACA now has both =M-x= for user-facing interactive commands and an agent that can eval arbitrary Lisp. The feedback loop is the same; the domain is different.
 
 * Future Plans
 
-Despite the name, clawmacs is not intended to be simply an OpenClaw clone. It is designed to bridge the gap between current agentic editors and OpenClaw by providing a truly introspective and recursive agentic editor --- one where the agent can modify the editor itself, inspect its own tool definitions, customize its own rendering, and evolve the environment collaboratively with the user.
+RPLACA takes its name from Common Lisp's destructive list update operation. It
+is designed to bridge the gap between current agentic editors and OpenClaw by
+providing a truly introspective and recursive agentic editor --- one where the
+agent can modify the editor itself, inspect its own tool definitions, customize
+its own rendering, and evolve the environment collaboratively with the user.
 
 * License
 
-Clawmacs itself is licensed under the [[https://www.gnu.org/licenses/agpl-3.0.html][GNU Affero General Public License v3.0 only]].
-See [LICENSE](/home/tay/projects/clawmacs/LICENSE) for the full text.
+RPLACA itself is licensed under the [[https://www.gnu.org/licenses/agpl-3.0.html][GNU Affero General Public License v3.0 only]].
+See [[file:LICENSE][LICENSE]] for the full text.
 
 Third-party vendored material may use different licenses. In particular,
-[vendor/cl-community-spec](/home/tay/projects/clawmacs/vendor/cl-community-spec)
+[[file:vendor/cl-community-spec][vendor/cl-community-spec]]
 is kept under its upstream MIT license; see
-[vendor/cl-community-spec/LICENSE](/home/tay/projects/clawmacs/vendor/cl-community-spec/LICENSE).
+[[file:vendor/cl-community-spec/LICENSE][vendor/cl-community-spec/LICENSE]].

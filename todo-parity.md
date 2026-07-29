@@ -1,6 +1,6 @@
-# Clawmacs Parity TODO
+# RPLACA Parity TODO
 
-This file tracks package-sized gaps between Clawmacs and the feature surfaces
+This file tracks package-sized gaps between RPLACA and the feature surfaces
 in:
 
 - `reference/external_src/codex`
@@ -9,7 +9,7 @@ in:
 I also looked at `reference/external_src/oh-my-pi`, but only as design
 inspiration. It is not the parity baseline for this file.
 
-Features Clawmacs already has and therefore are not listed here: session tree
+Features RPLACA already has and therefore are not listed here: session tree
 navigation and forking, transcript persistence, hooks/advice, subagents,
 pipelines, package enablement scopes, web search/fetch, basic git tools,
 org-mode todo/project management, self-screenshot/debug visibility, image
@@ -31,11 +31,11 @@ Parity sources:
 - [x] Support template metadata (`description`) and positional arguments
   (`$1`, `$2`, `$@`, slicing forms).
 - [x] Add slash completion UI with descriptions and argument hints.
-- [x] Ship slash wrappers for existing Clawmacs operations where that is more
+- [x] Ship slash wrappers for existing RPLACA operations where that is more
   ergonomic than `M-x` (`/model`, `/session`, `/resume`, `/new`, `/export`,
   `/reload`).
 - [x] Add reload support for prompt templates and slash resources without
-  restarting Clawmacs.
+  restarting RPLACA.
 - [x] Make package manifests able to contribute prompts/commands as first-class
   resources.
 - [x] Add unit and McCLIM e2e coverage for template expansion, completion, and
@@ -173,7 +173,7 @@ Parity sources:
 - `reference/external_src/codex/sdk/typescript/README.md`
 - `reference/external_src/pi-mono/packages/coding-agent/README.md`
 
-- [x] Define a stable Clawmacs app-server/RPC surface instead of only shell
+- [x] Define a stable RPLACA app-server/RPC surface instead of only shell
   wrappers like `prompt.sh`.
 - [x] Add thread/session APIs for start, resume, fork, read, and list.
 - [x] Add streamed event output for tool calls, tool results, assistant chunks,
@@ -193,7 +193,7 @@ Parity sources:
 - `reference/external_src/codex/codex-rs/docs/codex_mcp_interface.md`
 
 - [x] Add stdio and HTTP MCP server configuration.
-- [x] Map external MCP tools into Clawmacs tool definitions with package
+- [x] Map external MCP tools into RPLACA tool definitions with package
   ownership and approval metadata.
 - [x] Surface per-server and per-tool approval settings in the UI.
 - [x] Add commands to list, inspect, enable, disable, and doctor external MCP
@@ -206,7 +206,7 @@ Parity sources:
 ## Internal Review Findings (2026-04-24)
 
 These are not parity-package gaps. They are concrete correctness and design
-problems observed while reviewing the current Clawmacs tree.
+problems observed while reviewing the current RPLACA tree.
 
 ### P0
 

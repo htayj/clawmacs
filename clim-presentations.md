@@ -1,6 +1,6 @@
 # CLIM Presentation Backlog
 
-This is a prioritized backlog for making Clawmacs more presentation-driven in
+This is a prioritized backlog for making RPLACA more presentation-driven in
 the Lisp-machine sense: semantic objects on screen, direct mouse actions,
 inspection everywhere, and fewer command-only workflows.
 

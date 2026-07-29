@@ -1,6 +1,6 @@
 # Media generation
 
-Clawmacs generates media through small provider packages built on the `media`
+RPLACA generates media through small provider packages built on the `media`
 contract. The initial bundled provider is `codex-image`, which mirrors the
 current Codex CLI image tool's one-image behavior: it selects `gpt-image-2`,
 uses a text prompt, optionally edits from up to five local reference images,
@@ -36,7 +36,7 @@ This adapter only reads the shared Codex login store at `~/.codex/auth.json`.
 It requires ChatGPT/Codex OAuth `access_token` and `account_id`, refreshes stale
 credentials through the existing Codex OAuth refresh logic, and sends Codex's
 `Authorization`, `originator`, and `ChatGPT-Account-ID` headers. It does not
-read Clawmacs's static OpenAI token file, does not use an OpenAI API key in
+read RPLACA's static OpenAI token file, does not use an OpenAI API key in
 `auth.json`, and has no automatic public API fallback. That keeps the route
 subscription-bound instead of silently creating API-billed image usage.
 

@@ -1,6 +1,6 @@
-# Clawmacs Architecture
+# RPLACA Architecture
 
-Clawmacs should feel like a Lisp machine editor with an agent attached, not a
+RPLACA should feel like a Lisp machine editor with an agent attached, not a
 chat client with editor features bolted on. The architecture is strongest when
 it stays buffer-centric, registry-driven, and easy to extend from Lisp.
 
@@ -56,8 +56,8 @@ surface with different invocation contracts. Tool exposure, agent tool lists,
 package enablement, and immutable per-run snapshots compose a workflow; none is
 an authorization or containment boundary.
 
-Clawmacs is intentionally full-trust. Init files, packages, tools, shell
-commands, and live Lisp run with the authority of the Clawmacs process. Users
+RPLACA is intentionally full-trust. Init files, packages, tools, shell
+commands, and live Lisp run with the authority of the RPLACA process. Users
 who need containment should place the whole process inside an external sandbox,
 container, VM, or restricted account. Isolated evaluator workers and managed
 background operations protect frame liveness and process stability, not data or

@@ -5,7 +5,7 @@
   `docs/APPEARANCE-CUSTOMIZATION-PLAN.md`
 - **Historical profile:** Symbolics Genera 8.5 evidence as documented by the
   Lisp Machine Container Museum
-- **Implementation target:** Clawmacs on pinned McCLIM `1.0.0-koliada`
+- **Implementation target:** RPLACA on pinned McCLIM `1.0.0-koliada`
 - **Compatibility goal:** no Genera compatibility is required
 
 ## Purpose and relationship to the existing plan
@@ -110,13 +110,13 @@ commands must not be collapsed into Dynamic Windows internals.
 [Dynamic Windows relationship](https://github.com/htayj/lisp-machine-container-museum/blob/main/docs/clim-2-on-genera.md#dynamic-windows-relationship) and
 [complete CLIM facility map](https://github.com/htayj/lisp-machine-container-museum/blob/main/docs/clim-2-on-genera.md#complete-facility-map).
 
-### Design inference for Clawmacs
+### Design inference for RPLACA
 
-The following are Clawmacs design conclusions, not claims about Genera:
+The following are RPLACA design conclusions, not claims about Genera:
 
 - An appearance theme should coordinate independent appearance axes, not turn
   them into one undifferentiated face object.
-- Active state should remain centralized per Clawmacs frame even though Genera
+- Active state should remain centralized per RPLACA frame even though Genera
   customization was distributed.
 - McCLIM port resolution should be cached and explicitly invalidated, but
   Genera's cache implementation should not be copied.
@@ -126,11 +126,11 @@ The following are Clawmacs design conclusions, not claims about Genera:
   McCLIM escape hatch later; it does not justify making backend font names the
   ordinary configuration format.
 - Genera's document-style persistence is evidence for keeping defaults and
-  styled content separate. Because Clawmacs is not a rich-text editor, its
+  styled content separate. Because RPLACA is not a rich-text editor, its
   correct interpretation is to persist appearance preferences without
   attaching resolved styles to messages or buffers.
 
-## Current Clawmacs evidence that the amended plan must cover
+## Current RPLACA evidence that the amended plan must cover
 
 Current source confirms:
 
@@ -148,7 +148,7 @@ Current source confirms:
 - candidate-column estimation depends on the current text-style width;
 - the frame owns lifecycle and redisplay state already;
 - panes are generated during `make-application-frame`;
-- `run-clawmacs-chat-frame` does not currently pass an appearance profile,
+- `run-rplaca-chat-frame` does not currently pass an appearance profile,
   resolved bundle, explicit port, or explicit frame manager; and
 - the compose pane deliberately fixes its geometry to avoid repaint-time Drei
   relayout.
@@ -492,7 +492,7 @@ names. McCLIM explicitly does not promise those strings are identical.
 Duplicate display-name matches are an ambiguity error, not a reason to take the
 first result.
 
-Do not mutate `(setf text-style-mapping)` from Clawmacs merely to install a
+Do not mutate `(setf text-style-mapping)` from RPLACA merely to install a
 profile. Port text-style mappings and their internal caches are shared
 implementation state; changing them could affect other frames or unrelated
 CLIM applications.
@@ -527,7 +527,7 @@ generation.
 ### Literal device-font escape hatch
 
 Genera's `:DEVICE-FONT` facility demonstrates a legitimate need for exact,
-nonportable control, but it should be deferred in Clawmacs.
+nonportable control, but it should be deferred in RPLACA.
 
 If later implemented, a device-font descriptor must:
 
@@ -569,7 +569,7 @@ diagnostic. Do not intercept renderer internals per character.
 ## CLIM output-boundary contract
 
 Genera's default/current/merged distinction has a direct portable CLIM
-analogue, but Clawmacs should use CLIM's model rather than emulate TV sheets.
+analogue, but RPLACA should use CLIM's model rather than emulate TV sheets.
 
 ### Pane default
 
@@ -773,7 +773,7 @@ semantic, while axes describe how they render.
 A revised version-1 shape should make the axes visible:
 
 ```lisp
-(:clawmacs-appearance
+(:rplaca-appearance
  :version 1
  :theme :dark
  :overrides
@@ -998,7 +998,7 @@ The implementation must not copy:
 - mutable global registries of accepted family/face/size symbols;
 - Genera raster font names as a portable typography vocabulary;
 - device-font backtranslation as an ordinary workflow;
-- screen/printer font maps owned by Clawmacs;
+- screen/printer font maps owned by RPLACA;
 - document pathname attributes or mail headers for appearance preferences;
 - native ALUs;
 - opaque/nonopaque raster zero-bit behavior;
@@ -1131,7 +1131,7 @@ Optional commits remain outside the baseline:
 
 2. **Pane initialization**
    - verify foreground, background, and default text-style initargs for each
-     pane class used by Clawmacs.
+     pane class used by RPLACA.
 
 3. **Live pane color**
    - verify per-pane `reinitialize-instance`, medium synchronization if public,
@@ -1255,7 +1255,7 @@ Genera's strongest lesson is not a particular theme, font table, or editor. It
 is that semantic typography, concrete device fonts, native drawing state, and
 CLIM designs are different layers with different lifetimes.
 
-Clawmacs should preserve that separation while improving on Genera's
+RPLACA should preserve that separation while improving on Genera's
 distributed customization model:
 
 - semantic roles remain modular;

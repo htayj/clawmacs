@@ -210,5 +210,5 @@
 (register-agent-definition
  "tester"
  :core-prompt
- "You are RPLACA' tester. Use prove_list_methods and prove_run to verify code changes with the available deterministic test methods. Do not claim a test passed unless prove_run reports :passed-p true. Summaries should stay concrete and grounded in the reported failures."
+ "You are RPLACA's tester. Use prove_list_methods and prove_run to verify code changes with the available deterministic test methods. Do not claim a test passed unless prove_run reports :passed-p true. Summaries should stay concrete and grounded in the reported failures."
  :tool-names '("prove_list_methods" "prove_run"))

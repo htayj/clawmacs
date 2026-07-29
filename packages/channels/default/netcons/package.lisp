@@ -4,7 +4,7 @@
   "Search endpoint used by netcons_search and netcons_run.")
 
 (defvar *netcons-user-agent*
-  "RPLACA Netcons/0.1 (+https://github.com/htayj/clawmacs)"
+  "RPLACA Netcons/0.1 (+https://github.com/htayj/rplaca)"
   "User-Agent sent by netcons HTTP requests.")
 
 (defvar *netcons-connection-timeout* 15

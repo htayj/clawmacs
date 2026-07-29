@@ -21,10 +21,10 @@ All application-controlled crash triggers have local fixes, and the full
 acceptance suite can run without carrying a McCLIM patch. The pointer-tracking
 and Drei long-line redisplay defects below are now certainly McCLIM-owned and
 meet the threshold for upstream issues and patches. They do not yet justify
-maintaining a fork: Clawmacs avoids the pointer trigger, and the normal
+maintaining a fork: RPLACA avoids the pointer trigger, and the normal
 multiline compose path passes the bounded acceptance and adversarial runs.
 
-If upstream declines either focused fix, if Clawmacs again needs live
+If upstream declines either focused fix, if RPLACA again needs live
 command-table replacement, or if arbitrary single-line compose input must be
 made robust immediately, prefer a small Guix package patch before creating a
 permanent McCLIM fork.
@@ -36,21 +36,21 @@ candidate.
 
 The apparently hung selector was an application focus-ownership error. The
 visible minibuffer is a CLIM application pane that renders completion
-presentations, while Clawmacs' non-blocking modal key adapter lives on the Drei
+presentations, while RPLACA's non-blocking modal key adapter lives on the Drei
 compose pane. A command invoked while the transcript or standard-input stream
-had focus activated the selector without returning focus to compose. Clawmacs
+had focus activated the selector without returning focus to compose. RPLACA
 now uses `stream-set-input-focus` at its frame-command boundary whenever an
 application interaction becomes active.
 
 The black strip that covered the final candidates is the frame's standard
 pointer-documentation pane. The minibuffer had requested too little layout
-space; the pointer-documentation pane itself behaved correctly. Clawmacs now
+space; the pointer-documentation pane itself behaved correctly. RPLACA now
 derives complete-row height from live CLIM stream metrics and asks CLIM to
 resize the frame through `change-space-requirements`, preserving the declared
 pane layout instead of drawing around or over another pane.
 
 The related draft, point, mark, dirty-state, default-selection, modal-key
-performance, and undo defects were also in Clawmacs' integration. Buffer
+performance, and undo defects were also in RPLACA's integration. Buffer
 changes now use the public ESA current-buffer setter as one transactional
 contract. `C-w` runs a native Drei command from the pane-owned command table.
 Because pinned ESA consumes `C-u` as a universal argument before command-table
@@ -66,9 +66,9 @@ the cause of the reported selector hang or candidate overlap.
 ## Confirmed McCLIM Drei long-line redisplay defect
 
 This defect is certainly McCLIM-owned. A private-Xvfb control loads only
-`mcclim-clx` and `drei-mcclim`, verifies that no `CLAWMACS` package exists, and
+`mcclim-clx` and `drei-mcclim`, verifies that no `RPLACA` package exists, and
 creates a standard McCLIM application frame with an ordinary `:drei` pane and
-its default horizontal scroller. It crashes without any Clawmacs class,
+its default horizontal scroller. It crashes without any RPLACA class,
 package, or compose integration.
 
 The 32 KiB single-physical-line draft used in the original adversarial run was
@@ -81,13 +81,13 @@ signalling `SB-KERNEL:INDEX-TOO-LARGE-ERROR`. The backtrace crosses
 `DREI::DRAW-STROKE`, `change-space-requirements`, recursive repaint, and
 `DREI::CLEAR-STALE-LINES`.
 
-In Clawmacs, entering `M-x` after composing a single physical line is safe at
+In RPLACA, entering `M-x` after composing a single physical line is safe at
 100 characters and crashes at both 101 and 112 characters. That is an
 application-observed transition threshold, not a claim that every Drei usage
 with 101 characters must fail. Bare Drei controls with the same total text,
 point, and mark passed in the earlier controls, as did the tested multiline and
 fixed-rack initial/post-enable cases. The standard-pane control is the
-independent reproducer; the scroller is not a safe Clawmacs workaround.
+independent reproducer; the scroller is not a safe RPLACA workaround.
 
 The pinned `1.0.0-koliada` revision
 [`2577ea3569bb96e2c46ccc8abed4ce6c327e8ed6`](https://codeberg.org/McCLIM/McCLIM/commit/2577ea3569bb96e2c46ccc8abed4ce6c327e8ed6)
@@ -103,12 +103,12 @@ repair does not cover this ordinary Drei-pane path. The source still documents
 the related `0, 0, 1, 2` recursive-count case for Drei output-record replay,
 but that narrow repair is not a complete renderer fix.
 
-Clawmacs mitigates its specific trigger in local commit `866003f` by declaring
+RPLACA mitigates its specific trigger in local commit `866003f` by declaring
 the compose pane's fixed preferred, minimum, and maximum height
 and wrapping at construction, then removing the repaint-time compose
 `change-space-requirements` request. The exact compose-geometry regression
 passes 100-, 101-, and 112-character single-line inputs twice each. This
-removes the known Clawmacs `M-x` resize transition; it does not change Drei's
+removes the known RPLACA `M-x` resize transition; it does not change Drei's
 displayed-line invariant or establish safety during a genuine resize or another
 McCLIM-triggered relayout.
 
@@ -127,7 +127,7 @@ the existing inactive-gadget guard can run.
 
 This failure is certainly McCLIM-owned. A plain `standard-application-frame`
 following McCLIM issue
-[#1312](https://codeberg.org/McCLIM/McCLIM/issues/1312), with no Clawmacs or ESA
+[#1312](https://codeberg.org/McCLIM/McCLIM/issues/1312), with no RPLACA or ESA
 code, reproduced the exact ungrafted `MENU-BUTTON-SUBMENU-PANE` condition in
 three of three fresh Guix/private-Xvfb runs against the pinned revision. The
 commands completed before the crash, and the recorded backtrace enters
@@ -155,11 +155,11 @@ Pinned ESA also assigns the applicable frame command table on every command
 loop turn, and pinned McCLIM treats an `EQ` assignment as a request to disown
 and recreate menu gadgets. McCLIM deliberately preserves that same-object
 refresh to update dynamically enabled or disabled menu commands, as documented
-by [issue #1145](https://codeberg.org/McCLIM/McCLIM/issues/1145). Clawmacs'
+by [issue #1145](https://codeberg.org/McCLIM/McCLIM/issues/1145). RPLACA's
 former state-dependent table replacement made the stale-event timing window
-much larger, but neither Clawmacs nor ESA is required for the failure.
+much larger, but neither RPLACA nor ESA is required for the failure.
 
-The original Clawmacs/ESA-amplified trigger chain is:
+The original RPLACA/ESA-amplified trigger chain is:
 
 - `Libraries/ESA/esa.lisp`: applicable-table assignment in the ESA loop;
 - `Core/clim-core/frames/frames.lisp` and
@@ -203,22 +203,22 @@ moved medium acquisition and the explicit ungrafted-sheet error ahead of that
 guard. The current crash is therefore a regression of the failure class fixed
 for #1312, although it now fails earlier.
 
-Clawmacs keeps one stable named hierarchical command-table tree for M-x and
+RPLACA keeps one stable named hierarchical command-table tree for M-x and
 keys, sends state-dependent choices to presentation-based selectors or
 dashboards, and ignores only an identical table assignment for
-`clawmacs-chat-frame`. The repository currently does not use CLIM's dynamic
+`rplaca-chat-frame`. The repository currently does not use CLIM's dynamic
 command enable/disable APIs, so this scoped suppression does not hide a required
-status refresh. If that changes, Clawmacs must add an explicit refresh path or
+status refresh. If that changes, RPLACA must add an explicit refresh path or
 remove the suppression.
 
 That stable hierarchy was not sufficient for visible pointer menus. On
-2026-07-29, both Clawmacs and a plain two-menu `standard-application-frame`
+2026-07-29, both RPLACA and a plain two-menu `standard-application-frame`
 failed under the same bounded gesture: open one nested menu, then perform 40
 no-delay crossings through its first item, the adjacent heading, the adjacent
 first item, and the original heading. Both fresh private-Xvfb runs terminated
 with `MENU-UNMANAGED-TOP-LEVEL-SHEET-PANE ... is not grafted` from
 `INVOKE-WITH-SHEET-MEDIUM` through `INVOKE-TRACKING-POINTER`; the plain frame
-contains no Clawmacs or ESA code. Run the local ownership probe with:
+contains no RPLACA or ESA code. Run the local ownership probe with:
 
 ```sh
 ./scripts/probe-mcclim-menu-boundaries.sh
@@ -258,7 +258,7 @@ Do not make `with-sheet-medium` silently tolerate ungrafted sheets, globally
 turn `EQ` command-table assignments into no-ops, clear the entire input queue,
 or add application-level string-matched recovery. Those alternatives either
 hide legitimate lifecycle errors, break command-status refresh, discard valid
-input, or move McCLIM event handling into Clawmacs.
+input, or move McCLIM event handling into RPLACA.
 
 As of 2026-07-16, an official Codeberg issue and pull-request scan found no
 current report or patch for the pre-buffer lifecycle check. Upstream contact and
@@ -271,9 +271,9 @@ event has no modifiers or Shift alone. Control, Meta, Super, and Hyper key
 events therefore return `NIL` before Drei can perform command-table lookup.
 That behavior is certainly present in the pinned McCLIM/ESA source. Whether a
 particular end-user key symptom reaches that method still depends on the
-backend event form and Clawmacs' Drei-gadget integration.
+backend event form and RPLACA's Drei-gadget integration.
 
-Clawmacs keeps one pane-specific adapter that passes those events to Drei's
+RPLACA keeps one pane-specific adapter that passes those events to Drei's
 public `handle-gesture` path. It does not replace ESA or Drei behavior
 image-wide. The limitation is covered by modifier-event and real GUI keybinding
 tests and is not currently a crash or a reason to carry a fork. If the adapter
@@ -284,11 +284,11 @@ propose.
 
 | Candidate | Current classification | Evidence |
 |---|---|---|
-| Transient menu sheet reports `Sheet ... is not grafted` during pointer tracking | Confirmed McCLIM-owned robustness defect; trigger was amplified by Clawmacs | The official #1312 lifecycle reproduced the exact current condition in 3/3 plain-CLIM Guix/private-Xvfb runs. McCLIM buffers an already-disowned event sheet before lifecycle validation. Clawmacs removed live table replacement, keeps a stable menu tree, suppresses ESA's identical-table rebuild for its frame, and removed the whole-top-level retry. |
-| ESA minibuffer/basic-medium startup failures | Not reproduced in minimal pinned ESA control | A minimal ESA frame starts and exits on the pinned McCLIM without Clawmacs. Clawmacs also installed image-wide approximate `basic-medium` metrics and a repaint override; those overrides are removed. The application-owned fixed-height minibuffer retains only a pane-specific `compose-space` method. |
-| Edward word kill followed by yank fails on a list/`aref` mismatch | Fixed in the pin | The pinned Edward implementation already normalizes killed word data. The Clawmacs replacements for three private `climi::ie-*` methods are removed, and a regression test exercises the pinned implementation directly. |
-| Live compose `M-x` entered an undefined `STREAM` path | Application command-table ordering | Drei's `exclusive-gadget-table` handled `M-x` before Clawmacs' inherited frame table and entered Drei's blocking extended-command workflow. A pane-specific public `additional-command-tables` method now gives the application command precedence. Headless lookup/parser coverage and live GUI passes prove the non-blocking Clawmacs minibuffer path. |
-| A rapid `C-c V` became literal `V` in one GUI run | Not proven upstream | The actual pin already filters CLX's documented `:SHIFT-LEFT` and `:SHIFT-RIGHT` standalone modifier names. Clawmacs now consumes recognized standalone modifiers explicitly at its pane boundary, preserves the prefix across ESA's identical command-table assignment, and the GUI driver waits for one toggle's semantic completion before beginning the next chord. Repeated live keybinding coverage is the classification gate; there is no stripped-down McCLIM reproducer. |
+| Transient menu sheet reports `Sheet ... is not grafted` during pointer tracking | Confirmed McCLIM-owned robustness defect; trigger was amplified by RPLACA | The official #1312 lifecycle reproduced the exact current condition in 3/3 plain-CLIM Guix/private-Xvfb runs. McCLIM buffers an already-disowned event sheet before lifecycle validation. RPLACA removed live table replacement, keeps a stable menu tree, suppresses ESA's identical-table rebuild for its frame, and removed the whole-top-level retry. |
+| ESA minibuffer/basic-medium startup failures | Not reproduced in minimal pinned ESA control | A minimal ESA frame starts and exits on the pinned McCLIM without RPLACA. RPLACA also installed image-wide approximate `basic-medium` metrics and a repaint override; those overrides are removed. The application-owned fixed-height minibuffer retains only a pane-specific `compose-space` method. |
+| Edward word kill followed by yank fails on a list/`aref` mismatch | Fixed in the pin | The pinned Edward implementation already normalizes killed word data. The RPLACA replacements for three private `climi::ie-*` methods are removed, and a regression test exercises the pinned implementation directly. |
+| Live compose `M-x` entered an undefined `STREAM` path | Application command-table ordering | Drei's `exclusive-gadget-table` handled `M-x` before RPLACA's inherited frame table and entered Drei's blocking extended-command workflow. A pane-specific public `additional-command-tables` method now gives the application command precedence. Headless lookup/parser coverage and live GUI passes prove the non-blocking RPLACA minibuffer path. |
+| A rapid `C-c V` became literal `V` in one GUI run | Not proven upstream | The actual pin already filters CLX's documented `:SHIFT-LEFT` and `:SHIFT-RIGHT` standalone modifier names. RPLACA now consumes recognized standalone modifiers explicitly at its pane boundary, preserves the prefix across ESA's identical command-table assignment, and the GUI driver waits for one toggle's semantic completion before beginning the next chord. Repeated live keybinding coverage is the classification gate; there is no stripped-down McCLIM reproducer. |
 
 ## Post-adversarial classification
 
@@ -298,13 +298,13 @@ After its one-time setup transition, the bounded resource profile showed no
 accumulating RSS, descriptor, or thread trend during the sampled interval. The
 Artifactum timestamp crash, screenshot-ordering race, compile-cache and
 event-log costs, interop test flake, and inherited X socket namespace were
-owned by Clawmacs, its tests, or its harness.
+owned by RPLACA, its tests, or its harness.
 
 Fresh provenance again resolves the tested CLIM, McCLIM, ESA, and Drei systems
-from the pinned Guix McCLIM tree. The Clawmacs-free ESA control again starts and
+from the pinned Guix McCLIM tree. The RPLACA-free ESA control again starts and
 returns `:OK`; current evidence is under
 `.artifacts/adversarial-mcclim/final-closure/provenance/`. Those bounded results
-remain valid evidence that the locally mitigated Clawmacs interface is stable
+remain valid evidence that the locally mitigated RPLACA interface is stable
 under the tested workload.
 
 The later focused investigation supersedes only the pointer issue's ownership
@@ -325,7 +325,7 @@ protocol from issue #1312:
    queued event's old `MENU-BUTTON-SUBMENU-PANE` is not grafted.
 
 All three counted runs used
-`CLAWMACS_CONTAINER_DISABLE_HOST_X=1`, the Guix E2E wrapper, and a newly started
+`RPLACA_CONTAINER_DISABLE_HOST_X=1`, the Guix E2E wrapper, and a newly started
 private Xvfb selected through `-displayfd`. The harness waited until the named
 application window reached 900x548 before sending real `xdotool` gestures. It
 recorded every gesture, command marker, store provenance, exit status, and full
@@ -348,10 +348,10 @@ observed that same transient geometry before waiting for the valid frame.
 
 The following control loads `:mcclim-clx` and `:esa-mcclim`, creates a real ESA
 application frame with an ESA minibuffer pane, and runs its top level without
-loading Clawmacs:
+loading RPLACA:
 
 ```sh
-CLAWMACS_CONTAINER_DISABLE_HOST_X=1 \
+RPLACA_CONTAINER_DISABLE_HOST_X=1 \
 ./scripts/guix-container.sh --mode e2e -- sh -lc '
 set -eu
 display_file=$(mktemp)
@@ -375,7 +375,7 @@ until xdotool getdisplaygeometry >/dev/null 2>&1; do
   sleep 0.1
 done
 sbcl --noinform --non-interactive --disable-debugger \
-  --load "$CLAWMACS_QUICKLISP_SETUP" \
+  --load "$RPLACA_QUICKLISP_SETUP" \
   --eval "(ql:quickload (quote (:mcclim-clx :esa-mcclim)) :silent t)" \
   --eval "(clim:define-application-frame esa-minibuffer-repro
              (esa:esa-frame-mixin clim:standard-application-frame)
@@ -427,9 +427,9 @@ The protocol is declared in `Core/windowing/protocol.lisp` and described in
 `font-face-scalable-p` method. The only method in the pinned source tree is for
 the separate basic font-face implementation. A fresh private-Xvfb reproduction
 failed on `MCCLIM-TRUETYPE:TRUETYPE-FACE` with
-`SB-PCL::NO-APPLICABLE-METHOD-ERROR`, without relying on Clawmacs internals.
+`SB-PCL::NO-APPLICABLE-METHOD-ERROR`, without relying on RPLACA internals.
 
-Clawmacs avoids the broken predicate. It exposes only positive sizes returned
+RPLACA avoids the broken predicate. It exposes only positive sizes returned
 by the public `font-face-all-sizes` method, then resolves a selected size
 through public `font-face-text-style`, mapping, and metric operations. This
 retains the native TrueType implementation's listed sizes while deliberately
@@ -442,7 +442,7 @@ enumeration still fails.
 The same pinned backend's `port-all-font-families :invalidate-cache t` closes
 TrueType streams that can still be mapped by live pane mediums. A subsequent
 ordinary compose dispatch or redisplay then signals that the DejaVu font stream
-is closed. Clawmacs therefore treats explicit refresh as a frame-local logical
+is closed. RPLACA therefore treats explicit refresh as a frame-local logical
 generation advance over the current public cache and never invalidates the
 backend cache of an adopted live port. Newly installed system fonts become
 available after a new frame/application process, not through live refresh.
@@ -451,14 +451,14 @@ No fork is warranted while listed sizes satisfy the appearance editor. Revisit
 that decision only if arbitrary scalable sizes become a product requirement
 and upstream has not supplied the missing public method; at that point, prefer
 a focused upstream-compatible method and minimal reproducer over a
-Clawmacs-specific class test or monkey patch. This finding is recorded locally;
+RPLACA-specific class test or monkey patch. This finding is recorded locally;
 no upstream report was sent.
 
 ## Upstream attribution and fork thresholds
 
 Attribute a candidate certainly to McCLIM only when all of these are true:
 
-1. A minimal application contains no Clawmacs methods, advice, event classes,
+1. A minimal application contains no RPLACA methods, advice, event classes,
    or command-table refresh code.
 2. It fails on the exact pinned Guix McCLIM revision under a fresh Xvfb.
 3. The same semantic lifecycle is valid under the CLIM protocol: frames are
@@ -474,10 +474,10 @@ require a fork.
 
 Maintain a McCLIM fork only if all of these additional conditions become true:
 
-1. Clawmacs needs the failing lifecycle and cannot safely avoid it locally.
-2. A focused McCLIM patch fixes the plain reproducer and passes Clawmacs'
+1. RPLACA needs the failing lifecycle and cannot safely avoid it locally.
+2. A focused McCLIM patch fixes the plain reproducer and passes RPLACA's
    acceptance and adversarial suites.
 3. Upstream declines the patch or leaves it unavailable long enough to block
-   Clawmacs development.
+   RPLACA development.
 4. Carrying the patch in the Guix package is no longer sufficient or
    maintainable.

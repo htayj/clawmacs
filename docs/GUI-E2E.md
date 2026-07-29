@@ -1,7 +1,7 @@
-# Clawmacs GUI E2E
+# RPLACA GUI E2E
 
-The GUI E2E framework is opt-in and runs the real McCLIM Clawmacs frame inside
-Xvfb. It drives the window with `xdotool`, observes structured `CLAWMACS_DEBUG_LOG`
+The GUI E2E framework is opt-in and runs the real McCLIM RPLACA frame inside
+Xvfb. It drives the window with `xdotool`, observes structured `RPLACA_DEBUG_LOG`
 E2E events, and captures screenshots at scripted milestones and on failures.
 
 ## Commands
@@ -24,7 +24,7 @@ ASDF integration is also opt-in and runs `smoke`, `mx`, `features`,
 `keybinds`, `organa`, `quaestor`, `reload`, `appearance`, and `stability`:
 
 ```lisp
-(asdf:test-system :clawmacs/gui-e2e)
+(asdf:test-system :rplaca/gui-e2e)
 ```
 
 The default FiveAM unit suite only covers E2E primitives; it does not launch
@@ -32,7 +32,7 @@ Xvfb or the GUI smoke test.
 
 The dependency-free Python regression checks final-screenshot event ordering,
 wrong-buffer/repeated-redisplay rejection, and the final X server round trip
-without launching Clawmacs or Xvfb:
+without launching RPLACA or Xvfb:
 
 ```sh
 python3 ./scripts/test_gui_e2e_driver.py
@@ -42,9 +42,9 @@ python3 ./scripts/test_gui_e2e_driver.py
 
 The harness:
 
-- sets `CLAWMACS_CONTAINER_DISABLE_HOST_X=1` before entering the Guix wrapper;
+- sets `RPLACA_CONTAINER_DISABLE_HOST_X=1` before entering the Guix wrapper;
 - requires host `flock`, then serializes project Quicklisp bootstrap and an
-  exact `:clawmacs` dependency warmup under a host advisory lock with a
+  exact `:rplaca` dependency warmup under a host advisory lock with a
   600-second acquisition bound; it releases the lock before starting the GUI,
   so concurrent suites only read installed releases while compiling into
   their artifact-local caches;
@@ -74,24 +74,24 @@ The harness:
 - waits for both the waitable owner and every live application-group member
   after `frame-stopped`, and signals the exact group during emergency teardown
   so members remaining in that group cannot escape the harness; managed
-  subprocesses that create their own sessions remain owned by Clawmacs'
+  subprocesses that create their own sessions remain owned by RPLACA's
   separate process-group teardown;
-- sets `CLAWMACS_GUI_E2E=1`, `CLAWMACS_E2E_EVENTS=1`, and
-  `CLAWMACS_E2E_PROVIDER=1`;
+- sets `RPLACA_GUI_E2E=1`, `RPLACA_E2E_EVENTS=1`, and
+  `RPLACA_E2E_PROVIDER=1`;
 - unsets provider credential environment variables before launching SBCL;
-- sets `clawmacs:*inhibit-user-init*` before `clawmacs-main`.
+- sets `rplaca:*inhibit-user-init*` before `rplaca-main`.
 
 No real provider network call or user secret is required for the GUI E2E suites.
 The frame-ready wait defaults to 300 seconds so a cold McCLIM compilation can
-finish; set `CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS` to a positive integer
-to override it. Set `CLAWMACS_GUI_E2E_COLD_CACHE=1` to remove any existing,
+finish; set `RPLACA_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS` to a positive integer
+to override it. Set `RPLACA_GUI_E2E_COLD_CACHE=1` to remove any existing,
 validated artifact-local `cache/common-lisp` tree before startup while
 preserving sibling state. Invalid or overlapping roots and a failed cold-cache
 clear abort safely. An unavailable or safely failed seed copy continues with
 an empty private cache and never shares writable cache state.
 
 After the semantic `frame-stopped` event, the natural SBCL exit is bounded to
-30 seconds. Set `CLAWMACS_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS` to a positive
+30 seconds. Set `RPLACA_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS` to a positive
 integer to override that teardown deadline.
 
 Every external driver helper has a 15-second deadline, and image capture uses
@@ -145,7 +145,7 @@ sh ./scripts/test-gui-e2e-artifacts.sh
 The Xvfb namespace regression proves the fresh-container retry is bounded,
 unrelated launcher failures are not retried, and a disposable read-only
 `/tmp/.X11-unix` exposure is diagnosed before Xvfb starts or the directory is
-changed. It does not launch SBCL or Clawmacs:
+changed. It does not launch SBCL or RPLACA:
 
 ```sh
 sh ./scripts/test-gui-e2e-xvfb.sh
@@ -164,7 +164,7 @@ exhaustion. This final scan includes output emitted during frame teardown.
 Each run writes under `.artifacts/gui-e2e/<timestamp-pid>/` by default:
 
 - `debug.log` — normal debug log plus `[e2e-event]` JSON records;
-- `app.stdout`, `app.stderr` — Clawmacs process output;
+- `app.stdout`, `app.stderr` — RPLACA process output;
 - `app.pgid` — exact application session/process-group ID published by the
   session leader;
 - `driver.stdout`, `driver.stderr` — Python driver output;
@@ -222,13 +222,13 @@ next poll is outside this guarantee.
 
 The current `smoke` suite:
 
-1. waits for `frame-ready` and a visible `Clawmacs E2E` X window;
+1. waits for `frame-ready` and a visible `RPLACA E2E` X window;
 2. captures an initial screenshot;
 3. focuses the compose pane and types `hello`;
 4. waits for `compose_text` to equal `hello` in a `ui-snapshot`;
 5. presses Return;
 6. waits for the deterministic response containing
-   `CLAWMACS_E2E_HELLO_SENTINEL`, provider completion, and a final idle
+   `RPLACA_E2E_HELLO_SENTINEL`, provider completion, and a final idle
    `ui-snapshot` containing the response;
 7. captures a final screenshot after the rendered idle state.
 
@@ -237,7 +237,7 @@ The current `smoke` suite:
 The `mx` suite opens a fresh GUI and exercises the Emacs-style extended command
 flow from the compose pane:
 
-1. waits for `frame-ready` and focuses the Clawmacs window;
+1. waits for `frame-ready` and focuses the RPLACA window;
 2. sends `Escape` then `x` as the robust keyboard equivalent of `M-x`;
 3. waits for the minibuffer snapshot to show `M-x`;
 4. types the fuzzy abbreviation `tdbg`;
@@ -252,7 +252,7 @@ flow from the compose pane:
 ## Broad feature behavior
 
 The `features` suite is the broad deterministic no-provider-network coverage
-pass for user-facing Clawmacs features that can be driven safely inside the
+pass for user-facing RPLACA features that can be driven safely inside the
 isolated Xvfb session. It preserves `smoke` and `mx` as focused suites and adds
 coverage for:
 
@@ -304,7 +304,7 @@ separation.
 ## Safe reload behavior
 
 The `reload` suite exercises the real safe in-place reload flow from the GUI. It
-keeps a compose draft visible, invokes `safe-reload-clawmacs-command` through
+keeps a compose draft visible, invokes `safe-reload-rplaca-command` through
 `M-x`, waits for the `safe-reload-result` debug event from the isolated
 preflight plus live reload, and asserts the semantic snapshot still shows the
 same buffer and compose draft along with the success notification.
@@ -387,8 +387,8 @@ The same post-exit artifact scan now runs for every GUI suite; `stability`
 additionally performs an in-scenario scan immediately after its stress actions.
 
 The default is 24 menu cycles and 6 unmap/map cycles. Set
-`CLAWMACS_GUI_E2E_STABILITY_MENU_ITERATIONS` or
-`CLAWMACS_GUI_E2E_STABILITY_EXPOSE_ITERATIONS` to a positive integer for a
+`RPLACA_GUI_E2E_STABILITY_MENU_ITERATIONS` or
+`RPLACA_GUI_E2E_STABILITY_EXPOSE_ITERATIONS` to a positive integer for a
 longer bounded stress run; the Guix launcher preserves both overrides into the
 container. Extended adversarial validation has run both 100- and
 250-menu-cycle configurations.
@@ -411,7 +411,7 @@ writing to the checkout:
 
 The `quaestor` suite verifies the package-owned active request overlay:
 
-1. starts Clawmacs with the bundled `quaestor` package enabled;
+1. starts RPLACA with the bundled `quaestor` package enabled;
 2. installs an E2E-only `*initial-buffer-hook*` that opens a deterministic
    `quaestor-request-user-input` request in the first chat buffer;
 3. waits for the generic input-presentation overlay to show the question,

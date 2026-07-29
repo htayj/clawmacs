@@ -340,7 +340,7 @@
     font))
 
 (defun write-clawfont-file (font path)
-  "Write FONT to PATH in RPLACA' native `.clawfont' format."
+  "Write FONT to PATH in RPLACA's native `.clawfont' format."
   (ensure-directories-exist path)
   (with-open-file (stream path
                           :direction :output

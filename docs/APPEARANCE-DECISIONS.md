@@ -2,7 +2,7 @@
 
 - **Status:** normative implementation contract; no appearance system is complete
 - **Date:** 2026-07-26
-- **Applies to:** Clawmacs on pinned McCLIM `1.0.0-koliada`
+- **Applies to:** RPLACA on pinned McCLIM `1.0.0-koliada`
 - **Companion documents:** [customization plan](APPEARANCE-CUSTOMIZATION-PLAN.md),
   [Genera-informed companion plan](GENERA-INFORMED-APPEARANCE-PLAN.md),
   [design posture](DESIGN.md), [stability boundary](STABILITY.md), and
@@ -29,7 +29,7 @@ The labels below make the dependency boundary explicit.
 | **Portable CLIM** | Required by CLIM 2 semantics; no McCLIM-private behavior is assumed. |
 | **McCLIM extension** | Public API in the pinned McCLIM tree, not part of portable CLIM. |
 | **Pinned implementation fact** | Verified against `1.0.0-koliada`; do not generalize to another CLIM implementation or McCLIM revision. |
-| **Application policy** | Deliberate Clawmacs behavior, independent of framework capability. |
+| **Application policy** | Deliberate RPLACA behavior, independent of framework capability. |
 
 The decisive evidence is:
 
@@ -45,7 +45,7 @@ The decisive evidence is:
   provides `clim-extensions:port-all-font-families`,
   `clim-extensions:font-family-all-faces`, and
   `clim-extensions:font-face-text-style`.
-- In the current Clawmacs launch path, `make-application-frame` has no
+- In the current RPLACA launch path, `make-application-frame` has no
   preselected `:frame-manager`: it makes the frame before the standard frame
   manager adopts it, and adoption then generates panes. Basic pane foreground,
   background, and text-style defaults are installed when its medium is
@@ -428,7 +428,7 @@ are pinned-McCLIM facts plus application policy.
 `appearance.sexp` contains exactly one form:
 
 ```lisp
-(:clawmacs-appearance
+(:rplaca-appearance
  :version 1
  :theme (:package "org.example.plugin" "outline-dark")
  :strict-contrast nil
@@ -463,8 +463,8 @@ name" :size SIZE)`. The latter remains data until port resolution.
 Environment and command-line input is deliberately narrower than the file:
 
 ```text
-CLAWMACS_APPEARANCE_THEME=THEME-ID
-CLAWMACS_APPEARANCE_OVERRIDES=OVERRIDE-LIST
+RPLACA_APPEARANCE_THEME=THEME-ID
+RPLACA_APPEARANCE_OVERRIDES=OVERRIDE-LIST
 --appearance-theme THEME-ID | --appearance-theme=THEME-ID
 --appearance-override ROLE-ID=OVERRIDE-FORM | --appearance-override=ROLE-ID=OVERRIDE-FORM
 --appearance-file PATH | --appearance-file=PATH
@@ -502,7 +502,7 @@ example:
 
 ```text
 --appearance-override=org.example.plugin/outline-heading=(:foreground (:rgb 0.478 0.635 0.969))
-CLAWMACS_APPEARANCE_OVERRIDES='(("org.example.plugin/outline-heading" (:foreground (:rgb 0.478 0.635 0.969))))'
+RPLACA_APPEARANCE_OVERRIDES='(("org.example.plugin/outline-heading" (:foreground (:rgb 0.478 0.635 0.969))))'
 ```
 
 The environment is singular: an operating-system environment variable cannot
@@ -587,7 +587,7 @@ in its role or theme namespace.
 An extension may register a declaration only when its textual owner equals the
 canonical `package-definition-name` of the currently active package definition
 and that definition's resource allowlist contains `:appearance`. Core IDs are
-reserved to Clawmacs: packages cannot define, replace, or alter them. An
+reserved to RPLACA: packages cannot define, replace, or alter them. An
 extension's parent-theme and role-fallback references may name only a core ID
 or an ID owned by that same package; all cross-owner references are rejected.
 Candidate collisions with an existing other owner's declaration are fatal, and
@@ -597,7 +597,7 @@ Registration is an owner-scoped staged reload. Build a candidate catalog that
 replaces only the submitting owner's prior declarations, validate its complete
 graphs and all affected frames, then atomically publish it. Thus a package can
 replace its own mutually referring roles/themes in one staged set, but cannot
-claim, remove, or collide with Clawmacs or another package's declarations.
+claim, remove, or collide with RPLACA or another package's declarations.
 Persist the tagged lists as data—not interned symbols—so unloading a Common
 Lisp package cannot make preferences unreadable.
 
@@ -630,7 +630,7 @@ focuses the frame-local staged candidate and returns a command result without
 performing display work. The frame command is exactly
 `com-chat-customize-appearance`; it obtains the application frame, invokes
 that helper, and requests normal CLIM redisplay. A static Appearance menu
-is named `clawmacs-chat-appearance-menu` and contains a `Customize Appearance`
+is named `rplaca-chat-appearance-menu` and contains a `Customize Appearance`
 item dispatching that frame command; it is not assembled by a display function
 or a mutable process-global command table.
 

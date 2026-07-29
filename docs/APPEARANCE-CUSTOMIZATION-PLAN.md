@@ -40,12 +40,12 @@ The current GUI has literal visual choices in
   bold face. Selected rows do not have a general filled-background treatment.
 - Existing incremental paths use `clim:updating-output`, but their cache values
   do not include an appearance revision or rendering key.
-- `clawmacs-chat-frame` already owns UI state and declares the transcript,
+- `rplaca-chat-frame` already owns UI state and declares the transcript,
   info, compose, minibuffer, and pointer-documentation surfaces. It is the
   correct owner for active appearance state.
 - The package system already has package-owned resource allowlists and reload
   machinery in [`src/package-manager.lisp`](../src/package-manager.lisp).
-- User initialization is loaded from `~/.clawmacs.d/init.lisp` by
+- User initialization is loaded from `~/.rplaca.d/init.lisp` by
   [`src/main.lisp`](../src/main.lisp), which establishes configuration order.
 
 Some producers use roles that are not currently rendered explicitly, including
@@ -92,7 +92,7 @@ The catalog is an extensibility registry. It must never be a mutable global
 
 ### Frame-owned active appearance
 
-Each `clawmacs-chat-frame` should own:
+Each `rplaca-chat-frame` should own:
 
 - its active `appearance-profile`;
 - unsaved frame-local role overrides;
@@ -279,13 +279,13 @@ error.
 The proposed configuration file is:
 
 ```text
-~/.clawmacs.d/appearance.sexp
+~/.rplaca.d/appearance.sexp
 ```
 
 Its versioned, data-only format is:
 
 ```lisp
-(:clawmacs-appearance
+(:rplaca-appearance
  :version 1
  :theme :dark
  :styles
