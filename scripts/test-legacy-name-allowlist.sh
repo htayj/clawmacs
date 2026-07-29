@@ -75,14 +75,20 @@ git -C "$repo" add current.md
 expect_failure new-current-reference 'unapproved occurrence: current.md' "$repo"
 git -C "$repo" rm -q -f current.md
 
-printf 'ssh://archive.example/clawmacs/snapshot\n' >"$repo/uri.txt"
+printf 'clawmacs://legacy\n' >"$repo/uri.txt"
 git -C "$repo" add uri.txt
-expect_failure generic-uri '|url|' "$repo"
+write_allowlist "$repo"
+awk -F'|' 'BEGIN {OFS="|"} !($1 == "uri.txt" && $3 == "url") {print}' \
+  "$repo/allowlist.tsv" >"$repo/product-only-uri.tsv"
+mv "$repo/product-only-uri.tsv" "$repo/allowlist.tsv"
+expect_failure scheme-identity-uri '|url|' "$repo"
 git -C "$repo" rm -q -f uri.txt
+write_allowlist "$repo"
 
 ln -s '../clawmacs-archive' "$repo/archive-link"
 git -C "$repo" add archive-link
-expect_failure symlink-target '|symlink-target|' "$repo"
+ln -sfn '../safe-archive' "$repo/archive-link"
+expect_failure staged-symlink-target-divergence '|symlink-target|' "$repo"
 git -C "$repo" rm -q -f archive-link
 
 cp "$repo/allowlist.tsv" "$repo/valid-allowlist"

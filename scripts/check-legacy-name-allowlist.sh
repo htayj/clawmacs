@@ -100,8 +100,8 @@ classify_context() {
   done
 
   uri_count=$(printf '%s\n' "$lower" |
-    grep -Eio \
-      '[a-z][a-z0-9+.-]*:[^[:space:]]*(clawmacs|clawfont)[^[:space:]]*' |
+    grep -Eio '[a-z][a-z0-9+.-]*:[^[:space:]]*' |
+    grep -Ei 'clawmacs|clawfont' |
     wc -l | tr -d ' ' || true)
   while [ "$uri_count" -gt 0 ]; do
     record_raw_occurrence \
@@ -136,7 +136,7 @@ done
 
 while IFS= read -r path; do
   [ -n "$path" ] || continue
-  target=$(readlink "$REPO_ROOT/$path")
+  target=$(git -C "$REPO_ROOT" cat-file blob ":$path")
   classify_context "$path" symlink-target "$target"
 done <"$SYMLINKS"
 

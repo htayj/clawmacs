@@ -115,6 +115,17 @@ docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|e281ecc9b
 docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|e281ecc9bbbe3654ffcdaea87bf50bb4c7a698e0ca8dd7188bdb7ad68638d272:2|historical|Preserved completed pre-rename design history.
 docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|e8ad1f4a0668bd3cd066677e5bcc23e0fd671b1f10b27a3809862ee2373a172d:1|historical|Preserved completed pre-rename design history.
 docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|fd6b4cc0b3b3b7caa5866efe560326fef63536796b9bcd3b66985cef1a6aa0ae:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|081591215d22889a7e4bf9a2778c32692006dcc7627976aad9b2b3da73d2943b:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|1198f3ce96b3f050a5722084e70dbc5f25343f3d7e9b5870a6dc76afb664d271:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|188c59d2bfc5ce0a4ddff12fa6fd8fdd17a3fdb52a458b8e49fb713a7c92a891:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|575ec056a589c2b8ca3db7f48b69b92c13c84bbfc06cc98c265a958701ccc5bc:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|60b6bd07141a59c98e6c772f9e1af03e06d1e7d1ca51e974fee734f766815059:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|7765de1e494732a7e082b181c040ff0d852a610687623470fc3f6e29304a4969:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|7c7676ea0c98985a67d5e62e6348e4aa25b6cf1011568e4f6e88c6e6c8aa1dd7:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|930a2c20081a7e06a0d434974dd02d911805befcda5f3b2e7d51333293216e7f:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|935129ed5b3327e105545584729ae4747166c1f9edfb60224059e3a9b6b9558d:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|ae2e6af0ecba17eaf8e571d8497e78c396fb073bab89448dfaaa3a425c7228d4:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|bcf39c2db59072a9ed36456944fd7f0fc1a140e97389855e7b3d488b63f72417:1|historical|Preserved completed pre-rename design history.
 docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|e281ecc9bbbe3654ffcdaea87bf50bb4c7a698e0ca8dd7188bdb7ad68638d272:1|historical|Preserved completed pre-rename design history.
 docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|filename|product|5cd88e735d707c8a37f7550af243037cb34bd113a6b5c12df1436eac1892f6d2:1|historical|Preserved completed pre-rename design history.
 docs/superpowers/plans/2026-03-15-next-features.md|content|product|2e5af4c018d8a1269c4f06b3c7c8de2c923f2c07d52a9450e73731e75131458b:1|historical|Preserved completed pre-rename design history.
@@ -128,22 +139,23 @@ docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|55
 docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|6e1f381b81258b071bc033d911863b166d24f0f666d24df90b82d33485df412f:1|historical|Preserved completed pre-rename design history.
 docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|833d264b134b52124d069f260eac2325225267ffc603e8cc1e5f60056a6ca7fe:1|historical|Preserved completed pre-rename design history.
 docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|e34b8475699c793c0622097a1b6135703eebd44e13da3c16f7f327cc6d93ce51:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|url|4b5d4c2059dfd7e47f05ed61f0018d27636c1194210805e49fb4840e191ccbac:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|url|833d264b134b52124d069f260eac2325225267ffc603e8cc1e5f60056a6ca7fe:1|historical|Preserved completed pre-rename design history.
 docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|filename|product|20a2df2e810cceb87a4a6a2100f51bbd03085e2bfe596d4e412016d1fbc38bc2:1|historical|Preserved completed pre-rename design history.
-scripts/check-legacy-name-allowlist.sh|content|font|056d8300003147789e2edd4a49dd68dd820b2b8128426169f06b0ee0f0bb6390:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|font|17bf6832446d05e19e59c3ad4a09952423b97299a10c006d2e19313431a60de0:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|font|2876190f1c346b5d9b73cae9dbe9e5c1ec4125c41cd11b5ac197c584e018395f:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|font|8d2ed25e163052e123167f53f0f49c787267cf1521d3aaa62ecf5458c26230c7:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|font|ac4d5a81823eb3b01daa4d9e1228feca4515434aca5c5d75f6c438d925ed7db1:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|font|bbc3ebbe02eea9290e7ed19a25ed51183ba9db6a2a4bbae42a0e9578cc7e12ac:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|font|c17f8066d7e3d3b373966131d597647ffadebae810ec2ac4c4fa99296b127399:1|policy|Implements or tests exact residual-name enforcement.
-scripts/check-legacy-name-allowlist.sh|content|product|056d8300003147789e2edd4a49dd68dd820b2b8128426169f06b0ee0f0bb6390:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|product|17bf6832446d05e19e59c3ad4a09952423b97299a10c006d2e19313431a60de0:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|product|2876190f1c346b5d9b73cae9dbe9e5c1ec4125c41cd11b5ac197c584e018395f:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|product|425b5a17badf5ce822c43e3395ff89e46760afdf129199f7e8840e71e28f8d47:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|product|a6a3a278f7d66fc66cee1802bd829b9cbae2a84772b865da7af94bc7ee001062:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|product|a6a3a278f7d66fc66cee1802bd829b9cbae2a84772b865da7af94bc7ee001062:2|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|product|ac4d5a81823eb3b01daa4d9e1228feca4515434aca5c5d75f6c438d925ed7db1:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|product|bc5c1a16d8dbb881b4ed49f740fb5a9314c944b6ab07d4cc52ec1e8d84b41477:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|product|e21252526918e6a0daff3e552e7ddfb6300db0f41796302b746299e6d4012df6:1|policy|Implements or tests exact residual-name enforcement.
-scripts/check-legacy-name-allowlist.sh|content|url|056d8300003147789e2edd4a49dd68dd820b2b8128426169f06b0ee0f0bb6390:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|url|a6a3a278f7d66fc66cee1802bd829b9cbae2a84772b865da7af94bc7ee001062:1|policy|Implements or tests exact residual-name enforcement.
 scripts/check-legacy-name-allowlist.sh|content|url|a6a3a278f7d66fc66cee1802bd829b9cbae2a84772b865da7af94bc7ee001062:2|policy|Implements or tests exact residual-name enforcement.
 scripts/guix-container.sh|content|product|0101c08fa1d98f60bb85221c8b5e4603ebe97a5e3bbaa2d32712b66a66d37ab3:1|runtime-mount|Exposes former user state read-only in the container.
@@ -170,10 +182,10 @@ scripts/test-legacy-name-allowlist.sh|content|product|5ebd20a9ca7589b5152bb5b315
 scripts/test-legacy-name-allowlist.sh|content|product|68c041561211137de3b8eae07f8ab23612c365d1bc18d82a13755bc0dc5c9568:1|policy|Implements or tests exact residual-name enforcement.
 scripts/test-legacy-name-allowlist.sh|content|product|74010a6f8149febf92545e76088f162b6b059a24d92481d9b3be28f58cbddf1a:1|policy|Implements or tests exact residual-name enforcement.
 scripts/test-legacy-name-allowlist.sh|content|product|757326cd258f6867f49ca38b087941da2ef10683a86f2469f2c7488e1b70b7ea:1|policy|Implements or tests exact residual-name enforcement.
-scripts/test-legacy-name-allowlist.sh|content|product|e19bcf6d2be8f39b3fc5a3ee97dca9fde79214b9bded3c47861011f9f325e137:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|product|b2ea2baf8b11800161e6404de840fa8ed14234287e165b05c4e2045f09d959b7:1|policy|Implements or tests exact residual-name enforcement.
 scripts/test-legacy-name-allowlist.sh|content|product|e7a4e0d8f8aa5b815dba6977c06f8b62adb0aee33c54ae5df2ef99a697f6001d:1|policy|Implements or tests exact residual-name enforcement.
 scripts/test-legacy-name-allowlist.sh|content|product|e7a4e0d8f8aa5b815dba6977c06f8b62adb0aee33c54ae5df2ef99a697f6001d:2|policy|Implements or tests exact residual-name enforcement.
-scripts/test-legacy-name-allowlist.sh|content|url|e19bcf6d2be8f39b3fc5a3ee97dca9fde79214b9bded3c47861011f9f325e137:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|url|b2ea2baf8b11800161e6404de840fa8ed14234287e165b05c4e2045f09d959b7:1|policy|Implements or tests exact residual-name enforcement.
 scripts/test-session-migration-containers.sh|content|product|66cc5233364b5baaa42543ac4aad52ccd5510a1a27e9f728e59b16e7ad10df98:1|migration-test|Exercises migration compatibility in isolation.
 scripts/test-session-migration-containers.sh|content|product|ad87ca01f10f4263531acb49958e6dfe74145ae8eb9cdde4e2c9c0b3789acead:1|migration-test|Exercises migration compatibility in isolation.
 src/appearance-config.lisp|content|product|4d4de7330ee33abaa296072ef54492cd928856aaabc8860ebfbe9b97409fdba2:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
