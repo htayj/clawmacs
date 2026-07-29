@@ -1943,6 +1943,166 @@ def run_reload(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     return screenshots
 
 
+def run_appearance_stage(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    """Prove staging, restart-only application, editor semantics, and save.
+
+    The surrounding shell harness relaunches the real application with this
+    same artifact-private HOME for ``appearance-restart``.  This phase proves
+    that a dark surface candidate remains a frame-local staged value after an
+    Apply attempt: it must not be partly painted into the live classic frame.
+    """
+    screenshots = prepare_session(session)
+    initial = session.latest_snapshot()
+    if initial.get("appearance_active_theme") != "classic":
+        raise DriverError(f"appearance cold start was not classic: {initial!r}")
+    if initial.get("appearance_staged_theme") is not None:
+        raise DriverError("appearance cold start unexpectedly retained staging")
+    if initial.get("appearance_catalog_generation") is None:
+        raise DriverError("appearance snapshot has no catalog generation")
+    screenshots.append(session.screenshot("02-appearance-classic-cold-start"))
+
+    # The frame event owns the real CLX inventory refresh.  The deterministic
+    # unit fixture covers sorting/negative-cache semantics; this live check
+    # proves the public port enumeration route advances only this frame's
+    # generation without invalidating McCLIM's live shared font mappings.  The
+    # separate pinned-font probe is intentionally stricter and requires native
+    # TrueType listed sizes plus a complete mapping/metrics round trip.
+    initial_font_generation = initial.get("appearance_font_inventory_generation")
+    if not isinstance(initial_font_generation, int):
+        raise DriverError("appearance snapshot has no font inventory generation")
+    before_font_refresh = session.latest_sequence()
+    run_mx_selection(session, "refresh-font-inventory-command")
+    session.wait_event_after(
+        "font-inventory-refresh", before_font_refresh,
+        lambda event: (event.get("status") == "ready"
+                       and event.get("generation") == initial_font_generation + 1
+                       and isinstance(event.get("choice_count"), int)
+                       and event.get("choice_count") >= 0),
+        timeout=20.0)
+    session.press("ctrl+l")
+    refreshed = session.wait_snapshot(
+        "real public CLX font inventory refreshed",
+        lambda snapshot: (
+            snapshot.get("appearance_font_inventory_generation")
+            == initial_font_generation + 1
+            and isinstance(snapshot.get("appearance_font_choice_count"), int)
+            and snapshot.get("appearance_font_choice_count") >= 0),
+        timeout=20.0)
+    screenshots.append(session.final_state_screenshot(
+        "02-appearance-font-inventory", final_snapshot=refreshed))
+
+    # Both compatibility bindings must reach the ordinary CLIM command that
+    # opens the presentation-backed editor.  Close it between invocations so
+    # focus and the compose command table are exercised twice.
+    original_buffer = str(initial.get("buffer_name"))
+    for index, keys in enumerate((("ctrl+h", "shift+f"),
+                                  ("ctrl+c", "shift+f")), start=1):
+        # The command switches buffers before the compose-key instrumentation
+        # can emit its optional key-command acknowledgement.  The semantic
+        # appearance-editor snapshot is the authoritative proof that each
+        # compatibility chord reached the command.
+        for key in keys:
+            session.press(key)
+        session.wait_snapshot(
+            f"appearance editor opened by compatibility binding {index}",
+            lambda snapshot: (
+                snapshot.get("major_mode") == "appearance-editor"
+                and snapshot.get("input_focus_pane") == "compose"
+                and "Appearance" in str(snapshot.get("screen_text", ""))
+                and "Preview roles" in str(snapshot.get("screen_text", ""))
+                and "Apply staged appearance" in str(snapshot.get("screen_text", ""))),
+            timeout=10.0)
+        screenshots.append(session.screenshot(
+            f"02-appearance-editor-binding-{index}"))
+        close_current_buffer_with_key(session, original_buffer)
+
+    run_mx_selection(session, "switch-appearance-theme-command")
+    wait_minibuffer_text(session, "appearance theme prompt opened",
+                         lambda text: "Appearance theme" in text)
+    session.type_text("dark")
+    session.press("Return")
+    staged = session.wait_snapshot(
+        "dark appearance is staged without live mutation",
+        lambda snapshot: (
+            snapshot.get("appearance_active_theme") == "classic"
+            and snapshot.get("appearance_staged_theme") == "dark"
+            and snapshot.get("appearance_profile_revision") == 0),
+        timeout=10.0)
+    screenshots.append(session.final_state_screenshot(
+        "03-appearance-dark-staged", final_snapshot=staged))
+
+    run_mx_selection(session, "customize-appearance-command")
+    editor = session.wait_snapshot(
+        "staged dark profile shown by appearance presentations",
+        lambda snapshot: (
+            snapshot.get("major_mode") == "appearance-editor"
+            and "Active: classic" in str(snapshot.get("screen_text", ""))
+            and "Staged: dark" in str(snapshot.get("screen_text", ""))
+            and "Preview roles" in str(snapshot.get("screen_text", ""))),
+        timeout=10.0)
+    screenshots.append(session.final_state_screenshot(
+        "04-appearance-editor-preview", final_snapshot=editor))
+
+    run_mx_selection(session, "apply-staged-appearance-command")
+    # The queued frame-process event need not produce visible text, so request
+    # an ordinary CLIM redisplay and observe its snapshot rather than relying
+    # on a timing-sensitive pixel transition.
+    session.press("ctrl+l")
+    after_apply = session.wait_snapshot(
+        "dark surface apply remains restart required",
+        lambda snapshot: (
+            snapshot.get("appearance_active_theme") == "classic"
+            and snapshot.get("appearance_staged_theme") == "dark"
+            and snapshot.get("appearance_activation_status") == "restart-required"
+            and snapshot.get("appearance_activation_classification")
+            == "restart-required"
+            and snapshot.get("appearance_profile_revision") == 0),
+        timeout=15.0)
+    screenshots.append(session.final_state_screenshot(
+        "05-appearance-restart-required", final_snapshot=after_apply))
+
+    run_mx_selection(session, "save-appearance-command")
+    session.press("ctrl+l")
+    saved = session.wait_snapshot(
+        "staged dark profile persisted without live mutation",
+        lambda snapshot: (
+            snapshot.get("appearance_active_theme") == "classic"
+            and snapshot.get("appearance_staged_theme") == "dark"
+            and snapshot.get("appearance_persisted_theme") == "dark"),
+        timeout=15.0)
+    screenshots.append(session.final_state_screenshot(
+        "06-appearance-dark-saved", final_snapshot=saved))
+    return screenshots
+
+
+def run_appearance_restart(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    """Prove a separate real process reads the explicit saved dark profile."""
+    screenshots = prepare_session(session)
+    # PREPARE_SESSION may observe a complete first-paint snapshot.  Request one
+    # ordinary CLIM redisplay so WAIT_SNAPSHOT proves the restarted process
+    # remains coherent after expose rather than waiting for an event that need
+    # not otherwise occur in an idle frame.
+    session.press("ctrl+l")
+    restarted = session.wait_snapshot(
+        "saved dark profile activated at real application startup",
+        lambda snapshot: (
+            snapshot.get("appearance_active_theme") == "dark"
+            and snapshot.get("appearance_staged_theme") is None
+            and snapshot.get("appearance_bundle_theme") == "dark"
+            and snapshot.get("appearance_bundle_catalog_generation")
+            == snapshot.get("appearance_catalog_generation")
+            and snapshot.get("appearance_bundle_profile_revision")
+            == snapshot.get("appearance_profile_revision")
+            and snapshot.get("appearance_bundle_font_inventory_generation")
+            == snapshot.get("appearance_font_inventory_generation")
+            and snapshot.get("appearance_transcript_surface") is not None
+            and snapshot.get("appearance_compose_surface") is not None),
+        timeout=15.0)
+    screenshots.append(session.final_state_screenshot(
+        "02-appearance-dark-restarted", final_snapshot=restarted))
+    return screenshots
+
+
 def write_summary(path: Path, *, ok: bool, suite: str, artifact_dir: Path,
                   steps: list[dict[str, Any]], screenshots: list[dict[str, Any]],
                   failure: str | None = None,
@@ -2008,6 +2168,10 @@ def main(argv: list[str]) -> int:
             screenshots = run_quaestor(session)
         elif args.suite == "reload":
             screenshots = run_reload(session)
+        elif args.suite == "appearance-stage":
+            screenshots = run_appearance_stage(session)
+        elif args.suite == "appearance-restart":
+            screenshots = run_appearance_restart(session)
         elif args.suite == "stability":
             screenshots = run_stability(session)
         else:

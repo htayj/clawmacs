@@ -17,7 +17,7 @@ WINDOW_TITLE='Clawmacs E2E'
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|stability] [--artifact-dir DIR]
+Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|appearance|stability] [--artifact-dir DIR]
 
 Runs an opt-in Clawmacs GUI E2E suite inside an isolated Xvfb display.
 Set CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS to override the 300-second
@@ -163,6 +163,15 @@ if [ "$INSIDE_CONTAINER" -ne 1 ]; then
   else
     ARTIFACT_DIR=$(normalize_host_artifact_path_for_container "$ARTIFACT_DIR")
   fi
+  # Appearance persistence is intentionally a pair of completely fresh GUI
+  # processes.  The first private-Xvfb run saves a staged profile; the second
+  # starts in a fresh Guix container/Xvfb pair using the same artifact-private
+  # HOME.  No host display, image, or Lisp process participates in either.
+  if [ "$SUITE" = "appearance" ]; then
+    "$0" --suite appearance-stage --artifact-dir "$ARTIFACT_DIR"
+    "$0" --suite appearance-restart --artifact-dir "$ARTIFACT_DIR"
+    exit 0
+  fi
   if gui_e2e_run_container_with_retry \
        "$SCRIPT_DIR/guix-container.sh" --mode e2e -- \
        sh "scripts/run-gui-e2e.sh" \
@@ -183,7 +192,7 @@ fi
 PREWARMED_XDG_CACHE_HOME=${XDG_CACHE_HOME:-}
 
 case "$SUITE" in
-  smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|stability) ;;
+  smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|appearance-stage|appearance-restart|stability) ;;
   *) fail "unsupported GUI E2E suite: $SUITE" ;;
 esac
 
@@ -196,6 +205,9 @@ fi
 # original pathname error behind its generic "Could not load ASDF" condition.
 ARTIFACT_DIR=$(canonicalize_container_artifact_path "$ARTIFACT_DIR")
 
+if [ "$SUITE" = "appearance-stage" ]; then
+  gui_e2e_clear_appearance_stage_artifacts "$ARTIFACT_DIR"
+fi
 gui_e2e_reset_run_artifacts "$ARTIFACT_DIR"
 SCREENSHOT_DIR="$ARTIFACT_DIR/screenshots"
 mkdir -p "$SCREENSHOT_DIR" "$ARTIFACT_DIR/home" "$ARTIFACT_DIR/cache"
@@ -610,3 +622,12 @@ if [ "$scan_status" -ne 0 ]; then
 fi
 
 log "GUI E2E suite passed"
+
+# Preserve the first process's evidence across the intentional second launch
+# in the appearance lifecycle wrapper.  The normal reset still removes every
+# run-owned root output before the restart phase while HOME/cache remain the
+# only state that crosses the real process boundary.
+if [ "$SUITE" = "appearance-stage" ]; then
+  gui_e2e_archive_appearance_stage_artifacts "$ARTIFACT_DIR"
+  log "archived first appearance lifecycle phase under $ARTIFACT_DIR/appearance-stage"
+fi

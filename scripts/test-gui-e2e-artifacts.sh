@@ -45,4 +45,32 @@ for path in \
   test ! -e "$artifact_dir/$path" || fail "stale run output survived: $path"
 done
 
+# The appearance lifecycle deliberately restarts in a new Guix container and
+# Xvfb while retaining only HOME/cache.  Its prior process evidence must stay
+# inspectable, but it must not be reused as the next phase's readiness state.
+mkdir -p "$artifact_dir/appearance-stage"
+printf 'stale prior stage\n' > "$artifact_dir/appearance-stage/summary.json"
+gui_e2e_clear_appearance_stage_artifacts "$artifact_dir"
+test ! -e "$artifact_dir/appearance-stage" || \
+  fail 'failed replacement stage could retain prior appearance evidence'
+
+printf 'stage summary\n' > "$artifact_dir/summary.json"
+printf 'stage debug\n' > "$artifact_dir/debug.log"
+mkdir -p "$artifact_dir/screenshots"
+printf 'stage screenshot\n' > "$artifact_dir/screenshots/stage.png"
+gui_e2e_archive_appearance_stage_artifacts "$artifact_dir"
+gui_e2e_reset_run_artifacts "$artifact_dir"
+test -f "$artifact_dir/appearance-stage/summary.json" || \
+  fail 'appearance stage summary was not retained'
+test -f "$artifact_dir/appearance-stage/debug.log" || \
+  fail 'appearance stage debug log was not retained'
+test -f "$artifact_dir/appearance-stage/screenshots/stage.png" || \
+  fail 'appearance stage screenshot was not retained'
+test ! -e "$artifact_dir/summary.json" || \
+  fail 'appearance restart could reuse the stage summary'
+test ! -e "$artifact_dir/debug.log" || \
+  fail 'appearance restart could reuse the stage readiness log'
+test -f "$artifact_dir/home/keep" || fail 'appearance restart lost private HOME'
+test -f "$artifact_dir/cache/keep" || fail 'appearance restart lost private cache'
+
 printf 'GUI E2E artifact regression passed\n'

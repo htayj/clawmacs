@@ -91,4 +91,17 @@
         (is (= 5 (getf snapshot :compose-length)))
         (is (string= (clawmacs::file-checkpoint-content-hash "draft")
                      (getf snapshot :compose-fingerprint)))
+        ;; GUI E2E observes appearance through frame-owned semantic state, not
+        ;; a backend-specific port or screenshot-derived color value.
+        (is (string= "classic" (getf snapshot :appearance-active-theme)))
+        (is-false (getf snapshot :appearance-staged-theme))
+        (is-false (getf snapshot :appearance-persisted-theme))
+        (is (= (appearance-catalog-generation
+                (clawmacs::chat-frame-appearance-catalog frame))
+               (getf snapshot :appearance-catalog-generation)))
+        (is (= 0 (getf snapshot :appearance-profile-revision)))
+        (is (= 0 (getf snapshot :appearance-font-inventory-generation)))
+        (is (= 0 (getf snapshot :appearance-font-choice-count)))
+        (is-false (getf snapshot :appearance-bundle-catalog-generation))
+        (is-false (getf snapshot :appearance-activation-status))
         (is-false (search "user> draft" screen-text))))))

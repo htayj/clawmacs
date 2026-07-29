@@ -15,11 +15,12 @@ E2E events, and captures screenshots at scripted milestones and on failures.
 ./scripts/run-gui-e2e.sh --suite organa
 ./scripts/run-gui-e2e.sh --suite quaestor
 ./scripts/run-gui-e2e.sh --suite reload
+./scripts/run-gui-e2e.sh --suite appearance
 ./scripts/run-gui-e2e.sh --suite stability
 ```
 
 ASDF integration is also opt-in and runs `smoke`, `mx`, `features`,
-`keybinds`, `organa`, `quaestor`, `reload`, and `stability`:
+`keybinds`, `organa`, `quaestor`, `reload`, `appearance`, and `stability`:
 
 ```lisp
 (asdf:test-system :clawmacs/gui-e2e)
@@ -176,6 +177,13 @@ Each run writes under `.artifacts/gui-e2e/<timestamp-pid>/` by default:
 - `summary.json` — pass/fail summary, screenshot records, repo-relative paths,
   per-screenshot snapshot sequence/status, and the last snapshot.
 
+The `appearance` lifecycle suite keeps the first fresh process's evidence in
+`appearance-stage/` before starting its second fresh process.  Only the
+artifact-private `home/` and `cache/` cross that boundary; logs, window IDs,
+screenshots, summaries, Xvfb state, and the application process group are
+reset.  The second launch therefore proves persisted configuration, not stale
+frame state.
+
 Successful adversarial runs retained approximately 67–82 MiB of private cache
 per run. This is intentional isolation evidence, but the harness has no
 automatic artifact-retention policy; remove old run directories manually when
@@ -299,6 +307,48 @@ keeps a compose draft visible, invokes `safe-reload-clawmacs-command` through
 `M-x`, waits for the `safe-reload-result` debug event from the isolated
 preflight plus live reload, and asserts the semantic snapshot still shows the
 same buffer and compose draft along with the success notification.
+
+## Appearance lifecycle behavior
+
+The `appearance` suite is a two-process, private-Xvfb proof of the frame-owned
+appearance contract.  Its first fresh Guix/Xvfb process starts with `:classic`,
+advances the frame-local public CLX font inventory over the current live cache
+without invalidating shared McCLIM font mappings, verifies the `C-h F` and
+`C-c F` compatibility commands open the presentation-backed editor, stages
+`:dark`, and verifies the editor's Active/Staged/preview presentations. An
+Apply is required to remain `restart-required`: active theme and revision stay
+classic/unchanged while the complete dark candidate remains staged. Explicit
+Save then writes only the artifact-private appearance file.
+
+The wrapper starts a second fresh Guix container, private Xvfb, SBCL image, and
+application process with the same isolated HOME. It requires startup to select
+`dark` and checks catalog, profile, and font-inventory generations agree with
+the resolved bundle. It also records the portable transcript and compose
+surface declarations; screenshots are retained as secondary visual evidence.
+This does not infer correctness from pixel colors or reach into a McCLIM
+medium, Drei view, output record, or private font cache.
+
+`scripts/probe-clx-font-inventory.sh` is the smaller manual counterpart. It
+always enters the Guix E2E wrapper, starts its own `Xvfb -displayfd` server, and
+requires both `CLX_FONT_INVENTORY_PROBE_OK` and
+`CLX_FONT_INVENTORY_PROBE_SHELL_OK` markers. A missing payload marker fails the
+probe even if the outer shell happened to exit successfully.
+
+The complete appearance stability matrix deliberately keeps each claim in its
+smallest deterministic gate:
+
+- `appearance`: startup/staging/save/restart, editor presentations and
+  compatibility keys, public live font refresh, bundle-generation coherence;
+- `keybinds`: `C-x F`, `C-h F`, `C-c F`, a 32 KiB multiline draft, selector
+  focus, and pointer-documentation separation;
+- `compose-geometry`: the bounded 100/101/112-character Drei regression;
+- `stability`: pointer menu operation, resize/expose, and the post-exit
+  empty-process-group/runtime-signature gate;
+- `reload`: the public Safe Reload command with draft retention; and
+- focused `appearance`, `mcclim-interface`, and `safe-reload` FiveAM suites:
+  independent two-frame profiles/caches, render-boundary foreground commit and
+  failed activation rollback, package-removal refusal rollback, and Safe
+  Reload's no-preferences-I/O invariant.
 
 ## Stability behavior
 

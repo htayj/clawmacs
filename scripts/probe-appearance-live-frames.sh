@@ -1,22 +1,25 @@
 #!/bin/sh
-# Run the real public font-enumeration round trip in an isolated Guix Xvfb.
+# Execute the real two-frame CLX proof only in Guix e2e with a private Xvfb.
 set -eu
 
 probe_test_double=${CLAWMACS_PROBE_TEST_DOUBLE:-}
 
 if [ "${CLAWMACS_IN_GUIX_CONTAINER:-0}" != "1" ]; then
+  # The launcher starts this exact script once more in the container.  Do not
+  # call the launcher from that inner invocation: recursive containers obscure
+  # failures and can leave an owned process group behind.
   if [ -n "$probe_test_double" ]; then
     exec "$probe_test_double" launcher \
       ./scripts/guix-container.sh --mode e2e -- \
-      sh scripts/probe-clx-font-inventory.sh --inner
+      sh scripts/probe-appearance-live-frames.sh --inner
   fi
   export CLAWMACS_CONTAINER_DISABLE_HOST_X=1
   exec ./scripts/guix-container.sh --mode e2e -- \
-    sh scripts/probe-clx-font-inventory.sh --inner
+    sh scripts/probe-appearance-live-frames.sh --inner
 fi
 
 if [ "${1:-}" != "--inner" ]; then
-  echo "font probe must be entered by the Guix e2e launcher" >&2
+  echo "probe must be entered by the Guix e2e launcher" >&2
   exit 64
 fi
 
@@ -85,9 +88,10 @@ exec sh -lc '
   }
   trap cleanup EXIT INT TERM
   if [ -n "${CLAWMACS_PROBE_TEST_DOUBLE:-}" ]; then
-    "$CLAWMACS_PROBE_TEST_DOUBLE" xvfb 3>"$tmp/display" >"$tmp/xvfb.log" 2>&1 &
+    "$CLAWMACS_PROBE_TEST_DOUBLE" xvfb \
+      3>"$tmp/display" >"$tmp/xvfb.log" 2>&1 &
   else
-    Xvfb -displayfd 3 -screen 0 800x600x24 -nolisten tcp -ac \
+    Xvfb -displayfd 3 -screen 0 1280x800x24 -nolisten tcp -ac \
       3>"$tmp/display" >"$tmp/xvfb.log" 2>&1 &
   fi
   xvfb_pid=$!
@@ -97,16 +101,15 @@ exec sh -lc '
     exit 1
   fi
   export DISPLAY=":$(tr -d "\r\n" < "$tmp/display")"
-  payload_log="$tmp/payload.log"
   if [ -n "${CLAWMACS_PROBE_TEST_DOUBLE:-}" ]; then
-    setsid env CLAWMACS_PROBE_KIND=font \
-      "$CLAWMACS_PROBE_TEST_DOUBLE" sbcl >"$payload_log" 2>&1 &
+    setsid env CLAWMACS_PROBE_KIND=appearance \
+      "$CLAWMACS_PROBE_TEST_DOUBLE" sbcl >"$tmp/payload.log" 2>&1 &
   else
     setsid sbcl --noinform --non-interactive \
       --load "$CLAWMACS_QUICKLISP_SETUP" \
       --eval "(push (truename \".\") asdf:*central-registry*)" \
-      --load scripts/probe-clx-font-inventory.lisp --eval "(quit)" \
-      >"$payload_log" 2>&1 &
+      --load scripts/probe-appearance-live-frames.lisp --eval "(quit)" \
+      >"$tmp/payload.log" 2>&1 &
   fi
   payload_pid=$!
   payload_pgid=$payload_pid
@@ -117,23 +120,31 @@ exec sh -lc '
     sleep 0.1
   done
   if kill -0 "$payload_pid" 2>/dev/null; then
-    echo "font payload exceeded its bounded deadline" >&2
+    echo "two-frame payload exceeded its bounded deadline" >&2
     terminate_group "$payload_pgid" "$payload_pid" || {
       echo "owned SBCL process group survived TERM/KILL" >&2
     }
-    cat "$payload_log"
+    cat "$tmp/payload.log"
     exit 1
   fi
   if ! wait "$payload_pid"; then
-    cat "$payload_log"
+    cat "$tmp/payload.log"
     exit 1
   fi
-  # A successful container exit alone is not enough evidence: keep the two
-  # payload-owned markers mandatory so a wrapper/quoting regression cannot
-  # silently skip the real public CLX inventory and metrics round trip.
-  grep -q "CLX_FONT_INVENTORY_PROBE_OK" "$payload_log"
-  cat "$payload_log"
-  if group_live "$payload_pgid"; then
+  for marker in \
+    APPEARANCE_LIVE_TWO_FRAME_OK \
+    APPEARANCE_LIVE_STAGED_PROFILES_OK \
+    APPEARANCE_LIVE_FONT_INVENTORIES_OK \
+    APPEARANCE_LIVE_SAFE_ACTIVATION_OK \
+    APPEARANCE_LIVE_ACTIVATION_ROLLBACK_OK \
+    APPEARANCE_LIVE_PACKAGE_PUBLISH_OK \
+    APPEARANCE_LIVE_PACKAGE_REMOVAL_ROLLBACK_OK \
+    APPEARANCE_LIVE_TWO_FRAME_TEARDOWN_OK
+  do
+    grep -q "$marker" "$tmp/payload.log"
+  done
+  cat "$tmp/payload.log"
+  if kill -0 -- "-$payload_pgid" 2>/dev/null; then
     echo "owned SBCL process group survived" >&2
     exit 1
   fi
@@ -143,5 +154,7 @@ exec sh -lc '
     exit 1
   fi
   xvfb_pid=
-  printf "%s\\n" "CLX_FONT_INVENTORY_PROBE_SHELL_OK"
+  printf "%s\\n" \
+    "APPEARANCE_LIVE_PROCESS_GROUP_OK sbcl-group-empty=true xvfb-stopped=true"
+  printf "%s\\n" APPEARANCE_LIVE_TWO_FRAME_SHELL_OK
 '

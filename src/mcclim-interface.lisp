@@ -1486,6 +1486,80 @@ rendering state."
                                    minibuffer))))
       (format nil "~{~A~%~}" parts))))
 
+(defun chat-frame-e2e-profile-theme (profile)
+  "Return PROFILE's externally stable theme spelling for E2E observations."
+  (and profile
+       (appearance-id-external-string
+        (appearance-profile-selected-theme profile))))
+
+(defun chat-frame-e2e-bundle-surface (bundle role)
+  "Return ROLE's portable surface value from BUNDLE, or NIL when unspecified."
+  (when bundle
+    (let* ((entry (assoc role (resolved-appearance-bundle-surface-defaults bundle)
+                         :test #'equal))
+           (surface (and entry (appearance-role-style-surface (cdr entry)))))
+      (unless (or (null surface) (appearance-unspecified-p surface))
+        (let ((background (appearance-surface-spec-background surface)))
+          (unless (appearance-unspecified-p background)
+            (copy-appearance-value background)))))))
+
+(defun chat-frame-e2e-appearance-fields (frame)
+  "Return data-only appearance lifecycle state owned by FRAME.
+
+These fields deliberately expose no CLIM port, medium, pane, or mutable
+resolver object.  The GUI harness uses them to prove the frame-owned
+active/staged/persisted distinction and generation coherence without treating
+pixels or private McCLIM state as the contract."
+  (when (typep frame 'clawmacs-chat-frame)
+    (let* ((catalog (chat-frame-appearance-catalog frame))
+           (staged (chat-frame-appearance-staged-candidate frame))
+           (bundle (chat-frame-appearance-active-bundle frame))
+           (result (chat-frame-appearance-last-activation-result frame)))
+      (list
+       :appearance-active-theme
+       (chat-frame-e2e-profile-theme (chat-frame-appearance-profile frame))
+       :appearance-staged-theme
+       (and staged
+            (chat-frame-e2e-profile-theme
+             (appearance-candidate-profile staged)))
+       :appearance-persisted-theme
+       (chat-frame-e2e-profile-theme
+        (chat-frame-appearance-persisted-profile frame))
+       :appearance-catalog-generation
+       (appearance-catalog-generation catalog)
+       :appearance-profile-revision
+       (chat-frame-appearance-revision frame)
+       :appearance-font-inventory-generation
+       (chat-frame-appearance-font-inventory-generation frame)
+       :appearance-font-choice-count
+       (length (appearance-editor-font-choices frame))
+       :appearance-bundle-catalog-generation
+       (and bundle (resolved-appearance-bundle-catalog-generation bundle))
+       :appearance-bundle-profile-revision
+       (and bundle (resolved-appearance-bundle-profile-revision bundle))
+       :appearance-bundle-font-inventory-generation
+       (and bundle
+            (resolved-appearance-bundle-font-inventory-generation bundle))
+       :appearance-bundle-theme
+       (and bundle
+            (chat-frame-e2e-profile-theme
+             (resolved-appearance-bundle-profile bundle)))
+       :appearance-transcript-surface
+       (chat-frame-e2e-bundle-surface bundle :transcript-pane)
+       :appearance-compose-surface
+       (chat-frame-e2e-bundle-surface bundle :compose-pane)
+       :appearance-activation-status
+       (and result
+            (string-downcase
+             (symbol-name (appearance-activation-result-status result))))
+       :appearance-activation-classification
+       (let ((classification
+               (and result (appearance-activation-result-classification result))))
+         (and classification
+              (string-downcase
+               (symbol-name
+                (appearance-activation-classification-status classification)))))))))
+
 (defun chat-frame-e2e-snapshot (frame)
   "Return semantic GUI state for FRAME as a plist for tests and E2E logs."
   (let* ((frame (chat-frame-e2e-effective-frame frame))
@@ -1525,6 +1599,7 @@ rendering state."
              :minibuffer-text (chat-frame-e2e-minibuffer-text)
              :info-text (chat-frame-e2e-info-line frame)
              :screen-text (chat-frame-e2e-screen-text frame))
+       (chat-frame-e2e-appearance-fields frame)
        (chat-frame-e2e-layout-fields frame)))))
 
 (defun emit-chat-frame-e2e-snapshot
@@ -3920,7 +3995,17 @@ contains the expanded pane and the pointer-documentation pane below it."
                  (refresh-chat-frame-font-inventory
                   frame :invalidate-cache t)))
            (when result
-             (record-chat-frame-appearance-result frame result)))))
+             (record-chat-frame-appearance-result frame result)
+             ;; E2E consumes this data-only acknowledgement after the public
+             ;; port enumeration has completed on the owning frame process.
+             ;; It deliberately exposes neither the port nor McCLIM cache
+             ;; objects, and it is useful only when debug logging is enabled.
+             (file-debug-event
+              "font-inventory-refresh"
+              :status (string-downcase
+                       (symbol-name (appearance-activation-result-status result)))
+              :generation (chat-frame-appearance-font-inventory-generation frame)
+              :choice-count (length (appearance-editor-font-choices frame)))))))
     (error (condition)
       (record-chat-frame-appearance-result
        frame
