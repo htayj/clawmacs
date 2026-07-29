@@ -230,7 +230,8 @@
            (entry (merge-pathnames
                    #P"tests/session-migration-subprocess.lisp" repo))
            (output-one (migration-path root #P"process-one.log"))
-           (output-two (migration-path root #P"process-two.log")))
+           (output-two (migration-path root #P"process-two.log"))
+           (output-late (migration-path root #P"process-late.log")))
       (dotimes (index 32)
         (write-legacy-path-test-file
          (migration-path
@@ -275,7 +276,12 @@
                                            :output output-two
                                            :error-output :output)))
                (is (zerop (uiop:wait-process one)))
-               (is (zerop (uiop:wait-process two))))
+               (is (zerop (uiop:wait-process two)))
+               (let ((late
+                       (uiop:launch-program command
+                                            :output output-late
+                                            :error-output :output)))
+                 (is (zerop (uiop:wait-process late)))))
              (is (rplaca::completed-session-migration-p canonical legacy))
              (is (= 32
                     (length
@@ -295,6 +301,122 @@
                       (rplaca::session-path-mode canonical-nested)))
                (is (= #o400
                       (rplaca::session-path-mode canonical-restricted))))
+             (is-false
+              (find-if
+               (lambda (directory)
+                 (search ".sessions-migration-" (namestring directory)))
+               (uiop:subdirectories
+                (uiop:pathname-parent-directory-pathname canonical)))))
+        #+sbcl
+        (dolist (directory
+                 (list canonical-nested canonical legacy-nested legacy))
+          (when (probe-file directory)
+            (sb-posix:chmod (namestring directory) #o700)))))))
+
+(test pending-canonical-session-migration-is-recovered-before-use
+  "A legacy published pending tree is replaced, never returned as canonical."
+  (with-migration-integration-root (root)
+    (let* ((canonical (migration-path root #P"rplaca/sessions/"))
+           (legacy (migration-path root #P"clawmacs/sessions/"))
+           (marker
+             (migration-path
+              canonical rplaca::+session-migration-completion-marker+))
+           (expected (migration-path legacy #P"expected.json"))
+           (stale (migration-path canonical #P"stale.json"))
+           (rplaca::+default-sessions-dir+ canonical)
+           (rplaca::+legacy-sessions-dir+ legacy)
+           (rplaca::*sessions-dir* canonical))
+      (write-legacy-path-test-file expected "expected")
+      (write-legacy-path-test-file stale "must-not-survive")
+      (write-legacy-path-test-file marker (format nil "pending~%"))
+      #+sbcl
+      (sb-posix:chmod (namestring canonical) #o555)
+      (unwind-protect
+           (progn
+             (is (equal legacy (rplaca::selected-sessions-read-root)))
+             (is (equal canonical
+                        (rplaca::materialize-legacy-sessions-before-mutation)))
+             (is-false (probe-file stale))
+             (is (string= "expected"
+                          (uiop:read-file-string
+                           (migration-path canonical #P"expected.json"))))
+             (is (rplaca::completed-session-migration-p canonical legacy)))
+        #+sbcl
+        (when (probe-file canonical)
+          (sb-posix:chmod (namestring canonical) #o700))))))
+
+(test crashed-session-publisher-leaves-no-usable-canonical-and-recovers
+  "A crash before rename leaves only recoverable staging, never canonical."
+  (with-migration-integration-root (root)
+    (let* ((canonical (migration-path root #P"rplaca/sessions/"))
+           (legacy (migration-path root #P"clawmacs/sessions/"))
+           (canonical-nested (migration-path canonical #P"locked/"))
+           (legacy-nested (migration-path legacy #P"locked/"))
+           (legacy-file (migration-path legacy-nested #P"payload.json"))
+           (canonical-file (migration-path canonical-nested #P"payload.json"))
+           (barrier (migration-path root #P"barrier/"))
+           (repo (asdf:system-source-directory :rplaca))
+           (entry (merge-pathnames
+                   #P"tests/session-migration-subprocess.lisp" repo))
+           (crash-output (migration-path root #P"publisher-crash.log"))
+           (recovery-output (migration-path root #P"publisher-recovery.log")))
+      (write-legacy-path-test-file legacy-file "crash-safe")
+      (ensure-directories-exist (migration-path barrier #P".keep"))
+      #+sbcl
+      (progn
+        (sb-posix:chmod (namestring legacy-file) #o400)
+        (sb-posix:chmod (namestring legacy-nested) #o555)
+        (sb-posix:chmod (namestring legacy) #o555))
+      (unwind-protect
+           (let* ((base-command
+                    (list
+                     "env"
+                     (format nil "RPLACA_QUICKLISP_SETUP=~A"
+                             (or (uiop:getenv "RPLACA_QUICKLISP_SETUP")
+                                 (error
+                                  "RPLACA_QUICKLISP_SETUP is required")))
+                     (format nil "RPLACA_TEST_REPO_ROOT=~A"
+                             (namestring repo))
+                     (format nil "RPLACA_TEST_CANONICAL_SESSIONS=~A"
+                             (namestring canonical))
+                     (format nil "RPLACA_TEST_LEGACY_SESSIONS=~A"
+                             (namestring legacy))
+                     (format nil "RPLACA_TEST_SESSION_BARRIER=~A"
+                             (namestring barrier))
+                     "RPLACA_TEST_SESSION_BARRIER_COUNT=1"))
+                  (script-command
+                    (list "sbcl" "--noinform" "--disable-debugger"
+                          "--script" (namestring entry)))
+                  (crash
+                    (uiop:launch-program
+                     (append base-command
+                             (list
+                              "RPLACA_TEST_SESSION_CRASH_BEFORE_PUBLISH=1")
+                             script-command)
+                     :output crash-output
+                     :error-output :output)))
+             (is (= 77 (uiop:wait-process crash)))
+             (is-false (probe-file canonical))
+             (is (find-if
+                  (lambda (directory)
+                    (search ".sessions-migration-" (namestring directory)))
+                  (uiop:subdirectories
+                   (uiop:pathname-parent-directory-pathname canonical))))
+             (let ((recovery
+                     (uiop:launch-program
+                      (append base-command script-command)
+                      :output recovery-output
+                      :error-output :output)))
+               (is (zerop (uiop:wait-process recovery))))
+             (is (string= "crash-safe"
+                          (uiop:read-file-string canonical-file)))
+             #+sbcl
+             (progn
+               (is (= #o555 (rplaca::session-path-mode canonical)))
+               (is (= #o555
+                      (rplaca::session-path-mode canonical-nested)))
+               (is (= #o400
+                      (rplaca::session-path-mode canonical-file))))
              (is-false
               (find-if
                (lambda (directory)

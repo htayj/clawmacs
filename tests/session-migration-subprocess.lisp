@@ -25,10 +25,23 @@
           (format nil "ready-~D"
                   #+sbcl (sb-posix:getpid)
                   #-sbcl 0)
-          barrier)))
+          barrier))
+       (expected-ready-count
+         (parse-integer
+          (or (uiop:getenv "RPLACA_TEST_SESSION_BARRIER_COUNT") "2")))
+       (crash-before-publish-p
+         (string= (or (uiop:getenv
+                       "RPLACA_TEST_SESSION_CRASH_BEFORE_PUBLISH")
+                      "")
+                  "1")))
   (let ((rplaca::+default-sessions-dir+ canonical)
         (rplaca::+legacy-sessions-dir+ legacy)
         (rplaca::*sessions-dir* canonical)
+        (rplaca::*session-migration-before-publish-hook*
+          (and crash-before-publish-p
+               (lambda ()
+                 #+sbcl (sb-ext:exit :code 77 :abort t)
+                 #-sbcl (error "Injected migration crash."))))
         (rplaca::*session-migration-after-selection-hook*
           (lambda ()
             (ensure-directories-exist ready)
@@ -38,10 +51,12 @@
                                     :if-does-not-exist :create)
               (write-line "ready" stream))
             (loop repeat 200
-                  until (>= (length (uiop:directory-files barrier)) 2)
+                  until (>= (length (uiop:directory-files barrier))
+                            expected-ready-count)
                   do (sleep 0.05)
                   finally
-                     (unless (>= (length (uiop:directory-files barrier)) 2)
+                     (unless (>= (length (uiop:directory-files barrier))
+                                 expected-ready-count)
                        (error
                         "Timed out waiting after legacy selection."))))))
     (rplaca::materialize-legacy-sessions-before-mutation)

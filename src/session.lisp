@@ -2,7 +2,8 @@
 
 #+sbcl
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (require :sb-posix))
+  (require :sb-posix)
+  (require :sb-md5))
 
 ;;; --------------------------------------------------------------------------
 ;;; Sessions and transcripts
@@ -29,6 +30,9 @@
 
 (defvar *session-migration-after-selection-hook* nil
   "Test synchronization hook called after selecting a legacy session tree.")
+
+(defvar *session-migration-before-publish-hook* nil
+  "Test fault-injection hook called after staging is final but before rename.")
 
 (defvar *session-format-version* 2
   "Current durable session sidecar format version.")
@@ -94,11 +98,26 @@
 
 (defun selected-sessions-read-root ()
   "Return the sole session root selected by the migration contract."
-  (configured-migration-read-path
-   *sessions-dir*
-   +default-sessions-dir+
-   +legacy-sessions-dir+
-   :label "session directory"))
+  (let ((selected
+          (configured-migration-read-path
+           *sessions-dir*
+           +default-sessions-dir+
+           +legacy-sessions-dir+
+           :label "session directory")))
+    (if (and (equal (pathname *sessions-dir*)
+                    (pathname +default-sessions-dir+))
+             (equal selected (pathname +default-sessions-dir+))
+             (probe-file
+              (merge-pathnames
+               +session-migration-completion-marker+
+               +default-sessions-dir+))
+             (not (completed-session-migration-p
+                   +default-sessions-dir+ +legacy-sessions-dir+)))
+        (if (probe-file +legacy-sessions-dir+)
+            +legacy-sessions-dir+
+            (error "Incomplete canonical session migration at ~A has no usable read root."
+                   +default-sessions-dir+))
+        selected)))
 
 (defun copy-session-directory-tree (source target)
   "Copy SOURCE recursively into absent TARGET while keeping directories writable."
@@ -152,6 +171,26 @@
    (session-path-mode (uiop:ensure-directory-pathname source)))
   target)
 
+(defun make-session-directory-tree-owner-writable (directory)
+  "Add owner rwx permission to every directory below DIRECTORY."
+  #+sbcl
+  (sb-posix:chmod
+   (namestring (uiop:ensure-directory-pathname directory))
+   (logior #o700
+           (session-path-mode
+            (uiop:ensure-directory-pathname directory))))
+  (dolist (child (uiop:subdirectories directory))
+    (make-session-directory-tree-owner-writable child))
+  directory)
+
+(defun delete-session-migration-tree (directory)
+  "Delete migration DIRECTORY after making restrictive descendants removable."
+  (when (probe-file directory)
+    (make-session-directory-tree-owner-writable directory)
+    (uiop:delete-directory-tree directory
+                                :validate t
+                                :if-does-not-exist :ignore)))
+
 (defun session-directory-modes-match-p (source target)
   "Return true when every TARGET directory has its SOURCE mode."
   (and (probe-file target)
@@ -178,6 +217,105 @@
   (with-open-file (stream path :direction :input :element-type '(unsigned-byte 8))
     (file-length stream)))
 
+(defun session-file-content-digest (path)
+  "Return a stable hexadecimal content digest for PATH."
+  #+sbcl
+  (format nil "~{~2,'0X~}"
+          (coerce (sb-md5:md5sum-file path) 'list))
+  #-sbcl
+  (with-open-file (stream path
+                          :direction :input
+                          :element-type '(unsigned-byte 8))
+    (loop with hash = #xcbf29ce484222325
+          for byte = (read-byte stream nil nil)
+          while byte
+          do (setf hash
+                   (logand #xffffffffffffffff
+                           (* (logxor hash byte)
+                              #x100000001b3)))
+          finally (return (format nil "~16,'0X" hash)))))
+
+(defun session-files-byte-equal-p (source target)
+  "Return true when SOURCE and TARGET contain exactly the same octets."
+  (and (= (session-file-size source)
+          (session-file-size target))
+       (with-open-file
+           (source-stream source
+                          :direction :input
+                          :element-type '(unsigned-byte 8))
+         (with-open-file
+             (target-stream target
+                            :direction :input
+                            :element-type '(unsigned-byte 8))
+           (let ((source-buffer
+                   (make-array 8192 :element-type '(unsigned-byte 8)))
+                 (target-buffer
+                   (make-array 8192 :element-type '(unsigned-byte 8))))
+             (loop for source-count =
+                         (read-sequence source-buffer source-stream)
+                   for target-count =
+                         (read-sequence target-buffer target-stream)
+                   always
+                   (and (= source-count target-count)
+                        (loop for index below source-count
+                              always
+                              (= (aref source-buffer index)
+                                 (aref target-buffer index))))
+                   until (zerop source-count)))))))
+
+(defun session-migration-tree-matches-source-p
+    (source target &key check-directory-modes-p root-p)
+  "Return true when TARGET exactly copies SOURCE, aside from its root marker."
+  (let* ((source-files (uiop:directory-files source))
+         (target-files
+           (remove-if
+            (lambda (path)
+              (and root-p
+                   (string=
+                    (file-namestring path)
+                    (file-namestring
+                     +session-migration-completion-marker+))))
+            (uiop:directory-files target)))
+         (source-directories (uiop:subdirectories source))
+         (target-directories (uiop:subdirectories target)))
+    (and
+     (or (not check-directory-modes-p)
+         (= (session-path-mode source)
+            (session-path-mode target)))
+     (equal (sort (mapcar #'file-namestring source-files) #'string<)
+            (sort (mapcar #'file-namestring target-files) #'string<))
+     (equal
+      (sort (mapcar (lambda (path)
+                      (car (last (pathname-directory path))))
+                    source-directories)
+                  #'string<)
+      (sort (mapcar (lambda (path)
+                      (car (last (pathname-directory path))))
+                    target-directories)
+            #'string<))
+     (every
+      (lambda (source-file)
+        (let ((target-file
+                (merge-pathnames (file-namestring source-file) target)))
+          (and (= (session-path-mode source-file)
+                  (session-path-mode target-file))
+               (session-files-byte-equal-p source-file target-file))))
+      source-files)
+     (every
+      (lambda (source-directory)
+        (let ((target-directory
+                (merge-pathnames
+                 (make-pathname
+                  :directory
+                  (list :relative
+                        (car (last
+                              (pathname-directory source-directory)))))
+                 target)))
+          (session-migration-tree-matches-source-p
+           source-directory target-directory
+           :check-directory-modes-p check-directory-modes-p)))
+      source-directories))))
+
 (defun session-migration-tree-signature (source)
   "Return a deterministic inventory of directories and file sizes in SOURCE."
   (let ((root (uiop:ensure-directory-pathname source))
@@ -193,7 +331,8 @@
                  (push (list :file
                              (enough-namestring file root)
                              (session-file-size file)
-                             (session-path-mode file))
+                             (session-path-mode file)
+                             (session-file-content-digest file))
                        entries))))
       (walk root))
     (sort (list* (list :directory "./" (session-path-mode root))
@@ -205,15 +344,38 @@
   (format nil "rplaca-session-migration-v1~%~S~%"
           (session-migration-tree-signature legacy)))
 
+(defun final-session-migration-marker-content-p (content)
+  "Return true when CONTENT is a complete, data-only migration inventory."
+  (let ((prefix (format nil "rplaca-session-migration-v1~%")))
+    (and (uiop:string-prefix-p prefix content)
+         (handler-case
+             (let ((*read-eval* nil))
+               (multiple-value-bind (inventory end)
+                   (read-from-string content nil nil :start (length prefix))
+                 (and (listp inventory)
+                      inventory
+                      (every
+                       (lambda (entry)
+                         (and (listp entry)
+                              (member (first entry)
+                                      '(:directory :file))))
+                       inventory)
+                      (every
+                       (lambda (character)
+                         (find character
+                               '(#\Space #\Tab #\Newline #\Return)))
+                       (subseq content end)))))
+           (error () nil)))))
+
 (defun completed-session-migration-p (canonical legacy)
-  "Return true when CANONICAL has a valid atomic-copy marker for LEGACY."
+  "Return true when CANONICAL has a complete data-only migration marker."
+  (declare (ignore legacy))
   (let ((marker
           (merge-pathnames +session-migration-completion-marker+ canonical)))
     (and (probe-file canonical)
          (probe-file marker)
-         (string= (uiop:read-file-string marker)
-                  (session-migration-marker-content legacy))
-         (session-directory-modes-match-p legacy canonical))))
+         (final-session-migration-marker-content-p
+          (uiop:read-file-string marker)))))
 
 (defun wait-for-completed-session-migration (canonical legacy)
   "Wait briefly for a competing publisher to finalize CANONICAL."
@@ -221,6 +383,80 @@
         when (completed-session-migration-p canonical legacy)
           return canonical
         do (sleep 0.01)))
+
+(defun session-process-start-token (process-id)
+  "Return Linux PROCESS-ID's kernel start token, or NIL when unavailable."
+  #+sbcl
+  (handler-case
+      (let* ((text
+               (uiop:read-file-string
+                (format nil "/proc/~D/stat" process-id)))
+             (close (position #\) text :from-end t))
+             (fields
+               (and close
+                    (uiop:split-string
+                     (string-trim '(#\Space #\Tab #\Newline)
+                                  (subseq text (1+ close)))))))
+        ;; FIELDS starts at proc(5) field 3; starttime is field 22.
+        (and (>= (length fields) 20)
+             (nth 19 fields)))
+    (error () nil))
+  #-sbcl
+  (declare (ignore process-id))
+  #-sbcl
+  nil)
+
+(defun session-migration-temporary-owner (directory)
+  "Return the PID and start token encoded in migration DIRECTORY."
+  (let* ((name
+           (car (last
+                 (pathname-directory
+                  (uiop:ensure-directory-pathname directory)))))
+         (prefix ".sessions-migration-"))
+    (when (and (stringp name)
+               (uiop:string-prefix-p prefix name))
+      (let* ((start (length prefix))
+             (pid-end (position #\- name :start start))
+             (token-end (and pid-end
+                             (position #\- name :start (1+ pid-end)))))
+        (when (and pid-end token-end)
+          (values
+           (parse-integer name :start start :end pid-end
+                               :junk-allowed t)
+           (subseq name (1+ pid-end) token-end)))))))
+
+(defun active-session-migration-temporary-p (directory)
+  "Return true when DIRECTORY belongs to the still-running creating process."
+  (multiple-value-bind (process-id start-token)
+      (session-migration-temporary-owner directory)
+    (and process-id
+         start-token
+         (let ((active-token
+                 (session-process-start-token process-id)))
+           (and active-token
+                (string= start-token active-token))))))
+
+(defun cleanup-stale-session-migration-directories (canonical)
+  "Remove abandoned sibling staging trees without touching live publishers."
+  (dolist (directory
+           (uiop:subdirectories
+            (uiop:pathname-parent-directory-pathname canonical)))
+    (when (and (session-migration-temporary-owner directory)
+               (not (active-session-migration-temporary-p directory)))
+      (delete-session-migration-tree directory))))
+
+(defun recover-incomplete-canonical-session-migration (canonical legacy)
+  "Remove an old published pending tree, never returning it as canonical."
+  (let ((marker
+          (merge-pathnames +session-migration-completion-marker+ canonical)))
+    (when (and (probe-file canonical)
+               (probe-file marker)
+               (not (completed-session-migration-p canonical legacy)))
+      (unless (wait-for-completed-session-migration canonical legacy)
+        (unless (probe-file legacy)
+          (error "Incomplete canonical session migration at ~A has no legacy recovery source."
+                 canonical))
+        (delete-session-migration-tree canonical)))))
 
 (defun materialize-legacy-sessions-before-mutation ()
   "Copy the selected legacy session tree to canonical storage before mutation.
@@ -231,6 +467,9 @@ session remains available after the cutover."
   (unless (equal (pathname *sessions-dir*) (pathname +default-sessions-dir+))
     (return-from materialize-legacy-sessions-before-mutation *sessions-dir*))
   (bt:with-lock-held (*session-migration-lock*)
+    (cleanup-stale-session-migration-directories +default-sessions-dir+)
+    (recover-incomplete-canonical-session-migration
+     +default-sessions-dir+ +legacy-sessions-dir+)
     (let ((selection
             (select-migration-path +default-sessions-dir+
                                    +legacy-sessions-dir+
@@ -243,15 +482,23 @@ session remains available after the cutover."
                             +default-sessions-dir+))
                 (temporary
                   (merge-pathnames
-                   (format nil ".sessions-migration-~D-~D-~D/"
+                   (format nil ".sessions-migration-~D-~A-~D-~D/"
                            #+sbcl (sb-posix:getpid)
                            #-sbcl 0
+                           (or (session-process-start-token
+                                #+sbcl (sb-posix:getpid)
+                                #-sbcl 0)
+                               "unknown")
                            (get-universal-time)
                            (get-internal-real-time))
                    (uiop:pathname-parent-directory-pathname canonical))))
            (unwind-protect
                 (progn
                   (copy-session-directory-tree +legacy-sessions-dir+ temporary)
+                  (unless
+                      (session-migration-tree-matches-source-p
+                       +legacy-sessions-dir+ temporary)
+                    (error "Staged session migration does not match its source."))
                   (with-open-file
                       (stream
                        (merge-pathnames
@@ -261,23 +508,34 @@ session remains available after the cutover."
                        :if-exists :error
                        :if-does-not-exist :create)
                     (write-line "pending" stream))
+                  (apply-session-directory-modes
+                   +legacy-sessions-dir+ temporary)
+                  (when *session-migration-before-publish-hook*
+                    (funcall *session-migration-before-publish-hook*))
+                  (unless
+                      (session-migration-tree-matches-source-p
+                       +legacy-sessions-dir+ temporary
+                       :check-directory-modes-p t
+                       :root-p t)
+                    (error "Final staged session migration does not match its source."))
+                  (with-open-file
+                      (stream
+                       (merge-pathnames
+                        +session-migration-completion-marker+
+                        temporary)
+                       :direction :output
+                       :if-exists :overwrite
+                       :if-does-not-exist :error)
+                    (write-string
+                     (session-migration-marker-content
+                      +legacy-sessions-dir+)
+                     stream))
+                  (unless (completed-session-migration-p
+                           temporary +legacy-sessions-dir+)
+                    (error "Staged session migration marker is incomplete."))
                   (handler-case
                       (progn
                         (rename-file temporary canonical)
-                        (apply-session-directory-modes
-                         +legacy-sessions-dir+ canonical)
-                        (with-open-file
-                            (stream
-                             (merge-pathnames
-                              +session-migration-completion-marker+
-                              canonical)
-                             :direction :output
-                             :if-exists :overwrite
-                             :if-does-not-exist :error)
-                          (write-string
-                           (session-migration-marker-content
-                            +legacy-sessions-dir+)
-                           stream))
                         canonical)
                     (file-error (condition)
                       (unless (wait-for-completed-session-migration
@@ -286,9 +544,7 @@ session remains available after the cutover."
                       canonical)))
              (when (probe-file temporary)
                (ignore-errors
-                 (uiop:delete-directory-tree temporary
-                                             :validate t
-                                             :if-does-not-exist :ignore))))))
+                 (delete-session-migration-tree temporary))))))
         (otherwise +default-sessions-dir+)))))
 
 (defun set-session-display-name (session value)
