@@ -3421,7 +3421,33 @@ the medium."
         (slot-value frame 'appearance-font-refresh-diagnostics))
   condition)
 
-(defun refresh-chat-frame-font-inventory (frame &key (invalidate-cache t))
+(defun bounded-appearance-debug-text (value &optional (limit 240))
+  "Return a bounded printable diagnostic value for the debug event stream."
+  (let ((text (handler-case (princ-to-string value)
+                (error () "<unprintable>"))))
+    (if (> (length text) limit) (subseq text 0 limit) text)))
+
+(defun file-debug-font-refresh-diagnostic
+    (phase status condition diagnostic)
+  "Emit one bounded structured font failure without retaining backend objects."
+  (ignore-errors
+    (file-debug-event
+     "font-inventory-refresh-diagnostic"
+     :phase phase
+     :status status
+     :condition-class (bounded-appearance-debug-text (type-of condition))
+     :condition-text (bounded-appearance-debug-text condition)
+     :diagnostic-axis
+     (and (typep diagnostic 'appearance-condition)
+          (bounded-appearance-debug-text
+           (appearance-condition-axis diagnostic)))
+     :diagnostic-value
+     (and (typep diagnostic 'appearance-condition)
+          (bounded-appearance-debug-text
+           (appearance-condition-value diagnostic))))))
+
+(defun refresh-chat-frame-font-inventory
+    (frame &key (invalidate-cache t) (phase :explicit-refresh))
   "Atomically refresh FRAME's own post-adoption McCLIM font inventory.
 
 The explicit refresh path alone asks McCLIM to invalidate its font-list cache.
@@ -3469,6 +3495,8 @@ and render keys while recording a copied structured diagnostic."
                   (%make-appearance-activation-result :status :ready :bundle bundle))))
         (appearance-condition (condition)
           (record-chat-frame-font-refresh-diagnostic frame condition)
+          (file-debug-font-refresh-diagnostic
+           phase :failed condition condition)
           (%make-appearance-activation-result :status :failed
                                                :diagnostics (list condition)))
         (error (condition)
@@ -3480,8 +3508,31 @@ and render keys while recording a copied structured diagnostic."
                    :port port
                    :suggested-repairs '(:refresh-font-inventory))))
             (record-chat-frame-font-refresh-diagnostic frame diagnostic)
+            (file-debug-font-refresh-diagnostic
+             phase :failed condition diagnostic)
             (%make-appearance-activation-result :status :failed
                                                  :diagnostics (list diagnostic))))))))
+
+(defun real-chat-frame-appearance-port-p (port)
+  "Return true when PORT is an adopted public CLIM port."
+  (typep port 'clim:port))
+
+(defun publish-chat-frame-portable-appearance-bundle (frame port)
+  "Publish FRAME's portable generation-zero bundle independently of fonts."
+  (let ((bundle
+          (resolve-appearance-profile-bundle
+           (chat-frame-appearance-catalog frame)
+           (chat-frame-appearance-profile frame)
+           :profile-revision (chat-frame-appearance-revision frame)
+           :font-inventory-generation
+           (chat-frame-appearance-font-inventory-generation frame)
+           :port-identity port)))
+    (unless (and (chat-frame-appearance-active-bundle frame)
+                 (equal (resolved-appearance-bundle-bundle-key bundle)
+                        (resolved-appearance-bundle-bundle-key
+                         (chat-frame-appearance-active-bundle frame))))
+      (setf (slot-value frame 'appearance-active-bundle) bundle))
+    bundle))
 
 (defun refresh-chat-frame-appearance-port-bundle (frame)
   "Build or replace FRAME's local bundle after adoption on its event process.
@@ -3490,24 +3541,15 @@ For a real adopted CLIM port this also creates the initial noninvalidating
 frame-local inventory.  Test-only opaque ports retain the old bundle seam."
   (let ((port (chat-frame-appearance-live-port frame)))
     (when port
-      (if (ignore-errors (typep port 'clim:port))
-          (let ((result (refresh-chat-frame-font-inventory frame :invalidate-cache nil)))
-            (and (eq :ready (appearance-activation-result-status result))
-                 (appearance-activation-result-bundle result)))
-          (let ((bundle
-                  (resolve-appearance-profile-bundle
-                   (chat-frame-appearance-catalog frame)
-                   (chat-frame-appearance-profile frame)
-                   :profile-revision (chat-frame-appearance-revision frame)
-                   :font-inventory-generation
-                   (chat-frame-appearance-font-inventory-generation frame)
-                   :port-identity port)))
-            (unless (and (chat-frame-appearance-active-bundle frame)
-                         (equal (resolved-appearance-bundle-bundle-key bundle)
-                                (resolved-appearance-bundle-bundle-key
-                                 (chat-frame-appearance-active-bundle frame))))
-              (setf (slot-value frame 'appearance-active-bundle) bundle))
-            bundle)))))
+      ;; Portable CLIM typography and inks are sufficient for first paint.
+      ;; Optional named-font discovery may replace this complete bundle, but a
+      ;; stale backend inventory can never leave an adopted frame bundle-less.
+      (let ((portable
+              (publish-chat-frame-portable-appearance-bundle frame port)))
+        (when (real-chat-frame-appearance-port-p port)
+          (refresh-chat-frame-font-inventory
+           frame :invalidate-cache nil :phase :startup-inventory))
+        (or (chat-frame-appearance-active-bundle frame) portable)))))
 
 (defun publish-chat-frame-appearance-bundle (frame result)
   "Atomically publish one already validated live RESULT on FRAME.

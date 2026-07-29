@@ -21,6 +21,15 @@
 
 (defclass unreadable-test-font-face (test-font-face) ())
 
+(defclass protocol-gap-test-font-face (clim-extensions:font-face)
+  ((sizes :initarg :sizes :reader protocol-gap-test-font-face-sizes)))
+
+(defclass unreadable-test-font-family (test-font-family) ())
+
+(defclass invalid-test-font-family (test-font-family) ())
+
+(defclass unreadable-test-font-port (test-font-port) ())
+
 (define-condition unreadable-test-font-stream (stream-error) ())
 
 (defclass test-font-medium ()
@@ -37,6 +46,21 @@
 (defmethod clim-extensions:font-family-all-faces ((family test-font-family))
   (test-font-family-faces family))
 
+(defmethod clim-extensions:font-family-all-faces
+    ((family unreadable-test-font-family))
+  (declare (ignore family))
+  (error 'unreadable-test-font-stream))
+
+(defmethod clim-extensions:font-family-all-faces
+    ((family invalid-test-font-family))
+  (declare (ignore family))
+  (error "invalid public family object"))
+
+(defmethod clim-extensions:port-all-font-families
+    ((port unreadable-test-font-port) &key invalidate-cache &allow-other-keys)
+  (declare (ignore port invalidate-cache))
+  (error 'unreadable-test-font-stream))
+
 (defmethod clim-extensions:font-face-all-sizes ((face test-font-face))
   (copy-list (test-font-face-sizes face)))
 
@@ -47,10 +71,21 @@
   ;; let this implementation detail unwind the GUI event that requested it.
   (error 'unreadable-test-font-stream))
 
+(defmethod clim-extensions:font-face-all-sizes
+    ((face protocol-gap-test-font-face))
+  (copy-list (protocol-gap-test-font-face-sizes face)))
+
 (defmethod clim-extensions:font-face-scalable-p ((face test-font-face))
   (test-font-face-scalable-p face))
 
 (defmethod clim-extensions:font-face-text-style ((face test-font-face) &optional size)
+  (clim:make-text-style (clim-extensions:font-family-name
+                         (clim-extensions:font-face-family face))
+                        (clim-extensions:font-face-name face)
+                        size))
+
+(defmethod clim-extensions:font-face-text-style
+    ((face protocol-gap-test-font-face) &optional size)
   (clim:make-text-style (clim-extensions:font-family-name
                          (clim-extensions:font-face-family face))
                         (clim-extensions:font-face-name face)
@@ -153,6 +188,53 @@
       (is (= 7 (appearance-font-inventory-generation inventory)))
       (is (null (appearance-font-inventory-choices inventory))))))
 
+(test font-inventory-uses-listed-sizes-without-scalable-p-method
+  "Pinned McCLIM native TrueType faces omit the documented scalable predicate."
+  (let* ((port (make-instance 'test-font-port :families nil))
+         (family (make-test-font-family port "Protocol Gap" nil))
+         (face (make-instance 'protocol-gap-test-font-face
+                              :family family :name "Regular"
+                              :sizes '(14 10 12))))
+    (setf (test-font-family-faces family) (list face)
+          (test-font-port-families port) (list family))
+    (let ((choices
+            (appearance-font-inventory-choices
+             (enumerate-port-font-inventory port))))
+      (is (equal '(10 12 14)
+                 (mapcar #'enumerated-font-choice-size choices))))))
+
+(test font-inventory-isolates-an-unreadable-public-family
+  (let* ((port (make-instance 'test-font-port :families nil))
+         (unreadable
+           (make-instance 'unreadable-test-font-family
+                          :port port :name "Stale Family"))
+         (usable (make-test-font-family port "Readable Family" nil))
+         (face (make-test-font-face usable "Regular" :sizes '(12))))
+    (setf (test-font-family-faces usable) (list face)
+          (test-font-port-families port) (list unreadable usable))
+    (let ((choices
+            (appearance-font-inventory-choices
+             (enumerate-port-font-inventory port))))
+      (is (= 1 (length choices)))
+      (is (string= "Readable Family"
+                   (enumerated-font-choice-family-display
+                    (first choices)))))))
+
+(test font-inventory-treats-an-unreadable-port-cache-as-valid-empty-data
+  (let* ((port (make-instance 'unreadable-test-font-port :families nil))
+         (inventory
+           (enumerate-port-font-inventory port :generation 9)))
+    (is (= 9 (appearance-font-inventory-generation inventory)))
+    (is (null (appearance-font-inventory-choices inventory)))))
+
+(test font-inventory-does-not-hide-non-stream-family-errors
+  (let* ((port (make-instance 'test-font-port :families nil))
+         (invalid
+           (make-instance 'invalid-test-font-family
+                          :port port :name "Invalid Family")))
+    (setf (test-font-port-families port) (list invalid))
+    (signals error (enumerate-port-font-inventory port))))
+
 (test enumerated-font-resolution-is-exact-and-reports-family-face-ambiguity
   (multiple-value-bind (port inventory) (make-test-font-inventory)
     (declare (ignore port))
@@ -169,19 +251,22 @@
     (signals ambiguous-font-family
       (resolve-enumerated-font-choice inventory (test-enumerated-choice)))))
 
-(test enumerated-font-resolution-validates-fixed-and-scalable-size-boundaries
+(test enumerated-font-resolution-validates-listed-size-boundaries
   (multiple-value-bind (port inventory) (make-test-font-inventory :sizes '(10 12))
     (declare (ignore port))
     (is (typep (resolve-enumerated-font-choice inventory (test-enumerated-choice 10))
                'clim:text-style))
     (signals invalid-fixed-font-size
       (resolve-enumerated-font-choice inventory (test-enumerated-choice 11))))
+  ;; Even when the backend face would report itself scalable, enumeration uses
+  ;; only its public listed sizes because pinned McCLIM's native TrueType face
+  ;; does not implement FONT-FACE-SCALABLE-P.
   (multiple-value-bind (port inventory) (make-test-font-inventory :scalable-p t :sizes '(10))
     (declare (ignore port))
-    (is (typep (resolve-enumerated-font-choice inventory (test-enumerated-choice 11))
+    (is (typep (resolve-enumerated-font-choice inventory (test-enumerated-choice 10))
                'clim:text-style))
-    (signals invalid-scalable-font-size
-      (resolve-enumerated-font-choice inventory (test-enumerated-choice 0)))))
+    (signals invalid-fixed-font-size
+      (resolve-enumerated-font-choice inventory (test-enumerated-choice 11)))))
 
 (test enumerated-font-resolution-validates-mapping-metrics-and-editable-width
   (multiple-value-bind (port inventory) (make-test-font-inventory :mapping-valid-p nil)

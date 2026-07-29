@@ -132,24 +132,25 @@ exact comparison against one target port's public font inventory."
                       (< (%enumerated-font-choice-size left)
                          (%enumerated-font-choice-size right))))))))
 
-(defun public-font-sizes (face scalable-p)
+(defun public-font-sizes (face)
   "Copy and sort public FACE sizes; omit an unreadable public descriptor.
 
 The public McCLIM font protocol may expose a family whose backing font stream
 has already been closed by the backend.  That is an unavailable descriptor,
 not a reason to let a refresh event unwind the application frame.  Keep the
 inventory conservative: a face without readable sizes contributes no selectable
-choice, while other public faces on the same port remain available."
+choice, while other public faces on the same port remain available.
+
+Pinned McCLIM's native TrueType face omits the documented
+FONT-FACE-SCALABLE-P method.  Do not call that broken generic or inspect
+backend classes.  Listed public sizes remain fully usable and portable; an
+implementation that cannot advertise arbitrary scalable sizes is conservatively
+treated as fixed-size."
   (handler-case
       (let ((sizes (remove-if-not #'valid-enumerated-font-size-p
                                   (copy-list
                                    (clim-extensions:font-face-all-sizes face)))))
-        (cond (sizes (sort sizes #'<))
-              ;; A scalable face has infinitely many valid sizes.  One neutral
-              ;; displayed choice keeps the public choice contract finite while
-              ;; resolution still accepts every positive requested size.
-              (scalable-p (list 12))
-              (t nil)))
+        (and sizes (sort sizes #'<)))
     ;; SBCL reports a closed backing FD as a STREAM-ERROR.  Catch only that
     ;; unavailable-descriptor condition here; malformed protocol objects and
     ;; programming errors must still surface to the caller.
@@ -163,27 +164,46 @@ The returned inventory is local to this invocation.  It contains private
 protocol objects solely for exact later resolution and exposes only copied
 display descriptors."
   (let ((entries nil) (choices nil))
-    (dolist (family (clim-extensions:port-all-font-families
-                     port :invalidate-cache invalidate-cache))
-      (let ((family-display (copy-seq (clim-extensions:font-family-name family))))
-        (dolist (face (clim-extensions:font-family-all-faces family))
-          ;; A font backend can retain a stale face object after its source has
-          ;; gone away.  Treat each public descriptor independently so a single
-          ;; bad TTF cannot prevent a frame-local refresh or unrelated faces.
-          (handler-case
-              (let* ((face-display (copy-seq (clim-extensions:font-face-name face)))
-                     (scalable-p
-                       (not (null (clim-extensions:font-face-scalable-p face))))
-                     (sizes (public-font-sizes face scalable-p)))
-                (push (%make-appearance-font-entry
-                       :family-display family-display :face-display face-display
-                       :family family :face face :scalable-p scalable-p :sizes sizes)
-                      entries)
-                (dolist (size sizes)
-                  (push (make-enumerated-font-choice
-                         :family-display family-display :face-display face-display :size size)
-                        choices)))
-            (stream-error () nil)))))
+    (dolist
+        (family
+         (handler-case
+             (clim-extensions:port-all-font-families
+              port :invalidate-cache invalidate-cache)
+           ;; The public cache itself can retain a closed backing stream.
+           ;; A successful empty inventory is safer than coupling portable
+           ;; startup typography to that optional backend inventory.
+           (stream-error () nil)))
+      ;; Family display data and face enumeration may touch the same stale
+      ;; backing resource.  Isolate a complete family, while still allowing
+      ;; non-stream protocol/programming errors to reach the transaction.
+      (handler-case
+          (let ((family-display
+                  (copy-seq (clim-extensions:font-family-name family))))
+            (dolist (face (clim-extensions:font-family-all-faces family))
+              ;; A font backend can retain a stale face object after its source
+              ;; has gone away. Treat each public descriptor independently.
+              (handler-case
+                  (let* ((face-display
+                           (copy-seq
+                            (clim-extensions:font-face-name face)))
+                         ;; Listed sizes are the compatibility boundary for
+                         ;; pinned McCLIM.  Its native TrueType face does not
+                         ;; implement the documented scalable-p generic.
+                         (scalable-p nil)
+                         (sizes (public-font-sizes face)))
+                    (push (%make-appearance-font-entry
+                           :family-display family-display
+                           :face-display face-display
+                           :family family :face face
+                           :scalable-p scalable-p :sizes sizes)
+                          entries)
+                    (dolist (size sizes)
+                      (push (make-enumerated-font-choice
+                             :family-display family-display
+                             :face-display face-display :size size)
+                            choices)))
+                (stream-error () nil))))
+        (stream-error () nil)))
     (%make-appearance-font-inventory
      :port port
      :generation (or generation 0)

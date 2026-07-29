@@ -463,6 +463,77 @@ these tests exercise construction-time space requirements only."
         (is (string= "Readable"
                      (enumerated-font-choice-face-display (first choices))))))))
 
+(test startup-port-bundle-survives-optional-font-inventory-failure
+  "Portable generation-zero appearance is complete before optional fonts."
+  (let* ((frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "portable-startup-bundle"
+                                      :session-persistence-mode :ephemeral)))
+         (port (make-instance 'test-font-port :families nil)))
+    (with-mcclim-test-function-override
+        (clawmacs::chat-frame-appearance-live-port (requested-frame)
+          (is (eq frame requested-frame))
+          port)
+      (with-mcclim-test-function-override
+          (clawmacs::real-chat-frame-appearance-port-p (requested-port)
+            (is (eq port requested-port))
+            t)
+        (with-mcclim-test-function-override
+            (clawmacs::enumerate-port-font-inventory
+                (requested-port &rest arguments)
+              (declare (ignore requested-port arguments))
+              (error "optional inventory unavailable"))
+          (let ((bundle
+                  (clawmacs::refresh-chat-frame-appearance-port-bundle frame)))
+            (is (eq bundle
+                    (clawmacs::chat-frame-appearance-active-bundle frame)))
+            (is (= 0
+                   (resolved-appearance-bundle-font-inventory-generation
+                    bundle)))
+            (is (eq :classic
+                    (appearance-profile-selected-theme
+                     (resolved-appearance-bundle-profile bundle))))
+            (is (null
+                 (clawmacs::chat-frame-appearance-font-inventory frame)))
+            (is-true
+             (clawmacs::chat-frame-appearance-font-refresh-diagnostics
+              frame))))))))
+
+(test font-refresh-debug-diagnostic-is-bounded-and-structured
+  "Backend failures expose phase and copied bounded diagnostic data."
+  (let* ((frame (clim:make-application-frame
+                 'clawmacs::clawmacs-chat-frame
+                 :buffer (make-buffer "font-debug-diagnostic"
+                                      :session-persistence-mode :ephemeral)))
+         (port (make-instance 'test-font-port :families nil))
+         (event nil)
+         (long-text (make-string 600 :initial-element #\x)))
+    (with-mcclim-test-function-override
+        (clawmacs::chat-frame-appearance-live-port (requested-frame)
+          (is (eq frame requested-frame))
+          port)
+      (with-mcclim-test-function-override
+          (clawmacs::enumerate-port-font-inventory
+              (requested-port &rest arguments)
+            (declare (ignore requested-port arguments))
+            (error "~A" long-text))
+        (with-mcclim-test-function-override
+            (clawmacs::file-debug-event (name &rest fields)
+              (when (string= name "font-inventory-refresh-diagnostic")
+                (setf event fields)))
+          (let ((result
+                  (clawmacs::refresh-chat-frame-font-inventory
+                   frame :phase :unit-test)))
+            (is (eq :failed
+                    (appearance-activation-result-status result)))))))
+    (is (eq :unit-test (getf event :phase)))
+    (is (eq :failed (getf event :status)))
+    (is (stringp (getf event :condition-class)))
+    (is (<= (length (getf event :condition-text)) 240))
+    (is (string= "FONT-INVENTORY-REFRESH"
+                 (getf event :diagnostic-axis)))
+    (is (<= (length (getf event :diagnostic-value)) 240))))
+
 (test chat-font-refresh-failure-rolls-back-and-isolates-two-frames
   "Enumeration errors never replace active state, generations, or a sibling frame."
   (let* ((first (clim:make-application-frame
