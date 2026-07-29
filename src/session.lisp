@@ -101,7 +101,7 @@
    :label "session directory"))
 
 (defun copy-session-directory-tree (source target)
-  "Copy SOURCE recursively into absent TARGET without merging."
+  "Copy SOURCE recursively into absent TARGET while keeping directories writable."
   (ensure-directories-exist (merge-pathnames #P".keep" target))
   (dolist (file (uiop:directory-files source))
     (let ((target-file (merge-pathnames (file-namestring file) target)))
@@ -119,14 +119,59 @@
                                   (car (last (pathname-directory directory)))))
              target)))
       (copy-session-directory-tree directory target-directory)))
+  target)
+
+(defun session-path-mode (path)
+  "Return PATH's permission and special mode bits when supported."
+  #+sbcl
+  (logand #o7777
+          (sb-posix:stat-mode
+           (sb-posix:stat (namestring path))))
+  #-sbcl
+  (declare (ignore path))
+  #-sbcl
+  nil)
+
+(defun apply-session-directory-modes (source target)
+  "Apply SOURCE directory modes to TARGET from leaves to root."
+  (mapc (lambda (source-directory)
+          (let ((target-directory
+                  (merge-pathnames
+                   (make-pathname
+                    :directory
+                    (list :relative
+                          (car (last
+                                (pathname-directory source-directory)))))
+                   target)))
+            (apply-session-directory-modes
+             source-directory target-directory)))
+        (uiop:subdirectories source))
   #+sbcl
   (sb-posix:chmod
    (namestring (uiop:ensure-directory-pathname target))
-   (logand #o7777
-           (sb-posix:stat-mode
-            (sb-posix:stat
-             (namestring (uiop:ensure-directory-pathname source))))))
+   (session-path-mode (uiop:ensure-directory-pathname source)))
   target)
+
+(defun session-directory-modes-match-p (source target)
+  "Return true when every TARGET directory has its SOURCE mode."
+  (and (probe-file target)
+       (or #-sbcl t
+           #+sbcl
+           (= (session-path-mode (uiop:ensure-directory-pathname source))
+              (session-path-mode (uiop:ensure-directory-pathname target))))
+       (every
+        (lambda (source-directory)
+          (let ((target-directory
+                  (merge-pathnames
+                   (make-pathname
+                    :directory
+                    (list :relative
+                          (car (last
+                                (pathname-directory source-directory)))))
+                   target)))
+            (session-directory-modes-match-p
+             source-directory target-directory)))
+        (uiop:subdirectories source))))
 
 (defun session-file-size (path)
   "Return the octet length of PATH."
@@ -139,16 +184,21 @@
         (entries nil))
     (labels ((walk (directory)
                (dolist (child (uiop:subdirectories directory))
-                 (push (list :directory (enough-namestring child root))
+                 (push (list :directory
+                             (enough-namestring child root)
+                             (session-path-mode child))
                        entries)
                  (walk child))
                (dolist (file (uiop:directory-files directory))
                  (push (list :file
                              (enough-namestring file root)
-                             (session-file-size file))
+                             (session-file-size file)
+                             (session-path-mode file))
                        entries))))
       (walk root))
-    (sort entries #'string< :key #'second)))
+    (sort (list* (list :directory "./" (session-path-mode root))
+                 entries)
+          #'string< :key #'second)))
 
 (defun session-migration-marker-content (legacy)
   "Return the completion marker expected for a copy of LEGACY."
@@ -162,7 +212,15 @@
     (and (probe-file canonical)
          (probe-file marker)
          (string= (uiop:read-file-string marker)
-                  (session-migration-marker-content legacy)))))
+                  (session-migration-marker-content legacy))
+         (session-directory-modes-match-p legacy canonical))))
+
+(defun wait-for-completed-session-migration (canonical legacy)
+  "Wait briefly for a competing publisher to finalize CANONICAL."
+  (loop repeat 500
+        when (completed-session-migration-p canonical legacy)
+          return canonical
+        do (sleep 0.01)))
 
 (defun materialize-legacy-sessions-before-mutation ()
   "Copy the selected legacy session tree to canonical storage before mutation.
@@ -202,16 +260,27 @@ session remains available after the cutover."
                        :direction :output
                        :if-exists :error
                        :if-does-not-exist :create)
-                    (write-string
-                     (session-migration-marker-content
-                      +legacy-sessions-dir+)
-                     stream))
+                    (write-line "pending" stream))
                   (handler-case
                       (progn
                         (rename-file temporary canonical)
+                        (apply-session-directory-modes
+                         +legacy-sessions-dir+ canonical)
+                        (with-open-file
+                            (stream
+                             (merge-pathnames
+                              +session-migration-completion-marker+
+                              canonical)
+                             :direction :output
+                             :if-exists :overwrite
+                             :if-does-not-exist :error)
+                          (write-string
+                           (session-migration-marker-content
+                            +legacy-sessions-dir+)
+                           stream))
                         canonical)
                     (file-error (condition)
-                      (unless (completed-session-migration-p
+                      (unless (wait-for-completed-session-migration
                                canonical +legacy-sessions-dir+)
                         (error condition))
                       canonical)))
