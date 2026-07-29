@@ -434,7 +434,11 @@ these tests exercise construction-time space requirements only."
           (is (eq :ready (appearance-activation-result-status result)))
           (is (= 1 (clawmacs::chat-frame-appearance-font-inventory-generation first)))
           (is (= 0 (clawmacs::chat-frame-appearance-font-inventory-generation second)))
-          (is (= 1 (test-font-port-invalidations first-port)))
+          ;; Pinned McCLIM closes TrueType streams still mapped by live panes
+          ;; when its shared cache is invalidated.  Explicit refresh advances
+          ;; only this frame's logical generation and re-enumerates the current
+          ;; public cache.
+          (is (= 0 (test-font-port-invalidations first-port)))
           (is (eq other-bundle (clawmacs::chat-frame-appearance-active-bundle second)))
           (is-false (equal old-key
                            (resolved-appearance-bundle-bundle-key

@@ -3450,11 +3450,15 @@ the medium."
     (frame &key (invalidate-cache t) (phase :explicit-refresh))
   "Atomically refresh FRAME's own post-adoption McCLIM font inventory.
 
-The explicit refresh path alone asks McCLIM to invalidate its font-list cache.
-It first builds the next inventory and complete bundle off-frame.  A candidate
-whose effective role typography differs is restart-required and is not partly
-published.  Any error retains the old inventory, generation, bundle, profile,
-and render keys while recording a copied structured diagnostic."
+INVALIDATE-CACHE advances the frame-local inventory generation.  It does not
+forward cache invalidation to an adopted live McCLIM port: pinned McCLIM 1.0.0
+closes TrueType streams that remain mapped by live pane mediums.  Newly
+installed system fonts therefore require a new frame/application process.
+
+The refresh first builds the next inventory and complete bundle off-frame.  A
+candidate whose effective role typography differs is restart-required and is
+not partly published.  Any error retains the old inventory, generation, bundle,
+profile, and render keys while recording a copied structured diagnostic."
   (let ((port (chat-frame-appearance-live-port frame)))
     (unless port
       (return-from refresh-chat-frame-font-inventory nil))
@@ -3465,7 +3469,7 @@ and render keys while recording a copied structured diagnostic."
       (handler-case
           (let* ((metric-medium (chat-frame-font-metric-medium frame))
                  (inventory (enumerate-port-font-inventory
-                             port :invalidate-cache invalidate-cache
+                             port :invalidate-cache nil
                              :generation next-generation
                              :metric-medium metric-medium))
                  (bundle (resolve-appearance-profile-bundle
