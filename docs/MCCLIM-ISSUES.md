@@ -377,6 +377,55 @@ run result=:OK
 The final run is recorded in
 `.artifacts/stability-final-20260714T054821Z/final/minimal-esa-control-final2.log`.
 
+## Native TrueType scalable-font protocol gap
+
+The pinned McCLIM 1.0.0 public font protocol documents
+`clim-extensions:font-face-scalable-p` for font-face objects returned by
+`font-family-all-faces`. Its native TrueType face class does not implement that
+generic. Calling the documented predicate on an ordinary enumerated DejaVu
+face therefore signals `no-applicable-method`:
+
+```lisp
+(let* ((port (clim:find-port))
+       (family (first (clim-extensions:port-all-font-families port)))
+       (face (first (clim-extensions:font-family-all-faces family))))
+  (clim-extensions:font-face-scalable-p face))
+```
+
+The protocol is declared in `Core/windowing/protocol.lisp` and described in
+`Documentation/Manual/extensions.texi`. The native TrueType implementation in
+`Extensions/fonts/mcclim-native-ttf.lisp` provides
+`font-face-all-sizes` and `font-face-text-style`, but no
+`font-face-scalable-p` method. The only method in the pinned source tree is for
+the separate basic font-face implementation. A fresh private-Xvfb reproduction
+failed on `MCCLIM-TRUETYPE:TRUETYPE-FACE` with
+`SB-PCL::NO-APPLICABLE-METHOD-ERROR`, without relying on Clawmacs internals.
+
+Clawmacs avoids the broken predicate. It exposes only positive sizes returned
+by the public `font-face-all-sizes` method, then resolves a selected size
+through public `font-face-text-style`, mapping, and metric operations. This
+retains the native TrueType implementation's listed sizes while deliberately
+giving up arbitrary unlisted scalable sizes. It does not inspect implementation
+classes, install a global method, or hide non-stream protocol failures. An
+unreadable family or face is isolated only when it signals `stream-error`, and
+the frame retains its portable generation-zero appearance bundle if optional
+enumeration still fails.
+
+The same pinned backend's `port-all-font-families :invalidate-cache t` closes
+TrueType streams that can still be mapped by live pane mediums. A subsequent
+ordinary compose dispatch or redisplay then signals that the DejaVu font stream
+is closed. Clawmacs therefore treats explicit refresh as a frame-local logical
+generation advance over the current public cache and never invalidates the
+backend cache of an adopted live port. Newly installed system fonts become
+available after a new frame/application process, not through live refresh.
+
+No fork is warranted while listed sizes satisfy the appearance editor. Revisit
+that decision only if arbitrary scalable sizes become a product requirement
+and upstream has not supplied the missing public method; at that point, prefer
+a focused upstream-compatible method and minimal reproducer over a
+Clawmacs-specific class test or monkey patch. This finding is recorded locally;
+no upstream report was sent.
+
 ## Upstream attribution and fork thresholds
 
 Attribute a candidate certainly to McCLIM only when all of these are true:
