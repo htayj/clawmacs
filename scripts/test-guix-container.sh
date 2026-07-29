@@ -1000,4 +1000,6 @@ case "$PRODUCTION_SETUP_STATE" in
     ;;
 esac
 
+"$SCRIPT_DIR/test-legacy-name-allowlist.sh"
+
 echo "ok"

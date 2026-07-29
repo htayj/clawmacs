@@ -7,6 +7,10 @@ Macros for your agent!
 
 Repository: [[https://github.com/htayj/rplaca][github.com/htayj/rplaca]]
 
+Users of pre-rename builds should follow the
+[[file:docs/MIGRATING-FROM-CLAWMACS.md][Clawmacs-to-RPLACA migration guide]]
+before moving configuration or sessions.
+
 * Introduction
 
 Anyone who has used Emacs before knows the benefit of a tight feedback loop. Write lisp code, eval it, instant results. RPLACA brings that same philosophy to agentic programming: the tighter the feedback loop between you and the agent, and the more the agent can introspect its own environment, the more powerful the collaboration becomes.

@@ -35,3 +35,8 @@ Recent history uses imperative subjects and often scopes; the canonical format i
 
 ## Configuration & Secrets
 Load environment with `direnv` via `.envrc` when possible. Never commit API keys, OAuth tokens, or copied config from `~/.config/rplaca/`; use environment variables and local config files instead.
+
+The intentional legacy-name compatibility boundary is documented in
+[`docs/MIGRATING-FROM-CLAWMACS.md`](docs/MIGRATING-FROM-CLAWMACS.md) and
+enforced by `./scripts/check-legacy-name-allowlist.sh`. Update the exact
+allowlist entry and rationale whenever migration compatibility changes.

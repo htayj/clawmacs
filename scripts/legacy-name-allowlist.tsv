@@ -1,0 +1,31 @@
+# Exact path|allowed kinds|expected counts|category|rationale
+# Kinds: product (former product identity), font (legacy native font identity),
+# url (a URL containing the former product identity). Paths are never globs.
+.gitignore|product|product=1|compatibility-ignore|Ignores the former user-state directory.
+AGENTS.md|product|product=2|migration-link|Links contributors to the migration guide.
+README.org|product,font|product=2,font=1|migration-docs|Links the migration guide and documents import-only font compatibility.
+docs/MIGRATING-FROM-CLAWMACS.md|product,font|product=30,font=7|migration-guide|The dedicated guide must name legacy identities precisely.
+docs/superpowers/plans/2026-03-14-clawmacs-tui.md|product|product=65|historical|Preserved completed Croatoan-era implementation plan.
+docs/superpowers/plans/2026-03-15-next-features.md|product|product=3|historical|Preserved early feature plan.
+docs/superpowers/specs/2026-03-14-clawmacs-tui-design.md|product|product=9|historical|Preserved Croatoan-era design specification.
+scripts/check-legacy-name-allowlist.sh|product,font,url|product=8,font=4,url=1|policy|Defines and enforces the residual-name policy.
+scripts/guix-container.sh|product|product=9|legacy-mount|Exposes former user-state paths read-only for compatibility.
+scripts/legacy-name-allowlist.tsv|product|product=3|policy-data|Enumerates exact intentional residual paths and rationales.
+scripts/test-guix-container.sh|product|product=6|legacy-mount-test|Tests read-only exposure of former user-state paths.
+scripts/test-legacy-name-allowlist.sh|product,font,url|product=10,font=1,url=1|policy-test|Exercises product font URL and filename policy failures.
+scripts/test-session-migration-containers.sh|product|product=2|session-migration-test|Builds a former session tree for cross-container publication tests.
+src/appearance-config.lisp|product|product=3|legacy-data-reader|Accepts the former appearance path and data tag read-only.
+src/crash-report.lisp|product|product=1|legacy-archive|Locates former crash reports as archival data only.
+src/font-editor.lisp|font|font=4|legacy-font-reader|Imports the former native font tag and extension without writing them.
+src/llm.lisp|product|product=4|legacy-data-reader|Reads former credentials prompts defaults and boot instructions without writing them.
+src/main.lisp|product|product=1|legacy-executable-refusal|Detects and refuses the former executable init path.
+src/mcp-bridge-core.lisp|product|product=1|legacy-executable-refusal|Detects and refuses former MCP configuration.
+src/modelaria-core.lisp|product|product=2|legacy-data-reader|Reads former inert model metadata without writing it.
+src/package-manager.lisp|product|product=3|legacy-executable-refusal|Detects and refuses former package configuration and install roots.
+src/projects.lisp|product|product=1|legacy-executable-refusal|Detects and refuses the former project registry.
+src/session.lisp|product|product=1|session-migration|Discovers and atomically materializes former session storage.
+src/skills.lisp|product|product=3|legacy-executable-refusal|Detects and refuses former executable skill state.
+src/templata.lisp|product|product=2|legacy-data-reader|Reads former global and project prompt templates without writing them.
+tests/font-editor-test.lisp|font|font=9|legacy-font-test|Proves import-only compatibility and canonical font writes.
+tests/legacy-path-test.lisp|product|product=12|migration-unit-test|Exercises exact canonical and former path selection.
+tests/migration-integration-test.lisp|product|product=12|migration-integration-test|Exercises subsystem migration boundaries and preservation.
