@@ -397,6 +397,8 @@
                      :error-output :output)))
              (is (= 77 (uiop:wait-process crash)))
              (is-false (probe-file canonical))
+             (is (probe-file
+                  (rplaca::session-migration-lock-path canonical)))
              (is (find-if
                   (lambda (directory)
                     (search ".sessions-migration-" (namestring directory)))
@@ -408,6 +410,11 @@
                       :output recovery-output
                       :error-output :output)))
                (is (zerop (uiop:wait-process recovery))))
+             ;; The crashed process left its lock file behind, but the kernel
+             ;; released the advisory lock.  Recovery acquired that same file,
+             ;; removed the stale staging tree, and published normally.
+             (is (probe-file
+                  (rplaca::session-migration-lock-path canonical)))
              (is (string= "crash-safe"
                           (uiop:read-file-string canonical-file)))
              #+sbcl

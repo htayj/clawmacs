@@ -28,6 +28,10 @@
   #P".rplaca-session-migration-complete"
   "Marker published only after a complete legacy session tree copy.")
 
+(defparameter +session-migration-lock-file+
+  #P".rplaca-session-migration.lock"
+  "Sibling advisory-lock file serializing publishers across containers.")
+
 (defvar *session-migration-after-selection-hook* nil
   "Test synchronization hook called after selecting a legacy session tree.")
 
@@ -384,65 +388,60 @@
           return canonical
         do (sleep 0.01)))
 
-(defun session-process-start-token (process-id)
-  "Return Linux PROCESS-ID's kernel start token, or NIL when unavailable."
+(defun session-migration-lock-path (canonical)
+  "Return CANONICAL's shared-filesystem advisory-lock pathname."
+  (merge-pathnames
+   +session-migration-lock-file+
+   (uiop:pathname-parent-directory-pathname canonical)))
+
+(defun call-with-session-migration-filesystem-lock (canonical function)
+  "Call FUNCTION while holding CANONICAL's cross-process advisory lock.
+
+The kernel releases the record lock when the publisher exits, including after
+a crash.  Every cleanup and publication decision occurs while this lock is
+held, so PID namespaces are irrelevant and a live publisher's staging tree can
+never be mistaken for stale state."
   #+sbcl
-  (handler-case
-      (let* ((text
-               (uiop:read-file-string
-                (format nil "/proc/~D/stat" process-id)))
-             (close (position #\) text :from-end t))
-             (fields
-               (and close
-                    (uiop:split-string
-                     (string-trim '(#\Space #\Tab #\Newline)
-                                  (subseq text (1+ close)))))))
-        ;; FIELDS starts at proc(5) field 3; starttime is field 22.
-        (and (>= (length fields) 20)
-             (nth 19 fields)))
-    (error () nil))
+  (let* ((path (session-migration-lock-path canonical))
+         (descriptor nil)
+         (lock
+           (make-instance 'sb-posix:flock
+                          :type sb-posix:f-wrlck
+                          :whence sb-posix:seek-set
+                          :start 0
+                          :len 0)))
+    (ensure-directories-exist path)
+    (unwind-protect
+         (progn
+           (setf descriptor
+                 (sb-posix:open
+                  (namestring path)
+                  (logior sb-posix:o-rdwr sb-posix:o-creat)
+                  #o600))
+           (sb-posix:fcntl descriptor sb-posix:f-setlkw lock)
+           (funcall function))
+      (when descriptor
+        (sb-posix:close descriptor))))
   #-sbcl
-  (declare (ignore process-id))
-  #-sbcl
-  nil)
+  (error
+   "Cross-process session migration locking for ~A is unavailable on ~S."
+   canonical function))
 
-(defun session-migration-temporary-owner (directory)
-  "Return the PID and start token encoded in migration DIRECTORY."
-  (let* ((name
-           (car (last
-                 (pathname-directory
-                  (uiop:ensure-directory-pathname directory)))))
-         (prefix ".sessions-migration-"))
-    (when (and (stringp name)
-               (uiop:string-prefix-p prefix name))
-      (let* ((start (length prefix))
-             (pid-end (position #\- name :start start))
-             (token-end (and pid-end
-                             (position #\- name :start (1+ pid-end)))))
-        (when (and pid-end token-end)
-          (values
-           (parse-integer name :start start :end pid-end
-                               :junk-allowed t)
-           (subseq name (1+ pid-end) token-end)))))))
-
-(defun active-session-migration-temporary-p (directory)
-  "Return true when DIRECTORY belongs to the still-running creating process."
-  (multiple-value-bind (process-id start-token)
-      (session-migration-temporary-owner directory)
-    (and process-id
-         start-token
-         (let ((active-token
-                 (session-process-start-token process-id)))
-           (and active-token
-                (string= start-token active-token))))))
+(defun session-migration-temporary-p (directory)
+  "Return true when DIRECTORY is a session-migration staging tree."
+  (let ((name
+          (car (last
+                (pathname-directory
+                 (uiop:ensure-directory-pathname directory))))))
+    (and (stringp name)
+         (uiop:string-prefix-p ".sessions-migration-" name))))
 
 (defun cleanup-stale-session-migration-directories (canonical)
-  "Remove abandoned sibling staging trees without touching live publishers."
+  "Remove abandoned sibling staging trees while holding the publisher lock."
   (dolist (directory
            (uiop:subdirectories
             (uiop:pathname-parent-directory-pathname canonical)))
-    (when (and (session-migration-temporary-owner directory)
-               (not (active-session-migration-temporary-p directory)))
+    (when (session-migration-temporary-p directory)
       (delete-session-migration-tree directory))))
 
 (defun recover-incomplete-canonical-session-migration (canonical legacy)
@@ -467,85 +466,89 @@ session remains available after the cutover."
   (unless (equal (pathname *sessions-dir*) (pathname +default-sessions-dir+))
     (return-from materialize-legacy-sessions-before-mutation *sessions-dir*))
   (bt:with-lock-held (*session-migration-lock*)
-    (cleanup-stale-session-migration-directories +default-sessions-dir+)
-    (recover-incomplete-canonical-session-migration
-     +default-sessions-dir+ +legacy-sessions-dir+)
-    (let ((selection
+    (let ((initial-selection
             (select-migration-path +default-sessions-dir+
                                    +legacy-sessions-dir+
                                    :label "session directory")))
-      (case (legacy-path-selection-source selection)
-        (:legacy
-         (when *session-migration-after-selection-hook*
-           (funcall *session-migration-after-selection-hook*))
-         (let* ((canonical (uiop:ensure-directory-pathname
-                            +default-sessions-dir+))
-                (temporary
-                  (merge-pathnames
-                   (format nil ".sessions-migration-~D-~A-~D-~D/"
-                           #+sbcl (sb-posix:getpid)
-                           #-sbcl 0
-                           (or (session-process-start-token
-                                #+sbcl (sb-posix:getpid)
-                                #-sbcl 0)
-                               "unknown")
-                           (get-universal-time)
-                           (get-internal-real-time))
-                   (uiop:pathname-parent-directory-pathname canonical))))
-           (unwind-protect
-                (progn
-                  (copy-session-directory-tree +legacy-sessions-dir+ temporary)
-                  (unless
-                      (session-migration-tree-matches-source-p
-                       +legacy-sessions-dir+ temporary)
-                    (error "Staged session migration does not match its source."))
-                  (with-open-file
-                      (stream
-                       (merge-pathnames
-                        +session-migration-completion-marker+
-                        temporary)
-                       :direction :output
-                       :if-exists :error
-                       :if-does-not-exist :create)
-                    (write-line "pending" stream))
-                  (apply-session-directory-modes
-                   +legacy-sessions-dir+ temporary)
-                  (when *session-migration-before-publish-hook*
-                    (funcall *session-migration-before-publish-hook*))
-                  (unless
-                      (session-migration-tree-matches-source-p
-                       +legacy-sessions-dir+ temporary
-                       :check-directory-modes-p t
-                       :root-p t)
-                    (error "Final staged session migration does not match its source."))
-                  (with-open-file
-                      (stream
-                       (merge-pathnames
-                        +session-migration-completion-marker+
-                        temporary)
-                       :direction :output
-                       :if-exists :overwrite
-                       :if-does-not-exist :error)
-                    (write-string
-                     (session-migration-marker-content
-                      +legacy-sessions-dir+)
-                     stream))
-                  (unless (completed-session-migration-p
-                           temporary +legacy-sessions-dir+)
-                    (error "Staged session migration marker is incomplete."))
-                  (handler-case
-                      (progn
-                        (rename-file temporary canonical)
-                        canonical)
-                    (file-error (condition)
-                      (unless (wait-for-completed-session-migration
-                               canonical +legacy-sessions-dir+)
-                        (error condition))
-                      canonical)))
-             (when (probe-file temporary)
-               (ignore-errors
-                 (delete-session-migration-tree temporary))))))
-        (otherwise +default-sessions-dir+)))))
+      (when (and (eq :legacy
+                     (legacy-path-selection-source initial-selection))
+                 *session-migration-after-selection-hook*)
+        (funcall *session-migration-after-selection-hook*)))
+    (call-with-session-migration-filesystem-lock
+     +default-sessions-dir+
+     (lambda ()
+       (cleanup-stale-session-migration-directories +default-sessions-dir+)
+       (recover-incomplete-canonical-session-migration
+        +default-sessions-dir+ +legacy-sessions-dir+)
+       (let ((selection
+               (select-migration-path +default-sessions-dir+
+                                      +legacy-sessions-dir+
+                                      :label "session directory")))
+         (case (legacy-path-selection-source selection)
+           (:legacy
+            (let* ((canonical (uiop:ensure-directory-pathname
+                               +default-sessions-dir+))
+                   (temporary
+                     (merge-pathnames
+                      (format nil ".sessions-migration-~D-~D-~D/"
+                              #+sbcl (sb-posix:getpid)
+                              #-sbcl 0
+                              (get-universal-time)
+                              (get-internal-real-time))
+                      (uiop:pathname-parent-directory-pathname canonical))))
+              (unwind-protect
+                   (progn
+                     (copy-session-directory-tree
+                      +legacy-sessions-dir+ temporary)
+                     (unless
+                         (session-migration-tree-matches-source-p
+                          +legacy-sessions-dir+ temporary)
+                       (error
+                        "Staged session migration does not match its source."))
+                     (with-open-file
+                         (stream
+                          (merge-pathnames
+                           +session-migration-completion-marker+
+                           temporary)
+                          :direction :output
+                          :if-exists :error
+                          :if-does-not-exist :create)
+                       (write-line "pending" stream))
+                     (apply-session-directory-modes
+                      +legacy-sessions-dir+ temporary)
+                     (when *session-migration-before-publish-hook*
+                       (funcall *session-migration-before-publish-hook*))
+                     (unless
+                         (session-migration-tree-matches-source-p
+                          +legacy-sessions-dir+ temporary
+                          :check-directory-modes-p t
+                          :root-p t)
+                       (error
+                        "Final staged session migration does not match its source."))
+                     (with-open-file
+                         (stream
+                          (merge-pathnames
+                           +session-migration-completion-marker+
+                           temporary)
+                          :direction :output
+                          :if-exists :overwrite
+                          :if-does-not-exist :error)
+                       (write-string
+                        (session-migration-marker-content
+                         +legacy-sessions-dir+)
+                        stream))
+                     (unless (completed-session-migration-p
+                              temporary +legacy-sessions-dir+)
+                       (error
+                        "Staged session migration marker is incomplete."))
+                     ;; The final marker and exact staged bytes/modes are already
+                     ;; durable before this sole publication operation.
+                     (rename-file temporary canonical)
+                     canonical)
+                (when (probe-file temporary)
+                  (ignore-errors
+                    (delete-session-migration-tree temporary))))))
+           (otherwise +default-sessions-dir+)))))))
 
 (defun set-session-display-name (session value)
   "Set SESSION display name to VALUE, persist it, and return SESSION."
