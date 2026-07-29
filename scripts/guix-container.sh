@@ -676,6 +676,22 @@ clear_test_toggles() {
   unset RPLACA_ENABLE_TEST_TOGGLES
 }
 
+validate_persistent_directory_path() {
+  variable_name="$1"
+  directory="$2"
+  case "$directory" in
+    /*) ;;
+    *)
+      fail 124 "$variable_name must be an absolute path for persistent container storage"
+      ;;
+  esac
+  case "$directory" in
+    /|*[!A-Za-z0-9_./-]*)
+      fail 124 "$variable_name contains characters unsupported by persistent container storage"
+      ;;
+  esac
+}
+
 launch_payload() {
   shift_count="$1"
   shift
@@ -697,8 +713,26 @@ launch_payload() {
     mkdir -p "$HOST_CONFIG_DIR"
     extra_container_args="$extra_container_args --share=$HOST_CONFIG_DIR=$WORKSPACE_HOME/.config/rplaca"
   fi
+  if [ -n "$HOST_USER_HOME" ]; then
+    host_projects_dir="$HOST_USER_HOME/.rplaca.projects.d"
+    host_default_state_dir="$HOST_USER_HOME/.local/state/rplaca"
+    mkdir -p "$host_projects_dir" "$host_default_state_dir"
+    extra_container_args="$extra_container_args --share=$host_projects_dir=$WORKSPACE_HOME/.rplaca.projects.d"
+    extra_container_args="$extra_container_args --share=$host_default_state_dir=$WORKSPACE_HOME/.local/state/rplaca"
+  fi
   if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.rplaca.d" ]; then
     extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.rplaca.d=$WORKSPACE_HOME/.rplaca.d"
+  fi
+  if [ -n "${XDG_STATE_HOME:-}" ]; then
+    validate_persistent_directory_path XDG_STATE_HOME "$XDG_STATE_HOME"
+    mkdir -p "$XDG_STATE_HOME"
+    extra_container_args="$extra_container_args --share=$XDG_STATE_HOME=$XDG_STATE_HOME"
+  fi
+  if [ -n "${RPLACA_CRASH_REPORT_DIR:-}" ]; then
+    validate_persistent_directory_path \
+      RPLACA_CRASH_REPORT_DIR "$RPLACA_CRASH_REPORT_DIR"
+    mkdir -p "$RPLACA_CRASH_REPORT_DIR"
+    extra_container_args="$extra_container_args --share=$RPLACA_CRASH_REPORT_DIR=$RPLACA_CRASH_REPORT_DIR"
   fi
   if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.config/clawmacs" ]; then
     extra_container_args="$extra_container_args --expose=$HOST_USER_HOME/.config/clawmacs=$WORKSPACE_HOME/.config/clawmacs"

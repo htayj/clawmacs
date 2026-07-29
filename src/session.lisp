@@ -23,6 +23,13 @@
   (bt:make-lock "rplaca session migration")
   "Lock serializing in-process materialization of the legacy session tree.")
 
+(defparameter +session-migration-completion-marker+
+  #P".rplaca-session-migration-complete"
+  "Marker published only after a complete legacy session tree copy.")
+
+(defvar *session-migration-after-selection-hook* nil
+  "Test synchronization hook called after selecting a legacy session tree.")
+
 (defvar *session-format-version* 2
   "Current durable session sidecar format version.")
 
@@ -121,6 +128,42 @@
              (namestring (uiop:ensure-directory-pathname source))))))
   target)
 
+(defun session-file-size (path)
+  "Return the octet length of PATH."
+  (with-open-file (stream path :direction :input :element-type '(unsigned-byte 8))
+    (file-length stream)))
+
+(defun session-migration-tree-signature (source)
+  "Return a deterministic inventory of directories and file sizes in SOURCE."
+  (let ((root (uiop:ensure-directory-pathname source))
+        (entries nil))
+    (labels ((walk (directory)
+               (dolist (child (uiop:subdirectories directory))
+                 (push (list :directory (enough-namestring child root))
+                       entries)
+                 (walk child))
+               (dolist (file (uiop:directory-files directory))
+                 (push (list :file
+                             (enough-namestring file root)
+                             (session-file-size file))
+                       entries))))
+      (walk root))
+    (sort entries #'string< :key #'second)))
+
+(defun session-migration-marker-content (legacy)
+  "Return the completion marker expected for a copy of LEGACY."
+  (format nil "rplaca-session-migration-v1~%~S~%"
+          (session-migration-tree-signature legacy)))
+
+(defun completed-session-migration-p (canonical legacy)
+  "Return true when CANONICAL has a valid atomic-copy marker for LEGACY."
+  (let ((marker
+          (merge-pathnames +session-migration-completion-marker+ canonical)))
+    (and (probe-file canonical)
+         (probe-file marker)
+         (string= (uiop:read-file-string marker)
+                  (session-migration-marker-content legacy)))))
+
 (defun materialize-legacy-sessions-before-mutation ()
   "Copy the selected legacy session tree to canonical storage before mutation.
 
@@ -136,22 +179,42 @@ session remains available after the cutover."
                                    :label "session directory")))
       (case (legacy-path-selection-source selection)
         (:legacy
+         (when *session-migration-after-selection-hook*
+           (funcall *session-migration-after-selection-hook*))
          (let* ((canonical (uiop:ensure-directory-pathname
                             +default-sessions-dir+))
                 (temporary
                   (merge-pathnames
-                   (format nil ".sessions-migration-~D-~D/"
+                   (format nil ".sessions-migration-~D-~D-~D/"
+                           #+sbcl (sb-posix:getpid)
+                           #-sbcl 0
                            (get-universal-time)
                            (get-internal-real-time))
                    (uiop:pathname-parent-directory-pathname canonical))))
            (unwind-protect
                 (progn
                   (copy-session-directory-tree +legacy-sessions-dir+ temporary)
-                  (if (probe-file canonical)
-                      canonical
+                  (with-open-file
+                      (stream
+                       (merge-pathnames
+                        +session-migration-completion-marker+
+                        temporary)
+                       :direction :output
+                       :if-exists :error
+                       :if-does-not-exist :create)
+                    (write-string
+                     (session-migration-marker-content
+                      +legacy-sessions-dir+)
+                     stream))
+                  (handler-case
                       (progn
                         (rename-file temporary canonical)
-                        canonical)))
+                        canonical)
+                    (file-error (condition)
+                      (unless (completed-session-migration-p
+                               canonical +legacy-sessions-dir+)
+                        (error condition))
+                      canonical)))
              (when (probe-file temporary)
                (ignore-errors
                  (uiop:delete-directory-tree temporary

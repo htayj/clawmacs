@@ -214,6 +214,66 @@
                           (rplaca::session-current-transcript-path
                            migrated)))))))))))
 
+(test session-first-use-migration-is-safe-across-processes
+  "Two first-use processes publish one complete canonical session tree."
+  (with-migration-integration-root (root)
+    (let* ((canonical (migration-path root #P"rplaca/sessions/"))
+           (legacy (migration-path root #P"clawmacs/sessions/"))
+           (barrier (migration-path root #P"barrier/"))
+           (repo (asdf:system-source-directory :rplaca))
+           (entry (merge-pathnames
+                   #P"tests/session-migration-subprocess.lisp" repo))
+           (output-one (migration-path root #P"process-one.log"))
+           (output-two (migration-path root #P"process-two.log")))
+      (dotimes (index 32)
+        (write-legacy-path-test-file
+         (migration-path
+          legacy
+          (make-pathname :name (format nil "legacy-~2,'0D" index)
+                         :type "json"))
+         (make-string (+ 1024 index) :initial-element #\x)))
+      (ensure-directories-exist (migration-path barrier #P".keep"))
+      (let* ((command
+               (list
+                "env"
+                (format nil "RPLACA_QUICKLISP_SETUP=~A"
+                        (or (uiop:getenv "RPLACA_QUICKLISP_SETUP")
+                            (error "RPLACA_QUICKLISP_SETUP is required")))
+                (format nil "RPLACA_TEST_REPO_ROOT=~A" (namestring repo))
+                (format nil "RPLACA_TEST_CANONICAL_SESSIONS=~A"
+                        (namestring canonical))
+                (format nil "RPLACA_TEST_LEGACY_SESSIONS=~A"
+                        (namestring legacy))
+                (format nil "RPLACA_TEST_SESSION_BARRIER=~A"
+                        (namestring barrier))
+                "sbcl" "--noinform" "--disable-debugger"
+                "--script" (namestring entry)))
+             (one
+               (uiop:launch-program command
+                                    :output output-one
+                                    :error-output :output))
+             (two
+               (uiop:launch-program command
+                                    :output output-two
+                                    :error-output :output)))
+        (is (zerop (uiop:wait-process one)))
+        (is (zerop (uiop:wait-process two))))
+      (is (rplaca::completed-session-migration-p canonical legacy))
+      (is (= 32
+             (length
+              (remove-if
+               (lambda (path)
+                 (string= (file-namestring path)
+                          (file-namestring
+                           rplaca::+session-migration-completion-marker+)))
+               (uiop:directory-files canonical)))))
+      (is-false
+       (find-if
+        (lambda (directory)
+          (search ".sessions-migration-" (namestring directory)))
+        (uiop:subdirectories
+         (uiop:pathname-parent-directory-pathname canonical)))))))
+
 (test prompts-and-model-metadata-use-one-project-local-root
   "Project prompt and model metadata fallback without merging roots."
   (with-migration-integration-root (root)

@@ -234,13 +234,16 @@ if [ -n "${RPLACA_GUIX_ARGS_LOG:-}" ]; then
   printf '%s\n' "$@" >> "$RPLACA_GUIX_ARGS_LOG"
 fi
 share=''
+mount_mappings=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --share=*=/workspace)
       share=${1#--share=}
       ;;
     --share=*|--expose=*)
-      # Additional shares/exposes (e.g. init files or X11 sockets) — skip
+      mapping=${1#*=}
+      mount_mappings="$mount_mappings
+$mapping"
       ;;
   esac
   if [ "$1" = "--" ]; then
@@ -262,6 +265,22 @@ if [ "$#" -ge 3 ] && [ "$1" = "bash" ] && [ "$2" = "-lc" ]; then
       while [ "$#" -gt 0 ]; do
         arg="$1"
         shift
+        old_ifs=$IFS
+        IFS='
+'
+        for mapping in $mount_mappings; do
+          source_path=${mapping%%=*}
+          target_path=${mapping#*=}
+          case "$arg" in
+            "$target_path")
+              arg="$source_path"
+              ;;
+            "$target_path"/*)
+              arg="$source_path${arg#"$target_path"}"
+              ;;
+          esac
+        done
+        IFS=$old_ifs
         case "$arg" in
           /workspace)
             arg="$workspace"
@@ -682,6 +701,95 @@ if [ "$actual_code" -ne 0 ]; then
 fi
 
 guix_args_log="$TMP_DIR/guix-args.log"
+canonical_home="$TMP_DIR/canonical-home"
+canonical_guest_home="/workspace/$TEST_CACHE_RELATIVE/home"
+mkdir -p "$canonical_home"
+rm -f "$guix_args_log"
+set +e
+env PATH="$TMP_BIN:$PATH" \
+  HOME="$canonical_home" \
+  XDG_STATE_HOME= \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_GUIX_ARGS_LOG="$guix_args_log" \
+  "$LAUNCHER" --mode run -- \
+  sh -c 'printf "project\n" > "$1/visible"; printf "state\n" > "$2/visible"' \
+  sh \
+  "$canonical_guest_home/.rplaca.projects.d" \
+  "$canonical_guest_home/.local/state/rplaca" \
+  2>"$TMP_DIR/canonical-persistence.stderr"
+actual_code=$?
+set -e
+if [ "$actual_code" -ne 0 ] ||
+   [ ! -f "$canonical_home/.rplaca.projects.d/visible" ] ||
+   [ ! -f "$canonical_home/.local/state/rplaca/visible" ]; then
+  echo "FAIL canonical-host-persistence: canonical storage was not host-visible" >&2
+  cat "$TMP_DIR/canonical-persistence.stderr" >&2
+  cat "$guix_args_log" >&2
+  exit 1
+fi
+for mapping in \
+  "$canonical_home/.rplaca.projects.d=$canonical_guest_home/.rplaca.projects.d" \
+  "$canonical_home/.local/state/rplaca=$canonical_guest_home/.local/state/rplaca"; do
+  if ! grep -F -- "--share=$mapping" "$guix_args_log" >/dev/null; then
+    echo "FAIL canonical-host-persistence: missing mapping $mapping" >&2
+    cat "$guix_args_log" >&2
+    exit 1
+  fi
+done
+
+override_home="$TMP_DIR/override-home"
+override_crashes="$override_home/crashes"
+override_state="$override_home/state"
+mkdir -p "$override_home"
+rm -f "$guix_args_log"
+set +e
+env PATH="$TMP_BIN:$PATH" \
+  HOME="$override_home" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_GUIX_ARGS_LOG="$guix_args_log" \
+  RPLACA_CRASH_REPORT_DIR="$override_crashes" \
+  XDG_STATE_HOME="$override_state" \
+  "$LAUNCHER" --mode run -- \
+  sh -c 'printf "crash\n" > "$1/report"; printf "state\n" > "$2/visible"' \
+  sh "$override_crashes" "$override_state" \
+  2>"$TMP_DIR/override-persistence.stderr"
+actual_code=$?
+set -e
+if [ "$actual_code" -ne 0 ] ||
+   [ ! -f "$override_crashes/report" ] ||
+   [ ! -f "$override_state/visible" ]; then
+  echo "FAIL override-host-persistence: explicit storage was not host-visible" >&2
+  cat "$TMP_DIR/override-persistence.stderr" >&2
+  cat "$guix_args_log" >&2
+  exit 1
+fi
+for directory in "$override_crashes" "$override_state"; do
+  if ! grep -F -- "--share=$directory=$directory" "$guix_args_log" >/dev/null; then
+    echo "FAIL override-host-persistence: missing same-path mapping $directory" >&2
+    cat "$guix_args_log" >&2
+    exit 1
+  fi
+done
+
+set +e
+env PATH="$TMP_BIN:$PATH" \
+  HOME="$override_home" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_CRASH_REPORT_DIR=relative-crashes \
+  XDG_STATE_HOME= \
+  "$LAUNCHER" --mode run -- true \
+  2>"$TMP_DIR/relative-crash-storage.stderr"
+actual_code=$?
+set -e
+if [ "$actual_code" -ne 124 ]; then
+  echo "FAIL relative-crash-storage: expected exit 124 got $actual_code" >&2
+  cat "$TMP_DIR/relative-crash-storage.stderr" >&2
+  exit 1
+fi
+
 rm -f "$guix_args_log"
 set +e
 env PATH="$TMP_BIN:$PATH" \
