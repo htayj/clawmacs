@@ -20,6 +20,7 @@
   :components ((:module "src"
                 :serial t
                 :components ((:file "packages")
+                             (:file "legacy-paths")
                              (:file "message")
                              (:file "session")
                              (:file "buffer")
@@ -75,6 +76,7 @@
   :components ((:module "tests"
                 :serial t
                  :components ((:file "packages")
+                              (:file "legacy-path-test")
                               (:file "package-manager-test")
                               (:file "git-package-test")
                               (:file "organa-package-test")

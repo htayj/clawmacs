@@ -6,6 +6,10 @@
 (def-suite clawmacs-suite
   :description "All clawmacs tests")
 
+(def-suite legacy-path-suite
+  :description "Legacy path migration tests"
+  :in clawmacs-suite)
+
 (def-suite message-suite
   :description "Message and line tests"
   :in clawmacs-suite)
