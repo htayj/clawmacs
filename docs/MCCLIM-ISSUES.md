@@ -203,12 +203,40 @@ moved medium acquisition and the explicit ungrafted-sheet error ahead of that
 guard. The current crash is therefore a regression of the failure class fixed
 for #1312, although it now fails earlier.
 
-Clawmacs now uses one stable named command-table tree, sends state-dependent
-choices to presentation-based selectors or dashboards, and ignores only an
-identical table assignment for `clawmacs-chat-frame`. The repository currently
-does not use CLIM's dynamic command enable/disable APIs, so this scoped
-suppression does not hide a required status refresh. If that changes, Clawmacs
-must add an explicit refresh path or remove the suppression.
+Clawmacs keeps one stable named hierarchical command-table tree for M-x and
+keys, sends state-dependent choices to presentation-based selectors or
+dashboards, and ignores only an identical table assignment for
+`clawmacs-chat-frame`. The repository currently does not use CLIM's dynamic
+command enable/disable APIs, so this scoped suppression does not hide a required
+status refresh. If that changes, Clawmacs must add an explicit refresh path or
+remove the suppression.
+
+That stable hierarchy was not sufficient for visible pointer menus. On
+2026-07-29, both Clawmacs and a plain two-menu `standard-application-frame`
+failed under the same bounded gesture: open one nested menu, then perform 40
+no-delay crossings through its first item, the adjacent heading, the adjacent
+first item, and the original heading. Both fresh private-Xvfb runs terminated
+with `MENU-UNMANAGED-TOP-LEVEL-SHEET-PANE ... is not grafted` from
+`INVOKE-WITH-SHEET-MEDIUM` through `INVOKE-TRACKING-POINTER`; the plain frame
+contains no Clawmacs or ESA code. Run the local ownership probe with:
+
+```sh
+./scripts/probe-mcclim-menu-boundaries.sh
+```
+
+The wrapper uses artifact-private Guix/Xvfb process groups, a fixed 40-crossing
+budget, bounded startup and exit waits, TERM/grace/KILL cleanup, and explicit
+empty-group result fields. Its expected result against the pin is
+`reproduced=true`.
+
+The application workaround does not catch lifecycle errors or replace McCLIM
+methods. The frame retains its full hierarchical command table, but its
+`:menu-bar` names a separate public-CLIM command table containing direct command
+leaves only. Stop, buffer/model/effort/skill selectors, the package dashboard,
+appearance editor, and manual therefore remain one-click accessible without
+creating transient submenu frames. The tradeoff is that the visible bar is a
+flat high-value surface; the complete grouped hierarchy remains discoverable
+through M-x and key bindings.
 
 The focused upstream repair has two parts:
 
@@ -233,8 +261,8 @@ hide legitimate lifecycle errors, break command-status refresh, discard valid
 input, or move McCLIM event handling into Clawmacs.
 
 As of 2026-07-16, an official Codeberg issue and pull-request scan found no
-current report or patch for the pre-buffer lifecycle check. A new upstream
-report should link #1312 and its later regression history.
+current report or patch for the pre-buffer lifecycle check. Upstream contact and
+changes are outside this repository task; this record and probe remain local.
 
 ## Confirmed pinned implementation limitation
 

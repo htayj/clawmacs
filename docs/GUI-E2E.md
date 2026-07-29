@@ -16,6 +16,7 @@ E2E events, and captures screenshots at scripted milestones and on failures.
 ./scripts/run-gui-e2e.sh --suite quaestor
 ./scripts/run-gui-e2e.sh --suite reload
 ./scripts/run-gui-e2e.sh --suite appearance
+./scripts/run-gui-e2e.sh --suite menu-boundaries
 ./scripts/run-gui-e2e.sh --suite stability
 ```
 
@@ -344,6 +345,8 @@ smallest deterministic gate:
 - `compose-geometry`: the bounded 100/101/112-character Drei regression;
 - `stability`: pointer menu operation, resize/expose, and the post-exit
   empty-process-group/runtime-signature gate;
+- `menu-boundaries`: the focused leaf-only menu crossover, off-window,
+  selector-dispatch, responsiveness, and cleanup regression;
 - `reload`: the public Safe Reload command with draft retention; and
 - focused `appearance`, `mcclim-interface`, and `safe-reload` FiveAM suites:
   independent two-frame profiles/caches, render-boundary foreground commit and
@@ -356,21 +359,26 @@ The `stability` suite is the bounded real-window regression gate for menu-sheet,
 expose, and redisplay failures. It uses an effort-capable model fixture without
 making a provider request, then:
 
-1. repeatedly opens and cancels the stable, frame-declared Effort submenu
-   through pointer events;
-2. periodically activates its `Select Think Level...` command with CLX's
-   press-drag-release gesture, then chooses alternating `low` and `default`
-   values through the frame-owned presentation selector and waits for each
-   semantic confirmation;
-3. resizes the X window through several geometries and verifies the Drei compose
+1. first relies on headless structure coverage that proves the named menu-bar
+   table contains only direct `:command` leaves and no nested `:menu` entries;
+   the initial real-window screenshot then confirms those exact labels are the
+   attached visible bar (CLIM exports no portable frame menu-table accessor);
+2. holds button 1 while crossing every direct menu entry, leaves the window,
+   and releases outside, then repeats 40 no-delay Appearance/Help-equivalent
+   crossings through the former submenu area. A distinct compose probe after
+   each path proves the frame remains responsive;
+3. repeatedly activates the direct `Effort...` leaf, cancels it or chooses
+   alternating `low` and `default` values through the frame-owned presentation
+   selector, and waits for each semantic confirmation;
+4. resizes the X window through several geometries and verifies the Drei compose
    pane accepts and clears a distinct probe after every resize;
-4. repeatedly unmaps and remaps the window to force expose processing, again
+5. repeatedly unmaps and remaps the window to force expose processing, again
    proving compose input remains responsive after every cycle;
-5. switches back to the deterministic `e2e/e2e-model`, submits `hello`, and
+6. switches back to the deterministic `e2e/e2e-model`, submits `hello`, and
    requires the complete sentinel response and final idle redisplay; and
-6. captures the final rendered state, sends the ordinary `C-x C-c` exit command,
+7. captures the final rendered state, sends the ordinary `C-x C-c` exit command,
    and requires a `frame-stopped` event emitted after frame unwind cleanup; and
-7. fails if artifacts contain a debugger entry, an ungrafted-sheet condition,
+8. fails if artifacts contain a debugger entry, an ungrafted-sheet condition,
    the historical menu recovery marker, a redisplay, worker-start, help-frame,
    or cleanup diagnostic, or an SBCL fatal, unhandled-thread, or
    heap-exhaustion report.

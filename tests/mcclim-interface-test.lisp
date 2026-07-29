@@ -1731,6 +1731,48 @@ these tests exercise construction-time space requirements only."
               (setf (clim:frame-command-table frame) fresh-table)))
       (is (= 1 notifications)))))
 
+(test chat-frame-menu-bar-is-a-stable-leaf-only-command-surface
+  "The named visible-bar table cannot create transient submenu frames."
+  (let* ((menu-bar
+           (clim:find-command-table 'clawmacs::clawmacs-chat-menu-bar))
+         (entries nil))
+    (clim:map-over-command-table-menu-items
+     (lambda (name keystroke item)
+       (declare (ignore keystroke))
+       (push (list name
+                   (clim:command-menu-item-type item)
+                   (clim:command-menu-item-value item))
+             entries))
+     menu-bar
+     :inherited nil)
+    (is (equal '(("Stop" :command clawmacs::com-chat-stop-response)
+                 ("Buffers..." :command
+                  clawmacs::com-chat-open-buffer-selector)
+                 ("Model..." :command
+                  clawmacs::com-chat-open-model-selector)
+                 ("Effort..." :command
+                  clawmacs::com-chat-open-effort-selector)
+                 ("Skills..." :command
+                  clawmacs::com-chat-open-skill-selector)
+                 ("Packages..." :command
+                  clawmacs::com-chat-open-package-dashboard)
+                 ("Appearance..." :command
+                  clawmacs::com-chat-customize-appearance)
+                 ("Help" :command clawmacs::com-chat-open-manual))
+               (nreverse entries)))
+    (is (every (lambda (entry) (eq :command (second entry)))
+               entries))))
+
+(test chat-frame-retains-the-full-hierarchical-command-table
+  "M-x and key dispatch keep the logical menu hierarchy off the visible bar."
+  (let ((frame-table
+          (clim:find-command-table 'clawmacs::clawmacs-chat-frame)))
+    (dolist (label '("Chat" "View" "Skills" "Packages"
+                     "Effort" "Appearance" "System"))
+      (is (eq :menu
+              (clim:command-menu-item-type
+               (clim:find-menu-item label frame-table :errorp t)))))))
+
 (test frame-command-keeps-the-stable-menu-table
   "A state-mutating command redisplays content without replacing menu gadgets."
   (let* ((buf (make-buffer "stable-menu-command"

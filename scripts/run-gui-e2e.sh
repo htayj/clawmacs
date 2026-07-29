@@ -17,7 +17,7 @@ WINDOW_TITLE='Clawmacs E2E'
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|appearance|stability] [--artifact-dir DIR]
+Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|appearance|menu-boundaries|stability] [--artifact-dir DIR]
 
 Runs an opt-in Clawmacs GUI E2E suite inside an isolated Xvfb display.
 Set CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS to override the 300-second
@@ -192,7 +192,7 @@ fi
 PREWARMED_XDG_CACHE_HOME=${XDG_CACHE_HOME:-}
 
 case "$SUITE" in
-  smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|appearance-stage|appearance-restart|stability) ;;
+  smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|appearance-stage|appearance-restart|menu-boundaries|stability) ;;
   *) fail "unsupported GUI E2E suite: $SUITE" ;;
 esac
 
@@ -510,7 +510,7 @@ setsid --wait sh -c '
   --eval '(let ((suite (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") ""))) (when (member suite (list "organa" "quaestor") :test (function string=)) (clawmacs:set-package-enablement-scope suite :global) (clawmacs:load-active-packages)))' \
   --eval '(when (string= (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") "keybinds") (clawmacs:add-hook (quote clawmacs:*initial-buffer-hook*) (lambda (buffer) (let* ((prefix "CLAWMACS_SWITCH_BUFFER_LARGE_DRAFT:") (draft (concatenate (quote string) prefix (make-string (- 32768 (length prefix)) :initial-element #\x))) (message (clawmacs:buffer-input-message buffer))) (loop for offset from 79 below (length draft) by 80 do (setf (char draft offset) #\Newline)) (clawmacs:set-message-text message draft) (clawmacs:set-message-point-from-absolute-offset message 8192) (clawmacs:set-message-mark-from-absolute-offset message 24576)) (dotimes (index 12) (clawmacs:make-chat-buffer (format nil "switch-e2e-~D" index) :agent-name "agent" :working-directory (truename ".") :session-persistence-mode :ephemeral :add-to-ring-p t)) (clawmacs:switch-to-buffer buffer)) :append t))' \
   --eval '(when (string= (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") "quaestor") (clawmacs:add-hook (quote clawmacs:*initial-buffer-hook*) (lambda (buffer) (clawmacs::quaestor-request-user-input buffer (quote ((:header "Scope" :id "scope" :question "Pick a scope." :options ((:label "Alpha" :description "Smaller change.") (:label "Beta" :description "Broader change.")) :freeform t))))) :append t))' \
-  --eval '(when (string= (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") "stability") (clawmacs:add-hook (quote clawmacs:*initial-buffer-hook*) (lambda (buffer) (clawmacs:set-buffer-provider-override buffer :openai-codex) (clawmacs:set-buffer-model-override buffer "gpt-5.3-codex")) :append t))' \
+  --eval '(when (member (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") (list "menu-boundaries" "stability") :test (function string=)) (clawmacs:add-hook (quote clawmacs:*initial-buffer-hook*) (lambda (buffer) (clawmacs:set-buffer-provider-override buffer :openai-codex) (clawmacs:set-buffer-model-override buffer "gpt-5.3-codex")) :append t))' \
   --eval '(clawmacs:clawmacs-main :session-name "clawmacs:e2e" :agent-name "agent" :window-title "Clawmacs E2E" :working-directory (truename "."))' \
   --eval '(uiop:quit)' \
   >"$APP_STDOUT" 2>"$APP_STDERR" &

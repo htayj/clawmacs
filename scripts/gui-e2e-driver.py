@@ -553,34 +553,107 @@ def positive_environment_integer(name: str, default: int) -> int:
 
 def stability_effort_menu_coordinates(
         session: McCLIMGuiSession) -> tuple[int, int, int]:
-    """Return robust Effort-label and selector-item coordinates.
+    """Return robust leaf-menu Effort coordinates.
 
     McCLIM lays the menu bar from the upper-left using the fixed font supplied by
-    the Guix E2E environment. Derive the vertical positions from the actual
-    window and keep the pointer safely inside the Effort label and first row.
+    the Guix E2E environment. Derive the vertical position from the actual
+    window and keep the pointer safely inside the direct Effort leaf.
     Coordinates deliberately live here, outside application code.
     """
     geometry = session.window_geometry()
     width = geometry["width"]
     height = geometry["height"]
-    menu_x = min(width - 80, max(300, round(width * 0.35)))
+    menu_x = min(width - 80, max(280, round(width * 0.32)))
     menu_y = min(18, max(12, round(height * 0.027)))
-    selector_item_y = menu_y + 33
     session.log_action("stability_menu_coordinates", menu_x=menu_x,
-                       menu_y=menu_y, selector_item_y=selector_item_y,
                        width=width, height=height)
-    return menu_x, menu_y, selector_item_y
+    return menu_x, menu_y, menu_y + 34
 
 
 def open_stability_effort_menu(session: McCLIMGuiSession,
                                menu_x: int, menu_y: int) -> None:
-    """Open the real frame-local Effort menu with a pointer click."""
+    """Open the frame-local Effort selector through its direct menu leaf."""
     session.pointer_click(menu_x, menu_y)
-    # The click is delivered asynchronously to McCLIM.  Leave enough time for
-    # the menu sheet to map before a second click selects an item; under CPU
-    # contention a short delay can otherwise land on the application pane
-    # before the standard CLIM menu is visible.
+    # The click is delivered asynchronously to McCLIM. Leave enough time for
+    # the frame command to activate and render the selector.
     time.sleep(0.35)
+
+
+def stress_stability_menu_boundaries(session: McCLIMGuiSession,
+                                     menu_y: int) -> None:
+    """Cross direct top-level commands and boundaries with button 1 held."""
+    geometry = session.window_geometry()
+    width = geometry["width"]
+    height = geometry["height"]
+    # These centers are derived from the fixed E2E font and the real menu
+    # labels. Coordinates remain in this external driver, never application
+    # menu code.
+    category_xs = (24, 105, 199, 288, 382, 487, 617, 710)
+    session.run([
+        "xdotool",
+        "mousemove", "--window", session.window_id,
+        str(category_xs[0]), str(menu_y),
+        "mousedown", "1",
+        "sleep", "0.2",
+        *sum(([
+            "mousemove", "--window", session.window_id, str(x), str(menu_y),
+            "sleep", "0.05",
+        ] for x in (*category_xs, *reversed(category_xs))), []),
+        "mousemove", "--window", session.window_id,
+        str(width + 24), str(menu_y),
+        "sleep", "0.1",
+        "mouseup", "1",
+    ])
+    session.log_action(
+        "stability_menu_boundary_trajectory",
+        category_xs=category_xs,
+        menu_y=menu_y,
+        width=width,
+        height=height,
+    )
+    assert_compose_probe(session, "menu-boundary-probe")
+
+    # Re-run the exact no-delay crossover shape that crashed the former nested
+    # Appearance/System menu, now against two stable leaf buttons.
+    repetitions = 40
+    first_x, second_x = category_xs[-2:]
+    argv = [
+        "xdotool",
+        "mousemove", "--window", session.window_id,
+        str(first_x), str(menu_y),
+        "mousedown", "1",
+        "sleep", "0.2",
+    ]
+    for _ in range(repetitions):
+        argv.extend([
+            "mousemove", "--window", session.window_id,
+            str(first_x), str(menu_y + 34),
+            "mousemove", "--window", session.window_id,
+            str(second_x), str(menu_y),
+            "mousemove", "--window", session.window_id,
+            str(second_x), str(menu_y + 34),
+            "mousemove", "--window", session.window_id,
+            str(first_x), str(menu_y),
+        ])
+    argv.extend([
+        "mousemove", "--window", session.window_id,
+        str(width + 24), str(menu_y),
+        "sleep", "0.1",
+        "mouseup", "1",
+    ])
+    session.run(argv)
+    session.log_action(
+        "stability_menu_rapid_crossover",
+        repetitions=repetitions,
+        first_x=first_x,
+        second_x=second_x,
+        menu_y=menu_y,
+    )
+    # The deliberately backlogged no-delay pointer burst may still be draining
+    # after xdotool has sent its final release. Let the normal CLIM event loop
+    # settle before using keyboard responsiveness as the next assertion.
+    time.sleep(0.75)
+    assert_compose_probe(session, "menu-rapid-probe")
 
 
 def assert_compose_probe(session: McCLIMGuiSession, probe: str) -> None:
@@ -654,6 +727,32 @@ def request_frame_exit(session: McCLIMGuiSession) -> None:
     session.log_action("request_frame_exit", after_sequence=after_sequence)
 
 
+def run_menu_boundaries(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    """Prove the leaf-only menu survives the former transient-sheet path."""
+    screenshots = prepare_session(session)
+    session.wait_snapshot(
+        "effort-capable menu fixture selected",
+        lambda snapshot: snapshot.get("provider") == "openai-codex"
+        and snapshot.get("model") == "gpt-5.3-codex",
+        timeout=10.0,
+    )
+    menu_x, menu_y, _selector_item_y = stability_effort_menu_coordinates(
+        session)
+    stress_stability_menu_boundaries(session, menu_y)
+    screenshots.append(session.screenshot("02-after-menu-boundary-stress"))
+    open_stability_effort_menu(session, menu_x, menu_y)
+    wait_minibuffer_text(
+        session, "direct Effort leaf opened the semantic selector",
+        lambda text: "Select Think Level" in text,
+        timeout=10.0)
+    screenshots.append(session.screenshot("03-effort-selector-open", root=True))
+    cancel_modal_input(session)
+    assert_compose_probe(session, "menu-command-probe")
+    screenshots.append(session.screenshot("04-menu-boundary-complete"))
+    assert_no_stability_failure_signatures(session)
+    return screenshots
+
+
 def run_stability(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     """Stress stable menus, semantic selectors, X lifecycle, and redisplay."""
     screenshots = prepare_session(session)
@@ -668,7 +767,9 @@ def run_stability(session: McCLIMGuiSession) -> list[dict[str, Any]]:
         and snapshot.get("model") == "gpt-5.3-codex",
         timeout=10.0,
     )
-    menu_x, menu_y, selector_item_y = stability_effort_menu_coordinates(session)
+    menu_x, menu_y, _selector_item_y = stability_effort_menu_coordinates(session)
+    stress_stability_menu_boundaries(session, menu_y)
+    screenshots.append(session.screenshot("02-after-menu-boundary-stress"))
     selection_count = 0
     for iteration in range(menu_iterations):
         after_sequence = session.latest_sequence()
@@ -683,13 +784,10 @@ def run_stability(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                 if select_low else
                 "[Think level reset to default for openai-codex/gpt-5.3-codex]"
             )
-            # The CLX menu protocol tracks a press-drag-release gesture: keep
-            # button 1 held while the submenu maps and while motion arms the
-            # leaf, just as a user does.  Two independent synthetic clicks can
-            # race the tracking loop and fall through to the application pane.
-            session.pointer_drag(
-                menu_x, menu_y,
-                menu_x, selector_item_y)
+            # The visible bar is intentionally leaf-only: releasing on Effort
+            # dispatches the stable frame command directly, without creating a
+            # transient submenu frame in pinned McCLIM.
+            session.pointer_click(menu_x, menu_y)
             wait_minibuffer_text(
                 session, "effort selector opened from the menu",
                 lambda text: "Select Think Level" in text,
@@ -717,8 +815,8 @@ def run_stability(session: McCLIMGuiSession) -> list[dict[str, Any]]:
             open_stability_effort_menu(session, menu_x, menu_y)
             if iteration == 0:
                 screenshots.append(
-                    session.screenshot("02-effort-menu-open", root=True))
-            session.press("Escape")
+                    session.screenshot("02-effort-selector-open", root=True))
+            cancel_modal_input(session)
             time.sleep(0.15)
         if (iteration + 1) % 8 == 0:
             assert_compose_probe(session, f"menu-probe-{iteration + 1}")
@@ -2174,6 +2272,8 @@ def main(argv: list[str]) -> int:
             screenshots = run_appearance_restart(session)
         elif args.suite == "stability":
             screenshots = run_stability(session)
+        elif args.suite == "menu-boundaries":
+            screenshots = run_menu_boundaries(session)
         else:
             raise DriverError(f"unsupported suite: {args.suite}")
         # Every successful scenario finishes through the same public CLIM

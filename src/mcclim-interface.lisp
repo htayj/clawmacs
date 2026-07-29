@@ -294,6 +294,32 @@ instead of parking behind Safe Reload and deadlocking a frame barrier."
           :command com-chat-refresh-font-inventory
           :documentation "Queue a frame-local port font inventory refresh.")))
 
+(clim:define-command-table clawmacs-chat-menu-bar
+  :menu (("Stop"
+          :command com-chat-stop-response
+          :documentation "Stop the active streaming response.")
+         ("Buffers..."
+          :command com-chat-open-buffer-selector
+          :documentation "Switch between open buffers.")
+         ("Model..."
+          :command com-chat-open-model-selector
+          :documentation "Select the provider model for this buffer.")
+         ("Effort..."
+          :command com-chat-open-effort-selector
+          :documentation "Select the reasoning effort for this buffer.")
+         ("Skills..."
+          :command com-chat-open-skill-selector
+          :documentation "Enable or disable a skill.")
+         ("Packages..."
+          :command com-chat-open-package-dashboard
+          :documentation "Open the package dashboard.")
+         ("Appearance..."
+          :command com-chat-customize-appearance
+          :documentation "Open the staged appearance editor.")
+         ("Help"
+          :command com-chat-open-manual
+          :documentation "Open the Clawmacs manual.")))
+
 (defun chat-message-kind (msg)
   "Return MSG's high-level display kind."
   (case (message-sender msg)
@@ -1824,7 +1850,12 @@ pixels or private McCLIM state as the contract."
                            :documentation
                            "Launch nested frames and system actions."))))
   (:pointer-documentation t)
-  (:menu-bar t)
+  ;; Pinned McCLIM/CLX can retain pointer events for a transient submenu after
+  ;; switching top-level categories disowns that submenu frame.  Keep the full
+  ;; hierarchical command table above for M-x and keys, but attach a separate
+  ;; public-CLIM leaf-only table to the visible bar so ordinary pointer motion
+  ;; never creates or disowns transient submenu frames.
+  (:menu-bar clawmacs-chat-menu-bar)
   (:panes
    (transcript
     (let ((pane (clim:make-pane
@@ -4632,6 +4663,33 @@ compose pane while leaving text editing keys to Drei's editor tables."
   (clim:with-application-frame (frame)
     (when (stop-streaming-response (chat-frame-buffer frame))
       (request-chat-frame-redisplay frame))))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-open-buffer-selector :name "Switch Buffer")
+    ()
+  (clim:with-application-frame (frame)
+    (call-with-chat-frame-buffer-transition
+     frame
+     #'minibuffer-select-buffer-command
+     :state-only t)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-open-model-selector :name "Select Model")
+    ()
+  (clim:with-application-frame (frame)
+    (call-with-chat-frame-buffer-transition
+     frame
+     #'minibuffer-select-model-command
+     :state-only t)))
+
+(define-clawmacs-chat-frame-command
+    (com-chat-open-manual :name "Clawmacs Manual")
+    ()
+  (clim:with-application-frame (frame)
+    (call-with-chat-frame-buffer-transition
+     frame
+     #'clawmacs-manual-command
+     :focus-compose t)))
 
 (define-clawmacs-chat-frame-command
     (com-chat-toggle-tool-results :name "Toggle Tool Results")
