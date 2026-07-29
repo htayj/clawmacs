@@ -46,7 +46,8 @@
       (write-legacy-path-test-file
        legacy-defaults
        "{\"planner\":{\"provider\":\"zai\",\"model\":\"legacy-model\"}}")
-      (let ((rplaca::*provider-token-directory* canonical-dir)
+      (let ((rplaca::+default-provider-token-directory+ canonical-dir)
+            (rplaca::*provider-token-directory* canonical-dir)
             (rplaca::*legacy-provider-token-directory* legacy-dir)
             (rplaca::+default-personality-prompt-path+ canonical-personality)
             (rplaca::+legacy-personality-prompt-path+ legacy-personality)
@@ -467,6 +468,7 @@
     (let* ((canonical (migration-path root #P"rplaca/"))
            (legacy (migration-path root #P"clawmacs/"))
            (project (migration-path root #P"project/"))
+           (rplaca::+default-global-boot-directory+ canonical)
            (rplaca::*global-boot-directory* canonical)
            (rplaca::*legacy-global-boot-directory* legacy))
       (ensure-directories-exist (migration-path canonical #P".keep"))
@@ -481,6 +483,51 @@
               (rplaca::load-boot-files :directory project)))
         (is (search "canonical-global" instructions))
         (is-false (search "legacy-global" instructions))))))
+
+(test explicit-custom-paths-never-select-legacy-fallbacks
+  "Absent custom paths remain authoritative when corresponding legacy data exists."
+  (with-migration-integration-root (root)
+    (let* ((canonical (migration-path root #P"rplaca/"))
+           (legacy (migration-path root #P"clawmacs/"))
+           (custom-token-dir (migration-path root #P"custom-tokens/"))
+           (custom-boot-dir (migration-path root #P"custom-boot/"))
+           (project (migration-path root #P"project/"))
+           (legacy-project-prompts
+             (migration-path project #P".clawmacs/prompts/"))
+           (legacy-project-model
+             (migration-path project #P".clawmacs-modelaria.json"))
+           (buffer (rplaca::make-buffer "custom-migration-project"
+                                        :kind :scratch
+                                        :working-directory project)))
+      (ensure-directories-exist (migration-path project #P".keep"))
+      (write-legacy-path-test-file
+       (migration-path legacy #P"zai-api-key") "must-not-read")
+      (write-legacy-path-test-file
+       (migration-path legacy #P"AGENTS.md") "must-not-load")
+      (write-legacy-path-test-file
+       (migration-path legacy-project-prompts #P"old.md") "must-not-list")
+      (write-legacy-path-test-file
+       legacy-project-model
+       "{\"active_role\":\"must-not-route\",\"role_set\":[\"must-not-route\"]}")
+      (let ((rplaca::+default-provider-token-directory+ canonical)
+            (rplaca::*provider-token-directory* custom-token-dir)
+            (rplaca::*legacy-provider-token-directory* legacy)
+            (rplaca::+default-global-boot-directory+ canonical)
+            (rplaca::*global-boot-directory* custom-boot-dir)
+            (rplaca::*legacy-global-boot-directory* legacy)
+            (rplaca::*prompt-template-project-directory-name*
+              ".custom/prompts/")
+            (rplaca::*modelaria-project-config-filename*
+              ".custom-modelaria.json"))
+        (is-false (rplaca::read-provider-file-token :zai))
+        (is (equal custom-boot-dir
+                   (rplaca::selected-global-boot-directory)))
+        (is-false (search "must-not-load"
+                          (rplaca::load-boot-files :directory project)))
+        (is (equal (migration-path project #P".custom/prompts/")
+                   (rplaca::project-prompt-template-directory buffer)))
+        (is-false
+         (getf (rplaca::modelaria-project-config buffer) :active-role))))))
 
 (test old-crash-reports-are-archival-only
   "Crash output is canonical; the legacy path is location-only archival data."

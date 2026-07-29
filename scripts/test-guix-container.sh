@@ -713,14 +713,16 @@ env PATH="$TMP_BIN:$PATH" \
   RPLACA_SSL_LIB="$TMP_SSL_LIB" \
   RPLACA_GUIX_ARGS_LOG="$guix_args_log" \
   "$LAUNCHER" --mode run -- \
-  sh -c 'printf "project\n" > "$1/visible"; printf "state\n" > "$2/visible"' \
+  sh -c 'printf "user\n" > "$1/visible"; printf "project\n" > "$2/visible"; printf "state\n" > "$3/visible"' \
   sh \
+  "$canonical_guest_home/.rplaca.d" \
   "$canonical_guest_home/.rplaca.projects.d" \
   "$canonical_guest_home/.local/state/rplaca" \
   2>"$TMP_DIR/canonical-persistence.stderr"
 actual_code=$?
 set -e
 if [ "$actual_code" -ne 0 ] ||
+   [ ! -f "$canonical_home/.rplaca.d/visible" ] ||
    [ ! -f "$canonical_home/.rplaca.projects.d/visible" ] ||
    [ ! -f "$canonical_home/.local/state/rplaca/visible" ]; then
   echo "FAIL canonical-host-persistence: canonical storage was not host-visible" >&2
@@ -729,6 +731,7 @@ if [ "$actual_code" -ne 0 ] ||
   exit 1
 fi
 for mapping in \
+  "$canonical_home/.rplaca.d=$canonical_guest_home/.rplaca.d" \
   "$canonical_home/.rplaca.projects.d=$canonical_guest_home/.rplaca.projects.d" \
   "$canonical_home/.local/state/rplaca=$canonical_guest_home/.local/state/rplaca"; do
   if ! grep -F -- "--share=$mapping" "$guix_args_log" >/dev/null; then

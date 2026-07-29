@@ -714,14 +714,16 @@ launch_payload() {
     extra_container_args="$extra_container_args --share=$HOST_CONFIG_DIR=$WORKSPACE_HOME/.config/rplaca"
   fi
   if [ -n "$HOST_USER_HOME" ]; then
+    host_user_config_dir="$HOST_USER_HOME/.rplaca.d"
     host_projects_dir="$HOST_USER_HOME/.rplaca.projects.d"
     host_default_state_dir="$HOST_USER_HOME/.local/state/rplaca"
-    mkdir -p "$host_projects_dir" "$host_default_state_dir"
+    mkdir -p \
+      "$host_user_config_dir" \
+      "$host_projects_dir" \
+      "$host_default_state_dir"
+    extra_container_args="$extra_container_args --share=$host_user_config_dir=$WORKSPACE_HOME/.rplaca.d"
     extra_container_args="$extra_container_args --share=$host_projects_dir=$WORKSPACE_HOME/.rplaca.projects.d"
     extra_container_args="$extra_container_args --share=$host_default_state_dir=$WORKSPACE_HOME/.local/state/rplaca"
-  fi
-  if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.rplaca.d" ]; then
-    extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.rplaca.d=$WORKSPACE_HOME/.rplaca.d"
   fi
   if [ -n "${XDG_STATE_HOME:-}" ]; then
     validate_persistent_directory_path XDG_STATE_HOME "$XDG_STATE_HOME"

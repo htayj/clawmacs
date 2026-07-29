@@ -214,7 +214,8 @@ mechanism and do not merge with canonical shares.
 ## Backup, migration, and rollback
 
 Stop RPLACA before manipulating state. Create a private backup on trusted
-storage; the backup may contain credentials and transcripts:
+storage; the backup may contain credentials and transcripts. This first
+command covers only the three global legacy roots:
 
 ```sh
 umask 077
@@ -229,6 +230,33 @@ for path in \
   fi
 done
 ```
+
+Global roots do not cover project-local migration data or fonts. For every
+project tree and other source tree you used with the old application, discover
+the additional paths before migration:
+
+```sh
+find /path/to/projects \
+  \( -type d \( -path '*/.clawmacs/prompts' \
+                 -o -path '*/.clawmacs.d/packages' \) -prune \
+     -o -type f \( -name '.clawmacs-modelaria.json' \
+                    -o -name '*.clawfont' \) \) -print
+```
+
+Review the output and back up each containing project or source tree with its
+normal repository/filesystem backup mechanism. Project prompts and Modelaria
+files are inert read-only fallbacks; project package directories contain
+executable code and require manual review. Old font files may live anywhere,
+so repeat the font search for every storage root that could contain them.
+
+The default archived crash-report root is
+`${XDG_STATE_HOME:-$HOME/.local/state}/clawmacs/crash-reports/`. Repeat that
+check for every `XDG_STATE_HOME` value used by an old launch environment.
+Explicit crash-report overrides can point anywhere and cannot be inferred from
+the default state root; inspect old launch scripts, service definitions, shell
+history, and environment files, then back up each discovered override
+directory separately. Current `RPLACA_CRASH_REPORT_DIR` controls only the
+canonical writer and does not relocate or import old reports.
 
 Do not use that backup command to populate canonical directories. Migrate inert
 files one at a time after review, re-enter credentials, and recreate executable
@@ -272,7 +300,8 @@ find "$HOME/.config/rplaca" "$HOME/.rplaca.d" \
   "$HOME/.rplaca.projects.d" -maxdepth 3 -printf '%M %p\n' 2>/dev/null
 ```
 
-The residual-name gate is authoritative for repository text. Its allowlist
-contains exact paths, allowed identity kinds, categories, and rationales. New
-current-facing uses, stale URLs, broad wildcard exclusions, and undocumented
-legacy identifiers fail the gate.
+The residual-name gate is authoritative for tracked file contents, filenames,
+and symbolic-link targets. Its allowlist records each occurrence by exact path,
+origin, identity kind, normalized-context fingerprint, category, and rationale.
+New or substituted current-facing uses, URIs under any scheme, broad wildcard
+exclusions, stale entries, and undocumented legacy identifiers fail the gate.

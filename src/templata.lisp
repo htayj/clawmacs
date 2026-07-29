@@ -74,7 +74,12 @@
   +default-prompt-template-user-directory+
   "Global prompt-template directory.")
 
-(defvar *prompt-template-project-directory-name* ".rplaca/prompts/"
+(defparameter +default-prompt-template-project-directory-name+
+  ".rplaca/prompts/"
+  "Canonical project-relative prompt-template directory name.")
+
+(defvar *prompt-template-project-directory-name*
+  +default-prompt-template-project-directory-name+
   "Project-relative prompt-template directory name.")
 
 (defparameter +legacy-prompt-template-project-directory-name+
@@ -223,8 +228,11 @@ ARGS is a list of shell-like arguments with simple quote handling."
   (let ((working-directory (and buffer (buffer-working-directory buffer))))
     (when working-directory
       (let ((root (uiop:ensure-directory-pathname working-directory)))
-        (migration-read-path
+        (configured-migration-read-path
          (merge-pathnames *prompt-template-project-directory-name* root)
+         (merge-pathnames
+          +default-prompt-template-project-directory-name+
+          root)
          (merge-pathnames +legacy-prompt-template-project-directory-name+ root)
          :label "project prompt-template directory")))))
 

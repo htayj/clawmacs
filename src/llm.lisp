@@ -265,9 +265,12 @@ Users may override this via *personality-prompt-path* or init.lisp.")
 directory's ancestors and ~/.config/rplaca/. Compatible with OpenClaw
 workspace conventions.")
 
-(defvar *global-boot-directory*
+(defparameter +default-global-boot-directory+
   (merge-pathnames #P".config/rplaca/" (user-homedir-pathname))
   "Canonical global boot-instruction directory.")
+
+(defvar *global-boot-directory* +default-global-boot-directory+
+  "Configured global boot-instruction directory.")
 
 (defvar *legacy-global-boot-directory*
   (merge-pathnames #P".config/clawmacs/" (user-homedir-pathname))
@@ -297,9 +300,11 @@ workspace conventions.")
                         (pathname *legacy-global-boot-directory*))
                  legacy-p)
                 (t (funcall real-probe path))))))
-      (migration-read-path *global-boot-directory*
-                           *legacy-global-boot-directory*
-                           :label "global instruction directory"))))
+      (configured-migration-read-path
+       *global-boot-directory*
+       +default-global-boot-directory+
+       *legacy-global-boot-directory*
+       :label "global instruction directory"))))
 
 (defun load-personality-prompt-file (&optional (path *personality-prompt-path*))
   "Load PATH into the default personality prompt when the file exists.
@@ -664,9 +669,12 @@ as `{}` rather than `null`."
 ;;; Token Management
 ;;; --------------------------------------------------------------------------
 
-(defvar *provider-token-directory*
+(defparameter +default-provider-token-directory+
   (merge-pathnames #P".config/rplaca/" (user-homedir-pathname))
   "Canonical provider credential directory.")
+
+(defvar *provider-token-directory* +default-provider-token-directory+
+  "Configured provider credential directory.")
 
 (defvar *legacy-provider-token-directory*
   (merge-pathnames #P".config/clawmacs/" (user-homedir-pathname))
@@ -747,9 +755,12 @@ Returns NIL when the file is missing or blank."
 (defun read-provider-file-token (provider)
   "Read PROVIDER's static token file without consulting env vars or OAuth."
   (trimmed-file-string
-   (migration-read-path (provider-token-path provider)
-                        (legacy-provider-token-path provider)
-                        :label "provider credential")))
+   (configured-migration-read-path
+    (provider-token-path provider)
+    (let ((*provider-token-directory* +default-provider-token-directory+))
+      (provider-token-path provider))
+    (legacy-provider-token-path provider)
+    :label "provider credential")))
 
 (defun url-like-string-p (string)
   "Return non-nil when STRING looks like an HTTP(S) URL."

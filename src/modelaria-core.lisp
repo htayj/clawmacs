@@ -10,7 +10,12 @@
   +default-modelaria-global-config-path+
   "User config path for modelaria scope defaults.")
 
-(defvar *modelaria-project-config-filename* ".rplaca-modelaria.json"
+(defparameter +default-modelaria-project-config-filename+
+  ".rplaca-modelaria.json"
+  "Canonical project-local model metadata filename.")
+
+(defvar *modelaria-project-config-filename*
+  +default-modelaria-project-config-filename+
   "Project-local modelaria config filename.")
 
 (defparameter +legacy-modelaria-project-config-filename+
@@ -182,8 +187,11 @@ Hyphens and underscores are treated as equivalent."
                    (ignore-errors
                      (uiop:ensure-directory-pathname root)))))
     (when (and dir (uiop:directory-exists-p dir))
-      (migration-read-path
+      (configured-migration-read-path
        (merge-pathnames *modelaria-project-config-filename* dir)
+       (merge-pathnames
+        +default-modelaria-project-config-filename+
+        dir)
        (merge-pathnames +legacy-modelaria-project-config-filename+ dir)
        :label "project model metadata"))))
 

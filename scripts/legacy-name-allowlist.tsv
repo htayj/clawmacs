@@ -1,31 +1,240 @@
-# Exact path|allowed kinds|expected counts|category|rationale
-# Kinds: product (former product identity), font (legacy native font identity),
-# url (a URL containing the former product identity). Paths are never globs.
-.gitignore|product|product=1|compatibility-ignore|Ignores the former user-state directory.
-AGENTS.md|product|product=2|migration-link|Links contributors to the migration guide.
-README.org|product,font|product=2,font=1|migration-docs|Links the migration guide and documents import-only font compatibility.
-docs/MIGRATING-FROM-CLAWMACS.md|product,font|product=30,font=7|migration-guide|The dedicated guide must name legacy identities precisely.
-docs/superpowers/plans/2026-03-14-clawmacs-tui.md|product|product=65|historical|Preserved completed Croatoan-era implementation plan.
-docs/superpowers/plans/2026-03-15-next-features.md|product|product=3|historical|Preserved early feature plan.
-docs/superpowers/specs/2026-03-14-clawmacs-tui-design.md|product|product=9|historical|Preserved Croatoan-era design specification.
-scripts/check-legacy-name-allowlist.sh|product,font,url|product=8,font=4,url=1|policy|Defines and enforces the residual-name policy.
-scripts/guix-container.sh|product|product=9|legacy-mount|Exposes former user-state paths read-only for compatibility.
-scripts/legacy-name-allowlist.tsv|product|product=3|policy-data|Enumerates exact intentional residual paths and rationales.
-scripts/test-guix-container.sh|product|product=6|legacy-mount-test|Tests read-only exposure of former user-state paths.
-scripts/test-legacy-name-allowlist.sh|product,font,url|product=10,font=1,url=1|policy-test|Exercises product font URL and filename policy failures.
-scripts/test-session-migration-containers.sh|product|product=2|session-migration-test|Builds a former session tree for cross-container publication tests.
-src/appearance-config.lisp|product|product=3|legacy-data-reader|Accepts the former appearance path and data tag read-only.
-src/crash-report.lisp|product|product=1|legacy-archive|Locates former crash reports as archival data only.
-src/font-editor.lisp|font|font=4|legacy-font-reader|Imports the former native font tag and extension without writing them.
-src/llm.lisp|product|product=4|legacy-data-reader|Reads former credentials prompts defaults and boot instructions without writing them.
-src/main.lisp|product|product=1|legacy-executable-refusal|Detects and refuses the former executable init path.
-src/mcp-bridge-core.lisp|product|product=1|legacy-executable-refusal|Detects and refuses former MCP configuration.
-src/modelaria-core.lisp|product|product=2|legacy-data-reader|Reads former inert model metadata without writing it.
-src/package-manager.lisp|product|product=3|legacy-executable-refusal|Detects and refuses former package configuration and install roots.
-src/projects.lisp|product|product=1|legacy-executable-refusal|Detects and refuses the former project registry.
-src/session.lisp|product|product=1|session-migration|Discovers and atomically materializes former session storage.
-src/skills.lisp|product|product=3|legacy-executable-refusal|Detects and refuses former executable skill state.
-src/templata.lisp|product|product=2|legacy-data-reader|Reads former global and project prompt templates without writing them.
-tests/font-editor-test.lisp|font|font=9|legacy-font-test|Proves import-only compatibility and canonical font writes.
-tests/legacy-path-test.lisp|product|product=12|migration-unit-test|Exercises exact canonical and former path selection.
-tests/migration-integration-test.lisp|product|product=12|migration-integration-test|Exercises subsystem migration boundaries and preservation.
+# Exact path|origin|kind|normalized fingerprint|category|rationale
+# Paths use case-aware placeholders for former identities so this policy is not recursive.
+# Origins: content, filename, symlink-target. Kinds: product, font, url.
+.gitignore|content|product|06bad645d71cb788fa5da2f05743f3b98ef40a94124ed6e5677b90fad7ae9cc4:1|compatibility-ignore|Preserves the former user-state ignore boundary.
+AGENTS.md|content|product|1d10fa449adf2cbdd48bc9b71c9a7468c693d97e9cc57ff2af3d26a8e929d5bb:1|migration-doc|Documents the intentional migration boundary.
+AGENTS.md|content|product|1d10fa449adf2cbdd48bc9b71c9a7468c693d97e9cc57ff2af3d26a8e929d5bb:2|migration-doc|Documents the intentional migration boundary.
+README.org|content|font|bd3d073b2224a0729a721de0662c6d444c22717bb29c836ee64c08e08387ac53:1|migration-doc|Documents the intentional migration boundary.
+README.org|content|product|c1958365c52b50ddac428519a5c42be29d962c544277e11901364b5fcac7091e:1|migration-doc|Documents the intentional migration boundary.
+README.org|content|product|c1958365c52b50ddac428519a5c42be29d962c544277e11901364b5fcac7091e:2|migration-doc|Documents the intentional migration boundary.
+README.org|content|url|c1958365c52b50ddac428519a5c42be29d962c544277e11901364b5fcac7091e:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|font|18181457f3d4522ec215165f4b983d4aa7e40ea495c60dc5f845b1e48a63a6ee:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|font|2548ac1708d9464032cd8c1eb703647894a3dcf730b64a0443080f4a81a3a58b:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|font|5da23b7f49ba390f3cd8ae084b70d30188fe613f2e23b0eeccc55375a3eaa928:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|font|bdc3f3b778e66d4988d972a1529444d9b684b877bfab780a3687c0abc2842083:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|font|c258ac7467c8fa797a1d4e0d965980611eda5fe104c8b728b9c6b66aef543c7c:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|font|c258ac7467c8fa797a1d4e0d965980611eda5fe104c8b728b9c6b66aef543c7c:2|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|font|ef255b3bac79a1dfd91f11770ad5016ad7fc8cbc7519d918da693f219b05c3e2:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|font|ef255b3bac79a1dfd91f11770ad5016ad7fc8cbc7519d918da693f219b05c3e2:2|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|1623e465c088af2508e2bc420a13ebfb41596207c0b64c9ab0392ac040acf811:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|1aba08baea033d18905dafb82711343778219618c23b00fed921739b3a592b4b:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|222a01bd0186a5487a40ea830e9c886d610cac36545d8f31fe5ff6418f4c0d09:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|23842ba8275ebfd9596d13cf6b282c808067d6b79c66f2a977d856176d20c12f:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|28a9377eef69013eb5d5c8afa09b3067909b6bd656e22f01574e6a7ab4ccd029:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|304330422cf898e869b9dee4d4fe1b3c32d1e0ce9c317db02eba1a4c6a2c1aa2:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|304330422cf898e869b9dee4d4fe1b3c32d1e0ce9c317db02eba1a4c6a2c1aa2:2|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|33d9b971cb61b98732c42ee4ebbf715b8f25766a712e6a6025f6b138d5c38f3d:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|3a1da3acf9a338c68a273fa148f5f642a95affa64f459dd0f4f09ab123659d86:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|3c59d63c81c0fe2ac0c1062ce895818055febf6a25d6dd0d18ea470bd8ea8c82:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|438997398909f66a438714ad9e50545e155c2d755bb3041cdfa68bacb5b7fc6c:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|453d1dbd19584c124e4f0b6b268460731a367cc77f2cf0e0fdae70da1ae40005:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|48ca89f411b9dd41ce08d8dbed80b5a81670cc8228745c038b66b49b4cb2a69d:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|518284fe7d395d8244db41e62dcf9603de42bc04571909ae6d0ab963d2418cb2:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|61bca4349fd271911ec8bbd15493bfbfee407f473d446ec3bc185a3b0f2d77cf:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|6b60679461d0e8bc0d6400af74b8490d87aedc3e098c63bd3a77d363805f7ab4:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|6dee56db908e22885a01861cf61db76246ec8d550191414e5ebedb40933d3f6f:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|7a1b3aa5245061f05b0e0acd337198114274c0ac8cb93c6218ca48ca08c65454:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|7b950e86d833c4f663527c6b89a2612291f3156d79e8bc04fea476ab3ca08f9d:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|878928934359ff9554b47a7b616b76f459e61f6fd4c113f2778735d81bf9fe94:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|8ceb9f716b6b08fca1070733b532794487c440822df59e1fefb0092835f41c82:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|8d3e3aca24ba4af1f52f44178a98a745c35f7e42b9ebb89913ca8b3ab6db1943:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|8f192822f1796c92a97dcbe6c90016bc0bc5f1a6d43546387b3b85ba5a1632d0:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|916966e2284a5420d460275dd6a74af69146b3b68f253e994997b442af23d490:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|97b13af223750e71adc09eeab4eee504e3a8738b298445fc1733de7cc1a50c13:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|a24054613bda5d82702cfe0518b7e5ccb392c851753d3813c2380a0dbe71cb72:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|b54fd19d5d511a2df0af13e5fc066a2d865ad96b45546e24d025e411cfc230bb:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|bf6a647d0bcabfd05647a6d288b59e46afd330bf707d570d759e54651e586d7c:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|c120bbba33b51fc8e55e2741ccc3f969330497b153b9fc5122aa8322d66b9b55:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|d87f63ea58be28b79128f7e7f99b5970f7d8747e6625b01e794536f4272ad786:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|dc7507f4ef1071f52d54ce6f97384cd40a6dbc45c1d9dd7b02b14815511a1bec:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|df0fc355c3ebb0807689c437c7b733c14789535735c25159ed110c3bf6967731:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|product|f57934006cde1cabf33e24ff64c06981d4fbacfaf14e99685c8617ea33b75286:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|content|url|b54fd19d5d511a2df0af13e5fc066a2d865ad96b45546e24d025e411cfc230bb:1|migration-doc|Documents the intentional migration boundary.
+docs/MIGRATING-FROM-%OLD_PRODUCT_UPPER%.md|filename|product|14c5e4c999368ed6e8638a0dc9e8c8a73a15c8dccb13a470c7483cf9083055fe:1|migration-doc|Documents the intentional migration boundary.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|01de7aa9e3d8a36732ff33d3e51b1e9ec867bb1d577e1912d374cfc7a066aaad:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|081591215d22889a7e4bf9a2778c32692006dcc7627976aad9b2b3da73d2943b:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|0d73c19f4848886ef4876f4415787773818c57fa02aa81bd2e9fc2ae0cc6436b:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|1198f3ce96b3f050a5722084e70dbc5f25343f3d7e9b5870a6dc76afb664d271:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|168ba2df17f8453b5060a1f016b320cc1789b23b10cbe4ebee930fd58c88b172:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|168ba2df17f8453b5060a1f016b320cc1789b23b10cbe4ebee930fd58c88b172:2|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|188c59d2bfc5ce0a4ddff12fa6fd8fdd17a3fdb52a458b8e49fb713a7c92a891:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|188c59d2bfc5ce0a4ddff12fa6fd8fdd17a3fdb52a458b8e49fb713a7c92a891:2|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|2d09e74888a9782ababe58308e0e35fe44403ae0152c4afd73c34225623c044b:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|3a5bf28f80bda3bdc6cffe1b3328b402dd7d3ad9c1eeef881208abfa8b833d8d:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|4104a8c8b684b8c1f985a9a09a12ca2f8bf955b8af8210755e3f2ba2ea3ac13b:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|480d222793d4006152aaa215a17c42d358bd089757f224d1a1fa6444a0140dbd:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|4b0cf94032b2d6e708eb01747e8e3b3ca43f8a14d623e7fb2eb3700503a9d6d3:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|4d0fad253e2c6fd3c8b09af8aa17492c55884ba2c62ce7bb537bf757b3ac9cfa:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|4d0fad253e2c6fd3c8b09af8aa17492c55884ba2c62ce7bb537bf757b3ac9cfa:2|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|4d0fad253e2c6fd3c8b09af8aa17492c55884ba2c62ce7bb537bf757b3ac9cfa:3|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|4d0fad253e2c6fd3c8b09af8aa17492c55884ba2c62ce7bb537bf757b3ac9cfa:4|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|4d0fad253e2c6fd3c8b09af8aa17492c55884ba2c62ce7bb537bf757b3ac9cfa:5|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|4d0fad253e2c6fd3c8b09af8aa17492c55884ba2c62ce7bb537bf757b3ac9cfa:6|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|4d0fad253e2c6fd3c8b09af8aa17492c55884ba2c62ce7bb537bf757b3ac9cfa:7|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|575ec056a589c2b8ca3db7f48b69b92c13c84bbfc06cc98c265a958701ccc5bc:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|5d80b47b362b1d555c8077c9da4be2335b3068718a172e6a7a3187387299b724:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|600b335ddef756fed599c331015e13e13b8de9d5a2b363148aaa8a4b9b7492e8:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|60b6bd07141a59c98e6c772f9e1af03e06d1e7d1ca51e974fee734f766815059:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|6a4e4b14a7e62e18c46839f63141807dcb9656718a5252dca6bc0a4587a8650a:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|76cf5dfbb128f6dc8ad7fcef1df5a7fb8857d9691f16f3380c2e92a3ad90afd9:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|76cf5dfbb128f6dc8ad7fcef1df5a7fb8857d9691f16f3380c2e92a3ad90afd9:2|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|76cf5dfbb128f6dc8ad7fcef1df5a7fb8857d9691f16f3380c2e92a3ad90afd9:3|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|76cf5dfbb128f6dc8ad7fcef1df5a7fb8857d9691f16f3380c2e92a3ad90afd9:4|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|76cf5dfbb128f6dc8ad7fcef1df5a7fb8857d9691f16f3380c2e92a3ad90afd9:5|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|76cf5dfbb128f6dc8ad7fcef1df5a7fb8857d9691f16f3380c2e92a3ad90afd9:6|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|7765de1e494732a7e082b181c040ff0d852a610687623470fc3f6e29304a4969:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|7c7676ea0c98985a67d5e62e6348e4aa25b6cf1011568e4f6e88c6e6c8aa1dd7:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|7f02d57c5a93b0f79d104a5511773164e1f22ca30cc58e4732f518fdb6e41cfc:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|80ec4d7313ea92bba7599d37d5812cb9357388bf52d7a329bdd4cc2b2011b9fa:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|88f08cf6377032a2784c518cde6b3bf36417d334c29a5db32c88859588cb6b33:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|8d9d562977edea394cb2d11bba8d9707d5dd8589c24f7710db000f6c5225776c:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|90fb4a1065a71e26674cf315b45495d869905a0027fbc70c45530086edc1038d:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|930a2c20081a7e06a0d434974dd02d911805befcda5f3b2e7d51333293216e7f:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|935129ed5b3327e105545584729ae4747166c1f9edfb60224059e3a9b6b9558d:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|94c47962039f143ab2e7c64fcff6369e5354e66814099c6e28e2575f3673b68c:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|94c47962039f143ab2e7c64fcff6369e5354e66814099c6e28e2575f3673b68c:2|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|94c47962039f143ab2e7c64fcff6369e5354e66814099c6e28e2575f3673b68c:3|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|94c47962039f143ab2e7c64fcff6369e5354e66814099c6e28e2575f3673b68c:4|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|94c47962039f143ab2e7c64fcff6369e5354e66814099c6e28e2575f3673b68c:5|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|94c47962039f143ab2e7c64fcff6369e5354e66814099c6e28e2575f3673b68c:6|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|94c47962039f143ab2e7c64fcff6369e5354e66814099c6e28e2575f3673b68c:7|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|975491fcfd4ae98c3af4b420b7d22a9d533068ed5fc1907c790b4e9b49576fe0:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|99b2a8d80b267eb57ee091df975ef811d5f39fe28c91919a338d747abb1863f4:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|9b6d060d18631df277a3ccde1877457955158b1f961a64001be0342e0c233236:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|a1fc1c682d6a2823846cb442968c04e03d51a7561ea052afc5fffcda46c52045:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|a1fc1c682d6a2823846cb442968c04e03d51a7561ea052afc5fffcda46c52045:2|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|a1fc1c682d6a2823846cb442968c04e03d51a7561ea052afc5fffcda46c52045:3|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|ae2e6af0ecba17eaf8e571d8497e78c396fb073bab89448dfaaa3a425c7228d4:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|b0ad4825996be6f23a126200c5405e72a75c51a7890dc3bf83314e6d22d6c83b:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|b1cd7195ce628fdc8f44445db9c3b7348996f1278f5131837672ecea9beba59d:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|bcf39c2db59072a9ed36456944fd7f0fc1a140e97389855e7b3d488b63f72417:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|ce0d58188b86af587ee63f28d57e882b6cb2933d188709d5f56041ff46a4612a:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|cea688588459ec45d998d59c406d150ed4900e8b2e795f160b9819e29a212012:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|d56bf85344aefa7f680715235b4e585f1ca8690714d66b905ec3fc5ee81285ac:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|e281ecc9bbbe3654ffcdaea87bf50bb4c7a698e0ca8dd7188bdb7ad68638d272:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|e281ecc9bbbe3654ffcdaea87bf50bb4c7a698e0ca8dd7188bdb7ad68638d272:2|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|e8ad1f4a0668bd3cd066677e5bcc23e0fd671b1f10b27a3809862ee2373a172d:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|product|fd6b4cc0b3b3b7caa5866efe560326fef63536796b9bcd3b66985cef1a6aa0ae:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|content|url|e281ecc9bbbe3654ffcdaea87bf50bb4c7a698e0ca8dd7188bdb7ad68638d272:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-14-%OLD_PRODUCT%-tui.md|filename|product|5cd88e735d707c8a37f7550af243037cb34bd113a6b5c12df1436eac1892f6d2:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-15-next-features.md|content|product|2e5af4c018d8a1269c4f06b3c7c8de2c923f2c07d52a9450e73731e75131458b:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-15-next-features.md|content|product|6874ff5a6be4854a04f64e3d70bb5812a1eb3bf8a1885900f15e7b090750cea8:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/plans/2026-03-15-next-features.md|content|product|81458e552f671de0b5d1fcbe80645f2b73a3dc180f7355978a90d59f1ef4db37:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|163ed807f8664b11506c53699a17301919a104dc37ed07f0e60a6328afd73187:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|42f4c284c3f2225e059866a25be2a04903406f2377b003bb50b7a070704daf23:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|4b5d4c2059dfd7e47f05ed61f0018d27636c1194210805e49fb4840e191ccbac:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|5502d3a43554175d2d46ba4cee07cee6ad8884608975804d1219364cf453d42b:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|5502d3a43554175d2d46ba4cee07cee6ad8884608975804d1219364cf453d42b:2|historical|Preserved completed pre-rename design history.
+docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|6e1f381b81258b071bc033d911863b166d24f0f666d24df90b82d33485df412f:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|833d264b134b52124d069f260eac2325225267ffc603e8cc1e5f60056a6ca7fe:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|content|product|e34b8475699c793c0622097a1b6135703eebd44e13da3c16f7f327cc6d93ce51:1|historical|Preserved completed pre-rename design history.
+docs/superpowers/specs/2026-03-14-%OLD_PRODUCT%-tui-design.md|filename|product|20a2df2e810cceb87a4a6a2100f51bbd03085e2bfe596d4e412016d1fbc38bc2:1|historical|Preserved completed pre-rename design history.
+scripts/check-legacy-name-allowlist.sh|content|font|056d8300003147789e2edd4a49dd68dd820b2b8128426169f06b0ee0f0bb6390:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|font|17bf6832446d05e19e59c3ad4a09952423b97299a10c006d2e19313431a60de0:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|font|8d2ed25e163052e123167f53f0f49c787267cf1521d3aaa62ecf5458c26230c7:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|font|ac4d5a81823eb3b01daa4d9e1228feca4515434aca5c5d75f6c438d925ed7db1:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|font|bbc3ebbe02eea9290e7ed19a25ed51183ba9db6a2a4bbae42a0e9578cc7e12ac:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|font|c17f8066d7e3d3b373966131d597647ffadebae810ec2ac4c4fa99296b127399:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|product|056d8300003147789e2edd4a49dd68dd820b2b8128426169f06b0ee0f0bb6390:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|product|17bf6832446d05e19e59c3ad4a09952423b97299a10c006d2e19313431a60de0:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|product|425b5a17badf5ce822c43e3395ff89e46760afdf129199f7e8840e71e28f8d47:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|product|a6a3a278f7d66fc66cee1802bd829b9cbae2a84772b865da7af94bc7ee001062:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|product|a6a3a278f7d66fc66cee1802bd829b9cbae2a84772b865da7af94bc7ee001062:2|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|product|ac4d5a81823eb3b01daa4d9e1228feca4515434aca5c5d75f6c438d925ed7db1:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|product|bc5c1a16d8dbb881b4ed49f740fb5a9314c944b6ab07d4cc52ec1e8d84b41477:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|product|e21252526918e6a0daff3e552e7ddfb6300db0f41796302b746299e6d4012df6:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|url|056d8300003147789e2edd4a49dd68dd820b2b8128426169f06b0ee0f0bb6390:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|url|a6a3a278f7d66fc66cee1802bd829b9cbae2a84772b865da7af94bc7ee001062:1|policy|Implements or tests exact residual-name enforcement.
+scripts/check-legacy-name-allowlist.sh|content|url|a6a3a278f7d66fc66cee1802bd829b9cbae2a84772b865da7af94bc7ee001062:2|policy|Implements or tests exact residual-name enforcement.
+scripts/guix-container.sh|content|product|0101c08fa1d98f60bb85221c8b5e4603ebe97a5e3bbaa2d32712b66a66d37ab3:1|runtime-mount|Exposes former user state read-only in the container.
+scripts/guix-container.sh|content|product|0101c08fa1d98f60bb85221c8b5e4603ebe97a5e3bbaa2d32712b66a66d37ab3:2|runtime-mount|Exposes former user state read-only in the container.
+scripts/guix-container.sh|content|product|2e111c70ce559875cf9685176eeb4b3b0cbd7dd9f22012a1961736b62e2dcade:1|runtime-mount|Exposes former user state read-only in the container.
+scripts/guix-container.sh|content|product|2e111c70ce559875cf9685176eeb4b3b0cbd7dd9f22012a1961736b62e2dcade:2|runtime-mount|Exposes former user state read-only in the container.
+scripts/guix-container.sh|content|product|30c5198232814735685c9ae4ea9f9fecfa5a1880d816e1b477628ee6de6e68a5:1|runtime-mount|Exposes former user state read-only in the container.
+scripts/guix-container.sh|content|product|30c5198232814735685c9ae4ea9f9fecfa5a1880d816e1b477628ee6de6e68a5:2|runtime-mount|Exposes former user state read-only in the container.
+scripts/guix-container.sh|content|product|31b62b00b4aed08d365fd778968cbd0e8d059ecc00141d7a008be3088a18cf1e:1|runtime-mount|Exposes former user state read-only in the container.
+scripts/guix-container.sh|content|product|32ee2c63a003d577ee502018ec3fe0d0488b444ee769056baf6feaabe83119c2:1|runtime-mount|Exposes former user state read-only in the container.
+scripts/guix-container.sh|content|product|f2f6b8a86a22e16507db86c32015040e09e3864525c1cda787c076f34a280981:1|runtime-mount|Exposes former user state read-only in the container.
+scripts/test-guix-container.sh|content|product|4b2bac0376b07b82f05b30869ed69ec2a1d64be5a2b53143dca5aaeb4607a9dc:1|migration-test|Exercises migration compatibility in isolation.
+scripts/test-guix-container.sh|content|product|4d6f0c30ce679d51c36e80374cd17f565be02783abedaf7ac05a172c9b6cd7ef:1|migration-test|Exercises migration compatibility in isolation.
+scripts/test-guix-container.sh|content|product|4e82a235bd31e5ac1ca717e805527c2a69af436d6f598341e98ac71272933f36:1|migration-test|Exercises migration compatibility in isolation.
+scripts/test-guix-container.sh|content|product|7d970038ac2c4ee63a2a06f61cdeeae4e9159d9f20774c4bf5d7afcece9ca177:1|migration-test|Exercises migration compatibility in isolation.
+scripts/test-guix-container.sh|content|product|8ea1d164436743fabaf452f1b57e62c4bca3558536e530d90132140f5b08d340:1|migration-test|Exercises migration compatibility in isolation.
+scripts/test-guix-container.sh|content|product|9fb0f8e14d1676c296f95d52bfa25693bf5db366a72bf9f6d3e08c23734bbfec:1|migration-test|Exercises migration compatibility in isolation.
+scripts/test-legacy-name-allowlist.sh|content|font|936dd3f9518ff9580498a23ae3acc1e911213f5c186b4b0bf908884dab3c6e59:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|font|c4482a7471ccc926fa789ac0cf1bd704ec779384933455d75c73a8d540488031:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|font|dcd120535769d516832e44a1bdc7e6e04328590cdeb8b5abae16e375844fb917:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|product|4ffc822de0de39a6b17b90ca52646a06a65e3fffadb60c6eb7c7067019374f8e:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|product|5bf6f5dfe8c1bffdb0a294b7b322df1db2b9ef33c985b5cd993fedb00f8940f0:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|product|5ebd20a9ca7589b5152bb5b31545184260e01fda64815105a17dc231170cdad4:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|product|68c041561211137de3b8eae07f8ab23612c365d1bc18d82a13755bc0dc5c9568:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|product|74010a6f8149febf92545e76088f162b6b059a24d92481d9b3be28f58cbddf1a:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|product|757326cd258f6867f49ca38b087941da2ef10683a86f2469f2c7488e1b70b7ea:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|product|e19bcf6d2be8f39b3fc5a3ee97dca9fde79214b9bded3c47861011f9f325e137:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|product|e7a4e0d8f8aa5b815dba6977c06f8b62adb0aee33c54ae5df2ef99a697f6001d:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|product|e7a4e0d8f8aa5b815dba6977c06f8b62adb0aee33c54ae5df2ef99a697f6001d:2|policy|Implements or tests exact residual-name enforcement.
+scripts/test-legacy-name-allowlist.sh|content|url|e19bcf6d2be8f39b3fc5a3ee97dca9fde79214b9bded3c47861011f9f325e137:1|policy|Implements or tests exact residual-name enforcement.
+scripts/test-session-migration-containers.sh|content|product|66cc5233364b5baaa42543ac4aad52ccd5510a1a27e9f728e59b16e7ad10df98:1|migration-test|Exercises migration compatibility in isolation.
+scripts/test-session-migration-containers.sh|content|product|ad87ca01f10f4263531acb49958e6dfe74145ae8eb9cdde4e2c9c0b3789acead:1|migration-test|Exercises migration compatibility in isolation.
+src/appearance-config.lisp|content|product|4d4de7330ee33abaa296072ef54492cd928856aaabc8860ebfbe9b97409fdba2:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/appearance-config.lisp|content|product|587e4f58c23e705c0130c2b771fb9ceb697454f5ddb7218a6960a2d874a25f2f:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/appearance-config.lisp|content|product|7ec919d7ab3e1b74a345d44f3eaa82693991da1ce762300df9c1df5abfd97183:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/crash-report.lisp|content|product|c274c533e1a9e1a2f8cbe4a980064f6b3d424ca20eb26d73bf41485e5877b68a:1|runtime-archive|Locates former crash reports for archival inspection only.
+src/font-editor.lisp|content|font|2aede663876fa828c2c63b9d18b22155a7bdb557157415246d2ae6aeb714aa46:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/font-editor.lisp|content|font|2aede663876fa828c2c63b9d18b22155a7bdb557157415246d2ae6aeb714aa46:2|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/font-editor.lisp|content|font|951a99e6232bc45d4d6d3294586bc54742d86ea01929701ff1c097ddfd7959e0:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/font-editor.lisp|content|font|a674f6fa0e9022da007373e23fc8cf5d805edc3ab3445dcd53c6f66f3aebbeac:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/llm.lisp|content|product|7d745e870008b4a1ae5951a7a7b324b2e0085cf66fe4840abbbe2dc87fc7862b:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/llm.lisp|content|product|7d745e870008b4a1ae5951a7a7b324b2e0085cf66fe4840abbbe2dc87fc7862b:2|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/llm.lisp|content|product|a9a458f286915518317d4e75998ea2c494934860a9dc2ec96a5909663055291a:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/llm.lisp|content|product|de00edcf06d6906e332fc1d877fc29d9ba641b7b7f9650dcd7c4d2fb3ba1d6a6:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/main.lisp|content|product|587e4f58c23e705c0130c2b771fb9ceb697454f5ddb7218a6960a2d874a25f2f:1|runtime-executable-refusal|Detects and refuses former executable or behavioral state.
+src/mcp-bridge-core.lisp|content|product|1792121e8b790dbc0fb1c20efb95e4f5724bf39f0f59353b1441ede161f89242:1|runtime-executable-refusal|Detects and refuses former executable or behavioral state.
+src/modelaria-core.lisp|content|product|2a9fd94957c20630f40182e5808329856c2b51deaa4146c10fe0e14409b39763:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/modelaria-core.lisp|content|product|83e105e80c7f0e29ab51c3d0de6fac9e8e260a0c25cdbc2ec2ea3e5e6b094ddf:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/package-manager.lisp|content|product|1589ad4678aa1dc859e9fd91b505d0b21a0b1036716eca72887981395b06c852:1|runtime-executable-refusal|Detects and refuses former executable or behavioral state.
+src/package-manager.lisp|content|product|37945c18151e3022a175a9eb10a2105c77829463bec4e636a41f594ea8771086:1|runtime-executable-refusal|Detects and refuses former executable or behavioral state.
+src/package-manager.lisp|content|product|7d1dd2d433f8dc764dd4eff43c167a7272b0e6d79576c84576e2c71878e41a4c:1|runtime-executable-refusal|Detects and refuses former executable or behavioral state.
+src/projects.lisp|content|product|96f0e6510eb3cd32d89eac26426e8f07d36a93bb1f7783b0e691b4973b2bcbfb:1|runtime-executable-refusal|Detects and refuses former executable or behavioral state.
+src/session.lisp|content|product|e0c35c207ddaf634ee8479557d957d7c895469165c19955154116cea27d9e902:1|runtime-session|Discovers and atomically materializes former sessions.
+src/skills.lisp|content|product|a65a2e4fa5094934a5a58f1ab5d6f590ac7517cb5994827248dea57bc7356bc8:1|runtime-executable-refusal|Detects and refuses former executable or behavioral state.
+src/skills.lisp|content|product|d75b1420a5451833eef0f7576b7c55759efc2ba2716829301505997caffe506e:1|runtime-executable-refusal|Detects and refuses former executable or behavioral state.
+src/skills.lisp|content|product|f9875d20f7a7318ba36b80ad72d797f47d5e50d3afaa65324f922f692948a0ea:1|runtime-executable-refusal|Detects and refuses former executable or behavioral state.
+src/templata.lisp|content|product|601d84f61d11331bfc4318c3f12fa81179b1622c24e2e9394541c0eacfca2f90:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+src/templata.lisp|content|product|f8d33c167ee23b6647bb746e60062408b76338ebb7055219d8cbcdaffe0b8d2d:1|runtime-data-reader|Reads a bounded former data format or path without writing it.
+tests/font-editor-test.lisp|content|font|034271313b572890ef449197c81f176fb53b4f04fd15ac38bc57dd2842f9980f:1|migration-test|Proves the exact migration compatibility boundary.
+tests/font-editor-test.lisp|content|font|06d39f33a68a913c6256aaee0310641406601b1026808c3d3505f89df98690bd:1|migration-test|Proves the exact migration compatibility boundary.
+tests/font-editor-test.lisp|content|font|1eb11d5881ff21db0e99c553564485661ceb0d665609ff110afafccbf1e987a6:1|migration-test|Proves the exact migration compatibility boundary.
+tests/font-editor-test.lisp|content|font|3ec3b781868aaa9afc287a7c0b7e395429539b28d599fd2f7482450b129d2953:1|migration-test|Proves the exact migration compatibility boundary.
+tests/font-editor-test.lisp|content|font|62a5cd2de5b28615c099a4ef2c34374d5126b4b8e0eb4dae5a1b2a90486bbcc4:1|migration-test|Proves the exact migration compatibility boundary.
+tests/font-editor-test.lisp|content|font|62f0a45dec11a3a8158f866346e6c242442029438e664190dde710ab52e6b089:1|migration-test|Proves the exact migration compatibility boundary.
+tests/font-editor-test.lisp|content|font|70ee198d33ef4399fbf3ff2da5f9cd882662d4b257f3ed682696fb109b804fa3:1|migration-test|Proves the exact migration compatibility boundary.
+tests/font-editor-test.lisp|content|font|7fd55ac137ca8f9fcdc3074ba712a1ef6668621b6eb8e0f6a80676e297df3698:1|migration-test|Proves the exact migration compatibility boundary.
+tests/font-editor-test.lisp|content|font|cbf6a06d0c9036551cb4db992f44af6dd5fdb5fc501e48c410df27739be4ab98:1|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|127b8cf75e9d5e40ca138053dff622fbea2d8de2eb11a8fccbcabfa905f2e7d3:1|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|56200d1142e2b32f892cb0840cf2a76be6b0f3bdb66424955d8f3ff061e734c5:1|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|80054d9b25bf3b7c31d3935501f536c77b86b76e2fad9f5dd07586b52e4ef907:1|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|80054d9b25bf3b7c31d3935501f536c77b86b76e2fad9f5dd07586b52e4ef907:2|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|80054d9b25bf3b7c31d3935501f536c77b86b76e2fad9f5dd07586b52e4ef907:3|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|80054d9b25bf3b7c31d3935501f536c77b86b76e2fad9f5dd07586b52e4ef907:4|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|80054d9b25bf3b7c31d3935501f536c77b86b76e2fad9f5dd07586b52e4ef907:5|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|80054d9b25bf3b7c31d3935501f536c77b86b76e2fad9f5dd07586b52e4ef907:6|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|80054d9b25bf3b7c31d3935501f536c77b86b76e2fad9f5dd07586b52e4ef907:7|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|b01ca22e64ccfd9543c7debcaa1bc966359bfebdcacfb485635c329d8e0f7f4c:1|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|b3547a0dacdb09ee7205f13c288a9c957a4ed62f57baa802899086dd89a0be4e:1|migration-test|Proves the exact migration compatibility boundary.
+tests/legacy-path-test.lisp|content|product|c3827dc38ebcc3f4002e76c689f9eeb06ed98b1144cb4416cc2c840c877b406a:1|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|064ce36065282ae6ea31b606c3fe05eafb1f152ddfcff68a4e98c9fd1d8a53dc:1|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|099f20ecc82ca2cb22890edeff1f39327faced1970fa6de065c1a38b60b0ff55:1|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|39978f6affa8cd67feafe666388ba8991d320c0ccfec8895d4b00983340d23e7:1|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|661eb8f8c2acea618aeedc32f4eae8ec514525fad5a7810e61ddb5e0146460a4:1|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|94002e0bba08ba2d07999688d4aa4772c7aa8c5f70a8d78e08fb5b27ba2898cd:1|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|94002e0bba08ba2d07999688d4aa4772c7aa8c5f70a8d78e08fb5b27ba2898cd:2|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|9f7b66c06eae1906b8f2ee04c3234b79abee1a3166852b0f762ff989bf473e2c:1|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|aab17b4b02176c06198774a48596d12acec08a686bd1253ead73db1a71478c96:1|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|aab17b4b02176c06198774a48596d12acec08a686bd1253ead73db1a71478c96:2|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|b7bc634064f113cde35dce02cb6b65d1ece80328f96795e63733765ee2ddc404:1|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|d545f4a3b97ddbe06829840afecdf190a37c16506326c4d5b94f18723df25456:1|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|d545f4a3b97ddbe06829840afecdf190a37c16506326c4d5b94f18723df25456:2|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|d545f4a3b97ddbe06829840afecdf190a37c16506326c4d5b94f18723df25456:3|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|d545f4a3b97ddbe06829840afecdf190a37c16506326c4d5b94f18723df25456:4|migration-test|Proves the exact migration compatibility boundary.
+tests/migration-integration-test.lisp|content|product|e4678f386b4eb9f22d18210ea70ca702e316f7051d7dd3b6dc9644b55025c079:1|migration-test|Proves the exact migration compatibility boundary.
