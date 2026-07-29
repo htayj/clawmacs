@@ -2,7 +2,7 @@
 
 > **Historical document.** This early tool plan is retained as project history.
 > Its approval and sandbox assumptions were removed in July 2026. Current
-> Clawmacs is full-trust; containment belongs outside the application.
+> RPLACA is full-trust; containment belongs outside the application.
 
 ## Feature 1: More Tools (file read/write, shell exec with approval)
 

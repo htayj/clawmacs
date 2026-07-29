@@ -339,8 +339,14 @@
         (setf (bitmap-font-glyph font (bitmap-glyph-code glyph)) glyph)))
     font))
 
-(defun write-clawfont-file (font path)
-  "Write FONT to PATH in RPLACA's native `.clawfont' format."
+(defun rplacafont-path-p (path)
+  "Return true when PATH has the canonical `.rplacafont' extension."
+  (string-equal (or (pathname-type path) "") "rplacafont"))
+
+(defun write-rplacafont-file (font path)
+  "Write FONT to PATH in RPLACA's native `.rplacafont' format."
+  (unless (rplacafont-path-p path)
+    (error "Canonical RPLACA font files must use .rplacafont: ~A" path))
   (ensure-directories-exist path)
   (with-open-file (stream path
                           :direction :output
@@ -349,16 +355,16 @@
                           :external-format :utf-8)
     (let ((*print-readably* t)
           (*print-pretty* t))
-      (prin1 (list :clawfont (serialize-bitmap-font font)) stream)
+      (prin1 (list :rplacafont (serialize-bitmap-font font)) stream)
       (terpri stream)))
   path)
 
-(defun read-clawfont-file (path)
-  "Read and return a bitmap font from PATH."
+(defun read-rplacafont-file (path)
+  "Read a canonical or legacy native RPLACA bitmap font from PATH."
   (with-open-file (stream path :direction :input :external-format :utf-8)
     (let ((*read-eval* nil))
       (destructuring-bind (tag payload) (read stream nil nil)
-        (unless (eq tag :clawfont)
+        (unless (member tag '(:rplacafont :clawfont))
           (error "Unsupported RPLACA font file: ~A" path))
         (deserialize-bitmap-font payload)))))
 
@@ -658,18 +664,19 @@
 
 (defun detect-font-file-format (path)
   "Return the import/export file format keyword for PATH."
-  (let ((name (string-downcase (namestring path))))
+  (let ((type (string-downcase (or (pathname-type path) ""))))
     (cond
-      ((search ".clawfont" name :from-end t) :clawfont)
-      ((search ".bdf" name :from-end t) :bdf)
-      ((search ".ast" name :from-end t) :ast)
+      ((string= type "rplacafont") :rplacafont)
+      ((string= type "clawfont") :legacy-clawfont)
+      ((string= type "bdf") :bdf)
+      ((string= type "ast") :ast)
       (t
        (error "Unsupported font file format: ~A" path)))))
 
 (defun read-font-file (path)
   "Read and return a bitmap font from PATH."
   (ecase (detect-font-file-format path)
-    (:clawfont (read-clawfont-file path))
+    ((:rplacafont :legacy-clawfont) (read-rplacafont-file path))
     (:bdf (import-bdf-font path))
     (:ast (import-ast-font path))))
 
@@ -871,7 +878,9 @@ These extracted files remain outside the repository."
             (and value (pathname value)))
           (font-editor-state-save-path state)
           (let ((value (cdr (assoc :save-path persisted-state))))
-            (and value (pathname value)))
+            (and value
+                 (let ((path (pathname value)))
+                   (and (rplacafont-path-p path) path))))
           (font-editor-state-dirty-p state)
           (not (null (cdr (assoc :dirty-p persisted-state))))
           (font-editor-state-status-text state)
@@ -1010,9 +1019,10 @@ These extracted files remain outside the repository."
          (buffer-working-directory buf)))))
 
 (defun font-editor-save-current-font (buf path)
-  "Save BUF's font to PATH in native `.clawfont' format."
-  (write-clawfont-file (font-editor-state-font (font-editor-buffer-state buf))
-                       path)
+  "Save BUF's font to PATH in native `.rplacafont' format."
+  (write-rplacafont-file
+   (font-editor-state-font (font-editor-buffer-state buf))
+   path)
   (setf (font-editor-state-save-path (font-editor-buffer-state buf)) path
         (font-editor-state-dirty-p (font-editor-buffer-state buf)) nil)
   (font-editor-set-status buf "Saved ~A" (namestring path))
@@ -1056,14 +1066,14 @@ These extracted files remain outside the repository."
        (let ((font (read-font-file path)))
          (font-editor-load-font-into-buffer
           target font path
-          :save-path (and (eq (detect-font-file-format path) :clawfont)
+          :save-path (and (eq (detect-font-file-format path) :rplacafont)
                           path))
          (switch-to-buffer target)))))
   nil)
 (defcommand font-editor-open-file-command)
 
 (defun font-editor-save-font-command (buffer)
-  "Save the current font editor buffer as a `.clawfont' file."
+  "Save the current font editor buffer as a `.rplacafont' file."
   (unless (font-editor-buffer-p buffer)
     (error "Current buffer is not a font editor."))
   (let* ((state (font-editor-buffer-state buffer))
@@ -1071,14 +1081,14 @@ These extracted files remain outside the repository."
                    (and (font-editor-state-source-path state)
                         (eq (detect-font-file-format
                              (font-editor-state-source-path state))
-                            :clawfont)
+                            :rplacafont)
                         (font-editor-state-source-path state)))))
     (if path
         (font-editor-save-current-font buffer path)
         (font-editor-prompt-path
          buffer
-         "Save .clawfont as"
-         (font-editor-suggest-save-path buffer "clawfont")
+         "Save .rplacafont as"
+         (font-editor-suggest-save-path buffer "rplacafont")
          (lambda (candidate)
            (font-editor-save-current-font buffer candidate)))))
   nil)

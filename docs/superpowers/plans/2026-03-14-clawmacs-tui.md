@@ -2,7 +2,7 @@
 
 > **Historical document.** This completed Croatoan-era plan is retained as
 > project history. Its in-process permission and sandbox design was removed in
-> July 2026; current Clawmacs is full-trust and relies on user-controlled
+> July 2026; current RPLACA is full-trust and relies on user-controlled
 > external containment when desired.
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.

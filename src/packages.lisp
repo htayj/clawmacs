@@ -332,8 +332,8 @@
    #:make-font-editor-buffer
    #:ensure-font-editor-buffer
    #:read-font-file
-   #:write-clawfont-file
-   #:read-clawfont-file
+   #:write-rplacafont-file
+   #:read-rplacafont-file
    #:write-bdf-font
    #:import-bdf-font
    #:import-ast-font

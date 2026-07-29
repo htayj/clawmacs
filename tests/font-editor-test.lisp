@@ -88,24 +88,27 @@ ENDFONT
     (is (= 1 (aref (rplaca::bitmap-glyph-bitmap glyph) 1 0)))
     (is (= 1 (aref (rplaca::bitmap-glyph-bitmap glyph) 1 2)))))
 
-(test clawfont-roundtrip-preserves-font-data
-  "Native `.clawfont' save/load should preserve editor glyph data."
+(test rplacafont-roundtrip-preserves-font-data-and-canonical-tag
+  "Native `.rplacafont' save/load preserves data and writes the canonical tag."
   (let* ((font (rplaca:make-empty-bitmap-font
                 :name "ROUNDTRIP"
                 :line-spacing 6
                 :baseline 5
                 :default-width 4))
          (glyph (rplaca::ensure-bitmap-font-glyph font 65))
-         (path (merge-pathnames "demo.clawfont"
-                                (font-editor-temp-directory "clawfont"))))
+         (path (merge-pathnames "demo.rplacafont"
+                                (font-editor-temp-directory "rplacafont"))))
     (setf (rplaca::bitmap-glyph-name glyph) "A")
     (setf (rplaca::bitmap-glyph-advance-width glyph) 4)
     (rplaca::resize-glyph-bitmap glyph 3 3)
     (setf (aref (rplaca::bitmap-glyph-bitmap glyph) 0 0) 1
           (aref (rplaca::bitmap-glyph-bitmap glyph) 0 1) 1
           (aref (rplaca::bitmap-glyph-bitmap glyph) 1 1) 1)
-    (rplaca:write-clawfont-file font path)
-    (let* ((loaded (rplaca:read-clawfont-file path))
+    (rplaca:write-rplacafont-file font path)
+    (with-open-file (stream path :direction :input :external-format :utf-8)
+      (let ((*read-eval* nil))
+        (is (eq :rplacafont (first (read stream))))))
+    (let* ((loaded (rplaca:read-rplacafont-file path))
            (loaded-glyph (rplaca::bitmap-font-glyph loaded 65)))
       (is (string= "ROUNDTRIP" (rplaca:bitmap-font-name loaded)))
       (is (= 6 (rplaca:bitmap-font-line-spacing loaded)))
@@ -114,6 +117,67 @@ ENDFONT
       (is (= 1 (aref (rplaca::bitmap-glyph-bitmap loaded-glyph) 0 0)))
       (is (= 1 (aref (rplaca::bitmap-glyph-bitmap loaded-glyph) 0 1)))
       (is (= 1 (aref (rplaca::bitmap-glyph-bitmap loaded-glyph) 1 1))))))
+
+(test legacy-clawfont-remains-read-only-import-compatible
+  "Legacy `.clawfont' data remains readable but cannot be a native write target."
+  (let* ((font (rplaca:make-empty-bitmap-font :name "LEGACY"))
+         (directory (font-editor-temp-directory "legacy-clawfont"))
+         (legacy-path (merge-pathnames "legacy.clawfont" directory)))
+    (write-font-editor-test-file
+     legacy-path
+     (format nil "~S~%"
+             (list :clawfont (rplaca::serialize-bitmap-font font))))
+    (is (eq :legacy-clawfont
+            (rplaca::detect-font-file-format legacy-path)))
+    (is (string= "LEGACY"
+                 (rplaca:bitmap-font-name
+                  (rplaca:read-font-file legacy-path))))
+    (signals error
+      (rplaca:write-rplacafont-file font legacy-path))))
+
+(test rplacafont-public-api-and-save-prompt-are-canonical
+  "Only RPLACA-named native font APIs are public and the UI prompts canonically."
+  (multiple-value-bind (symbol status)
+      (find-symbol "WRITE-RPLACAFONT-FILE" :rplaca)
+    (is (eq :external status))
+    (is (fboundp symbol)))
+  (multiple-value-bind (symbol status)
+      (find-symbol "READ-RPLACAFONT-FILE" :rplaca)
+    (is (eq :external status))
+    (is (fboundp symbol)))
+  (is (not (eq :external
+               (nth-value 1 (find-symbol "WRITE-CLAWFONT-FILE" :rplaca)))))
+  (is (not (eq :external
+               (nth-value 1 (find-symbol "READ-CLAWFONT-FILE" :rplaca)))))
+  (let ((*buffer-ring* nil)
+        (rplaca::*font-editor-states* (make-hash-table :test #'eq)))
+    (unwind-protect
+         (let ((buf (rplaca:make-font-editor-buffer :add-to-ring-p nil)))
+           (rplaca:font-editor-save-font-command buf)
+           (is (string= "Save .rplacafont as"
+                        rplaca::*minibuffer-prompt*))
+           (is (search ".rplacafont" rplaca::*minibuffer-input*)))
+      (rplaca::minibuffer-deactivate))))
+
+(test restored-font-editor-state-never-reuses-a-legacy-save-path
+  "Legacy save paths are discarded while canonical save paths survive restore."
+  (let ((*buffer-ring* nil)
+        (rplaca::*font-editor-states* (make-hash-table :test #'eq)))
+    (let* ((source (rplaca:make-font-editor-buffer :add-to-ring-p nil))
+           (legacy-target (rplaca:make-font-editor-buffer :add-to-ring-p nil))
+           (canonical-target
+             (rplaca:make-font-editor-buffer :add-to-ring-p nil))
+           (persisted (rplaca::font-editor-serialize-buffer-state source))
+           (save-entry (assoc :save-path persisted)))
+      (setf (cdr save-entry) "/tmp/legacy.clawfont")
+      (rplaca::font-editor-restore-buffer-state legacy-target persisted)
+      (is (null (rplaca::font-editor-state-save-path
+                 (rplaca:font-editor-buffer-state legacy-target))))
+      (setf (cdr save-entry) "/tmp/canonical.rplacafont")
+      (rplaca::font-editor-restore-buffer-state canonical-target persisted)
+      (is (equal #P"/tmp/canonical.rplacafont"
+                 (rplaca::font-editor-state-save-path
+                  (rplaca:font-editor-buffer-state canonical-target)))))))
 
 (test font-editor-buffer-toggle-and-serialize
   "Font editor buffers should edit glyph pixels and persist buffer state."

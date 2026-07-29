@@ -165,7 +165,7 @@ with =define-project=, and inert manifest files are autoloaded from
 available as the =config= project unless init defines =config= first.
 
 #+begin_src lisp
-(define-project "rplaca" :root #P"/home/tay/projects/rplaca/")
+(define-project "rplaca" :root #P"/path/to/rplaca/")
 (create-project "scratch-work" :root #P"/tmp/scratch-work/" :persist nil)
 (list-projects)
 (project-list-files "rplaca")
@@ -197,7 +197,7 @@ Projects can also expose validation and reload hooks through =define-project=:
 
 #+begin_src lisp
 (define-project "rplaca"
-  :root #P"/home/tay/projects/rplaca/"
+  :root #P"/path/to/rplaca/"
   :systems '("rplaca" "rplaca/tests")
   :check-functions
   (list (lambda (project)
@@ -352,6 +352,13 @@ RPLACA has a full face (color/attribute) system inspired by Emacs:
 - Face inheritance chains with full resolution
 - Interactive face customization via =C-h F=
 - Supports CGA (16-color), 256-color, and hex (#RRGGBB) color specs
+
+** Bitmap Font Editor
+
+The bitmap font editor saves its native editable format as =.rplacafont= using
+=write-rplacafont-file= and =read-rplacafont-file=. It can import legacy
+=.clawfont= files for compatibility, but saves only the canonical RPLACA format.
+BDF and CADR AST font import remain available through =read-font-file=.
 
 ** Session Persistence
 
@@ -517,7 +524,6 @@ Customize RPLACA by creating =~/.rplaca.d/init.lisp=:
 ;; Switch default provider and model
 (setf rplaca:*default-provider* :openai-codex)
 (setf rplaca:*default-model* "gpt-5.6-sol")
-(setf rplaca:*openai-codex-model* "gpt-5.6-sol")
 
 ;; Override the default personality prompt or point to a different prompt file
 (setf rplaca:*default-personality-prompt* "You are a pragmatic pair programmer.")
