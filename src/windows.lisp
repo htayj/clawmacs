@@ -1,47 +1,47 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Logical Windows
 ;;; --------------------------------------------------------------------------
 
-(declaim (type integer *clawmacs-window-counter*))
-(defvar *clawmacs-window-counter* 0
+(declaim (type integer *rplaca-window-counter*))
+(defvar *rplaca-window-counter* 0
   "Counter used to assign process-local logical window ids.")
 
-(declaim (ftype (function () integer) next-clawmacs-window-id))
-(defun next-clawmacs-window-id ()
+(declaim (ftype (function () integer) next-rplaca-window-id))
+(defun next-rplaca-window-id ()
   "Return a fresh process-local logical window id."
-  (incf *clawmacs-window-counter*))
+  (incf *rplaca-window-counter*))
 
-(defclass clawmacs-window ()
+(defclass rplaca-window ()
   ((id :initarg :id
-       :reader clawmacs-window-id
+       :reader rplaca-window-id
        :type integer
        :documentation "Stable process-local id for this logical window.")
    (buffer :initarg :buffer
-           :accessor clawmacs-window-buffer
+           :accessor rplaca-window-buffer
            :type (or null buffer)
            :documentation "Buffer displayed by this logical window."))
   (:documentation
    "An Emacs-style logical window.
 
-Clawmacs windows are not CLIM sheets.  The McCLIM frame owns one transcript
+RPLACA windows are not CLIM sheets.  The McCLIM frame owns one transcript
 pane and renders these logical windows into sub-regions of that pane, keeping
 CLIM pane layout simple while exposing Emacs-like split/delete/window cycling
 semantics."))
 
 (declaim (ftype (function (&key (:buffer t) (:id (or null integer)))
-                          clawmacs-window)
-                make-clawmacs-window))
-(defun make-clawmacs-window (&key buffer id)
+                          rplaca-window)
+                make-rplaca-window))
+(defun make-rplaca-window (&key buffer id)
   "Return a logical window displaying BUFFER."
   (declare (type (or null integer) id))
-  (make-instance 'clawmacs-window
-    :id (or id (next-clawmacs-window-id))
+  (make-instance 'rplaca-window
+    :id (or id (next-rplaca-window-id))
     :buffer buffer))
 
-(defstruct (clawmacs-window-node
-            (:constructor %make-clawmacs-window-node
+(defstruct (rplaca-window-node
+            (:constructor %make-rplaca-window-node
                 (&key kind window orientation first second)))
   "A node in the logical window tree.
 
@@ -50,173 +50,173 @@ ORIENTATION plus FIRST and SECOND child nodes.  ORIENTATION is :VERTICAL for a
 top/bottom split and :HORIZONTAL for a left/right split, matching CLIM's
 VERTICALLY/HORIZONTALLY layout terminology."
   (kind nil :type (or null keyword))
-  (window nil :type (or null clawmacs-window))
+  (window nil :type (or null rplaca-window))
   (orientation nil :type (or null keyword))
-  (first nil :type (or null clawmacs-window-node))
-  (second nil :type (or null clawmacs-window-node)))
+  (first nil :type (or null rplaca-window-node))
+  (second nil :type (or null rplaca-window-node)))
 
 (declaim
- (ftype (function (clawmacs-window) clawmacs-window-node)
-        make-clawmacs-window-leaf)
- (ftype (function (keyword clawmacs-window-node clawmacs-window-node)
-                  clawmacs-window-node)
-        make-clawmacs-window-split)
- (ftype (function (t) clawmacs-window-node) make-clawmacs-window-tree)
- (ftype (function (t) boolean) clawmacs-window-node-leaf-p
-        clawmacs-window-node-split-p)
- (ftype (function (t) list) clawmacs-window-tree-windows)
- (ftype (function (t) integer) clawmacs-window-tree-count)
- (ftype (function (t integer) (or null clawmacs-window))
-        clawmacs-window-tree-find-window)
- (ftype (function (t integer) (or null clawmacs-window-node))
-        clawmacs-window-tree-find-node)
- (ftype (function (t integer keyword) (or null clawmacs-window))
-        split-clawmacs-window-tree)
- (ftype (function (t integer &key (:reverse t)) (or null clawmacs-window))
-        clawmacs-window-tree-next-window)
- (ftype (function (t integer) (values t (or null clawmacs-window) boolean))
-        delete-clawmacs-window-from-tree
-        delete-other-clawmacs-windows)
- (ftype (function (t list t) boolean) clawmacs-window-tree-replace-dead-buffers))
+ (ftype (function (rplaca-window) rplaca-window-node)
+        make-rplaca-window-leaf)
+ (ftype (function (keyword rplaca-window-node rplaca-window-node)
+                  rplaca-window-node)
+        make-rplaca-window-split)
+ (ftype (function (t) rplaca-window-node) make-rplaca-window-tree)
+ (ftype (function (t) boolean) rplaca-window-node-leaf-p
+        rplaca-window-node-split-p)
+ (ftype (function (t) list) rplaca-window-tree-windows)
+ (ftype (function (t) integer) rplaca-window-tree-count)
+ (ftype (function (t integer) (or null rplaca-window))
+        rplaca-window-tree-find-window)
+ (ftype (function (t integer) (or null rplaca-window-node))
+        rplaca-window-tree-find-node)
+ (ftype (function (t integer keyword) (or null rplaca-window))
+        split-rplaca-window-tree)
+ (ftype (function (t integer &key (:reverse t)) (or null rplaca-window))
+        rplaca-window-tree-next-window)
+ (ftype (function (t integer) (values t (or null rplaca-window) boolean))
+        delete-rplaca-window-from-tree
+        delete-other-rplaca-windows)
+ (ftype (function (t list t) boolean) rplaca-window-tree-replace-dead-buffers))
 
-(defun make-clawmacs-window-leaf (window)
+(defun make-rplaca-window-leaf (window)
   "Return a leaf node for WINDOW."
-  (%make-clawmacs-window-node :kind :leaf :window window))
+  (%make-rplaca-window-node :kind :leaf :window window))
 
-(defun make-clawmacs-window-split (orientation first second)
+(defun make-rplaca-window-split (orientation first second)
   "Return a split node with ORIENTATION, FIRST child, and SECOND child."
   (unless (member orientation '(:vertical :horizontal) :test #'eq)
     (error "Unknown window split orientation: ~S" orientation))
-  (%make-clawmacs-window-node :kind :split
+  (%make-rplaca-window-node :kind :split
                               :orientation orientation
                               :first first
                               :second second))
 
-(defun make-clawmacs-window-tree (buffer)
+(defun make-rplaca-window-tree (buffer)
   "Return a new window tree containing one logical window for BUFFER."
-  (make-clawmacs-window-leaf
-   (make-clawmacs-window :buffer buffer)))
+  (make-rplaca-window-leaf
+   (make-rplaca-window :buffer buffer)))
 
-(defun clawmacs-window-node-leaf-p (node)
+(defun rplaca-window-node-leaf-p (node)
   "Return true when NODE is a leaf node."
-  (and node (eq (clawmacs-window-node-kind node) :leaf)))
+  (and node (eq (rplaca-window-node-kind node) :leaf)))
 
-(defun clawmacs-window-node-split-p (node)
+(defun rplaca-window-node-split-p (node)
   "Return true when NODE is a split node."
-  (and node (eq (clawmacs-window-node-kind node) :split)))
+  (and node (eq (rplaca-window-node-kind node) :split)))
 
-(defun clawmacs-window-tree-windows (tree)
+(defun rplaca-window-tree-windows (tree)
   "Return TREE's logical windows in display order."
   (labels ((walk (node)
              (cond
                ((null node) nil)
-               ((clawmacs-window-node-leaf-p node)
-                (list (clawmacs-window-node-window node)))
-               ((clawmacs-window-node-split-p node)
-                (append (walk (clawmacs-window-node-first node))
-                        (walk (clawmacs-window-node-second node))))
+               ((rplaca-window-node-leaf-p node)
+                (list (rplaca-window-node-window node)))
+               ((rplaca-window-node-split-p node)
+                (append (walk (rplaca-window-node-first node))
+                        (walk (rplaca-window-node-second node))))
                (t nil))))
     (remove nil (walk tree))))
 
-(defun clawmacs-window-tree-count (tree)
+(defun rplaca-window-tree-count (tree)
   "Return the number of logical windows in TREE."
-  (length (clawmacs-window-tree-windows tree)))
+  (length (rplaca-window-tree-windows tree)))
 
-(defun clawmacs-window-tree-find-window (tree window-id)
+(defun rplaca-window-tree-find-window (tree window-id)
   "Return the logical window with WINDOW-ID in TREE, or NIL."
-  (find window-id (clawmacs-window-tree-windows tree)
-        :key #'clawmacs-window-id
+  (find window-id (rplaca-window-tree-windows tree)
+        :key #'rplaca-window-id
         :test #'eql))
 
-(defun clawmacs-window-tree-find-node (tree window-id)
+(defun rplaca-window-tree-find-node (tree window-id)
   "Return the leaf node for WINDOW-ID in TREE, or NIL."
   (labels ((walk (node)
              (cond
                ((null node) nil)
-               ((clawmacs-window-node-leaf-p node)
+               ((rplaca-window-node-leaf-p node)
                 (and (eql window-id
-                          (clawmacs-window-id
-                           (clawmacs-window-node-window node)))
+                          (rplaca-window-id
+                           (rplaca-window-node-window node)))
                      node))
-               ((clawmacs-window-node-split-p node)
-                (or (walk (clawmacs-window-node-first node))
-                    (walk (clawmacs-window-node-second node))))
+               ((rplaca-window-node-split-p node)
+                (or (walk (rplaca-window-node-first node))
+                    (walk (rplaca-window-node-second node))))
                (t nil))))
     (walk tree)))
 
-(defun split-clawmacs-window-tree (tree window-id orientation)
+(defun split-rplaca-window-tree (tree window-id orientation)
   "Split WINDOW-ID in TREE and return the newly created logical window.
 
 ORIENTATION is :VERTICAL for split-window-below behavior and :HORIZONTAL for
 split-window-right behavior.  The existing window keeps its buffer; the new
 window starts by displaying the same buffer."
-  (let ((node (clawmacs-window-tree-find-node tree window-id)))
+  (let ((node (rplaca-window-tree-find-node tree window-id)))
     (when node
-      (let* ((old-window (clawmacs-window-node-window node))
-             (new-window (make-clawmacs-window
-                          :buffer (clawmacs-window-buffer old-window))))
-        (setf (clawmacs-window-node-kind node) :split
-              (clawmacs-window-node-window node) nil
-              (clawmacs-window-node-orientation node) orientation
-              (clawmacs-window-node-first node)
-              (make-clawmacs-window-leaf old-window)
-              (clawmacs-window-node-second node)
-              (make-clawmacs-window-leaf new-window))
+      (let* ((old-window (rplaca-window-node-window node))
+             (new-window (make-rplaca-window
+                          :buffer (rplaca-window-buffer old-window))))
+        (setf (rplaca-window-node-kind node) :split
+              (rplaca-window-node-window node) nil
+              (rplaca-window-node-orientation node) orientation
+              (rplaca-window-node-first node)
+              (make-rplaca-window-leaf old-window)
+              (rplaca-window-node-second node)
+              (make-rplaca-window-leaf new-window))
         new-window))))
 
-(defun clawmacs-window-tree-next-window (tree window-id &key reverse)
+(defun rplaca-window-tree-next-window (tree window-id &key reverse)
   "Return the next logical window after WINDOW-ID in display order."
-  (let* ((windows (clawmacs-window-tree-windows tree))
+  (let* ((windows (rplaca-window-tree-windows tree))
          (count (length windows))
          (index (position window-id windows
-                          :key #'clawmacs-window-id
+                          :key #'rplaca-window-id
                           :test #'eql)))
     (when (and index (plusp count))
       (nth (mod (+ index (if reverse -1 1)) count) windows))))
 
-(defun delete-clawmacs-window-from-tree (tree window-id)
+(defun delete-rplaca-window-from-tree (tree window-id)
   "Delete WINDOW-ID from TREE.
 
 Returns three values: the new tree root, the replacement selected window, and a
 boolean indicating whether a window was deleted.  The final remaining window is
 never deleted."
-  (let ((windows (clawmacs-window-tree-windows tree)))
+  (let ((windows (rplaca-window-tree-windows tree)))
     (cond
       ((or (null (cdr windows))
            (null (find window-id windows
-                       :key #'clawmacs-window-id
+                       :key #'rplaca-window-id
                        :test #'eql)))
        (values tree
                (or (first windows)
                    (and tree
-                        (clawmacs-window-node-leaf-p tree)
-                        (clawmacs-window-node-window tree)))
+                        (rplaca-window-node-leaf-p tree)
+                        (rplaca-window-node-window tree)))
                nil))
       (t
-       (let ((replacement (or (clawmacs-window-tree-next-window tree window-id)
+       (let ((replacement (or (rplaca-window-tree-next-window tree window-id)
                               (first windows))))
          (labels ((walk (node)
                     (cond
                       ((null node) (values nil nil))
-                      ((clawmacs-window-node-leaf-p node)
+                      ((rplaca-window-node-leaf-p node)
                        (if (eql window-id
-                                (clawmacs-window-id
-                                 (clawmacs-window-node-window node)))
+                                (rplaca-window-id
+                                 (rplaca-window-node-window node)))
                            (values nil t)
                            (values node nil)))
-                      ((clawmacs-window-node-split-p node)
+                      ((rplaca-window-node-split-p node)
                        (multiple-value-bind (new-first deleted-first-p)
-                           (walk (clawmacs-window-node-first node))
+                           (walk (rplaca-window-node-first node))
                          (multiple-value-bind (new-second deleted-second-p)
-                             (walk (clawmacs-window-node-second node))
+                             (walk (rplaca-window-node-second node))
                            (cond
                              ((and deleted-first-p (null new-first))
                               (values new-second t))
                              ((and deleted-second-p (null new-second))
                               (values new-first t))
                              ((or deleted-first-p deleted-second-p)
-                              (setf (clawmacs-window-node-first node) new-first
-                                    (clawmacs-window-node-second node) new-second)
+                              (setf (rplaca-window-node-first node) new-first
+                                    (rplaca-window-node-second node) new-second)
                               (values node t))
                              (t
                               (values node nil)))))))))
@@ -224,36 +224,36 @@ never deleted."
                (walk tree)
              (values new-root replacement deleted-p))))))))
 
-(defun delete-other-clawmacs-windows (tree window-id)
+(defun delete-other-rplaca-windows (tree window-id)
   "Return a new tree containing only WINDOW-ID, preserving that window object."
-  (let ((window (clawmacs-window-tree-find-window tree window-id)))
+  (let ((window (rplaca-window-tree-find-window tree window-id)))
     (if window
-        (values (make-clawmacs-window-leaf window) window t)
+        (values (make-rplaca-window-leaf window) window t)
         (values tree nil nil))))
 
-(defun clawmacs-window-tree-replace-dead-buffers (tree live-buffers fallback)
+(defun rplaca-window-tree-replace-dead-buffers (tree live-buffers fallback)
   "Replace window buffers not in LIVE-BUFFERS with FALLBACK.
 
 Returns true when any window buffer was changed."
   (let ((changed-p nil))
-    (dolist (window (clawmacs-window-tree-windows tree) changed-p)
-      (unless (member (clawmacs-window-buffer window) live-buffers :test #'eq)
-        (setf (clawmacs-window-buffer window) fallback
+    (dolist (window (rplaca-window-tree-windows tree) changed-p)
+      (unless (member (rplaca-window-buffer window) live-buffers :test #'eq)
+        (setf (rplaca-window-buffer window) fallback
               changed-p t)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Window Layout
 ;;; --------------------------------------------------------------------------
 
-(defstruct clawmacs-window-layout-entry
+(defstruct rplaca-window-layout-entry
   "A rendered grid rectangle for one logical window."
-  (window nil :type (or null clawmacs-window))
+  (window nil :type (or null rplaca-window))
   (row nil :type (or null integer))
   (col nil :type (or null integer))
   (rows nil :type (or null integer))
   (cols nil :type (or null integer)))
 
-(defstruct clawmacs-window-separator
+(defstruct rplaca-window-separator
   "A grid rectangle used as visual separation between logical windows."
   (orientation nil :type (or null keyword))
   (row nil :type (or null integer))
@@ -264,7 +264,7 @@ Returns true when any window buffer was changed."
 (declaim (ftype (function (integer) (values integer integer integer))
                 split-window-space)
          (ftype (function (t integer integer) (values list list))
-                clawmacs-window-tree-layout))
+                rplaca-window-tree-layout))
 
 (defun split-window-space (size)
   "Return FIRST, SEPARATOR, and SECOND sizes for splitting SIZE cells."
@@ -280,29 +280,29 @@ Returns true when any window buffer was changed."
             (second (- available first)))
        (values first 1 second)))))
 
-(defun clawmacs-window-tree-layout (tree rows cols)
+(defun rplaca-window-tree-layout (tree rows cols)
   "Return layout entries and separators for TREE over ROWS by COLS cells."
   (declare (type integer rows cols))
   (labels ((walk (node row col height width)
              (cond
                ((or (null node) (<= height 0) (<= width 0))
                 (values nil nil))
-               ((clawmacs-window-node-leaf-p node)
-                (values (list (make-clawmacs-window-layout-entry
-                               :window (clawmacs-window-node-window node)
+               ((rplaca-window-node-leaf-p node)
+                (values (list (make-rplaca-window-layout-entry
+                               :window (rplaca-window-node-window node)
                                :row row
                                :col col
                                :rows height
                                :cols width))
                         nil))
-               ((eq (clawmacs-window-node-orientation node) :horizontal)
+               ((eq (rplaca-window-node-orientation node) :horizontal)
                 (multiple-value-bind (first-width sep-width second-width)
                     (split-window-space width)
                   (multiple-value-bind (first-entries first-separators)
-                      (walk (clawmacs-window-node-first node)
+                      (walk (rplaca-window-node-first node)
                             row col height first-width)
                     (multiple-value-bind (second-entries second-separators)
-                        (walk (clawmacs-window-node-second node)
+                        (walk (rplaca-window-node-second node)
                               row
                               (+ col first-width sep-width)
                               height
@@ -311,21 +311,21 @@ Returns true when any window buffer was changed."
                               (append first-separators
                                       (when (plusp sep-width)
                                         (list
-                                         (make-clawmacs-window-separator
+                                         (make-rplaca-window-separator
                                           :orientation :vertical
                                           :row row
                                           :col (+ col first-width)
                                           :rows height
                                           :cols sep-width)))
                                       second-separators))))))
-               ((eq (clawmacs-window-node-orientation node) :vertical)
+               ((eq (rplaca-window-node-orientation node) :vertical)
                 (multiple-value-bind (first-height sep-height second-height)
                     (split-window-space height)
                   (multiple-value-bind (first-entries first-separators)
-                      (walk (clawmacs-window-node-first node)
+                      (walk (rplaca-window-node-first node)
                             row col first-height width)
                     (multiple-value-bind (second-entries second-separators)
-                        (walk (clawmacs-window-node-second node)
+                        (walk (rplaca-window-node-second node)
                               (+ row first-height sep-height)
                               col
                               second-height
@@ -334,7 +334,7 @@ Returns true when any window buffer was changed."
                               (append first-separators
                                       (when (plusp sep-height)
                                         (list
-                                         (make-clawmacs-window-separator
+                                         (make-rplaca-window-separator
                                           :orientation :horizontal
                                           :row (+ row first-height)
                                           :col col

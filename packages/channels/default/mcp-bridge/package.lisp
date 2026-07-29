@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defun mcp-bridge-refresh-runtime (&optional buffer)
   "Refresh mapped MCP external tools for BUFFER's working directory."
@@ -82,7 +82,7 @@
 - Use `mcp_list_resources` and `mcp_read_resource` for MCP resources instead of
   asking the user to paste them manually.
 - Users can insert linked MCP resource mentions into chat input. When a message
-  contains a linked `mcp://` resource mention, Clawmacs injects that resource's
+  contains a linked `mcp://` resource mention, RPLACA injects that resource's
   content into provider-visible context for the turn."
  :title "External MCP integrations"
  :package "mcp-bridge")

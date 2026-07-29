@@ -18,7 +18,7 @@ mkdir -p "$artifact_dir/home" "$artifact_dir/cache" \
 printf 'preserve home\n' > "$artifact_dir/home/keep"
 printf 'preserve cache\n' > "$artifact_dir/cache/keep"
 printf '%s\n' \
-  'prefix [clawmacs-e2e] {"event":"frame-ready","sequence":999}' \
+  'prefix [rplaca-e2e] {"event":"frame-ready","sequence":999}' \
   > "$artifact_dir/debug.log"
 printf '999999\n' > "$artifact_dir/window.id"
 printf 'stale screenshot\n' > "$artifact_dir/screenshots/nested/failure.png"

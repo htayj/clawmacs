@@ -1,4 +1,4 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 (in-suite message-suite)
 
 (test line-creation
@@ -43,8 +43,8 @@
   (let* ((l1 (make-line "hello"))
          (l2 (make-line "world"))
          (m (make-message :user)))
-    (setf (slot-value m 'clawmacs::first-line) l1
-          (slot-value m 'clawmacs::last-line) l2
+    (setf (slot-value m 'rplaca::first-line) l1
+          (slot-value m 'rplaca::last-line) l2
           (line-next l1) l2
           (line-prev l2) l1)
     (is (string= (format nil "hello~%world") (message-text m)))))
@@ -56,7 +56,7 @@
     (let ((l2 (make-line "second")))
       (setf (line-next (message-first-line m)) l2
             (line-prev l2) (message-first-line m)
-            (slot-value m 'clawmacs::last-line) l2))
+            (slot-value m 'rplaca::last-line) l2))
     (is (= 2 (message-line-count m)))))
 
 (test message-insert-char
@@ -179,44 +179,44 @@
 (test message-point-mark-and-region-operations
   "Point and mark support Emacs-style region copy, kill, and exchange."
   (let ((m (make-message :user)))
-    (clawmacs::set-message-text m "alpha beta gamma")
-    (clawmacs::set-message-point-from-absolute-offset m 6)
+    (rplaca::set-message-text m "alpha beta gamma")
+    (rplaca::set-message-point-from-absolute-offset m 6)
     (message-set-mark-at-point m)
-    (clawmacs::set-message-point-from-absolute-offset m 10)
+    (rplaca::set-message-point-from-absolute-offset m 10)
     (is (string= "beta" (message-region-text m)))
     (message-copy-region m)
     (is (string= "beta" (kill-ring-top)))
     (message-exchange-point-and-mark m)
-    (is (= 6 (clawmacs::message-point-absolute-offset m)))
+    (is (= 6 (rplaca::message-point-absolute-offset m)))
     (is (= 10 (message-mark-absolute-offset m)))
     (message-kill-region m)
     (is (string= "alpha  gamma" (message-text m)))
     (is-false (message-mark-active-p m))
-    (is (= 6 (clawmacs::message-point-absolute-offset m)))))
+    (is (= 6 (rplaca::message-point-absolute-offset m)))))
 
 (test message-mark-can-be-restored-from-an-absolute-offset
   "Editor adapters can round-trip a mark independently from point."
   (let ((m (make-message :user)))
-    (clawmacs::set-message-text m (format nil "alpha~%beta"))
-    (clawmacs:set-message-mark-from-absolute-offset m 7)
-    (clawmacs::set-message-point-from-absolute-offset m 2)
+    (rplaca::set-message-text m (format nil "alpha~%beta"))
+    (rplaca:set-message-mark-from-absolute-offset m 7)
+    (rplaca::set-message-point-from-absolute-offset m 2)
     (is (= 7 (message-mark-absolute-offset m)))
-    (is (= 2 (clawmacs::message-point-absolute-offset m)))))
+    (is (= 2 (rplaca::message-point-absolute-offset m)))))
 
 (test message-mark-whole-buffer-and-replacement-insert
   "Self insertion replaces an active region."
   (let ((m (make-message :user)))
-    (clawmacs::set-message-text m "old text")
+    (rplaca::set-message-text m "old text")
     (message-mark-whole-buffer m)
     (message-insert-char m #\x)
     (is (string= "x" (message-text m)))
     (is-false (message-mark-active-p m))
-    (is (= 1 (clawmacs::message-point-absolute-offset m)))))
+    (is (= 1 (rplaca::message-point-absolute-offset m)))))
 
 (test message-line-motion-and-search-cross-lines
   "Editor movement and search operate across multi-line message text."
   (let ((m (make-message :user)))
-    (clawmacs::set-message-text m "one
+    (rplaca::set-message-text m "one
 two words
 three")
     (message-forward-line m)
@@ -229,4 +229,4 @@ three")
     (is (= 4 (message-search-backward m "two")))
     (is (= 14 (message-search-forward m "three")))
     (message-backward-word m)
-    (is (= 8 (clawmacs::message-point-absolute-offset m)))))
+    (is (= 8 (rplaca::message-point-absolute-offset m)))))

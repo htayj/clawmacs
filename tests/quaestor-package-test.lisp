@@ -1,4 +1,4 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite quaestor-package-suite)
 
@@ -27,58 +27,58 @@
 (defmacro with-quaestor-package-state (&body body)
   "Run BODY with isolated package, tool, command, keymap, and advice state."
   `(let* ((root (temp-package-test-directory "quaestor-config"))
-          (clawmacs::*package-configuration-path*
+          (rplaca::*package-configuration-path*
            (merge-pathnames "packages.json" root))
-          (clawmacs::*package-configuration* nil)
-          (clawmacs::*package-channels* (default-package-test-channels))
-          (clawmacs::*available-packages* nil)
-          (clawmacs::*package-registry-loaded-p* nil)
-          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
-          (clawmacs::*package-prompt-sections* nil)
-          (clawmacs::*enabled-builtin-packages* nil)
-          (clawmacs::*tool-table* (make-hash-table :test #'equal))
-          (clawmacs::*agent-tool-metadata-table*
+          (rplaca::*package-configuration* nil)
+          (rplaca::*package-channels* (default-package-test-channels))
+          (rplaca::*available-packages* nil)
+          (rplaca::*package-registry-loaded-p* nil)
+          (rplaca::*loaded-packages* (make-hash-table :test #'equal))
+          (rplaca::*package-prompt-sections* nil)
+          (rplaca::*enabled-builtin-packages* nil)
+          (rplaca::*tool-table* (make-hash-table :test #'equal))
+          (rplaca::*agent-tool-metadata-table*
            (make-hash-table :test #'eq))
-          (clawmacs::*agent-tool-name-table*
+          (rplaca::*agent-tool-name-table*
            (make-hash-table :test #'equal))
-          (clawmacs::*command-table* (make-hash-table :test #'eq))
-          (clawmacs::*extended-docs* (make-hash-table :test #'eq))
-          (clawmacs::*slash-command-table* (make-hash-table :test #'equal))
-          (clawmacs::*buffer-type-registry*
-           (clawmacs::make-buffer-type-registry))
-          (clawmacs::*buffer-input-presentation-providers* nil)
-          (clawmacs::*buffer-ring* nil)
-          (clawmacs::*buffer-counter* 0)
-          (clawmacs::*default-keymap* nil)
-          (clawmacs::*scratch-keymap* nil)
-          (clawmacs::*file-keymap* nil)
-          (clawmacs::*after-buffer-display-change-hook* nil)
-          (clawmacs::*advice-table* (make-hash-table :test #'eq))
+          (rplaca::*command-table* (make-hash-table :test #'eq))
+          (rplaca::*extended-docs* (make-hash-table :test #'eq))
+          (rplaca::*slash-command-table* (make-hash-table :test #'equal))
+          (rplaca::*buffer-type-registry*
+           (rplaca::make-buffer-type-registry))
+          (rplaca::*buffer-input-presentation-providers* nil)
+          (rplaca::*buffer-ring* nil)
+          (rplaca::*buffer-counter* 0)
+          (rplaca::*default-keymap* nil)
+          (rplaca::*scratch-keymap* nil)
+          (rplaca::*file-keymap* nil)
+          (rplaca::*after-buffer-display-change-hook* nil)
+          (rplaca::*advice-table* (make-hash-table :test #'eq))
           (*quaestor-test-resume-record* nil))
      (unwind-protect
           (progn
             ,@body)
        (ignore-errors
-         (clawmacs:remove-advice 'clawmacs::send-message
-                                 'clawmacs::quaestor-send-message))
+         (rplaca:remove-advice 'rplaca::send-message
+                                 'rplaca::quaestor-send-message))
        (ignore-errors
-         (clawmacs:remove-advice 'clawmacs::handle-key-event
-                                 'clawmacs::quaestor-handle-key-event))
+         (rplaca:remove-advice 'rplaca::handle-key-event
+                                 'rplaca::quaestor-handle-key-event))
        (ignore-errors
-         (clawmacs:remove-advice 'clawmacs::advance-tool-calls
-                                 'clawmacs::quaestor-advance-tool-calls))
+         (rplaca:remove-advice 'rplaca::advance-tool-calls
+                                 'rplaca::quaestor-advance-tool-calls))
        (ignore-errors
-         (clawmacs:remove-advice 'clawmacs::execute-prompt-tool-call
-                                 'clawmacs::quaestor-prompt-tool-call))
+         (rplaca:remove-advice 'rplaca::execute-prompt-tool-call
+                                 'rplaca::quaestor-prompt-tool-call))
        (ignore-errors
-         (clawmacs:remove-advice 'clawmacs::init-default-keymap
-                                 'clawmacs::quaestor-init-default-keymap)))))
+         (rplaca:remove-advice 'rplaca::init-default-keymap
+                                 'rplaca::quaestor-init-default-keymap)))))
 
 (defun load-test-quaestor-package ()
   "Enable and load the bundled quaestor package."
   (set-package-enablement-scope "quaestor" :global)
   (load-active-packages)
-  (clawmacs::init-default-keymap))
+  (rplaca::init-default-keymap))
 
 (defun quaestor-test-request-args ()
   "Return a normalized request_user_input question payload."
@@ -98,7 +98,7 @@
   (let ((root (temp-package-test-directory
                (format nil "quaestor-buffer-~A" name))))
     (ensure-directories-exist (merge-pathnames #P".keep" root))
-    (clawmacs::make-chat-buffer name :working-directory root)))
+    (rplaca::make-chat-buffer name :working-directory root)))
 
 (test quaestor-package-registers-tool-prompt-commands-and-bindings
   "Enabling quaestor exposes its tool, prompt, commands, and queue bindings."
@@ -113,42 +113,42 @@
            (commands (list-available-commands)))
       (is (member "request_user_input" tool-names :test #'string=))
       (let ((buf (make-quaestor-test-buffer "quaestor-provider-check")))
-        (is (member 'clawmacs::quaestor-input-presentation-entries
-                    (clawmacs::buffer-input-presentation-functions buf)
+        (is (member 'rplaca::quaestor-input-presentation-entries
+                    (rplaca::buffer-input-presentation-functions buf)
                     :test #'eq)))
       (is (search "Structured user questions with quaestor" prompt))
       (is (search "request_user_input" prompt))
-      (is (member 'clawmacs::quaestor-show-queued-messages-command
+      (is (member 'rplaca::quaestor-show-queued-messages-command
                   commands
                   :test #'eq))
-      (is (member 'clawmacs::quaestor-recall-last-queued-message-command
+      (is (member 'rplaca::quaestor-recall-last-queued-message-command
                   commands
                   :test #'eq))
-      (is (member 'clawmacs::quaestor-queue-steering-message-command
+      (is (member 'rplaca::quaestor-queue-steering-message-command
                   commands
                   :test #'eq))
-      (is (member 'clawmacs::quaestor-cancel-and-restore-command
+      (is (member 'rplaca::quaestor-cancel-and-restore-command
                   commands
                   :test #'eq))
-      (is (eq 'clawmacs::quaestor-show-queued-messages-command
-              (clawmacs::keymap-lookup clawmacs::*default-keymap*
+      (is (eq 'rplaca::quaestor-show-queued-messages-command
+              (rplaca::keymap-lookup rplaca::*default-keymap*
                                       '(:ctrl-c #\q))))
-      (is (eq 'clawmacs::quaestor-recall-last-queued-message-command
-              (clawmacs::keymap-lookup clawmacs::*default-keymap*
+      (is (eq 'rplaca::quaestor-recall-last-queued-message-command
+              (rplaca::keymap-lookup rplaca::*default-keymap*
                                       '(:ctrl-c #\Q))))
-      (is (eq 'clawmacs::quaestor-queue-steering-message-command
-              (clawmacs::keymap-lookup clawmacs::*default-keymap*
+      (is (eq 'rplaca::quaestor-queue-steering-message-command
+              (rplaca::keymap-lookup rplaca::*default-keymap*
                                       '(:ctrl-c #\j))))
-      (is (eq 'clawmacs::quaestor-cancel-and-restore-command
-              (clawmacs::keymap-lookup clawmacs::*default-keymap*
+      (is (eq 'rplaca::quaestor-cancel-and-restore-command
+              (rplaca::keymap-lookup rplaca::*default-keymap*
                                       '(:ctrl-c #\J))))
       (let ((buf (make-quaestor-test-buffer "quaestor-provider-reset")))
-        (is (member 'clawmacs::quaestor-input-presentation-entries
-                    (clawmacs::buffer-input-presentation-functions buf)
+        (is (member 'rplaca::quaestor-input-presentation-entries
+                    (rplaca::buffer-input-presentation-functions buf)
                     :test #'eq))
-        (clawmacs::reset-package-runtime-state "quaestor")
-        (is-false (member 'clawmacs::quaestor-input-presentation-entries
-                          (clawmacs::buffer-input-presentation-functions buf)
+        (rplaca::reset-package-runtime-state "quaestor")
+        (is-false (member 'rplaca::quaestor-input-presentation-entries
+                          (rplaca::buffer-input-presentation-functions buf)
                           :test #'eq))))))
 
 (test quaestor-input-presentations-describe-active-request
@@ -156,7 +156,7 @@
   (with-quaestor-package-state
     (load-test-quaestor-package)
     (let ((buf (make-quaestor-test-buffer "quaestor-panel")))
-      (clawmacs::quaestor-request-user-input
+      (rplaca::quaestor-request-user-input
        buf
        '((:header "Scope"
           :id "scope"
@@ -164,28 +164,28 @@
           :options ((:label "Alpha" :description "Smaller change.")
                     (:label "Beta" :description "Broader change."))
           :freeform t)))
-      (is (member 'clawmacs::quaestor-input-presentation-entries
-                  (clawmacs::buffer-input-presentation-functions buf)
+      (is (member 'rplaca::quaestor-input-presentation-entries
+                  (rplaca::buffer-input-presentation-functions buf)
                   :test #'eq))
-      (let* ((entries (clawmacs::quaestor-input-presentation-entries buf 100))
+      (let* ((entries (rplaca::quaestor-input-presentation-entries buf 100))
              (beta (find-if (lambda (entry)
                               (search "Beta" (getf entry :text)))
                             entries))
-             (submit (find 'clawmacs::quaestor-submit-ref entries
+             (submit (find 'rplaca::quaestor-submit-ref entries
                            :key (lambda (entry)
                                   (getf entry :presentation-type)))))
         (is (search "Quaestor request 1/1: Scope"
                     (getf (second entries) :text)))
         (is (not (null beta)))
-        (is (eq 'clawmacs::quaestor-option-ref
+        (is (eq 'rplaca::quaestor-option-ref
                 (getf beta :presentation-type)))
         (is (clim:presentation-typep (getf beta :object)
-                                     'clawmacs::quaestor-option-ref))
+                                     'rplaca::quaestor-option-ref))
         (is (not (null submit)))
         (is (clim:presentation-typep (getf submit :object)
-                                     'clawmacs::quaestor-submit-ref))
-        (clawmacs::quaestor-activate-option buf (getf beta :object))
-        (let ((updated (clawmacs::quaestor-input-presentation-entries buf 100)))
+                                     'rplaca::quaestor-submit-ref))
+        (rplaca::quaestor-activate-option buf (getf beta :object))
+        (let ((updated (rplaca::quaestor-input-presentation-entries buf 100)))
           (is (find-if (lambda (entry)
                          (and (search "[x] Beta" (getf entry :text))
                               (eq :selector-selected (getf entry :face))))
@@ -197,27 +197,27 @@
     (load-test-quaestor-package)
     (let ((buf (make-quaestor-test-buffer "quaestor-tool"))
           (start-stream-called nil))
-      (with-quaestor-function-override (clawmacs::start-streaming-response (buffer)
+      (with-quaestor-function-override (rplaca::start-streaming-response (buffer)
                                         (declare (ignore buffer))
                                         (setf start-stream-called t)
                                         :stubbed)
-        (let ((tool-use (clawmacs::canonical-tool-use-block
+        (let ((tool-use (rplaca::canonical-tool-use-block
                          "call-1"
                          "request_user_input"
                          (quaestor-test-request-args))))
-          (clawmacs::begin-tool-calls buf (list tool-use))
+          (rplaca::begin-tool-calls buf (list tool-use))
           (is (eq :question (buffer-status buf)))
-          (is (not (null (clawmacs::buffer-user-input-pending buf))))
+          (is (not (null (rplaca::buffer-user-input-pending buf))))
           (is (= 1 (length (buffer-pending-tool-calls buf))))
           (is (search "[request_user_input]"
                       (message-text (quaestor-last-finalized-message buf))))
-          (clawmacs::handle-key-event buf :down)
-          (clawmacs::handle-key-event buf #\Space)
-          (clawmacs::handle-key-event buf #\Tab)
-          (clawmacs::handle-key-event buf #\o)
-          (clawmacs::handle-key-event buf #\k)
-          (clawmacs::handle-key-event buf #\Return)
-          (is (null (clawmacs::buffer-user-input-pending buf)))
+          (rplaca::handle-key-event buf :down)
+          (rplaca::handle-key-event buf #\Space)
+          (rplaca::handle-key-event buf #\Tab)
+          (rplaca::handle-key-event buf #\o)
+          (rplaca::handle-key-event buf #\k)
+          (rplaca::handle-key-event buf #\Return)
+          (is (null (rplaca::buffer-user-input-pending buf)))
           (is (null (buffer-pending-tool-calls buf)))
           (is (null (buffer-tool-call-results buf)))
           (is-true start-stream-called)
@@ -237,13 +237,13 @@
   (with-quaestor-package-state
     (load-test-quaestor-package)
     (let* ((buf (make-quaestor-test-buffer "quaestor-prompt"))
-           (tool-use (clawmacs::canonical-tool-use-block
+           (tool-use (rplaca::canonical-tool-use-block
                       "call-1"
                       "request_user_input"
                       (quaestor-test-request-args)))
            (events nil))
       (multiple-value-bind (result event)
-          (clawmacs::execute-prompt-tool-call
+          (rplaca::execute-prompt-tool-call
            buf tool-use :agent
            :event-callback (lambda (payload)
                              (push payload events)))
@@ -254,7 +254,7 @@
         (is (search "unavailable in non-interactive prompt mode"
                     (cdr (assoc :result result))
                     :test #'char-equal))
-        (is (clawmacs::prompt-tool-event-denied-p event))
+        (is (rplaca::prompt-tool-event-denied-p event))
         (is (= 2 (length events)))
         (is (string= "tool.call"
                      (getf (first events) :event)))
@@ -273,7 +273,7 @@
   (with-quaestor-package-state
     (load-test-quaestor-package)
     (let ((buf (make-quaestor-test-buffer "quaestor-multi-question")))
-      (clawmacs::quaestor-request-user-input
+      (rplaca::quaestor-request-user-input
        buf
        '((:header "First"
           :id "first"
@@ -283,14 +283,14 @@
           :question "Second answer?"))
        :resume-function 'quaestor-test-resume-handler)
       (set-message-text (buffer-input-message buf) "one")
-      (clawmacs::send-message buf)
-      (is (clawmacs::buffer-user-input-pending buf))
-      (is (= 1 (clawmacs::quaestor-request-current-index
-                (clawmacs::buffer-user-input-pending buf))))
+      (rplaca::send-message buf)
+      (is (rplaca::buffer-user-input-pending buf))
+      (is (= 1 (rplaca::quaestor-request-current-index
+                (rplaca::buffer-user-input-pending buf))))
       (is (string= "" (message-text (buffer-input-message buf))))
       (set-message-text (buffer-input-message buf) "two")
-      (clawmacs::send-message buf)
-      (is-false (clawmacs::buffer-user-input-pending buf))
+      (rplaca::send-message buf)
+      (is-false (rplaca::buffer-user-input-pending buf))
       (is (equalp '(:answers (("first" :answers #("one"))
                               ("second" :answers #("two"))))
                   (getf *quaestor-test-resume-record* :payload))))))
@@ -300,7 +300,7 @@
   (with-quaestor-package-state
     (load-test-quaestor-package)
     (let ((buf (make-quaestor-test-buffer "quaestor-lisp")))
-      (clawmacs::quaestor-request-user-input
+      (rplaca::quaestor-request-user-input
        buf
        '((:header "Path"
           :id "path"
@@ -308,11 +308,11 @@
        :resume-function 'quaestor-test-resume-handler
        :resume-state '(:ticket 7))
       (is (eq :question (buffer-status buf)))
-      (clawmacs::handle-key-event buf #\d)
-      (clawmacs::handle-key-event buf #\o)
-      (clawmacs::handle-key-event buf #\n)
-      (clawmacs::handle-key-event buf #\e)
-      (clawmacs::handle-key-event buf #\Return)
+      (rplaca::handle-key-event buf #\d)
+      (rplaca::handle-key-event buf #\o)
+      (rplaca::handle-key-event buf #\n)
+      (rplaca::handle-key-event buf #\e)
+      (rplaca::handle-key-event buf #\Return)
       (is (eq :idle (buffer-status buf)))
       (is (not (null *quaestor-test-resume-record*)))
       (is (string= "quaestor-lisp"
@@ -328,18 +328,18 @@
     (load-test-quaestor-package)
     (let ((buf (make-quaestor-test-buffer "quaestor-queue")))
       (setf (buffer-pending-tool-calls buf)
-            (list (clawmacs::canonical-tool-use-block
+            (list (rplaca::canonical-tool-use-block
                    "call-1"
                    "request_user_input"
                    (quaestor-test-request-args))))
       (set-message-text (buffer-input-message buf) "follow up")
-      (clawmacs::send-message buf)
-      (is (= 1 (length (clawmacs::buffer-queued-follow-up-messages buf))))
+      (rplaca::send-message buf)
+      (is (= 1 (length (rplaca::buffer-queued-follow-up-messages buf))))
       (is (string= "" (message-text (buffer-input-message buf))))
       (is (search "Queued follow-up message"
                   (message-text (quaestor-last-finalized-message buf))))
-      (clawmacs::quaestor-recall-last-queued-message-command buf)
-      (is (null (clawmacs::buffer-queued-follow-up-messages buf)))
+      (rplaca::quaestor-recall-last-queued-message-command buf)
+      (is (null (rplaca::buffer-queued-follow-up-messages buf)))
       (is (string= "follow up"
                    (message-text (buffer-input-message buf)))))))
 
@@ -350,12 +350,12 @@
     (let ((buf (make-quaestor-test-buffer "quaestor-steering")))
       (setf (buffer-status buf) :streaming)
       (set-message-text (buffer-input-message buf) "steer now")
-      (clawmacs::quaestor-queue-steering-message-command buf)
-      (clawmacs::queue-buffer-message buf :follow-up "follow later")
+      (rplaca::quaestor-queue-steering-message-command buf)
+      (rplaca::queue-buffer-message buf :follow-up "follow later")
       (set-message-text (buffer-input-message buf) "draft text")
-      (clawmacs::quaestor-cancel-and-restore-command buf)
-      (is (null (clawmacs::buffer-queued-steering-messages buf)))
-      (is (null (clawmacs::buffer-queued-follow-up-messages buf)))
+      (rplaca::quaestor-cancel-and-restore-command buf)
+      (is (null (rplaca::buffer-queued-steering-messages buf)))
+      (is (null (rplaca::buffer-queued-follow-up-messages buf)))
       (let ((text (message-text (buffer-input-message buf))))
         (is (search "steer now" text))
         (is (search "follow later" text))

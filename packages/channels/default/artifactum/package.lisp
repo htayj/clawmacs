@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defun artifactum-current-buffer ()
   "Return the current tool buffer, or the current UI buffer."

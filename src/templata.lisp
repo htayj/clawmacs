@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Prompt Templates And Slash Commands
@@ -28,7 +28,7 @@
   "Process-global slash command table, distinct from dynamic test bindings.")
 
 (defvar *slash-command-registry-lock*
-  (bt:make-lock "clawmacs slash command registry")
+  (bt:make-lock "rplaca slash command registry")
   "Lock guarding bounded access to the process-global slash command table.")
 
 (defun call-with-slash-command-registry-lock
@@ -64,12 +64,22 @@
        (nreverse removed)))
    *slash-command-table*))
 
-(defvar *prompt-template-user-directory*
+(defparameter +default-prompt-template-user-directory+
+  (merge-pathnames #P".rplaca.d/prompts/" (user-homedir-pathname))
+  "Canonical global prompt-template directory.")
+(defparameter +legacy-prompt-template-user-directory+
   (merge-pathnames #P".clawmacs.d/prompts/" (user-homedir-pathname))
+  "Legacy read-only prompt-template directory.")
+(defvar *prompt-template-user-directory*
+  +default-prompt-template-user-directory+
   "Global prompt-template directory.")
 
-(defvar *prompt-template-project-directory-name* ".clawmacs/prompts/"
+(defvar *prompt-template-project-directory-name* ".rplaca/prompts/"
   "Project-relative prompt-template directory name.")
+
+(defparameter +legacy-prompt-template-project-directory-name+
+  ".clawmacs/prompts/"
+  "Legacy project-relative prompt-template directory name.")
 
 (defvar *prompt-template-package-directory-name* "prompts/"
   "Package-relative prompt-template directory name.")
@@ -212,8 +222,11 @@ ARGS is a list of shell-like arguments with simple quote handling."
   "Return BUFFER's project prompt-template directory, or NIL."
   (let ((working-directory (and buffer (buffer-working-directory buffer))))
     (when working-directory
-      (merge-pathnames *prompt-template-project-directory-name*
-                       (uiop:ensure-directory-pathname working-directory)))))
+      (let ((root (uiop:ensure-directory-pathname working-directory)))
+        (migration-read-path
+         (merge-pathnames *prompt-template-project-directory-name* root)
+         (merge-pathnames +legacy-prompt-template-project-directory-name+ root)
+         :label "project prompt-template directory")))))
 
 (defun package-prompt-template-directory (definition)
   "Return DEFINITION's prompt-template directory."
@@ -250,10 +263,15 @@ ARGS is a list of shell-like arguments with simple quote handling."
          (list (list :directory project-dir :scope :project))
          nil))
    (prompt-template-package-directory-entries :buffer buffer)
-   (if (probe-file *prompt-template-user-directory*)
-       (list (list :directory *prompt-template-user-directory*
-                   :scope :global))
-       nil)))
+   (let ((user-directory
+           (configured-migration-read-path
+            *prompt-template-user-directory*
+            +default-prompt-template-user-directory+
+            +legacy-prompt-template-user-directory+
+            :label "global prompt-template directory")))
+     (if (probe-file user-directory)
+         (list (list :directory user-directory :scope :global))
+         nil))))
 
 (defun discover-prompt-templates (&key buffer)
   "Return prompt templates visible for BUFFER with local precedence."
@@ -363,11 +381,11 @@ Supports $1, $2, $@, $ARGUMENTS, ${@:N}, and ${@:N:M}."
 
 (defun register-slash-command (name handler &key description argument-hint package)
   "Register a slash command NAME handled by HANDLER."
-  (when (and *current-clawmacs-package*
+  (when (and *current-rplaca-package*
              (not (package-resource-type-allowed-p :slash-command)))
     (return-from register-slash-command nil))
   (let* ((normalized-name (normalize-slash-command-name name))
-         (raw-owner (or package *current-clawmacs-package*))
+         (raw-owner (or package *current-rplaca-package*))
          (owner (and raw-owner (manifest-package-name raw-owner)))
          (command (make-slash-command
                    :name normalized-name

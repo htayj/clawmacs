@@ -2,9 +2,9 @@
 # Execute the real two-frame CLX proof only in Guix e2e with a private Xvfb.
 set -eu
 
-probe_test_double=${CLAWMACS_PROBE_TEST_DOUBLE:-}
+probe_test_double=${RPLACA_PROBE_TEST_DOUBLE:-}
 
-if [ "${CLAWMACS_IN_GUIX_CONTAINER:-0}" != "1" ]; then
+if [ "${RPLACA_IN_GUIX_CONTAINER:-0}" != "1" ]; then
   # The launcher starts this exact script once more in the container.  Do not
   # call the launcher from that inner invocation: recursive containers obscure
   # failures and can leave an owned process group behind.
@@ -13,7 +13,7 @@ if [ "${CLAWMACS_IN_GUIX_CONTAINER:-0}" != "1" ]; then
       ./scripts/guix-container.sh --mode e2e -- \
       sh scripts/probe-appearance-live-frames.sh --inner
   fi
-  export CLAWMACS_CONTAINER_DISABLE_HOST_X=1
+  export RPLACA_CONTAINER_DISABLE_HOST_X=1
   exec ./scripts/guix-container.sh --mode e2e -- \
     sh scripts/probe-appearance-live-frames.sh --inner
 fi
@@ -30,8 +30,8 @@ fi
 exec sh -lc '
   set -eu
   tmp=$(mktemp -d)
-  payload_timeout_tenths=${CLAWMACS_PROBE_PAYLOAD_TIMEOUT_TENTHS:-1800}
-  termination_grace_tenths=${CLAWMACS_PROBE_TERMINATION_GRACE_TENTHS:-50}
+  payload_timeout_tenths=${RPLACA_PROBE_PAYLOAD_TIMEOUT_TENTHS:-1800}
+  termination_grace_tenths=${RPLACA_PROBE_TERMINATION_GRACE_TENTHS:-50}
   case "$payload_timeout_tenths:$termination_grace_tenths" in
     *[!0-9:]*|:*|*:) echo "invalid probe timeout" >&2; exit 64 ;;
   esac
@@ -87,8 +87,8 @@ exec sh -lc '
     rm -rf "$tmp"
   }
   trap cleanup EXIT INT TERM
-  if [ -n "${CLAWMACS_PROBE_TEST_DOUBLE:-}" ]; then
-    "$CLAWMACS_PROBE_TEST_DOUBLE" xvfb \
+  if [ -n "${RPLACA_PROBE_TEST_DOUBLE:-}" ]; then
+    "$RPLACA_PROBE_TEST_DOUBLE" xvfb \
       3>"$tmp/display" >"$tmp/xvfb.log" 2>&1 &
   else
     Xvfb -displayfd 3 -screen 0 1280x800x24 -nolisten tcp -ac \
@@ -101,12 +101,12 @@ exec sh -lc '
     exit 1
   fi
   export DISPLAY=":$(tr -d "\r\n" < "$tmp/display")"
-  if [ -n "${CLAWMACS_PROBE_TEST_DOUBLE:-}" ]; then
-    setsid env CLAWMACS_PROBE_KIND=appearance \
-      "$CLAWMACS_PROBE_TEST_DOUBLE" sbcl >"$tmp/payload.log" 2>&1 &
+  if [ -n "${RPLACA_PROBE_TEST_DOUBLE:-}" ]; then
+    setsid env RPLACA_PROBE_KIND=appearance \
+      "$RPLACA_PROBE_TEST_DOUBLE" sbcl >"$tmp/payload.log" 2>&1 &
   else
     setsid sbcl --noinform --non-interactive \
-      --load "$CLAWMACS_QUICKLISP_SETUP" \
+      --load "$RPLACA_QUICKLISP_SETUP" \
       --eval "(push (truename \".\") asdf:*central-registry*)" \
       --load scripts/probe-appearance-live-frames.lisp --eval "(quit)" \
       >"$tmp/payload.log" 2>&1 &

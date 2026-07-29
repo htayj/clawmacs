@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Provider-neutral generated media
@@ -66,7 +66,7 @@ video jobs without exposing provider or billing selection to an agent tool."
 (defvar *media-provider-registry* (make-hash-table :test #'equal)
   "Registry of installed package-owned MEDIA-PROVIDER definitions.")
 
-(defvar *media-provider-registry-lock* (bt:make-lock "clawmacs media providers")
+(defvar *media-provider-registry-lock* (bt:make-lock "rplaca media providers")
   "Lock guarding the media provider and operation registries.")
 
 (defvar *media-operation-registry* (make-hash-table :test #'equal)
@@ -140,8 +140,8 @@ video jobs without exposing provider or billing selection to an agent tool."
 
 (defun media-registry-owner-name ()
   "Return the package name that owns a registration in the current load."
-  (and *current-clawmacs-package*
-       (manifest-package-name *current-clawmacs-package*)))
+  (and *current-rplaca-package*
+       (manifest-package-name *current-rplaca-package*)))
 
 (defun normalize-media-provider-package-owner (package)
   "Return PACKAGE as a canonical package owner, or signal for an invalid name."

@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defun templata-find-model-entry (buffer raw-name)
   "Return the unique model selector entry matching RAW-NAME, or NIL."

@@ -1,9 +1,9 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite skills-suite)
 
 (defun temp-skills-test-directory (&optional (name "skills"))
-  (let* ((leaf (format nil "clawmacs-~A-test-~D-~D-~A"
+  (let* ((leaf (format nil "rplaca-~A-test-~D-~D-~A"
                        name
                        (get-universal-time)
                        (get-internal-real-time)
@@ -23,30 +23,30 @@
 
 (defmacro with-isolated-skills ((root) &body body)
   `(let* ((,root (temp-skills-test-directory))
-          (clawmacs::*skill-user-directory*
+          (rplaca::*skill-user-directory*
             (merge-pathnames #P"user-skills/" ,root))
-          (clawmacs::*skill-agents-directory*
+          (rplaca::*skill-agents-directory*
             (merge-pathnames #P"agents-skills/" ,root))
-          (clawmacs::*skill-system-directory*
+          (rplaca::*skill-system-directory*
             (merge-pathnames #P"system-skills/" ,root))
-          (clawmacs::*skill-configuration-path*
+          (rplaca::*skill-configuration-path*
             (merge-pathnames #P"skills.json" ,root))
-          (clawmacs::*skill-roots* nil)
-          (clawmacs::*programmatic-skills* nil)
-          (clawmacs::*skill-registry* nil)
-          (clawmacs::*skill-disabled-paths* nil)
-          (clawmacs::*buffer-ring* nil)
-          (clawmacs::*chat-interaction-state*
-            (clawmacs::make-chat-interaction-state))
-          (clawmacs::*automatic-skill-completion-enabled* t)
-          (clawmacs::*skill-completion-enabled-buffer-kinds* '(:chat))
-          (clawmacs::*skill-completion-max-height* 12))
+          (rplaca::*skill-roots* nil)
+          (rplaca::*programmatic-skills* nil)
+          (rplaca::*skill-registry* nil)
+          (rplaca::*skill-disabled-paths* nil)
+          (rplaca::*buffer-ring* nil)
+          (rplaca::*chat-interaction-state*
+            (rplaca::make-chat-interaction-state))
+          (rplaca::*automatic-skill-completion-enabled* t)
+          (rplaca::*skill-completion-enabled-buffer-kinds* '(:chat))
+          (rplaca::*skill-completion-max-height* 12))
      (ensure-directories-exist
-      (merge-pathnames #P".keep" clawmacs::*skill-user-directory*))
+      (merge-pathnames #P".keep" rplaca::*skill-user-directory*))
      (ensure-directories-exist
-      (merge-pathnames #P".keep" clawmacs::*skill-agents-directory*))
+      (merge-pathnames #P".keep" rplaca::*skill-agents-directory*))
      (ensure-directories-exist
-      (merge-pathnames #P".keep" clawmacs::*skill-system-directory*))
+      (merge-pathnames #P".keep" rplaca::*skill-system-directory*))
      ,@body))
 
 (defun write-demo-skill (root &key (name "demo") (description "Demo skill"))
@@ -72,18 +72,18 @@ policy:
     skill-path))
 
 (defun make-skill-completion-test-buffer (&key (kind :chat))
-  (clawmacs::init-default-keymap)
+  (rplaca::init-default-keymap)
   (let ((buf (make-buffer "skill-completion" :kind kind)))
     (setf (buffer-keymap buf)
           (if (eq kind :scratch)
-              clawmacs::*scratch-keymap*
-              clawmacs::*default-keymap*))
-    (clawmacs::add-buffer-to-ring buf)
+              rplaca::*scratch-keymap*
+              rplaca::*default-keymap*))
+    (rplaca::add-buffer-to-ring buf)
     buf))
 
 (defun type-skill-completion-text (buffer text)
   (loop :for char :across text
-        :do (clawmacs::handle-key-event buffer char))
+        :do (rplaca::handle-key-event buffer char))
   buffer)
 
 (test skill-root-discovery-loads-frontmatter-metadata-and-resources
@@ -97,7 +97,7 @@ policy:
       (is (string= "Demo skill" (skill-description skill)))
       (is (string= "Short demo" (skill-short-description skill)))
       (is (string= "Demo interface description"
-                   (clawmacs::skill-display-description skill)))
+                   (rplaca::skill-display-description skill)))
       (is-false (skill-allow-implicit-invocation-p skill))
       (is (member "SKILL.md" (skill-list-files skill) :test #'string=))
       (is (member "references/guide.md" (skill-list-files skill)
@@ -116,8 +116,8 @@ policy:
       (disable-skill "demo")
       (is (= 0 (length (list-skills))))
       (is (= 1 (length (list-skills :include-disabled t))))
-      (setf clawmacs::*skill-registry* nil
-            clawmacs::*skill-disabled-paths* nil)
+      (setf rplaca::*skill-registry* nil
+            rplaca::*skill-disabled-paths* nil)
       (is (= 0 (length (list-skills))))
       (enable-skill skill-path)
       (is (= 1 (length (list-skills)))))))
@@ -153,8 +153,8 @@ policy:
         (is (equal '("demo")
                    (mapcar #'skill-name
                            (collect-skill-mentions "use $demo now"))))
-        (is (equal (list (clawmacs::skill-path-key first-skill))
-                   (mapcar #'clawmacs::skill-path-key
+        (is (equal (list (rplaca::skill-path-key first-skill))
+                   (mapcar #'rplaca::skill-path-key
                            (collect-skill-mentions
                             (format nil "use [$demo](skill://~A)"
                                     (namestring (skill-path first-skill)))))))))))
@@ -176,7 +176,7 @@ policy:
     (write-demo-skill root)
     (register-skill-root root)
     (let ((buf (make-buffer "skill-chat")))
-      (clawmacs::set-message-text (buffer-input-message buf) "please use $demo")
+      (rplaca::set-message-text (buffer-input-message buf) "please use $demo")
       (buffer-finalize-input buf)
       (let* ((messages (build-conversation-messages buf))
              (first-content (cdr (assoc :content (first messages))))
@@ -199,13 +199,13 @@ policy:
 
 (test prompt-args-accept-repeatable-skill-roots
   "prompt.sh can provide temporary skill roots for a prompt run."
-  (let ((options (clawmacs::parse-clawmacs-prompt-args
+  (let ((options (rplaca::parse-rplaca-prompt-args
                   '("--skill-root" "/tmp/a"
                     "--skill-root" "/tmp/b"
                     "hello"))))
     (is (equal '("/tmp/a" "/tmp/b")
-               (clawmacs::prompt-options-skill-roots options)))
-    (is (string= "hello" (clawmacs::prompt-options-prompt options)))))
+               (rplaca::prompt-options-skill-roots options)))
+    (is (string= "hello" (rplaca::prompt-options-prompt options)))))
 
 (test minibuffer-insert-skill-command-inserts-linked-mention
   "The skill insert command inserts a precise linked mention into input."
@@ -213,10 +213,10 @@ policy:
     (write-demo-skill root)
     (register-skill-root root)
     (let ((buf (make-buffer "skill-ui")))
-      (clawmacs::minibuffer-insert-skill-command buf)
-      (is (eq t clawmacs::*minibuffer-active*))
-      (is (string= "Insert Skill" clawmacs::*minibuffer-prompt*))
-      (clawmacs::minibuffer-confirm)
+      (rplaca::minibuffer-insert-skill-command buf)
+      (is (eq t rplaca::*minibuffer-active*))
+      (is (string= "Insert Skill" rplaca::*minibuffer-prompt*))
+      (rplaca::minibuffer-confirm)
       (is (search "[$demo](skill://"
                   (message-text (buffer-input-message buf)))))))
 
@@ -226,9 +226,9 @@ policy:
     (write-demo-skill root)
     (register-skill-root root)
     (let ((buf (make-buffer "skill-toggle")))
-      (clawmacs::minibuffer-toggle-skill-command buf)
-      (is (string= "Toggle Skill" clawmacs::*minibuffer-prompt*))
-      (clawmacs::minibuffer-confirm)
+      (rplaca::minibuffer-toggle-skill-command buf)
+      (is (string= "Toggle Skill" rplaca::*minibuffer-prompt*))
+      (rplaca::minibuffer-confirm)
       (is (= 0 (length (list-skills))))
       (is (search "disabled" (message-text (message-prev (buffer-input-message buf))))))))
 
@@ -238,11 +238,11 @@ policy:
     (write-demo-skill root)
     (register-skill-root root)
     (let ((buf (make-skill-completion-test-buffer)))
-      (clawmacs::handle-key-event buf #\$)
-      (is (eq t clawmacs::*skill-completion-active*))
-      (is (eq buf clawmacs::*skill-completion-buffer*))
-      (is (string= "" clawmacs::*skill-completion-query*))
-      (is (= 1 (length clawmacs::*skill-completion-filtered-items*))))))
+      (rplaca::handle-key-event buf #\$)
+      (is (eq t rplaca::*skill-completion-active*))
+      (is (eq buf rplaca::*skill-completion-buffer*))
+      (is (string= "" rplaca::*skill-completion-query*))
+      (is (= 1 (length rplaca::*skill-completion-filtered-items*))))))
 
 (test automatic-skill-completion-filters-while-typing-in-input
   "Automatic skill completion filters without stealing typed input."
@@ -253,12 +253,12 @@ policy:
     (let ((buf (make-skill-completion-test-buffer)))
       (type-skill-completion-text buf "$nee")
       (is (string= "$nee" (message-text (buffer-input-message buf))))
-      (is (eq t clawmacs::*skill-completion-active*))
-      (is (string= "nee" clawmacs::*skill-completion-query*))
-      (is (plusp (length clawmacs::*skill-completion-filtered-items*)))
+      (is (eq t rplaca::*skill-completion-active*))
+      (is (string= "nee" rplaca::*skill-completion-query*))
+      (is (plusp (length rplaca::*skill-completion-filtered-items*)))
       (is (string= "needle"
                    (skill-name
-                    (getf (first clawmacs::*skill-completion-filtered-items*)
+                    (getf (first rplaca::*skill-completion-filtered-items*)
                           :skill)))))))
 
 (test automatic-skill-completion-confirms-linked-mention-with-return
@@ -268,8 +268,8 @@ policy:
     (register-skill-root root)
     (let ((buf (make-skill-completion-test-buffer)))
       (type-skill-completion-text buf "please use $dem")
-      (clawmacs::handle-key-event buf #\Return)
-      (is-false clawmacs::*skill-completion-active*)
+      (rplaca::handle-key-event buf #\Return)
+      (is-false rplaca::*skill-completion-active*)
       (is (search "please use [$demo](skill://"
                   (message-text (buffer-input-message buf))))
       (is (char= #\Space
@@ -287,8 +287,8 @@ policy:
      :contents "---\nname: inline\ndescription: Inline skill\n---\nUse inline.")
     (let ((buf (make-skill-completion-test-buffer)))
       (type-skill-completion-text buf "$in")
-      (clawmacs::handle-key-event buf #\Tab)
-      (is-false clawmacs::*skill-completion-active*)
+      (rplaca::handle-key-event buf #\Tab)
+      (is-false rplaca::*skill-completion-active*)
       (is (string= "$inline " (message-text (buffer-input-message buf)))))))
 
 (test automatic-skill-completion-dismisses-and-reopens-after-token-change
@@ -298,11 +298,11 @@ policy:
     (register-skill-root root)
     (let ((buf (make-skill-completion-test-buffer)))
       (type-skill-completion-text buf "$dem")
-      (clawmacs::handle-key-event buf (code-char 7))
-      (is-false clawmacs::*skill-completion-active*)
+      (rplaca::handle-key-event buf (code-char 7))
+      (is-false rplaca::*skill-completion-active*)
       (is (string= "$dem" (message-text (buffer-input-message buf))))
-      (clawmacs::handle-key-event buf #\o)
-      (is (eq t clawmacs::*skill-completion-active*))
+      (rplaca::handle-key-event buf #\o)
+      (is (eq t rplaca::*skill-completion-active*))
       (is (string= "$demo" (message-text (buffer-input-message buf)))))))
 
 (test automatic-skill-completion-excludes-disabled-skills
@@ -313,7 +313,7 @@ policy:
     (disable-skill "demo")
     (let ((buf (make-skill-completion-test-buffer)))
       (type-skill-completion-text buf "$")
-      (is-false clawmacs::*skill-completion-active*)
+      (is-false rplaca::*skill-completion-active*)
       (is (string= "$" (message-text (buffer-input-message buf)))))))
 
 (test automatic-skill-completion-defaults-to-chat-buffers
@@ -323,5 +323,5 @@ policy:
     (register-skill-root root)
     (let ((buf (make-skill-completion-test-buffer :kind :scratch)))
       (type-skill-completion-text buf "$dem")
-      (is-false clawmacs::*skill-completion-active*)
+      (is-false rplaca::*skill-completion-active*)
       (is (string= "$dem" (message-text (buffer-input-message buf)))))))

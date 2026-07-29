@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (register-package-prompt-section
  "slop"
@@ -11,7 +11,7 @@
   source spans, ids, roles, namespaces, packages, enclosing definitions, and
   previews that are meant to guide precise follow-up reads or structural edits.
 - The `project` argument is optional. Omit it for the current workspace, or
-  use `clawmacs`, `workspace`, `.`, `/workspace`, or a source root path.
+  use `rplaca`, `workspace`, `.`, `/workspace`, or a source root path.
 - For Common Lisp source analysis, start with `slop_project_symbols`,
   `slop_find_definitions_batch`, `slop_definition_context`, and
   `slop_trace_calls`. Use `slop_current_project` or `slop_list_projects` only
@@ -64,7 +64,7 @@
   :description "Search Common Lisp definitions in a project by name, package, kind, or path."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (path :type "string" :required nil
                :description "Optional project-relative file or directory to restrict indexing.")
          (package :type "string" :required nil
@@ -85,7 +85,7 @@
   :description "Return the symbol, binding, and enclosing definition at a Common Lisp source location."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (path :type "string"
                :description "Project-relative Lisp source path.")
          (offset :type "integer" :required nil
@@ -100,7 +100,7 @@
   :description "Find Common Lisp definitions for a symbol in a project."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (symbol :type "string"
                  :description "Symbol name such as foo, pkg:foo, or *option*.")
          (path :type "string" :required nil
@@ -121,7 +121,7 @@
   :description "Find Common Lisp definitions for multiple symbols in one project index pass."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (symbols :type "array" :items ((:type . "string"))
                   :description "Symbol names such as foo, pkg:foo, or *option*.")
          (path :type "string" :required nil
@@ -142,7 +142,7 @@
   :description "Find Common Lisp references for a symbol or slop definition id; stale ids fall back to symbol lookup when supplied."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (path :type "string" :required nil
                :description "Optional project-relative file or directory to restrict indexing.")
          (symbol :type "string" :required nil
@@ -165,7 +165,7 @@
   :description "Find functions or top-level forms that call a selected Common Lisp function definition."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (path :type "string" :required nil
                :description "Optional project-relative file or directory to restrict indexing.")
          (symbol :type "string" :required nil
@@ -180,7 +180,7 @@
   :description "List function calls made from a selected Common Lisp definition."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (path :type "string" :required nil
                :description "Optional project-relative file or directory to restrict indexing.")
          (symbol :type "string" :required nil
@@ -195,7 +195,7 @@
   :description "Trace Common Lisp call flow from an entrypoint/function to helpers or callers; pass definition-id when available to avoid ambiguity."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (path :type "string" :required nil
                :description "Optional project-relative file or directory to restrict indexing.")
          (symbol :type "string" :required nil
@@ -216,7 +216,7 @@
   :description "Find text mentions of a symbol or phrase across project source, docs, tests, and config."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (query :type "string"
                 :description "Symbol or phrase to find in text.")
          (path :type "string" :required nil
@@ -233,7 +233,7 @@
   :description "Read a Common Lisp definition body with nearby top-level forms and package context."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (path :type "string" :required nil
                :description "Optional project-relative file or directory to restrict indexing.")
          (symbol :type "string" :required nil
@@ -256,7 +256,7 @@
   :description "Find the binding, accesses, and sets for one lexical Common Lisp variable."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (path :type "string" :required nil
                :description "Project-relative source path when selecting by location.")
          (binding-id :type "string" :required nil
@@ -275,7 +275,7 @@
   :description "Safely rename one lexical Common Lisp variable and its known references directly on disk."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional project name or source root. Omit for the current workspace; aliases include clawmacs, workspace, ., and /workspace.")
+                  :description "Optional project name or source root. Omit for the current workspace; aliases include rplaca, workspace, ., and /workspace.")
          (path :type "string" :required nil
                :description "Project-relative source path when selecting by location.")
          (binding-id :type "string" :required nil

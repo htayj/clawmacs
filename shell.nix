@@ -16,7 +16,7 @@ pkgs.mkShell {
   ];
 
   shellHook = ''
-    export CLAWMACS_QUICKLISP_SETUP="$PWD/.cache/home/quicklisp/setup.lisp"
+    export RPLACA_QUICKLISP_SETUP="$PWD/.cache/home/quicklisp/setup.lisp"
     export XDG_CACHE_HOME="$PWD/.cache"
     mkdir -p "$XDG_CACHE_HOME/home/quicklisp"
   '';

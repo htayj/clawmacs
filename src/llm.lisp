@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   #+sbcl
@@ -22,13 +22,13 @@ is configured. Should be a valid model name for *default-provider*.")
 (defvar *e2e-provider-enabled-override* nil
   "Test override for enabling the deterministic E2E provider.")
 
-(defparameter +e2e-hello-sentinel+ "CLAWMACS_E2E_HELLO_SENTINEL"
+(defparameter +e2e-hello-sentinel+ "RPLACA_E2E_HELLO_SENTINEL"
   "Stable text that the deterministic E2E provider emits for hello prompts.")
 
 (defun e2e-provider-enabled-p ()
   "Return true when the deterministic no-network E2E provider is enabled."
   (or *e2e-provider-enabled-override*
-      (env-truthy-p "CLAWMACS_E2E_PROVIDER")))
+      (env-truthy-p "RPLACA_E2E_PROVIDER")))
 
 (defvar *default-max-tokens* 8192
   "Default maximum tokens for LLM responses across all providers.")
@@ -152,15 +152,26 @@ client from retaining the callback worker indefinitely.")
   "Path to the shared Codex auth.json credential store.")
 
 (defparameter +default-personality-prompt-path+
-  (merge-pathnames #P".config/clawmacs/system-prompt.txt" (user-homedir-pathname))
+  (merge-pathnames #P".config/rplaca/system-prompt.txt" (user-homedir-pathname))
   "Default path for the optional personality prompt file.")
+
+(defparameter +legacy-personality-prompt-path+
+  (merge-pathnames #P".config/clawmacs/system-prompt.txt" (user-homedir-pathname))
+  "Legacy read-only fallback for the optional personality prompt file.")
 
 (defvar *personality-prompt-path*
   +default-personality-prompt-path+
   "Path to an optional personality prompt file.")
 
-(defvar *agent-defaults-path*
+(defparameter +default-agent-defaults-path+
+  (merge-pathnames #P".config/rplaca/agent-defaults.json" (user-homedir-pathname))
+  "Canonical path to the persisted agent defaults registry.")
+
+(defparameter +legacy-agent-defaults-path+
   (merge-pathnames #P".config/clawmacs/agent-defaults.json" (user-homedir-pathname))
+  "Legacy read-only fallback for the persisted agent defaults registry.")
+
+(defvar *agent-defaults-path* +default-agent-defaults-path+
   "Path to the persisted agent defaults registry.")
 
 (defvar *agent-defaults-registry* nil
@@ -173,7 +184,7 @@ client from retaining the callback worker indefinitely.")
   "Process-global agent registry, distinct from dynamic test bindings.")
 
 (defvar *agent-definition-registry-lock*
-  (bt:make-lock "clawmacs agent definition registry")
+  (bt:make-lock "rplaca agent definition registry")
   "Lock guarding the process-global agent definition registry.")
 
 (defun call-with-agent-definition-registry-lock (function &optional
@@ -211,7 +222,7 @@ Each entry is (NAME-KEY . PLIST) and is intended for transient subagent runs.")
   package)
 
 (defparameter +default-core-system-prompt+
-  "You are an expert coding assistant operating inside clawmacs, a Lisp-native McCLIM agent workbench.
+  "You are an expert coding assistant operating inside rplaca, a Lisp-native McCLIM agent workbench.
 You help users by using provider tools to inspect files, edit code, write files, search projects, and verify Common Lisp changes in isolated workers.
 
 Tool calls and tool results use Lisp data mode with keyword arguments such as :path, :content, :old-text, and :new-text.
@@ -229,20 +240,20 @@ Guidelines:
 - Be concise in user-facing replies.
 - Show file paths clearly when working with files.
 - To display a local image to the user, put a Markdown image link on its own line, such as `![alt text](relative/path.png)`."
-  "Built-in clawmacs operating instructions inserted ahead of the personality prompt.")
+  "Built-in rplaca operating instructions inserted ahead of the personality prompt.")
 
 (defvar *default-core-system-prompt*
   +default-core-system-prompt+
-  "Default clawmacs operating instructions inserted ahead of the personality prompt.")
+  "Default rplaca operating instructions inserted ahead of the personality prompt.")
 
 (defparameter +default-personality-prompt+
   "You are a helpful assistant. Keep private reasoning private. Use normal assistant text only
 for direct user-facing replies and concise explanations after you have done the work."
-  "Built-in default personality prompt inserted after the clawmacs core system prompt.")
+  "Built-in default personality prompt inserted after the rplaca core system prompt.")
 
 (defvar *default-personality-prompt*
   +default-personality-prompt+
-  "Default personality prompt inserted after the clawmacs core system prompt.
+  "Default personality prompt inserted after the rplaca core system prompt.
 Users may override this via *personality-prompt-path* or init.lisp.")
 
 (defvar *system-prompt-buffer* nil
@@ -251,13 +262,56 @@ Users may override this via *personality-prompt-path* or init.lisp.")
 (defvar *boot-file-names*
   '("AGENTS.md" "SOUL.md" "USER.md" "IDENTITY.md" "TOOLS.md")
   "Boot markdown files to load, in order. Checked in the active working
-directory's ancestors and ~/.config/clawmacs/. Compatible with OpenClaw
+directory's ancestors and ~/.config/rplaca/. Compatible with OpenClaw
 workspace conventions.")
+
+(defvar *global-boot-directory*
+  (merge-pathnames #P".config/rplaca/" (user-homedir-pathname))
+  "Canonical global boot-instruction directory.")
+
+(defvar *legacy-global-boot-directory*
+  (merge-pathnames #P".config/clawmacs/" (user-homedir-pathname))
+  "Legacy read-only global boot-instruction directory.")
+
+(defun boot-directory-has-instructions-p (directory)
+  "Return true when DIRECTORY contains any relevant global boot file."
+  (some (lambda (name)
+          (probe-file (merge-pathnames name directory)))
+        *boot-file-names*))
+
+(defun selected-global-boot-directory ()
+  "Select one global boot root based on relevant files, not directory existence."
+  (let ((canonical-p
+          (boot-directory-has-instructions-p *global-boot-directory*))
+        (legacy-p
+          (boot-directory-has-instructions-p
+           *legacy-global-boot-directory*))
+        (real-probe *migration-path-probe-function*))
+    (let ((*migration-path-probe-function*
+            (lambda (path)
+              (cond
+                ((equal (pathname path)
+                        (pathname *global-boot-directory*))
+                 canonical-p)
+                ((equal (pathname path)
+                        (pathname *legacy-global-boot-directory*))
+                 legacy-p)
+                (t (funcall real-probe path))))))
+      (migration-read-path *global-boot-directory*
+                           *legacy-global-boot-directory*
+                           :label "global instruction directory"))))
 
 (defun load-personality-prompt-file (&optional (path *personality-prompt-path*))
   "Load PATH into the default personality prompt when the file exists.
 Returns the trimmed prompt text on success, or NIL when PATH is NIL or missing."
-  (let ((prompt-path (and path (probe-file path))))
+  (let* ((selected-path
+           (and path
+                (configured-migration-read-path
+                 path
+                 +default-personality-prompt-path+
+                 +legacy-personality-prompt-path+
+                 :label "personality prompt")))
+         (prompt-path (and selected-path (probe-file selected-path))))
     (when prompt-path
       (let ((prompt (string-trim '(#\Space #\Tab #\Newline #\Return)
                                  (uiop:read-file-string prompt-path))))
@@ -338,14 +392,14 @@ Returns the trimmed prompt text on success, or NIL when PATH is NIL or missing."
        (truename "."))))
 
 (defun load-boot-files (&key directory)
-  "Load boot MD instruction files for DIRECTORY and ~/.config/clawmacs/.
+  "Load boot MD instruction files for DIRECTORY and ~/.config/rplaca/.
 Returns a concatenated string, or nil if no files found.
 Files are loaded in the order specified by *boot-file-names*. For each name,
 project-local files are discovered from DIRECTORY's ancestors in root-to-leaf
 order. The global file is used only when no project-local file of that name
 applies."
   (let ((parts nil)
-        (global-dir (merge-pathnames #P".config/clawmacs/" (user-homedir-pathname)))
+        (global-dir (selected-global-boot-directory))
         (local-dir (normalize-boot-directory
                     (or directory (current-system-prompt-directory)))))
     (dolist (name *boot-file-names*)
@@ -610,17 +664,37 @@ as `{}` rather than `null`."
 ;;; Token Management
 ;;; --------------------------------------------------------------------------
 
+(defvar *provider-token-directory*
+  (merge-pathnames #P".config/rplaca/" (user-homedir-pathname))
+  "Canonical provider credential directory.")
+
+(defvar *legacy-provider-token-directory*
+  (merge-pathnames #P".config/clawmacs/" (user-homedir-pathname))
+  "Legacy read-only provider credential directory.")
+
 (defun provider-token-path (provider)
   "Return the provider-specific token file path for PROVIDER."
   (merge-pathnames
    (case provider
-     (:openai-codex #P".config/clawmacs/openai-codex-token")
-     (:zai #P".config/clawmacs/zai-api-key")
-     (:openrouter #P".config/clawmacs/openrouter-api-key")
+     (:openai-codex #P"openai-codex-token")
+     (:zai #P"zai-api-key")
+     (:openrouter #P"openrouter-api-key")
      (otherwise
       (error "Unknown provider ~S. Supported providers: :OPENAI-CODEX, :ZAI, :OPENROUTER"
              provider)))
-   (user-homedir-pathname)))
+   *provider-token-directory*))
+
+(defun legacy-provider-token-path (provider)
+  "Return PROVIDER's legacy token file path for read-only migration fallback."
+  (merge-pathnames
+   (case provider
+     (:openai-codex #P"openai-codex-token")
+     (:zai #P"zai-api-key")
+     (:openrouter #P"openrouter-api-key")
+     (otherwise
+      (error "Unknown provider ~S. Supported providers: :OPENAI-CODEX, :ZAI, :OPENROUTER"
+             provider)))
+   *legacy-provider-token-directory*))
 
 (defvar *zai-env-var* "ZAI_CODING_MAX_API_KEY"
   "Environment variable name for the Z.AI Coding Max API key.
@@ -672,7 +746,10 @@ Returns NIL when the file is missing or blank."
 
 (defun read-provider-file-token (provider)
   "Read PROVIDER's static token file without consulting env vars or OAuth."
-  (trimmed-file-string (provider-token-path provider)))
+  (trimmed-file-string
+   (migration-read-path (provider-token-path provider)
+                        (legacy-provider-token-path provider)
+                        :label "provider credential")))
 
 (defun url-like-string-p (string)
   "Return non-nil when STRING looks like an HTTP(S) URL."
@@ -1066,7 +1143,7 @@ The legacy EXPIRES-IN argument is accepted for compatibility and ignored."
 
 (defun resolve-openai-codex-auth (&key (refresh-if-needed t))
   "Resolve the effective OpenAI Codex auth descriptor.
-Precedence: clawmacs override token file, then shared ~/.codex/auth.json."
+Precedence: rplaca override token file, then shared ~/.codex/auth.json."
   (let ((override-token (read-provider-file-token :openai-codex)))
     (when (openai-codex-api-key-override-valid-p override-token)
       (return-from resolve-openai-codex-auth
@@ -1090,7 +1167,7 @@ Precedence: clawmacs override token file, then shared ~/.codex/auth.json."
 (defun resolve-openai-codex-chatgpt-image-auth (&key (refresh-if-needed t))
   "Resolve ChatGPT OAuth credentials for subscription-backed Codex images.
 
-Unlike `RESOLVE-OPENAI-CODEX-AUTH', this deliberately ignores Clawmacs's
+Unlike `RESOLVE-OPENAI-CODEX-AUTH', this deliberately ignores RPLACA's
 static token override and refuses auth.json API-key mode.  Image generation
 through this path must consume the user's Codex/ChatGPT allowance rather than
 silently switching to separately billed OpenAI API credentials."
@@ -1131,14 +1208,14 @@ The narrow helper cannot fall back to API-key or static-token credentials."
 (defun read-provider-token (provider)
   "Read PROVIDER's token with provider-specific precedence rules.
 
-  :OPENAI-CODEX  1) Static token override (~/.config/clawmacs/openai-codex-token)
+  :OPENAI-CODEX  1) Static token override (~/.config/rplaca/openai-codex-token)
                  2) Shared Codex auth.json (~/.codex/auth.json)
 
   :ZAI           1) ZAI_CODING_MAX_API_KEY env var
-                 2) Static token file (~/.config/clawmacs/zai-api-key)
+                 2) Static token file (~/.config/rplaca/zai-api-key)
 
   :OPENROUTER    1) OPENROUTER_API_KEY env var
-                 2) Static token file (~/.config/clawmacs/openrouter-api-key)"
+                 2) Static token file (~/.config/rplaca/openrouter-api-key)"
   (cond
     ((eq provider :e2e)
      nil)
@@ -1423,7 +1500,7 @@ Returns the access token on success."
 
 (defun openai-oauth-success-page ()
   "Return the minimal success HTML shown in the browser after login."
-  "<!doctype html><html><head><meta charset=\"utf-8\"><title>Codex Login Complete</title></head><body><h1>Login complete</h1><p>You can return to clawmacs.</p></body></html>")
+  "<!doctype html><html><head><meta charset=\"utf-8\"><title>Codex Login Complete</title></head><body><h1>Login complete</h1><p>You can return to rplaca.</p></body></html>")
 
 (defun openai-oauth-error-page (message)
   "Return a minimal HTML error page for OAuth failures."
@@ -1745,7 +1822,7 @@ and lets the blocked reader unwind and close both objects itself."
                              (run-openai-oauth-server flow)
                           #+sbcl
                           (close-openai-oauth-listener flow)))
-                      :name "clawmacs-openai-oauth")))
+                      :name "rplaca-openai-oauth")))
                ;; Once the constructor returns, only the flow/worker lifecycle
                ;; closes the listener.  Publish the thread under the same lock
                ;; used by teardown snapshots.
@@ -1897,9 +1974,9 @@ NAME is stored as given for display, while lookups are keyed case-insensitively.
                                             :personality-prompt personality-prompt
                                             :tool-names normalized-tool-names
                                             :package
-                                            (and *current-clawmacs-package*
+                                            (and *current-rplaca-package*
                                                  (package-identifier-string
-                                                  *current-clawmacs-package*)))))
+                                                  *current-rplaca-package*)))))
     (when (and model (blank-string-p model))
       (error "Agent model must be a non-empty string"))
     (call-with-agent-definition-registry-lock
@@ -2233,9 +2310,15 @@ For :OPENROUTER, dynamically-fetched models are used when an API key is present.
 
 (defun load-agent-defaults ()
   "Load and memoize persisted agent defaults, overlaying built-in fallbacks."
-  (let ((registry (make-agent-defaults-registry)))
-    (when (probe-file *agent-defaults-path*)
-      (let* ((json (uiop:read-file-string *agent-defaults-path*))
+  (let ((registry (make-agent-defaults-registry))
+        (read-path
+          (configured-migration-read-path
+           *agent-defaults-path*
+           +default-agent-defaults-path+
+           +legacy-agent-defaults-path+
+           :label "agent defaults")))
+    (when (probe-file read-path)
+      (let* ((json (uiop:read-file-string read-path))
              (data (cl-json:decode-json-from-string json))
              (agents (registry-agents registry)))
         (dolist (entry data)
@@ -2456,7 +2539,7 @@ and should not be sent to the API."
     (and (numberp value) value)))
 
 (defun normalize-openai-token-usage (usage)
-  "Normalize OpenAI token USAGE into clawmacs cache telemetry.
+  "Normalize OpenAI token USAGE into rplaca cache telemetry.
 Supports both Responses-style names (input_tokens/output_tokens) and
 Chat/documented names (prompt_tokens/completion_tokens)."
   (when usage
@@ -2749,7 +2832,7 @@ semantics."
         (ignore-errors (close text-stream))))))
 
 (defun openai-finish-reason->stop-reason (finish-reason)
-  "Normalize OpenAI FINISH-REASON to clawmacs stop reasons."
+  "Normalize OpenAI FINISH-REASON to rplaca stop reasons."
   (cond
     ((null finish-reason) nil)
     ((string= finish-reason "tool_calls") "tool_use")
@@ -2813,7 +2896,7 @@ reasoning_content is present, falls back to reasoning_content."
    'vector))
 
 (defun tool-definitions->openai-tools (tools)
-  "Translate clawmacs TOOLS to OpenAI-compatible tool definitions."
+  "Translate rplaca TOOLS to OpenAI-compatible tool definitions."
   (when (and tools (plusp (length tools)))
     (coerce
      (loop :for tool :across tools
@@ -2917,7 +3000,7 @@ reasoning_content is present, falls back to reasoning_content."
           (content-blocks->responses-input-items role content-blocks))))
 
 (defun tool-definitions->responses-tools (tools)
-  "Translate clawmacs TOOLS to OpenAI Responses function tools."
+  "Translate rplaca TOOLS to OpenAI Responses function tools."
   (when (and tools (plusp (length tools)))
     (coerce
      (loop :for tool :across tools
@@ -3006,7 +3089,7 @@ reasoning_content is present, falls back to reasoning_content."
     (nreverse options)))
 
 (defun responses-api-response->canonical-response (response)
-  "Normalize an OpenAI Responses API RESPONSE to the canonical clawmacs shape."
+  "Normalize an OpenAI Responses API RESPONSE to the canonical rplaca shape."
   (let ((content-blocks nil)
         (saw-tool-use nil)
         (usage (normalize-openai-token-usage (cdr (assoc :usage response)))))
@@ -3209,7 +3292,7 @@ reasoning_content is present, falls back to reasoning_content."
   (let ((prompt (string-downcase (e2e-message-text messages))))
     (if (search "hello" prompt)
         (format nil "~A: deterministic response for hello." +e2e-hello-sentinel+)
-        "CLAWMACS_E2E_SENTINEL: deterministic response.")))
+        "RPLACA_E2E_SENTINEL: deterministic response.")))
 
 (defun e2e-token-usage (text)
   "Return small deterministic usage metadata for E2E response TEXT."
@@ -3250,11 +3333,11 @@ reasoning_content is present, falls back to reasoning_content."
                       :chunks (length chunks)
                       :sentinel (if (search +e2e-hello-sentinel+ text)
                                     +e2e-hello-sentinel+
-                                    "CLAWMACS_E2E_SENTINEL"))
+                                    "RPLACA_E2E_SENTINEL"))
     (start-stream-state-reader-worker
      state
      callback
-     "clawmacs-e2e-stream"
+     "rplaca-e2e-stream"
      (lambda (worker-state)
        (dolist (chunk chunks)
          (unless (call-with-active-stream-state
@@ -3282,7 +3365,7 @@ reasoning_content is present, falls back to reasoning_content."
                            :sentinel
                            (if (search +e2e-hello-sentinel+ text)
                                +e2e-hello-sentinel+
-                               "CLAWMACS_E2E_SENTINEL")))))
+                               "RPLACA_E2E_SENTINEL")))))
     state))
 
 (defun install-e2e-agent-definition ()
@@ -3292,7 +3375,7 @@ reasoning_content is present, falls back to reasoning_content."
      "agent"
      :provider :e2e
      :model *e2e-model*
-     :core-prompt "Deterministic Clawmacs GUI E2E agent."
+     :core-prompt "Deterministic RPLACA GUI E2E agent."
      :personality-prompt "Return only deterministic E2E fixture text."
      :tool-names nil)))
 
@@ -3405,7 +3488,7 @@ reasoning_content is present, falls back to reasoning_content."
   "Call the OpenAI Responses API for Codex and normalize the response shape."
   (let* ((auth (or (resolve-openai-codex-auth)
                    (error 'simple-error
-                          :format-control "No OpenAI Codex auth. Save a bearer token to ~~/.config/clawmacs/openai-codex-token or sign in via ~~/.codex/auth.json")))
+                          :format-control "No OpenAI Codex auth. Save a bearer token to ~~/.config/rplaca/openai-codex-token or sign in via ~~/.codex/auth.json")))
          (request-body (openai-codex-responses-request-body
                         messages model max-tokens tools
                         :system-prompt system-prompt
@@ -3475,9 +3558,9 @@ reasoning_content is present, falls back to reasoning_content."
   (reported-dropped-count 0 :type integer)
   worker
   (active-p nil :type boolean)
-  (lock (bt:make-lock "clawmacs runtime callback lane"))
+  (lock (bt:make-lock "rplaca runtime callback lane"))
   (condition
-    (bt:make-condition-variable :name "clawmacs runtime callback lane")))
+    (bt:make-condition-variable :name "rplaca runtime callback lane")))
 
 (defparameter *runtime-callback-copy-node-limit* 100000
   "Maximum mutable nodes copied into one external callback delivery.")
@@ -3669,7 +3752,7 @@ reasoning_content is present, falls back to reasoning_content."
       (setf (runtime-callback-dispatch-lane-worker lane)
             (bt:make-thread
              (lambda () (run-runtime-callback-dispatch-lane lane))
-             :name "clawmacs-runtime-callback"))))
+             :name "rplaca-runtime-callback"))))
   (runtime-callback-dispatch-lane-worker lane))
 
 (defun enqueue-runtime-callback (function arguments &key label)
@@ -4432,7 +4515,7 @@ loses to cancellation."
     (start-stream-state-reader-worker
      state
      callback
-     "clawmacs-openai-codex-responses"
+     "rplaca-openai-codex-responses"
      (lambda (worker-state)
        (block request
          (unless (stream-state-active-p-safe worker-state)
@@ -4440,7 +4523,7 @@ loses to cancellation."
          (let* ((auth
                   (or (resolve-openai-codex-auth)
                       (error 'simple-error
-                             :format-control "No OpenAI Codex auth. Save a bearer token to ~~/.config/clawmacs/openai-codex-token or sign in via ~~/.codex/auth.json")))
+                             :format-control "No OpenAI Codex auth. Save a bearer token to ~~/.config/rplaca/openai-codex-token or sign in via ~~/.codex/auth.json")))
                 (request-body
                   (openai-codex-responses-request-body
                    messages model max-tokens tools
@@ -4511,7 +4594,7 @@ loses to cancellation."
 Uses the OpenAI-compatible chat completions protocol."
   (let* ((token (or (read-provider-token :openrouter)
                     (error 'simple-error
-                           :format-control "No OpenRouter API key. Set OPENROUTER_API_KEY env var or save to ~/.config/clawmacs/openrouter-api-key")))
+                           :format-control "No OpenRouter API key. Set OPENROUTER_API_KEY env var or save to ~/.config/rplaca/openrouter-api-key")))
          (request-body
             (let ((body `((:model . ,model)
                           (:max--tokens . ,max-tokens)
@@ -4532,7 +4615,7 @@ Uses the OpenAI-compatible chat completions protocol."
             :content-type "application/json"
             :additional-headers `(("Authorization" . ,(format nil "Bearer ~A" token))
                                   ("HTTP-Referer" . "https://github.com/clawmacs/clawmacs")
-                                  ("X-Title" . "clawmacs"))
+                                  ("X-Title" . "rplaca"))
             :content request-body
             :want-stream nil
             :force-binary nil
@@ -4557,7 +4640,7 @@ Uses the OpenAI-compatible chat completions protocol."
     (start-stream-state-reader-worker
      state
      callback
-     "clawmacs-openrouter-sse-reader"
+     "rplaca-openrouter-sse-reader"
      (lambda (worker-state)
        (block request
          (unless (stream-state-active-p-safe worker-state)
@@ -4565,7 +4648,7 @@ Uses the OpenAI-compatible chat completions protocol."
          (let* ((token
                   (or (read-provider-token :openrouter)
                       (error 'simple-error
-                             :format-control "No OpenRouter API key. Set OPENROUTER_API_KEY env var or save to ~/.config/clawmacs/openrouter-api-key")))
+                             :format-control "No OpenRouter API key. Set OPENROUTER_API_KEY env var or save to ~/.config/rplaca/openrouter-api-key")))
                 (request-body
                   (let ((body
                           `((:model . ,model)
@@ -4599,7 +4682,7 @@ Uses the OpenAI-compatible chat completions protocol."
                       . ,(format nil "Bearer ~A" token))
                      ("HTTP-Referer"
                       . "https://github.com/clawmacs/clawmacs")
-                     ("X-Title" . "clawmacs"))
+                     ("X-Title" . "rplaca"))
                    :content request-body
                    :want-stream t
                    :connection-timeout
@@ -4643,7 +4726,7 @@ compatible with the GLM Coding Max-Monthly subscription.
 The API follows the OpenAI Chat Completions format."
   (let* ((token (or (read-provider-token :zai)
                     (error 'simple-error
-                           :format-control "No Z.AI API key. Set ZAI_CODING_MAX_API_KEY env var or save to ~/.config/clawmacs/zai-api-key")))
+                           :format-control "No Z.AI API key. Set ZAI_CODING_MAX_API_KEY env var or save to ~/.config/rplaca/zai-api-key")))
          (request-body
             (let ((body `((:model . ,model)
                           (:max--tokens . ,max-tokens)
@@ -4691,7 +4774,7 @@ The API follows the OpenAI Chat Completions format."
     (start-stream-state-reader-worker
      state
      callback
-     "clawmacs-zai-sse-reader"
+     "rplaca-zai-sse-reader"
      (lambda (worker-state)
        (block request
          (unless (stream-state-active-p-safe worker-state)
@@ -4699,7 +4782,7 @@ The API follows the OpenAI Chat Completions format."
          (let* ((token
                   (or (read-provider-token :zai)
                       (error 'simple-error
-                             :format-control "No Z.AI API key. Set ZAI_CODING_MAX_API_KEY env var or save to ~/.config/clawmacs/zai-api-key")))
+                             :format-control "No Z.AI API key. Set ZAI_CODING_MAX_API_KEY env var or save to ~/.config/rplaca/zai-api-key")))
                 (request-body
                   (let ((body
                           `((:model . ,model)

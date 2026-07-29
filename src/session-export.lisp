@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Session Export And Sharing
@@ -19,7 +19,7 @@
   "Process-global share handler table, distinct from dynamic test bindings.")
 
 (defvar *session-share-handler-registry-lock*
-  (bt:make-lock "clawmacs session share handler registry")
+  (bt:make-lock "rplaca session share handler registry")
   "Lock guarding bounded access to the process-global share handler table.")
 
 (defun call-with-session-share-handler-registry-lock

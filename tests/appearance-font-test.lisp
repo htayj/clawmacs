@@ -1,4 +1,4 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite appearance-suite)
 
@@ -309,7 +309,7 @@
     ;; A missing frame metric context is infrastructure state, not a negative
     ;; fact about the named font.  Retrying with a valid context must succeed.
     (is (= 0 (hash-table-count
-              (clawmacs::%appearance-font-inventory-negative-cache inventory))))
+              (rplaca::%appearance-font-inventory-negative-cache inventory))))
     (is (typep
          (resolve-enumerated-font-choice
           inventory (test-enumerated-choice)
@@ -325,8 +325,8 @@
         (resolve-enumerated-font-choice
          first (make-enumerated-font-choice :family-display "missing"
                                              :face-display "Regular" :size 10)))
-      (is (= 1 (hash-table-count (clawmacs::%appearance-font-inventory-negative-cache first))))
-      (is (= 0 (hash-table-count (clawmacs::%appearance-font-inventory-negative-cache second))))
+      (is (= 1 (hash-table-count (rplaca::%appearance-font-inventory-negative-cache first))))
+      (is (= 0 (hash-table-count (rplaca::%appearance-font-inventory-negative-cache second))))
       (is (typep (resolve-enumerated-font-choice second (test-enumerated-choice))
                  'clim:text-style)))))
 

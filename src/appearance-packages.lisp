@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; Package-owned appearance declarations deliberately live above the pure
 ;;; appearance model.  The model knows only immutable catalogs; this file owns
@@ -267,7 +267,7 @@ later package callback is not an entrypoint declaration transaction."
   (let ((staging *package-appearance-entrypoint-staging*))
     (unless (and staging
                  (package-appearance-staging-definition staging)
-                 *current-clawmacs-package*
+                 *current-rplaca-package*
                  ;; NIL is the legacy permissive policy for old resource
                  ;; categories.  Appearance declarations are deliberately
                  ;; opt-in: the package record must name :APPEARANCE itself.
@@ -277,7 +277,7 @@ later package callback is not an entrypoint declaration transaction."
     (let ((canonical (package-definition-name
                       (package-appearance-staging-definition staging))))
       (unless (and (stringp canonical)
-                   (string= canonical *current-clawmacs-package*)
+                   (string= canonical *current-rplaca-package*)
                    (string= canonical (package-appearance-staging-owner staging))
                    (valid-package-owner-p canonical))
         (package-appearance-reject :package-owner canonical))

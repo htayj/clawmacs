@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defvar *modelaria-package-name* "modelaria"
   "Bundled package name for scoped model routing and usage reporting.")

@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Structured Output
@@ -208,7 +208,7 @@
 ;;; --------------------------------------------------------------------------
 
 (defstruct interop-thread
-  "Programmatic thread backed by a Clawmacs buffer/session."
+  "Programmatic thread backed by a RPLACA buffer/session."
   id
   buffer
   (ephemeral-p nil :type boolean)
@@ -222,10 +222,10 @@
   (lock (bt:make-lock "interop-thread")))
 
 (defstruct interop-client
-  "Minimal in-process Lisp client for the Clawmacs interop surface.")
+  "Minimal in-process Lisp client for the RPLACA interop surface.")
 
 (defstruct interop-turn
-  "Programmatic async turn state for the Clawmacs interop surface."
+  "Programmatic async turn state for the RPLACA interop surface."
   id
   thread-id
   status
@@ -275,7 +275,7 @@
   "Single-flight lock for persistent session load, buffer creation, and publish.")
 
 (defun active-interop-runtime-operation-count ()
-  "Return interop construction/run tails still executing Clawmacs code."
+  "Return interop construction/run tails still executing RPLACA code."
   (bt:with-lock-held (*interop-registry-lock*)
     (hash-table-count *interop-runtime-operations*)))
 
@@ -418,10 +418,10 @@ the registry lock; resource release and buffer cancellation happen afterward."
       (release-evicted-interop-thread-resources thread))
     (values (length evicted-turns) (length evicted-threads))))
 
-(defun clawmacs-system-version ()
-  "Return the loaded Clawmacs system version string."
+(defun rplaca-system-version ()
+  "Return the loaded RPLACA system version string."
   (or (ignore-errors
-        (asdf:component-version (asdf:find-system :clawmacs)))
+        (asdf:component-version (asdf:find-system :rplaca)))
       "0.1.0"))
 
 (defun interop-generate-id (prefix)
@@ -570,7 +570,7 @@ writing one session through two candidate buffers."
            (let* ((working-directory (resolve-interop-working-directory cwd))
                   (resolved-name (or session-name
                                      (interop-generate-id
-                                      "clawmacs-thread")))
+                                      "rplaca-thread")))
                   (persistent-p (not ephemeral))
                   (session (and persistent-p
                                 (load-or-create-session
@@ -1331,7 +1331,7 @@ notification when runner creation fails."
                      (unwind-protect
                           (release-interop-thread-execution thread turn-id)
                        (finish-interop-turn-runner turn))))
-                 (format nil "clawmacs-interop-turn-~A" turn-id))))
+                 (format nil "rplaca-interop-turn-~A" turn-id))))
           (bt:with-lock-held ((interop-turn-lock turn))
             (unless (interop-turn-retained-resources-released-p turn)
               (setf (interop-turn-runner-thread turn) runner
@@ -1373,8 +1373,8 @@ notification when runner creation fails."
 (defun interop-response-server-info ()
   "Return server metadata for initialize responses."
   (list :protocol-version *interop-protocol-version*
-        :server-info (list :name "clawmacs-app-server"
-                           :version (clawmacs-system-version))))
+        :server-info (list :name "rplaca-app-server"
+                           :version (rplaca-system-version))))
 
 (defun handle-interop-request (request &key event-callback)
   "Handle one interop REQUEST alist and return a result plist."
@@ -1520,10 +1520,10 @@ notification when runner creation fails."
   `((:id . ,request-id)
     (:error . ((:message . ,(format nil "~A" condition))))))
 
-(defun clawmacs-app-server-main ()
-  "Run the Clawmacs stdio app-server until standard input reaches EOF."
-  (parse-clawmacs-args)
-  (initialize-clawmacs-runtime)
+(defun rplaca-app-server-main ()
+  "Run the RPLACA stdio app-server until standard input reaches EOF."
+  (parse-rplaca-args)
+  (initialize-rplaca-runtime)
   (reset-interaction-state)
   (ensure-prompt-workspace-project)
   (let ((write-lock (bt:make-lock "interop-jsonl-output")))

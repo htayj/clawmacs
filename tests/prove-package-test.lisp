@@ -1,30 +1,30 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite prove-package-suite)
 
 (defmacro with-prove-package-state (&body body)
   "Run BODY with isolated package, project, tool, and agent registries."
   `(let* ((root (temp-package-test-directory "prove-config"))
-          (clawmacs::*agent-tool-metadata-table*
+          (rplaca::*agent-tool-metadata-table*
            (make-hash-table :test #'eq))
-          (clawmacs::*agent-tool-name-table*
+          (rplaca::*agent-tool-name-table*
            (make-hash-table :test #'equal))
-          (clawmacs::*tool-table* (make-hash-table :test #'equal))
-          (clawmacs::*agent-definition-registry*
+          (rplaca::*tool-table* (make-hash-table :test #'equal))
+          (rplaca::*agent-definition-registry*
            (make-hash-table :test #'equal))
-          (clawmacs::*project-registry* (make-hash-table :test #'equal))
-          (clawmacs::*project-definitions-loaded-p* nil)
-          (clawmacs::*pipeline-test-profile-registry*
+          (rplaca::*project-registry* (make-hash-table :test #'equal))
+          (rplaca::*project-definitions-loaded-p* nil)
+          (rplaca::*pipeline-test-profile-registry*
            (make-hash-table :test #'equal))
-          (clawmacs::*package-configuration-path*
+          (rplaca::*package-configuration-path*
            (merge-pathnames "packages.json" root))
-          (clawmacs::*package-configuration* nil)
-          (clawmacs::*package-channels* (default-package-test-channels))
-          (clawmacs::*available-packages* nil)
-          (clawmacs::*package-registry-loaded-p* nil)
-          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
-          (clawmacs::*package-prompt-sections* nil)
-          (clawmacs::*enabled-builtin-packages* nil))
+          (rplaca::*package-configuration* nil)
+          (rplaca::*package-channels* (default-package-test-channels))
+          (rplaca::*available-packages* nil)
+          (rplaca::*package-registry-loaded-p* nil)
+          (rplaca::*loaded-packages* (make-hash-table :test #'equal))
+          (rplaca::*package-prompt-sections* nil)
+          (rplaca::*enabled-builtin-packages* nil))
      ,@body))
 
 (defun load-test-prove-package ()
@@ -35,8 +35,8 @@
 (defun prove-package-tool-result (tool-name args)
   "Execute TOOL-NAME with ARGS and read its Lisp data result."
   (nth-value 0
-    (clawmacs::lisp-data-read
-     (clawmacs:execute-tool tool-name args))))
+    (rplaca::lisp-data-read
+     (rplaca:execute-tool tool-name args))))
 
 (test prove-package-registers-tools-prompt-and-tester-agent
   "Enabling prove exposes self-testing tools, prompt guidance, and a tester agent."

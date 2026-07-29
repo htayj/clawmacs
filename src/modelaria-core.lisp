@@ -1,11 +1,21 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
-(defvar *modelaria-global-config-path*
+(defparameter +default-modelaria-global-config-path+
+  (merge-pathnames #P".rplaca.d/modelaria.json" (user-homedir-pathname))
+  "Canonical user model metadata path.")
+(defparameter +legacy-modelaria-global-config-path+
   (merge-pathnames #P".clawmacs.d/modelaria.json" (user-homedir-pathname))
+  "Legacy read-only model metadata path.")
+(defvar *modelaria-global-config-path*
+  +default-modelaria-global-config-path+
   "User config path for modelaria scope defaults.")
 
-(defvar *modelaria-project-config-filename* ".clawmacs-modelaria.json"
+(defvar *modelaria-project-config-filename* ".rplaca-modelaria.json"
   "Project-local modelaria config filename.")
+
+(defparameter +legacy-modelaria-project-config-filename+
+  ".clawmacs-modelaria.json"
+  "Legacy project-local model metadata filename.")
 
 (defparameter *modelaria-built-in-role-order*
   '("default" "cheap" "plan" "review" "slow")
@@ -142,7 +152,12 @@ Hyphens and underscores are treated as equivalent."
 
 (defun modelaria-global-config ()
   "Return normalized global modelaria config."
-  (or (read-modelaria-scope-config *modelaria-global-config-path*)
+  (or (read-modelaria-scope-config
+       (configured-migration-read-path
+        *modelaria-global-config-path*
+        +default-modelaria-global-config-path+
+        +legacy-modelaria-global-config-path+
+        :label "global model metadata"))
       (list :active-role nil
             :role-set nil
             :service-tier nil)))
@@ -160,9 +175,21 @@ Hyphens and underscores are treated as equivalent."
     (when (and dir (uiop:directory-exists-p dir))
       (merge-pathnames *modelaria-project-config-filename* dir))))
 
+(defun modelaria-project-config-read-path (&optional buffer)
+  "Return the sole project model metadata path selected for BUFFER."
+  (let* ((root (and buffer (buffer-working-directory buffer)))
+         (dir (and root
+                   (ignore-errors
+                     (uiop:ensure-directory-pathname root)))))
+    (when (and dir (uiop:directory-exists-p dir))
+      (migration-read-path
+       (merge-pathnames *modelaria-project-config-filename* dir)
+       (merge-pathnames +legacy-modelaria-project-config-filename+ dir)
+       :label "project model metadata"))))
+
 (defun modelaria-project-config (&optional buffer)
   "Return normalized project-local modelaria config for BUFFER, or NIL."
-  (let ((path (modelaria-project-config-path buffer)))
+  (let ((path (modelaria-project-config-read-path buffer)))
     (and path (or (read-modelaria-scope-config path)
                   (list :active-role nil
                         :role-set nil

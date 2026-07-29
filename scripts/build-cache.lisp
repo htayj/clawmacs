@@ -1,11 +1,11 @@
 (require :asdf)
 
-(defpackage :clawmacs/build-cache
+(defpackage :rplaca/build-cache
   (:use :cl)
   (:export :clean-build-argument-p
            :maybe-clean-build-cache))
 
-(in-package :clawmacs/build-cache)
+(in-package :rplaca/build-cache)
 
 (defun truthy-env-value-p (value)
   "Return true when VALUE is an affirmative shell-style boolean."

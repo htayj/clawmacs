@@ -4,13 +4,13 @@
 
 (let ((*standard-output* *error-output*)
       (*trace-output* *error-output*))
-  (let ((setup (uiop:getenv "CLAWMACS_QUICKLISP_SETUP")))
+  (let ((setup (uiop:getenv "RPLACA_QUICKLISP_SETUP")))
     (unless (and setup (plusp (length setup)))
-      (error "Missing CLAWMACS_QUICKLISP_SETUP"))
+      (error "Missing RPLACA_QUICKLISP_SETUP"))
     (load setup))
-  (clawmacs/build-cache:maybe-clean-build-cache
-   :environment-variable "CLAWMACS_PROMPT_CLEAN_BUILD")
+  (rplaca/build-cache:maybe-clean-build-cache
+   :environment-variable "RPLACA_PROMPT_CLEAN_BUILD")
   (push (truename ".") asdf:*central-registry*)
-  (funcall (symbol-function (find-symbol "QUICKLOAD" "QL")) :clawmacs))
+  (funcall (symbol-function (find-symbol "QUICKLOAD" "QL")) :rplaca))
 
-(clawmacs:clawmacs-session-prompt-main)
+(rplaca:rplaca-session-prompt-main)

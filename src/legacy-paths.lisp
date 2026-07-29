@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Narrow pre-alpha path migration boundary
@@ -17,10 +17,10 @@ manually. WRITE-PATH is always canonical. SOURCE is one of :CANONICAL,
   (source :absent :type keyword :read-only t))
 
 (defvar *legacy-path-warning-lock*
-  (bt:make-lock "clawmacs legacy path warnings"))
+  (bt:make-lock "rplaca legacy path warnings"))
 
 (defvar *legacy-path-selection-lock*
-  (bt:make-lock "clawmacs legacy path selection"))
+  (bt:make-lock "rplaca legacy path selection"))
 
 (defvar *legacy-path-warning-keys* (make-hash-table :test #'equal)
   "Process-local set of migration warnings already emitted.")
@@ -139,4 +139,29 @@ merged."
   (let ((path (migration-read-path canonical legacy
                                    :label label
                                    :executable-p executable-p)))
+    (and path (list path))))
+
+(defun configured-migration-read-path
+    (configured canonical legacy &key (label "configuration") executable-p)
+  "Resolve CONFIGURED through migration only when it is the canonical default.
+
+Callers and tests that bind a custom path keep that exact path. The built-in
+canonical default may fall back read-only to LEGACY under the migration
+contract."
+  (if (equal (pathname configured) (pathname canonical))
+      (migration-read-path canonical legacy
+                           :label label
+                           :executable-p executable-p)
+      (pathname configured)))
+
+(defun configured-migration-read-roots
+    (configured canonical legacy &key (label "directory") executable-p)
+  "Return the sole read root selected for CONFIGURED.
+
+Custom roots are returned directly. The built-in default uses the non-merging
+canonical/legacy resolver."
+  (let ((path (configured-migration-read-path
+               configured canonical legacy
+               :label label
+               :executable-p executable-p)))
     (and path (list path))))

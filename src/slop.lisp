@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Slop: Symbol Lookup and Origin Probe
@@ -7,7 +7,7 @@
 (defparameter *slop-default-result-limit* 100
   "Default maximum number of SLOP results returned by provider tools.")
 
-(defparameter *slop-default-project-candidates* '("clawmacs" "workspace")
+(defparameter *slop-default-project-candidates* '("rplaca" "workspace")
   "Project names tried when a SLOP tool call omits :PROJECT.")
 
 (defparameter *slop-fallback-project-name* "workspace"
@@ -20,7 +20,7 @@
   "Process-global SLOP cache, distinct from dynamic test bindings.")
 
 (defvar *slop-project-index-cache-lock*
-  (bt:make-lock "clawmacs slop project index cache")
+  (bt:make-lock "rplaca slop project index cache")
   "Lock guarding bounded access to the process-global SLOP cache.")
 
 (defun call-with-slop-project-index-cache-lock
@@ -975,7 +975,7 @@ lock has been released."
 
 (defun slop-default-workspace-root ()
   "Return the default directory used for omitted SLOP project arguments."
-  (let ((env-root (uiop:getenv "CLAWMACS_PROMPT_PROJECT_ROOT")))
+  (let ((env-root (uiop:getenv "RPLACA_PROMPT_PROJECT_ROOT")))
     (or (and (not (blank-string-p env-root))
              (slop-existing-directory-root env-root))
         (truename "."))))
@@ -1027,7 +1027,7 @@ lock has been released."
 
 (defun slop-default-project ()
   "Return the best current project for SLOP, registering one if needed."
-  (let* ((env-root (uiop:getenv "CLAWMACS_PROMPT_PROJECT_ROOT"))
+  (let* ((env-root (uiop:getenv "RPLACA_PROMPT_PROJECT_ROOT"))
          (current-root (and (not (blank-string-p env-root))
                             (slop-existing-directory-root env-root))))
     (or (and current-root

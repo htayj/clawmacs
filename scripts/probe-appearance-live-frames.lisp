@@ -1,6 +1,6 @@
 ;;;; Real CLX frame-lifecycle proof.  The shell wrapper supplies a fresh Xvfb.
 
-(ql:quickload :clawmacs)
+(ql:quickload :rplaca)
 
 (defvar *probe-clx-port*
   (or (clim:find-port)
@@ -69,7 +69,7 @@
 (defun probe-call-on-frame (frame expected-thread label function &key (seconds 15))
   "Call FUNCTION on FRAME's actual event process and return its values."
   (let* ((call (make-probe-frame-call label expected-thread function))
-         (sheet (or (clawmacs::chat-frame-grafted-top-level-sheet frame)
+         (sheet (or (rplaca::chat-frame-grafted-top-level-sheet frame)
                     (error "Cannot queue ~A before frame adoption." label))))
     (clim:queue-event
      sheet
@@ -91,13 +91,13 @@
       (values-list (probe-frame-call-values call)))))
 
 (defun probe-profile-theme (frame)
-  (clawmacs:appearance-profile-selected-theme
-   (clawmacs::chat-frame-appearance-profile frame)))
+  (rplaca:appearance-profile-selected-theme
+   (rplaca::chat-frame-appearance-profile frame)))
 
 (defun probe-start-frame (name profile)
-  (let* ((buffer (clawmacs:make-buffer name :session-persistence-mode :ephemeral))
+  (let* ((buffer (rplaca:make-buffer name :session-persistence-mode :ephemeral))
          (frame (clim:make-application-frame
-                 'clawmacs::clawmacs-chat-frame
+                 'rplaca::rplaca-chat-frame
                  :buffer buffer :appearance-profile profile :pretty-name name))
          (thread (bt:make-thread
                   (lambda ()
@@ -114,39 +114,39 @@
     (values frame thread)))
 
 (defun probe-package-definition (owner)
-  (clawmacs:make-package-definition
+  (rplaca:make-package-definition
    :name owner :description "appearance live probe"
    :root #P"/tmp/" :entrypoint #P"/tmp/appearance-live-probe.lisp"))
 
 (defun probe-publish-package-theme (first second)
   "Publish one package theme through both real frame event processes."
-  (let* ((owner "org.clawmacs.appearance-live-probe")
+  (let* ((owner "org.rplaca.appearance-live-probe")
          (theme-id (list :package owner "theme"))
          (definition (probe-package-definition owner))
          (before-generation
-           (clawmacs:appearance-catalog-generation
-            (clawmacs:current-package-appearance-catalog)))
-         (clawmacs::*current-clawmacs-package* owner)
-         (clawmacs::*current-package-resource-types* '(:appearance))
-         (clawmacs::*package-appearance-entrypoint-staging*
-           (clawmacs::begin-package-appearance-entrypoint-staging definition)))
-    (clawmacs:register-package-appearance-theme
-     (clawmacs:make-appearance-theme-definition
+           (rplaca:appearance-catalog-generation
+            (rplaca:current-package-appearance-catalog)))
+         (rplaca::*current-rplaca-package* owner)
+         (rplaca::*current-package-resource-types* '(:appearance))
+         (rplaca::*package-appearance-entrypoint-staging*
+           (rplaca::begin-package-appearance-entrypoint-staging definition)))
+    (rplaca:register-package-appearance-theme
+     (rplaca:make-appearance-theme-definition
       :id theme-id :parent-theme :classic :role-overlays nil))
-    (clawmacs::commit-package-appearance-entrypoint-staging
-     clawmacs::*package-appearance-entrypoint-staging*)
-    (let ((catalog (clawmacs:current-package-appearance-catalog)))
+    (rplaca::commit-package-appearance-entrypoint-staging
+     rplaca::*package-appearance-entrypoint-staging*)
+    (let ((catalog (rplaca:current-package-appearance-catalog)))
       (unless (and (= (1+ before-generation)
-                      (clawmacs:appearance-catalog-generation catalog))
+                      (rplaca:appearance-catalog-generation catalog))
                    (eq catalog
-                       (clawmacs::chat-frame-appearance-catalog first))
+                       (rplaca::chat-frame-appearance-catalog first))
                    (eq catalog
-                       (clawmacs::chat-frame-appearance-catalog second))
-                   (gethash owner clawmacs::*package-appearance-declarations*))
+                       (rplaca::chat-frame-appearance-catalog second))
+                   (gethash owner rplaca::*package-appearance-declarations*))
         (error "Package theme publication did not settle on both frames."))
       (format t
               "APPEARANCE_LIVE_PACKAGE_PUBLISH_OK frames=2 generation=~D~%"
-              (clawmacs:appearance-catalog-generation catalog))
+              (rplaca:appearance-catalog-generation catalog))
       (values definition owner theme-id catalog))))
 
 (defun probe-package-removal-rollback
@@ -155,45 +155,45 @@
   (probe-call-on-frame
    first first-thread "stage package theme"
    (lambda (frame)
-     (clawmacs::appearance-editor-stage-profile
+     (rplaca::appearance-editor-stage-profile
       frame
-      (clawmacs:make-appearance-profile :selected-theme theme-id)
+      (rplaca:make-appearance-profile :selected-theme theme-id)
       :probe-package-theme)))
-  (let ((first-profile (clawmacs::chat-frame-appearance-profile first))
-        (second-profile (clawmacs::chat-frame-appearance-profile second))
-        (first-bundle (clawmacs::chat-frame-appearance-active-bundle first))
-        (second-bundle (clawmacs::chat-frame-appearance-active-bundle second))
-        (first-revision (clawmacs::chat-frame-appearance-revision first))
-        (second-revision (clawmacs::chat-frame-appearance-revision second))
+  (let ((first-profile (rplaca::chat-frame-appearance-profile first))
+        (second-profile (rplaca::chat-frame-appearance-profile second))
+        (first-bundle (rplaca::chat-frame-appearance-active-bundle first))
+        (second-bundle (rplaca::chat-frame-appearance-active-bundle second))
+        (first-revision (rplaca::chat-frame-appearance-revision first))
+        (second-revision (rplaca::chat-frame-appearance-revision second))
         (declarations
-          (gethash owner clawmacs::*package-appearance-declarations*))
+          (gethash owner rplaca::*package-appearance-declarations*))
         (refused-p nil))
     (handler-case
-        (clawmacs::prepare-package-appearance-removal definition)
-      (clawmacs:appearance-error ()
+        (rplaca::prepare-package-appearance-removal definition)
+      (rplaca:appearance-error ()
         (setf refused-p t)))
     (unless (and refused-p
                  (eq published-catalog
-                     (clawmacs:current-package-appearance-catalog))
+                     (rplaca:current-package-appearance-catalog))
                  (eq published-catalog
-                     (clawmacs::chat-frame-appearance-catalog first))
+                     (rplaca::chat-frame-appearance-catalog first))
                  (eq published-catalog
-                     (clawmacs::chat-frame-appearance-catalog second))
+                     (rplaca::chat-frame-appearance-catalog second))
                  (eq declarations
                      (gethash owner
-                              clawmacs::*package-appearance-declarations*))
+                              rplaca::*package-appearance-declarations*))
                  (eq first-profile
-                     (clawmacs::chat-frame-appearance-profile first))
+                     (rplaca::chat-frame-appearance-profile first))
                  (eq second-profile
-                     (clawmacs::chat-frame-appearance-profile second))
+                     (rplaca::chat-frame-appearance-profile second))
                  (eq first-bundle
-                     (clawmacs::chat-frame-appearance-active-bundle first))
+                     (rplaca::chat-frame-appearance-active-bundle first))
                  (eq second-bundle
-                     (clawmacs::chat-frame-appearance-active-bundle second))
+                     (rplaca::chat-frame-appearance-active-bundle second))
                  (= first-revision
-                    (clawmacs::chat-frame-appearance-revision first))
+                    (rplaca::chat-frame-appearance-revision first))
                  (= second-revision
-                    (clawmacs::chat-frame-appearance-revision second)))
+                    (rplaca::chat-frame-appearance-revision second)))
       (error "Refused package-theme removal changed committed state."))
     (format t
             "APPEARANCE_LIVE_PACKAGE_REMOVAL_ROLLBACK_OK frames=2 catalog-unchanged=true~%")))
@@ -205,141 +205,141 @@
          ;; public CLX port and run on independent normal event processes.
          (multiple-value-setq (first first-thread)
            (probe-start-frame "appearance-live-classic"
-                              (clawmacs:make-appearance-profile
+                              (rplaca:make-appearance-profile
                                :selected-theme :classic)))
          ;; McCLIM lazily establishes the default frame manager/CLX port.
          ;; Let the first frame complete that ordinary adoption before asking
          ;; a second owning event process to share the same port.
          (probe-wait
           (lambda ()
-            (and (clawmacs::chat-frame-grafted-top-level-sheet first)
-                 (clawmacs::chat-frame-appearance-active-bundle first)))
+            (and (rplaca::chat-frame-grafted-top-level-sheet first)
+                 (rplaca::chat-frame-appearance-active-bundle first)))
           "first adopted CLX frame" :seconds 30)
          (multiple-value-setq (second second-thread)
            (probe-start-frame "appearance-live-dark"
-                              (clawmacs:make-appearance-profile
+                              (rplaca:make-appearance-profile
                                :selected-theme :dark)))
          (probe-wait (lambda ()
-                       (and (clawmacs::chat-frame-grafted-top-level-sheet first)
-                            (clawmacs::chat-frame-grafted-top-level-sheet second)
-                            (clawmacs::chat-frame-appearance-active-bundle first)
-                            (clawmacs::chat-frame-appearance-active-bundle second)))
+                       (and (rplaca::chat-frame-grafted-top-level-sheet first)
+                            (rplaca::chat-frame-grafted-top-level-sheet second)
+                            (rplaca::chat-frame-appearance-active-bundle first)
+                            (rplaca::chat-frame-appearance-active-bundle second)))
                      "two adopted CLX frames" :seconds 30)
          (unless (and (eq :classic (probe-profile-theme first))
                       (eq :dark (probe-profile-theme second))
-                      (not (eq (clawmacs::chat-frame-appearance-active-bundle first)
-                               (clawmacs::chat-frame-appearance-active-bundle second)))
-                      (not (eq (clawmacs::chat-frame-appearance-resolved-roles first)
-                               (clawmacs::chat-frame-appearance-resolved-roles second))))
+                      (not (eq (rplaca::chat-frame-appearance-active-bundle first)
+                               (rplaca::chat-frame-appearance-active-bundle second)))
+                      (not (eq (rplaca::chat-frame-appearance-resolved-roles first)
+                               (rplaca::chat-frame-appearance-resolved-roles second))))
            (error "Frame-local appearance profile or cache isolation failed."))
          (format t "APPEARANCE_LIVE_TWO_FRAME_OK first=classic second=dark distinct-bundles=true distinct-caches=true~%")
          (probe-call-on-frame
           first first-thread "stage first frame profile"
           (lambda (frame)
-            (clawmacs::appearance-editor-stage-profile
+            (rplaca::appearance-editor-stage-profile
              frame
-             (clawmacs:make-appearance-profile :selected-theme :dark)
+             (rplaca:make-appearance-profile :selected-theme :dark)
              :probe)))
          (probe-call-on-frame
           second second-thread "stage second frame profile"
           (lambda (frame)
-            (clawmacs::appearance-editor-stage-profile
+            (rplaca::appearance-editor-stage-profile
              frame
-             (clawmacs:make-appearance-profile :selected-theme :classic)
+             (rplaca:make-appearance-profile :selected-theme :classic)
              :probe)))
-         (unless (and (eq :dark (clawmacs:appearance-profile-selected-theme
-                                 (clawmacs::appearance-editor-staged-profile first)))
-                      (eq :classic (clawmacs:appearance-profile-selected-theme
-                                    (clawmacs::appearance-editor-staged-profile second))))
+         (unless (and (eq :dark (rplaca:appearance-profile-selected-theme
+                                 (rplaca::appearance-editor-staged-profile first)))
+                      (eq :classic (rplaca:appearance-profile-selected-theme
+                                    (rplaca::appearance-editor-staged-profile second))))
            (error "Frame-local staged profiles leaked."))
          (format t "APPEARANCE_LIVE_STAGED_PROFILES_OK first=dark second=classic~%")
          ;; The public commands only queue work; the refresh handlers themselves
          ;; run on the two independent owning frame processes.
-         (clawmacs::refresh-font-inventory-command first)
+         (rplaca::refresh-font-inventory-command first)
          (probe-wait
           (lambda ()
             (plusp
-             (clawmacs::chat-frame-appearance-font-inventory-generation first)))
+             (rplaca::chat-frame-appearance-font-inventory-generation first)))
           "first frame-local public font refresh")
          (probe-call-on-frame first first-thread "first font refresh owner barrier"
                               (lambda (frame) (declare (ignore frame)) t))
          ;; Package appearance transactions deliberately refuse overlapping
          ;; user edits.  Complete the first public refresh before queueing the
          ;; second; this proves both owners without manufacturing contention.
-         (clawmacs::refresh-font-inventory-command second)
+         (rplaca::refresh-font-inventory-command second)
          (probe-wait
           (lambda ()
             (plusp
-             (clawmacs::chat-frame-appearance-font-inventory-generation second)))
+             (rplaca::chat-frame-appearance-font-inventory-generation second)))
           "second frame-local public font refresh")
-         (unless (and (not (eq (clawmacs::chat-frame-appearance-font-inventory first)
-                              (clawmacs::chat-frame-appearance-font-inventory second)))
-                      (= 1 (clawmacs::chat-frame-appearance-font-inventory-generation first))
-                      (= 1 (clawmacs::chat-frame-appearance-font-inventory-generation second)))
+         (unless (and (not (eq (rplaca::chat-frame-appearance-font-inventory first)
+                              (rplaca::chat-frame-appearance-font-inventory second)))
+                      (= 1 (rplaca::chat-frame-appearance-font-inventory-generation first))
+                      (= 1 (rplaca::chat-frame-appearance-font-inventory-generation second)))
            (error "Frame-local font inventory leaked or generation was not committed."))
          (probe-call-on-frame second second-thread "second font refresh owner barrier"
                               (lambda (frame) (declare (ignore frame)) t))
          (format t "APPEARANCE_LIVE_FONT_INVENTORIES_OK first-generation=1 second-generation=1 distinct=true owner-processes=true~%")
          (let* ((safe-profile
-                  (clawmacs:make-appearance-profile
+                  (rplaca:make-appearance-profile
                    :selected-theme :classic
                    :role-overrides
                    (list (cons :transcript-user
-                                (clawmacs:make-appearance-role-style
+                                (rplaca:make-appearance-role-style
                                  :foreground-ink
-                                 (clawmacs:make-appearance-ink-spec :foreground :red)))))))
+                                 (rplaca:make-appearance-ink-spec :foreground :red)))))))
            (probe-call-on-frame
             first first-thread "stage live-safe profile"
             (lambda (frame)
-              (clawmacs::appearance-editor-stage-profile
+              (rplaca::appearance-editor-stage-profile
                frame safe-profile :probe-live)))
            (let ((before-result
-                   (clawmacs::chat-frame-appearance-last-activation-result first)))
-             (clawmacs::request-chat-frame-appearance-activation
-              first (clawmacs::chat-frame-appearance-staged-candidate first))
+                   (rplaca::chat-frame-appearance-last-activation-result first)))
+             (rplaca::request-chat-frame-appearance-activation
+              first (rplaca::chat-frame-appearance-staged-candidate first))
              (probe-wait
               (lambda ()
                 (let ((result
-                        (clawmacs::chat-frame-appearance-last-activation-result
+                        (rplaca::chat-frame-appearance-last-activation-result
                          first)))
                   (and (not (eq before-result result))
                        (eq :ready
-                           (clawmacs:appearance-activation-result-status
+                           (rplaca:appearance-activation-result-status
                             result)))))
               "live-safe activation"))
            (unless
                (equal
-                (clawmacs::appearance-profile-structural-key safe-profile)
-                (clawmacs::appearance-profile-structural-key
-                 (clawmacs::chat-frame-appearance-profile first)))
+                (rplaca::appearance-profile-structural-key safe-profile)
+                (rplaca::appearance-profile-structural-key
+                 (rplaca::chat-frame-appearance-profile first)))
              (error "Live-safe activation did not publish the staged profile."))
            (probe-call-on-frame first first-thread "live activation owner barrier"
                                 (lambda (frame) (declare (ignore frame)) t))
            (format t "APPEARANCE_LIVE_SAFE_ACTIVATION_OK status=ready owner-process=true~%")
-           (let ((before-profile (clawmacs::chat-frame-appearance-profile first))
-                 (before-bundle (clawmacs::chat-frame-appearance-active-bundle first))
-                 (bad (clawmacs:make-appearance-profile :selected-theme :missing)))
+           (let ((before-profile (rplaca::chat-frame-appearance-profile first))
+                 (before-bundle (rplaca::chat-frame-appearance-active-bundle first))
+                 (bad (rplaca:make-appearance-profile :selected-theme :missing)))
              (probe-call-on-frame
               first first-thread "stage invalid rollback profile"
               (lambda (frame)
-                (clawmacs::appearance-editor-stage-profile
+                (rplaca::appearance-editor-stage-profile
                  frame bad :probe-failure)))
              (let ((before-result
-                     (clawmacs::chat-frame-appearance-last-activation-result first)))
-               (clawmacs::request-chat-frame-appearance-activation
-                first (clawmacs::chat-frame-appearance-staged-candidate first))
+                     (rplaca::chat-frame-appearance-last-activation-result first)))
+               (rplaca::request-chat-frame-appearance-activation
+                first (rplaca::chat-frame-appearance-staged-candidate first))
                (probe-wait
                 (lambda ()
                   (let ((result
-                          (clawmacs::chat-frame-appearance-last-activation-result
+                          (rplaca::chat-frame-appearance-last-activation-result
                            first)))
                     (and (not (eq before-result result))
                          (eq :failed
-                             (clawmacs:appearance-activation-result-status
+                             (rplaca:appearance-activation-result-status
                               result)))))
                 "failed activation rollback"))
-             (unless (and (eq before-profile (clawmacs::chat-frame-appearance-profile first))
-                          (eq before-bundle (clawmacs::chat-frame-appearance-active-bundle first)))
+             (unless (and (eq before-profile (rplaca::chat-frame-appearance-profile first))
+                          (eq before-bundle (rplaca::chat-frame-appearance-active-bundle first)))
                (error "Failed activation changed committed frame state."))
              (probe-call-on-frame first first-thread "failed activation owner barrier"
                                   (lambda (frame) (declare (ignore frame)) t))
@@ -349,7 +349,7 @@
              (probe-call-on-frame
               first first-thread "reset failed activation staging"
               (lambda (frame)
-                (clawmacs::appearance-editor-stage-profile
+                (rplaca::appearance-editor-stage-profile
                  frame before-profile :probe-reset-after-failure)))))
          (multiple-value-bind (definition owner theme-id catalog)
              (probe-publish-package-theme first second)
@@ -358,7 +358,7 @@
     (dolist (frame (list first second))
       (when frame
         (let ((sheet
-                (clawmacs::chat-frame-grafted-top-level-sheet frame)))
+                (rplaca::chat-frame-grafted-top-level-sheet frame)))
           (when sheet
             (ignore-errors
               (clim:queue-event

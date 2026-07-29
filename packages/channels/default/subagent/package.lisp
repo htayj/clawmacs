@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defvar *subagent-tool-default-wait-timeout* 60
   "Default seconds that subagent_wait blocks before returning :TIMEOUT.")
@@ -309,7 +309,7 @@
   before you continue. It returns the final text, metadata, and any tool events.
 - Use `subagent_start` for background or parallel work, then use
   `subagent_status` or `subagent_wait` with the returned `id`.
-- Use `agent` to name an existing registered Clawmacs agent. Add `provider`,
+- Use `agent` to name an existing registered RPLACA agent. Add `provider`,
   `model`, `think_level`, `core_prompt`, `personality_prompt`, or `tool_names`
   to override that agent for this run only. You can also group those fields in
   an `agent_spec` object.
@@ -325,7 +325,7 @@
 
 (deftool subagent-tool-run
   :name "subagent_run"
-  :description "Run a Clawmacs subagent synchronously. Use agent for an existing agent, or provide core_prompt/personality_prompt/routing overrides for a custom transient agent."
+  :description "Run a RPLACA subagent synchronously. Use agent for an existing agent, or provide core_prompt/personality_prompt/routing overrides for a custom transient agent."
   :call-style :raw-args
   :args ((prompt :type "string"
                  :description "Task prompt for the subagent.")
@@ -351,7 +351,7 @@
 
 (deftool subagent-tool-start
   :name "subagent_start"
-  :description "Start a Clawmacs subagent asynchronously and return a handle id for later status, wait, or cancel calls."
+  :description "Start a RPLACA subagent asynchronously and return a handle id for later status, wait, or cancel calls."
   :call-style :raw-args
   :args ((prompt :type "string"
                  :description "Task prompt for the subagent.")

@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; Appearance preferences are deliberately data only.  In particular, this
 ;;; file never resolves package declarations or creates symbols from external
@@ -12,10 +12,17 @@
 (defparameter +appearance-config-max-overrides+ 64)
 (defparameter +appearance-selector-max-bytes+ 4096)
 
-(defvar *appearance-config-directory*
-  (merge-pathnames #P".clawmacs.d/" (user-homedir-pathname)))
-(defvar *appearance-config-path*
-  (merge-pathnames #P"appearance.sexp" *appearance-config-directory*))
+(defparameter +default-appearance-config-directory+
+  (merge-pathnames #P".rplaca.d/" (user-homedir-pathname)))
+(defparameter +legacy-appearance-config-directory+
+  (merge-pathnames #P".clawmacs.d/" (user-homedir-pathname))
+  "Legacy read-only appearance directory.")
+(defvar *appearance-config-directory* +default-appearance-config-directory+)
+(defparameter +default-appearance-config-path+
+  (merge-pathnames #P"appearance.sexp" +default-appearance-config-directory+))
+(defparameter +legacy-appearance-config-path+
+  (merge-pathnames #P"appearance.sexp" +legacy-appearance-config-directory+))
+(defvar *appearance-config-path* +default-appearance-config-path+)
 (defvar *appearance-cli-selector* nil)
 (defvar *appearance-startup-resolution-count* 0)
 (defvar *appearance-configuration-access-count* 0)
@@ -47,7 +54,8 @@
         (t (appearance-config-error "Unsupported appearance datum: ~S" value))))
 
 (defparameter +appearance-config-keywords+
-  '(:clawmacs-appearance :version :theme :strict-contrast :overrides :package
+  '(:rplaca-appearance :clawmacs-appearance
+    :version :theme :strict-contrast :overrides :package
     :foreground :background :typography :decoration :rgb :portable :enumerated
     :family :face :size :marker :none :selection-marker
     :black :white :red :green :blue :cyan :magenta :yellow :gray
@@ -330,7 +338,10 @@ booleans, and numeric tokens, so READ cannot intern external names."
             value)))
 
 (defun parse-appearance-profile-form (form)
-  (unless (and (consp form) (eq (first form) :clawmacs-appearance)
+  (unless (and (consp form)
+               (member (first form)
+                       '(:rplaca-appearance :clawmacs-appearance)
+                       :test #'eq)
                (plist-with-keys-p (rest form) '(:version :theme :strict-contrast :overrides)))
     (appearance-config-error "Invalid appearance configuration schema."))
   (let ((clauses (rest form)))
@@ -348,6 +359,12 @@ booleans, and numeric tokens, so READ cannot intern external names."
 (defun read-appearance-profile-file (&optional (path (appearance-config-pathname)))
   "Read one valid profile.  A missing default file is reported as :MISSING."
   (incf *appearance-configuration-access-count*)
+  (let ((path
+          (configured-migration-read-path
+           path
+           +default-appearance-config-path+
+           +legacy-appearance-config-path+
+           :label "appearance configuration")))
   (if (not (probe-file path))
       (values nil :missing)
       (let ((bytes (with-open-file (stream path :element-type '(unsigned-byte 8))
@@ -356,7 +373,7 @@ booleans, and numeric tokens, so READ cannot intern external names."
           (appearance-config-error "Appearance file exceeds byte limit."))
         (let ((profile (parse-appearance-profile-form
                         (read-one-appearance-form (uiop:read-file-string path)))))
-          (values profile :valid)))))
+          (values profile :valid))))))
 
 (defun appearance-id-external-string (id)
   (cond ((keywordp id) (string-downcase (symbol-name id)))
@@ -396,7 +413,7 @@ booleans, and numeric tokens, so READ cannot intern external names."
 (defun serialize-appearance-profile (profile)
   (with-output-to-string (stream)
     (let ((*print-pretty* t) (*print-case* :downcase))
-      (write (list :clawmacs-appearance :version 1
+      (write (list :rplaca-appearance :version 1
                    :theme (appearance-profile-selected-theme profile)
                    :strict-contrast (appearance-profile-strict-contrast profile)
                    :overrides (mapcar (lambda (entry)
@@ -461,7 +478,7 @@ booleans, and numeric tokens, so READ cannot intern external names."
                       "Invalid appearance command-line selector.")))))))
 
 (defun parse-appearance-environment-selector ()
-  (let ((value (uiop:getenv "CLAWMACS_APPEARANCE_THEME")))
+  (let ((value (uiop:getenv "RPLACA_APPEARANCE_THEME")))
     (cond ((null value) (list :present-p nil :valid-p t))
           (t (handler-case (list :present-p t :valid-p t
                                  :theme (parse-appearance-theme-selector value))

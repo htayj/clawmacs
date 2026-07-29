@@ -1,10 +1,10 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite reference-suite)
 
 (defmacro with-common-lisp-spec-cache-reset (&body body)
-  `(let ((clawmacs::*common-lisp-spec-index-cache* nil)
-         (clawmacs::*common-lisp-spec-index-cache-path* nil))
+  `(let ((rplaca::*common-lisp-spec-index-cache* nil)
+         (rplaca::*common-lisp-spec-index-cache-path* nil))
      ,@body))
 
 (defmacro with-temp-directory ((var prefix) &body body)
@@ -28,7 +28,7 @@
   pathname)
 
 (defmacro with-common-lisp-spec-fixture ((root-var index-var) &body body)
-  `(with-temp-directory (,root-var "clawmacs-spec-fixture")
+  `(with-temp-directory (,root-var "rplaca-spec-fixture")
      (let* ((pages-dir (merge-pathnames #P"pages/" ,root-var))
             (,index-var (merge-pathnames #P"searchable_terms.json" ,root-var)))
        (ensure-directories-exist (merge-pathnames #P".keep" pages-dir))
@@ -44,19 +44,19 @@
                 "format" "format.html"
                 "handler-case" "handler_002dcase.html"))
        (with-common-lisp-spec-cache-reset
-         (let ((clawmacs::*common-lisp-spec-root* ,root-var)
-               (clawmacs::*common-lisp-spec-index-path* ,index-var))
+         (let ((rplaca::*common-lisp-spec-root* ,root-var)
+               (rplaca::*common-lisp-spec-index-path* ,index-var))
            ,@body)))))
 
 (test common-lisp-spec-available-from-bundled-assets
   "The vendored search index and pages archive are present."
-  (is (clawmacs::common-lisp-spec-available-p)))
+  (is (rplaca::common-lisp-spec-available-p)))
 
 (test vendored-common-lisp-spec-smoke-test
   "The vendored CL Community Spec resolves stable standard symbols end-to-end."
   (with-common-lisp-spec-cache-reset
-    (let ((format-entry (clawmacs::find-common-lisp-spec-entry 'format))
-          (handler-description (clawmacs::describe-common-lisp-symbol-to-string 'handler-case
+    (let ((format-entry (rplaca::find-common-lisp-spec-entry 'format))
+          (handler-description (rplaca::describe-common-lisp-symbol-to-string 'handler-case
                                                                                 :max-chars 4000)))
       (is (string= "format" (getf format-entry :term)))
       (is (probe-file (getf format-entry :path)))
@@ -68,7 +68,7 @@
   "Exact CL Community Spec lookup resolves to a page path and URL."
   (with-common-lisp-spec-fixture (root index)
     (declare (ignore root index))
-    (let ((entry (clawmacs::find-common-lisp-spec-entry 'format)))
+    (let ((entry (rplaca::find-common-lisp-spec-entry 'format)))
       (is (string= "format" (getf entry :term)))
       (is (string= "format.html" (getf entry :page)))
       (is (search "/pages/format.html" (namestring (getf entry :path))))
@@ -79,7 +79,7 @@
   "Spec descriptions render plain text from the vendored page content."
   (with-common-lisp-spec-fixture (root index)
     (declare (ignore root index))
-    (let ((description (clawmacs::describe-common-lisp-symbol-to-string 'format
+    (let ((description (rplaca::describe-common-lisp-symbol-to-string 'format
                                                                         :max-chars 5000)))
       (is (search "Reference: CL Community Spec" description))
       (is (search "format.html" description))
@@ -90,40 +90,40 @@
   "Spec search returns matching terms from the JSON index."
   (with-common-lisp-spec-fixture (root index)
     (declare (ignore root index))
-    (let ((search-output (clawmacs::search-common-lisp-spec-to-string "handler")))
+    (let ((search-output (rplaca::search-common-lisp-spec-to-string "handler")))
       (is (search "handler-case" search-output))
       (is (search "handler_002dcase.html" search-output)))))
 
 (test list-project-systems-reads-direct-dependencies
-  "list-project-systems returns clawmacs and the systems imported in clawmacs.asd."
-  (let ((systems (clawmacs::list-project-systems)))
-    (is (member "clawmacs" systems :test #'string=))
+  "list-project-systems returns rplaca and the systems imported in rplaca.asd."
+  (let ((systems (rplaca::list-project-systems)))
+    (is (member "rplaca" systems :test #'string=))
     (is (member "alexandria" systems :test #'string=))
     (is (member "mcclim" systems :test #'string=))
     (is (member "drakma" systems :test #'string=))))
 
-(test describe-system-to-string-summarizes-clawmacs
-  "describe-system-to-string reports metadata and package names for clawmacs."
-  (let ((description (clawmacs::describe-system-to-string "clawmacs")))
-    (is (search "clawmacs" description))
+(test describe-system-to-string-summarizes-rplaca
+  "describe-system-to-string reports metadata and package names for rplaca."
+  (let ((description (rplaca::describe-system-to-string "rplaca")))
+    (is (search "rplaca" description))
     (is (search "A Lisp-native Emacs-inspired LLM chat interface" description))
     (is (search "mcclim" description))
-    (is (search "Packages: clawmacs" description))))
+    (is (search "rplaca, rplaca/matching-core" description))))
 
-(test search-system-docs-finds-clawmacs-source
-  "search-system-docs finds local matches in the clawmacs source tree."
-  (let ((search-output (clawmacs::search-system-docs "clawmacs" "lisp_eval" :limit 5)))
+(test search-system-docs-finds-rplaca-source
+  "search-system-docs finds local matches in the rplaca source tree."
+  (let ((search-output (rplaca::search-system-docs "rplaca" "lisp_eval" :limit 5)))
     (is (search "lisp_eval" search-output))
     (is (or (search "src/llm.lisp" search-output)
             (search "src/docs.lisp" search-output)
             (search "README.org" search-output)))))
 
-(test describe-library-symbol-to-string-summarizes-clawmacs-symbol
+(test describe-library-symbol-to-string-summarizes-rplaca-symbol
   "describe-library-symbol-to-string combines runtime docs with local source hits."
-  (let ((description (clawmacs::describe-library-symbol-to-string
-                      "clawmacs"
+  (let ((description (rplaca::describe-library-symbol-to-string
+                      "rplaca"
                       'describe-function-to-string
-                      "clawmacs")))
-    (is (search "CLAWMACS::DESCRIBE-FUNCTION-TO-STRING" description))
+                      "rplaca")))
+    (is (search "RPLACA::DESCRIBE-FUNCTION-TO-STRING" description))
     (is (search "Kinds: Function" description))
     (is (search "describe-function-to-string" description))))

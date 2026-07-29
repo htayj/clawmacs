@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defun media-tool-argument (args &rest names)
   "Return values VALUE and SUPPLIED-P for the first argument in NAMES."

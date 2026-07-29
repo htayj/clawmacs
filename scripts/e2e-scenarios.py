@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared Clawmacs E2E scenarios for McCLIM-driven tests."""
+"""Shared RPLACA E2E scenarios for McCLIM-driven tests."""
 import os
 import tempfile
 import time
@@ -114,9 +114,9 @@ def test_01_initial_render(s):
 
 def test_02_text_input(s):
     """Test: Typing text appears in the input area."""
-    s.type_text("Hello, clawmacs!")
+    s.type_text("Hello, rplaca!")
     screen = s.text()
-    assert_contains(screen, "Hello, clawmacs!", "typed text")
+    assert_contains(screen, "Hello, rplaca!", "typed text")
     s.screenshot("02-text-input")
 
 
@@ -126,12 +126,12 @@ def test_03_line_editing_c_a_c_e(s):
     s.press("Ctrl+a")
     s.type_text(">>> ")
     screen = s.text()
-    assert_contains(screen, ">>> Hello, clawmacs!", "C-a + insert at beginning")
+    assert_contains(screen, ">>> Hello, rplaca!", "C-a + insert at beginning")
     # C-e to end, type suffix
     s.press("Ctrl+e")
     s.type_text(" <<<")
     screen = s.text()
-    assert_contains(screen, ">>> Hello, clawmacs! <<<", "C-e + insert at end")
+    assert_contains(screen, ">>> Hello, rplaca! <<<", "C-e + insert at end")
     s.screenshot("03-line-editing")
 
 
@@ -146,7 +146,7 @@ def test_04_kill_yank(s):
     # Yank it back
     s.press("Ctrl+y")
     screen = s.text()
-    assert_contains(screen, ">>> Hello, clawmacs! <<<", "C-y yanked text back")
+    assert_contains(screen, ">>> Hello, rplaca! <<<", "C-y yanked text back")
     s.screenshot("04-kill-yank")
 
 
@@ -323,7 +323,7 @@ def test_19_file_write_append(s):
     for _ in range(20):
         s.press("Backspace")
     # Use lisp_eval to verify append behavior directly
-    s.type_text("Use the lisp_eval tool to: (progn (clawmacs::init-tools) (let ((clawmacs::*tool-working-directory* (truename \".\"))) (clawmacs::execute-tool \"file_write\" (list (cons :path \"e2e-append-test.txt\") (cons :content \"first\"))) (clawmacs::execute-tool \"file_write\" (list (cons :path \"e2e-append-test.txt\") (cons :content \" second\")))) (uiop:read-file-string (merge-pathnames \"e2e-append-test.txt\" (truename \".\"))))")
+    s.type_text("Use the lisp_eval tool to: (progn (rplaca::init-tools) (let ((rplaca::*tool-working-directory* (truename \".\"))) (rplaca::execute-tool \"file_write\" (list (cons :path \"e2e-append-test.txt\") (cons :content \"first\"))) (rplaca::execute-tool \"file_write\" (list (cons :path \"e2e-append-test.txt\") (cons :content \" second\")))) (uiop:read-file-string (merge-pathnames \"e2e-append-test.txt\" (truename \".\"))))")
     s.press("Enter")
     time.sleep(8)
     screen = s.text()
@@ -784,7 +784,7 @@ def lisp_string(value):
 
 def create_e2e_skill_root():
     """Create a temporary skill root used by offline skill-completion tests."""
-    root = tempfile.mkdtemp(prefix="clawmacs-e2e-skills-")
+    root = tempfile.mkdtemp(prefix="rplaca-e2e-skills-")
     skill_dir = os.path.join(root, "demo-skill")
     os.makedirs(skill_dir, exist_ok=True)
     with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:

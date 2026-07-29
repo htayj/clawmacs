@@ -61,11 +61,11 @@ PRIVATE_COLD="$TMP_DIR/private-cold"
 mkdir -p "$PRIVATE_COLD/common-lisp"
 printf 'stale-cache\n' >"$PRIVATE_COLD/common-lisp/stale.fasl"
 printf 'preserve-sibling\n' >"$PRIVATE_COLD/unrelated-state"
-CLAWMACS_GUI_E2E_COLD_CACHE=1
-export CLAWMACS_GUI_E2E_COLD_CACHE
+RPLACA_GUI_E2E_COLD_CACHE=1
+export RPLACA_GUI_E2E_COLD_CACHE
 gui_e2e_seed_private_common_lisp_cache \
   "$SOURCE_CACHE" "$PRIVATE_COLD" "$LOCK_FILE"
-unset CLAWMACS_GUI_E2E_COLD_CACHE
+unset RPLACA_GUI_E2E_COLD_CACHE
 if [ "$GUI_E2E_CACHE_SEED_STATUS" != cold-override ] || \
    [ -e "$PRIVATE_COLD/common-lisp" ]; then
   echo 'FAIL cold-cache-override: existing Common Lisp cache survived' >&2

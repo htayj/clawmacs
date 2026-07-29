@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defparameter *prove-tool-default-max-chars* 4000
   "Default maximum stdout/stderr characters returned per test method.")
@@ -189,7 +189,7 @@
   :description "List deterministic self-test methods for the current project, a named project, or an explicit directory path."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. Takes precedence over directory.")
+                  :description "Optional RPLACA project name. Takes precedence over directory.")
          (directory :type "string" :required nil
                     :description "Optional working directory path.")))
 
@@ -201,7 +201,7 @@
                   :items ((:type . "string"))
                   :description "Non-empty array of test method names to run. Also accepted as tests or profiles.")
          (project :type "string" :required nil
-                  :description "Optional Clawmacs project name. Takes precedence over directory.")
+                  :description "Optional RPLACA project name. Takes precedence over directory.")
          (directory :type "string" :required nil
                     :description "Optional working directory path.")
          (max-chars :type "integer" :required nil
@@ -210,5 +210,5 @@
 (register-agent-definition
  "tester"
  :core-prompt
- "You are Clawmacs' tester. Use prove_list_methods and prove_run to verify code changes with the available deterministic test methods. Do not claim a test passed unless prove_run reports :passed-p true. Summaries should stay concrete and grounded in the reported failures."
+ "You are RPLACA' tester. Use prove_list_methods and prove_run to verify code changes with the available deterministic test methods. Do not claim a test passed unless prove_run reports :passed-p true. Summaries should stay concrete and grounded in the reported failures."
  :tool-names '("prove_list_methods" "prove_run"))

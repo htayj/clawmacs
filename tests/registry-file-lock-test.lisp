@@ -1,20 +1,20 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (defmacro with-isolated-process-tool-registry (&body body)
   "Run BODY with isolated tables treated as the process-global registry."
-  `(let* ((clawmacs::*tool-registry-lock*
+  `(let* ((rplaca::*tool-registry-lock*
             (bt:make-lock "test process tool registry"))
-          (clawmacs::*tool-table* (make-hash-table :test #'equal))
-          (clawmacs::*process-tool-table* clawmacs::*tool-table*)
-          (clawmacs::*agent-tool-metadata-table*
+          (rplaca::*tool-table* (make-hash-table :test #'equal))
+          (rplaca::*process-tool-table* rplaca::*tool-table*)
+          (rplaca::*agent-tool-metadata-table*
             (make-hash-table :test #'eq))
-          (clawmacs::*process-agent-tool-metadata-table*
-            clawmacs::*agent-tool-metadata-table*)
-          (clawmacs::*agent-tool-name-table*
+          (rplaca::*process-agent-tool-metadata-table*
+            rplaca::*agent-tool-metadata-table*)
+          (rplaca::*agent-tool-name-table*
             (make-hash-table :test #'equal))
-          (clawmacs::*process-agent-tool-name-table*
-            clawmacs::*agent-tool-name-table*)
-          (clawmacs::*temporary-tool-table* nil))
+          (rplaca::*process-agent-tool-name-table*
+            rplaca::*agent-tool-name-table*)
+          (rplaca::*temporary-tool-table* nil))
      ,@body))
 
 (in-suite llm-suite)
@@ -22,8 +22,8 @@
 (test tool-registry-snapshot-survives-concurrent-refresh
   "Prompt traversal uses a snapshot and never holds the lock in callbacks."
   (with-isolated-process-tool-registry
-    (let* ((table clawmacs::*tool-table*)
-           (lock clawmacs::*tool-registry-lock*)
+    (let* ((table rplaca::*tool-table*)
+           (lock rplaca::*tool-registry-lock*)
            (callback-entered
              (bt:make-semaphore :name "tool snapshot callback entered"))
            (release-callback
@@ -36,7 +36,7 @@
            (mapper nil)
            (refresher nil))
       (flet ((install (name)
-               (clawmacs::register-tool
+               (rplaca::register-tool
                 name name '((:type . "object"))
                 (lambda (args) (declare (ignore args)) name))))
         (install "snapshot_alpha")
@@ -46,13 +46,13 @@
                (setf mapper
                      (bt:make-thread
                       (lambda ()
-                        (let ((clawmacs::*tool-table* table)
-                              (clawmacs::*process-tool-table* table)
-                              (clawmacs::*tool-registry-lock* lock)
-                              (clawmacs::*temporary-tool-table* nil)
+                        (let ((rplaca::*tool-table* table)
+                              (rplaca::*process-tool-table* table)
+                              (rplaca::*tool-registry-lock* lock)
+                              (rplaca::*temporary-tool-table* nil)
                               (first-p t))
                           (handler-case
-                              (clawmacs::map-effective-tool-definitions
+                              (rplaca::map-effective-tool-definitions
                                (lambda (name definition)
                                  (declare (ignore definition))
                                  (push name mapped)
@@ -70,12 +70,12 @@
                (setf refresher
                      (bt:make-thread
                       (lambda ()
-                        (let ((clawmacs::*tool-table* table)
-                              (clawmacs::*process-tool-table* table)
-                              (clawmacs::*tool-registry-lock* lock))
+                        (let ((rplaca::*tool-table* table)
+                              (rplaca::*process-tool-table* table)
+                              (rplaca::*tool-registry-lock* lock))
                           (handler-case
                               (progn
-                                (clawmacs::remove-registered-tools
+                                (rplaca::remove-registered-tools
                                  '("snapshot_alpha" "snapshot_beta"))
                                 (install "snapshot_gamma"))
                             (error (condition)
@@ -97,7 +97,7 @@
                           (sort mapped #'string<)))
                (is (equal '("snapshot_gamma")
                           (sort (mapcar #'car
-                                        (clawmacs::registered-tool-definitions-snapshot))
+                                        (rplaca::registered-tool-definitions-snapshot))
                                 #'string<))))
           (bt:signal-semaphore release-callback)
           (when (and mapper (bt:thread-alive-p mapper))
@@ -108,8 +108,8 @@
 (test dynamically-bound-tool-table-does-not-contend-on-process-lock
   "A private dynamic tool table is not serialized by the global registry lock."
   (with-isolated-process-tool-registry
-    (let* ((process-table clawmacs::*tool-table*)
-           (lock clawmacs::*tool-registry-lock*)
+    (let* ((process-table rplaca::*tool-table*)
+           (lock rplaca::*tool-registry-lock*)
            (private-table (make-hash-table :test #'equal))
            (completed (bt:make-semaphore :name "private tool table complete"))
            (worker nil)
@@ -120,11 +120,11 @@
              (setf worker
                    (bt:make-thread
                     (lambda ()
-                      (let ((clawmacs::*tool-table* private-table)
-                            (clawmacs::*process-tool-table* process-table)
-                            (clawmacs::*tool-registry-lock* lock))
+                      (let ((rplaca::*tool-table* private-table)
+                            (rplaca::*process-tool-table* process-table)
+                            (rplaca::*tool-registry-lock* lock))
                         (handler-case
-                            (clawmacs::register-tool
+                            (rplaca::register-tool
                              "private_tool" "private" nil
                              (lambda (args) (declare (ignore args)) "ok"))
                           (error (condition)
@@ -230,23 +230,23 @@ interleaving also proves the writer does not wait for snapshot consumers."
   (let ((table (make-hash-table :test #'eq))
         (lock (bt:make-lock "test command registry")))
     (labels ((within-registry (function)
-               (let ((clawmacs::*command-table* table)
-                     (clawmacs::*process-command-table* table)
-                     (clawmacs::*command-registry-lock* lock))
+               (let ((rplaca::*command-table* table)
+                     (rplaca::*process-command-table* table)
+                     (rplaca::*command-registry-lock* lock))
                  (funcall function)))
              (register (symbol package)
                (within-registry
                 (lambda ()
-                  (let ((clawmacs::*current-clawmacs-package* package))
-                    (clawmacs::register-command-metadata symbol)))))
+                  (let ((rplaca::*current-rplaca-package* package))
+                    (rplaca::register-command-metadata symbol)))))
              (snapshot ()
-               (within-registry #'clawmacs::command-registry-snapshot))
+               (within-registry #'rplaca::command-registry-snapshot))
              (refresh ()
                (within-registry
                 (lambda ()
-                  (clawmacs::remove-command-metadata-for-package "registry-old")
-                  (let ((clawmacs::*current-clawmacs-package* "registry-new"))
-                    (clawmacs::register-command-metadata
+                  (rplaca::remove-command-metadata-for-package "registry-old")
+                  (let ((rplaca::*current-rplaca-package* "registry-new"))
+                    (rplaca::register-command-metadata
                      'registry-lock-command-gamma))))))
       (register 'registry-lock-command-alpha "registry-old")
       (register 'registry-lock-command-beta "registry-old")
@@ -263,22 +263,22 @@ interleaving also proves the writer does not wait for snapshot consumers."
   (let ((table (make-hash-table :test #'eq))
         (lock (bt:make-lock "test extended doc registry")))
     (labels ((within-registry (function)
-               (let ((clawmacs::*extended-docs* table)
-                     (clawmacs::*process-extended-docs* table)
-                     (clawmacs::*extended-doc-registry-lock* lock))
+               (let ((rplaca::*extended-docs* table)
+                     (rplaca::*process-extended-docs* table)
+                     (rplaca::*extended-doc-registry-lock* lock))
                  (funcall function)))
              (register (symbol package)
                (within-registry
                 (lambda ()
-                  (clawmacs::register-extended-doc
+                  (rplaca::register-extended-doc
                    symbol (list :category "test" :package package)))))
              (snapshot ()
-               (within-registry #'clawmacs::extended-doc-registry-snapshot))
+               (within-registry #'rplaca::extended-doc-registry-snapshot))
              (refresh ()
                (within-registry
                 (lambda ()
-                  (clawmacs::remove-extended-docs-for-package "registry-old")
-                  (clawmacs::register-extended-doc
+                  (rplaca::remove-extended-docs-for-package "registry-old")
+                  (rplaca::register-extended-doc
                    'registry-lock-command-gamma
                    '(:category "test" :package "registry-new"))))))
       (register 'registry-lock-command-alpha "registry-old")
@@ -296,23 +296,23 @@ interleaving also proves the writer does not wait for snapshot consumers."
   (let ((table (make-hash-table :test #'equal))
         (lock (bt:make-lock "test slash command registry")))
     (labels ((within-registry (function)
-               (let ((clawmacs::*slash-command-table* table)
-                     (clawmacs::*process-slash-command-table* table)
-                     (clawmacs::*slash-command-registry-lock* lock))
+               (let ((rplaca::*slash-command-table* table)
+                     (rplaca::*process-slash-command-table* table)
+                     (rplaca::*slash-command-registry-lock* lock))
                  (funcall function)))
              (register (name package)
                (within-registry
                 (lambda ()
-                  (clawmacs:register-slash-command
+                  (rplaca:register-slash-command
                    name (lambda (&rest args) (declare (ignore args)) nil)
                    :package package))))
              (snapshot ()
-               (within-registry #'clawmacs::slash-command-registry-snapshot))
+               (within-registry #'rplaca::slash-command-registry-snapshot))
              (refresh ()
                (within-registry
                 (lambda ()
-                  (clawmacs::remove-slash-commands-for-package "registry-old")
-                  (clawmacs:register-slash-command
+                  (rplaca::remove-slash-commands-for-package "registry-old")
+                  (rplaca:register-slash-command
                    "registry-gamma"
                    (lambda (&rest args) (declare (ignore args)) nil)
                    :package "registry-new")))))
@@ -332,22 +332,22 @@ interleaving also proves the writer does not wait for snapshot consumers."
   (let ((table (make-hash-table :test #'eq))
         (lock (bt:make-lock "test buffer type registry")))
     (labels ((within-registry (function)
-               (let ((clawmacs::*buffer-type-registry* table)
-                     (clawmacs::*process-buffer-type-registry* table)
-                     (clawmacs::*buffer-type-registry-lock* lock)
-                     (clawmacs::*buffer-input-presentation-providers* nil))
+               (let ((rplaca::*buffer-type-registry* table)
+                     (rplaca::*process-buffer-type-registry* table)
+                     (rplaca::*buffer-type-registry-lock* lock)
+                     (rplaca::*buffer-input-presentation-providers* nil))
                  (funcall function)))
              (register (name package)
                (within-registry
                 (lambda ()
-                  (clawmacs:register-buffer-type name :package package))))
+                  (rplaca:register-buffer-type name :package package))))
              (snapshot ()
-               (within-registry #'clawmacs::buffer-type-registry-snapshot))
+               (within-registry #'rplaca::buffer-type-registry-snapshot))
              (refresh ()
                (within-registry
                 (lambda ()
-                  (clawmacs::remove-buffer-types-for-package "registry-old")
-                  (clawmacs:register-buffer-type
+                  (rplaca::remove-buffer-types-for-package "registry-old")
+                  (rplaca:register-buffer-type
                    :registry-gamma :package "registry-new")))))
       (register :registry-alpha "registry-old")
       (register :registry-beta "registry-old")
@@ -365,24 +365,24 @@ interleaving also proves the writer does not wait for snapshot consumers."
   (let ((table (make-hash-table :test #'eq))
         (lock (bt:make-lock "test hook registry")))
     (labels ((within-registry (function)
-               (let ((clawmacs::*hook-metadata-table* table)
-                     (clawmacs::*process-hook-metadata-table* table)
-                     (clawmacs::*hook-registry-lock* lock)
-                     (clawmacs::*package-hook-registrations* nil))
+               (let ((rplaca::*hook-metadata-table* table)
+                     (rplaca::*process-hook-metadata-table* table)
+                     (rplaca::*hook-registry-lock* lock)
+                     (rplaca::*package-hook-registrations* nil))
                  (funcall function)))
              (register (symbol package)
                (within-registry
                 (lambda ()
-                  (let ((clawmacs::*current-clawmacs-package* package))
-                    (clawmacs::register-hook-metadata symbol '(value) "test")))))
+                  (let ((rplaca::*current-rplaca-package* package))
+                    (rplaca::register-hook-metadata symbol '(value) "test")))))
              (snapshot ()
-               (within-registry #'clawmacs::hook-metadata-registry-snapshot))
+               (within-registry #'rplaca::hook-metadata-registry-snapshot))
              (refresh ()
                (within-registry
                 (lambda ()
-                  (clawmacs::remove-package-hook-registrations "registry-old")
-                  (let ((clawmacs::*current-clawmacs-package* "registry-new"))
-                    (clawmacs::register-hook-metadata
+                  (rplaca::remove-package-hook-registrations "registry-old")
+                  (let ((rplaca::*current-rplaca-package* "registry-new"))
+                    (rplaca::register-hook-metadata
                      '*registry-lock-hook-gamma* '(value) "test"))))))
       (register '*registry-lock-hook-alpha* "registry-old")
       (register '*registry-lock-hook-beta* "registry-old")
@@ -398,25 +398,25 @@ interleaving also proves the writer does not wait for snapshot consumers."
   (let ((table (make-hash-table :test #'eq))
         (lock (bt:make-lock "test advice registry")))
     (labels ((within-registry (function)
-               (let ((clawmacs::*advice-table* table)
-                     (clawmacs::*process-advice-table* table)
-                     (clawmacs::*advice-registry-lock* lock))
+               (let ((rplaca::*advice-table* table)
+                     (rplaca::*process-advice-table* table)
+                     (rplaca::*advice-registry-lock* lock))
                  (funcall function)))
              (register (symbol package)
                (within-registry
                 (lambda ()
-                  (let ((clawmacs::*current-clawmacs-package* package))
-                    (clawmacs:add-advice
+                  (let ((rplaca::*current-rplaca-package* package))
+                    (rplaca:add-advice
                      symbol :before 'registry-lock-before-advice
                      :name package)))))
              (snapshot ()
-               (within-registry #'clawmacs::advice-registry-snapshot))
+               (within-registry #'rplaca::advice-registry-snapshot))
              (refresh ()
                (within-registry
                 (lambda ()
-                  (clawmacs::remove-package-advices "registry-old")
-                  (let ((clawmacs::*current-clawmacs-package* "registry-new"))
-                    (clawmacs:add-advice
+                  (rplaca::remove-package-advices "registry-old")
+                  (let ((rplaca::*current-rplaca-package* "registry-new"))
+                    (rplaca:add-advice
                      'registry-lock-advice-target-gamma
                      :before 'registry-lock-before-advice
                      :name "registry-new"))))))
@@ -437,7 +437,7 @@ interleaving also proves the writer does not wait for snapshot consumers."
            (dolist (symbol '(registry-lock-advice-target-alpha
                              registry-lock-advice-target-beta
                              registry-lock-advice-target-gamma))
-             (clawmacs:clear-advices symbol))))))))
+             (rplaca:clear-advices symbol))))))))
 
 (in-suite llm-suite)
 
@@ -445,23 +445,23 @@ interleaving also proves the writer does not wait for snapshot consumers."
   (let ((table (make-hash-table :test #'equal))
         (lock (bt:make-lock "test agent definition registry")))
     (labels ((within-registry (function)
-               (let ((clawmacs::*agent-definition-registry* table)
-                     (clawmacs::*process-agent-definition-registry* table)
-                     (clawmacs::*agent-definition-registry-lock* lock))
+               (let ((rplaca::*agent-definition-registry* table)
+                     (rplaca::*process-agent-definition-registry* table)
+                     (rplaca::*agent-definition-registry-lock* lock))
                  (funcall function)))
              (register (name package)
                (within-registry
                 (lambda ()
-                  (let ((clawmacs::*current-clawmacs-package* package))
-                    (clawmacs:register-agent-definition name)))))
+                  (let ((rplaca::*current-rplaca-package* package))
+                    (rplaca:register-agent-definition name)))))
              (snapshot ()
-               (within-registry #'clawmacs::agent-definition-registry-snapshot))
+               (within-registry #'rplaca::agent-definition-registry-snapshot))
              (refresh ()
                (within-registry
                 (lambda ()
-                  (clawmacs::remove-agent-definitions-for-package "registry-old")
-                  (let ((clawmacs::*current-clawmacs-package* "registry-new"))
-                    (clawmacs:register-agent-definition "registry-gamma"))))))
+                  (rplaca::remove-agent-definitions-for-package "registry-old")
+                  (let ((rplaca::*current-rplaca-package* "registry-new"))
+                    (rplaca:register-agent-definition "registry-gamma"))))))
       (register "registry-alpha" "registry-old")
       (register "registry-beta" "registry-old")
       (let ((observed
@@ -477,20 +477,20 @@ interleaving also proves the writer does not wait for snapshot consumers."
         (profiles (make-hash-table :test #'equal))
         (lock (bt:make-lock "test pipeline registries")))
     (labels ((within-registry (function)
-               (let ((clawmacs::*pipeline-definition-registry* definitions)
-                     (clawmacs::*process-pipeline-definition-registry*
+               (let ((rplaca::*pipeline-definition-registry* definitions)
+                     (rplaca::*process-pipeline-definition-registry*
                        definitions)
-                     (clawmacs::*pipeline-test-profile-registry* profiles)
-                     (clawmacs::*process-pipeline-test-profile-registry* profiles)
-                     (clawmacs::*pipeline-registry-lock* lock))
+                     (rplaca::*pipeline-test-profile-registry* profiles)
+                     (rplaca::*process-pipeline-test-profile-registry* profiles)
+                     (rplaca::*pipeline-registry-lock* lock))
                  (funcall function)))
              (register (name package)
                (within-registry
                 (lambda ()
-                  (let ((clawmacs::*current-clawmacs-package* package))
-                    (clawmacs:register-pipeline-definition
+                  (let ((rplaca::*current-rplaca-package* package))
+                    (rplaca:register-pipeline-definition
                      name :stages '((:name "only" :prompt "test")))
-                    (clawmacs:register-pipeline-test-profile
+                    (rplaca:register-pipeline-test-profile
                      name :command '("true"))))))
              (snapshot ()
                (within-registry
@@ -499,21 +499,21 @@ interleaving also proves the writer does not wait for snapshot consumers."
                    (mapcar (lambda (entry)
                              (cons (format nil "definition/~A" (car entry))
                                    (cdr entry)))
-                           (clawmacs::pipeline-registry-snapshot definitions))
+                           (rplaca::pipeline-registry-snapshot definitions))
                    (mapcar (lambda (entry)
                              (cons (format nil "profile/~A" (car entry))
                                    (cdr entry)))
-                           (clawmacs::pipeline-registry-snapshot profiles))))))
+                           (rplaca::pipeline-registry-snapshot profiles))))))
              (refresh ()
                (within-registry
                 (lambda ()
-                  (clawmacs::remove-pipeline-registrations-for-package
+                  (rplaca::remove-pipeline-registrations-for-package
                    "registry-old")
-                  (let ((clawmacs::*current-clawmacs-package* "registry-new"))
-                    (clawmacs:register-pipeline-definition
+                  (let ((rplaca::*current-rplaca-package* "registry-new"))
+                    (rplaca:register-pipeline-definition
                      "registry-gamma"
                      :stages '((:name "only" :prompt "test")))
-                    (clawmacs:register-pipeline-test-profile
+                    (rplaca:register-pipeline-test-profile
                      "registry-gamma" :command '("true")))))))
       (register "registry-alpha" "registry-old")
       (register "registry-beta" "registry-old")
@@ -549,7 +549,7 @@ interleaving also proves the writer does not wait for snapshot consumers."
   "Concurrent upserts sharing a session path retain both valid JSON records."
   (with-artifactum-test-state
     (let* ((live (make-artifactum-test-buffer "concurrent-index"))
-           (detached (clawmacs::make-tool-execution-buffer-snapshot live))
+           (detached (rplaca::make-tool-execution-buffer-snapshot live))
            (live-session (buffer-session live))
            (detached-session (buffer-session detached))
            (lock (bt:make-lock "test artifactum process index"))
@@ -565,9 +565,9 @@ interleaving also proves the writer does not wait for snapshot consumers."
                  (bt:signal-semaphore ready)
                  (unless (bt:wait-on-semaphore start :timeout 5.0)
                    (error "Timed out starting Artifactum writer"))
-                 (let ((clawmacs::*artifactum-index-lock* lock))
+                 (let ((rplaca::*artifactum-index-lock* lock))
                    (handler-case
-                       (clawmacs::artifactum-upsert-record session record)
+                       (rplaca::artifactum-upsert-record session record)
                      (error (condition)
                        (funcall error-setter condition))))
                  (bt:signal-semaphore completed)))
@@ -610,14 +610,14 @@ interleaving also proves the writer does not wait for snapshot consumers."
                (is (null second-error))
                (is (equal (namestring (session-directory live-session))
                           (namestring (session-directory detached-session))))
-               (is (not (eq (clawmacs::session-lock live-session)
-                            (clawmacs::session-lock detached-session))))
-               (let* ((records (clawmacs::artifactum-session-records live))
+               (is (not (eq (rplaca::session-lock live-session)
+                            (rplaca::session-lock detached-session))))
+               (let* ((records (rplaca::artifactum-session-records live))
                       (ids (sort (mapcar (lambda (record) (getf record :id))
                                          records)
                                  #'string<))
                       (index-path
-                        (clawmacs::artifactum-session-index-path live-session))
+                        (rplaca::artifactum-session-index-path live-session))
                       (decoded
                         (let ((cl-json:*json-array-type* 'vector))
                           (cl-json:decode-json-from-string
@@ -625,7 +625,7 @@ interleaving also proves the writer does not wait for snapshot consumers."
                  (is (equal '("art-detached" "art-live") ids))
                  (is (= 2 (length decoded)))
                  (is (= 2 (length
-                           (clawmacs::artifactum-session-records detached))))))
+                           (rplaca::artifactum-session-records detached))))))
           (when lock-held-p
             (bt:release-lock lock))
           (bt:signal-semaphore start)

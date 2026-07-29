@@ -4,7 +4,7 @@
  :system-prompt-section "## Packrat package lifecycle
 
 - Use Packrat tools for installing, removing, updating, listing, and
-  inspecting Clawmacs packages.
+  inspecting RPLACA packages.
 - Installs can target the global package root or a project-local package
   root. Project-local packages are active when a buffer belongs to that
   project.

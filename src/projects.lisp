@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Project/resource abstraction
@@ -57,8 +57,16 @@
 (defvar *project-buffer-effect-collector* nil
   "Transaction-local callback collecting project buffer effects until commit.")
 
-(defvar *project-definitions-directory*
+(defparameter +default-project-definitions-directory+
+  (merge-pathnames #P".rplaca.projects.d/" (user-homedir-pathname))
+  "Canonical directory containing project definition manifests.")
+
+(defparameter +legacy-project-definitions-directory+
   (merge-pathnames #P".clawmacs.projects.d/" (user-homedir-pathname))
+  "Legacy behavioral project registry, never loaded automatically.")
+
+(defvar *project-definitions-directory*
+  +default-project-definitions-directory+
   "Directory containing inert project definition manifests.")
 
 (defvar *project-registry* (make-hash-table :test #'equal)
@@ -68,7 +76,7 @@
   "Process-global project registry, distinct from dynamic test bindings.")
 
 (defvar *project-registry-lock*
-  (bt:make-lock "clawmacs project registry")
+  (bt:make-lock "rplaca project registry")
   "Lock guarding bounded access to the process-global project registry.")
 
 (defun call-with-project-registry-lock
@@ -113,11 +121,11 @@ execution must happen after the lock has been released."
   "Extension used for inert project definition manifests.")
 
 (defvar *project-manifest-serialization-lock*
-  (bt:make-lock "clawmacs project manifest serialization")
+  (bt:make-lock "rplaca project manifest serialization")
   "Lock guarding bounded ownership changes for manifest writers.")
 
 (defvar *project-manifest-serialization-condition*
-  (bt:make-condition-variable :name "clawmacs project manifest serialization")
+  (bt:make-condition-variable :name "rplaca project manifest serialization")
   "Condition signaled when the logical manifest writer releases ownership.")
 
 (defvar *project-manifest-serialization-owner* nil
@@ -171,7 +179,7 @@ execution must happen after the lock has been released."
   "Process-global change-set registry, distinct from dynamic test bindings.")
 
 (defvar *change-set-registry-lock*
-  (bt:make-lock "clawmacs change set registry")
+  (bt:make-lock "rplaca change set registry")
   "Lock guarding change-set registration and mutable change-set state.")
 
 (defstruct (change-set-transaction-state
@@ -180,7 +188,7 @@ execution must happen after the lock has been released."
   "Logical filesystem transaction state protected by the registry lock."
   owner
   (condition (bt:make-condition-variable
-              :name "clawmacs change set transaction")))
+              :name "rplaca change set transaction")))
 
 (defvar *change-set-transaction-state*
   (make-change-set-transaction-state)
@@ -327,7 +335,7 @@ run after this lock is released."
      (let ((name (getf value :name)))
        (when name
          (list :name (project-display-name name)
-               :src-type (clawmacs::normalize-package-source-type
+               :src-type (rplaca::normalize-package-source-type
                           (getf value :src-type))
                :repo (getf value :repo)
                :path (getf value :path)
@@ -335,7 +343,7 @@ run after this lock is released."
                :ref (getf value :ref)
                :scope (or (getf value :scope) :project)
                :resource-types
-               (clawmacs::normalize-package-resource-type-list
+               (rplaca::normalize-package-resource-type-list
                 (getf value :resource-types))
                :description (getf value :description)))))
     ((or (stringp value) (symbolp value))
@@ -568,7 +576,7 @@ When ROOT is omitted, create a directory under *PROJECT-DEFINITIONS-DIRECTORY*."
            (getf request :source))))
 
 (defun project-package-install-request->use-package-args (request)
-  "Return keyword arguments for CLAWMACS-USE-PACKAGE from REQUEST."
+  "Return keyword arguments for RPLACA-USE-PACKAGE from REQUEST."
   (let ((src-type (or (getf request :src-type)
                       (getf request :source-type)
                       :git))
@@ -603,7 +611,7 @@ When ROOT is omitted, create a directory under *PROJECT-DEFINITIONS-DIRECTORY*."
              nil)
             (t
              (let ((definition
-                     (apply #'clawmacs-use-package
+                     (apply #'rplaca-use-package
                             (append (project-package-install-request->use-package-args
                                      request)
                                     (list :project project)))))
@@ -612,16 +620,16 @@ When ROOT is omitted, create a directory under *PROJECT-DEFINITIONS-DIRECTORY*."
     (nreverse loaded)))
 
 (defun config-project-root ()
-  "Return the configured Clawmacs init directory."
+  "Return the configured RPLACA init directory."
   (if (boundp '*user-init-directory*)
       (symbol-value '*user-init-directory*)
-      (merge-pathnames #P".clawmacs.d/" (user-homedir-pathname))))
+      (merge-pathnames #P".rplaca.d/" (user-homedir-pathname))))
 
 (defun ensure-config-project ()
   "Ensure the user configuration directory is available as project \"config\"."
   (define-project "config"
     :root (config-project-root)
-    :description "Clawmacs user configuration"
+    :description "RPLACA user configuration"
     :create-if-missing t
     :source :builtin
     :replace nil))
@@ -638,14 +646,22 @@ When ROOT is omitted, create a directory under *PROJECT-DEFINITIONS-DIRECTORY*."
 (defun load-project-definitions ()
   "Load built-in and manifest-backed project definitions.
 Existing projects, usually from init.lisp, are not overwritten."
-  (ensure-config-project)
-  (dolist (path (project-manifest-paths *project-definitions-directory*))
-    (handler-case
-        (load-project-manifest path :replace nil)
-      (error (e)
-      (format *error-output*
-                "~&;; Warning: error loading project manifest ~A:~%;; ~A~%"
-                path e))))
+  (let ((roots
+          (configured-migration-read-roots
+           *project-definitions-directory*
+           +default-project-definitions-directory+
+           +legacy-project-definitions-directory+
+           :label "project definition registry"
+           :executable-p t)))
+    (ensure-config-project)
+    (dolist (root roots)
+      (dolist (path (project-manifest-paths root))
+        (handler-case
+            (load-project-manifest path :replace nil)
+          (error (e)
+            (format *error-output*
+                    "~&;; Warning: error loading project manifest ~A:~%;; ~A~%"
+                    path e))))))
   (load-project-declared-packages)
   (set-project-definitions-loaded-p t)
   (list-projects))
@@ -1604,7 +1620,7 @@ Returns plists containing :PATH, :LINE, and :TEXT."
              *buffer-ring*)))
 
 (defun project-open-file (project-designator path)
-  "Open PROJECT-DESIGNATOR/PATH as an editable Clawmacs file buffer."
+  "Open PROJECT-DESIGNATOR/PATH as an editable RPLACA file buffer."
   (let* ((project (ensure-project project-designator))
          (resource-path (project-resource-name path))
          (existing (find-project-file-buffer project resource-path)))

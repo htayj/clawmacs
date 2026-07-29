@@ -5,7 +5,7 @@
 ;;;;          --eval "(push (truename \".\") asdf:*central-registry*)" \
 ;;;;          --load tests/openrouter-live-test.lisp
 
-(ql:quickload "clawmacs" :silent t)
+(ql:quickload "rplaca" :silent t)
 
 (defpackage #:openrouter-live-test
   (:use #:cl))
@@ -53,7 +53,7 @@
             "OPENROUTER_API_KEY is not set")))
 
 (check "read-provider-token :openrouter picks up env var"
-  (let ((tok (clawmacs::read-provider-token :openrouter)))
+  (let ((tok (rplaca::read-provider-token :openrouter)))
     (assert (and tok (stringp tok) (plusp (length tok))) ()
             "read-provider-token returned nil or empty")))
 
@@ -62,21 +62,21 @@
 (section "2. Dynamic model fetching  (live API call to /api/v1/models)")
 
 ;; Ensure we start without a cached list
-(setf clawmacs::*openrouter-cached-models* nil)
+(setf rplaca::*openrouter-cached-models* nil)
 
 (check "fetch-openrouter-models returns a non-empty list"
-  (let ((models (clawmacs::fetch-openrouter-models)))
+  (let ((models (rplaca::fetch-openrouter-models)))
     (assert (listp models) () "Not a list")
     (assert (plusp (length models)) () "Empty list")
     (format t "         => ~A models fetched~%" (length models))))
 
 (check "fetched models are all strings"
-  (let ((models clawmacs::*openrouter-cached-models*))
+  (let ((models rplaca::*openrouter-cached-models*))
     (assert models () "Cache is empty — fetch must have failed")
     (assert (every #'stringp models) () "Not all models are strings")))
 
 (check "fetched models follow provider/name format"
-  (let ((models clawmacs::*openrouter-cached-models*))
+  (let ((models rplaca::*openrouter-cached-models*))
     (assert models () "Cache is empty")
     (let ((bad (remove-if (lambda (m) (find #\/ m)) models)))
       (when bad
@@ -84,13 +84,13 @@
                 (length bad) (first bad))))))
 
 (check "cached result is returned on second call (no re-fetch)"
-  (let* ((cached clawmacs::*openrouter-cached-models*)
-         (result (clawmacs::fetch-openrouter-models)))
+  (let* ((cached rplaca::*openrouter-cached-models*)
+         (result (rplaca::fetch-openrouter-models)))
     (assert (eq result cached) () "Second call returned a different object")))
 
 (check "provider-known-models :openrouter returns cached list"
-  (let ((pkm (clawmacs::provider-known-models :openrouter)))
-    (assert (eq pkm clawmacs::*openrouter-cached-models*) ()
+  (let ((pkm (rplaca::provider-known-models :openrouter)))
+    (assert (eq pkm rplaca::*openrouter-cached-models*) ()
             "provider-known-models did not return the cache")))
 
 ;;; ── 3. Non-streaming request ────────────────────────────────────────────────
@@ -99,7 +99,7 @@
 
 (check "openrouter-request returns a canonical response alist"
   (let* ((msgs (list (user-message "Reply with exactly one word: pong")))
-         (resp (clawmacs::openrouter-request msgs
+         (resp (rplaca::openrouter-request msgs
                                              :model "openai/gpt-4o-mini"
                                              :max-tokens 16)))
     (format t "         => response: ~S~%" resp)
@@ -109,7 +109,7 @@
 
 (check "openrouter-request response contains a text string"
   (let* ((msgs (list (user-message "Say exactly: hello")))
-         (resp (clawmacs::openrouter-request msgs
+         (resp (rplaca::openrouter-request msgs
                                              :model "openai/gpt-4o-mini"
                                              :max-tokens 16)))
     (let ((txt (response-text resp)))
@@ -119,10 +119,10 @@
 
 (check "openrouter-request works with a second model (anthropic/claude-haiku-4-5)"
   ;; Use a model we know is in the live catalog (second element of the cached list)
-  (let* ((second-model (or (second clawmacs::*openrouter-cached-models*)
+  (let* ((second-model (or (second rplaca::*openrouter-cached-models*)
                            "anthropic/claude-haiku-4-5"))
          (msgs (list (user-message "Say: hi")))
-         (resp (clawmacs::openrouter-request msgs
+         (resp (rplaca::openrouter-request msgs
                                              :model second-model
                                              :max-tokens 16)))
     (format t "         => model: ~A  text: ~S~%" second-model (response-text resp))
@@ -134,20 +134,20 @@
 
 (check "openrouter-request-streaming returns a stream-state struct"
   (let* ((msgs (list (user-message "Count from 1 to 3, one per line.")))
-         (state (clawmacs::openrouter-request-streaming
+         (state (rplaca::openrouter-request-streaming
                  msgs
                  nil   ; callback is ignored in this implementation
                  :model "openai/gpt-4o-mini"
                  :max-tokens 64)))
-    (assert (clawmacs::stream-state-p state) ()
+    (assert (rplaca::stream-state-p state) ()
             "Return value is not a stream-state struct")
     ;; Wait up to 20 s for the SSE reader thread to finish
     (loop :repeat 200
-          :until (clawmacs::stream-state-done-p state)
+          :until (rplaca::stream-state-done-p state)
           :do (sleep 0.1))
-    (let ((text  (clawmacs::stream-state-text state))
-          (donep (clawmacs::stream-state-done-p state))
-          (errp  (clawmacs::stream-state-error-p state)))
+    (let ((text  (rplaca::stream-state-text state))
+          (donep (rplaca::stream-state-done-p state))
+          (errp  (rplaca::stream-state-error-p state)))
       (format t "         => done-p=~A  error-p=~A~%         => text: ~S~%"
               donep errp text)
       (when errp

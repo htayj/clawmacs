@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Buffer
@@ -37,7 +37,7 @@
 (defvar *scratch-buffer-initial-text* ""
   "Initial text inserted into the scratch buffer when it is created.")
 
-(defvar *current-clawmacs-package* nil
+(defvar *current-rplaca-package* nil
   "Package name dynamically bound while loading a package entrypoint.")
 
 (defvar *buffer-display-wakeup-hook* nil
@@ -184,7 +184,7 @@ interfaces.")
   "Process-global buffer type registry, distinct from dynamic test bindings.")
 
 (defvar *buffer-type-registry-lock*
-  (bt:make-lock "clawmacs buffer type registry")
+  (bt:make-lock "rplaca buffer type registry")
   "Lock guarding process-global buffer types and presentation providers.")
 
 (defun call-with-buffer-type-registry-lock
@@ -243,7 +243,7 @@ functions and package visibility checks must run after this lock is released."
 (defun register-buffer-input-presentation-provider
     (kind function &key (package nil package-supplied-p))
   "Register FUNCTION as a package-owned input overlay for buffer KIND."
-  (when (and *current-clawmacs-package*
+  (when (and *current-rplaca-package*
              (not (package-resource-type-allowed-p :buffer-type)))
     (return-from register-buffer-input-presentation-provider nil))
   (let* ((normalized-kind (normalize-buffer-kind kind))
@@ -252,7 +252,7 @@ functions and package visibility checks must run after this lock is released."
          (owner (normalize-buffer-type-package-name
                  (cond
                    (package-supplied-p package)
-                   (*current-clawmacs-package*)
+                   (*current-rplaca-package*)
                    (t nil))))
          (provider (make-buffer-input-presentation-provider
                     :kind normalized-kind
@@ -304,8 +304,8 @@ functions and package visibility checks must run after this lock is released."
 
   PRESENTATION-FUNCTION and INPUT-PRESENTATION-FUNCTION are retained as optional
 interface metadata. Package entrypoints normally leave PACKAGE unset; it
-defaults to the package currently being loaded by the Clawmacs package manager."
-  (when (and *current-clawmacs-package*
+defaults to the package currently being loaded by the RPLACA package manager."
+  (when (and *current-rplaca-package*
              (not (package-resource-type-allowed-p :buffer-type)))
     (return-from register-buffer-type nil))
   (let* ((kind (normalize-buffer-kind name))
@@ -314,7 +314,7 @@ defaults to the package currently being loaded by the Clawmacs package manager."
             (lambda () (gethash kind *buffer-type-registry*))
             *buffer-type-registry*))
          (current-owner
-           (normalize-buffer-type-package-name *current-clawmacs-package*))
+           (normalize-buffer-type-package-name *current-rplaca-package*))
          (owner (normalize-buffer-type-package-name
                  (cond
                    (package-supplied-p package)
@@ -376,7 +376,7 @@ defaults to the package currently being loaded by the Clawmacs package manager."
     type))
 
 (defmacro define-buffer-type (name &rest options)
-  "Define a Clawmacs buffer type.
+  "Define a RPLACA buffer type.
 
 This is the package-facing form for registering a buffer kind, its default
 major-mode label, and optional McCLIM presentation functions."
@@ -624,11 +624,11 @@ major-mode label, and optional McCLIM presentation functions."
     :initform nil
     :documentation "Managed worker state for one shell, pipeline, or compaction action. Only the frame process applies its result to this buffer.")
    (runtime-lock :reader buffer-runtime-lock
-                 :initform (bt:make-lock "clawmacs buffer runtime")
+                 :initform (bt:make-lock "rplaca buffer runtime")
                  :documentation "Lock serializing provider/tool ownership and teardown transitions for this buffer.")
    (runtime-condition :reader buffer-runtime-condition
                       :initform (bt:make-condition-variable
-                                 :name "clawmacs buffer runtime condition")
+                                 :name "rplaca buffer runtime condition")
                       :documentation "Condition variable for application/teardown phase changes protected by RUNTIME-LOCK.")
    (runtime-application :accessor buffer-runtime-application
                         :initform nil
@@ -1853,14 +1853,14 @@ The current buffer remains current when a current buffer already exists."
 ;;; Session Persistence
 ;;; --------------------------------------------------------------------------
 
-(defun session-path (session-name)
+(defun session-path (session-name &key (root *sessions-dir*))
   "Return the file path for a session by name."
-  (merge-pathnames (format nil "~A.json" session-name) *sessions-dir*))
+  (merge-pathnames (format nil "~A.json" session-name) root))
 
-(defun session-sidecar-manifest-path (session-name)
+(defun session-sidecar-manifest-path (session-name &key (root *sessions-dir*))
   "Return SESSION-NAME's sidecar manifest path."
   (merge-pathnames "session.json"
-                   (session-sidecar-directory session-name)))
+                   (session-sidecar-directory session-name :root root)))
 
 (defun serialize-message (msg)
   "Serialize a message to an alist for JSON encoding."
@@ -2009,7 +2009,8 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
   "Return durable serialized messages for SESSION's active branch."
   (session-active-branch-message-events session))
 
-(defun load-session-snapshot (session-name path agent-name)
+(defun load-session-snapshot
+    (session-name path agent-name &key source-root (root *sessions-dir*))
   "Load SESSION-NAME from snapshot PATH."
   (let ((cl-json:*json-array-type* 'vector))
     (let* ((json-str (uiop:read-file-string path))
@@ -2052,7 +2053,9 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
                                             name
                                             :working-directory
                                             working-directory
-                                            :display-name display-name))))
+                                            :display-name display-name
+                                            :source-root source-root
+                                            :root root))))
       (setf (buffer-provider-override buf)
             (and provider-override
                  (ignore-errors
@@ -2093,9 +2096,15 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
       (sync-buffer-system-prompt-display buf)
       buf)))
 
-(defun load-session-sidecar (session-name &key (agent-name *default-agent-name*))
+(defun load-session-sidecar
+    (session-name &key (agent-name *default-agent-name*)
+                         (root *sessions-dir*) source-root)
   "Load SESSION-NAME from its transcript sidecar."
-  (let* ((manifest-path (session-sidecar-manifest-path session-name))
+  (let* ((source-root (or source-root root))
+         (root (if (equal (pathname root) (pathname +legacy-sessions-dir+))
+                   (materialize-legacy-sessions-before-mutation)
+                   root))
+         (manifest-path (session-sidecar-manifest-path session-name :root root))
          (manifest (read-session-manifest manifest-path)))
     (unless manifest
       (return-from load-session-sidecar nil))
@@ -2106,7 +2115,9 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
              (normalize-session-display-name
               (cdr (assoc :display-name manifest))))
            (session (load-or-create-session name
-                                            :display-name display-name))
+                                            :display-name display-name
+                                            :source-root source-root
+                                            :root root))
            (buf (make-buffer name :agent-name agent-name
                                   :working-directory
                                   (session-working-directory session)
@@ -2131,6 +2142,14 @@ snapshot/manifest path."
                    (and (stringp session-name)
                         (session-path session-name))))
          (source (and record (getf record :source)))
+         (source-root (and record (getf record :source-root)))
+         (storage-root
+           (cond
+             ((null source-root) *sessions-dir*)
+             ((equal (pathname source-root)
+                     (pathname +legacy-sessions-dir+))
+              (materialize-legacy-sessions-before-mutation))
+             (t source-root)))
          (buf (cond
                 ((or (eq source :snapshot)
                      (and (null source)
@@ -2141,7 +2160,9 @@ snapshot/manifest path."
                          (load-session-snapshot session-name
                                                 (or path
                                                     (session-path session-name))
-                                                agent-name)))
+                                                agent-name
+                                                :source-root source-root
+                                                :root storage-root)))
                    (when snapshot
                      (let* ((session (buffer-session snapshot))
                             (sidecar-messages
@@ -2158,7 +2179,10 @@ snapshot/manifest path."
                              (set-session-current-leaf session nil)))))
                    snapshot))
                 ((eq source :sidecar)
-                 (load-session-sidecar session-name :agent-name agent-name))
+                 (load-session-sidecar session-name
+                                       :agent-name agent-name
+                                       :root source-root
+                                       :source-root source-root))
                 (t
                  (load-session-sidecar session-name :agent-name agent-name)))))
     (when buf
@@ -2166,17 +2190,17 @@ snapshot/manifest path."
       (maybe-run-hook-with-args '*after-session-load-hook* buf session-name))
     buf))
 
-(defun saved-session-snapshot-names ()
+(defun saved-session-snapshot-names (&optional (root (selected-sessions-read-root)))
   "Return session names with legacy JSON snapshots."
-  (when (probe-file *sessions-dir*)
+  (when (probe-file root)
     (mapcar #'pathname-name
-            (directory (merge-pathnames "*.json" *sessions-dir*)))))
+            (directory (merge-pathnames "*.json" root)))))
 
-(defun saved-session-sidecar-names ()
+(defun saved-session-sidecar-names (&optional (root (selected-sessions-read-root)))
   "Return session names with transcript sidecar manifests."
-  (when (probe-file *sessions-dir*)
+  (when (probe-file root)
     (loop :for path :in (directory (merge-pathnames #P"*/session.json"
-                                                    *sessions-dir*))
+                                                    root))
           :for manifest := (read-session-manifest path)
           :for name := (and (listp manifest)
                             (cdr (assoc :name manifest)))
@@ -2237,11 +2261,13 @@ snapshot/manifest path."
 
 (defun list-saved-session-records ()
   "Return saved session records with display names and metadata."
-  (when (probe-file *sessions-dir*)
-    (let ((records nil))
-      (dolist (session-name (list-saved-sessions))
-        (let* ((snapshot-path (session-path session-name))
-               (sidecar-path (session-sidecar-manifest-path session-name))
+  (let ((root (selected-sessions-read-root)))
+    (when (probe-file root)
+      (let ((records nil))
+        (dolist (session-name (list-saved-sessions))
+          (let* ((snapshot-path (session-path session-name :root root))
+                 (sidecar-path
+                   (session-sidecar-manifest-path session-name :root root))
                (snapshot (and (probe-file snapshot-path)
                               (read-session-record-from-snapshot
                                session-name snapshot-path)))
@@ -2272,12 +2298,13 @@ snapshot/manifest path."
                       :updated-at updated-at
                       :created-at created-at
                       :path path
+                      :source-root root
                       :source source)
                 records)))
-      (sort records
-            #'string<
-            :key (lambda (record)
-                   (session-record-display-name record))))))
+        (sort records
+              #'string<
+              :key (lambda (record)
+                     (session-record-display-name record)))))))
 
 (defun normalize-session-record-working-directory (value)
   "Return VALUE as a comparable absolute directory namestring, or NIL."
@@ -2292,6 +2319,12 @@ snapshot/manifest path."
       (getf record :created-at)
       0))
 
+(defun session-record-with-source-root (record root)
+  "Return RECORD annotated with its discovery ROOT, or NIL."
+  (and record
+       (append record (list :source-root
+                            (uiop:ensure-directory-pathname root)))))
+
 (defun explicit-session-record-from-path (designator)
   "Return a saved-session record for DESIGNATOR when it names a session path."
   (let* ((path (probe-file designator))
@@ -2301,11 +2334,18 @@ snapshot/manifest path."
       (directory
        (let ((manifest-path (merge-pathnames #P"session.json" path)))
          (and (probe-file manifest-path)
-              (read-session-record-from-sidecar "" manifest-path))))
+              (session-record-with-source-root
+               (read-session-record-from-sidecar "" manifest-path)
+               (uiop:pathname-parent-directory-pathname path)))))
       ((string= (pathname-name path) "session")
-       (read-session-record-from-sidecar "" path))
+       (session-record-with-source-root
+        (read-session-record-from-sidecar "" path)
+        (uiop:pathname-parent-directory-pathname
+         (uiop:pathname-directory-pathname path))))
       (t
-       (read-session-record-from-snapshot (pathname-name path) path)))))
+       (session-record-with-source-root
+        (read-session-record-from-snapshot (pathname-name path) path)
+        (uiop:pathname-directory-pathname path))))))
 
 (defun resolve-saved-session-record (designator)
   "Resolve DESIGNATOR to one saved-session record, or NIL when not found.
@@ -2368,9 +2408,10 @@ snapshot/manifest path."
 
 (defun list-saved-sessions ()
   "Return a list of saved session names."
-  (when (probe-file *sessions-dir*)
-    (sort (remove-duplicates
-           (append (saved-session-snapshot-names)
-                   (saved-session-sidecar-names))
-           :test #'string=)
-          #'string<)))
+  (let ((root (selected-sessions-read-root)))
+    (when (probe-file root)
+      (sort (remove-duplicates
+             (append (saved-session-snapshot-names root)
+                     (saved-session-sidecar-names root))
+             :test #'string=)
+            #'string<))))

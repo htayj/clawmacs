@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Common Lisp Standard Reference
@@ -8,13 +8,13 @@
   "Base URL for the bundled CL Community Spec site.")
 
 (defparameter *common-lisp-spec-index-path*
-  (asdf:system-relative-pathname "clawmacs"
+  (asdf:system-relative-pathname "rplaca"
                                  #P"vendor/cl-community-spec/searchable_terms.json")
   "Path to the vendored CL Community Spec search index.")
 
 (defparameter *common-lisp-spec-root*
   (uiop:ensure-directory-pathname
-   (asdf:system-relative-pathname "clawmacs"
+   (asdf:system-relative-pathname "rplaca"
                                   #P"vendor/cl-community-spec/"))
   "Directory containing the vendored CL Community Spec snapshot.")
 
@@ -518,9 +518,9 @@ Returns two values: the decoded string and the index after the closing quote."
     (t (string-downcase (prin1-to-string designator)))))
 
 (defun list-project-systems ()
-  "Return the direct ASDF systems used by clawmacs."
-  (let* ((metadata (system-metadata "clawmacs"))
-         (systems (cons "clawmacs" (copy-list (getf metadata :depends-on)))))
+  "Return the direct ASDF systems used by rplaca."
+  (let* ((metadata (system-metadata "rplaca"))
+         (systems (cons "rplaca" (copy-list (getf metadata :depends-on)))))
     (sort (remove-duplicates systems :test #'string-equal) #'string-lessp)))
 
 (defun extract-package-names-from-string (string)

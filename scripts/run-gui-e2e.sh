@@ -13,16 +13,16 @@ SUITE=smoke
 PREFLIGHT_ONLY=0
 INSIDE_CONTAINER=0
 ARTIFACT_DIR=''
-WINDOW_TITLE='Clawmacs E2E'
+WINDOW_TITLE='RPLACA E2E'
 
 usage() {
   cat <<'EOF'
 Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|appearance|menu-boundaries|stability] [--artifact-dir DIR]
 
-Runs an opt-in Clawmacs GUI E2E suite inside an isolated Xvfb display.
-Set CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS to override the 300-second
+Runs an opt-in RPLACA GUI E2E suite inside an isolated Xvfb display.
+Set RPLACA_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS to override the 300-second
 cold-start/frame-ready timeout.
-Set CLAWMACS_GUI_E2E_COLD_CACHE=1 to skip the artifact-cache seed and exercise
+Set RPLACA_GUI_E2E_COLD_CACHE=1 to skip the artifact-cache seed and exercise
 a deliberately cold ASDF startup.
 EOF
 }
@@ -149,12 +149,12 @@ canonicalize_container_artifact_path() {
   esac
 }
 
-if [ "${CLAWMACS_IN_GUIX_CONTAINER:-0}" = "1" ]; then
+if [ "${RPLACA_IN_GUIX_CONTAINER:-0}" = "1" ]; then
   INSIDE_CONTAINER=1
 fi
 
 if [ "$INSIDE_CONTAINER" -ne 1 ]; then
-  export CLAWMACS_CONTAINER_DISABLE_HOST_X=1
+  export RPLACA_CONTAINER_DISABLE_HOST_X=1
   if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
     exec "$SCRIPT_DIR/guix-container.sh" --preflight-only --mode e2e -- true
   fi
@@ -201,7 +201,7 @@ if [ -z "$ARTIFACT_DIR" ]; then
 fi
 
 # HOME and XDG_CACHE_HOME must be absolute.  A relative artifact path makes
-# ASDF initialization fail before Clawmacs starts, while Quicklisp masks the
+# ASDF initialization fail before RPLACA starts, while Quicklisp masks the
 # original pathname error behind its generic "Could not load ASDF" condition.
 ARTIFACT_DIR=$(canonicalize_container_artifact_path "$ARTIFACT_DIR")
 
@@ -261,7 +261,7 @@ if os.path.exists(summary_path):
             payload = decoded
     except (OSError, json.JSONDecodeError):
         pass
-suite = os.environ.get('CLAWMACS_GUI_E2E_SUITE', 'unknown')
+suite = os.environ.get('RPLACA_GUI_E2E_SUITE', 'unknown')
 payload.update({'suite': suite, 'ok': False, 'failure': reason,
                 'artifact_dir': artifact_dir})
 with open(summary_path, 'w', encoding='utf-8') as f:
@@ -410,37 +410,37 @@ unset OPENAI_API_KEY ZAI_CODING_MAX_API_KEY OPENROUTER_API_KEY
 unset OPENAI_TOKEN ZAI_TOKEN OPENROUTER_TOKEN
 export HOME="$ARTIFACT_DIR/home"
 export XDG_CACHE_HOME="$ARTIFACT_DIR/cache"
-export CLAWMACS_DEBUG_LOG="$DEBUG_LOG"
-export CLAWMACS_GUI_E2E=1
-export CLAWMACS_E2E_EVENTS=1
-export CLAWMACS_E2E_PROVIDER=1
-export CLAWMACS_CONTAINER_DISABLE_HOST_X=1
-export CLAWMACS_PROMPT_PROJECT_ROOT=/workspace
-export CLAWMACS_GUI_E2E_SUITE="$SUITE"
+export RPLACA_DEBUG_LOG="$DEBUG_LOG"
+export RPLACA_GUI_E2E=1
+export RPLACA_E2E_EVENTS=1
+export RPLACA_E2E_PROVIDER=1
+export RPLACA_CONTAINER_DISABLE_HOST_X=1
+export RPLACA_PROMPT_PROJECT_ROOT=/workspace
+export RPLACA_GUI_E2E_SUITE="$SUITE"
 if [ "$SUITE" = "keybinds" ]; then
-  export CLAWMACS_GUI_E2E_INITIAL_INPUT_FOCUS=standard-input
+  export RPLACA_GUI_E2E_INITIAL_INPUT_FOCUS=standard-input
 else
-  unset CLAWMACS_GUI_E2E_INITIAL_INPUT_FOCUS
+  unset RPLACA_GUI_E2E_INITIAL_INPUT_FOCUS
 fi
 
-FRAME_READY_TIMEOUT_SECONDS=${CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS:-300}
+FRAME_READY_TIMEOUT_SECONDS=${RPLACA_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS:-300}
 case "$FRAME_READY_TIMEOUT_SECONDS" in
   ''|*[!0-9]*)
-    fail 'CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS must be a positive integer'
+    fail 'RPLACA_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS must be a positive integer'
     ;;
 esac
 [ "$FRAME_READY_TIMEOUT_SECONDS" -gt 0 ] || \
-  fail 'CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS must be a positive integer'
+  fail 'RPLACA_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS must be a positive integer'
 FRAME_READY_ATTEMPTS=$((FRAME_READY_TIMEOUT_SECONDS * 5))
 
-APP_EXIT_TIMEOUT_SECONDS=${CLAWMACS_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS:-30}
+APP_EXIT_TIMEOUT_SECONDS=${RPLACA_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS:-30}
 case "$APP_EXIT_TIMEOUT_SECONDS" in
   ''|*[!0-9]*)
-    fail 'CLAWMACS_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS must be a positive integer'
+    fail 'RPLACA_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS must be a positive integer'
     ;;
 esac
 [ "$APP_EXIT_TIMEOUT_SECONDS" -gt 0 ] || \
-  fail 'CLAWMACS_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS must be a positive integer'
+  fail 'RPLACA_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS must be a positive integer'
 
 XVFB_DISPLAY_FILE="$ARTIFACT_DIR/xvfb.display"
 rm -f "$XVFB_DISPLAY_FILE"
@@ -491,27 +491,27 @@ while [ "$i" -lt 100 ]; do
 done
 [ "$ready" -eq 1 ] || { write_failure_artifacts 'timed out waiting for Xvfb'; exit 1; }
 
-log "launching Clawmacs in an isolated process group"
+log "launching RPLACA in an isolated process group"
 rm -f "$APP_PGID_FILE"
-export CLAWMACS_GUI_E2E_APP_PGID_FILE="$APP_PGID_FILE"
+export RPLACA_GUI_E2E_APP_PGID_FILE="$APP_PGID_FILE"
 setsid --wait sh -c '
   # setsid conditionally forks when its caller is already a process-group
   # leader.  Publish the PID from inside the new session so the harness owns
   # the exact application group instead of assuming that $! is its PGID.
-  printf "%s\n" "$$" > "$CLAWMACS_GUI_E2E_APP_PGID_FILE"
+  printf "%s\n" "$$" > "$RPLACA_GUI_E2E_APP_PGID_FILE"
   exec "$@"
 ' sh sbcl --noinform \
   --non-interactive \
   --disable-debugger \
-  --load "$CLAWMACS_QUICKLISP_SETUP" \
+  --load "$RPLACA_QUICKLISP_SETUP" \
   --eval '(push (truename ".") asdf:*central-registry*)' \
-  --eval '(ql:quickload :clawmacs)' \
-  --eval '(setf clawmacs:*inhibit-user-init* t)' \
-  --eval '(let ((suite (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") ""))) (when (member suite (list "organa" "quaestor") :test (function string=)) (clawmacs:set-package-enablement-scope suite :global) (clawmacs:load-active-packages)))' \
-  --eval '(when (string= (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") "keybinds") (clawmacs:add-hook (quote clawmacs:*initial-buffer-hook*) (lambda (buffer) (let* ((prefix "CLAWMACS_SWITCH_BUFFER_LARGE_DRAFT:") (draft (concatenate (quote string) prefix (make-string (- 32768 (length prefix)) :initial-element #\x))) (message (clawmacs:buffer-input-message buffer))) (loop for offset from 79 below (length draft) by 80 do (setf (char draft offset) #\Newline)) (clawmacs:set-message-text message draft) (clawmacs:set-message-point-from-absolute-offset message 8192) (clawmacs:set-message-mark-from-absolute-offset message 24576)) (dotimes (index 12) (clawmacs:make-chat-buffer (format nil "switch-e2e-~D" index) :agent-name "agent" :working-directory (truename ".") :session-persistence-mode :ephemeral :add-to-ring-p t)) (clawmacs:switch-to-buffer buffer)) :append t))' \
-  --eval '(when (string= (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") "quaestor") (clawmacs:add-hook (quote clawmacs:*initial-buffer-hook*) (lambda (buffer) (clawmacs::quaestor-request-user-input buffer (quote ((:header "Scope" :id "scope" :question "Pick a scope." :options ((:label "Alpha" :description "Smaller change.") (:label "Beta" :description "Broader change.")) :freeform t))))) :append t))' \
-  --eval '(when (member (or (uiop:getenv "CLAWMACS_GUI_E2E_SUITE") "") (list "menu-boundaries" "stability") :test (function string=)) (clawmacs:add-hook (quote clawmacs:*initial-buffer-hook*) (lambda (buffer) (clawmacs:set-buffer-provider-override buffer :openai-codex) (clawmacs:set-buffer-model-override buffer "gpt-5.3-codex")) :append t))' \
-  --eval '(clawmacs:clawmacs-main :session-name "clawmacs:e2e" :agent-name "agent" :window-title "Clawmacs E2E" :working-directory (truename "."))' \
+  --eval '(ql:quickload :rplaca)' \
+  --eval '(setf rplaca:*inhibit-user-init* t)' \
+  --eval '(let ((suite (or (uiop:getenv "RPLACA_GUI_E2E_SUITE") ""))) (when (member suite (list "organa" "quaestor") :test (function string=)) (rplaca:set-package-enablement-scope suite :global) (rplaca:load-active-packages)))' \
+  --eval '(when (string= (or (uiop:getenv "RPLACA_GUI_E2E_SUITE") "") "keybinds") (rplaca:add-hook (quote rplaca:*initial-buffer-hook*) (lambda (buffer) (let* ((prefix "RPLACA_SWITCH_BUFFER_LARGE_DRAFT:") (draft (concatenate (quote string) prefix (make-string (- 32768 (length prefix)) :initial-element #\x))) (message (rplaca:buffer-input-message buffer))) (loop for offset from 79 below (length draft) by 80 do (setf (char draft offset) #\Newline)) (rplaca:set-message-text message draft) (rplaca:set-message-point-from-absolute-offset message 8192) (rplaca:set-message-mark-from-absolute-offset message 24576)) (dotimes (index 12) (rplaca:make-chat-buffer (format nil "switch-e2e-~D" index) :agent-name "agent" :working-directory (truename ".") :session-persistence-mode :ephemeral :add-to-ring-p t)) (rplaca:switch-to-buffer buffer)) :append t))' \
+  --eval '(when (string= (or (uiop:getenv "RPLACA_GUI_E2E_SUITE") "") "quaestor") (rplaca:add-hook (quote rplaca:*initial-buffer-hook*) (lambda (buffer) (rplaca::quaestor-request-user-input buffer (quote ((:header "Scope" :id "scope" :question "Pick a scope." :options ((:label "Alpha" :description "Smaller change.") (:label "Beta" :description "Broader change.")) :freeform t))))) :append t))' \
+  --eval '(when (member (or (uiop:getenv "RPLACA_GUI_E2E_SUITE") "") (list "menu-boundaries" "stability") :test (function string=)) (rplaca:add-hook (quote rplaca:*initial-buffer-hook*) (lambda (buffer) (rplaca:set-buffer-provider-override buffer :openai-codex) (rplaca:set-buffer-model-override buffer "gpt-5.3-codex")) :append t))' \
+  --eval '(rplaca:rplaca-main :session-name "rplaca:e2e" :agent-name "agent" :window-title "RPLACA E2E" :working-directory (truename "."))' \
   --eval '(uiop:quit)' \
   >"$APP_STDOUT" 2>"$APP_STDERR" &
 APP_PID=$!
@@ -525,7 +525,7 @@ while [ "$i" -lt 50 ]; do
     case "$published_app_pgid" in
       ''|*[!0-9]*)
         write_failure_artifacts \
-          "Clawmacs launcher published invalid process group: $published_app_pgid"
+          "RPLACA launcher published invalid process group: $published_app_pgid"
         exit 1
         ;;
     esac
@@ -536,7 +536,7 @@ while [ "$i" -lt 50 ]; do
     fi
   fi
   if ! kill -0 "$APP_PID" >/dev/null 2>&1; then
-    write_failure_artifacts 'Clawmacs exited before establishing its process group'
+    write_failure_artifacts 'RPLACA exited before establishing its process group'
     exit 1
   fi
   i=$((i + 1))
@@ -544,7 +544,7 @@ while [ "$i" -lt 50 ]; do
 done
 [ -n "$APP_PGID" ] && [ "$app_group_live" -eq 1 ] || {
   write_failure_artifacts \
-    "Clawmacs failed to establish an isolated process group (owner=${APP_PID:-none}, published=${APP_PGID:-none}, group-live=$app_group_live)"
+    "RPLACA failed to establish an isolated process group (owner=${APP_PID:-none}, published=${APP_PGID:-none}, group-live=$app_group_live)"
   exit 1
 }
 
@@ -553,7 +553,7 @@ window_id=''
 i=0
 while [ "$i" -lt "$FRAME_READY_ATTEMPTS" ]; do
   if ! kill -0 "$APP_PID" >/dev/null 2>&1; then
-    write_failure_artifacts 'Clawmacs exited before frame-ready'
+    write_failure_artifacts 'RPLACA exited before frame-ready'
     exit 1
   fi
   if [ -f "$DEBUG_LOG" ] && grep -q '"event":"frame-ready"' "$DEBUG_LOG"; then
@@ -584,7 +584,7 @@ if ! python3 scripts/gui-e2e-driver.py \
   exit 1
 fi
 
-log 'driver observed frame-stopped; waiting for natural Clawmacs exit'
+log 'driver observed frame-stopped; waiting for natural RPLACA exit'
 completed_app_pid=$APP_PID
 completed_app_pgid=$APP_PGID
 app_status=0
@@ -596,7 +596,7 @@ else
 fi
 if [ "$GUI_E2E_WAIT_TIMED_OUT" -eq 1 ]; then
   write_failure_artifacts \
-    "Clawmacs did not exit within ${APP_EXIT_TIMEOUT_SECONDS}s after frame-stopped"
+    "RPLACA did not exit within ${APP_EXIT_TIMEOUT_SECONDS}s after frame-stopped"
   exit 1
 fi
 log "natural application exit observed: pid=$completed_app_pid status=$app_status; process group $completed_app_pgid is empty"
@@ -613,11 +613,11 @@ else
 fi
 
 if [ "$app_status" -ne 0 ]; then
-  write_failure_artifacts "Clawmacs exited with status $app_status after frame-stopped"
+  write_failure_artifacts "RPLACA exited with status $app_status after frame-stopped"
   exit 1
 fi
 if [ "$scan_status" -ne 0 ]; then
-  write_failure_artifacts 'runtime failure signature found after Clawmacs exit'
+  write_failure_artifacts 'runtime failure signature found after RPLACA exit'
   exit 1
 fi
 

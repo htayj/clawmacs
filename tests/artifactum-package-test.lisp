@@ -1,38 +1,38 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite artifactum-package-suite)
 
 (defmacro with-artifactum-test-state (&body body)
   `(with-package-state-override ((default-package-test-channels))
      (let* ((*sessions-dir* (temp-session-test-directory "artifactum"))
-            (clawmacs::*tool-working-directory* *sessions-dir*)
-            (clawmacs::*buffer-ring* nil)
-            (clawmacs::*buffer-counter* 0)
-            (clawmacs::*default-keymap* nil)
-            (clawmacs::*scratch-keymap* nil)
-            (clawmacs::*file-keymap* nil)
-            (clawmacs::*command-table* (make-hash-table :test #'eq))
-            (clawmacs::*extended-docs* (make-hash-table :test #'eq))
-            (clawmacs::*agent-tool-metadata-table*
+            (rplaca::*tool-working-directory* *sessions-dir*)
+            (rplaca::*buffer-ring* nil)
+            (rplaca::*buffer-counter* 0)
+            (rplaca::*default-keymap* nil)
+            (rplaca::*scratch-keymap* nil)
+            (rplaca::*file-keymap* nil)
+            (rplaca::*command-table* (make-hash-table :test #'eq))
+            (rplaca::*extended-docs* (make-hash-table :test #'eq))
+            (rplaca::*agent-tool-metadata-table*
              (make-hash-table :test #'eq))
-            (clawmacs::*agent-tool-name-table*
+            (rplaca::*agent-tool-name-table*
              (make-hash-table :test #'equal))
-            (clawmacs::*slash-command-table* (make-hash-table :test #'equal))
-            (clawmacs::*buffer-type-registry*
-             (clawmacs::make-buffer-type-registry)))
+            (rplaca::*slash-command-table* (make-hash-table :test #'equal))
+            (rplaca::*buffer-type-registry*
+             (rplaca::make-buffer-type-registry)))
        (set-package-enablement-scope "artifactum" :global)
        (load-active-packages)
-       (clawmacs::init-default-keymap)
+       (rplaca::init-default-keymap)
        ,@body)))
 
 (defun make-artifactum-test-buffer (label)
   "Return a persistent chat buffer for artifactum tests."
   (let ((root (merge-pathnames
                (format nil "~A/" label)
-               clawmacs::*tool-working-directory*)))
+               rplaca::*tool-working-directory*)))
     (ensure-directories-exist (merge-pathnames #P".keep" root))
-    (let ((buffer (clawmacs::make-chat-buffer label :working-directory root)))
-      (setf (clawmacs::buffer-keymap buffer) clawmacs::*default-keymap*)
+    (let ((buffer (rplaca::make-chat-buffer label :working-directory root)))
+      (setf (rplaca::buffer-keymap buffer) rplaca::*default-keymap*)
       (add-buffer-to-ring buffer)
       (switch-to-buffer buffer)
       buffer)))
@@ -46,8 +46,8 @@
 (defun artifactum-package-tool-result (tool-name args)
   "Execute TOOL-NAME with ARGS and decode its Lisp data result."
   (nth-value 0
-    (clawmacs::lisp-data-read
-     (clawmacs:execute-tool tool-name args))))
+    (rplaca::lisp-data-read
+     (rplaca:execute-tool tool-name args))))
 
 (defun read-artifactum-octets (path)
   "Return PATH's contents as an octet vector."
@@ -63,19 +63,19 @@
                   ("provider-name" . "OpenAI")
                   (:provider_name . "later match"))))
     (is (string= "OpenAI"
-                 (clawmacs::artifactum-json-value object :provider_name)))
-    (is (null (clawmacs::artifactum-json-value object "missing")))))
+                 (rplaca::artifactum-json-value object :provider_name)))
+    (is (null (rplaca::artifactum-json-value object "missing")))))
 
 (test artifactum-normalize-string-preserves-absent-values
   "Absent JSON strings remain absent instead of becoming the symbol name NIL."
-  (is (null (clawmacs::artifactum-normalize-string nil)))
-  (is (null (clawmacs::artifactum-normalize-string
+  (is (null (rplaca::artifactum-normalize-string nil)))
+  (is (null (rplaca::artifactum-normalize-string
              (coerce (list #\Space #\Tab #\Newline) 'string))))
-  (is (string= "ARTIFACT" (clawmacs::artifactum-normalize-string :artifact))))
+  (is (string= "ARTIFACT" (rplaca::artifactum-normalize-string :artifact))))
 
 (test artifactum-normalizes-source-path-and-mime-type-json-keys
   "Normalized JSON keys retain source paths and MIME types in legacy records."
-  (let ((record (clawmacs::normalize-artifactum-record
+  (let ((record (rplaca::normalize-artifactum-record
                  '((:id . "legacy-media")
                    (:source_path . "/tmp/legacy-media.png")
                    (:mime_type . "image/png")))))
@@ -84,7 +84,7 @@
 
 (test artifactum-normalizes-record-without-updated-timestamp
   "Legacy records use their creation timestamp when updated_at is absent."
-  (let ((record (clawmacs::normalize-artifactum-record
+  (let ((record (rplaca::normalize-artifactum-record
                  '((:id . "legacy-created")
                    (:path . "/tmp/legacy-created.txt")
                    (:created_at . 12345)))))
@@ -93,7 +93,7 @@
 
 (test artifactum-normalizes-record-without-timestamps
   "Records without timestamps receive one consistent fallback timestamp."
-  (let* ((record (clawmacs::normalize-artifactum-record
+  (let* ((record (rplaca::normalize-artifactum-record
                   '((:id . "legacy-undated")
                     (:path . "/tmp/legacy-undated.txt"))))
          (created-at (getf record :created-at)))
@@ -102,7 +102,7 @@
 
 (test artifactum-normalization-preserves-supplied-timestamps
   "Complete records retain distinct supplied creation and update timestamps."
-  (let ((record (clawmacs::normalize-artifactum-record
+  (let ((record (rplaca::normalize-artifactum-record
                  '((:id . "complete")
                    (:path . "/tmp/complete.txt")
                    (:created_at . 12345)
@@ -114,8 +114,8 @@
   "The durable index reader accepts legacy records missing updated_at."
   (with-artifactum-test-state
     (let* ((buffer (make-artifactum-test-buffer "legacy-index"))
-           (session (clawmacs::artifactum-session-for-buffer buffer))
-           (index-path (clawmacs::artifactum-session-index-path session)))
+           (session (rplaca::artifactum-session-for-buffer buffer))
+           (index-path (rplaca::artifactum-session-index-path session)))
       (ensure-directories-exist index-path)
       (with-open-file (stream index-path
                               :direction :output
@@ -125,7 +125,7 @@
         (write-string
          "[{\"id\":\"legacy-index\",\"path\":\"/tmp/legacy-index.txt\",\"created_at\":34567}]"
          stream))
-      (let ((records (clawmacs::artifactum-session-records buffer)))
+      (let ((records (rplaca::artifactum-session-records buffer)))
         (is (= 1 (length records)))
         (is (string= "legacy-index" (getf (first records) :id)))
         (is (= 34567 (getf (first records) :created-at)))
@@ -138,7 +138,7 @@
            (octets (make-array 6
                                :element-type '(unsigned-byte 8)
                                :initial-contents '(0 1 127 128 254 255)))
-           (record (clawmacs:artifactum-create-from-octets
+           (record (rplaca:artifactum-create-from-octets
                     buffer
                     "../nested/ Generated Image.PNG "
                     octets
@@ -154,7 +154,7 @@
   "Media metadata and provenance round-trip through the durable JSON index."
   (with-artifactum-test-state
     (let* ((buffer (make-artifactum-test-buffer "metadata"))
-           (record (clawmacs:artifactum-create-from-octets
+           (record (rplaca:artifactum-create-from-octets
                     buffer "image.webp"
                     (make-array 4
                                 :element-type '(unsigned-byte 8)
@@ -164,20 +164,20 @@
                                 (:Settings . ((:Quality . "high"))))
                     :provenance '((:Tool-Name . "image_generate")
                                   (:Request-Id . "req-123"))))
-           (read-back (first (clawmacs::artifactum-session-records buffer)))
+           (read-back (first (rplaca::artifactum-session-records buffer)))
            (index (uiop:read-file-string
-                   (clawmacs::artifactum-session-index-path
-                    (clawmacs::artifactum-session-for-buffer buffer)))))
+                   (rplaca::artifactum-session-index-path
+                    (rplaca::artifactum-session-for-buffer buffer)))))
       (is (string= "OpenAI"
-                   (clawmacs::artifactum-json-value
+                   (rplaca::artifactum-json-value
                     (getf record :metadata) "provider_name")))
       (is (string= "high"
-                   (clawmacs::artifactum-json-value
-                    (clawmacs::artifactum-json-value
+                   (rplaca::artifactum-json-value
+                    (rplaca::artifactum-json-value
                      (getf record :metadata) "settings")
                     "quality")))
       (is (string= "req-123"
-                   (clawmacs::artifactum-json-value
+                   (rplaca::artifactum-json-value
                     (getf read-back :provenance) "request_id")))
       (is (search "\"provider_name\"" index))
       (is (search "\"request_id\"" index)))))
@@ -185,17 +185,17 @@
 (test artifactum-create-from-octets-rejects-general-vectors
   "Artifact byte writes require an explicitly specialized octet vector."
   (signals error
-    (clawmacs:artifactum-create-from-octets nil "image.webp" #(82 73 70 70))))
+    (rplaca:artifactum-create-from-octets nil "image.webp" #(82 73 70 70))))
 
 (test artifactum-record-normalization-keeps-legacy-and-skips-malformed-attributes
   "Malformed optional fields do not make legacy durable records unreadable."
-  (let ((legacy (clawmacs::normalize-artifactum-record
+  (let ((legacy (rplaca::normalize-artifactum-record
                  '((:id . "legacy-media")
                    (:path . "/tmp/legacy-media.png")
                    (:created_at . 12345)
                    (:metadata . "not-an-object")
                    (:provenance . ((:source . #\x)))))))
-    (is (null (clawmacs::normalize-artifactum-record 42)))
+    (is (null (rplaca::normalize-artifactum-record 42)))
     (is (string= "legacy-media" (getf legacy :id)))
     (is (= 12345 (getf legacy :updated-at)))
     (is (null (getf legacy :metadata)))
@@ -216,9 +216,9 @@
       (is (member "artifactum_update" tool-names :test #'string=))
       (is (fboundp 'artifactum-create-from-octets))
       (is (search "Attachments and artifacts with artifactum" prompt))
-      (is (member 'clawmacs::artifactum-attach-file-command commands :test #'eq))
-      (is (member 'clawmacs::artifactum-open-artifact-command commands :test #'eq))
-      (is (member 'clawmacs::artifactum-list-artifacts-command commands :test #'eq))
+      (is (member 'rplaca::artifactum-attach-file-command commands :test #'eq))
+      (is (member 'rplaca::artifactum-open-artifact-command commands :test #'eq))
+      (is (member 'rplaca::artifactum-list-artifacts-command commands :test #'eq))
       (is (not (null buffer-type)))
       (is (string= "artifactum" (buffer-type-package buffer-type))))))
 
@@ -232,21 +232,21 @@
                               :if-exists :supersede
                               :if-does-not-exist :create)
         (write-string "# Notes\n\nArtifactum preview text." stream))
-      (let* ((record (clawmacs::artifactum-attach-file-command
+      (let* ((record (rplaca::artifactum-attach-file-command
                       buffer
                       (namestring source)))
-             (records (clawmacs::artifactum-session-records buffer))
+             (records (rplaca::artifactum-session-records buffer))
              (message (car (last (artifactum-finalized-messages buffer)))))
         (is (= 1 (length records)))
         (is (string= "attachment" (getf record :kind)))
         (is (search "Artifactum preview text" (or (getf record :preview) "")))
         (is (eq :context (message-sender message)))
         (is (string= (getf record :id)
-                     (clawmacs::message-metadata-value
+                     (rplaca::message-metadata-value
                       (message-metadata message)
                       :artifact-id)))
         (is (probe-file (pathname (getf record :path))))
-        (clawmacs::artifactum-open-record-buffer record)
+        (rplaca::artifactum-open-record-buffer record)
         (let ((artifact-buffer (current-buffer))
               (artifact-message (car (artifactum-finalized-messages
                                       (current-buffer)))))
@@ -269,7 +269,7 @@
                        '((:name . "report.json")
                          (:content . "{\"ok\":true}")
                          (:mime_type . "application/json"))))
-             (record (first (clawmacs::artifactum-session-records buffer)))
+             (record (first (rplaca::artifactum-session-records buffer)))
              (artifact-id (getf record :id)))
         (is (string= "report.json" (getf created :name)))
         (is (string= artifact-id (getf created :id)))
@@ -290,7 +290,7 @@
           (is (string= artifact-id (getf (first (coerce listed 'list)) :id)))
           (is (string= "{\"ok\":false}" (getf read-back :content)))
           (let ((html (progn
-                        (clawmacs::export-buffer-session-html
+                        (rplaca::export-buffer-session-html
                          buffer
                          :path export-path)
                         (uiop:read-file-string export-path))))

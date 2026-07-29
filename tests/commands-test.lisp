@@ -1,4 +1,4 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 (in-suite commands-suite)
 
 (defvar *command-tool-test-log* nil
@@ -8,20 +8,20 @@
   "Records slash command dispatch during command tests.")
 
 (defmacro with-agent-tool-state (() &body body)
-  `(let ((clawmacs::*agent-tool-metadata-table*
+  `(let ((rplaca::*agent-tool-metadata-table*
            (make-hash-table :test #'eq))
-         (clawmacs::*agent-tool-name-table*
+         (rplaca::*agent-tool-name-table*
            (make-hash-table :test #'equal))
-         (clawmacs::*tool-table*
+         (rplaca::*tool-table*
            (make-hash-table :test #'equal)))
      ,@body))
 
 (defmacro with-slash-command-state (() &body body)
-  `(let ((clawmacs::*slash-command-table*
+  `(let ((rplaca::*slash-command-table*
            (make-hash-table :test #'equal)))
      ,@body))
 
-(clawmacs:defhook *commands-test-hook* (value)
+(rplaca:defhook *commands-test-hook* (value)
   "Hook used by command-system tests.")
 
 (defvar *advice-test-log* nil
@@ -51,35 +51,35 @@
   "Command used by hook dispatch tests."
   (push (list :body buffer) *hook-dispatch-test-log*)
   :command-result)
-(clawmacs:defcommand hook-dispatch-test-command)
+(rplaca:defcommand hook-dispatch-test-command)
 
 (test defhook-registers-hook-metadata
   "defhook defines a hook var and records its argument metadata."
-  (let ((metadata (clawmacs:find-hook-metadata
-                   'clawmacs/tests::*commands-test-hook*)))
+  (let ((metadata (rplaca:find-hook-metadata
+                   'rplaca/tests::*commands-test-hook*)))
     (is (not (null metadata)))
-    (is (equal '(value) (clawmacs:hook-metadata-args metadata)))
-    (is (find 'clawmacs/tests::*commands-test-hook*
-              (clawmacs:list-hooks)
-              :key #'clawmacs:hook-metadata-name))))
+    (is (equal '(value) (rplaca:hook-metadata-args metadata)))
+    (is (find 'rplaca/tests::*commands-test-hook*
+              (rplaca:list-hooks)
+              :key #'rplaca:hook-metadata-name))))
 
 (test run-hook-with-args-isolates-hook-errors
   "Hook errors are reported without preventing later hook functions."
   (let ((*commands-test-hook* nil)
         (log nil)
         (*error-output* (make-string-output-stream)))
-    (clawmacs:add-hook
+    (rplaca:add-hook
      '*commands-test-hook*
      (lambda (value)
        (declare (ignore value))
        (error "expected hook failure"))
      :append t)
-    (clawmacs:add-hook
+    (rplaca:add-hook
      '*commands-test-hook*
      (lambda (value)
        (push (list :after-error value) log))
      :append t)
-    (clawmacs:run-hook-with-args '*commands-test-hook* "ok")
+    (rplaca:run-hook-with-args '*commands-test-hook* "ok")
     (is (equal '((:after-error "ok")) (reverse log)))))
 
 (test advice-before-after-and-around-wrap-function
@@ -87,15 +87,15 @@
   (let ((*advice-test-log* nil))
     (unwind-protect
          (progn
-           (clawmacs:clear-advices 'advice-target)
-           (clawmacs:add-advice
+           (rplaca:clear-advices 'advice-target)
+           (rplaca:add-advice
             'advice-target
             :before
             (lambda (value)
               (push (list :before value) *advice-test-log*))
             :name 'advice-test-before
             :append t)
-           (clawmacs:add-advice
+           (rplaca:add-advice
             'advice-target
             :around
             (lambda (next value)
@@ -105,7 +105,7 @@
                 (format nil "around-~A" result)))
             :name 'advice-test-around
             :append t)
-           (clawmacs:add-advice
+           (rplaca:add-advice
             'advice-target
             :after
             (lambda (result value)
@@ -119,32 +119,32 @@
                         (:around-after "body-x!")
                         (:after "around-body-x!" "x"))
                       (reverse *advice-test-log*))))
-      (clawmacs:clear-advices 'advice-target))))
+      (rplaca:clear-advices 'advice-target))))
 
 (test advice-removal-and-multiple-values
   "Removing the last advice restores the original function and values."
-  (clawmacs:clear-advices 'advice-values-target)
+  (rplaca:clear-advices 'advice-values-target)
   (let ((original (symbol-function 'advice-values-target)))
     (unwind-protect
          (progn
-           (clawmacs:add-advice
+           (rplaca:add-advice
             'advice-values-target
             :after
             (lambda (result value)
               (declare (ignore result value))
               nil)
             :name 'advice-values-after)
-           (is (clawmacs:advice-member-p 'advice-values-target
+           (is (rplaca:advice-member-p 'advice-values-target
                                           'advice-values-after))
            (is (equal '(:first :second)
                       (multiple-value-list
                        (funcall 'advice-values-target :first))))
-           (is (not (null (clawmacs:remove-advice
+           (is (not (null (rplaca:remove-advice
                            'advice-values-target
                            'advice-values-after))))
-           (is (null (clawmacs:list-advices 'advice-values-target)))
+           (is (null (rplaca:list-advices 'advice-values-target)))
            (is (eq original (symbol-function 'advice-values-target))))
-      (clawmacs:clear-advices 'advice-values-target))))
+      (rplaca:clear-advices 'advice-values-target))))
 
 (test package-advice-preserves-and-readvises-redefined-targets
   "Package cleanup never restores a stale pre-reload target fdefinition."
@@ -152,9 +152,9 @@
         (*advice-test-log* nil))
     (unwind-protect
          (progn
-           (clawmacs:clear-advices 'advice-reload-target)
-           (let ((clawmacs::*current-clawmacs-package* "reload-probe"))
-             (clawmacs:add-advice 'advice-reload-target
+           (rplaca:clear-advices 'advice-reload-target)
+           (let ((rplaca::*current-rplaca-package* "reload-probe"))
+             (rplaca:add-advice 'advice-reload-target
                                   :before
                                   'advice-reload-probe
                                   :name 'advice-reload-probe))
@@ -162,11 +162,11 @@
            (is (equal '(:advice) *advice-test-log*))
            (setf *advice-test-log* nil
                  (fdefinition 'advice-reload-target) (lambda () :redefined))
-           (clawmacs::remove-package-advices "reload-probe")
+           (rplaca::remove-package-advices "reload-probe")
            (is (eq :redefined (advice-reload-target)))
-           (is (null (clawmacs:list-advices 'advice-reload-target)))
-           (let ((clawmacs::*current-clawmacs-package* "reload-probe"))
-             (clawmacs:add-advice 'advice-reload-target
+           (is (null (rplaca:list-advices 'advice-reload-target)))
+           (let ((rplaca::*current-rplaca-package* "reload-probe"))
+             (rplaca:add-advice 'advice-reload-target
                                   :before
                                   'advice-reload-probe
                                   :name 'advice-reload-probe))
@@ -176,71 +176,71 @@
            ;; when the package re-registers its advice.
            (setf *advice-test-log* nil
                  (fdefinition 'advice-reload-target) (lambda () :newest))
-           (let ((clawmacs::*current-clawmacs-package* "reload-probe"))
-             (clawmacs:add-advice 'advice-reload-target
+           (let ((rplaca::*current-rplaca-package* "reload-probe"))
+             (rplaca:add-advice 'advice-reload-target
                                   :before
                                   'advice-reload-probe
                                   :name 'advice-reload-probe))
            (is (eq :newest (advice-reload-target)))
            (is (equal '(:advice) *advice-test-log*))
-           (clawmacs::remove-package-advices "reload-probe")
+           (rplaca::remove-package-advices "reload-probe")
            (is (eq :newest (advice-reload-target))))
-      (clawmacs:clear-advices 'advice-reload-target)
+      (rplaca:clear-advices 'advice-reload-target)
       (setf (fdefinition 'advice-reload-target) original))))
 
 (test invoke-command-runs-command-hooks
   "Interactive command dispatch runs before and after command hooks."
-  (let ((clawmacs::*before-command-hook* nil)
-        (clawmacs::*after-command-hook* nil)
+  (let ((rplaca::*before-command-hook* nil)
+        (rplaca::*after-command-hook* nil)
         (*hook-dispatch-test-log* nil))
-    (clawmacs:add-hook
-     'clawmacs:*before-command-hook*
+    (rplaca:add-hook
+     'rplaca:*before-command-hook*
      (lambda (buffer command)
        (push (list :before buffer command) *hook-dispatch-test-log*))
      :append t)
-    (clawmacs:add-hook
-     'clawmacs:*after-command-hook*
+    (rplaca:add-hook
+     'rplaca:*after-command-hook*
      (lambda (buffer command result)
        (push (list :after buffer command result) *hook-dispatch-test-log*))
      :append t)
     (let ((buffer (make-buffer "command-hook-test")))
       (is (eq :command-result
-              (clawmacs:invoke-command
-               buffer 'clawmacs/tests::hook-dispatch-test-command)))
+              (rplaca:invoke-command
+               buffer 'rplaca/tests::hook-dispatch-test-command)))
       (is (equal `((:before ,buffer
-                            clawmacs/tests::hook-dispatch-test-command)
+                            rplaca/tests::hook-dispatch-test-command)
                    (:body ,buffer)
                    (:after ,buffer
-                           clawmacs/tests::hook-dispatch-test-command
+                           rplaca/tests::hook-dispatch-test-command
                            :command-result))
                  (reverse *hook-dispatch-test-log*))))))
 
 (test execute-tool-runs-tool-hooks
   "Tool execution runs before and after tool hooks."
-  (let ((clawmacs::*tool-table* (make-hash-table :test #'equal))
-        (clawmacs::*before-tool-hook* nil)
-        (clawmacs::*after-tool-hook* nil)
+  (let ((rplaca::*tool-table* (make-hash-table :test #'equal))
+        (rplaca::*before-tool-hook* nil)
+        (rplaca::*after-tool-hook* nil)
         (log nil))
-    (clawmacs:register-tool
+    (rplaca:register-tool
      "hook_probe"
      "Probe tool hooks."
      '((:type . "object"))
      (lambda (args)
        (push (list :body args) log)
        "tool-result"))
-    (clawmacs:add-hook
-     'clawmacs:*before-tool-hook*
+    (rplaca:add-hook
+     'rplaca:*before-tool-hook*
      (lambda (tool-name args)
        (push (list :before tool-name args) log))
      :append t)
-    (clawmacs:add-hook
-     'clawmacs:*after-tool-hook*
+    (rplaca:add-hook
+     'rplaca:*after-tool-hook*
      (lambda (tool-name args result)
        (push (list :after tool-name args result) log))
      :append t)
     (let ((args '(:value "ok")))
       (is (string= "tool-result"
-                   (clawmacs:execute-tool "hook_probe" args)))
+                   (rplaca:execute-tool "hook_probe" args)))
       (is (equal `((:before "hook_probe" ,args)
                    (:body ,args)
                    (:after "hook_probe" ,args "tool-result"))
@@ -248,26 +248,26 @@
 
 (test send-message-runs-send-hooks
   "Sending a non-empty input runs before and after send hooks."
-  (let ((clawmacs::*before-send-message-hook* nil)
-        (clawmacs::*after-send-message-hook* nil)
+  (let ((rplaca::*before-send-message-hook* nil)
+        (rplaca::*after-send-message-hook* nil)
         (log nil))
-    (clawmacs:add-hook
-     'clawmacs:*before-send-message-hook*
+    (rplaca:add-hook
+     'rplaca:*before-send-message-hook*
      (lambda (buffer input-text)
        (push (list :before buffer input-text) log))
      :append t)
-    (clawmacs:add-hook
-     'clawmacs:*after-send-message-hook*
+    (rplaca:add-hook
+     'rplaca:*after-send-message-hook*
      (lambda (buffer input-text result)
        (push (list :after buffer input-text result) log))
      :append t)
     (let* ((buffer (make-buffer "send-hook-test"))
-           (clawmacs::*prefix-handlers*
+           (rplaca::*prefix-handlers*
              (list (cons "?"
                          (lambda (buf remaining)
                            (push (list :handler buf remaining) log))))))
-      (clawmacs::set-message-text (buffer-input-message buffer) "?payload")
-      (is (eq t (clawmacs::send-message buffer)))
+      (rplaca::set-message-text (buffer-input-message buffer) "?payload")
+      (is (eq t (rplaca::send-message buffer)))
       (is (equal `((:before ,buffer "?payload")
                    (:handler ,buffer "payload")
                    (:after ,buffer "?payload" t))
@@ -282,15 +282,15 @@
   "Known slash commands are handled in the composer instead of becoming chat history."
   (with-slash-command-state ()
     (let ((*slash-command-test-log* nil)
-          (clawmacs::*before-send-message-hook* nil)
-          (clawmacs::*after-send-message-hook* nil)
+          (rplaca::*before-send-message-hook* nil)
+          (rplaca::*after-send-message-hook* nil)
           (buffer (make-buffer "slash-dispatch-test")))
-      (clawmacs:register-slash-command
+      (rplaca:register-slash-command
        "demo"
        #'slash-command-test-handler
        :description "Demo slash command.")
-      (clawmacs::set-message-text (buffer-input-message buffer) "/demo alpha beta")
-      (is (eq :slash-dispatched (clawmacs::send-message buffer)))
+      (rplaca::set-message-text (buffer-input-message buffer) "/demo alpha beta")
+      (is (eq :slash-dispatched (rplaca::send-message buffer)))
       (is (equal `((:slash ,buffer ("alpha" "beta") "/demo alpha beta"))
                  *slash-command-test-log*))
       (is (string= "" (message-text (buffer-input-message buffer))))
@@ -300,33 +300,33 @@
 (test send-message-leaves-unknown-slash-text-on-normal-send-path
   "Unknown slash text still falls through to the normal agent send path."
   (with-slash-command-state ()
-    (let ((clawmacs::*before-send-message-hook* nil)
-          (clawmacs::*after-send-message-hook* nil)
+    (let ((rplaca::*before-send-message-hook* nil)
+          (rplaca::*after-send-message-hook* nil)
           (buffer (make-buffer "unknown-slash-test"))
-          (original-send (symbol-function 'clawmacs::send-to-agent-with-context)))
+          (original-send (symbol-function 'rplaca::send-to-agent-with-context)))
       (unwind-protect
            (progn
-             (setf (symbol-function 'clawmacs::send-to-agent-with-context)
+             (setf (symbol-function 'rplaca::send-to-agent-with-context)
                    (lambda (buf)
                      (declare (ignore buf))
                      :agent-sent))
-             (clawmacs::set-message-text (buffer-input-message buffer)
+             (rplaca::set-message-text (buffer-input-message buffer)
                                          "/unknown still-send")
-             (is (eq :agent-sent (clawmacs::send-message buffer))))
-        (setf (symbol-function 'clawmacs::send-to-agent-with-context)
+             (is (eq :agent-sent (rplaca::send-message buffer))))
+        (setf (symbol-function 'rplaca::send-to-agent-with-context)
               original-send)))))
 
 (test send-message-expands-prompt-template-before-normal-send
   "Known slash templates expand into normal chat input before the agent send."
   (let* ((root (temp-package-test-directory "templata-send"))
          (project-root (merge-pathnames "project/" root))
-         (prompt-root (merge-pathnames ".clawmacs/prompts/" project-root))
-         (clawmacs::*before-send-message-hook* nil)
-         (clawmacs::*after-send-message-hook* nil)
+         (prompt-root (merge-pathnames ".rplaca/prompts/" project-root))
+         (rplaca::*before-send-message-hook* nil)
+         (rplaca::*after-send-message-hook* nil)
          (buffer (make-buffer "templata-send"
                               :working-directory project-root))
          (sent-text nil)
-         (original-send (symbol-function 'clawmacs::send-to-agent-with-context)))
+         (original-send (symbol-function 'rplaca::send-to-agent-with-context)))
     (ensure-directories-exist (merge-pathnames ".keep" prompt-root))
     (with-open-file (stream (merge-pathnames "review.md" prompt-root)
                             :direction :output
@@ -339,18 +339,18 @@ Review target: $1
 All args: $@" stream))
     (unwind-protect
          (progn
-           (setf (symbol-function 'clawmacs::send-to-agent-with-context)
+           (setf (symbol-function 'rplaca::send-to-agent-with-context)
                  (lambda (buf)
                    (setf sent-text
                          (message-text
                           (message-prev (buffer-input-message buf))))
                    :agent-sent))
-           (clawmacs::set-message-text (buffer-input-message buffer)
+           (rplaca::set-message-text (buffer-input-message buffer)
                                        "/review parser")
-           (is (eq :agent-sent (clawmacs::send-message buffer)))
+           (is (eq :agent-sent (rplaca::send-message buffer)))
            (is (search "Review target: parser" sent-text))
            (is (search "All args: parser" sent-text)))
-      (setf (symbol-function 'clawmacs::send-to-agent-with-context)
+      (setf (symbol-function 'rplaca::send-to-agent-with-context)
             original-send))))
 
 (test command-metadata-registration
@@ -360,7 +360,7 @@ All args: $@" stream))
              "A test command."
              (declare (ignore buffer))
              :test-result))
-    (eval '(clawmacs:defcommand test-cmd))
+    (eval '(rplaca:defcommand test-cmd))
     (let ((meta (gethash 'test-cmd *command-table*)))
       (is (not (null meta)))
       (is (string= "A test command." (command-metadata-docstring meta))))))
@@ -372,7 +372,7 @@ All args: $@" stream))
              "Prompted command."
              (declare (ignore buffer count label))
              :ok))
-    (eval '(clawmacs:defcommand prompted-cmd
+    (eval '(rplaca:defcommand prompted-cmd
              :prompts ((count :prompt "Count" :reader parse-integer)
                        (label :prompt "Label"))))
     (let ((meta (gethash 'prompted-cmd *command-table*)))
@@ -387,13 +387,13 @@ All args: $@" stream))
   (with-agent-tool-state ()
     (eval '(defun metadata-doc-tool (value)
              (format nil "value=~A" value)))
-    (eval '(clawmacs:deftool metadata-doc-tool
+    (eval '(rplaca:deftool metadata-doc-tool
              :name "metadata_doc_tool"
              :description "Return a tagged value."
              :args ((value :type "string"
                            :description "Value to echo."))))
     (let* ((metadata (find-agent-tool-metadata 'metadata-doc-tool))
-           (definition (gethash "metadata_doc_tool" clawmacs::*tool-table*))
+           (definition (gethash "metadata_doc_tool" rplaca::*tool-table*))
            (schema (and definition
                         (tool-definition-input-schema definition)))
            (properties (cdr (assoc :properties schema))))
@@ -410,16 +410,16 @@ All args: $@" stream))
   (with-agent-tool-state ()
     (eval '(defun replace-doc-tool (value)
              (format nil "replace=~A" value)))
-    (eval '(clawmacs:deftool replace-doc-tool
+    (eval '(rplaca:deftool replace-doc-tool
              :name "replace_old"
              :description "Old tool."
              :args ((value :type "string"))))
-    (eval '(clawmacs:deftool replace-doc-tool
+    (eval '(rplaca:deftool replace-doc-tool
              :name "replace_new"
              :description "New tool."
              :args ((value :type "string"))))
-    (is (null (gethash "replace_old" clawmacs::*tool-table*)))
-    (is (not (null (gethash "replace_new" clawmacs::*tool-table*))))
+    (is (null (gethash "replace_old" rplaca::*tool-table*)))
+    (is (not (null (gethash "replace_new" rplaca::*tool-table*))))
     (is (string= "replace_new"
                  (agent-tool-metadata-name
                   (find-agent-tool-metadata 'replace-doc-tool))))))
@@ -429,12 +429,12 @@ All args: $@" stream))
   (with-agent-tool-state ()
     (eval '(defun duplicate-doc-tool-a (value) value))
     (eval '(defun duplicate-doc-tool-b (value) value))
-    (eval '(clawmacs:deftool duplicate-doc-tool-a
+    (eval '(rplaca:deftool duplicate-doc-tool-a
              :name "duplicate_doc_tool"
              :description "First tool."
              :args ((value :type "string"))))
     (signals error
-      (eval '(clawmacs:deftool duplicate-doc-tool-b
+      (eval '(rplaca:deftool duplicate-doc-tool-b
                :name "duplicate_doc_tool"
                :description "Second tool."
                :args ((value :type "string")))))))
@@ -445,7 +445,7 @@ All args: $@" stream))
     (when (fboundp 'missing-doc-tool)
       (fmakunbound 'missing-doc-tool))
     (signals error
-      (eval '(clawmacs:deftool missing-doc-tool
+      (eval '(rplaca:deftool missing-doc-tool
                :name "missing_doc_tool"
                :description "Missing function."
                :args ((value :type "string")))))))
@@ -457,17 +457,17 @@ All args: $@" stream))
           (*command-tool-test-log* nil))
       (eval '(defun command-tool-test (buffer label)
                "Run a command as an agent tool."
-               (setf clawmacs/tests::*command-tool-test-log*
+               (setf rplaca/tests::*command-tool-test-log*
                      (list (buffer-name buffer) label))
                (format nil "command=~A" label)))
-      (eval '(clawmacs:defcommand command-tool-test
+      (eval '(rplaca:defcommand command-tool-test
                :prompts ((label :prompt "Label"))))
-      (eval '(clawmacs:deftool command-tool-test
+      (eval '(rplaca:deftool command-tool-test
                :name "command_tool_test"
                :description "Run a command as an agent tool."
                :args ((label :type "string"
                              :description "Label to record."))))
-      (let* ((definition (gethash "command_tool_test" clawmacs::*tool-table*))
+      (let* ((definition (gethash "command_tool_test" rplaca::*tool-table*))
              (metadata (find-agent-tool-metadata 'command-tool-test))
              (schema (tool-definition-input-schema definition))
              (properties (cdr (assoc :properties schema)))
@@ -486,12 +486,12 @@ All args: $@" stream))
   "Tool metadata belongs in deftool, not defdoc or defcommand."
   (signals error
     (macroexpand-1
-     '(clawmacs:defdoc old-doc-tool
+     '(rplaca:defdoc old-doc-tool
        :tool (:name "old_doc_tool"
               :args ((value :type "string"))))))
   (signals error
     (macroexpand-1
-     '(clawmacs:defcommand old-command-tool
+     '(rplaca:defcommand old-command-tool
         :tool (:name "old_command_tool"
                :args ((label :type "string")))))))
 
@@ -499,7 +499,7 @@ All args: $@" stream))
   "Commands have no in-process permission metadata."
   (signals error
     (macroexpand-1
-     '(clawmacs:defcommand permission-command
+     '(rplaca:defcommand permission-command
         :permission :agent-allowed))))
 
 (test deftool-rejects-obsolete-security-keywords
@@ -507,13 +507,13 @@ All args: $@" stream))
   (with-agent-tool-state ()
     (eval '(defun obsolete-security-tool (value) value))
     (signals error
-      (eval '(clawmacs:deftool obsolete-security-tool
+      (eval '(rplaca:deftool obsolete-security-tool
                :name "obsolete_security_tool"
                :description "Obsolete metadata test."
                :permission :agent-allowed
                :args ((value :type "string")))))
     (signals error
-      (eval '(clawmacs:deftool obsolete-security-tool
+      (eval '(rplaca:deftool obsolete-security-tool
                :name "obsolete_security_tool"
                :description "Obsolete metadata test."
                :approval-display-fn identity
@@ -523,7 +523,7 @@ All args: $@" stream))
   "Prompt metadata belongs under :PROMPTS, not :INTERACTIVE."
   (signals error
     (macroexpand-1
-     '(clawmacs:defcommand interactive-command
+     '(rplaca:defcommand interactive-command
         :interactive nil))))
 
 (test defcommand-rejects-undefined-functions
@@ -531,7 +531,7 @@ All args: $@" stream))
   (when (fboundp 'missing-command)
     (fmakunbound 'missing-command))
   (signals error
-    (eval '(clawmacs:defcommand missing-command))))
+    (eval '(rplaca:defcommand missing-command))))
 
 (test list-available-commands-returns-registered-commands
   "list-available-commands returns registered commands for every caller."
@@ -540,8 +540,8 @@ All args: $@" stream))
              "First." (declare (ignore buffer)) nil))
     (eval '(defun second-cmd (buffer)
              "Second." (declare (ignore buffer)) nil))
-    (eval '(clawmacs:defcommand first-cmd))
-    (eval '(clawmacs:defcommand second-cmd))
+    (eval '(rplaca:defcommand first-cmd))
+    (eval '(rplaca:defcommand second-cmd))
     (let ((*current-caller* :user))
       (let ((cmds (list-available-commands)))
         (is (member 'first-cmd cmds))
@@ -558,8 +558,8 @@ All args: $@" stream))
              "Default command." (declare (ignore buffer)) :ok))
     (eval '(defun listed-prompted-cmd (buffer count)
              "Prompted command." (declare (ignore buffer count)) :ok))
-    (eval '(clawmacs:defcommand zero-arg-cmd))
-    (eval '(clawmacs:defcommand listed-prompted-cmd
+    (eval '(rplaca:defcommand zero-arg-cmd))
+    (eval '(rplaca:defcommand listed-prompted-cmd
              :prompts ((count :prompt "Count" :reader parse-integer))))
     (let ((cmds (list-available-commands)))
       (is (member 'zero-arg-cmd cmds))
@@ -572,7 +572,7 @@ All args: $@" stream))
            (declare (ignore buffer count))
            nil))
   (signals error
-    (eval '(clawmacs:defcommand unsupported-cmd))))
+    (eval '(rplaca:defcommand unsupported-cmd))))
 
 (test defcommand-rejects-missing-prompts-for-arguments
   "Commands with non-buffer arguments must declare minibuffer prompts."
@@ -581,7 +581,7 @@ All args: $@" stream))
            (declare (ignore buffer count))
            nil))
   (signals error
-    (eval '(clawmacs:defcommand missing-prompts-cmd))))
+    (eval '(rplaca:defcommand missing-prompts-cmd))))
 
 (test defcommand-rejects-prompt-arg-mismatches
   "Prompt specs must line up with the command parameters."
@@ -590,5 +590,5 @@ All args: $@" stream))
            (declare (ignore buffer count label))
            nil))
   (signals error
-    (eval '(clawmacs:defcommand mismatched-cmd
+    (eval '(rplaca:defcommand mismatched-cmd
              :prompts ((count :prompt "Count" :reader parse-integer))))))

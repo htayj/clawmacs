@@ -1,10 +1,10 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Fatal crash report policy and portable formatting boundary
 ;;; --------------------------------------------------------------------------
 
-(defparameter +crash-report-schema+ "clawmacs-crash-report")
+(defparameter +crash-report-schema+ "rplaca-crash-report")
 (defconstant +crash-report-schema-version+ 1)
 (defconstant +crash-report-max-characters+ 32768)
 (defconstant +crash-report-max-condition-characters+ 2048)
@@ -21,7 +21,7 @@
   "Per-thread recursion guard for the fatal debugger hook.")
 
 (defvar *crash-report-install-lock*
-  (bt:make-lock "clawmacs crash reporter installation"))
+  (bt:make-lock "rplaca crash reporter installation"))
 
 (defvar *crash-report-install-depth* 0)
 (defvar *crash-report-original-debugger-hook* nil)
@@ -54,9 +54,9 @@
         (and (plusp (length trimmed)) trimmed)))))
 
 (defun crash-report-directory-components ()
-  "Return the report directory and the first Clawmacs-owned directory."
+  "Return the report directory and the first RPLACA-owned directory."
   (let ((override (nonblank-environment-value
-                   "CLAWMACS_CRASH_REPORT_DIR")))
+                   "RPLACA_CRASH_REPORT_DIR")))
     (if override
         (let ((directory
                 (uiop:ensure-directory-pathname
@@ -73,17 +73,33 @@
                               (pathname xdg) (uiop:getcwd))))
                       (merge-pathnames #P".local/state/"
                                        (user-homedir-pathname)))))
-               (owned-root (merge-pathnames #P"clawmacs/" state-home)))
+               (owned-root (merge-pathnames #P"rplaca/" state-home)))
           (values (merge-pathnames #P"crash-reports/" owned-root)
                   owned-root)))))
 
 (defun crash-report-directory ()
   "Return the configured private crash-report directory.
 
-CLAWMACS_CRASH_REPORT_DIR takes precedence. Otherwise use
-XDG_STATE_HOME/clawmacs/crash-reports, falling back to
-~/.local/state/clawmacs/crash-reports."
+RPLACA_CRASH_REPORT_DIR takes precedence. Otherwise use
+XDG_STATE_HOME/rplaca/crash-reports, falling back to
+~/.local/state/rplaca/crash-reports."
   (nth-value 0 (crash-report-directory-components)))
+
+(defun archived-legacy-crash-report-directory ()
+  "Return the archival legacy crash-report directory.
+
+RPLACA never writes to or automatically imports this directory. It is exposed
+only so migration tooling and users can locate preserved reports."
+  (let* ((state-home
+           (uiop:ensure-directory-pathname
+            (or (let ((xdg (nonblank-environment-value "XDG_STATE_HOME")))
+                  (and xdg
+                       (uiop:ensure-absolute-pathname
+                        (pathname xdg) (uiop:getcwd))))
+                (merge-pathnames #P".local/state/"
+                                 (user-homedir-pathname)))))
+         (legacy-root (merge-pathnames #P"clawmacs/" state-home)))
+    (merge-pathnames #P"crash-reports/" legacy-root)))
 
 (defun replace-all-substrings (string old new)
   "Return STRING with every non-overlapping OLD occurrence replaced by NEW."
@@ -190,7 +206,7 @@ environment values, payloads, transcripts, compose text, or provider stderr."
   (multiple-value-bind (second minute hour day month year)
       (decode-universal-time universal-time 0)
     (format nil
-            "clawmacs-crash-~4,'0D~2,'0D~2,'0DT~2,'0D~2,'0D~2,'0DZ-p~D-~8,'0D.report"
+            "rplaca-crash-~4,'0D~2,'0D~2,'0DT~2,'0D~2,'0D~2,'0DZ-p~D-~8,'0D.report"
             year month day hour minute second pid sequence)))
 
 (defun crash-report-safe-value (function &rest arguments)
@@ -211,7 +227,7 @@ environment values, payloads, transcripts, compose text, or provider stderr."
   (setf *crash-report-runtime-snapshot* (copy-list state)))
 
 (defun crash-report-safe-application-state ()
-  "Return whitelist-only lock-free Clawmacs state useful for diagnosis."
+  "Return whitelist-only lock-free RPLACA state useful for diagnosis."
   (let* ((frame *crash-report-frame*)
          (buffer (crash-report-frame-buffer))
          (compose (and buffer
@@ -348,7 +364,7 @@ or an implementation condition's arbitrary printed report."
                     (crash-report-condition-summary condition)
                     :by #'cddr
                   :do (write-crash-report-pair stream key value))
-            (format stream "~%[clawmacs_state]~%")
+            (format stream "~%[rplaca_state]~%")
             (loop :for (key value) :on (crash-report-safe-application-state)
                     :by #'cddr
                   :do (write-crash-report-pair stream key value))
@@ -401,7 +417,7 @@ or an implementation condition's arbitrary printed report."
            (temporary nil)
            (committed-p nil))
       ;; Parent state roots belong to the user/XDG configuration. Create them
-      ;; if absent but never chmod them. Only Clawmacs-owned descendants are
+      ;; if absent but never chmod them. Only RPLACA-owned descendants are
       ;; forced private by the platform adapter.
       (ensure-directories-exist
        (merge-pathnames #P".crash-report-parent"
@@ -448,14 +464,14 @@ or an implementation condition's arbitrary printed report."
                              (if *crash-report-frame* :frame :main))))
               (ignore-errors
                 (format *error-output*
-                        "~&Clawmacs fatal crash report: ~A~%"
+                        "~&RPLACA fatal crash report: ~A~%"
                         path)
                 (force-output *error-output*)))
           (condition (reporter-condition)
             (declare (ignore reporter-condition))
             (ignore-errors
               (format *error-output*
-                      "~&Clawmacs crash reporter failed; original condition preserved.~%")
+                      "~&RPLACA crash reporter failed; original condition preserved.~%")
               (force-output *error-output*)))))
       (when original
         (funcall original condition original)))))

@@ -1,33 +1,33 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite mcp-bridge-package-suite)
 
 (defmacro with-mcp-bridge-package-state (&body body)
   "Run BODY with isolated MCP bridge, package, and tool state."
   `(let* ((root (temp-package-test-directory "mcp-bridge-config"))
-          (clawmacs::*agent-tool-metadata-table*
+          (rplaca::*agent-tool-metadata-table*
            (make-hash-table :test #'eq))
-          (clawmacs::*agent-tool-name-table*
+          (rplaca::*agent-tool-name-table*
            (make-hash-table :test #'equal))
-          (clawmacs::*tool-table* (make-hash-table :test #'equal))
-          (clawmacs::*command-table* (make-hash-table :test #'eq))
-          (clawmacs::*extended-docs* (make-hash-table :test #'eq))
-          (clawmacs::*slash-command-table* (make-hash-table :test #'equal))
-          (clawmacs::*package-configuration-path*
+          (rplaca::*tool-table* (make-hash-table :test #'equal))
+          (rplaca::*command-table* (make-hash-table :test #'eq))
+          (rplaca::*extended-docs* (make-hash-table :test #'eq))
+          (rplaca::*slash-command-table* (make-hash-table :test #'equal))
+          (rplaca::*package-configuration-path*
            (merge-pathnames "packages.json" root))
-          (clawmacs::*package-configuration* nil)
-          (clawmacs::*package-channels* (default-package-test-channels))
-          (clawmacs::*available-packages* nil)
-          (clawmacs::*package-registry-loaded-p* nil)
-          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
-          (clawmacs::*package-prompt-sections* nil)
-          (clawmacs::*enabled-builtin-packages* nil)
-          (clawmacs::*buffer-type-registry*
-           (clawmacs::make-buffer-type-registry))
-          (clawmacs::*mcp-server-configuration-path*
+          (rplaca::*package-configuration* nil)
+          (rplaca::*package-channels* (default-package-test-channels))
+          (rplaca::*available-packages* nil)
+          (rplaca::*package-registry-loaded-p* nil)
+          (rplaca::*loaded-packages* (make-hash-table :test #'equal))
+          (rplaca::*package-prompt-sections* nil)
+          (rplaca::*enabled-builtin-packages* nil)
+          (rplaca::*buffer-type-registry*
+           (rplaca::make-buffer-type-registry))
+          (rplaca::*mcp-server-configuration-path*
            (merge-pathnames "mcp-servers.json" root))
-          (clawmacs::*mcp-server-registry* nil)
-          (clawmacs::*mcp-external-tool-table* (make-hash-table :test #'equal)))
+          (rplaca::*mcp-server-registry* nil)
+          (rplaca::*mcp-external-tool-table* (make-hash-table :test #'equal)))
      ,@body))
 
 (defun load-test-mcp-bridge-package ()
@@ -122,8 +122,8 @@ for raw in sys.stdin:
 (defun mcp-bridge-tool-result (tool-name args)
   "Execute TOOL-NAME with ARGS and read its Lisp-data result."
   (nth-value 0
-    (clawmacs::lisp-data-read
-     (clawmacs:execute-tool tool-name args))))
+    (rplaca::lisp-data-read
+     (rplaca:execute-tool tool-name args))))
 
 (defun mcp-bridge-tool-names (&optional buffer)
   "Return visible tool names for BUFFER."
@@ -135,18 +135,18 @@ for raw in sys.stdin:
 
 (defmacro with-mcp-http-stubs (&body body)
   "Run BODY with deterministic HTTP MCP responses."
-  `(let ((old-provider (symbol-function 'clawmacs::provider-http-request-with-retries))
+  `(let ((old-provider (symbol-function 'rplaca::provider-http-request-with-retries))
          (old-http (symbol-function 'drakma:http-request)))
      (unwind-protect
           (progn
-            (setf (symbol-function 'clawmacs::provider-http-request-with-retries)
+            (setf (symbol-function 'rplaca::provider-http-request-with-retries)
                   (lambda (_label thunk)
                     (funcall thunk)))
             (setf (symbol-function 'drakma:http-request)
                   (lambda (_url &rest args &key content &allow-other-keys)
                     (declare (ignore _url args))
                     (let* ((request (api-json-decode content))
-                           (method (clawmacs::mcp-json-value request :method "method"))
+                           (method (rplaca::mcp-json-value request :method "method"))
                            (result
                              (cond
                                ((string= method "tools/list")
@@ -176,7 +176,7 @@ for raw in sys.stdin:
                        200
                        nil))))
             ,@body)
-       (setf (symbol-function 'clawmacs::provider-http-request-with-retries)
+       (setf (symbol-function 'rplaca::provider-http-request-with-retries)
              old-provider
              (symbol-function 'drakma:http-request)
              old-http))))
@@ -199,10 +199,10 @@ for raw in sys.stdin:
       (is (search "mcp_list_resources" prompt)))))
 
 (test mcp-bridge-stdio-discovery-registers-tools-and-resources
-  "A configured stdio MCP server maps tools and resources into Clawmacs."
+  "A configured stdio MCP server maps tools and resources into RPLACA."
   (with-mcp-bridge-package-state
     (let ((script (write-mcp-bridge-stdio-server-script)))
-      (clawmacs::register-mcp-server-config
+      (rplaca::register-mcp-server-config
        "demo"
        :transport :stdio
        :command "python3"
@@ -230,7 +230,7 @@ for raw in sys.stdin:
   "Legacy permission fields warn, do not constrain tools, and vanish on save."
   (with-mcp-bridge-package-state
     (write-test-file
-     clawmacs::*mcp-server-configuration-path*
+     rplaca::*mcp-server-configuration-path*
      "{\"servers\":[{\"name\":\"httpdemo\",\"description\":\"legacy config\",\"transport\":\"http\",\"url\":\"http://example.test/mcp\",\"enabled\":true,\"default_permission\":\"user-only\",\"tool_permissions\":{\"echo\":\"agent-with-permission\"}}]}")
     (let ((warnings nil))
       (handler-bind
@@ -238,24 +238,24 @@ for raw in sys.stdin:
              (lambda (condition)
                (push (princ-to-string condition) warnings)
                (muffle-warning condition))))
-        (clawmacs::load-mcp-server-configurations))
+        (rplaca::load-mcp-server-configurations))
       (is-true
        (some (lambda (message)
                (search "obsolete MCP permission fields" message
                        :test #'char-equal))
              warnings)))
-    (let ((config (clawmacs::find-mcp-server-config "httpdemo")))
+    (let ((config (rplaca::find-mcp-server-config "httpdemo")))
       (is-true config)
-      (is (eq :http (clawmacs::mcp-server-config-transport config)))
+      (is (eq :http (rplaca::mcp-server-config-transport config)))
       (is (string= "http://example.test/mcp"
-                   (clawmacs::mcp-server-config-url config))))
+                   (rplaca::mcp-server-config-url config))))
     (with-mcp-http-stubs
       (load-test-mcp-bridge-package)
       (is (member "mcp_httpdemo_echo" (mcp-bridge-tool-names) :test #'string=))
       (is (member "mcp_httpdemo_admin" (mcp-bridge-tool-names) :test #'string=)))
-    (clawmacs::save-mcp-server-configurations)
+    (rplaca::save-mcp-server-configurations)
     (let ((saved (uiop:read-file-string
-                  clawmacs::*mcp-server-configuration-path*)))
+                  rplaca::*mcp-server-configuration-path*)))
       (is-false (search "permission" saved :test #'char-equal)))))
 
 (test mcp-bridge-resource-mentions-inject-provider-context
@@ -263,7 +263,7 @@ for raw in sys.stdin:
   (with-mcp-bridge-package-state
     (let* ((script (write-mcp-bridge-stdio-server-script))
            (buffer (make-buffer "mcp-resource-chat")))
-      (clawmacs::register-mcp-server-config
+      (rplaca::register-mcp-server-config
        "demo"
        :transport :stdio
        :command "python3"
@@ -272,7 +272,7 @@ for raw in sys.stdin:
       (set-message-text
        (buffer-input-message buffer)
        (format nil "Please inspect ~A"
-               (clawmacs::mcp-resource-mention-text "demo" "memory://demo"
+               (rplaca::mcp-resource-mention-text "demo" "memory://demo"
                                                    :name "Demo Resource")))
       (buffer-finalize-input buffer)
       (let* ((messages (build-conversation-messages buffer))
@@ -288,15 +288,15 @@ for raw in sys.stdin:
 (test mcp-bridge-doctor-reports-failing-server-without-stale-tools
   "Broken MCP servers are reported cleanly and do not leave stale mapped tools."
   (with-mcp-bridge-package-state
-    (clawmacs::register-mcp-server-config
+    (rplaca::register-mcp-server-config
      "broken"
      :transport :stdio
      :command "/definitely/missing/mcp-server")
     (load-test-mcp-bridge-package)
-    (let* ((report (clawmacs::mcp-bridge-doctor-report))
+    (let* ((report (rplaca::mcp-bridge-doctor-report))
            (entry (first report)))
       (is (= 1 (length report)))
       (is (string= "broken" (getf entry :name)))
       (is (eq :error (getf entry :status)))
       (is (stringp (getf entry :error)))
-      (is (null (clawmacs::list-mcp-external-tools))))))
+      (is (null (rplaca::list-mcp-external-tools))))))

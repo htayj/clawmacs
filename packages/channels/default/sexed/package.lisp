@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (register-package-prompt-section
  "sexed"
@@ -9,7 +9,7 @@
   working-directory-relative paths such as `.cache/...`, or absolute paths.
   Use `sexed_project_outline`, `sexed_project_form_text`, `sexed_project_edit`,
   `sexed_project_read`, and `sexed_project_write` only when you have an actual
-  Clawmacs project name and a project-relative path.
+  RPLACA project name and a project-relative path.
 - `sexed_file_read` and `sexed_project_read` return exact source for ordinary
   files. For structurally giant files they return a safety page with form ids,
   levels, heads, names, spans, previews, and continuation guidance. Use `full`

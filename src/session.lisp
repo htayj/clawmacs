@@ -1,12 +1,27 @@
-(in-package :clawmacs)
+(in-package :rplaca)
+
+#+sbcl
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (require :sb-posix))
 
 ;;; --------------------------------------------------------------------------
 ;;; Sessions and transcripts
 ;;; --------------------------------------------------------------------------
 
-(defvar *sessions-dir*
+(defparameter +default-sessions-dir+
+  (merge-pathnames #P".config/rplaca/sessions/" (user-homedir-pathname))
+  "Canonical directory for saved sessions.")
+
+(defparameter +legacy-sessions-dir+
   (merge-pathnames #P".config/clawmacs/sessions/" (user-homedir-pathname))
+  "Legacy read-only session directory.")
+
+(defvar *sessions-dir* +default-sessions-dir+
   "Directory for saved session snapshots and transcript sidecars.")
+
+(defvar *session-migration-lock*
+  (bt:make-lock "rplaca session migration")
+  "Lock serializing in-process materialization of the legacy session tree.")
 
 (defvar *session-format-version* 2
   "Current durable session sidecar format version.")
@@ -16,7 +31,7 @@
                 (name id directory manifest-path transcript-directory
                  current-transcript-index current-transcript-path created-at
                  &key updated-at current-leaf-id parent-session
-                      working-directory display-name)))
+                      working-directory display-name source-root)))
   "Persistent chat session metadata and current transcript segment."
   (name "" :type string)
   (id "" :type string)
@@ -29,6 +44,7 @@
   (parent-session nil :type (or null string))
   (working-directory #P"" :type pathname)
   (display-name nil :type (or null string))
+  (source-root #P"" :type pathname)
   (created-at 0 :type integer)
   (updated-at 0 :type integer)
   (lock (bt:make-lock "session-transcript")))
@@ -68,6 +84,80 @@
   "Return SESSION's user-facing display name, or its file name."
   (or (session-display-name session)
       (session-name session)))
+
+(defun selected-sessions-read-root ()
+  "Return the sole session root selected by the migration contract."
+  (configured-migration-read-path
+   *sessions-dir*
+   +default-sessions-dir+
+   +legacy-sessions-dir+
+   :label "session directory"))
+
+(defun copy-session-directory-tree (source target)
+  "Copy SOURCE recursively into absent TARGET without merging."
+  (ensure-directories-exist (merge-pathnames #P".keep" target))
+  (dolist (file (uiop:directory-files source))
+    (let ((target-file (merge-pathnames (file-namestring file) target)))
+      (uiop:copy-file file target-file)
+      #+sbcl
+      (sb-posix:chmod
+       (namestring target-file)
+       (logand #o7777
+               (sb-posix:stat-mode (sb-posix:stat (namestring file)))))))
+  (dolist (directory (uiop:subdirectories source))
+    (let ((target-directory
+            (merge-pathnames
+             (make-pathname :directory
+                            (list :relative
+                                  (car (last (pathname-directory directory)))))
+             target)))
+      (copy-session-directory-tree directory target-directory)))
+  #+sbcl
+  (sb-posix:chmod
+   (namestring (uiop:ensure-directory-pathname target))
+   (logand #o7777
+           (sb-posix:stat-mode
+            (sb-posix:stat
+             (namestring (uiop:ensure-directory-pathname source))))))
+  target)
+
+(defun materialize-legacy-sessions-before-mutation ()
+  "Copy the selected legacy session tree to canonical storage before mutation.
+
+The complete tree is copied only while the canonical sessions directory is
+absent, so sessions never become a merged view and every discovered legacy
+session remains available after the cutover."
+  (unless (equal (pathname *sessions-dir*) (pathname +default-sessions-dir+))
+    (return-from materialize-legacy-sessions-before-mutation *sessions-dir*))
+  (bt:with-lock-held (*session-migration-lock*)
+    (let ((selection
+            (select-migration-path +default-sessions-dir+
+                                   +legacy-sessions-dir+
+                                   :label "session directory")))
+      (case (legacy-path-selection-source selection)
+        (:legacy
+         (let* ((canonical (uiop:ensure-directory-pathname
+                            +default-sessions-dir+))
+                (temporary
+                  (merge-pathnames
+                   (format nil ".sessions-migration-~D-~D/"
+                           (get-universal-time)
+                           (get-internal-real-time))
+                   (uiop:pathname-parent-directory-pathname canonical))))
+           (unwind-protect
+                (progn
+                  (copy-session-directory-tree +legacy-sessions-dir+ temporary)
+                  (if (probe-file canonical)
+                      canonical
+                      (progn
+                        (rename-file temporary canonical)
+                        canonical)))
+             (when (probe-file temporary)
+               (ignore-errors
+                 (uiop:delete-directory-tree temporary
+                                             :validate t
+                                             :if-does-not-exist :ignore))))))
+        (otherwise +default-sessions-dir+)))))
 
 (defun set-session-display-name (session value)
   "Set SESSION display name to VALUE, persist it, and return SESSION."
@@ -246,6 +336,7 @@
         `((:parent-session . ,(session-parent-session session))))
     (:working-directory
      . ,(session-path-string (session-working-directory session)))
+    (:source-root . ,(session-path-string (session-source-root session)))
     (:directory . ,(session-path-string (session-directory session)))
     (:transcript-directory
      . ,(session-path-string (session-transcript-directory session)))
@@ -815,9 +906,17 @@ Selecting a user message returns its parent so the message can be edited."
 (defun load-or-create-session
     (name &key (root *sessions-dir*) parent-session
                     (working-directory (truename "."))
-                    display-name)
+                    display-name source-root)
   "Load or initialize persistent session metadata for NAME."
-  (let* ((id (session-safe-component name))
+  (let* ((selected-source-root
+           (or source-root
+               (and (equal (pathname root) (pathname *sessions-dir*))
+                    (selected-sessions-read-root))
+               root))
+         (root
+           (if (equal (pathname root) (pathname +default-sessions-dir+))
+               (materialize-legacy-sessions-before-mutation)
+               root))
          (directory (session-sidecar-directory name :root root))
          (manifest-path (merge-pathnames "session.json" directory))
          (transcript-directory (merge-pathnames #P"transcripts/" directory))
@@ -826,7 +925,9 @@ Selecting a user message returns its parent so the message can be edited."
          (manifest-path-error-p (typep manifest 'session-manifest-parse-error)))
     (when manifest-path-error-p
       (error manifest))
-    (let* ((created-at (or (cdr (assoc :created-at manifest)) now))
+    (let* ((id (or (cdr (assoc :id manifest))
+                   (session-safe-component name)))
+           (created-at (or (cdr (assoc :created-at manifest)) now))
            (updated-at (or (cdr (assoc :updated-at manifest)) created-at))
            (index (or (cdr (assoc :current-transcript-index manifest)) 1))
            (current-leaf-cell (assoc :current-leaf-id manifest))
@@ -842,7 +943,21 @@ Selecting a user message returns its parent so the message can be edited."
               (or (cdr (assoc :working-directory manifest))
                   working-directory)))
            (manifest-path-string (cdr (assoc :current-transcript-path manifest)))
-         (current-path (if manifest-path-string
+           (effective-source-root
+             (pathname
+              (or source-root
+                  (cdr (assoc :source-root manifest))
+                  (and manifest-path-string
+                       (uiop:subpathp (pathname manifest-path-string)
+                                      +legacy-sessions-dir+)
+                       +legacy-sessions-dir+)
+                  selected-source-root)))
+           (migrated-p
+             (or (not (equal effective-source-root (pathname root)))
+                 (and manifest-path-string
+                      (not (uiop:subpathp (pathname manifest-path-string)
+                                          root)))))
+           (current-path (if (and manifest-path-string (not migrated-p))
                            (pathname manifest-path-string)
                            (session-transcript-path-for-index
                             transcript-directory
@@ -859,7 +974,8 @@ Selecting a user message returns its parent so the message can be edited."
                                  :current-leaf-id current-leaf-id
                                  :parent-session parent-session
                                  :working-directory working-directory
-                                 :display-name display-name)))
+                                 :display-name display-name
+                                 :source-root effective-source-root)))
       (ensure-session-directories session)
       (unless (probe-file (session-current-transcript-path session))
         (bt:with-lock-held ((session-lock session))

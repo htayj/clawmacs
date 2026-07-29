@@ -1,9 +1,9 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite appearance-config-suite)
 
 (defun temporary-appearance-path ()
-  (merge-pathnames (format nil "clawmacs-appearance-~D.sexp" (random most-positive-fixnum))
+  (merge-pathnames (format nil "rplaca-appearance-~D.sexp" (random most-positive-fixnum))
                    (uiop:temporary-directory)))
 
 (defmacro with-temporary-appearance-path ((path) &body body)
@@ -12,47 +12,47 @@
        (ignore-errors (delete-file ,path)))))
 
 (defun config-form (&optional (theme :dark) (overrides nil))
-  (list :clawmacs-appearance :version 1 :theme theme :strict-contrast nil
+  (list :rplaca-appearance :version 1 :theme theme :strict-contrast nil
         :overrides overrides))
 
 (test appearance-config-rejects-reader-and-shape-boundaries
-  (signals error (clawmacs::read-one-appearance-form "#. (progn 1)"))
-  (signals error (clawmacs::read-one-appearance-form "(:classic) (:dark)"))
-  (signals error (clawmacs::read-one-appearance-form "(aaaaaaaa)"))
-  (signals error (clawmacs::read-one-appearance-form (make-string 32769 :initial-element #\x)))
-  (signals error (clawmacs::read-one-appearance-form
+  (signals error (rplaca::read-one-appearance-form "#. (progn 1)"))
+  (signals error (rplaca::read-one-appearance-form "(:classic) (:dark)"))
+  (signals error (rplaca::read-one-appearance-form "(aaaaaaaa)"))
+  (signals error (rplaca::read-one-appearance-form (make-string 32769 :initial-element #\x)))
+  (signals error (rplaca::read-one-appearance-form
                   (concatenate 'string (make-string 17 :initial-element #\()
                                ":classic" (make-string 17 :initial-element #\)))))
-  (signals error (clawmacs::appearance-config-shape-valid-p
+  (signals error (rplaca::appearance-config-shape-valid-p
                   (make-list 65 :initial-element :classic) 0)))
 
 (test appearance-config-rejects-oversized-string-leaf
   (signals error
-    (clawmacs::read-one-appearance-form
-     (format nil "(:clawmacs-appearance :version 1 :theme :classic :overrides ((:base :decoration (:marker ~S))))"
+    (rplaca::read-one-appearance-form
+     (format nil "(:rplaca-appearance :version 1 :theme :classic :overrides ((:base :decoration (:marker ~S))))"
              (make-string 1025 :initial-element #\x)))))
 
 (test appearance-config-no-external-symbol-interning
   (dolist (name '("ATTACKER-APPEARANCE-NAME" "CLASSIC?" "?CLASSIC"))
-    (is-false (find-symbol name :clawmacs))
+    (is-false (find-symbol name :rplaca))
     (is-false (find-symbol name :keyword)))
   (dolist (text '("(attacker-appearance-name)"
                   "(:attacker-appearance-name)"
                   "(:classic?)" "(:?classic)" "(123?)"
                   "(\\:classic)" "(+)" "(.)" "(1..2)"))
-    (signals error (clawmacs::read-one-appearance-form text)))
+    (signals error (rplaca::read-one-appearance-form text)))
   (is (equal '(1/2 1.0e2 -0.25)
-             (clawmacs::read-one-appearance-form
+             (rplaca::read-one-appearance-form
               "(1/2 1.0e2 -0.25)")))
   (is (equal '("literal :classic? #. attacker")
-             (clawmacs::read-one-appearance-form
+             (rplaca::read-one-appearance-form
               "(\"literal :classic? #. attacker\")")))
   (is (equal '(:classic)
-             (clawmacs::read-one-appearance-form
+             (rplaca::read-one-appearance-form
               "(; ignored :classic? #. attacker
 :classic)")))
   (dolist (name '("ATTACKER-APPEARANCE-NAME" "CLASSIC?" "?CLASSIC"))
-    (is-false (find-symbol name :clawmacs))
+    (is-false (find-symbol name :rplaca))
     (is-false (find-symbol name :keyword))))
 
 (test appearance-config-public-boundaries-accept-n-and-reject-n-plus-one
@@ -67,26 +67,26 @@
         (at-string-limit (make-string 1024 :initial-element #\x))
         (over-string-limit (make-string 1025 :initial-element #\x)))
     (is (equal '(:classic)
-               (clawmacs::read-one-appearance-form at-byte-limit)))
-    (signals error (clawmacs::read-one-appearance-form over-byte-limit))
-    (is (= 1024 (length (first (clawmacs::read-one-appearance-form
+               (rplaca::read-one-appearance-form at-byte-limit)))
+    (signals error (rplaca::read-one-appearance-form over-byte-limit))
+    (is (= 1024 (length (first (rplaca::read-one-appearance-form
                                 (format nil "(~S)" at-string-limit))))))
     (signals error
-      (clawmacs::read-one-appearance-form
+      (rplaca::read-one-appearance-form
        (format nil "(~S)" over-string-limit))))
   (is-true
-   (clawmacs::read-one-appearance-form
+   (rplaca::read-one-appearance-form
     (concatenate 'string (make-string 16 :initial-element #\()
                  ":classic" (make-string 16 :initial-element #\)))))
   (signals error
-    (clawmacs::read-one-appearance-form
+    (rplaca::read-one-appearance-form
      (concatenate 'string (make-string 17 :initial-element #\()
                   ":classic" (make-string 17 :initial-element #\)))))
-  (is (= 64 (length (clawmacs::read-one-appearance-form
+  (is (= 64 (length (rplaca::read-one-appearance-form
                      (format nil "(~{~A~^ ~})"
                              (make-list 64 :initial-element ":classic"))))))
   (signals error
-    (clawmacs::read-one-appearance-form
+    (rplaca::read-one-appearance-form
      (format nil "(~{~A~^ ~})"
              (make-list 65 :initial-element ":classic")))))
 
@@ -95,17 +95,17 @@
                       (config-form :classic '((:base :unknown :white)))
                       (config-form :classic '((:base :foreground :orange)))
                       (config-form :classic '((:base :foreground :white :foreground :black)))
-                      (list :clawmacs-appearance :version 2 :theme :classic)))
-    (signals error (clawmacs::parse-appearance-profile-form form))))
+                      (list :rplaca-appearance :version 2 :theme :classic)))
+    (signals error (rplaca::parse-appearance-profile-form form))))
 
 (test appearance-config-preserves-package-identifiers-and-round-trips
   (let* ((form (config-form '(:package "org.example.plugin" "outline-dark")
                             '(((:package "org.example.plugin" "outline-heading")
                                :foreground (:rgb 0.4 0.6 0.9)))))
-         (profile (clawmacs::parse-appearance-profile-form form))
+         (profile (rplaca::parse-appearance-profile-form form))
          (serialized (serialize-appearance-profile profile))
-         (round-trip (clawmacs::parse-appearance-profile-form
-                      (clawmacs::read-one-appearance-form serialized))))
+         (round-trip (rplaca::parse-appearance-profile-form
+                      (rplaca::read-one-appearance-form serialized))))
     (is (equal '(:package "org.example.plugin" "outline-dark")
                (appearance-profile-selected-theme profile)))
     (is (equal (appearance-profile-selected-theme profile)
@@ -119,7 +119,7 @@
   (with-temporary-appearance-path (path)
     (with-open-file (stream path :direction :output :if-exists :supersede)
       (write-string "old" stream))
-    (let ((clawmacs::*appearance-config-rename-function*
+    (let ((rplaca::*appearance-config-rename-function*
             (lambda (&rest ignored) (declare (ignore ignored)) (error "rename failed"))))
       (signals error (write-appearance-profile-file (make-appearance-profile :selected-theme :dark) path)))
     (is (string= "old" (uiop:read-file-string path)))))
@@ -157,13 +157,13 @@
 
 (test appearance-config-preserves-selection-marker-parameters
   (let* ((profile
-           (clawmacs::parse-appearance-profile-form
+           (rplaca::parse-appearance-profile-form
             (config-form :classic
                          '((:selector-selection
                             :decoration (:marker "=>"))))))
          (round-trip
-           (clawmacs::parse-appearance-profile-form
-            (clawmacs::read-one-appearance-form
+           (rplaca::parse-appearance-profile-form
+            (rplaca::read-one-appearance-form
              (serialize-appearance-profile profile))))
          (decoration
            (appearance-role-style-decoration
@@ -176,7 +176,7 @@
 (test appearance-config-file-failure-forces-classic-and-reload-rolls-back
   (with-temporary-appearance-path (path)
     (with-open-file (stream path :direction :output :if-exists :supersede)
-      (write-string "(:clawmacs-appearance :version 99)" stream))
+      (write-string "(:rplaca-appearance :version 99)" stream))
     (let ((warnings 0))
       (handler-bind ((warning (lambda (condition) (declare (ignore condition))
                                 (incf warnings) (muffle-warning))))
@@ -193,18 +193,18 @@
 
 (test appearance-config-no-init-and-prompt-isolation-markers
   (let ((path (temporary-appearance-path))
-        (clawmacs::*appearance-startup-resolution-count* 0)
-        (clawmacs::*appearance-configuration-access-count* 0))
+        (rplaca::*appearance-startup-resolution-count* 0)
+        (rplaca::*appearance-configuration-access-count* 0))
     (write-appearance-profile-file (make-appearance-profile :selected-theme :dark) path)
     ;; A GUI resolver does not consult the init inhibition flag, matching --no-init.
-    (let ((clawmacs::*inhibit-user-init* t))
+    (let ((rplaca::*inhibit-user-init* t))
       (is (eq :dark (appearance-profile-selected-theme
                      (resolve-startup-appearance-profile :path path
                                                          :environment '(:present-p nil :valid-p t)
                                                          :cli '(:valid-p nil))))))
     ;; Prompt paths call neither reader nor resolver; this marker is their unit proof.
-    (is (= 1 clawmacs::*appearance-startup-resolution-count*))
-    (is (= 1 clawmacs::*appearance-configuration-access-count*))
+    (is (= 1 rplaca::*appearance-startup-resolution-count*))
+    (is (= 1 rplaca::*appearance-configuration-access-count*))
     (delete-file path)))
 
 (test appearance-config-save-staged-profile-does-not-apply

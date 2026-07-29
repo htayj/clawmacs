@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; =========================================================================
 ;;; Extended Documentation Entries
@@ -376,7 +376,7 @@ documentation in *extended-docs*."
   :category "buffer"
   :usage "(define-buffer-type :dashboard :major-mode \"dashboard\" :presentation-function 'dashboard-entries)"
   :returns "buffer-type — The registered metadata. Presentation hooks accept (BUFFER COLUMNS) and return generic entry plists. INPUT-PRESENTATION-FUNCTION appends an interactive overlay after normal transcript output."
-  :side-effects "Package-facing macro wrapper around register-buffer-type; package ownership defaults to the currently loading Clawmacs package."
+  :side-effects "Package-facing macro wrapper around register-buffer-type; package ownership defaults to the currently loading RPLACA package."
   :see-also (register-buffer-type package-owned-buffer-types))
 
 (defdoc find-buffer-type
@@ -407,7 +407,7 @@ documentation in *extended-docs*."
   :category "buffer"
   :usage "(register-buffer-input-presentation-provider :chat 'package-input-panel)"
   :returns "buffer-input-presentation-provider — A package-owned input-overlay provider for an existing buffer kind."
-  :side-effects "Adds a provider removed automatically when the owning Clawmacs package is reset or reloaded."
+  :side-effects "Adds a provider removed automatically when the owning RPLACA package is reset or reloaded."
   :see-also (buffer-input-presentation-functions remove-buffer-input-presentation-providers-for-package))
 
 (defdoc buffer-input-presentation-functions
@@ -1065,7 +1065,7 @@ documentation in *extended-docs*."
 (defdoc command-metadata-package
   :category "command"
   :usage "(command-metadata-package META:command-metadata)"
-  :returns "string or NIL — Owning Clawmacs package name for package-defined commands."
+  :returns "string or NIL — Owning RPLACA package name for package-defined commands."
   :see-also (command-metadata list-available-commands package-enablement-scope))
 
 (defdoc defcommand
@@ -1197,7 +1197,7 @@ documentation in *extended-docs*."
 
 (defdoc project
   :category "project"
-  :usage "(make-project :name \"config\" :root #P\"~/.clawmacs.d/\")"
+  :usage "(make-project :name \"config\" :root #P\"~/.rplaca.d/\")"
   :returns "Structure — A named project resource root."
   :see-also (define-project list-projects project-read-file))
 
@@ -1245,7 +1245,7 @@ documentation in *extended-docs*."
 
 (defdoc *project-definitions-directory*
   :category "project"
-  :usage "Pathname — defaults to ~/.clawmacs.projects.d/."
+  :usage "Pathname — defaults to ~/.rplaca.projects.d/."
   :see-also (load-project-definitions create-project))
 
 (defdoc *project-registry*
@@ -1521,7 +1521,7 @@ documentation in *extended-docs*."
 
 (defdoc *default-core-system-prompt*
   :category "llm"
-  :usage "String — default clawmacs operating prompt inserted before the personality prompt."
+  :usage "String — default rplaca operating prompt inserted before the personality prompt."
   :see-also (*default-personality-prompt* build-agent-system-prompt)
   :side-effects "Changing this affects future requests for agents that do not provide their own core prompt.")
 
@@ -1533,9 +1533,9 @@ documentation in *extended-docs*."
 
 (defdoc *personality-prompt-path*
   :category "llm"
-  :usage "Pathname — defaults to ~/.config/clawmacs/system-prompt.txt"
+  :usage "Pathname — defaults to ~/.config/rplaca/system-prompt.txt"
   :see-also (*default-personality-prompt* load-personality-prompt-file)
-  :side-effects "clawmacs-main loads this file once during startup before init.lisp; init.lisp may then change the path and call load-personality-prompt-file again.")
+  :side-effects "rplaca-main loads this file once during startup before init.lisp; init.lisp may then change the path and call load-personality-prompt-file again.")
 
 (defdoc load-personality-prompt-file
   :category "llm"
@@ -1554,12 +1554,12 @@ documentation in *extended-docs*."
   :category "llm"
   :usage "(load-boot-files &key :directory)"
   :returns "string or nil — Wrapped boot-file instruction content, or NIL when none are present."
-  :side-effects "Reads AGENTS.md/SOUL.md-style files from the active buffer working-directory's ancestors, falling back to ~/.config/clawmacs/ when no project-local file applies."
+  :side-effects "Reads AGENTS.md/SOUL.md-style files from the active buffer working-directory's ancestors, falling back to ~/.config/rplaca/ when no project-local file applies."
   :see-also (*boot-file-names* build-agent-system-prompt))
 
 (defdoc *agent-defaults-path*
   :category "llm"
-  :usage "Pathname — defaults to ~/.config/clawmacs/agent-defaults.json"
+  :usage "Pathname — defaults to ~/.config/rplaca/agent-defaults.json"
   :see-also (load-agent-defaults save-agent-defaults))
 
 (defdoc agent-definition
@@ -1656,7 +1656,7 @@ documentation in *extended-docs*."
 (defdoc provider-token-path
   :category "llm"
   :usage "(provider-token-path PROVIDER:keyword) — (provider-token-path :zai)"
-  :returns "pathname — Provider-specific token file under ~/.config/clawmacs/."
+  :returns "pathname — Provider-specific token file under ~/.config/rplaca/."
   :see-also (read-provider-token save-provider-token))
 
 (defdoc read-provider-token
@@ -1754,7 +1754,7 @@ documentation in *extended-docs*."
   :category "llm"
   :usage "(load-agent-defaults) — (load-agent-defaults)"
   :returns "list — The agent defaults registry."
-  :side-effects "Reads ~/.config/clawmacs/agent-defaults.json and memoizes the result."
+  :side-effects "Reads ~/.config/rplaca/agent-defaults.json and memoizes the result."
   :see-also (save-agent-defaults agent-default set-agent-default ensure-agent-defaults-loaded))
 
 (defdoc save-agent-defaults
@@ -1915,7 +1915,7 @@ documentation in *extended-docs*."
 (defdoc *lisp-eval-default-package*
   :category "tool"
   :returns "string - Default package used by lisp_eval when :package is omitted."
-  :side-effects "init-tools sets this to \"CLAWMACS\" for the clawmacs default tool surface."
+  :side-effects "init-tools sets this to \"RPLACA\" for the rplaca default tool surface."
   :see-also (init-tools eval-history-to-string))
 
 (defdoc *last-eval-result*
@@ -2012,7 +2012,7 @@ documentation in *extended-docs*."
 (defdoc agent-tool-metadata-package
   :category "tool"
   :usage "(agent-tool-metadata-package META:agent-tool-metadata)"
-  :returns "string or NIL — Owning Clawmacs package name for package-defined tools."
+  :returns "string or NIL — Owning RPLACA package name for package-defined tools."
   :see-also (agent-tool-metadata tool-definitions-for-api package-enablement-scope))
 
 (defdoc register-agent-tool-metadata
@@ -2109,38 +2109,38 @@ documentation in *extended-docs*."
 ;;; Category: safe-reload — Safe in-place source reload
 ;;; ==========================================================================
 
-(defdoc clawmacs-safe-reload
+(defdoc rplaca-safe-reload
   :category "safe-reload"
-  :usage "(clawmacs-safe-reload :buffer BUF)"
+  :usage "(rplaca-safe-reload :buffer BUF)"
   :returns "safe-reload-result — :OK, :BUSY, :PREFLIGHT-FAILED, or :LIVE-FAILED."
-  :side-effects "Uses a nonblocking reload lock, runs an isolated worker preflight, and only then reloads :clawmacs in the live image. Inserts a visible system notification when :BUFFER is supplied; does not reset buffers, sessions, or start a new frame."
-  :see-also (clawmacs-safe-reload-preflight clawmacs-reload-result-ok-p safe-reload-clawmacs-command))
+  :side-effects "Uses a nonblocking reload lock, runs an isolated worker preflight, and only then reloads :rplaca in the live image. Inserts a visible system notification when :BUFFER is supplied; does not reset buffers, sessions, or start a new frame."
+  :see-also (rplaca-safe-reload-preflight rplaca-reload-result-ok-p safe-reload-rplaca-command))
 
-(defdoc clawmacs-safe-reload-preflight
+(defdoc rplaca-safe-reload-preflight
   :category "safe-reload"
-  :usage "(clawmacs-safe-reload-preflight)"
+  :usage "(rplaca-safe-reload-preflight)"
   :returns "safe-reload-result — An isolated worker preflight result."
-  :side-effects "Starts a fresh SBCL worker process to load Clawmacs source without mutating the current image."
-  :see-also (clawmacs-safe-reload clawmacs-reload-result-summary))
+  :side-effects "Starts a fresh SBCL worker process to load RPLACA source without mutating the current image."
+  :see-also (rplaca-safe-reload rplaca-reload-result-summary))
 
-(defdoc clawmacs-reload-result-ok-p
+(defdoc rplaca-reload-result-ok-p
   :category "safe-reload"
-  :usage "(clawmacs-reload-result-ok-p RESULT)"
+  :usage "(rplaca-reload-result-ok-p RESULT)"
   :returns "boolean — T only for a completed :OK safe reload result."
-  :see-also (clawmacs-safe-reload clawmacs-reload-result-summary))
+  :see-also (rplaca-safe-reload rplaca-reload-result-summary))
 
-(defdoc clawmacs-reload-result-summary
+(defdoc rplaca-reload-result-summary
   :category "safe-reload"
-  :usage "(clawmacs-reload-result-summary RESULT)"
+  :usage "(rplaca-reload-result-summary RESULT)"
   :returns "string — Human-readable reload result summary."
-  :see-also (clawmacs-safe-reload clawmacs-reload-result-ok-p))
+  :see-also (rplaca-safe-reload rplaca-reload-result-ok-p))
 
-(defdoc safe-reload-clawmacs-command
+(defdoc safe-reload-rplaca-command
   :category "safe-reload"
-  :usage "M-x safe-reload-clawmacs-command"
+  :usage "M-x safe-reload-rplaca-command"
   :returns "safe-reload-result — The command result."
-  :side-effects "Delegates to CLAWMACS-SAFE-RELOAD for the current buffer and leaves the visible session/buffer state intact except for the system notification."
-  :see-also (clawmacs-safe-reload))
+  :side-effects "Delegates to RPLACA-SAFE-RELOAD for the current buffer and leaves the visible session/buffer state intact except for the system notification."
+  :see-also (rplaca-safe-reload))
 
 ;;; ==========================================================================
 ;;; Category: tool-runtime — Tool sequencing state
@@ -2287,7 +2287,7 @@ documentation in *extended-docs*."
   :usage "Bound to C-l. Requests a full redraw."
   :returns ":redraw"
   :side-effects "Returns :redraw to the active event loop."
-  :see-also (clawmacs-main))
+  :see-also (rplaca-main))
 
 (defdoc openai-codex-oauth-command
   :category "buffer-command"
@@ -2308,7 +2308,7 @@ documentation in *extended-docs*."
 (defdoc package-definition
   :category "packages"
   :usage "Struct — package metadata discovered from a channel manifest."
-  :see-also (list-available-packages find-available-package load-clawmacs-package package-channel))
+  :see-also (list-available-packages find-available-package load-rplaca-package package-channel))
 
 (defdoc package-prompt-section
   :category "packages"
@@ -2317,7 +2317,7 @@ documentation in *extended-docs*."
 
 (defdoc *default-package-channel-directory*
   :category "packages"
-  :usage "Pathname — defaults to packages/channels/default/ inside the clawmacs repo."
+  :usage "Pathname — defaults to packages/channels/default/ inside the rplaca repo."
   :see-also (*package-channels* register-package-channel))
 
 (defdoc *package-channels*
@@ -2332,18 +2332,18 @@ documentation in *extended-docs*."
 
 (defdoc *package-configuration-path*
   :category "packages"
-  :usage "Pathname — defaults to ~/.clawmacs.d/packages.json"
+  :usage "Pathname — defaults to ~/.rplaca.d/packages.json"
   :see-also (active-package-names set-package-enablement-scope))
 
 (defdoc *packages-directory*
   :category "packages"
-  :usage "Pathname — defaults to ~/.clawmacs.d/packages/"
-  :see-also (clawmacs-use-package *user-init-file* register-package-channel))
+  :usage "Pathname — defaults to ~/.rplaca.d/packages/"
+  :see-also (rplaca-use-package *user-init-file* register-package-channel))
 
-(defdoc *current-clawmacs-package*
+(defdoc *current-rplaca-package*
   :category "packages"
-  :usage "Dynamically bound package name while a Clawmacs package entrypoint is loading."
-  :see-also (load-clawmacs-package define-buffer-type register-package-prompt-section))
+  :usage "Dynamically bound package name while a RPLACA package entrypoint is loading."
+  :see-also (load-rplaca-package define-buffer-type register-package-prompt-section))
 
 (defdoc register-package-channel
   :category "packages"
@@ -2381,19 +2381,19 @@ documentation in *extended-docs*."
   :category "packages"
   :usage "(list-installed-packages)"
   :returns "list — package definitions present on disk, including channel packages and cloned packages."
-  :see-also (find-installed-package clawmacs-use-package list-available-packages))
+  :see-also (find-installed-package rplaca-use-package list-available-packages))
 
 (defdoc find-installed-package
   :category "packages"
   :usage "(find-installed-package \"sexed\")"
   :returns "package-definition or NIL."
-  :see-also (list-installed-packages load-clawmacs-package))
+  :see-also (list-installed-packages load-rplaca-package))
 
 (defdoc package-install-record-for-definition
   :category "packages"
   :usage "(package-install-record-for-definition DEFINITION)"
   :returns "plist or NIL — Persisted install metadata for DEFINITION when present."
-  :see-also (clawmacs-use-package package-status-to-string package-doctor-to-string))
+  :see-also (rplaca-use-package package-status-to-string package-doctor-to-string))
 
 (defdoc package-install-status-entry
   :category "packages"
@@ -2443,14 +2443,14 @@ documentation in *extended-docs*."
   :usage "(remove-installed-package \"sexed\")"
   :returns "package-definition or NIL."
   :side-effects "Deletes the installed package directory and removes package-owned runtime registrations."
-  :see-also (update-installed-package clawmacs-use-package))
+  :see-also (update-installed-package rplaca-use-package))
 
 (defdoc update-installed-package
   :category "packages"
   :usage "(update-installed-package \"sexed\")"
   :returns "package-definition or NIL."
   :side-effects "Refreshes the installed package from its recorded source and reloads the package entrypoint."
-  :see-also (remove-installed-package clawmacs-use-package))
+  :see-also (remove-installed-package rplaca-use-package))
 
 (defdoc package-enablement-scope
   :category "packages"
@@ -2484,19 +2484,19 @@ documentation in *extended-docs*."
   :returns "list — buffer-type structures registered by the package."
   :see-also (define-buffer-type describe-installed-package-to-string))
 
-(defdoc load-clawmacs-package
+(defdoc load-rplaca-package
   :category "packages"
-  :usage "(load-clawmacs-package \"sexed\")"
+  :usage "(load-rplaca-package \"sexed\")"
   :returns "package-definition on success, NIL on warning or failure."
-  :side-effects "Loads package dependencies, then loads the package entrypoint into the clawmacs package."
-  :see-also (list-installed-packages load-active-packages clawmacs-use-package))
+  :side-effects "Loads package dependencies, then loads the package entrypoint into the rplaca package."
+  :see-also (list-installed-packages load-active-packages rplaca-use-package))
 
 (defdoc load-active-packages
   :category "packages"
   :usage "(load-active-packages :buffer BUF)"
   :returns "list — active package definitions loaded for the given context."
   :side-effects "Loads enabled package entrypoints and their dependencies; inactive package registrations remain hidden."
-  :see-also (active-package-names load-clawmacs-package))
+  :see-also (active-package-names load-rplaca-package))
 
 (defdoc load-autoload-packages
   :category "packages"
@@ -2524,9 +2524,9 @@ documentation in *extended-docs*."
   :returns "string or NIL — active package prompt sections rendered for the system prompt."
   :see-also (register-package-prompt-section build-agent-system-prompt active-package-names))
 
-(defdoc clawmacs-use-package
+(defdoc rplaca-use-package
   :category "packages"
-  :usage "(clawmacs-use-package :src-type :git :repo \"https://example.com/user/repo.git\")"
+  :usage "(rplaca-use-package :src-type :git :repo \"https://example.com/user/repo.git\")"
   :returns "package-definition — non-nil on successful install, NIL on warning or failure."
   :side-effects "Creates the package install directory when needed, runs git clone for missing packages, and validates manifest.lisp without loading or enabling the entrypoint."
   :see-also (*packages-directory* list-installed-packages set-package-enablement-scope *user-init-file* load-user-init-file))
@@ -2536,7 +2536,7 @@ documentation in *extended-docs*."
   :usage "(load-project-declared-packages)"
   :returns "list — newly installed project-declared package definitions."
   :side-effects "Auto-installs missing project package declarations into the correct project-local or global scope."
-  :see-also (create-project load-project-definitions clawmacs-use-package))
+  :see-also (create-project load-project-definitions rplaca-use-package))
 
 (defdoc minibuffer-toggle-package-command
   :category "packages"
@@ -2550,7 +2550,7 @@ documentation in *extended-docs*."
   :usage "M-x describe-installed-package-command"
   :returns "nil"
   :side-effects "Opens a minibuffer package selector and displays package help derived from registered package commands, tools, docs, and prompt sections."
-  :see-also (list-installed-packages load-clawmacs-package))
+  :see-also (list-installed-packages load-rplaca-package))
 
 ;;; ==========================================================================
 ;;; Category: utilities — Small helpers useful from lisp_eval
@@ -2568,12 +2568,12 @@ documentation in *extended-docs*."
 
 (defdoc *user-init-directory*
   :category "init"
-  :usage "Pathname — defaults to ~/.clawmacs.d/"
+  :usage "Pathname — defaults to ~/.rplaca.d/"
   :see-also (*user-init-file* *inhibit-user-init* load-user-init-file))
 
 (defdoc *user-init-file*
   :category "init"
-  :usage "Pathname — defaults to ~/.clawmacs.d/init.lisp"
+  :usage "Pathname — defaults to ~/.rplaca.d/init.lisp"
   :see-also (*user-init-directory* *inhibit-user-init* load-user-init-file))
 
 (defdoc *inhibit-user-init*
@@ -2609,12 +2609,12 @@ documentation in *extended-docs*."
 (defdoc *startup-hook*
   :category "init"
   :usage "List of function designators run after init.lisp loads and before McCLIM startup."
-  :see-also (add-hook remove-hook run-hooks *initial-buffer-hook* clawmacs-main))
+  :see-also (add-hook remove-hook run-hooks *initial-buffer-hook* rplaca-main))
 
 (defdoc *initial-buffer-hook*
   :category "init"
   :usage "List of function designators run with the initial buffer after it is created."
-  :see-also (add-hook remove-hook run-hook-with-args *startup-hook* clawmacs-main))
+  :see-also (add-hook remove-hook run-hook-with-args *startup-hook* rplaca-main))
 
 (defdoc *before-command-hook*
   :category "init"
@@ -2724,8 +2724,8 @@ documentation in *extended-docs*."
   :category "init"
   :usage "(load-user-init-file) — Called once during startup."
   :returns "T on success, NIL if skipped, inhibited, or on error."
-  :side-effects "Loads and evaluates *user-init-file* in the :clawmacs package. Errors are caught, printed to stderr, and logged via file-debug-log. By the time init.lisp runs, the default keymap, tool registry, faces, and configured system prompt file are already loaded; use *startup-hook* or *initial-buffer-hook* for additional startup customization."
-  :see-also (*user-init-file* *user-init-directory* *inhibit-user-init* *startup-hook* *initial-buffer-hook* clawmacs-main))
+  :side-effects "Loads and evaluates *user-init-file* in the :rplaca package. Errors are caught, printed to stderr, and logged via file-debug-log. By the time init.lisp runs, the default keymap, tool registry, faces, and configured system prompt file are already loaded; use *startup-hook* or *initial-buffer-hook* for additional startup customization."
+  :see-also (*user-init-file* *user-init-directory* *inhibit-user-init* *startup-hook* *initial-buffer-hook* rplaca-main))
 
 ;;; ==========================================================================
 ;;; Category: main — Application entry point
@@ -2742,7 +2742,7 @@ documentation in *extended-docs*."
   :category "main"
   :usage "Integer default used by run-single-prompt."
   :returns "integer — Default maximum non-interactive tool-call turns."
-  :see-also (run-single-prompt run-subagent clawmacs-prompt-main))
+  :see-also (run-single-prompt run-subagent rplaca-prompt-main))
 
 (defdoc *default-subagent-name*
   :category "main"
@@ -2755,7 +2755,7 @@ documentation in *extended-docs*."
   :usage "(run-single-prompt PROMPT &key :agent-name :provider :model :think-level :working-directory :max-tool-iterations :tool-names :custom-tools)"
   :returns "prompt-run-result — Final text, routing metadata, iteration count, and captured tool events."
   :side-effects "Creates an in-memory prompt buffer, sends non-streaming provider requests, executes exposed tools, inserts tool_result messages into the prompt buffer, and loops until a final assistant response is returned."
-  :see-also (clawmacs-prompt-main run-subagent provider-request execute-tool build-conversation-messages))
+  :see-also (rplaca-prompt-main run-subagent provider-request execute-tool build-conversation-messages))
 
 (defdoc run-subagent
   :category "main"
@@ -2850,16 +2850,16 @@ documentation in *extended-docs*."
   :returns "boolean — T if RESULT includes at least one TOOL-NAME call."
   :see-also (prompt-run-tool-names prompt-run-tool-count prompt-run-result-tool-events))
 
-(defdoc clawmacs-prompt-main
+(defdoc rplaca-prompt-main
   :category "main"
-  :usage "(clawmacs-prompt-main) — CLI entry point used by prompt.sh."
+  :usage "(rplaca-prompt-main) — CLI entry point used by prompt.sh."
   :returns "does not return — Exits the Lisp image with status 0 or 1."
-  :side-effects "Parses command-line options, defaults plain prompt.sh runs to openai-codex/gpt-5.6-sol unless --agent, --provider, or --model supplies routing, initializes the clawmacs runtime without starting McCLIM, runs one prompt through run-single-prompt, and writes the final response or JSON result to stdout."
-  :see-also (run-single-prompt *prompt-max-tool-iterations* clawmacs-main))
+  :side-effects "Parses command-line options, defaults plain prompt.sh runs to openai-codex/gpt-5.6-sol unless --agent, --provider, or --model supplies routing, initializes the rplaca runtime without starting McCLIM, runs one prompt through run-single-prompt, and writes the final response or JSON result to stdout."
+  :see-also (run-single-prompt *prompt-max-tool-iterations* rplaca-main))
 
-(defdoc clawmacs-main
+(defdoc rplaca-main
   :category "main"
-  :usage "(clawmacs-main &key session-name agent-name window-title (run-frame t))"
+  :usage "(rplaca-main &key session-name agent-name window-title (run-frame t))"
   :returns "buffer — The initial chat buffer."
   :side-effects "Initializes state, loads the configured personality prompt file, loads user init, runs *startup-hook*, creates the initial buffer, runs *initial-buffer-hook*, and starts the McCLIM frame unless RUN-FRAME is NIL."
   :see-also (current-buffer *default-keymap* init-tools *startup-hook* *initial-buffer-hook*))

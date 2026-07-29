@@ -21,20 +21,20 @@ printf '%s\n' '(in-package :cl-user)' > "$SETUP_FILE"
 cat > "$TMP_BIN/sbcl" <<'EOF'
 #!/bin/sh
 {
-  printf 'clean-build=<%s>\n' "${CLAWMACS_RUN_CLEAN_BUILD:-}"
+  printf 'clean-build=<%s>\n' "${RPLACA_RUN_CLEAN_BUILD:-}"
   index=0
   for argument in "$@"; do
     printf 'argument[%s]=<%s>\n' "$index" "$argument"
     index=$((index + 1))
   done
-} > "$CLAWMACS_TEST_SBCL_LOG"
+} > "$RPLACA_TEST_SBCL_LOG"
 EOF
 chmod +x "$TMP_BIN/sbcl"
 
 assert_log() {
   label="$1"
   expected="$2"
-  if ! diff -u "$expected" "$CLAWMACS_TEST_SBCL_LOG"; then
+  if ! diff -u "$expected" "$RPLACA_TEST_SBCL_LOG"; then
     printf 'FAIL %s: native launcher arguments differ\n' "$label" >&2
     exit 1
   fi
@@ -44,20 +44,20 @@ run_case() {
   label="$1"
   clean_build="$2"
   shift 2
-  CLAWMACS_TEST_SBCL_LOG="$TMP_DIR/$label.log"
-  export CLAWMACS_TEST_SBCL_LOG
+  RPLACA_TEST_SBCL_LOG="$TMP_DIR/$label.log"
+  export RPLACA_TEST_SBCL_LOG
   if [ "$clean_build" = unset ]; then
     (
-      unset CLAWMACS_RUN_CLEAN_BUILD
+      unset RPLACA_RUN_CLEAN_BUILD
       PATH="$TMP_BIN:$PATH"
-      CLAWMACS_ULTRALISP_SETUP="$SETUP_FILE"
-      export PATH CLAWMACS_ULTRALISP_SETUP
+      RPLACA_ULTRALISP_SETUP="$SETUP_FILE"
+      export PATH RPLACA_ULTRALISP_SETUP
       "$LAUNCHER" "$@"
     )
   else
-    CLAWMACS_RUN_CLEAN_BUILD="$clean_build" \
+    RPLACA_RUN_CLEAN_BUILD="$clean_build" \
       PATH="$TMP_BIN:$PATH" \
-      CLAWMACS_ULTRALISP_SETUP="$SETUP_FILE" \
+      RPLACA_ULTRALISP_SETUP="$SETUP_FILE" \
       "$LAUNCHER" "$@"
   fi
 }

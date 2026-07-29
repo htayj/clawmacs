@@ -1,4 +1,4 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite crash-report-suite)
 
@@ -7,7 +7,7 @@
           (make-pathname
            :directory
            (list :absolute "tmp"
-                 (format nil "clawmacs-crash-test-~A-~36R-~36R-~A"
+                 (format nil "rplaca-crash-test-~A-~36R-~36R-~A"
                          label
                          (get-universal-time)
                          (get-internal-real-time)
@@ -53,20 +53,20 @@
   (with-crash-test-directory (override "override")
     (with-crash-test-directory (xdg "xdg")
       (with-crash-environment
-          ("CLAWMACS_CRASH_REPORT_DIR" (namestring override))
+          ("RPLACA_CRASH_REPORT_DIR" (namestring override))
         (with-crash-environment ("XDG_STATE_HOME" (namestring xdg))
-          (is (equal override (clawmacs::crash-report-directory)))))
-      (with-crash-environment ("CLAWMACS_CRASH_REPORT_DIR" "")
+          (is (equal override (rplaca::crash-report-directory)))))
+      (with-crash-environment ("RPLACA_CRASH_REPORT_DIR" "")
         (with-crash-environment ("XDG_STATE_HOME" (namestring xdg))
-          (is (equal (merge-pathnames #P"clawmacs/crash-reports/" xdg)
-                     (clawmacs::crash-report-directory))))))))
+          (is (equal (merge-pathnames #P"rplaca/crash-reports/" xdg)
+                     (rplaca::crash-report-directory))))))))
 
 (test crash-report-filenames-are-bounded-unique-and-diagnostic
-  (let ((first (clawmacs::crash-report-filename
+  (let ((first (rplaca::crash-report-filename
                 :universal-time 3983724306
                 :pid 42
                 :sequence 7))
-        (second (clawmacs::crash-report-filename
+        (second (rplaca::crash-report-filename
                  :universal-time 3983724306
                  :pid 42
                  :sequence 8)))
@@ -86,14 +86,14 @@
     (set-message-text (buffer-input-message buffer) secret)
     (buffer-insert-read-only-message buffer :user secret :record-p nil)
     (with-crash-environment ("OPENAI_API_KEY" environment-secret)
-      (let* ((clawmacs::*buffer-ring* (list buffer))
+      (let* ((rplaca::*buffer-ring* (list buffer))
              (report
-               (clawmacs::build-crash-report
+               (rplaca::build-crash-report
                 (make-condition 'simple-error
                                 :format-control "~A"
                                 :format-arguments (list secret))
                 :context :unit-test)))
-        (is (search "schema: clawmacs-crash-report" report))
+        (is (search "schema: rplaca-crash-report" report))
         (is (search "schema_version: 1" report))
         (is (search "type: SIMPLE-ERROR" report))
         (is (search "message: <omitted for privacy>" report))
@@ -104,7 +104,7 @@
         (is-false (search "private session name" report))
         (is-false (search (make-string 1000 :initial-element #\m) report))
         (is (<= (length report)
-                clawmacs::+crash-report-max-characters+))))))
+                rplaca::+crash-report-max-characters+))))))
 
 (test crash-report-type-error-summary-never-prints-the-datum
   (let* ((secret "datum sentinel 97cc61dd")
@@ -112,7 +112,7 @@
            (handler-case
                (error 'type-error :datum secret :expected-type 'integer)
              (type-error (caught) caught)))
-         (report (clawmacs::build-crash-report condition :context :unit-test)))
+         (report (rplaca::build-crash-report condition :context :unit-test)))
     (is (search "family: :TYPE-ERROR" report))
     (is (search "datum-type:" report))
     (is (search "datum-length:" report))
@@ -124,19 +124,19 @@
   (with-crash-test-directory (base "atomic")
     (let ((directory (merge-pathnames #P"reports/" base)))
       (with-crash-environment
-        ("CLAWMACS_CRASH_REPORT_DIR" (namestring directory))
+        ("RPLACA_CRASH_REPORT_DIR" (namestring directory))
       (let ((observed-pre-rename-p nil)
-            (original clawmacs::*crash-report-rename-function*))
-        (let ((clawmacs::*crash-report-rename-function*
+            (original rplaca::*crash-report-rename-function*))
+        (let ((rplaca::*crash-report-rename-function*
                 (lambda (source target)
                   (is (probe-file source))
                   (is-false (probe-file target))
-                  (is (search "schema: clawmacs-crash-report"
+                  (is (search "schema: rplaca-crash-report"
                               (crash-test-read-file source)))
                   (setf observed-pre-rename-p t)
                   (funcall original source target))))
           (let ((path
-                  (clawmacs::write-crash-report
+                  (rplaca::write-crash-report
                    (make-condition 'simple-error
                                    :format-control "atomic test")
                    :context :unit-test)))
@@ -151,8 +151,8 @@
   (with-crash-test-directory (base "write-failure")
     (let ((directory (merge-pathnames #P"reports/" base)))
     (with-crash-environment
-        ("CLAWMACS_CRASH_REPORT_DIR" (namestring directory))
-      (let ((clawmacs::*crash-report-private-write-function*
+        ("RPLACA_CRASH_REPORT_DIR" (namestring directory))
+      (let ((rplaca::*crash-report-private-write-function*
               (lambda (path content)
                 (declare (ignore content))
                 (with-open-file
@@ -161,7 +161,7 @@
                   (write-string "partial" stream))
                 (error "simulated writer failure"))))
         (signals error
-          (clawmacs::write-crash-report
+          (rplaca::write-crash-report
            (make-condition 'simple-error :format-control "writer")
            :context :unit-test))
         (is (null (crash-test-report-files directory)))
@@ -174,9 +174,9 @@
       (ensure-directories-exist (merge-pathnames #P".keep" directory))
       (sb-posix:chmod (namestring directory) #o755)
       (with-crash-environment
-          ("CLAWMACS_CRASH_REPORT_DIR" (namestring directory))
+          ("RPLACA_CRASH_REPORT_DIR" (namestring directory))
         (signals error
-          (clawmacs::write-crash-report
+          (rplaca::write-crash-report
            (make-condition 'simple-error :format-control "mode")
            :context :unit-test))
         (is (= #o755 (crash-test-mode directory)))
@@ -191,9 +191,9 @@
       (sb-posix:chmod (namestring target) #o700)
       (sb-posix:symlink (namestring target) (namestring link))
       (with-crash-environment
-          ("CLAWMACS_CRASH_REPORT_DIR" (namestring link))
+          ("RPLACA_CRASH_REPORT_DIR" (namestring link))
         (signals error
-          (clawmacs::write-crash-report
+          (rplaca::write-crash-report
            (make-condition 'simple-error :format-control "symlink")
            :context :unit-test))
         (is (= #o700 (crash-test-mode target)))
@@ -204,10 +204,10 @@
   (with-crash-test-directory (base "collision")
     (let ((directory (merge-pathnames #P"reports/" base)))
       (with-crash-environment
-          ("CLAWMACS_CRASH_REPORT_DIR" (namestring directory))
-        (let ((original clawmacs::*crash-report-rename-function*)
-              (clawmacs::*crash-report-rename-function* nil))
-          (setf clawmacs::*crash-report-rename-function*
+          ("RPLACA_CRASH_REPORT_DIR" (namestring directory))
+        (let ((original rplaca::*crash-report-rename-function*)
+              (rplaca::*crash-report-rename-function* nil))
+          (setf rplaca::*crash-report-rename-function*
                 (lambda (source target)
                   (with-open-file
                       (stream target :direction :output
@@ -216,7 +216,7 @@
                     (write-string "preexisting" stream))
                   (funcall original source target)))
           (signals error
-            (clawmacs::write-crash-report
+            (rplaca::write-crash-report
              (make-condition 'simple-error :format-control "collision")
              :context :unit-test))
           (let ((reports (crash-test-report-files directory)))
@@ -230,51 +230,51 @@
                                    :format-control "original"))
          (delegated nil)
          (emissions 0)
-         (old-emitter clawmacs::*crash-report-emitter-function*)
-         (old-original clawmacs::*crash-report-original-debugger-hook*))
+         (old-emitter rplaca::*crash-report-emitter-function*)
+         (old-original rplaca::*crash-report-original-debugger-hook*))
     (unwind-protect
          (progn
-           (setf (clawmacs::crash-report-claim-state-claimed-p
-                  clawmacs::*crash-report-claim-state*)
+           (setf (rplaca::crash-report-claim-state-claimed-p
+                  rplaca::*crash-report-claim-state*)
                  nil
-                 clawmacs::*crash-report-original-debugger-hook*
+                 rplaca::*crash-report-original-debugger-hook*
                  (lambda (condition previous)
                    (is (eq previous
-                           clawmacs::*crash-report-original-debugger-hook*))
+                           rplaca::*crash-report-original-debugger-hook*))
                    (push condition delegated))
-                 clawmacs::*crash-report-emitter-function*
+                 rplaca::*crash-report-emitter-function*
                  (lambda (condition &key context)
                    (declare (ignore condition context))
                    (incf emissions)
-                   (clawmacs::crash-report-invoke-debugger-hook
+                   (rplaca::crash-report-invoke-debugger-hook
                     (make-condition 'simple-error
                                     :format-control "recursive")
                     nil)
                    (error "simulated reporter failure")))
-           (clawmacs::crash-report-invoke-debugger-hook original nil)
+           (rplaca::crash-report-invoke-debugger-hook original nil)
            (is (= 1 emissions))
            (is (eq original (first delegated)))
            (is (= 1 (length delegated))))
-      (setf clawmacs::*crash-report-emitter-function* old-emitter
-            clawmacs::*crash-report-original-debugger-hook* old-original))))
+      (setf rplaca::*crash-report-emitter-function* old-emitter
+            rplaca::*crash-report-original-debugger-hook* old-original))))
 
 (test crash-reporter-process-claim-is-exactly-once-under-concurrency
   #+sbcl
   (let ((emissions (list 0))
         (delegations (list 0))
-        (old-emitter clawmacs::*crash-report-emitter-function*)
-        (old-original clawmacs::*crash-report-original-debugger-hook*))
+        (old-emitter rplaca::*crash-report-emitter-function*)
+        (old-original rplaca::*crash-report-original-debugger-hook*))
     (unwind-protect
          (progn
-           (setf (clawmacs::crash-report-claim-state-claimed-p
-                  clawmacs::*crash-report-claim-state*)
+           (setf (rplaca::crash-report-claim-state-claimed-p
+                  rplaca::*crash-report-claim-state*)
                  nil
-                 clawmacs::*crash-report-emitter-function*
+                 rplaca::*crash-report-emitter-function*
                  (lambda (condition &key context)
                    (declare (ignore condition context))
                    (sb-ext:atomic-incf (car emissions))
                    #P"/tmp/report")
-                 clawmacs::*crash-report-original-debugger-hook*
+                 rplaca::*crash-report-original-debugger-hook*
                  (lambda (condition previous)
                    (declare (ignore condition previous))
                    (sb-ext:atomic-incf (car delegations))))
@@ -283,47 +283,47 @@
                          :collect
                          (bt:make-thread
                           (lambda ()
-                            (clawmacs::crash-report-invoke-debugger-hook
+                            (rplaca::crash-report-invoke-debugger-hook
                              (make-condition 'simple-error
                                              :format-control "concurrent")
                              nil))
-                          :name "clawmacs crash claim test"))))
+                          :name "rplaca crash claim test"))))
              (dolist (thread threads)
                (bt:join-thread thread)))
            (is (= 1 (car emissions)))
            (is (= 12 (car delegations))))
-      (setf clawmacs::*crash-report-emitter-function* old-emitter
-            clawmacs::*crash-report-original-debugger-hook* old-original))))
+      (setf rplaca::*crash-report-emitter-function* old-emitter
+            rplaca::*crash-report-original-debugger-hook* old-original))))
 
 (test installed-crash-reporter-restores-hook-and-ignores-handled-errors
-  (let ((before (clawmacs::crash-platform-current-debugger-hook))
+  (let ((before (rplaca::crash-platform-current-debugger-hook))
         (emissions 0)
-        (old-emitter clawmacs::*crash-report-emitter-function*))
+        (old-emitter rplaca::*crash-report-emitter-function*))
     (unwind-protect
          (progn
-           (setf clawmacs::*crash-report-emitter-function*
+           (setf rplaca::*crash-report-emitter-function*
                  (lambda (&rest arguments)
                    (declare (ignore arguments))
                    (incf emissions)))
            (is (eq :handled
-                   (clawmacs::call-with-installed-crash-reporter
+                   (rplaca::call-with-installed-crash-reporter
                     (lambda ()
                       (handler-case
                           (error "handled")
                         (error () :handled))))))
            (is (= 0 emissions))
            (is (eq before
-                   (clawmacs::crash-platform-current-debugger-hook))))
-      (setf clawmacs::*crash-report-emitter-function* old-emitter))))
+                   (rplaca::crash-platform-current-debugger-hook))))
+      (setf rplaca::*crash-report-emitter-function* old-emitter))))
 
 (defun run-crash-report-subprocess (mode directory)
   (with-crash-environment
-      ("CLAWMACS_CRASH_REPORT_DIR" (namestring directory))
-    (with-crash-environment ("CLAWMACS_CRASH_TEST_MODE" mode)
+      ("RPLACA_CRASH_REPORT_DIR" (namestring directory))
+    (with-crash-environment ("RPLACA_CRASH_TEST_MODE" mode)
       (uiop:run-program
        (list "sbcl" "--noinform" "--disable-debugger"
              "--script" "scripts/crash-report-test-entry.lisp")
-       :directory (asdf:system-source-directory :clawmacs)
+       :directory (asdf:system-source-directory :rplaca)
        :output :string
        :error-output :string
        :ignore-error-status t))))
@@ -337,17 +337,17 @@
             (run-crash-report-subprocess mode reports-directory)
           (declare (ignore stdout))
           (is (not (zerop exit-code)))
-          (is (search "Clawmacs fatal crash report:" stderr))
+          (is (search "RPLACA fatal crash report:" stderr))
           (let ((reports (crash-test-report-files reports-directory)))
             (is (= 1 (length reports)))
             (let ((content (crash-test-read-file (first reports))))
-              (is (search "schema: clawmacs-crash-report" content))
+              (is (search "schema: rplaca-crash-report" content))
               (is (search "[current_thread_backtrace]" content))
               (is (search "[threads]" content))
               (is (search "message: <omitted for privacy>" content))
               (is-false (search private-sentinel content))
               (is-false
-               (search "clawmacs crash integration worker" content)))
+               (search "rplaca crash integration worker" content)))
             #+sbcl
             (progn
               (is (= #o700 (crash-test-mode reports-directory)))

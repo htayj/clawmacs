@@ -1,7 +1,7 @@
 ;;;; Opt-in real CLX/Xvfb proof for the public McCLIM font-listing boundary.
 ;;;; The shell wrapper supplies QUICKLISP setup, project registry, and DISPLAY.
 
-(ql:quickload :clawmacs)
+(ql:quickload :rplaca)
 
 (let* ((port (or (clim:find-port)
                  (error "CLIM did not create a port for DISPLAY=~S."
@@ -21,21 +21,21 @@
        (listed-sizes
          (and native-face
               (clim-extensions:font-face-all-sizes native-face)))
-       (inventory (clawmacs:enumerate-port-font-inventory port))
-       (choices (clawmacs:appearance-font-inventory-choices inventory))
+       (inventory (rplaca:enumerate-port-font-inventory port))
+       (choices (rplaca:appearance-font-inventory-choices inventory))
        (choice
          (and native-face listed-sizes
               (find-if
                (lambda (candidate)
                  (and
                   (string=
-                   (clawmacs:enumerated-font-choice-family-display candidate)
+                   (rplaca:enumerated-font-choice-family-display candidate)
                    (clim-extensions:font-family-name
                     (clim-extensions:font-face-family native-face)))
                   (string=
-                   (clawmacs:enumerated-font-choice-face-display candidate)
+                   (rplaca:enumerated-font-choice-face-display candidate)
                    (clim-extensions:font-face-name native-face))
-                  (= (clawmacs:enumerated-font-choice-size candidate)
+                  (= (rplaca:enumerated-font-choice-size candidate)
                      (first listed-sizes))))
                choices)))
        (graft (clim:find-graft :port port)))
@@ -47,7 +47,7 @@
   (let ((medium (clim:make-medium port graft)))
     (unwind-protect
          (let* ((style
-                  (clawmacs:resolve-enumerated-font-choice
+                  (rplaca:resolve-enumerated-font-choice
                    inventory choice :medium medium :scope :transcript))
                 (mapping (clim:text-style-mapping port style))
                 (ascent (clim:text-style-ascent style medium))
@@ -62,8 +62,8 @@
            (format t
                    "CLX_FONT_INVENTORY_PROBE_OK count=~D native-ttf=true listed-sizes=~D family=~S face=~S size=~S mapping=~S ascent=~S descent=~S width=~S fixed-width=~S~%"
                    (length choices) (length listed-sizes)
-                   (clawmacs:enumerated-font-choice-family-display choice)
-                   (clawmacs:enumerated-font-choice-face-display choice)
-                   (clawmacs:enumerated-font-choice-size choice)
+                   (rplaca:enumerated-font-choice-family-display choice)
+                   (rplaca:enumerated-font-choice-face-display choice)
+                   (rplaca:enumerated-font-choice-size choice)
                    mapping ascent descent width fixed-width-p))
       (clim:deallocate-medium port medium))))

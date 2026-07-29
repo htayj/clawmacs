@@ -19,8 +19,8 @@ assert_one() {
 for probe in probe-clx-font-inventory.sh probe-appearance-live-frames.sh; do
   state="$test_dir/${probe}.events"
   : >"$state"
-  CLAWMACS_PROBE_TEST_STATE="$state" \
-  CLAWMACS_PROBE_TEST_DOUBLE="$repo_root/scripts/probe-wrapper-test-double.sh" \
+  RPLACA_PROBE_TEST_STATE="$state" \
+  RPLACA_PROBE_TEST_DOUBLE="$repo_root/scripts/probe-wrapper-test-double.sh" \
     "$repo_root/scripts/$probe" >"$test_dir/${probe}.log" 2>&1
   assert_one launcher
   assert_one inner
@@ -33,11 +33,11 @@ done
 for probe in probe-clx-font-inventory.sh probe-appearance-live-frames.sh; do
   state="$test_dir/${probe}.stuck.events"
   : >"$state"
-  if CLAWMACS_PROBE_TEST_STATE="$state" \
-     CLAWMACS_PROBE_TEST_HANG=1 \
-     CLAWMACS_PROBE_PAYLOAD_TIMEOUT_TENTHS=2 \
-     CLAWMACS_PROBE_TERMINATION_GRACE_TENTHS=2 \
-     CLAWMACS_PROBE_TEST_DOUBLE="$repo_root/scripts/probe-wrapper-test-double.sh" \
+  if RPLACA_PROBE_TEST_STATE="$state" \
+     RPLACA_PROBE_TEST_HANG=1 \
+     RPLACA_PROBE_PAYLOAD_TIMEOUT_TENTHS=2 \
+     RPLACA_PROBE_TERMINATION_GRACE_TENTHS=2 \
+     RPLACA_PROBE_TEST_DOUBLE="$repo_root/scripts/probe-wrapper-test-double.sh" \
        "$repo_root/scripts/$probe" >"$test_dir/${probe}.stuck.log" 2>&1; then
     echo "stuck $probe unexpectedly succeeded" >&2
     exit 1

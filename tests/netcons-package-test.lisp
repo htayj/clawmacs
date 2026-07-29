@@ -1,4 +1,4 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite netcons-suite)
 
@@ -34,28 +34,28 @@
 (defmacro with-netcons-package-state (&body body)
   "Run BODY with isolated package, project, and tool registries."
   `(let* ((root (temp-package-test-directory "netcons-config"))
-          (clawmacs::*agent-tool-metadata-table*
+          (rplaca::*agent-tool-metadata-table*
            (make-hash-table :test #'eq))
-          (clawmacs::*agent-tool-name-table*
+          (rplaca::*agent-tool-name-table*
            (make-hash-table :test #'equal))
-          (clawmacs::*tool-table* (make-hash-table :test #'equal))
-          (clawmacs::*project-registry* (make-hash-table :test #'equal))
-          (clawmacs::*project-definitions-loaded-p* nil)
-          (clawmacs::*package-configuration-path*
+          (rplaca::*tool-table* (make-hash-table :test #'equal))
+          (rplaca::*project-registry* (make-hash-table :test #'equal))
+          (rplaca::*project-definitions-loaded-p* nil)
+          (rplaca::*package-configuration-path*
            (merge-pathnames "packages.json" root))
-          (clawmacs::*package-configuration* nil)
-          (clawmacs::*package-channels* (default-package-test-channels))
-          (clawmacs::*available-packages* nil)
-          (clawmacs::*package-registry-loaded-p* nil)
-          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
-          (clawmacs::*package-prompt-sections* nil)
-          (clawmacs::*enabled-builtin-packages* nil))
+          (rplaca::*package-configuration* nil)
+          (rplaca::*package-channels* (default-package-test-channels))
+          (rplaca::*available-packages* nil)
+          (rplaca::*package-registry-loaded-p* nil)
+          (rplaca::*loaded-packages* (make-hash-table :test #'equal))
+          (rplaca::*package-prompt-sections* nil)
+          (rplaca::*enabled-builtin-packages* nil))
      ,@body))
 
 (defun reset-test-netcons-state ()
   "Reset netcons process-local ref cache when the package has been loaded."
-  (let ((counter (find-symbol "*NETCONS-REF-COUNTER*" :clawmacs))
-        (table (find-symbol "*NETCONS-REF-TABLE*" :clawmacs)))
+  (let ((counter (find-symbol "*NETCONS-REF-COUNTER*" :rplaca))
+        (table (find-symbol "*NETCONS-REF-TABLE*" :rplaca)))
     (when (and counter (boundp counter))
       (set counter 0))
     (when (and table (boundp table))
@@ -70,8 +70,8 @@
 (defun netcons-package-tool-result (tool-name args)
   "Execute TOOL-NAME with ARGS and read its Lisp data result."
   (nth-value 0
-    (clawmacs::lisp-data-read
-     (clawmacs:execute-tool tool-name args))))
+    (rplaca::lisp-data-read
+     (rplaca:execute-tool tool-name args))))
 
 (defmacro with-netcons-http-fixtures (&body body)
   `(with-netcons-function-override (drakma:http-request (url &rest args)
@@ -117,7 +117,7 @@
                (netcons-package-tool-result
                 "netcons_run"
                 '(:response_length "short"
-                  :search_query #(((:q . "clawmacs netcons")
+                  :search_query #(((:q . "rplaca netcons")
                                    (:domains . #("example.com"))
                                    (:recency . 7)
                                    (:limit . 1))))))
@@ -127,7 +127,7 @@
              (first-result (aref results 0))
              (ref-id (getf first-result :ref-id)))
         (is (= 1 (length searches)))
-        (is (string= "clawmacs netcons" (getf search :query)))
+        (is (string= "rplaca netcons" (getf search :query)))
         (is (search "site%3Aexample.com" (getf search :search-url)))
         (is (string= "Example Page" (getf first-result :title)))
         (is (string= "https://example.com/page" (getf first-result :url)))

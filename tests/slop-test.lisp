@@ -1,11 +1,11 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite slop-suite)
 
 (defun slop-test-directory ()
   "Return a fresh temporary directory for slop tests."
   (let ((dir (merge-pathnames
-              (format nil "clawmacs-slop-tests-~D-~D-~36R/"
+              (format nil "rplaca-slop-tests-~D-~D-~36R/"
                       (get-universal-time)
                       (get-internal-real-time)
                       (random (expt 36 8)))
@@ -75,8 +75,8 @@
           (,source-var (slop-demo-source))
           (*project-registry* (make-hash-table :test #'equal))
           (*project-definitions-directory* definitions)
-          (clawmacs::*project-definitions-loaded-p* nil)
-          (clawmacs::*slop-project-index-cache*
+          (rplaca::*project-definitions-loaded-p* nil)
+          (rplaca::*slop-project-index-cache*
            (make-hash-table :test #'equal)))
      (ensure-directories-exist (merge-pathnames #P".keep" ,root-var))
      (ensure-directories-exist (merge-pathnames #P".keep" definitions))
@@ -106,7 +106,7 @@
                      (eq :call (getf reference :role)))
                    (getf references :references))))
       (let ((tool-definitions
-              (clawmacs::slop-tool-find-definitions
+              (rplaca::slop-tool-find-definitions
                '(:project "slop-demo"
                  :symbol "double"
                  :path "src/main.lisp"
@@ -116,7 +116,7 @@
                  :limit 10))))
         (is (= 1 (getf tool-definitions :count))))
       (let ((tool-callers
-              (clawmacs::slop-tool-find-callers
+              (rplaca::slop-tool-find-callers
                '(:project "slop-demo"
                  :path "src/main.lisp"
                  :symbol "double"
@@ -160,7 +160,7 @@
                            (getf entry :symbol))
                          results))))
     (let ((tool-result
-            (clawmacs::slop-tool-find-definitions-batch
+            (rplaca::slop-tool-find-definitions-batch
              '(:project "slop-batch"
                :symbols #("double" "triple")
                :namespace "function"
@@ -170,29 +170,29 @@
 
 (test slop-resolves-default-and-path-projects
   "Slop accepts omitted projects and explicit source root paths."
-  (with-slop-project ("clawmacs" root source)
+  (with-slop-project ("rplaca" root source)
     (is (search "(defun double" source))
-    (with-slop-env-var ("CLAWMACS_PROMPT_PROJECT_ROOT" nil)
+    (with-slop-env-var ("RPLACA_PROMPT_PROJECT_ROOT" nil)
       (let* ((default-result (slop-find-definitions nil
                                                     "double"
                                                     :namespace "function"))
              (definition (first (getf default-result :definitions))))
         (is (= 1 (getf default-result :count)))
-        (is (string= "clawmacs" (getf default-result :project)))
-        (is (string= "clawmacs" (getf definition :project))))
+        (is (string= "rplaca" (getf default-result :project)))
+        (is (string= "rplaca" (getf definition :project))))
       (let ((tool-result
-              (clawmacs::slop-tool-find-definitions
+              (rplaca::slop-tool-find-definitions
                '(:symbol "triple"
                  :namespace "function"
                  :path "src/main.lisp"))))
         (is (= 1 (getf tool-result :count)))
-        (is (string= "clawmacs" (getf tool-result :project)))))
+        (is (string= "rplaca" (getf tool-result :project)))))
     (let ((by-path (slop-find-definitions (namestring root)
                                           "caller"
                                           :path "src/main.lisp"
                                           :namespace "function")))
       (is (= 1 (getf by-path :count)))
-      (is (string= "clawmacs" (getf by-path :project))))))
+      (is (string= "rplaca" (getf by-path :project))))))
 
 (test slop-registers-transient-workspace-for-omitted-project
   "Omitted project arguments auto-register the current prompt workspace."
@@ -201,20 +201,20 @@
          (definitions (merge-pathnames #P"defs/" base))
          (*project-registry* (make-hash-table :test #'equal))
          (*project-definitions-directory* definitions)
-         (clawmacs::*project-definitions-loaded-p* nil)
-         (clawmacs::*slop-project-index-cache*
+         (rplaca::*project-definitions-loaded-p* nil)
+         (rplaca::*slop-project-index-cache*
           (make-hash-table :test #'equal)))
     (ensure-directories-exist (merge-pathnames #P".keep" root))
     (ensure-directories-exist (merge-pathnames #P".keep" definitions))
     (write-slop-test-file (merge-pathnames #P"src/main.lisp" root)
                           (slop-demo-source))
-    (with-slop-env-var ("CLAWMACS_PROMPT_PROJECT_ROOT" (namestring root))
+    (with-slop-env-var ("RPLACA_PROMPT_PROJECT_ROOT" (namestring root))
       (let ((current (slop-current-project)))
         (is (string= "workspace" (getf current :project)))
         (is (string= (namestring (truename root))
                      (getf current :root))))
       (let ((definitions-result
-              (clawmacs::slop-tool-find-definitions
+              (rplaca::slop-tool-find-definitions
                '(:symbol "double"
                  :path "src/main.lisp"
                  :namespace "function"))))
@@ -230,7 +230,7 @@
         (is (= 1 (getf by-path :count)))
         (is (string= "workspace" (getf by-dot :project)))
         (is (string= "workspace" (getf by-path :project))))
-      (let* ((projects (clawmacs::slop-tool-list-projects '()))
+      (let* ((projects (rplaca::slop-tool-list-projects '()))
              (names (mapcar (lambda (project)
                               (getf project :name))
                             (getf projects :projects))))
@@ -388,24 +388,24 @@
 (defmacro with-slop-package-state (&body body)
   "Run BODY with isolated package and tool registries."
   `(let* ((root (slop-test-directory))
-          (clawmacs::*agent-tool-metadata-table*
+          (rplaca::*agent-tool-metadata-table*
            (make-hash-table :test #'eq))
-          (clawmacs::*agent-tool-name-table*
+          (rplaca::*agent-tool-name-table*
            (make-hash-table :test #'equal))
-          (clawmacs::*tool-table* (make-hash-table :test #'equal))
-          (clawmacs::*package-configuration-path*
+          (rplaca::*tool-table* (make-hash-table :test #'equal))
+          (rplaca::*package-configuration-path*
            (merge-pathnames "packages.json" root))
-          (clawmacs::*package-configuration* nil)
-          (clawmacs::*package-channels*
-           (list (clawmacs:make-package-channel
+          (rplaca::*package-configuration* nil)
+          (rplaca::*package-channels*
+           (list (rplaca:make-package-channel
                   :name "default"
-                  :root clawmacs:*default-package-channel-directory*
-                  :description "Bundled Clawmacs packages"
+                  :root rplaca:*default-package-channel-directory*
+                  :description "Bundled RPLACA packages"
                   :source :builtin)))
-          (clawmacs::*available-packages* nil)
-          (clawmacs::*package-registry-loaded-p* nil)
-          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
-          (clawmacs::*package-prompt-sections* nil))
+          (rplaca::*available-packages* nil)
+          (rplaca::*package-registry-loaded-p* nil)
+          (rplaca::*loaded-packages* (make-hash-table :test #'equal))
+          (rplaca::*package-prompt-sections* nil))
      ,@body))
 
 (test slop-package-registers-agent-tools-and-prompt

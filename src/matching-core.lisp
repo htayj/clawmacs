@@ -1,4 +1,4 @@
-(in-package #:clawmacs/matching-core)
+(in-package #:rplaca/matching-core)
 
 (named-readtables:in-readtable coalton:coalton)
 

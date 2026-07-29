@@ -1,8 +1,8 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (def-suite keymap-suite
   :description "Keymap tests"
-  :in clawmacs-suite)
+  :in rplaca-suite)
 
 (in-suite keymap-suite)
 
@@ -34,220 +34,220 @@
 
 (test default-keymap-readline-argument-yank-bindings
   "Default keymap includes readline-style argument yank keybindings."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::yank-previous-command-first-arg-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::yank-previous-command-first-arg-command
           (keymap-lookup *default-keymap* '(:meta #\Em))))
-  (is (eq 'clawmacs::yank-previous-command-last-arg-command
+  (is (eq 'rplaca::yank-previous-command-last-arg-command
           (keymap-lookup *default-keymap* '(:meta #\.))))
-  (is (eq 'clawmacs::yank-previous-command-last-arg-command
+  (is (eq 'rplaca::yank-previous-command-last-arg-command
           (keymap-lookup *default-keymap* '(:meta #\_)))))
 
 (test default-keymap-ctrl-d-binding
   "Default keymap binds Ctrl+d to forward delete."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::delete-char-forward-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::delete-char-forward-command
           (keymap-lookup *default-keymap* (code-char 4)))))
 
 (test default-keymap-redraw-screen-binding
   "Default keymap binds Ctrl+l to request a full redraw."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::redraw-screen-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::redraw-screen-command
           (keymap-lookup *default-keymap* (code-char 12)))))
 
 (test default-keymap-escape-stop-llm-binding
   "Default keymap binds Escape to stopping the active LLM response."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::stop-llm-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::stop-llm-command
           (keymap-lookup *default-keymap* #\Esc))))
 
 (test default-keymap-backspace-bindings
   "Default keymap binds backspace variants to backward char delete."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::delete-char-backward-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::delete-char-backward-command
           (keymap-lookup *default-keymap* #\Backspace)))
-  (is (eq 'clawmacs::delete-char-backward-command
+  (is (eq 'rplaca::delete-char-backward-command
           (keymap-lookup *default-keymap* #\Rubout)))
-  (is (eq 'clawmacs::delete-char-backward-command
+  (is (eq 'rplaca::delete-char-backward-command
           (keymap-lookup *default-keymap* :backspace))))
 
 (test default-keymap-backward-kill-word-backspace-bindings
   "Default keymap binds C-Backspace and M-Backspace to backward-kill-word."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::backward-kill-word-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::backward-kill-word-command
           (keymap-lookup *default-keymap* '(:meta #\Backspace))))
-  (is (eq 'clawmacs::backward-kill-word-command
+  (is (eq 'rplaca::backward-kill-word-command
           (keymap-lookup *default-keymap* '(:meta #\Rubout))))
-  (is (eq 'clawmacs::backward-kill-word-command
+  (is (eq 'rplaca::backward-kill-word-command
           (keymap-lookup *default-keymap* '(:meta :backspace))))
   (is (null (keymap-lookup *default-keymap* '(:alt :backspace))))
-  (is (eq 'clawmacs::backward-kill-word-command
+  (is (eq 'rplaca::backward-kill-word-command
           (keymap-lookup *default-keymap* '(:ctrl #\Backspace))))
-  (is (eq 'clawmacs::backward-kill-word-command
+  (is (eq 'rplaca::backward-kill-word-command
           (keymap-lookup *default-keymap* '(:ctrl #\Rubout))))
-  (is (eq 'clawmacs::backward-kill-word-command
+  (is (eq 'rplaca::backward-kill-word-command
           (keymap-lookup *default-keymap* '(:ctrl :backspace)))))
 
 
 
 (test default-keymap-buffer-selector-binding
   "Default keymap binds C-x b and C-x C-b to the minibuffer buffer selector."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::minibuffer-select-buffer-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::minibuffer-select-buffer-command
           (keymap-lookup *default-keymap* (list :ctrl-x (code-char 2)))))
-  (is (eq 'clawmacs::minibuffer-select-buffer-command
+  (is (eq 'rplaca::minibuffer-select-buffer-command
           (keymap-lookup *default-keymap* '(:ctrl-x #\b)))))
 
 (test default-keymap-project-bindings
   "Default keymap binds project selection and project file opening."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::open-project-file-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::open-project-file-command
           (keymap-lookup *default-keymap* (list :ctrl-x (code-char 6)))))
-  (is (eq 'clawmacs::minibuffer-select-project-command
+  (is (eq 'rplaca::minibuffer-select-project-command
           (keymap-lookup *default-keymap* '(:ctrl-x #\p))))
-  (is (eq 'clawmacs::load-session-command
+  (is (eq 'rplaca::load-session-command
           (keymap-lookup *default-keymap* (list :ctrl-x (code-char 18))))))
 
 (test default-keymap-listener-binding
   "Default keymap binds C-x l to the in-buffer Lisp listener."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::new-listener-buffer-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::new-listener-buffer-command
           (keymap-lookup *default-keymap* '(:ctrl-x #\l)))))
 
 (test file-keymap-emacs-editor-bindings
   "File buffers have Emacs-style editor bindings over the global keymap."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::insert-newline-command
-          (keymap-lookup clawmacs::*file-keymap* #\Return)))
-  (is (eq 'clawmacs::insert-tab-command
-          (keymap-lookup clawmacs::*file-keymap* #\Tab)))
-  (is (eq 'clawmacs::previous-line-command
-          (keymap-lookup clawmacs::*file-keymap* (code-char 16))))
-  (is (eq 'clawmacs::next-line-command
-          (keymap-lookup clawmacs::*file-keymap* (code-char 14))))
-  (is (eq 'clawmacs::search-forward-command
-          (keymap-lookup clawmacs::*file-keymap* (code-char 19))))
-  (is (eq 'clawmacs::set-mark-command
-          (keymap-lookup clawmacs::*file-keymap* (code-char 0))))
-  (is (eq 'clawmacs::kill-region-command
-          (keymap-lookup clawmacs::*file-keymap* (code-char 23))))
-  (is (eq 'clawmacs::copy-region-command
-          (keymap-lookup clawmacs::*file-keymap* '(:meta #\w))))
-  (is (eq 'clawmacs::save-session-command
-          (keymap-lookup clawmacs::*file-keymap*
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::insert-newline-command
+          (keymap-lookup rplaca::*file-keymap* #\Return)))
+  (is (eq 'rplaca::insert-tab-command
+          (keymap-lookup rplaca::*file-keymap* #\Tab)))
+  (is (eq 'rplaca::previous-line-command
+          (keymap-lookup rplaca::*file-keymap* (code-char 16))))
+  (is (eq 'rplaca::next-line-command
+          (keymap-lookup rplaca::*file-keymap* (code-char 14))))
+  (is (eq 'rplaca::search-forward-command
+          (keymap-lookup rplaca::*file-keymap* (code-char 19))))
+  (is (eq 'rplaca::set-mark-command
+          (keymap-lookup rplaca::*file-keymap* (code-char 0))))
+  (is (eq 'rplaca::kill-region-command
+          (keymap-lookup rplaca::*file-keymap* (code-char 23))))
+  (is (eq 'rplaca::copy-region-command
+          (keymap-lookup rplaca::*file-keymap* '(:meta #\w))))
+  (is (eq 'rplaca::save-session-command
+          (keymap-lookup rplaca::*file-keymap*
                          (list :ctrl-x (code-char 19)))))
-  (is (eq 'clawmacs::write-project-file-as-command
-          (keymap-lookup clawmacs::*file-keymap*
+  (is (eq 'rplaca::write-project-file-as-command
+          (keymap-lookup rplaca::*file-keymap*
                          (list :ctrl-x (code-char 23)))))
-  (is (eq 'clawmacs::revert-file-buffer-command
-          (keymap-lookup clawmacs::*file-keymap*
+  (is (eq 'rplaca::revert-file-buffer-command
+          (keymap-lookup rplaca::*file-keymap*
                          (list :ctrl-x (code-char 22))))))
 
 (test default-keymap-toggle-tool-results-uses-c-c-prefix
   "Toggle tool results stays under C-c; C-x t is session-tree navigation."
-  (clawmacs::init-default-keymap)
+  (rplaca::init-default-keymap)
   ;; C-c t should be bound
-  (is (eq 'clawmacs::toggle-tool-results-command
+  (is (eq 'rplaca::toggle-tool-results-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\t))))
-  (is (eq 'clawmacs::session-tree-command
+  (is (eq 'rplaca::session-tree-command
           (keymap-lookup *default-keymap* '(:ctrl-x #\t))))
-  (is (eq 'clawmacs::fork-session-command
+  (is (eq 'rplaca::fork-session-command
           (keymap-lookup *default-keymap* '(:ctrl-x #\T)))))
 
 (test default-keymap-toggle-reasoning-output-uses-c-c-prefix
   "Toggle reasoning output is bound under C-c (mode-specific), not C-x."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::toggle-reasoning-output-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::toggle-reasoning-output-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\V))))
-  (is (eq 'clawmacs::describe-variable-command
+  (is (eq 'rplaca::describe-variable-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\v))))
   (is (null (keymap-lookup *default-keymap* '(:ctrl-x #\V)))))
 
 (test default-keymap-toggle-metadata-output-uses-c-c-prefix
   "Toggle metadata output is bound under C-c (mode-specific), not C-x."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::toggle-metadata-output-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::toggle-metadata-output-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\I))))
   (is (null (keymap-lookup *default-keymap* '(:ctrl-x #\I)))))
 
 (test default-keymap-compaction-binding
   "Manual compaction is bound under the chat-mode C-c prefix."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::compact-buffer-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::compact-buffer-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\c)))))
 
 (test default-keymap-agent-selector-binding
   "Default keymap binds C-c A to the minibuffer agent selector."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::minibuffer-select-agent-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::minibuffer-select-agent-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\A)))))
 
 (test default-keymap-skill-bindings
   "Default keymap binds skill insertion and toggling under C-c."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::minibuffer-insert-skill-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::minibuffer-insert-skill-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\s))))
-  (is (eq 'clawmacs::minibuffer-toggle-skill-command
+  (is (eq 'rplaca::minibuffer-toggle-skill-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\S)))))
 
 (test default-keymap-model-selector-binding
   "Default keymap binds C-c C-m (C-c Return) to the minibuffer model selector,
 and C-c M (capital M) to its compatibility command alias."
-  (clawmacs::init-default-keymap)
+  (rplaca::init-default-keymap)
   ;; C-c C-m -> minibuffer model selector (new)
-  (is (eq 'clawmacs::minibuffer-select-model-command
+  (is (eq 'rplaca::minibuffer-select-model-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\Return))))
   ;; Some terminals send #\Newline (LF) for Enter
-  (is (eq 'clawmacs::minibuffer-select-model-command
+  (is (eq 'rplaca::minibuffer-select-model-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\Newline))))
   ;; C-c M (capital M) -> compatibility command alias
-  (is (eq 'clawmacs::select-model-command
+  (is (eq 'rplaca::select-model-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\M)))))
 
 (test default-keymap-think-selector-binding
   "Default keymap binds C-c C-r to the minibuffer think selector,
 and C-c R to its compatibility command alias."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::minibuffer-select-think-level-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::minibuffer-select-think-level-command
           (keymap-lookup *default-keymap* (list :ctrl-c (code-char 18)))))
-  (is (eq 'clawmacs::select-think-level-command
+  (is (eq 'rplaca::select-think-level-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\R)))))
 
 (test default-keymap-describe-function-binding
   "Default keymap binds C-c f to describe-function-command."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::describe-function-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::describe-function-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\f)))))
 
 (test default-keymap-appearance-bindings-preserve-neighboring-commands
   "Uppercase F opens appearance while established lowercase and global keys remain."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::customize-appearance-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::customize-appearance-command
           (keymap-lookup *default-keymap* '(:ctrl-h #\F))))
-  (is (eq 'clawmacs::customize-appearance-command
+  (is (eq 'rplaca::customize-appearance-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\F))))
-  (is (eq 'clawmacs::describe-function-command
+  (is (eq 'rplaca::describe-function-command
           (keymap-lookup *default-keymap* '(:ctrl-h #\f))))
-  (is (eq 'clawmacs::describe-function-command
+  (is (eq 'rplaca::describe-function-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\f))))
-  (is (eq 'clawmacs::toggle-tool-results-command
+  (is (eq 'rplaca::toggle-tool-results-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\t))))
-  (is (eq 'clawmacs::font-editor-command
+  (is (eq 'rplaca::font-editor-command
           (keymap-lookup *default-keymap* '(:ctrl-x #\F)))))
 
 (test default-keymap-describe-bindings-binding
   "Default keymap binds C-c b to describe-bindings-command."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::describe-bindings-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::describe-bindings-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\b)))))
 
 (test default-keymap-describe-variable-binding
   "Default keymap binds C-c v to describe-variable-command."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::describe-variable-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::describe-variable-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\v)))))
 
 (test default-keymap-describe-type-binding
   "Default keymap binds C-c T (capital T) to describe-type-command."
-  (clawmacs::init-default-keymap)
-  (is (eq 'clawmacs::describe-type-command
+  (rplaca::init-default-keymap)
+  (is (eq 'rplaca::describe-type-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\T)))))

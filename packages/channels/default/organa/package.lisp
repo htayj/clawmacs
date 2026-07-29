@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Organa model
@@ -1102,19 +1102,19 @@ Blank AFTER moves the TODO before the first headline."
 (defcommand organa-cycle-view-command
   :docstring "Cycle the current Organa buffer view.")
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-organa-cycle-todo-status :name nil)
     ((todo 'organa-todo-ref))
   (clim:with-application-frame (frame)
     (organa-cycle-todo-status (chat-frame-buffer frame) todo)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-organa-focus-dependency :name nil)
     ((dependency 'organa-dependency-ref))
   (clim:with-application-frame (frame)
     (organa-focus-todo-by-id (chat-frame-buffer frame) dependency)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-organa-describe-todo :name nil)
     ((todo 'organa-todo-ref))
   (clim:with-application-frame (frame)
@@ -1128,7 +1128,7 @@ Blank AFTER moves the TODO before the first headline."
 
 (clim:define-presentation-to-command-translator select-organa-todo
     (organa-todo-ref com-organa-cycle-todo-status
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Cycle TODO status"
      :menu t)
@@ -1137,7 +1137,7 @@ Blank AFTER moves the TODO before the first headline."
 
 (clim:define-presentation-to-command-translator describe-organa-todo
     (organa-todo-ref com-organa-describe-todo
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :describe
      :documentation "Describe TODO"
      :menu t)
@@ -1146,7 +1146,7 @@ Blank AFTER moves the TODO before the first headline."
 
 (clim:define-presentation-to-command-translator select-organa-dependency
     (organa-dependency-ref com-organa-focus-dependency
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Focus dependency target"
      :menu t)
@@ -1312,7 +1312,7 @@ Blank AFTER moves the TODO before the first headline."
   :description "Read an org-mode TODO file and return TODOs, status counts, ready work, and dependency-blocked work."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. When supplied, path is project-relative.")
+                  :description "Optional RPLACA project name. When supplied, path is project-relative.")
          (path :type "string"
                :description "Org file path, or project-relative path when project is supplied.")
          (view :type "string" :required nil
@@ -1323,7 +1323,7 @@ Blank AFTER moves the TODO before the first headline."
   :description "Add a TODO heading to an org-mode TODO file. Creates an ID property for the new TODO."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. When supplied, path is project-relative.")
+                  :description "Optional RPLACA project name. When supplied, path is project-relative.")
          (path :type "string"
                :description "Org file path, or project-relative path when project is supplied.")
          (title :type "string"
@@ -1338,7 +1338,7 @@ Blank AFTER moves the TODO before the first headline."
   :description "Set an org TODO status by ID or exact title."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. When supplied, path is project-relative.")
+                  :description "Optional RPLACA project name. When supplied, path is project-relative.")
          (path :type "string"
                :description "Org file path, or project-relative path when project is supplied.")
          (todo :type "string"
@@ -1351,7 +1351,7 @@ Blank AFTER moves the TODO before the first headline."
   :description "Move a TODO subtree before the first headline or after another TODO subtree."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. When supplied, path is project-relative.")
+                  :description "Optional RPLACA project name. When supplied, path is project-relative.")
          (path :type "string"
                :description "Org file path, or project-relative path when project is supplied.")
          (todo :type "string"
@@ -1364,7 +1364,7 @@ Blank AFTER moves the TODO before the first headline."
   :description "Persist or remove a dependency relation between two org TODOs using ID and ORGANA_DEPENDS properties."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. When supplied, path is project-relative.")
+                  :description "Optional RPLACA project name. When supplied, path is project-relative.")
          (path :type "string"
                :description "Org file path, or project-relative path when project is supplied.")
          (todo :type "string"

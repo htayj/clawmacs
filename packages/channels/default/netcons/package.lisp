@@ -1,10 +1,10 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defvar *netcons-search-url* "https://duckduckgo.com/html/"
   "Search endpoint used by netcons_search and netcons_run.")
 
 (defvar *netcons-user-agent*
-  "Clawmacs Netcons/0.1 (+https://github.com/htayj/clawmacs)"
+  "RPLACA Netcons/0.1 (+https://github.com/htayj/clawmacs)"
   "User-Agent sent by netcons HTTP requests.")
 
 (defvar *netcons-connection-timeout* 15

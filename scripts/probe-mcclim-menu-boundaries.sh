@@ -16,7 +16,7 @@ if [ "${1:-}" != "--inside-container" ]; then
       ;;
   esac
   mkdir -p "$artifact_dir"
-  export CLAWMACS_CONTAINER_DISABLE_HOST_X=1
+  export RPLACA_CONTAINER_DISABLE_HOST_X=1
   exec "$SCRIPT_DIR/guix-container.sh" --mode e2e -- \
     sh scripts/probe-mcclim-menu-boundaries.sh \
       --inside-container "$container_artifact"
@@ -82,7 +82,7 @@ done
 export DISPLAY=":$(tr -d '\r\n' < "$artifact_dir/display")"
 
 setsid --wait sbcl --noinform --disable-debugger \
-  --load "$CLAWMACS_QUICKLISP_SETUP" \
+  --load "$RPLACA_QUICKLISP_SETUP" \
   --load /workspace/scripts/probe-mcclim-menu-boundaries.lisp \
   >"$artifact_dir/app.stdout" 2>"$artifact_dir/app.stderr" &
 app_pid=$!

@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; MCP Bridge Core
@@ -23,8 +23,16 @@
   description
   input-schema)
 
-(defvar *mcp-server-configuration-path*
+(defparameter +default-mcp-server-configuration-path+
+  (merge-pathnames #P".rplaca.d/mcp-servers.json" (user-homedir-pathname))
+  "Canonical MCP server configuration path.")
+
+(defparameter +legacy-mcp-server-configuration-path+
   (merge-pathnames #P".clawmacs.d/mcp-servers.json" (user-homedir-pathname))
+  "Legacy behavioral MCP configuration, never read automatically.")
+
+(defvar *mcp-server-configuration-path*
+  +default-mcp-server-configuration-path+
   "Path to persisted MCP server configuration.")
 
 (defvar *mcp-server-registry* nil
@@ -198,11 +206,18 @@ FUNCTION must not perform MCP I/O or invoke tool/package extension code."
 
 Obsolete permission fields are ignored.  They disappear on the next save."
   (let ((registry (make-mcp-server-registry))
-        (legacy-permission-fields-p nil))
-    (when (probe-file *mcp-server-configuration-path*)
+        (legacy-permission-fields-p nil)
+        (read-path
+          (configured-migration-read-path
+           *mcp-server-configuration-path*
+           +default-mcp-server-configuration-path+
+           +legacy-mcp-server-configuration-path+
+           :label "MCP server configuration"
+           :executable-p t)))
+    (when (and read-path (probe-file read-path))
       (handler-case
           (let* ((data (api-json-decode
-                        (uiop:read-file-string *mcp-server-configuration-path*)))
+                        (uiop:read-file-string read-path)))
                  (servers (mcp-json-array-list
                            (or (mcp-json-value data :servers)
                                (mcp-json-value data :mcp_servers)))))
@@ -245,11 +260,11 @@ Obsolete permission fields are ignored.  They disappear on the next save."
                                        t))))
                 (setf (gethash name registry) config)))
             (when legacy-permission-fields-p
-              (warn "Ignoring obsolete MCP permission fields in ~A. Clawmacs tools run with the process's authority; use an external sandbox when isolation is required. The obsolete fields will be removed on the next save."
-                    *mcp-server-configuration-path*)))
+              (warn "Ignoring obsolete MCP permission fields in ~A. RPLACA tools run with the process's authority; use an external sandbox when isolation is required. The obsolete fields will be removed on the next save."
+                    read-path)))
         (error (condition)
           (warn "Failed to load MCP server configuration from ~A: ~A"
-                *mcp-server-configuration-path*
+                read-path
                 condition))))
     (setf *mcp-server-registry* registry)))
 
@@ -376,8 +391,8 @@ Obsolete permission fields are ignored.  They disappear on the next save."
   (list
    (cons :protocolVersion "2024-11-05")
    (cons :clientInfo
-         (list (cons :name "clawmacs")
-               (cons :version (clawmacs-system-version))))
+         (list (cons :name "rplaca")
+               (cons :version (rplaca-system-version))))
    (cons :capabilities (list))))
 
 (defun mcp-split-lines (text)

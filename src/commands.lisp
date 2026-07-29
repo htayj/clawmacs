@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Special Variables
@@ -28,7 +28,7 @@ or an agent keyword (e.g., :CODER) during agent tool dispatch.")
   "Process-global command table, distinct from dynamic test bindings.")
 
 (defvar *command-registry-lock*
-  (bt:make-lock "clawmacs command registry")
+  (bt:make-lock "rplaca command registry")
   "Lock guarding bounded access to the process-global command table.")
 
 (defun call-with-command-registry-lock (function &optional
@@ -222,7 +222,7 @@ UI work, and extension callbacks belong after the lock has been released."
                                             (prompts nil prompts-supplied-p)
                                             docstring)
   "Register existing function NAME as a user command."
-  (when (and *current-clawmacs-package*
+  (when (and *current-rplaca-package*
              (not (package-resource-type-allowed-p :command)))
     (return-from register-command-metadata nil))
   (let* ((lambda-list
@@ -239,7 +239,7 @@ UI work, and extension callbacks belong after the lock has been released."
                     :keybindings keys
                     :lambda-list lambda-list
                     :prompts prompts
-                    :package *current-clawmacs-package*)))
+                    :package *current-rplaca-package*)))
     (call-with-command-registry-lock
      (lambda ()
        (setf (gethash name *command-table*) metadata))
@@ -285,7 +285,7 @@ Each entry is a plist with optional keys:
   "Process-global extended-doc table, distinct from dynamic test bindings.")
 
 (defvar *extended-doc-registry-lock*
-  (bt:make-lock "clawmacs extended documentation registry")
+  (bt:make-lock "rplaca extended documentation registry")
   "Lock guarding bounded access to the process-global extended-doc table.")
 
 (defun call-with-extended-doc-registry-lock
@@ -341,7 +341,7 @@ Example:
     :see-also (buffer buffer-name add-buffer-to-ring)
     :side-effects \"Allocates a new buffer with an empty input message.\")"
   `(let ((doc
-           (when (or (null *current-clawmacs-package*)
+           (when (or (null *current-rplaca-package*)
                      (package-resource-type-allowed-p :doc))
              (register-extended-doc
               ',name
@@ -351,8 +351,8 @@ Example:
                      ,@(when returns `(:returns ,returns))
                      ,@(when see-also `(:see-also ',see-also))
                      ,@(when side-effects `(:side-effects ,side-effects)))
-               (when *current-clawmacs-package*
-                 (list :package *current-clawmacs-package*)))))))
+               (when *current-rplaca-package*
+                 (list :package *current-rplaca-package*)))))))
      doc))
 
 (defun extended-doc (symbol &optional key)

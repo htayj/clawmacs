@@ -15,7 +15,7 @@ from unittest import mock
 
 
 DRIVER_PATH = Path(__file__).with_name("gui-e2e-driver.py")
-SPEC = importlib.util.spec_from_file_location("clawmacs_gui_e2e_driver",
+SPEC = importlib.util.spec_from_file_location("rplaca_gui_e2e_driver",
                                               DRIVER_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"cannot load GUI E2E driver from {DRIVER_PATH}")
@@ -528,7 +528,7 @@ class SwitchBufferAssertionTests(unittest.TestCase):
             max(map(len, DRIVER.SWITCH_BUFFER_LARGE_DRAFT.splitlines())),
             DRIVER.SWITCH_BUFFER_LARGE_DRAFT_LINE_WIDTH - 1)
         self.assertEqual(
-            "75B23B0101D8FF16",
+            "74D712A71BAED508",
             DRIVER.SWITCH_BUFFER_LARGE_DRAFT_FINGERPRINT)
         self.assertEqual(
             DRIVER.SWITCH_BUFFER_LARGE_DRAFT_FINGERPRINT,

@@ -1,23 +1,38 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Skill Registry
 ;;; --------------------------------------------------------------------------
 
-(defvar *skill-user-directory*
+(defparameter +default-skill-user-directory+
+  (merge-pathnames #P".rplaca.d/skills/" (user-homedir-pathname))
+  "Canonical user skill directory.")
+(defparameter +legacy-skill-user-directory+
   (merge-pathnames #P".clawmacs.d/skills/" (user-homedir-pathname))
+  "Legacy executable skill directory, never scanned automatically.")
+(defvar *skill-user-directory* +default-skill-user-directory+
   "Default user skill directory.")
 
 (defvar *skill-agents-directory*
   (merge-pathnames #P".agents/skills/" (user-homedir-pathname))
   "Default AGENTS-compatible user skill directory.")
 
-(defvar *skill-system-directory*
+(defparameter +default-skill-system-directory+
+  (merge-pathnames #P".rplaca.d/skills/.system/" (user-homedir-pathname))
+  "Canonical system skill directory.")
+(defparameter +legacy-skill-system-directory+
   (merge-pathnames #P".clawmacs.d/skills/.system/" (user-homedir-pathname))
+  "Legacy executable system skill directory, never scanned automatically.")
+(defvar *skill-system-directory* +default-skill-system-directory+
   "Directory for bundled or locally installed system skills.")
 
-(defvar *skill-configuration-path*
+(defparameter +default-skill-configuration-path+
+  (merge-pathnames #P".rplaca.d/skills.json" (user-homedir-pathname))
+  "Canonical persisted skill configuration.")
+(defparameter +legacy-skill-configuration-path+
   (merge-pathnames #P".clawmacs.d/skills.json" (user-homedir-pathname))
+  "Legacy behavioral skill registry, never read automatically.")
+(defvar *skill-configuration-path* +default-skill-configuration-path+
   "Path to persisted skill enable/disable configuration.")
 
 (defvar *skill-roots* nil
@@ -188,10 +203,17 @@ Each entry is a SKILL-ROOT.")
 
 (defun load-skill-disabled-paths ()
   "Load the persisted disabled skill path set."
-  (let ((table (make-hash-table :test #'equal)))
-    (when (probe-file *skill-configuration-path*)
+  (let ((table (make-hash-table :test #'equal))
+        (read-path
+          (configured-migration-read-path
+           *skill-configuration-path*
+           +default-skill-configuration-path+
+           +legacy-skill-configuration-path+
+           :label "skill registry"
+           :executable-p t)))
+    (when (and read-path (probe-file read-path))
       (handler-case
-          (let* ((json (uiop:read-file-string *skill-configuration-path*))
+          (let* ((json (uiop:read-file-string read-path))
                  (data (cl-json:decode-json-from-string json))
                  (disabled (or (skill-lookup-json-value data "disabled")
                                (skill-lookup-json-value data "disabled_paths"))))
@@ -201,7 +223,7 @@ Each entry is a SKILL-ROOT.")
         (error (e)
           (format *error-output*
                   "~&;; Warning: error loading skill configuration ~A: ~A~%"
-                  *skill-configuration-path* e))))
+                  read-path e))))
     (setf *skill-disabled-paths* table)))
 
 (defun ensure-skill-disabled-paths-loaded ()
@@ -473,15 +495,26 @@ Each entry is a SKILL-ROOT.")
   "Return the default ordered skill root list."
   (append
    (repo-skill-roots)
-   (list (make-skill-root :path *skill-user-directory*
-                          :scope :user
-                          :source :user)
-         (make-skill-root :path *skill-agents-directory*
-                          :scope :user
-                          :source :agents)
-         (make-skill-root :path *skill-system-directory*
-                          :scope :system
-                          :source :system))
+   (append
+    (mapcar (lambda (path)
+              (make-skill-root :path path :scope :user :source :user))
+            (configured-migration-read-roots
+             *skill-user-directory*
+             +default-skill-user-directory+
+             +legacy-skill-user-directory+
+             :label "user skill directory"
+             :executable-p t))
+    (list (make-skill-root :path *skill-agents-directory*
+                           :scope :user
+                           :source :agents))
+    (mapcar (lambda (path)
+              (make-skill-root :path path :scope :system :source :system))
+            (configured-migration-read-roots
+             *skill-system-directory*
+             +default-skill-system-directory+
+             +legacy-skill-system-directory+
+             :label "system skill directory"
+             :executable-p t)))
    (remove-if-not #'skill-root-p *skill-roots*)))
 
 (defun dedupe-skill-roots (roots)

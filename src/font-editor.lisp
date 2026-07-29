@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Bitmap Font Editor
@@ -11,7 +11,7 @@
   "Default sample string shown by the bitmap font editor preview.")
 
 (defvar *font-editor-default-extract-directory*
-  #P"/tmp/clawmacs-genera-fonts/"
+  #P"/tmp/rplaca-genera-fonts/"
   "Default extraction target for proprietary Genera BDF fonts.")
 
 (defvar *font-editor-states* (make-hash-table :test #'eq)
@@ -25,7 +25,7 @@
       (or *load-truename*
           *compile-file-truename*
           *default-pathname-defaults*))))
-  "Clawmacs repository root when it can be inferred during load/compile.")
+  "RPLACA repository root when it can be inferred during load/compile.")
 
 (defun resolve-font-editor-directory (path)
   "Return PATH as a truename when it exists, otherwise NIL."
@@ -340,7 +340,7 @@
     font))
 
 (defun write-clawfont-file (font path)
-  "Write FONT to PATH in Clawmacs' native `.clawfont' format."
+  "Write FONT to PATH in RPLACA' native `.clawfont' format."
   (ensure-directories-exist path)
   (with-open-file (stream path
                           :direction :output
@@ -359,7 +359,7 @@
     (let ((*read-eval* nil))
       (destructuring-bind (tag payload) (read stream nil nil)
         (unless (eq tag :clawfont)
-          (error "Unsupported Clawmacs font file: ~A" path))
+          (error "Unsupported RPLACA font file: ~A" path))
         (deserialize-bitmap-font payload)))))
 
 (defun split-string-on-page (text)

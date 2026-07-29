@@ -1,23 +1,23 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
-;;; Safe in-place Clawmacs reload
+;;; Safe in-place RPLACA reload
 ;;; --------------------------------------------------------------------------
 
 (defparameter *safe-reload-preflight-timeout* 60
   "Default timeout, in seconds, for the isolated safe reload preflight worker.")
 
-(defparameter *safe-reload-worker-marker* "CLAWMACS-SAFE-RELOAD-RESULT "
+(defparameter *safe-reload-worker-marker* "RPLACA-SAFE-RELOAD-RESULT "
   "Marker prefix used to locate the isolated reload worker's Lisp data result.")
 
 (defparameter *safe-reload-visible-summary-limit* 240
   "Maximum characters of result summary shown in visible reload notifications.")
 
-(defvar *safe-reload-lock* (bt:make-lock "clawmacs safe reload")
-  "Process-local nonblocking lock guarding in-place Clawmacs reloads.")
+(defvar *safe-reload-lock* (bt:make-lock "rplaca safe reload")
+  "Process-local nonblocking lock guarding in-place RPLACA reloads.")
 
 (defvar *safe-reload-condition*
-  (bt:make-condition-variable :name "clawmacs safe reload")
+  (bt:make-condition-variable :name "rplaca safe reload")
   "Condition variable for exact request/worker handoff under the reload lock.")
 
 (defvar *safe-reload-running-p* nil
@@ -36,7 +36,7 @@ NIL queues a CLIM window-manager event to the request's top-level sheet.  An
 override receives the SAFE-RELOAD-REQUEST and must preserve frame ownership.")
 
 (defvar *safe-reload-preflight-function* nil
-  "Function used by CLAWMACS-SAFE-RELOAD-PREFLIGHT.
+  "Function used by RPLACA-SAFE-RELOAD-PREFLIGHT.
 The value is dynamically replaceable by tests.  NIL means use the built-in
 isolated SBCL worker preflight implementation.")
 
@@ -44,10 +44,10 @@ isolated SBCL worker preflight implementation.")
   "Function used for the live in-place reload after preflight succeeds.
 The value is dynamically replaceable by tests and is called with :BUFFER and
 :SOURCE-ROOT.  NIL means use ASDF:LOAD-SYSTEM on the current image without
-reinitializing Clawmacs runtime state.")
+reinitializing RPLACA runtime state.")
 
 (defstruct safe-reload-result
-  "Result object returned by Clawmacs safe reload entry points."
+  "Result object returned by RPLACA safe reload entry points."
   status
   stage
   summary
@@ -75,7 +75,7 @@ reinitializing Clawmacs runtime state.")
   worker
   preflight)
 
-(defclass clawmacs-safe-reload-completion-event (clim:window-manager-event)
+(defclass rplaca-safe-reload-completion-event (clim:window-manager-event)
   ((request :initarg :request
             :reader safe-reload-completion-event-request)))
 
@@ -119,7 +119,7 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
     (funcall function)))
 
 (defvar *message-help-runtime-lock*
-  (bt:make-lock "clawmacs message help runtime")
+  (bt:make-lock "rplaca message help runtime")
   "Lock guarding active independent message-help frame reservations.")
 
 (defvar *message-help-runtime-reservations* (make-hash-table :test #'eq)
@@ -146,12 +146,12 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
     (bt:with-lock-held (*message-help-runtime-lock*)
       (remhash token *message-help-runtime-reservations*))))
 
-(defun clawmacs-reload-result-ok-p (result)
+(defun rplaca-reload-result-ok-p (result)
   "Return true when RESULT represents a completed safe reload."
   (and (typep result 'safe-reload-result)
        (eq :ok (safe-reload-result-status result))))
 
-(defun clawmacs-reload-result-summary (result)
+(defun rplaca-reload-result-summary (result)
   "Return the human-readable summary string for a safe reload RESULT."
   (if (typep result 'safe-reload-result)
       (or (safe-reload-result-summary result) "")
@@ -176,18 +176,18 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
     (max 1 value)))
 
 (defun safe-reload-source-root (&optional source-root)
-  "Return the Clawmacs source root used by worker and live reloads."
+  "Return the RPLACA source root used by worker and live reloads."
   (uiop:ensure-directory-pathname
    (truename
     (or source-root
-        (asdf:system-source-directory :clawmacs)
+        (asdf:system-source-directory :rplaca)
         "."))))
 
 (defun safe-reload-setup-candidates ()
   "Return candidate Lisp dependency setup files for reload workers."
   (remove nil
-          (list (uiop:getenv "CLAWMACS_QUICKLISP_SETUP")
-                (uiop:getenv "CLAWMACS_ULTRALISP_SETUP")
+          (list (uiop:getenv "RPLACA_QUICKLISP_SETUP")
+                (uiop:getenv "RPLACA_ULTRALISP_SETUP")
                 (namestring (merge-pathnames #P"quicklisp/setup.lisp"
                                              (user-homedir-pathname))))))
 
@@ -200,13 +200,13 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
           (return (namestring (truename path))))))))
 
 (defun safe-reload-asd-path (source-root)
-  "Return SOURCE-ROOT's clawmacs.asd path when present."
-  (let ((path (merge-pathnames #P"clawmacs.asd"
+  "Return SOURCE-ROOT's rplaca.asd path when present."
+  (let ((path (merge-pathnames #P"rplaca.asd"
                                (uiop:ensure-directory-pathname source-root))))
     (and (probe-file path) path)))
 
 (defun safe-reload-load-asd (source-root)
-  "Reload SOURCE-ROOT's clawmacs.asd when present."
+  "Reload SOURCE-ROOT's rplaca.asd when present."
   (let ((asd-path (safe-reload-asd-path source-root)))
     (when asd-path
       (asdf:load-asd asd-path))))
@@ -214,7 +214,7 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
 (defun safe-reload-worker-form (source-root marker)
   "Return the Lisp form evaluated by the isolated reload preflight worker."
   (format nil
-          "(let ((*print-case* :downcase)~%      (*print-circle* t)~%      (*print-escape* t)~%      (*print-pretty* t)~%      (*print-readably* nil)~%      (exit-code 0))~%  (handler-case~%      (let* ((source-root (truename ~S))~%             (asd-path (merge-pathnames #P\"clawmacs.asd\" source-root)))~%        (pushnew source-root asdf:*central-registry* :test #'equal)~%        (when (probe-file asd-path)~%          (asdf:load-asd asd-path))~%        (let ((ql-package (find-package :ql)))~%          (when ql-package~%            (multiple-value-bind (quickload present-p)~%                (find-symbol \"QUICKLOAD\" ql-package)~%              (when (and present-p (fboundp quickload))~%                (funcall quickload :clawmacs :silent t)))))~%        (asdf:load-system :clawmacs :force t)~%        (format t \"~~&~A~~S~~%\"~%                (list :status :ok~%                      :summary \"Preflight reload succeeded.\")))~%    (error (condition)~%      (setf exit-code 1)~%      (format t \"~~&~A~~S~~%\"~%              (list :status :preflight-failed~%                    :summary (format nil \"Preflight reload failed: ~~A\" condition)~%                    :condition-type (format nil \"~~S\" (type-of condition))~%                    :condition-message (format nil \"~~A\" condition)))))~%  (uiop:quit exit-code))"
+          "(let ((*print-case* :downcase)~%      (*print-circle* t)~%      (*print-escape* t)~%      (*print-pretty* t)~%      (*print-readably* nil)~%      (exit-code 0))~%  (handler-case~%      (let* ((source-root (truename ~S))~%             (asd-path (merge-pathnames #P\"rplaca.asd\" source-root)))~%        (pushnew source-root asdf:*central-registry* :test #'equal)~%        (when (probe-file asd-path)~%          (asdf:load-asd asd-path))~%        (let ((ql-package (find-package :ql)))~%          (when ql-package~%            (multiple-value-bind (quickload present-p)~%                (find-symbol \"QUICKLOAD\" ql-package)~%              (when (and present-p (fboundp quickload))~%                (funcall quickload :rplaca :silent t)))))~%        (asdf:load-system :rplaca :force t)~%        (format t \"~~&~A~~S~~%\"~%                (list :status :ok~%                      :summary \"Preflight reload succeeded.\")))~%    (error (condition)~%      (setf exit-code 1)~%      (format t \"~~&~A~~S~~%\"~%              (list :status :preflight-failed~%                    :summary (format nil \"Preflight reload failed: ~~A\" condition)~%                    :condition-type (format nil \"~~S\" (type-of condition))~%                    :condition-message (format nil \"~~A\" condition)))))~%  (uiop:quit exit-code))"
           (namestring source-root)
           marker
           marker))
@@ -295,7 +295,7 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
    :source-root source-root))
 
 (defun %safe-reload-run-preflight-worker (&key timeout source-root)
-  "Run the isolated worker that proves Clawmacs can be loaded from SOURCE-ROOT."
+  "Run the isolated worker that proves RPLACA can be loaded from SOURCE-ROOT."
   (let* ((started-at (safe-reload-now-seconds))
          (root (safe-reload-source-root source-root))
          (seconds (safe-reload-normalize-timeout timeout))
@@ -323,8 +323,8 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
 
 (defun safe-reload-refresh-runtime-registrations (buffer)
   "Refresh non-destructive runtime registrations after a live source reload."
-  ;; Do not call INITIALIZE-CLAWMACS-RUNTIME, RESET-INTERACTION-STATE, or
-  ;; CLAWMACS-MAIN here.  These targeted refreshes make reloaded commands,
+  ;; Do not call INITIALIZE-RPLACA-RUNTIME, RESET-INTERACTION-STATE, or
+  ;; RPLACA-MAIN here.  These targeted refreshes make reloaded commands,
   ;; tools, keybindings, and package entrypoints visible while preserving the
   ;; user's buffers, sessions, frame, and compose draft.
   (when (fboundp 'init-tools)
@@ -338,7 +338,7 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
       (funcall 'reload-active-packages :buffer buffer))))
 
 (defun %safe-reload-live-reload (&key buffer source-root)
-  "Reload Clawmacs in the current image without resetting application state."
+  "Reload RPLACA in the current image without resetting application state."
   (let ((started-at (safe-reload-now-seconds))
         (stdout (make-string-output-stream))
         (stderr (make-string-output-stream))
@@ -348,7 +348,7 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
               (*trace-output* stderr)
               (*error-output* stderr))
           (safe-reload-load-asd root)
-          (asdf:load-system :clawmacs :force t)
+          (asdf:load-system :rplaca :force t)
           (safe-reload-refresh-runtime-registrations buffer)
           (make-safe-reload-result
            :status :ok
@@ -391,8 +391,8 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
                :source-root source-root)
       (%safe-reload-live-reload :buffer buffer :source-root source-root)))
 
-(defun clawmacs-safe-reload-preflight (&key timeout source-root)
-  "Preflight a Clawmacs reload in an isolated worker and return a result.
+(defun rplaca-safe-reload-preflight (&key timeout source-root)
+  "Preflight a RPLACA reload in an isolated worker and return a result.
 The current Lisp image is not mutated by this function."
   (let ((started-at (safe-reload-now-seconds)))
     (handler-case
@@ -411,7 +411,7 @@ The current Lisp image is not mutated by this function."
   (when (typep result 'safe-reload-result)
     (append
      (list :status (safe-reload-result-status result)
-           :ok (clawmacs-reload-result-ok-p result)
+           :ok (rplaca-reload-result-ok-p result)
            :stage (safe-reload-result-stage result)
            :summary (safe-reload-result-summary result))
      (when (safe-reload-result-duration-seconds result)
@@ -448,7 +448,7 @@ The current Lisp image is not mutated by this function."
 
 (defun safe-reload-start-notification-text ()
   "Return the visible notification shown before reload preflight starts."
-  "[Clawmacs safe reload started: preflighting updated source...]")
+  "[RPLACA safe reload started: preflighting updated source...]")
 
 (defun notify-safe-reload-started (buffer)
   "Insert a visible start notification for BUFFER."
@@ -457,7 +457,7 @@ The current Lisp image is not mutated by this function."
 
 (defun safe-reload-current-chat-frame ()
   "Return the currently active chat frame, when running under McCLIM."
-  (let ((class (find-class 'clawmacs-chat-frame nil))
+  (let ((class (find-class 'rplaca-chat-frame nil))
         (frame clim:*application-frame*))
     (and class (typep frame class) frame)))
 
@@ -486,7 +486,7 @@ The current Lisp image is not mutated by this function."
   "Return RESULT summary text suitable for the transcript surface."
   (let* ((summary (string-trim '(#\Space #\Tab #\Newline #\Return)
                                (safe-reload-one-line-summary
-                                (clawmacs-reload-result-summary result))))
+                                (rplaca-reload-result-summary result))))
          (limit *safe-reload-visible-summary-limit*))
     (cond
       ((<= (length summary) limit)
@@ -501,17 +501,17 @@ The current Lisp image is not mutated by this function."
     (case (and (typep result 'safe-reload-result)
                (safe-reload-result-status result))
       (:ok
-       (format nil "[Clawmacs safe reload succeeded: ~A]" summary))
+       (format nil "[RPLACA safe reload succeeded: ~A]" summary))
       (:busy
-       (format nil "[Clawmacs safe reload busy: ~A]" summary))
+       (format nil "[RPLACA safe reload busy: ~A]" summary))
       (:refused
-       (format nil "[Clawmacs safe reload refused: ~A]" summary))
+       (format nil "[RPLACA safe reload refused: ~A]" summary))
       (:preflight-failed
-       (format nil "[Clawmacs safe reload failed during preflight: ~A]" summary))
+       (format nil "[RPLACA safe reload failed during preflight: ~A]" summary))
       (:live-failed
-       (format nil "[Clawmacs safe reload failed during live reload: ~A]" summary))
+       (format nil "[RPLACA safe reload failed during live reload: ~A]" summary))
       (t
-       (format nil "[Clawmacs safe reload failed: ~A]" summary)))))
+       (format nil "[RPLACA safe reload failed: ~A]" summary)))))
 
 (defun maybe-notify-safe-reload-buffer (buffer result notify-p)
   "Insert RESULT as a visible system message when requested."
@@ -529,7 +529,7 @@ The current Lisp image is not mutated by this function."
   (make-safe-reload-result
    :status :busy
    :stage :lock
-   :summary "Another Clawmacs safe reload is already running."))
+   :summary "Another RPLACA safe reload is already running."))
 
 (defun safe-reload-buffer-runtime-active-p (buffer)
   "Return true when BUFFER owns or awaits provider/tool/OAuth runtime work."
@@ -648,10 +648,10 @@ attempting a reload from incomplete state."
 
 (defun run-safe-reload-under-lock (buffer timeout source-root notify-p started-at)
   "Run preflight and, if safe, the live reload while the reload lock is held."
-  (let ((preflight (clawmacs-safe-reload-preflight
+  (let ((preflight (rplaca-safe-reload-preflight
                     :timeout timeout
                     :source-root source-root)))
-    (if (clawmacs-reload-result-ok-p preflight)
+    (if (rplaca-reload-result-ok-p preflight)
         (let ((live (handler-case
                         (call-safe-reload-live-function buffer source-root)
                       (error (condition)
@@ -662,7 +662,7 @@ attempting a reload from incomplete state."
                                                       :preflight preflight
                                                       :source-root source-root)))))
           (finalize-safe-reload-result
-           (if (clawmacs-reload-result-ok-p live)
+           (if (rplaca-reload-result-ok-p live)
                (safe-reload-complete-result preflight live started-at)
                (safe-reload-live-failed-result live preflight))
            buffer
@@ -777,7 +777,7 @@ before this check and is observed, or sees the installed request and refuses."
       (error "Safe reload frame is no longer grafted."))
     (clim:queue-event
      sheet
-     (make-instance 'clawmacs-safe-reload-completion-event
+     (make-instance 'rplaca-safe-reload-completion-event
                     :sheet sheet
                     :request request))
     t))
@@ -799,7 +799,7 @@ before this check and is observed, or sees the installed request and refuses."
   "Run REQUEST's isolated preflight and publish only immutable completion."
   (when (safe-reload-await-recorded-worker request)
     (let ((preflight
-            (clawmacs-safe-reload-preflight
+            (rplaca-safe-reload-preflight
              :timeout (safe-reload-request-timeout request)
              :source-root (safe-reload-request-source-root request))))
       (when (safe-reload-publish-preflight request preflight)
@@ -818,17 +818,17 @@ before this check and is observed, or sees the installed request and refuses."
   (make-safe-reload-result
    :status :refused
    :stage :frame
-   :summary "Interactive safe reload requires a running Clawmacs frame."))
+   :summary "Interactive safe reload requires a running RPLACA frame."))
 
 (defun safe-reload-live-result-after-preflight (request preflight)
   "Apply PREFLIGHT at the frame boundary and return the final reload result."
   (let* ((buffer (safe-reload-request-buffer request))
          (source-root (safe-reload-request-source-root request))
          (started-at (safe-reload-request-started-at request))
-         (activity (and (clawmacs-reload-result-ok-p preflight)
+         (activity (and (rplaca-reload-result-ok-p preflight)
                         (safe-reload-process-runtime-activity buffer))))
     (cond
-      ((not (clawmacs-reload-result-ok-p preflight))
+      ((not (rplaca-reload-result-ok-p preflight))
        preflight)
       (activity
        (let ((result (safe-reload-refused-result activity)))
@@ -846,7 +846,7 @@ before this check and is observed, or sees the installed request and refuses."
                     started-at
                     :preflight preflight
                     :source-root source-root)))))
-         (if (clawmacs-reload-result-ok-p live)
+         (if (rplaca-reload-result-ok-p live)
              (safe-reload-complete-result preflight live started-at)
              (safe-reload-live-failed-result live preflight)))))))
 
@@ -885,7 +885,7 @@ before this check and is observed, or sees the installed request and refuses."
 
 (defmethod clim:handle-event
     ((sheet clime:top-level-sheet-mixin)
-     (event clawmacs-safe-reload-completion-event))
+     (event rplaca-safe-reload-completion-event))
   "Apply safe reload completion only at the CLIM application event boundary."
   (declare (ignore sheet))
   (let ((request (safe-reload-completion-event-request event)))
@@ -951,7 +951,7 @@ before this check and is observed, or sees the installed request and refuses."
         (let ((worker
                 (make-safe-reload-preflight-thread
                  (lambda () (run-safe-reload-preflight-worker request))
-                 "clawmacs-safe-reload-preflight")))
+                 "rplaca-safe-reload-preflight")))
           (unless worker
             (error "Safe reload worker constructor returned NIL."))
           (safe-reload-record-worker request worker)
@@ -968,18 +968,18 @@ before this check and is observed, or sees the installed request and refuses."
               t)
           (finish-safe-reload-request request))))))
 
-(defun clawmacs-safe-reload (&key buffer timeout source-root (notify-p t))
-  "Safely reload updated Clawmacs source in-place.
+(defun rplaca-safe-reload (&key buffer timeout source-root (notify-p t))
+  "Safely reload updated RPLACA source in-place.
 The process must first be quiescent: no buffer runtime owner, provider/tool/OAuth
 activity, interop turn, or subagent worker may be active.  An isolated worker
-then proves that Clawmacs can load from SOURCE-ROOT.  The live image is reloaded
+then proves that RPLACA can load from SOURCE-ROOT.  The live image is reloaded
 only when that preflight returns :OK.  Accepted live reload is a synchronous,
 explicit development operation and briefly blocks its caller.  Refusals and
 all preflight, busy, and live-reload failures are returned as SAFE-RELOAD-RESULT
 objects rather than signaled to the caller."
   (run-synchronous-safe-reload-request buffer timeout source-root notify-p))
 
-(defun safe-reload-clawmacs-command (buffer)
+(defun safe-reload-rplaca-command (buffer)
   "Start a managed safe reload from a user command when quiescent.
 
 The isolated preflight runs off the CLIM command process.  Its completion is
@@ -987,4 +987,4 @@ marshalled back as an application event; only the accepted live ASDF reload is
 synchronous and briefly blocks the UI at that quiescent frame boundary.  Unsafe
 activity is visibly refused before the start notification or either phase."
   (start-interactive-safe-reload buffer))
-(defcommand safe-reload-clawmacs-command)
+(defcommand safe-reload-rplaca-command)

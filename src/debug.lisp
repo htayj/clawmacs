@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Debug Logging
@@ -21,7 +21,7 @@ output, and other low-level details useful for post-mortem debugging.")
 (defvar *debug-event-sequence* 0
   "Monotonic sequence number for structured E2E debug events.")
 
-(defvar *debug-event-lock* (bt:make-lock "clawmacs e2e debug events")
+(defvar *debug-event-lock* (bt:make-lock "rplaca e2e debug events")
   "Lock guarding structured debug event sequence numbers.")
 
 (defun env-truthy-p (name)
@@ -38,8 +38,8 @@ output, and other low-level details useful for post-mortem debugging.")
 (defun e2e-events-enabled-p ()
   "Return true when structured GUI E2E debug events should be written."
   (or *e2e-events-enabled-override*
-      (env-truthy-p "CLAWMACS_GUI_E2E")
-      (env-truthy-p "CLAWMACS_E2E_EVENTS")))
+      (env-truthy-p "RPLACA_GUI_E2E")
+      (env-truthy-p "RPLACA_E2E_EVENTS")))
 
 (defun debug-log (buf text)
   "Insert TEXT as a debug message in BUF when *debug-mode* is enabled.

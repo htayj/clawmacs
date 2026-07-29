@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Fresh McCLIM Chat Interface
@@ -146,21 +146,21 @@
        (getf object :dashboard-buffer)
        (getf object :entry)))
 
-(defclass clawmacs-chat-redisplay-event (clim:window-manager-event)
+(defclass rplaca-chat-redisplay-event (clim:window-manager-event)
   ())
 
-(defclass clawmacs-chat-appearance-activation-event (clim:window-manager-event)
+(defclass rplaca-chat-appearance-activation-event (clim:window-manager-event)
   ((candidate :initarg :candidate :reader chat-appearance-activation-event-candidate))
   (:documentation
    "One immutable appearance request delivered to the owning CLIM frame process."))
 
-(defclass clawmacs-chat-appearance-catalog-event (clim:window-manager-event)
+(defclass rplaca-chat-appearance-catalog-event (clim:window-manager-event)
   ((reservation :initarg :reservation
                 :reader chat-appearance-catalog-event-reservation)
    (token :initarg :token :reader chat-appearance-catalog-event-token))
   (:documentation "An admitted package appearance catalog transition."))
 
-(defclass clawmacs-chat-font-inventory-refresh-event (clim:window-manager-event)
+(defclass rplaca-chat-font-inventory-refresh-event (clim:window-manager-event)
   ()
   (:documentation
    "One explicit port-font inventory refresh delivered to the owning frame process."))
@@ -206,16 +206,16 @@ instead of parking behind Safe Reload and deadlocking a frame barrier."
   ;; so a frame is either absent from the complete transaction or joins with
   ;; its exact committed catalog after that transaction finishes.
   (bt:with-lock-held (*package-appearance-frame-batch-lock*)
-    (bt:with-lock-held (clawmacs::*package-appearance-catalog-lock*)
+    (bt:with-lock-held (rplaca::*package-appearance-catalog-lock*)
       (bt:with-lock-held (*package-appearance-live-chat-frames-lock*)
         (setf (slot-value frame 'appearance-catalog)
-              (clawmacs::package-appearance-current-catalog-under-lock))
+              (rplaca::package-appearance-current-catalog-under-lock))
         (pushnew frame *package-appearance-live-chat-frames* :test #'eq))))
   frame)
 
 (defun unregister-package-appearance-live-chat-frame (frame)
   (bt:with-lock-held (*package-appearance-frame-batch-lock*)
-    (bt:with-lock-held (clawmacs::*package-appearance-catalog-lock*)
+    (bt:with-lock-held (rplaca::*package-appearance-catalog-lock*)
       (bt:with-lock-held (*package-appearance-live-chat-frames-lock*)
         (setf *package-appearance-live-chat-frames*
               (remove frame *package-appearance-live-chat-frames* :test #'eq)))))
@@ -224,11 +224,11 @@ instead of parking behind Safe Reload and deadlocking a frame barrier."
 (defparameter *chat-transcript-follow-tail* t
   "When non-nil, the chat transcript scrolls to the bottom after redisplay.")
 
-(clim:define-command-table clawmacs-chat-control-menu
+(clim:define-command-table rplaca-chat-control-menu
   :menu (("Stop Response" :command com-chat-stop-response
           :documentation "Stop the active streaming response.")))
 
-(clim:define-command-table clawmacs-chat-view-menu
+(clim:define-command-table rplaca-chat-view-menu
   :menu (("Toggle Tool Results"
           :command com-chat-toggle-tool-results
           :documentation "Toggle tool result messages.")
@@ -242,33 +242,33 @@ instead of parking behind Safe Reload and deadlocking a frame barrier."
           :command com-chat-toggle-debug-mode
           :documentation "Toggle API debug messages.")))
 
-(clim:define-command-table clawmacs-chat-skills-menu
+(clim:define-command-table rplaca-chat-skills-menu
   :menu (("Toggle Skill..."
           :command com-chat-open-skill-selector
           :documentation
           "Enable or disable a skill through the presentation-based minibuffer.")))
 
-(clim:define-command-table clawmacs-chat-packages-menu
+(clim:define-command-table rplaca-chat-packages-menu
   :menu (("Open Package Dashboard..."
           :command com-chat-open-package-dashboard
           :documentation
           "Open the presentation-based package dashboard for this chat.")))
 
-(clim:define-command-table clawmacs-chat-effort-menu
+(clim:define-command-table rplaca-chat-effort-menu
   :menu (("Select Think Level..."
           :command com-chat-open-effort-selector
           :documentation
           "Choose reasoning effort through the presentation-based minibuffer.")))
 
-(clim:define-command-table clawmacs-chat-system-menu
+(clim:define-command-table rplaca-chat-system-menu
   :menu (("Safe Reload"
           :command com-chat-safe-reload
-          :documentation "Safely reload updated Clawmacs source in place.")
+          :documentation "Safely reload updated RPLACA source in place.")
          ("Recurse"
           :command com-chat-recurse
-          :documentation "Open a fresh nested Clawmacs frame in a new process.")))
+          :documentation "Open a fresh nested RPLACA frame in a new process.")))
 
-(clim:define-command-table clawmacs-chat-appearance-menu
+(clim:define-command-table rplaca-chat-appearance-menu
   :menu (("Customize Appearance..."
           :command com-chat-customize-appearance
           :documentation "Open the frame-local staged appearance editor.")
@@ -294,7 +294,7 @@ instead of parking behind Safe Reload and deadlocking a frame barrier."
           :command com-chat-refresh-font-inventory
           :documentation "Queue a frame-local port font inventory refresh.")))
 
-(clim:define-command-table clawmacs-chat-menu-bar
+(clim:define-command-table rplaca-chat-menu-bar
   :menu (("Stop"
           :command com-chat-stop-response
           :documentation "Stop the active streaming response.")
@@ -318,7 +318,7 @@ instead of parking behind Safe Reload and deadlocking a frame barrier."
           :documentation "Open the staged appearance editor.")
          ("Help"
           :command com-chat-open-manual
-          :documentation "Open the Clawmacs manual.")))
+          :documentation "Open the RPLACA manual.")))
 
 (defun chat-message-kind (msg)
   "Return MSG's high-level display kind."
@@ -495,7 +495,7 @@ instead of parking behind Safe Reload and deadlocking a frame barrier."
      (send-message buf)
      t)))
 
-(clim:define-application-frame clawmacs-message-help-frame ()
+(clim:define-application-frame rplaca-message-help-frame ()
   ((message :initarg :message
             :reader help-frame-message))
   (:panes
@@ -515,12 +515,12 @@ instead of parking behind Safe Reload and deadlocking a frame barrier."
 
 (defun make-message-help-worker-thread (function)
   "Create the worker that owns one independent message-help frame."
-  (bt:make-thread function :name "clawmacs message metadata"))
+  (bt:make-thread function :name "rplaca message metadata"))
 
 (defun make-message-help-frame (msg)
   "Construct one disowned message-help application frame for MSG."
   (clim:make-application-frame
-   'clawmacs-message-help-frame
+   'rplaca-message-help-frame
    :message msg
    :pretty-name "Message Metadata"))
 
@@ -576,7 +576,7 @@ instead of parking behind Safe Reload and deadlocking a frame barrier."
          :condition (format nil "~A" condition))
         nil))))
 
-(clim:define-command-table clawmacs-chat-compose-editing-table)
+(clim:define-command-table rplaca-chat-compose-editing-table)
 
 (defun chat-compose-drei-command-symbol (name)
   "Return Drei's built-in command named NAME.
@@ -588,16 +588,16 @@ the public ESA and DREI-SYNTAX protocols."
       (error "This McCLIM does not provide the Drei command ~A." name)))
 
 (defun install-chat-compose-drei-keybindings ()
-  "Install Clawmacs compose bindings in its application-owned command table.
+  "Install RPLACA compose bindings in its application-owned command table.
 
   Drei already binds the usual C-j representation, but some backends deliver it
-  as Control-Newline.  The compose pane also preserves the Clawmacs/Emacs-style
+  as Control-Newline.  The compose pane also preserves the RPLACA/Emacs-style
   C-w and C-Backspace editing bindings.  Do not modify Drei's process-global
   INDENT-TABLE or DELETION-TABLE: `additional-command-tables' scopes these
-  bindings to `clawmacs-chat-compose-pane'."
+  bindings to `rplaca-chat-compose-pane'."
   (esa:set-key (chat-compose-drei-command-symbol
                 "COM-NEWLINE-AND-INDENT")
-               'clawmacs-chat-compose-editing-table
+               'rplaca-chat-compose-editing-table
                '((#\Newline :control)))
   (let ((backward-kill-word
           (chat-compose-drei-command-symbol "COM-BACKWARD-KILL-WORD")))
@@ -605,7 +605,7 @@ the public ESA and DREI-SYNTAX protocols."
                        (#\Backspace :control)
                        (#\Rubout :control)))
       (esa:set-key (list backward-kill-word clim:*numeric-argument-marker*)
-                   'clawmacs-chat-compose-editing-table
+                   'rplaca-chat-compose-editing-table
                    (list gesture)))))
 
 (install-chat-compose-drei-keybindings)
@@ -745,7 +745,7 @@ argument zero is Drei's documented kill-from-point-to-line-start operation."
   "Return the CLIM gesture the compose Drei command processor should see.
 
 This is a narrow backend-normalization adapter for `drei-gadget-pane'.  It does
-not decide which Clawmacs command to run; it only preserves standard CLIM key
+not decide which RPLACA command to run; it only preserves standard CLIM key
 event information so Drei's command table machinery can resolve editor-table
 and frame-table bindings."
   (let* ((key-name (clim:keyboard-event-key-name event))
@@ -806,14 +806,14 @@ pane redraws and value callbacks propagate."
                   (esa:process-gesture pane gesture))))))))
 
 (defun chat-compose-application-input-active-p (&optional buffer)
-  "Return true when Clawmacs modal input should receive compose keystrokes."
+  "Return true when RPLACA modal input should receive compose keystrokes."
   (or *minibuffer-active*
       *session-tree-selector-active*
       (openai-oauth-login-pending-p)
       (and buffer (buffer-user-input-pending buffer))))
 
 (defun chat-key-name-keyword (key-name)
-  "Return the Clawmacs key keyword corresponding to CLIM KEY-NAME."
+  "Return the RPLACA key keyword corresponding to CLIM KEY-NAME."
   (case key-name
     ((:left :right :up :down :home :end :page-up :page-down :tab :backspace)
      key-name)
@@ -826,7 +826,7 @@ pane redraws and value callbacks propagate."
     (t key-name)))
 
 (defun chat-control-key-character (char)
-  "Return CHAR encoded as the control character expected by Clawmacs keymaps."
+  "Return CHAR encoded as the control character expected by RPLACA keymaps."
   (cond
     ((null char) nil)
     ((char-equal char #\Space) (code-char 0))
@@ -1009,7 +1009,7 @@ lets modal navigation avoid materializing a large compose draft on every key."
                        (char= base-key #\Newline)))))))
 
 (defun dispatch-chat-compose-event-to-buffer (pane event)
-  "Dispatch EVENT through Clawmacs' buffer key handler and refresh the frame."
+  "Dispatch EVENT through RPLACA' buffer key handler and refresh the frame."
   (let* ((frame (clim:pane-frame pane))
          (raw-key (chat-compose-event-key event))
          (key (cond
@@ -1028,17 +1028,17 @@ lets modal navigation avoid materializing a large compose draft on every key."
        :compose-pane pane
        :state-only (chat-compose-state-only-modal-key-p key)))))
 
-(defclass clawmacs-chat-compose-pane (drei:drei-gadget-pane)
+(defclass rplaca-chat-compose-pane (drei:drei-gadget-pane)
   ()
   (:metaclass esa-utils:modual-class)
-  (:documentation "Drei-backed chat compose pane with Clawmacs frame commands."))
+  (:documentation "Drei-backed chat compose pane with RPLACA frame commands."))
 
 (defmethod drei-syntax:additional-command-tables append
-    ((pane clawmacs-chat-compose-pane) (table clim:command-table))
+    ((pane rplaca-chat-compose-pane) (table clim:command-table))
   "Prefer FRAME's application commands, then compose-specific editing keys.
 
 Drei gadgets put `exclusive-gadget-table' before their inherited frame table.
-That table owns M-x for Drei's blocking `accept' workflow, while Clawmacs uses
+That table owns M-x for Drei's blocking `accept' workflow, while RPLACA uses
 its frame command to activate the application's non-blocking minibuffer.  Use
 Drei's public application-extension hook to put the frame-local table first;
 the inherited copy remains harmless and ordinary editing keys stay in Drei
@@ -1047,7 +1047,7 @@ because they are intentionally absent from the frame table."
   (let ((frame (ignore-errors (clim:pane-frame pane))))
     (append (when frame
               (list (clim:frame-command-table frame)))
-            '(clawmacs-chat-compose-editing-table))))
+            '(rplaca-chat-compose-editing-table))))
 
 (defun chat-compose-meta-prefix-event (pane event)
   "Return EVENT as a Meta-modified key press for an ESC prefix."
@@ -1061,19 +1061,19 @@ because they are intentionally absent from the frame table."
                                           clim:+meta-key+)))
 
 (defmethod clim:handle-event :before
-    ((pane clawmacs-chat-compose-pane) (event clim:pointer-event))
+    ((pane rplaca-chat-compose-pane) (event clim:pointer-event))
   "Invalidate compose/model synchronization before Drei handles a pointer."
   (declare (ignore event))
   (let ((frame (clim:pane-frame pane)))
-    (when (typep frame 'clawmacs-chat-frame)
+    (when (typep frame 'rplaca-chat-frame)
       (setf (chat-frame-compose-synchronized-buffer frame) nil))))
 
 (defmethod clim:handle-event :around
-    ((pane clawmacs-chat-compose-pane) (event clim:key-press-event))
+    ((pane rplaca-chat-compose-pane) (event clim:key-press-event))
   "Normalize only key forms that upstream Drei cannot process directly.
 
 Ordinary editing and application keys go through Drei's own HANDLE-EVENT and
-its inherited frame command table.  Direct dispatch remains only for Clawmacs'
+its inherited frame command table.  Direct dispatch remains only for RPLACA'
 modal input overlays, ESC-as-Meta, and modified key events that
 ESA:CONVERT-TO-GESTURE currently drops.  Standalone modifier presses are
 consumed explicitly so a retained prefix never depends on backend-specific
@@ -1083,7 +1083,7 @@ modifier-event conversion."
            (lambda ()
              (let ((buf (and frame (chat-frame-buffer frame))))
                ;; A non-modal Drei gesture may edit text or move point/mark.
-               ;; Modal keys are consumed by Clawmacs and leave Drei intact.
+               ;; Modal keys are consumed by RPLACA and leave Drei intact.
                (when (and buf
                           (not (chat-compose-application-input-active-p buf)))
                  (setf (chat-frame-compose-synchronized-buffer frame) nil))
@@ -1120,7 +1120,7 @@ modifier-event conversion."
                   (process-chat-compose-drei-event pane event :redisplay t))
                  (t (call-next-method))))))
          (result
-           (if (typep frame 'clawmacs-chat-frame)
+           (if (typep frame 'rplaca-chat-frame)
                (call-chat-frame-ui-action-safely
                 frame "compose key dispatch" dispatch)
                (funcall dispatch))))
@@ -1128,13 +1128,13 @@ modifier-event conversion."
       (emit-chat-frame-e2e-snapshot frame :reason "compose-key" :pane "compose"))
     result))
 
-(defclass clawmacs-transcript-pane (esa:esa-pane-mixin clim:application-pane)
+(defclass rplaca-transcript-pane (esa:esa-pane-mixin clim:application-pane)
   ()
   (:documentation "ESA window pane that displays the current chat transcript."))
 
-(defclass clawmacs-chat-info-pane (esa:info-pane)
+(defclass rplaca-chat-info-pane (esa:info-pane)
   ()
-  (:documentation "Emacs-style status line for the Clawmacs chat frame.")
+  (:documentation "Emacs-style status line for the RPLACA chat frame.")
   (:default-initargs
    :height 22
    :min-height 22
@@ -1148,7 +1148,7 @@ modifier-event conversion."
 When NIL, derive it from `*minibuffer-max-height*' and
 `*chat-minibuffer-line-height*' so logical rows and reserved space agree.")
 
-(defclass clawmacs-chat-minibuffer-pane (esa:minibuffer-pane)
+(defclass rplaca-chat-minibuffer-pane (esa:minibuffer-pane)
   ()
   (:documentation "ESA minibuffer used for messages, command arguments, and M-x.")
   (:default-initargs
@@ -1157,14 +1157,14 @@ When NIL, derive it from `*minibuffer-max-height*' and
    :max-height 24
    :incremental-redisplay nil))
 
-(defmethod clim:compose-space ((pane clawmacs-chat-minibuffer-pane)
+(defmethod clim:compose-space ((pane rplaca-chat-minibuffer-pane)
                                &key width height)
   "Return a compact minibuffer space requirement without probing a basic medium.
 
 Some native McCLIM builds compute `esa:minibuffer-pane' height by asking a
 fresh `clim:basic-medium' for font metrics before the pane has a backend
 medium.  Quicklisp/Ultralisp McCLIM may not define those metric methods, so
-native startup fails before the frame is adopted.  Clawmacs owns the chat
+native startup fails before the frame is adopted.  RPLACA owns the chat
 minibuffer height explicitly, so this pane-specific method keeps layout stable
 and avoids the backend-independent metric probe."
   (declare (ignore pane height))
@@ -1175,8 +1175,8 @@ and avoids the backend-independent metric probe."
 (defun chat-frame-e2e-effective-frame (frame)
   "Return FRAME when it is a chat frame, otherwise the current application frame."
   (cond
-    ((typep frame 'clawmacs-chat-frame) frame)
-    ((typep clim:*application-frame* 'clawmacs-chat-frame)
+    ((typep frame 'rplaca-chat-frame) frame)
+    ((typep clim:*application-frame* 'rplaca-chat-frame)
      clim:*application-frame*)
     (t nil)))
 
@@ -1495,7 +1495,7 @@ rendering state."
 (defun chat-frame-e2e-screen-text (frame)
   "Return a semantic screen-text snapshot for FRAME."
   (let ((*chat-interaction-state*
-          (if (typep frame 'clawmacs-chat-frame)
+          (if (typep frame 'rplaca-chat-frame)
               (chat-frame-interaction-state frame)
               *chat-interaction-state*)))
     (let* ((buf (and frame (chat-frame-buffer frame)))
@@ -1536,7 +1536,7 @@ These fields deliberately expose no CLIM port, medium, pane, or mutable
 resolver object.  The GUI harness uses them to prove the frame-owned
 active/staged/persisted distinction and generation coherence without treating
 pixels or private McCLIM state as the contract."
-  (when (typep frame 'clawmacs-chat-frame)
+  (when (typep frame 'rplaca-chat-frame)
     (let* ((catalog (chat-frame-appearance-catalog frame))
            (staged (chat-frame-appearance-staged-candidate frame))
            (bundle (chat-frame-appearance-active-bundle frame))
@@ -1715,7 +1715,7 @@ pixels or private McCLIM state as the contract."
          (master (and pane (ignore-errors (esa:master-pane pane))))
          (frame (or (and master (ignore-errors (clim:pane-frame master)))
                     clim:*application-frame*))
-         (buf (and (typep frame 'clawmacs-chat-frame)
+         (buf (and (typep frame 'rplaca-chat-frame)
                    (chat-frame-buffer frame))))
     (when buf
       (multiple-value-bind (provider model)
@@ -1734,7 +1734,7 @@ pixels or private McCLIM state as the contract."
       (emit-chat-pane-rendered frame "info"
                                :text (chat-frame-e2e-info-line frame))))))
 
-(clim:define-application-frame clawmacs-chat-frame
+(clim:define-application-frame rplaca-chat-frame
     (esa:esa-frame-mixin clim:standard-application-frame)
   ((buffer :initarg :buffer
            :accessor chat-frame-buffer)
@@ -1815,7 +1815,7 @@ pixels or private McCLIM state as the contract."
     :accessor chat-frame-compose-synchronized-buffer
     :documentation
     "Frame buffer whose draft/point/mark currently match the Drei pane.")
-   (redisplay-lock :initform (bt:make-lock "clawmacs chat redisplay")
+   (redisplay-lock :initform (bt:make-lock "rplaca chat redisplay")
                    :reader chat-frame-redisplay-lock)
    (lifecycle-state :initform :created
                     :accessor chat-frame-lifecycle-state)
@@ -1829,24 +1829,24 @@ pixels or private McCLIM state as the contract."
                         :accessor chat-frame-redisplay-pending-p)
    (redisplay-handling-p :initform nil
                          :accessor chat-frame-redisplay-handling-p))
-  (:command-table (clawmacs-chat-frame
+  (:command-table (rplaca-chat-frame
                    :inherit-from (esa:global-esa-table
                                   esa:keyboard-macro-table)
-                   :menu (("Chat" :menu clawmacs-chat-control-menu
+                   :menu (("Chat" :menu rplaca-chat-control-menu
                            :documentation "Chat controls.")
-                          ("View" :menu clawmacs-chat-view-menu
+                          ("View" :menu rplaca-chat-view-menu
                            :documentation "Transcript display controls.")
-                          ("Skills" :menu clawmacs-chat-skills-menu
+                          ("Skills" :menu rplaca-chat-skills-menu
                            :documentation "Enable or disable skills.")
-                          ("Packages" :menu clawmacs-chat-packages-menu
+                          ("Packages" :menu rplaca-chat-packages-menu
                            :documentation "Manage packages for this chat.")
-                          ("Effort" :menu clawmacs-chat-effort-menu
+                          ("Effort" :menu rplaca-chat-effort-menu
                            :documentation
                            "Select model reasoning effort for this chat.")
-                          ("Appearance" :menu clawmacs-chat-appearance-menu
+                          ("Appearance" :menu rplaca-chat-appearance-menu
                            :documentation
                            "Stage, preview, apply, and save appearance profiles.")
-                          ("System" :menu clawmacs-chat-system-menu
+                          ("System" :menu rplaca-chat-system-menu
                            :documentation
                            "Launch nested frames and system actions."))))
   (:pointer-documentation t)
@@ -1855,29 +1855,29 @@ pixels or private McCLIM state as the contract."
   ;; hierarchical command table above for M-x and keys, but attach a separate
   ;; public-CLIM leaf-only table to the visible bar so ordinary pointer motion
   ;; never creates or disowns transient submenu frames.
-  (:menu-bar clawmacs-chat-menu-bar)
+  (:menu-bar rplaca-chat-menu-bar)
   (:panes
    (transcript
     (let ((pane (clim:make-pane
-                 'clawmacs-transcript-pane
+                 'rplaca-transcript-pane
                  :display-function 'display-chat-transcript
                  :display-time :command-loop
                  :incremental-redisplay t
                  :end-of-page-action :allow
                  :width 900
                  :height 640
-                 :command-table 'clawmacs-chat-frame)))
+                 :command-table 'rplaca-chat-frame)))
       (setf (esa:windows clim:*application-frame*) (list pane))
       pane))
    (info
     (clim:make-pane
-     'clawmacs-chat-info-pane
+     'rplaca-chat-info-pane
      :master-pane nil
      :display-function 'display-chat-info-pane
      :width 900))
    (compose
     (clim:make-pane
-     'clawmacs-chat-compose-pane
+     'rplaca-chat-compose-pane
      :initial-contents ""
      :ncolumns 90
      :nlines 5
@@ -1894,7 +1894,7 @@ pixels or private McCLIM state as the contract."
      :activation-gestures '(:return)
      :activate-callback #'compose-pane-activated))
    (minibuffer
-    (clim:make-pane 'clawmacs-chat-minibuffer-pane
+    (clim:make-pane 'rplaca-chat-minibuffer-pane
                     :display-function 'display-chat-minibuffer-pane
                     :display-time :command-loop
                     :width 900)))
@@ -1906,7 +1906,7 @@ pixels or private McCLIM state as the contract."
       compose
       info
       minibuffer)))
-  (:top-level (run-clawmacs-chat-top-level)))
+  (:top-level (run-rplaca-chat-top-level)))
 
 (defparameter +appearance-editor-buffer-name+ "*Appearance*")
 
@@ -1922,11 +1922,11 @@ pixels or private McCLIM state as the contract."
 (defun appearance-command-frame (context)
   "Return the active chat frame for frame- or buffer-originated CONTEXT."
   (cond
-    ((typep context 'clawmacs-chat-frame) context)
-    ((typep clim:*application-frame* 'clawmacs-chat-frame)
+    ((typep context 'rplaca-chat-frame) context)
+    ((typep clim:*application-frame* 'rplaca-chat-frame)
      clim:*application-frame*)
     (t
-     (error "Appearance commands require a running Clawmacs chat frame."))))
+     (error "Appearance commands require a running RPLACA chat frame."))))
 
 (defun appearance-editor-profile (frame)
   "Return FRAME's staged profile, falling back to its active profile."
@@ -2121,8 +2121,8 @@ pixels or private McCLIM state as the contract."
 (defun customize-appearance-command (buffer)
   "Open the owning frame's staged CLIM appearance editor."
   (let ((frame clim:*application-frame*))
-    (unless (typep frame 'clawmacs-chat-frame)
-      (error "Customize Appearance requires a running Clawmacs chat frame."))
+    (unless (typep frame 'rplaca-chat-frame)
+      (error "Customize Appearance requires a running RPLACA chat frame."))
     (unless (chat-frame-appearance-staged-candidate frame)
       (appearance-editor-stage-profile
        frame (chat-frame-appearance-profile frame) :customize))
@@ -2260,7 +2260,7 @@ pixels or private McCLIM state as the contract."
   "Return ordinary CLIM presentation entries for BUFFER's owning frame."
   (declare (ignore columns))
   (let ((frame clim:*application-frame*))
-    (unless (and (typep frame 'clawmacs-chat-frame)
+    (unless (and (typep frame 'rplaca-chat-frame)
                  (eq buffer (chat-frame-appearance-editor-buffer frame)))
       (return-from appearance-editor-display-entries
         (list (list :text "[Appearance editor is not attached to this frame.]"
@@ -2509,7 +2509,7 @@ cannot turn the original action failure into a frame exit."
           nil)))))
 
 (defmethod clim:execute-frame-command :around
-    ((frame clawmacs-chat-frame) command)
+    ((frame rplaca-chat-frame) command)
   "Keep an ordinary command error inside FRAME's running CLIM command loop."
   (call-chat-frame-ui-action-safely
    frame
@@ -2519,7 +2519,7 @@ cannot turn the original action failure into a frame exit."
    (lambda () (call-next-method))))
 
 (defmethod (setf clim:frame-command-table) :around
-    (new-table (frame clawmacs-chat-frame))
+    (new-table (frame rplaca-chat-frame))
   "Avoid rebuilding FRAME's live menu bar for an identical command table.
 
 Pinned ESA assigns its applicable command table on every command-loop turn.
@@ -2531,24 +2531,24 @@ frame-local table still goes through the standard CLIM setter and menu update."
       new-table
       (call-next-method)))
 
-(defmethod initialize-instance :after ((frame clawmacs-chat-frame) &key)
+(defmethod initialize-instance :after ((frame rplaca-chat-frame) &key)
   "Keep ESA frame slots safely initialized before panes are generated."
   (unless (slot-boundp frame 'esa:windows)
     (setf (esa:windows frame) nil)))
 
-(defmethod clim:frame-standard-input ((frame clawmacs-chat-frame))
+(defmethod clim:frame-standard-input ((frame rplaca-chat-frame))
   "Use the ESA minibuffer as FRAME's standard input stream when it exists."
   (or (ignore-errors (clim:find-pane-named frame 'minibuffer))
       (call-next-method)))
 
-(defmethod esa:buffers ((frame clawmacs-chat-frame))
-  "Return the Clawmacs buffers visible to the ESA command processor."
+(defmethod esa:buffers ((frame rplaca-chat-frame))
+  "Return the RPLACA buffers visible to the ESA command processor."
   (remove-duplicates
    (remove nil (cons (chat-frame-buffer frame) *buffer-ring*))
    :test #'eq))
 
-(defmethod esa:esa-current-buffer ((frame clawmacs-chat-frame))
-  "Return FRAME's current Clawmacs buffer."
+(defmethod esa:esa-current-buffer ((frame rplaca-chat-frame))
+  "Return FRAME's current RPLACA buffer."
   (chat-frame-buffer frame))
 
 (defun restore-chat-frame-source-after-load-error
@@ -2574,7 +2574,7 @@ frame-local table still goes through the standard CLIM setter and menu update."
         (error load-error))))
 
 (defmethod (setf esa:esa-current-buffer) ((new-buffer buffer)
-                                          (frame clawmacs-chat-frame))
+                                          (frame rplaca-chat-frame))
   "Synchronize FRAME's compose editor and switch it to NEW-BUFFER.
 
 This is the canonical frame-level transition contract for built-in commands
@@ -2617,17 +2617,17 @@ single shared Drei gadget's undo history so undo cannot cross buffers."
     (request-chat-frame-redisplay frame))
   new-buffer)
 
-(defmethod esa:esa-current-window ((frame clawmacs-chat-frame))
+(defmethod esa:esa-current-window ((frame rplaca-chat-frame))
   "Return the current ESA window, falling back to FRAME before panes exist."
   (or (first (ignore-errors (esa:windows frame)))
       (ignore-errors (clim:find-pane-named frame 'transcript))
       frame))
 
-(defmethod (setf esa:previous-command) (command (frame clawmacs-chat-frame))
+(defmethod (setf esa:previous-command) (command (frame rplaca-chat-frame))
   "Accept ESA's previous-command update before concrete window panes exist."
   command)
 
-(defmethod esa:find-applicable-command-table ((frame clawmacs-chat-frame))
+(defmethod esa:find-applicable-command-table ((frame rplaca-chat-frame))
   "Use FRAME's stable application command table for ESA lookup and M-x."
   (clim:frame-command-table frame))
 
@@ -2648,7 +2648,7 @@ that opening a non-blocking selector transfers ownership back to Drei, without
 changing ordinary application startup."
   (let* ((requested
            (and (e2e-events-enabled-p)
-                (uiop:getenv "CLAWMACS_GUI_E2E_INITIAL_INPUT_FOCUS")))
+                (uiop:getenv "RPLACA_GUI_E2E_INITIAL_INPUT_FOCUS")))
          (pane
            (cond
              ((and requested (string-equal requested "standard-input"))
@@ -2663,8 +2663,8 @@ changing ordinary application startup."
         (focus-chat-compose-pane frame))))
 
 (defmethod clim:execute-frame-command :after
-    ((frame clawmacs-chat-frame) command)
-  "Keep non-blocking Clawmacs interaction input on FRAME's compose pane.
+    ((frame rplaca-chat-frame) command)
+  "Keep non-blocking RPLACA interaction input on FRAME's compose pane.
 
 The visible minibuffer pane is an application pane: it displays semantic
 completion presentations, while the Drei compose pane deliberately owns the
@@ -2691,7 +2691,7 @@ implements that input contract before the next gesture is delivered."
   (initialize-chat-frame-compose-pane
    frame (clim:find-pane-named frame 'compose)))
 
-(defun run-clawmacs-chat-top-level (frame)
+(defun run-rplaca-chat-top-level (frame)
   "Run FRAME with ESA command processing and compose focused initially."
   (unless (eq (clim:frame-state frame) :enabled)
     (clim:enable-frame frame)
@@ -3147,7 +3147,7 @@ CLIM:REDISPLAY-FRAME-PANE."
           (progn
             (clim:queue-event
              sheet
-             (make-instance 'clawmacs-chat-redisplay-event :sheet sheet))
+             (make-instance 'rplaca-chat-redisplay-event :sheet sheet))
             t)
         (error (condition)
           (file-debug-event "redisplay-queue-failed"
@@ -3166,7 +3166,7 @@ frame construction remains the profile-application path for that case."
           (progn
             (clim:queue-event
              sheet
-             (make-instance 'clawmacs-chat-appearance-activation-event
+             (make-instance 'rplaca-chat-appearance-activation-event
                             :sheet sheet :candidate candidate))
             t)
         (error (condition)
@@ -3182,7 +3182,7 @@ frame construction remains the profile-application path for that case."
           (progn
             (clim:queue-event
              sheet
-             (make-instance 'clawmacs-chat-font-inventory-refresh-event :sheet sheet))
+             (make-instance 'rplaca-chat-font-inventory-refresh-event :sheet sheet))
             t)
         (error (condition)
           (file-debug-event "font-inventory-refresh-queue-failed"
@@ -3305,7 +3305,7 @@ handler, which is delivered by the frame's normal CLIM event process."
                       'appearance-live-update-unsupported
                       :axis :package-catalog-transition
                       :value classification-status
-                      :suggested-repairs '(:restart-clawmacs))))
+                      :suggested-repairs '(:restart-rplaca))))
               (otherwise
                (list :status :failed :condition classification-status))))))
       (condition (condition)
@@ -3356,7 +3356,7 @@ handler, which is delivered by the frame's normal CLIM event process."
       (let ((sheet (getf reservation :sheet)))
         (clim:queue-event
          sheet
-         (make-instance 'clawmacs-chat-appearance-catalog-event
+         (make-instance 'rplaca-chat-appearance-catalog-event
                         :sheet sheet
                         :reservation reservation
                         :token (getf reservation :token)))
@@ -3366,27 +3366,27 @@ handler, which is delivered by the frame's normal CLIM event process."
 (defun appearance-package-transition-notify-all (token)
   #+sbcl
   (sb-thread:condition-broadcast
-   (clawmacs::appearance-package-transition-token-condition token))
+   (rplaca::appearance-package-transition-token-condition token))
   #-sbcl
   (bt:condition-notify
-   (clawmacs::appearance-package-transition-token-condition token)))
+   (rplaca::appearance-package-transition-token-condition token)))
 
 (defun wait-for-appearance-package-transition-count
     (token count-reader expected deadline &key (stop-on-failure-p t))
   "Wait with TOKEN locked until COUNT-READER reaches EXPECTED or fails."
   (loop
     (when (and stop-on-failure-p
-               (clawmacs::appearance-package-transition-token-failure token))
+               (rplaca::appearance-package-transition-token-failure token))
       (return nil))
     (when (>= (funcall count-reader token) expected)
       (return t))
     (when (>= (get-internal-real-time) deadline)
-      (setf (clawmacs::appearance-package-transition-token-failure token)
+      (setf (rplaca::appearance-package-transition-token-failure token)
             :frame-transition-timeout)
       (return nil))
     (bt:condition-wait
-     (clawmacs::appearance-package-transition-token-condition token)
-     (clawmacs::appearance-package-transition-token-lock token)
+     (rplaca::appearance-package-transition-token-condition token)
+     (rplaca::appearance-package-transition-token-lock token)
      :timeout 0.05)))
 
 (defun finalize-package-appearance-frame-transition
@@ -3397,9 +3397,9 @@ handler, which is delivered by the frame's normal CLIM event process."
                      (* *appearance-package-transition-timeout-seconds*
                         internal-time-units-per-second))))
     (bt:with-lock-held
-        ((clawmacs::appearance-package-transition-token-lock token))
+        ((rplaca::appearance-package-transition-token-lock token))
       (let ((expected
-              (clawmacs::appearance-package-transition-token-expected-count
+              (rplaca::appearance-package-transition-token-expected-count
                token))
             (origin
               (find-if (lambda (reservation)
@@ -3412,22 +3412,22 @@ handler, which is delivered by the frame's normal CLIM event process."
         (when origin
           (unless (package-appearance-reservation-current-p origin)
             (setf
-             (clawmacs::appearance-package-transition-token-failure token)
+             (rplaca::appearance-package-transition-token-failure token)
              :origin-frame-state-changed))
           (incf
-           (clawmacs::appearance-package-transition-token-ready-count token)))
+           (rplaca::appearance-package-transition-token-ready-count token)))
         (unless
             (wait-for-appearance-package-transition-count
              token
-             #'clawmacs::appearance-package-transition-token-ready-count
+             #'rplaca::appearance-package-transition-token-ready-count
              expected deadline)
-          (setf (clawmacs::appearance-package-transition-token-state token)
+          (setf (rplaca::appearance-package-transition-token-state token)
                 :aborted)
           (appearance-package-transition-notify-all token)
           (error "Appearance frame transition preparation failed: ~A"
-                 (clawmacs::appearance-package-transition-token-failure token)))
+                 (rplaca::appearance-package-transition-token-failure token)))
         (funcall commit-function)
-        (setf (clawmacs::appearance-package-transition-token-state token)
+        (setf (rplaca::appearance-package-transition-token-state token)
               :committing)
         (appearance-package-transition-notify-all token)
         ;; Every non-origin owning process is now parked in its event handler,
@@ -3437,11 +3437,11 @@ handler, which is delivered by the frame's normal CLIM event process."
         (when origin
           (apply-package-appearance-frame-reservation-target origin)
           (incf
-           (clawmacs::appearance-package-transition-token-applied-count token)))
+           (rplaca::appearance-package-transition-token-applied-count token)))
         (unless
             (wait-for-appearance-package-transition-count
              token
-             #'clawmacs::appearance-package-transition-token-applied-count
+             #'rplaca::appearance-package-transition-token-applied-count
              expected
              (+ (get-internal-real-time)
                 (* *appearance-package-transition-timeout-seconds*
@@ -3455,9 +3455,9 @@ handler, which is delivered by the frame's normal CLIM event process."
             (warn
              "Committed appearance transition is still settling on ~D frame(s)."
              (- expected
-                (clawmacs::appearance-package-transition-token-applied-count
+                (rplaca::appearance-package-transition-token-applied-count
                  token)))))
-        (setf (clawmacs::appearance-package-transition-token-state token)
+        (setf (rplaca::appearance-package-transition-token-state token)
               :committed)
         (appearance-package-transition-notify-all token)
         t))))
@@ -3596,7 +3596,7 @@ profile, and render keys while recording a copied structured diagnostic."
                         'appearance-live-update-unsupported
                         :axis :typography :value :font-inventory-refresh
                         :port port
-                        :suggested-repairs '(:restart-clawmacs))))
+                        :suggested-repairs '(:restart-rplaca))))
                 (progn
                   (setf (slot-value frame 'appearance-font-inventory) inventory
                         (slot-value frame 'appearance-font-inventory-generation)
@@ -3988,18 +3988,18 @@ contains the expanded pane and the pointer-documentation pane below it."
 
 (defmethod clim:handle-event
     ((sheet clime:top-level-sheet-mixin)
-     (event clawmacs-chat-redisplay-event))
+     (event rplaca-chat-redisplay-event))
   (declare (ignore event))
   (let ((frame (ignore-errors (clim:pane-frame sheet))))
-    (when (typep frame 'clawmacs-chat-frame)
+    (when (typep frame 'rplaca-chat-frame)
       (handle-chat-frame-redisplay-safely frame))))
 
 (defmethod clim:handle-event
     ((sheet clime:top-level-sheet-mixin)
-     (event clawmacs-chat-appearance-activation-event))
+     (event rplaca-chat-appearance-activation-event))
   "Deliver appearance publication through the same canonical CLIM event loop."
   (let ((frame (ignore-errors (clim:pane-frame sheet))))
-    (when (typep frame 'clawmacs-chat-frame)
+    (when (typep frame 'rplaca-chat-frame)
       (handler-case
           (handle-queued-chat-frame-appearance-activation
            frame (chat-appearance-activation-event-candidate event))
@@ -4051,11 +4051,11 @@ contains the expanded pane and the pointer-documentation pane below it."
 
 (defmethod clim:handle-event
     ((sheet clime:top-level-sheet-mixin)
-     (event clawmacs-chat-font-inventory-refresh-event))
+     (event rplaca-chat-font-inventory-refresh-event))
   "Run the explicit font refresh through the owning frame's event process."
   (declare (ignore event))
   (let ((frame (ignore-errors (clim:pane-frame sheet))))
-    (when (typep frame 'clawmacs-chat-frame)
+    (when (typep frame 'rplaca-chat-frame)
       (handle-chat-frame-font-inventory-refresh frame))))
 
 (defun publish-admitted-package-appearance-frame-state
@@ -4134,24 +4134,24 @@ to test without manufacturing a backend top-level sheet."
   "Participate in TOKEN from FRAME's owning event process."
   (let ((commit-p nil))
     (bt:with-lock-held
-        ((clawmacs::appearance-package-transition-token-lock token))
-      (unless (and (typep frame 'clawmacs-chat-frame)
+        ((rplaca::appearance-package-transition-token-lock token))
+      (unless (and (typep frame 'rplaca-chat-frame)
                    (eq frame (getf reservation :frame))
                    (package-appearance-reservation-current-p reservation))
-        (setf (clawmacs::appearance-package-transition-token-failure token)
+        (setf (rplaca::appearance-package-transition-token-failure token)
               :frame-state-changed))
-      (incf (clawmacs::appearance-package-transition-token-ready-count token))
+      (incf (rplaca::appearance-package-transition-token-ready-count token))
       (appearance-package-transition-notify-all token)
       (loop :while
               (eq :preparing
-                  (clawmacs::appearance-package-transition-token-state token))
+                  (rplaca::appearance-package-transition-token-state token))
             :do
                (bt:condition-wait
-                (clawmacs::appearance-package-transition-token-condition token)
-                (clawmacs::appearance-package-transition-token-lock token)))
+                (rplaca::appearance-package-transition-token-condition token)
+                (rplaca::appearance-package-transition-token-lock token)))
       (setf commit-p
             (member
-             (clawmacs::appearance-package-transition-token-state token)
+             (rplaca::appearance-package-transition-token-state token)
              '(:committing :committed)
              :test #'eq)))
     (when commit-p
@@ -4163,18 +4163,18 @@ to test without manufacturing a backend top-level sheet."
                frame reservation)
       (apply-package-appearance-frame-reservation-target reservation)
       (bt:with-lock-held
-          ((clawmacs::appearance-package-transition-token-lock token))
+          ((rplaca::appearance-package-transition-token-lock token))
         (incf
-         (clawmacs::appearance-package-transition-token-applied-count token))
+         (rplaca::appearance-package-transition-token-applied-count token))
         (appearance-package-transition-notify-all token))))
   (when (eq :committed
-            (clawmacs::appearance-package-transition-token-state token))
+            (rplaca::appearance-package-transition-token-state token))
     (ignore-errors (request-chat-frame-redisplay frame)))
   nil)
 
 (defmethod clim:handle-event
     ((sheet clime:top-level-sheet-mixin)
-     (event clawmacs-chat-appearance-catalog-event))
+     (event rplaca-chat-appearance-catalog-event))
   "Publish an already-admitted catalog transition on FRAME's event process."
   (handle-package-appearance-frame-reservation
    (ignore-errors (clim:pane-frame sheet))
@@ -4259,14 +4259,14 @@ to test without manufacturing a backend top-level sheet."
     (prin1-to-string form)))
 
 (defun chat-recurse-source-root ()
-  "Return the Clawmacs source root used for recurse launches."
+  "Return the RPLACA source root used for recurse launches."
   (uiop:ensure-directory-pathname
-   (or (ignore-errors (asdf:system-source-directory :clawmacs))
+   (or (ignore-errors (asdf:system-source-directory :rplaca))
        (truename "."))))
 
 (defun chat-recurse-quicklisp-setup ()
   "Return the Quicklisp setup file used for recurse launches."
-  (or (let ((env (uiop:getenv "CLAWMACS_QUICKLISP_SETUP")))
+  (or (let ((env (uiop:getenv "RPLACA_QUICKLISP_SETUP")))
         (and env
              (plusp (length env))
              (probe-file env)))
@@ -4275,7 +4275,7 @@ to test without manufacturing a backend top-level sheet."
                         (user-homedir-pathname)))
       (error 'simple-error
              :format-control
-             "Cannot recurse without Quicklisp setup. Set CLAWMACS_QUICKLISP_SETUP or install ~/quicklisp/setup.lisp."
+             "Cannot recurse without Quicklisp setup. Set RPLACA_QUICKLISP_SETUP or install ~/quicklisp/setup.lisp."
              :format-arguments nil)))
 
 (defun chat-recurse-session-name (buffer)
@@ -4294,7 +4294,7 @@ to test without manufacturing a backend top-level sheet."
 
 (defun chat-recurse-window-title (buffer)
   "Return the window title for BUFFER's recurse child."
-  (format nil "Clawmacs Recurse - ~A" (buffer-name buffer)))
+  (format nil "RPLACA Recurse - ~A" (buffer-name buffer)))
 
 (defun chat-recurse-startup-form
     (buffer &key session-name window-title working-directory)
@@ -4306,7 +4306,7 @@ to test without manufacturing a backend top-level sheet."
            (or working-directory
                (buffer-working-directory buffer)))))
     (format nil
-            "(clawmacs:clawmacs-main :session-name ~A :agent-name ~A :window-title ~A :working-directory ~A)"
+            "(rplaca:rplaca-main :session-name ~A :agent-name ~A :window-title ~A :working-directory ~A)"
             (chat-recurse-readable-form session-name)
             (chat-recurse-readable-form (buffer-agent-name buffer))
             (chat-recurse-readable-form window-title)
@@ -4315,7 +4315,7 @@ to test without manufacturing a backend top-level sheet."
 (defun chat-recurse-launch-spec
     (buffer &key repo-root quicklisp-setup session-name window-title
                   working-directory)
-  "Return a launch plist for a fresh child Clawmacs process for BUFFER."
+  "Return a launch plist for a fresh child RPLACA process for BUFFER."
   (let* ((source-root
            (uiop:ensure-directory-pathname
             (or repo-root (chat-recurse-source-root))))
@@ -4337,14 +4337,14 @@ to test without manufacturing a backend top-level sheet."
                  "--load" (namestring quicklisp-setup)
                  "--eval"
                  (format nil
-                         "(clawmacs/build-cache:maybe-clean-build-cache :environment-variable ~S)"
-                         "CLAWMACS_RUN_CLEAN_BUILD")
+                         "(rplaca/build-cache:maybe-clean-build-cache :environment-variable ~S)"
+                         "RPLACA_RUN_CLEAN_BUILD")
                  "--eval"
                  (format nil
                          "(push (truename ~S) asdf:*central-registry*)"
                          (namestring source-root))
-                 "--eval" "(ql:quickload :clawmacs)"
-                 "--eval" "(asdf:load-system :clawmacs :force t)"
+                 "--eval" "(ql:quickload :rplaca)"
+                 "--eval" "(asdf:load-system :rplaca :force t)"
                  "--eval"
                  (chat-recurse-startup-form
                   buffer
@@ -4359,7 +4359,7 @@ to test without manufacturing a backend top-level sheet."
           :working-directory working-directory)))
 
 (defun launch-chat-recurse (buffer)
-  "Spawn a fresh child Clawmacs process for BUFFER and return its launch plist."
+  "Spawn a fresh child RPLACA process for BUFFER and return its launch plist."
   (let* ((spec (chat-recurse-launch-spec buffer))
          (process
            (uiop:launch-program
@@ -4372,7 +4372,7 @@ to test without manufacturing a backend top-level sheet."
     (setf (getf spec :process) process)
     spec))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-show-message-metadata :name nil)
     ((msg 'chat-message))
   (unless (open-message-help-window msg)
@@ -4382,7 +4382,7 @@ to test without manufacturing a backend top-level sheet."
        "[Unable to open message metadata: help-frame worker unavailable]")
       (request-chat-frame-redisplay frame))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-submit-compose :name nil)
     ()
   (clim:with-application-frame (frame)
@@ -4464,7 +4464,7 @@ to test without manufacturing a backend top-level sheet."
          t)
        :focus-compose t))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-select-interaction-candidate :name nil)
     ((ref 'chat-interaction-candidate))
   (clim:with-application-frame (frame)
@@ -4472,7 +4472,7 @@ to test without manufacturing a backend top-level sheet."
 
 (dolist (gesture '((#\Return) (#\Newline)))
   (clim:add-keystroke-to-command-table
-   'clawmacs-chat-frame
+   'rplaca-chat-frame
    gesture
    :command '(com-chat-submit-compose)
    :errorp nil))
@@ -4509,7 +4509,7 @@ to test without manufacturing a backend top-level sheet."
     delete-char-forward-command
     search-forward-command
     search-backward-command)
-  "Clawmacs keymap commands that the Drei compose editor should handle itself.
+  "RPLACA keymap commands that the Drei compose editor should handle itself.
 
 The compose pane inherits the chat frame command table before Drei's editor
 command tables, so binding these in the frame table would steal ordinary text
@@ -4523,7 +4523,7 @@ in the frame table and remain available while focus is in compose.")
        (not (member command *chat-compose-drei-owned-commands* :test #'eq))))
 
 (defun chat-control-character-gesture (char)
-  "Return the CLIM gesture for Clawmacs control character CHAR."
+  "Return the CLIM gesture for RPLACA control character CHAR."
   (let ((code (char-code char)))
     (cond
       ((= code 0) '(#\Space :control))
@@ -4535,7 +4535,7 @@ in the frame table and remain available while focus is in compose.")
       (t (list char)))))
 
 (defun chat-key-component-gesture (component &optional modifier)
-  "Return a one-gesture CLIM key spec for one Clawmacs key COMPONENT."
+  "Return a one-gesture CLIM key spec for one RPLACA key COMPONENT."
   (let ((gesture
           (cond
             ((characterp component)
@@ -4555,7 +4555,7 @@ in the frame table and remain available while focus is in compose.")
         gesture)))
 
 (defun chat-keyspec-gestures (key)
-  "Translate one Clawmacs keymap KEY into ESA/CLIM gesture sequence syntax."
+  "Translate one RPLACA keymap KEY into ESA/CLIM gesture sequence syntax."
   (cond
     ((characterp key)
      (list (chat-key-component-gesture key)))
@@ -4610,10 +4610,10 @@ from the Drei compose pane."
             :test #'equal)))
 
 (defun install-chat-frame-keybindings (&optional (keymap *default-keymap*))
-  "Install application-level Clawmacs key bindings into the chat command table.
+  "Install application-level RPLACA key bindings into the chat command table.
 
 Drei gadgets already inherit the frame command table.  Installing only
-application-level bindings there lets global Clawmacs/ESA keys work from the
+application-level bindings there lets global RPLACA/ESA keys work from the
 compose pane while leaving text editing keys to Drei's editor tables."
   (when keymap
     (maphash
@@ -4632,18 +4632,18 @@ compose pane while leaving text editing keys to Drei's editor tables."
                    (esa:set-key (if (eq command 'customize-appearance-command)
                                     '(com-chat-customize-appearance)
                                     `(com-chat-dispatch-key ',key))
-                                'clawmacs-chat-frame
+                                'rplaca-chat-frame
                                 key-gestures)
                  (clim:command-already-present () nil)))))))
      (keymap-bindings keymap)))
   (dolist (gesture '((#\Return) (#\Newline)))
     (clim:add-keystroke-to-command-table
-     'clawmacs-chat-frame
+     'rplaca-chat-frame
      gesture
      :command '(com-chat-submit-compose)
      :errorp nil)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-dispatch-key :name nil)
     ((key 't))
   (clim:with-application-frame (frame)
@@ -4657,14 +4657,14 @@ compose pane while leaving text editing keys to Drei's editor tables."
 
 (install-chat-frame-keybindings)
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-stop-response :name "Stop Response")
     ()
   (clim:with-application-frame (frame)
     (when (stop-streaming-response (chat-frame-buffer frame))
       (request-chat-frame-redisplay frame))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-open-buffer-selector :name "Switch Buffer")
     ()
   (clim:with-application-frame (frame)
@@ -4673,7 +4673,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
      #'minibuffer-select-buffer-command
      :state-only t)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-open-model-selector :name "Select Model")
     ()
   (clim:with-application-frame (frame)
@@ -4682,40 +4682,40 @@ compose pane while leaving text editing keys to Drei's editor tables."
      #'minibuffer-select-model-command
      :state-only t)))
 
-(define-clawmacs-chat-frame-command
-    (com-chat-open-manual :name "Clawmacs Manual")
+(define-rplaca-chat-frame-command
+    (com-chat-open-manual :name "RPLACA Manual")
     ()
   (clim:with-application-frame (frame)
     (call-with-chat-frame-buffer-transition
      frame
-     #'clawmacs-manual-command
+     #'rplaca-manual-command
      :focus-compose t)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-toggle-tool-results :name "Toggle Tool Results")
     ()
   (clim:with-application-frame (frame)
     (run-chat-frame-buffer-command frame #'toggle-tool-results-command)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-toggle-reasoning-output :name "Toggle Reasoning Output")
     ()
   (clim:with-application-frame (frame)
     (run-chat-frame-buffer-command frame #'toggle-reasoning-output-command)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-toggle-metadata-output :name "Toggle Metadata Output")
     ()
   (clim:with-application-frame (frame)
     (run-chat-frame-buffer-command frame #'toggle-metadata-output-command)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-toggle-debug-mode :name "Toggle Debug Mode")
     ()
   (clim:with-application-frame (frame)
     (run-chat-frame-buffer-command frame #'toggle-debug-mode-command)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-open-package-dashboard :name "Open Package Dashboard")
     ()
   (clim:with-application-frame (frame)
@@ -4723,14 +4723,14 @@ compose pane while leaving text editing keys to Drei's editor tables."
      frame #'package-dashboard-command
      :focus-compose t)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-open-skill-selector :name "Toggle Skill")
     ()
   (clim:with-application-frame (frame)
     (minibuffer-toggle-skill-command (chat-frame-buffer frame))
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-open-effort-selector :name "Select Think Level")
     ()
   (clim:with-application-frame (frame)
@@ -4739,42 +4739,42 @@ compose pane while leaving text editing keys to Drei's editor tables."
     (select-think-level-command (chat-frame-buffer frame))
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-toggle-skill :name nil)
     ((skill-key 'string))
   (clim:with-application-frame (frame)
     (toggle-chat-skill-for-buffer (chat-frame-buffer frame) skill-key)
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-toggle-package :name nil)
     ((package-name 'string))
   (clim:with-application-frame (frame)
     (toggle-chat-package-for-buffer (chat-frame-buffer frame) package-name)
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-select-effort :name nil)
     ((level 'string))
   (clim:with-application-frame (frame)
     (select-chat-effort-for-buffer (chat-frame-buffer frame) level)
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-safe-reload :name "Safe Reload")
     ()
   (clim:with-application-frame (frame)
-    (safe-reload-clawmacs-command (chat-frame-buffer frame))
+    (safe-reload-rplaca-command (chat-frame-buffer frame))
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-refresh-font-inventory :name "Refresh Font Inventory")
     ()
   (clim:with-application-frame (frame)
     (refresh-font-inventory-command frame)
     (appearance-editor-record-status frame :refresh-fonts :queued)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-customize-appearance :name "Customize Appearance")
     ()
   (clim:with-application-frame (frame)
@@ -4782,49 +4782,49 @@ compose pane while leaving text editing keys to Drei's editor tables."
      frame #'customize-appearance-command
      :focus-compose t)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-switch-appearance-theme :name "Switch Appearance Theme")
     ((theme 'appearance-theme-ref))
   (clim:with-application-frame (frame)
     (switch-appearance-theme-command frame theme)
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-describe-current-appearance :name "Describe Current Appearance")
     ()
   (clim:with-application-frame (frame)
     (describe-current-appearance-command frame)
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-apply-staged-appearance :name "Apply Staged Appearance")
     ()
   (clim:with-application-frame (frame)
     (apply-staged-appearance-command frame)
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-save-appearance :name "Save Appearance")
     ()
   (clim:with-application-frame (frame)
     (save-appearance-command frame)
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-revert-staged-appearance :name "Revert Staged Appearance")
     ()
   (clim:with-application-frame (frame)
     (revert-staged-appearance-command frame)
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-reload-appearance-file :name "Reload Appearance File")
     ()
   (clim:with-application-frame (frame)
     (reload-appearance-file-command frame)
     (request-chat-frame-redisplay frame)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-activate-appearance-editor-ref :name nil)
     ((ref 'appearance-activation-ref))
   (let ((frame (appearance-editor-ref-frame ref)))
@@ -4839,7 +4839,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
          (appearance-editor-record-status frame :refresh-fonts :queued)))
       (request-chat-frame-redisplay frame))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-select-appearance-theme :name nil)
     ((ref 'appearance-theme-ref))
   (let ((frame (appearance-editor-ref-frame ref)))
@@ -4847,7 +4847,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
       (switch-appearance-theme-command frame ref)
       (request-chat-frame-redisplay frame))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-select-appearance-role :name nil)
     ((ref 'appearance-role-ref))
   (let ((frame (appearance-editor-ref-frame ref)))
@@ -4860,7 +4860,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
                                        :role (appearance-editor-ref-value ref))
       (request-chat-frame-redisplay frame))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-select-appearance-font-family :name nil)
     ((ref 'appearance-port-font-family-ref))
   (let ((frame (appearance-editor-ref-frame ref)))
@@ -4872,7 +4872,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
                                        :family (appearance-editor-ref-value ref))
       (request-chat-frame-redisplay frame))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-select-appearance-font-face :name nil)
     ((ref 'appearance-port-font-face-ref))
   (let ((frame (appearance-editor-ref-frame ref)))
@@ -4883,7 +4883,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
                                        :face (appearance-editor-ref-value ref))
       (request-chat-frame-redisplay frame))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-select-appearance-font-size :name nil)
     ((ref 'appearance-port-font-size-ref))
   (let ((frame (appearance-editor-ref-frame ref)))
@@ -4892,7 +4892,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
        frame (appearance-editor-ref-value ref))
       (request-chat-frame-redisplay frame))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-describe-appearance-diagnostic :name nil)
     ((ref 'appearance-diagnostic-ref))
   (let ((frame (appearance-editor-ref-frame ref)))
@@ -4902,7 +4902,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
        :diagnostic (appearance-editor-ref-value ref))
       (request-chat-frame-redisplay frame))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-chat-recurse :name "Recurse")
     ()
   (clim:with-application-frame (frame)
@@ -4928,7 +4928,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
            (format nil "[Unable to open recurse frame: ~A]" condition))))
       (request-chat-frame-redisplay frame))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-toggle-package-dashboard-entry :name nil)
     ((ref 'package-dashboard-entry-ref))
   (let ((dashboard (getf ref :dashboard-buffer))
@@ -4938,7 +4938,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
       (package-dashboard-toggle-entry dashboard entry :origin-buffer origin))))
 
 (clim:define-presentation-to-command-translator describe-chat-message
-    (chat-message com-show-message-metadata clawmacs-chat-frame
+    (chat-message com-show-message-metadata rplaca-chat-frame
      :gesture :describe
      :documentation "View message metadata"
      :menu nil)
@@ -4947,7 +4947,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
 
 (clim:define-presentation-to-command-translator select-chat-interaction-candidate
     (chat-interaction-candidate com-chat-select-interaction-candidate
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Choose candidate"
      :menu nil)
@@ -4956,7 +4956,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
 
 (clim:define-presentation-to-command-translator select-package-dashboard-entry
     (package-dashboard-entry-ref com-toggle-package-dashboard-entry
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Toggle package scope"
      :menu t)
@@ -4965,7 +4965,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
 
 (clim:define-presentation-to-command-translator activate-appearance-editor-action
     (appearance-activation-ref com-chat-activate-appearance-editor-ref
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Run appearance action"
      :menu t)
@@ -4974,7 +4974,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
 
 (clim:define-presentation-to-command-translator select-appearance-theme
     (appearance-theme-ref com-chat-select-appearance-theme
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Stage theme"
      :menu t)
@@ -4983,7 +4983,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
 
 (clim:define-presentation-to-command-translator select-appearance-role
     (appearance-role-ref com-chat-select-appearance-role
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Customize role"
      :menu t)
@@ -4992,7 +4992,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
 
 (clim:define-presentation-to-command-translator select-appearance-font-family
     (appearance-port-font-family-ref com-chat-select-appearance-font-family
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Choose font family"
      :menu t)
@@ -5001,7 +5001,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
 
 (clim:define-presentation-to-command-translator select-appearance-font-face
     (appearance-port-font-face-ref com-chat-select-appearance-font-face
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Choose font face"
      :menu t)
@@ -5010,7 +5010,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
 
 (clim:define-presentation-to-command-translator select-appearance-font-size
     (appearance-port-font-size-ref com-chat-select-appearance-font-size
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Stage font size"
      :menu t)
@@ -5019,7 +5019,7 @@ compose pane while leaving text editing keys to Drei's editor tables."
 
 (clim:define-presentation-to-command-translator describe-appearance-diagnostic
     (appearance-diagnostic-ref com-chat-describe-appearance-diagnostic
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :describe-presentation
      :documentation "Describe diagnostic"
      :menu t)
@@ -5120,7 +5120,7 @@ remaining buffers from being cancelled, or leave the frame marked running."
            (funcall continuation))
       (cleanup-chat-frame-runtime frame hook))))
 
-(defmethod clim:run-frame-top-level :around ((frame clawmacs-chat-frame) &key)
+(defmethod clim:run-frame-top-level :around ((frame rplaca-chat-frame) &key)
   (call-with-chat-frame-runtime frame (lambda () (call-next-method))))
 
 (defun snapshot-package-appearance-frame-state (frame)
@@ -5146,18 +5146,18 @@ remaining buffers from being cancelled, or leave the frame marked running."
 (defun copy-package-appearance-declaration-registry ()
   "Return a private owner/declaration registry snapshot."
   (copy-package-runtime-hash-table
-   clawmacs::*package-appearance-declarations*))
+   rplaca::*package-appearance-declarations*))
 
 (defun restore-package-appearance-declaration-registry (snapshot)
   "Atomically publish a private declaration-registry copy."
-  (setf clawmacs::*package-appearance-declarations*
+  (setf rplaca::*package-appearance-declarations*
         (copy-package-runtime-hash-table snapshot)))
 
 (defun begin-package-appearance-frame-batch ()
   "Exclude frame registration and snapshot the whole appearance transaction."
   (bt:acquire-lock *package-appearance-frame-batch-lock*)
   (handler-case
-      (bt:with-lock-held (clawmacs::*package-appearance-catalog-lock*)
+      (bt:with-lock-held (rplaca::*package-appearance-catalog-lock*)
         (bt:with-lock-held (*package-appearance-live-chat-frames-lock*)
           (let ((frames
                   (mapcar #'snapshot-package-appearance-frame-state
@@ -5166,7 +5166,7 @@ remaining buffers from being cancelled, or leave the frame marked running."
                   (list
                    :lock-held-p t
                    :catalog
-                   (clawmacs::package-appearance-current-catalog-under-lock)
+                   (rplaca::package-appearance-current-catalog-under-lock)
                    :declarations (copy-package-appearance-declaration-registry)
                    :frames frames
                    :expected-frames (copy-list frames)
@@ -5291,7 +5291,7 @@ remaining buffers from being cancelled, or leave the frame marked running."
     (error "Appearance batch rollback refused: a frame changed outside package reconciliation."))
   (let ((token (make-appearance-package-transition-token))
         (reservations nil))
-    (bt:with-lock-held (clawmacs::*package-appearance-catalog-lock*)
+    (bt:with-lock-held (rplaca::*package-appearance-catalog-lock*)
       (setf reservations
             (mapcar
              (lambda (frame-snapshot)
@@ -5340,7 +5340,7 @@ remaining buffers from being cancelled, or leave the frame marked running."
     (bt:release-lock *package-appearance-frame-batch-lock*))
   nil)
 
-(defun run-clawmacs-chat-frame
+(defun run-rplaca-chat-frame
     (buffer &key window-title (appearance-profile (make-appearance-profile)))
   "Run the fresh McCLIM chat frame for BUFFER using an immutable startup profile.
 
@@ -5348,15 +5348,15 @@ The initial :CLASSIC profile is deliberately passed as frame construction data.
 It does not select a port, install named fonts, change pane defaults, or alter
 the existing Drei/ESA pane declarations."
   (let ((frame (clim:make-application-frame
-                'clawmacs-chat-frame
+                'rplaca-chat-frame
                 :buffer buffer
                 :appearance-profile appearance-profile
-                :pretty-name (or window-title "Clawmacs"))))
+                :pretty-name (or window-title "RPLACA"))))
     (let ((*crash-report-frame* frame))
       (publish-crash-report-runtime-snapshot :phase :frame-created)
       (file-debug-event "frame-created"
                         :buffer-name (buffer-name buffer)
-                        :window-title (or window-title "Clawmacs"))
+                        :window-title (or window-title "RPLACA"))
       (unwind-protect
            (clim:run-frame-top-level frame)
         (publish-crash-report-runtime-snapshot :phase :frame-stopped)))))

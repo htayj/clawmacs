@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defun packrat-blank-string-p (value)
   "Return true when VALUE is NIL or only ASCII whitespace."
@@ -42,7 +42,7 @@
 
 (defun packrat-source-spec->install-args (source &key src-type ref scope project
                                           resource-types)
-  "Return keyword arguments for CLAWMACS-USE-PACKAGE from a source string."
+  "Return keyword arguments for RPLACA-USE-PACKAGE from a source string."
   (let ((normalized-source (manifest-string source))
         (normalized-type (packrat-normalize-source-type src-type source))
         (normalized-scope (packrat-parse-scope scope))
@@ -57,7 +57,7 @@
 (defun packrat-install-package (source &key src-type ref scope project
                                  resource-types)
   "Install SOURCE and return the installed package definition."
-  (apply #'clawmacs-use-package
+  (apply #'rplaca-use-package
          (packrat-source-spec->install-args
           source
           :src-type src-type
@@ -271,7 +271,7 @@
 
 (deftool packrat-tool-install
   :name "packrat_install"
-  :description "Install a Clawmacs package from a repo URL or local path."
+  :description "Install a RPLACA package from a repo URL or local path."
   :call-style :raw-args
   :execution :frame
   :args ((repo :type "string"
@@ -290,7 +290,7 @@
 
 (deftool packrat-tool-remove
   :name "packrat_remove"
-  :description "Remove an installed Clawmacs package."
+  :description "Remove an installed RPLACA package."
   :call-style :raw-args
   :execution :frame
   :args ((package :type "string"
@@ -300,7 +300,7 @@
 
 (deftool packrat-tool-update
   :name "packrat_update"
-  :description "Update an installed Clawmacs package from its recorded source."
+  :description "Update an installed RPLACA package from its recorded source."
   :call-style :raw-args
   :execution :frame
   :args ((package :type "string"

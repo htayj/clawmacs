@@ -1,4 +1,4 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite llm-suite)
 
@@ -14,7 +14,7 @@
 
 (defun temp-test-token-path (provider)
   (let* ((base (make-pathname :directory (list :absolute "tmp"
-                                               (format nil "clawmacs-llm-tests-~A"
+                                               (format nil "rplaca-llm-tests-~A"
                                                        (list (get-universal-time)
                                                              (get-internal-real-time)
                                                              (gensym))))))
@@ -37,10 +37,10 @@
 (defmacro with-provider-token-path-overrides ((_removed-provider-path openai-codex-path &optional zai-path) &body body)
   (declare (ignore _removed-provider-path))
   `(let ((original-provider-token-path
-           (symbol-function 'clawmacs::provider-token-path)))
+           (symbol-function 'rplaca::provider-token-path)))
      (unwind-protect
           (progn
-            (setf (symbol-function 'clawmacs::provider-token-path)
+            (setf (symbol-function 'rplaca::provider-token-path)
                   (lambda (provider)
                     (case provider
                       (:openai-codex ,openai-codex-path)
@@ -48,12 +48,12 @@
                       (otherwise
                        (funcall original-provider-token-path provider)))))
             ,@body)
-       (setf (symbol-function 'clawmacs::provider-token-path)
+       (setf (symbol-function 'rplaca::provider-token-path)
              original-provider-token-path))))
 
 (defun temp-agent-defaults-path ()
   (let ((base (make-pathname :directory (list :absolute "tmp"
-                                              (format nil "clawmacs-agent-defaults-~A"
+                                              (format nil "rplaca-agent-defaults-~A"
                                                       (list (get-universal-time)
                                                             (get-internal-real-time)
                                                             (gensym)))))))
@@ -61,47 +61,47 @@
     (merge-pathnames "agent-defaults.json" base)))
 
 (defmacro with-agent-defaults-path-override ((path) &body body)
-  `(let ((clawmacs::*agent-defaults-path* ,path)
-         (clawmacs::*agent-defaults-registry* nil))
+  `(let ((rplaca::*agent-defaults-path* ,path)
+         (rplaca::*agent-defaults-registry* nil))
      ,@body))
 
 (defun temp-package-test-directory (label)
   (make-pathname :directory (list :absolute "tmp"
-                                  (format nil "clawmacs-package-tests-~A-~36R-~36R-~A"
+                                  (format nil "rplaca-package-tests-~A-~36R-~36R-~A"
                                           label
                                           (get-universal-time)
                                           (get-internal-real-time)
                                           (gensym)))))
 
 (defun default-package-test-channels ()
-  (list (clawmacs:make-package-channel
+  (list (rplaca:make-package-channel
          :name "default"
-         :root clawmacs:*default-package-channel-directory*
-         :description "Bundled Clawmacs packages"
+         :root rplaca:*default-package-channel-directory*
+         :description "Bundled RPLACA packages"
          :source :builtin)))
 
 (defmacro with-agent-definition-registry-override (() &body body)
-  `(let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal)))
+  `(let ((rplaca::*agent-definition-registry* (make-hash-table :test #'equal)))
      ,@body))
 
 (defmacro with-subagent-registry-override (() &body body)
-  `(let ((clawmacs::*subagent-handle-counter* 0)
-         (clawmacs::*subagent-handles* (make-hash-table :test #'equal))
-         (clawmacs::*subagent-registry-lock*
+  `(let ((rplaca::*subagent-handle-counter* 0)
+         (rplaca::*subagent-handles* (make-hash-table :test #'equal))
+         (rplaca::*subagent-registry-lock*
            (bt:make-lock "test-subagent-registry")))
      ,@body))
 
 (defmacro with-pipeline-definition-registry-override (() &body body)
-  `(let ((clawmacs::*pipeline-definition-registry*
+  `(let ((rplaca::*pipeline-definition-registry*
            (make-hash-table :test #'equal))
-         (clawmacs::*pipeline-test-profile-registry*
+         (rplaca::*pipeline-test-profile-registry*
            (make-hash-table :test #'equal))
-         (clawmacs:*default-pipeline-name* nil))
+         (rplaca:*default-pipeline-name* nil))
      ,@body))
 
 (defun temp-codex-auth-path ()
   (let ((base (make-pathname :directory (list :absolute "tmp"
-                                              (format nil "clawmacs-codex-auth-~A"
+                                              (format nil "rplaca-codex-auth-~A"
                                                       (list (get-universal-time)
                                                             (get-internal-real-time)
                                                             (gensym)))))))
@@ -109,7 +109,7 @@
     (merge-pathnames "auth.json" base)))
 
 (defmacro with-codex-auth-path-override ((path) &body body)
-  `(let ((clawmacs::*codex-auth-path* ,path))
+  `(let ((rplaca::*codex-auth-path* ,path))
      ,@body))
 
 (defun write-agent-defaults-file (path json)
@@ -193,7 +193,7 @@
   (bt:signal-semaphore (controlled-stream-read-release stream))
   (call-next-method))
 
-(defmethod clawmacs::interrupt-provider-stream-read
+(defmethod rplaca::interrupt-provider-stream-read
     ((stream controlled-character-input-stream))
   "Wake the controlled test read while leaving close ownership to its reader."
   (bt:signal-semaphore (controlled-stream-read-release stream))
@@ -241,19 +241,19 @@
       (close (observed-provider-underlying-stream stream) :abort abort))))
 
 #+sbcl
-(defmethod clawmacs::interrupt-provider-stream-read
+(defmethod rplaca::interrupt-provider-stream-read
     ((stream observed-provider-character-input-stream))
-  (clawmacs::interrupt-provider-stream-read
+  (rplaca::interrupt-provider-stream-read
    (observed-provider-underlying-stream stream)))
 
 (defun stream-state-reader-thread-snapshot (state)
-  (bt:with-lock-held ((clawmacs::stream-state-lock state))
-    (clawmacs::stream-state-reader-thread state)))
+  (bt:with-lock-held ((rplaca::stream-state-lock state))
+    (rplaca::stream-state-reader-thread state)))
 
 (defun join-test-stream-reader (state)
   (let ((thread (stream-state-reader-thread-snapshot state)))
     (when thread
-      (clawmacs::settle-stream-state-reader state))
+      (rplaca::settle-stream-state-reader state))
     thread))
 
 (defun write-test-file (path contents)
@@ -265,77 +265,77 @@
     (write-string contents stream)))
 
 (defmacro with-tool-table-restored (&body body)
-  `(let* ((snapshot (make-hash-table :test (hash-table-test clawmacs::*tool-table*)))
+  `(let* ((snapshot (make-hash-table :test (hash-table-test rplaca::*tool-table*)))
           (agent-tool-snapshot
             (make-hash-table
-             :test (hash-table-test clawmacs::*agent-tool-metadata-table*)))
+             :test (hash-table-test rplaca::*agent-tool-metadata-table*)))
           (agent-tool-name-snapshot
             (make-hash-table
-             :test (hash-table-test clawmacs::*agent-tool-name-table*)))
+             :test (hash-table-test rplaca::*agent-tool-name-table*)))
           (package-test-root (temp-package-test-directory "llm-package-config"))
-          (clawmacs::*package-configuration-path*
+          (rplaca::*package-configuration-path*
            (merge-pathnames "packages.json"
                             (uiop:ensure-directory-pathname package-test-root)))
-          (clawmacs::*package-configuration* nil)
-          (clawmacs::*package-channels* (default-package-test-channels))
-          (clawmacs::*available-packages* nil)
-          (clawmacs::*package-registry-loaded-p* nil)
-          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
-          (clawmacs::*package-prompt-sections* nil)
+          (rplaca::*package-configuration* nil)
+          (rplaca::*package-channels* (default-package-test-channels))
+          (rplaca::*available-packages* nil)
+          (rplaca::*package-registry-loaded-p* nil)
+          (rplaca::*loaded-packages* (make-hash-table :test #'equal))
+          (rplaca::*package-prompt-sections* nil)
           (*sessions-dir* (temp-session-test-directory "llm-sessions"))
-          (clawmacs::*buffer-ring* nil)
-          (clawmacs::*buffer-counter* 0)
-          (clawmacs::*startup-hook* nil)
-          (clawmacs::*initial-buffer-hook* nil)
-          (clawmacs::*before-command-hook* nil)
-          (clawmacs::*after-command-hook* nil)
-          (clawmacs::*before-tool-hook* nil)
-          (clawmacs::*after-tool-hook* nil)
-          (clawmacs::*before-send-message-hook* nil)
-          (clawmacs::*after-send-message-hook* nil)
-          (clawmacs::*after-buffer-create-hook* nil)
-          (clawmacs::*after-provider-response-hook* nil))
+          (rplaca::*buffer-ring* nil)
+          (rplaca::*buffer-counter* 0)
+          (rplaca::*startup-hook* nil)
+          (rplaca::*initial-buffer-hook* nil)
+          (rplaca::*before-command-hook* nil)
+          (rplaca::*after-command-hook* nil)
+          (rplaca::*before-tool-hook* nil)
+          (rplaca::*after-tool-hook* nil)
+          (rplaca::*before-send-message-hook* nil)
+          (rplaca::*after-send-message-hook* nil)
+          (rplaca::*after-buffer-create-hook* nil)
+          (rplaca::*after-provider-response-hook* nil))
      (maphash (lambda (key value)
                 (setf (gethash key snapshot) value))
-              clawmacs::*tool-table*)
+              rplaca::*tool-table*)
      (maphash (lambda (key value)
                 (setf (gethash key agent-tool-snapshot) value))
-              clawmacs::*agent-tool-metadata-table*)
+              rplaca::*agent-tool-metadata-table*)
      (maphash (lambda (key value)
                 (setf (gethash key agent-tool-name-snapshot) value))
-              clawmacs::*agent-tool-name-table*)
+              rplaca::*agent-tool-name-table*)
      (unwind-protect
           (progn
             ,@body)
-       (clrhash clawmacs::*tool-table*)
+       (clrhash rplaca::*tool-table*)
        (maphash (lambda (key value)
-                  (setf (gethash key clawmacs::*tool-table*) value))
+                  (setf (gethash key rplaca::*tool-table*) value))
                 snapshot)
-       (clrhash clawmacs::*agent-tool-metadata-table*)
+       (clrhash rplaca::*agent-tool-metadata-table*)
        (maphash (lambda (key value)
-                  (setf (gethash key clawmacs::*agent-tool-metadata-table*)
+                  (setf (gethash key rplaca::*agent-tool-metadata-table*)
                         value))
                 agent-tool-snapshot)
-       (clrhash clawmacs::*agent-tool-name-table*)
+       (clrhash rplaca::*agent-tool-name-table*)
        (maphash (lambda (key value)
-                  (setf (gethash key clawmacs::*agent-tool-name-table*) value))
+                  (setf (gethash key rplaca::*agent-tool-name-table*) value))
                 agent-tool-name-snapshot))))
 
 (defun initialize-test-tools ()
   "Initialize the tool table with the bundled lispi package enabled."
-  (clawmacs::init-tools)
-  (clawmacs:set-package-enablement-scope "lispi" :global)
-  (clawmacs:load-active-packages))
+  (rplaca::init-tools)
+  (rplaca:set-package-enablement-scope "lispi" :global)
+  (rplaca:load-active-packages))
 
 (defun append-test-user-message (buf text)
-  (clawmacs::set-message-text (buffer-input-message buf) text)
+  (rplaca::set-message-text (buffer-input-message buf) text)
   (buffer-finalize-input buf)
   (message-prev (buffer-input-message buf)))
 
 (defun test-buffer-history-messages (buf)
   (loop :for msg := (buffer-first-message buf) :then (message-next msg)
         :while (and msg (not (eq msg (buffer-input-message buf))))
-        :unless (clawmacs::buffer-ephemeral-display-message-p msg)
+        :unless (rplaca::buffer-ephemeral-display-message-p msg)
         :collect msg))
 
 (defun test-buffer-history-senders (buf)
@@ -343,12 +343,12 @@
 
 (defun make-completed-stream-state-response (stop-reason content-blocks
                                              &optional usage)
-  (let ((state (clawmacs::make-stream-state)))
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (setf (clawmacs::stream-state-stop-reason state) stop-reason
-            (clawmacs::stream-state-content-blocks state) (reverse content-blocks)
-            (clawmacs::stream-state-usage state) usage
-            (clawmacs::stream-state-done-p state) t))
+  (let ((state (rplaca::make-stream-state)))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (setf (rplaca::stream-state-stop-reason state) stop-reason
+            (rplaca::stream-state-content-blocks state) (reverse content-blocks)
+            (rplaca::stream-state-usage state) usage
+            (rplaca::stream-state-done-p state) t))
     state))
 
 (defun write-codex-auth-json (path payload)
@@ -357,7 +357,7 @@
                           :direction :output
                           :if-exists :supersede
                           :if-does-not-exist :create)
-    (write-string (clawmacs::api-json-encode payload) stream)))
+    (write-string (rplaca::api-json-encode payload) stream)))
 
 (defun make-codex-chatgpt-auth-payload (&key
                                           (access-token "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig")
@@ -383,45 +383,45 @@
 (test provider-token-paths
   "Provider token paths are provider-specific."
   (let ((home (user-homedir-pathname)))
-    (is (equal (merge-pathnames #P".config/clawmacs/openai-codex-token" home)
-               (clawmacs::provider-token-path :openai-codex)))
-    (is (equal (merge-pathnames #P".config/clawmacs/zai-api-key" home)
-               (clawmacs::provider-token-path :zai)))
-    (is (equal (merge-pathnames #P".config/clawmacs/openrouter-api-key" home)
-               (clawmacs::provider-token-path :openrouter)))))
+    (is (equal (merge-pathnames #P".config/rplaca/openai-codex-token" home)
+               (rplaca::provider-token-path :openai-codex)))
+    (is (equal (merge-pathnames #P".config/rplaca/zai-api-key" home)
+               (rplaca::provider-token-path :zai)))
+    (is (equal (merge-pathnames #P".config/rplaca/openrouter-api-key" home)
+               (rplaca::provider-token-path :openrouter)))))
 
 (test provider-token-path-unknown-provider
   "Unknown providers signal a clear error."
   (signals error
-    (clawmacs::provider-token-path :unknown-provider)))
+    (rplaca::provider-token-path :unknown-provider)))
 
 (test init-tools-registers-pi-style-tools-by-default
   "Enabling the bundled lispi package exposes file tools beside core tools."
   (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
+    (clrhash rplaca::*tool-table*)
     (initialize-test-tools)
     (let* ((*current-caller* :user)
-           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tools (coerce (rplaca::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
       (is (equal '("edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names))
-      (is (string= "CLAWMACS" clawmacs:*lisp-eval-default-package*))
+      (is (string= "RPLACA" rplaca:*lisp-eval-default-package*))
       (dolist (name '("read" "find" "grep" "write" "edit" "lisp_eval"))
-        (is (not (null (gethash name clawmacs::*tool-table*)))))
-      (is (null (gethash "http_fetch" clawmacs::*tool-table*)))
-      (is (null (gethash "file_read" clawmacs::*tool-table*)))
-      (is (null (gethash "file_write" clawmacs::*tool-table*)))
-      (is (null (gethash "file_edit" clawmacs::*tool-table*)))
-      (is (null (gethash "shell_exec" clawmacs::*tool-table*))))))
+        (is (not (null (gethash name rplaca::*tool-table*)))))
+      (is (null (gethash "http_fetch" rplaca::*tool-table*)))
+      (is (null (gethash "file_read" rplaca::*tool-table*)))
+      (is (null (gethash "file_write" rplaca::*tool-table*)))
+      (is (null (gethash "file_edit" rplaca::*tool-table*)))
+      (is (null (gethash "shell_exec" rplaca::*tool-table*))))))
 
 (test tool-definitions-for-api-returns-stable-name-order
   "Provider tool definitions are sorted by name for deterministic prompts."
   (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
+    (clrhash rplaca::*tool-table*)
     (initialize-test-tools)
     (let* ((*current-caller* :user)
-           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tools (coerce (rplaca::tool-definitions-for-api) 'list))
            (tool-names (mapcar (lambda (tool)
                                  (cdr (assoc :name tool)))
                                tools)))
@@ -433,11 +433,11 @@
   (with-tool-table-restored
     (initialize-test-tools)
     (let ((request-count 0))
-      (with-function-override (clawmacs::resolve-buffer-provider-and-model
+      (with-function-override (rplaca::resolve-buffer-provider-and-model
                                (buffer)
                                (declare (ignore buffer))
                                (values :zai "glm-test" nil))
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                              reasoning-effort system-prompt
@@ -451,23 +451,23 @@
                                      (make-completed-stream-state-response
                                       "tool_use"
                                       (list
-                                       (clawmacs::canonical-tool-use-block
+                                       (rplaca::canonical-tool-use-block
                                         "call-1"
                                         "lisp_eval"
                                         '((:code . "(+ 1 1)")
-                                          (:package . "CLAWMACS")))))
+                                          (:package . "RPLACA")))))
                                      (make-completed-stream-state-response
                                       "end_turn"
                                       (list
-                                       (clawmacs::canonical-text-block
+                                       (rplaca::canonical-text-block
                                         "the result is 2")))))
           (let ((buf (make-buffer "mcclim-live-eval" :agent-name "agent")))
-            (clawmacs::start-streaming-response buf)
+            (rplaca::start-streaming-response buf)
             (is (= 1 request-count))
-            (is-true (clawmacs::update-streaming-response buf))
+            (is-true (rplaca::update-streaming-response buf))
             (is (null (buffer-pending-tool-execution buf)))
             (is (= 2 request-count))
-            (is-false (clawmacs::update-streaming-response buf))
+            (is-false (rplaca::update-streaming-response buf))
             (let ((messages (test-buffer-history-messages buf)))
               (is (member :tool-result
                           (mapcar #'message-sender messages)))
@@ -513,38 +513,38 @@
   "The McCLIM chat frame binds Return/Newline to submit the message."
   (let* ((buf (make-buffer "mcclim-ret-submit" :agent-name "agent"))
          (frame (clim:make-application-frame
-                 'clawmacs::clawmacs-chat-frame
+                 'rplaca::rplaca-chat-frame
                  :buffer buf))
-         (table (clim:find-command-table 'clawmacs::clawmacs-chat-frame))
+         (table (clim:find-command-table 'rplaca::rplaca-chat-frame))
          (menu-table (clim:frame-command-table frame))
          (drei-order-table
            (clim:make-command-table
             nil
             :inherit-from (list menu-table 'drei:editor-table))))
     (is (clim:command-accessible-in-command-table-p
-         'clawmacs::com-chat-submit-compose
+         'rplaca::com-chat-submit-compose
          table))
-    (is (equal '(clawmacs::com-chat-submit-compose)
+    (is (equal '(rplaca::com-chat-submit-compose)
                (test-command-table-key-command table #\Return)))
-    (is (equal '(clawmacs::com-chat-submit-compose)
+    (is (equal '(rplaca::com-chat-submit-compose)
                (test-command-table-key-command table #\Newline)))
-    (is (equal '(clawmacs::com-chat-submit-compose)
+    (is (equal '(rplaca::com-chat-submit-compose)
                (test-command-table-key-command menu-table #\Return)))
-    (is (equal '(clawmacs::com-chat-submit-compose)
+    (is (equal '(rplaca::com-chat-submit-compose)
                (test-command-table-key-command drei-order-table #\Return)))
-    (is (equal '(clawmacs::com-chat-submit-compose)
+    (is (equal '(rplaca::com-chat-submit-compose)
                (test-command-table-key-command drei-order-table #\Newline)))
-    (clawmacs::init-default-keymap)
-    (clawmacs::install-chat-frame-keybindings)
-    (is (equal '(clawmacs::com-chat-dispatch-key '(:meta #\x))
+    (rplaca::init-default-keymap)
+    (rplaca::install-chat-frame-keybindings)
+    (is (equal '(rplaca::com-chat-dispatch-key '(:meta #\x))
                (test-command-table-key-command table #\x
                                                :modifiers '(:meta))))
-    (is (equal '(clawmacs::com-chat-dispatch-key '(:ctrl-x #\b))
+    (is (equal '(rplaca::com-chat-dispatch-key '(:ctrl-x #\b))
                (test-command-table-key-sequence-command
                 table
                 `((#\x :modifiers (:control))
                   (#\b)))))
-    (is (equal '(clawmacs::com-chat-dispatch-key '(:ctrl-h #\b))
+    (is (equal '(rplaca::com-chat-dispatch-key '(:ctrl-h #\b))
                (test-command-table-key-sequence-command
                 drei-order-table
                 `((#\h :modifiers (:control))
@@ -554,7 +554,7 @@
                    (test-command-table-key-event #\V)
                    (test-command-table-key-event #\V :modifiers '(:shift))
                    (test-command-table-key-event #\v :modifiers '(:shift))))
-      (is (equal '(clawmacs::com-chat-dispatch-key '(:ctrl-c #\V))
+      (is (equal '(rplaca::com-chat-dispatch-key '(:ctrl-c #\V))
                  (let ((item
                          (esa::find-gestures-with-inheritance
                           (list (test-command-table-key-event
@@ -562,11 +562,11 @@
                                 second-gesture)
                           table)))
                    (and item (clim:command-menu-item-value item))))))
-    (is-false (equal '(clawmacs::com-chat-dispatch-key #\Soh)
+    (is-false (equal '(rplaca::com-chat-dispatch-key #\Soh)
                      (test-command-table-key-command table #\a
                                                      :modifiers '(:control))))
     (is-true
-     (clawmacs::chat-compose-submit-event-p
+     (rplaca::chat-compose-submit-event-p
       (make-instance 'clim:key-press-event
                      :sheet nil
                      :x 0
@@ -575,7 +575,7 @@
                      :key-character #\Newline
                      :modifier-state (clim:make-modifier-state))))
     (is-false
-     (clawmacs::chat-compose-submit-event-p
+     (rplaca::chat-compose-submit-event-p
       (make-instance 'clim:key-press-event
                      :sheet nil
                      :x 0
@@ -585,13 +585,13 @@
                      :modifier-state (clim:make-modifier-state :control))))))
 
 (test mcclim-compose-pane-is-drei-gadget
-  "The chat compose pane uses a Drei gadget editor with Clawmacs command tables."
-  (let ((compose (make-instance 'clawmacs::clawmacs-chat-compose-pane)))
+  "The chat compose pane uses a Drei gadget editor with RPLACA command tables."
+  (let ((compose (make-instance 'rplaca::rplaca-chat-compose-pane)))
     (is (typep compose 'drei:drei-gadget-pane))
-    (is (typep compose 'clawmacs::clawmacs-chat-compose-pane))
+    (is (typep compose 'rplaca::rplaca-chat-compose-pane))
     (setf (clim:gadget-value compose) "hello")
     (is (string= "hello" (clim:gadget-value compose)))
-    (clawmacs::configure-chat-compose-pane compose)
+    (rplaca::configure-chat-compose-pane compose)
     (is (eq :wrap* (clim:stream-end-of-line-action compose)))))
 
 (test mcclim-compose-drei-control-editing-gestures
@@ -599,8 +599,8 @@
   (let* ((editor-table (clim:find-command-table 'drei:editor-table))
          (compose-table
            (clim:find-command-table
-            'clawmacs::clawmacs-chat-compose-editing-table))
-         (compose (make-instance 'clawmacs::clawmacs-chat-compose-pane
+            'rplaca::rplaca-chat-compose-editing-table))
+         (compose (make-instance 'rplaca::rplaca-chat-compose-pane
                                  :initial-contents "hello world"))
          (plain-drei (make-instance 'drei:drei-gadget-pane))
          (control-j (make-instance 'clim:key-press-event
@@ -725,7 +725,7 @@
                (test-command-table-key-command compose-table #\w
                                                :modifiers '(:control))))
     (is (equal '(drei-commands::com-kill-line 0 t)
-               (clawmacs::chat-compose-drei-direct-command control-u)))
+               (rplaca::chat-compose-drei-direct-command control-u)))
     (is (equal `(drei-commands::com-backward-delete-object
                  ,clim:*numeric-argument-marker*
                  ,clim:*numeric-argument-marker*)
@@ -736,72 +736,72 @@
     (is-false
      (test-command-table-key-command editor-table #\Backspace
                                      :modifiers '(:control)))
-    (is (member 'clawmacs::clawmacs-chat-compose-editing-table
+    (is (member 'rplaca::rplaca-chat-compose-editing-table
                 (drei-syntax:additional-command-tables compose editor-table)))
     (is-false
-     (member 'clawmacs::clawmacs-chat-compose-editing-table
+     (member 'rplaca::rplaca-chat-compose-editing-table
              (drei-syntax:additional-command-tables plain-drei editor-table)))
-    (is-true (clawmacs::chat-compose-drei-control-editing-event-p control-j))
-    (is-false (clawmacs::chat-compose-encoded-control-character
+    (is-true (rplaca::chat-compose-drei-control-editing-event-p control-j))
+    (is-false (rplaca::chat-compose-encoded-control-character
                plain-backspace))
-    (is-false (clawmacs::chat-compose-encoded-control-character
+    (is-false (rplaca::chat-compose-encoded-control-character
                named-plain-backspace))
-    (is-false (clawmacs::chat-compose-modified-key-event-p plain-backspace))
-    (is-false (clawmacs::chat-compose-modified-key-event-p modifier-only))
-    (clawmacs::process-chat-compose-drei-event compose control-j)
+    (is-false (rplaca::chat-compose-modified-key-event-p plain-backspace))
+    (is-false (rplaca::chat-compose-modified-key-event-p modifier-only))
+    (rplaca::process-chat-compose-drei-event compose control-j)
     (is (string= (format nil "~%hello world")
                  (clim:gadget-value compose)))
     (setf (clim:gadget-value compose) "hello world")
     (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
-    (is-true (clawmacs::chat-compose-modified-key-event-p control-b))
-    (clawmacs::process-chat-compose-drei-event compose control-b)
+    (is-true (rplaca::chat-compose-modified-key-event-p control-b))
+    (rplaca::process-chat-compose-drei-event compose control-b)
     (is (= (1- (length (clim:gadget-value compose)))
            (drei-buffer:offset (drei:point (drei:current-view compose)))))
     (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
-    (is (eql #\b (clawmacs::chat-compose-encoded-control-character
+    (is (eql #\b (rplaca::chat-compose-encoded-control-character
                   encoded-control-b)))
-    (is-true (clawmacs::chat-compose-modified-key-event-p encoded-control-b))
-    (clawmacs::process-chat-compose-drei-event compose encoded-control-b)
+    (is-true (rplaca::chat-compose-modified-key-event-p encoded-control-b))
+    (rplaca::process-chat-compose-drei-event compose encoded-control-b)
     (is (= (1- (length (clim:gadget-value compose)))
            (drei-buffer:offset (drei:point (drei:current-view compose)))))
     (setf (drei-buffer:offset (drei:point (drei:current-view compose))) 0)
-    (is-true (clawmacs::chat-compose-modified-key-event-p meta-f))
-    (clawmacs::process-chat-compose-drei-event compose meta-f)
+    (is-true (rplaca::chat-compose-modified-key-event-p meta-f))
+    (rplaca::process-chat-compose-drei-event compose meta-f)
     (is (= 5 (drei-buffer:offset (drei:point (drei:current-view compose)))))
     (setf (clim:gadget-value compose) "hello world")
     (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
-    (clawmacs::process-chat-compose-drei-event compose plain-backspace)
+    (rplaca::process-chat-compose-drei-event compose plain-backspace)
     (is (string= "hello worl" (clim:gadget-value compose)))
     (setf (clim:gadget-value compose) "hello world")
     (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
-    (is-true (clawmacs::chat-compose-drei-control-editing-event-p
+    (is-true (rplaca::chat-compose-drei-control-editing-event-p
               control-backspace))
-    (clawmacs::process-chat-compose-drei-event compose control-backspace)
+    (rplaca::process-chat-compose-drei-event compose control-backspace)
     (is (string= "hello " (clim:gadget-value compose)))
     (setf (clim:gadget-value compose) "hello world")
     (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
-    (is-true (clawmacs::chat-compose-drei-control-editing-event-p
+    (is-true (rplaca::chat-compose-drei-control-editing-event-p
               control-named-backspace))
-    (clawmacs::process-chat-compose-drei-event compose control-named-backspace)
+    (rplaca::process-chat-compose-drei-event compose control-named-backspace)
     (is (string= "hello " (clim:gadget-value compose)))
     (setf (clim:gadget-value compose) "hello world")
     (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
-    (clawmacs::process-chat-compose-drei-event compose control-w)
+    (rplaca::process-chat-compose-drei-event compose control-w)
     (is (string= "hello " (clim:gadget-value compose)))
-    (clawmacs::process-chat-compose-drei-event compose control-underscore)
+    (rplaca::process-chat-compose-drei-event compose control-underscore)
     (is (string= "hello world" (clim:gadget-value compose)))
     (setf (clim:gadget-value compose) (format nil "alpha~%beta"))
     (setf (drei-buffer:offset (drei:point (drei:current-view compose)))
           (length (clim:gadget-value compose)))
-    (clawmacs::process-chat-compose-drei-event compose control-u)
+    (rplaca::process-chat-compose-drei-event compose control-u)
     (is (string= (format nil "alpha~%") (clim:gadget-value compose)))
-    (clawmacs::process-chat-compose-drei-event compose control-underscore)
+    (rplaca::process-chat-compose-drei-event compose control-underscore)
     (is (string= (format nil "alpha~%beta")
                  (clim:gadget-value compose)))))
 
@@ -841,18 +841,18 @@
   "The chat compose configuration uses CLIM stream soft wrapping when supported."
   (let ((pane (make-instance 'soft-wrap-test-pane)))
     (is (eq :scroll (clim:stream-end-of-line-action pane)))
-    (clawmacs::configure-chat-compose-pane pane)
+    (rplaca::configure-chat-compose-pane pane)
     (is (eq :wrap* (clim:stream-end-of-line-action pane)))))
 
 (test mcclim-compose-pane-skips-soft-wrap-when-unsupported
   "The compatibility helper leaves panes without the CLIM writer untouched."
   (let ((pane (make-instance 'no-soft-wrap-test-pane)))
-    (is (eq pane (clawmacs::configure-chat-compose-pane pane)))))
+    (is (eq pane (rplaca::configure-chat-compose-pane pane)))))
 
 (test mcclim-compose-pane-does-not-hard-wrap-text-editor-value
   "Current McCLIM text-editor gadgets do not get approximate hard newlines inserted."
   (let ((pane (make-instance 'clim:text-editor-pane :value "hello world")))
-    (clawmacs::configure-chat-compose-pane pane)
+    (rplaca::configure-chat-compose-pane pane)
     (is (string= "hello world" (clim:gadget-value pane)))))
 
 (defclass transcript-scroll-test-region ()
@@ -885,22 +885,22 @@
 (test mcclim-transcript-bottom-scroll-uses-output-and-viewport-heights
   "Transcript tail following computes Listener-style bottom scroll offsets."
   (is (= 800
-         (clawmacs::chat-transcript-bottom-scroll-y-from-heights 1200 400)))
+         (rplaca::chat-transcript-bottom-scroll-y-from-heights 1200 400)))
   (is (= 0
-         (clawmacs::chat-transcript-bottom-scroll-y-from-heights 300 400)))
+         (rplaca::chat-transcript-bottom-scroll-y-from-heights 300 400)))
   (let* ((history (make-instance 'transcript-scroll-test-region :height 1200))
          (viewport (make-instance 'transcript-scroll-test-region :height 400))
          (pane (make-instance 'transcript-scroll-test-pane
                               :history history
                               :viewport viewport)))
-    (is (= 800 (clawmacs::chat-transcript-scroll-to-bottom pane)))
+    (is (= 800 (rplaca::chat-transcript-scroll-to-bottom pane)))
     (is (= 0 (transcript-scroll-test-pane-scroll-x pane)))
     (is (= 800 (transcript-scroll-test-pane-scroll-y pane)))))
 
 (test mcclim-chat-menu-bar-exposes-toolbar-commands
   "The McCLIM chat frame exposes its MVP toolbar through command-table menus."
   (let* ((menu-table (clim:find-command-table
-                      'clawmacs::clawmacs-chat-frame))
+                      'rplaca::rplaca-chat-frame))
          (chat-menu (clim:find-menu-item "Chat" menu-table :errorp nil))
          (view-menu (clim:find-menu-item "View" menu-table :errorp nil))
          (skills-menu (clim:find-menu-item "Skills" menu-table :errorp nil))
@@ -926,36 +926,36 @@
       (flet ((menu-command (name table)
                (let ((item (clim:find-menu-item name table :errorp nil)))
                  (and item (clim:command-menu-item-value item)))))
-        (is (eq 'clawmacs::com-chat-stop-response
+        (is (eq 'rplaca::com-chat-stop-response
                 (menu-command "Stop Response" chat-table)))
-        (is (eq 'clawmacs::com-chat-toggle-tool-results
+        (is (eq 'rplaca::com-chat-toggle-tool-results
                 (menu-command "Toggle Tool Results" view-table)))
-        (is (eq 'clawmacs::com-chat-toggle-reasoning-output
+        (is (eq 'rplaca::com-chat-toggle-reasoning-output
                 (menu-command "Toggle Reasoning Output" view-table)))
-        (is (eq 'clawmacs::com-chat-toggle-metadata-output
+        (is (eq 'rplaca::com-chat-toggle-metadata-output
                 (menu-command "Toggle Metadata Output" view-table)))
-        (is (eq 'clawmacs::com-chat-toggle-debug-mode
+        (is (eq 'rplaca::com-chat-toggle-debug-mode
                 (menu-command "Toggle Debug Mode" view-table)))
-        (is (eq 'clawmacs::com-chat-open-effort-selector
+        (is (eq 'rplaca::com-chat-open-effort-selector
                 (menu-command "Select Think Level..." effort-table)))
-        (is (eq 'clawmacs::com-chat-safe-reload
+        (is (eq 'rplaca::com-chat-safe-reload
                 (menu-command "Safe Reload" system-table)))
-        (is (eq 'clawmacs::com-chat-recurse
+        (is (eq 'rplaca::com-chat-recurse
                 (menu-command "Recurse" system-table)))))
-    (dolist (command '(clawmacs::com-chat-stop-response
-                       clawmacs::com-chat-toggle-tool-results
-                       clawmacs::com-chat-toggle-reasoning-output
-                       clawmacs::com-chat-toggle-metadata-output
-                       clawmacs::com-chat-toggle-debug-mode
-                       clawmacs::com-chat-open-skill-selector
-                       clawmacs::com-chat-open-package-dashboard
-                       clawmacs::com-chat-open-effort-selector
-                       clawmacs::com-chat-submit-compose
-                       clawmacs::com-chat-toggle-skill
-                       clawmacs::com-chat-toggle-package
-                       clawmacs::com-chat-select-effort
-                       clawmacs::com-chat-safe-reload
-                       clawmacs::com-chat-recurse))
+    (dolist (command '(rplaca::com-chat-stop-response
+                       rplaca::com-chat-toggle-tool-results
+                       rplaca::com-chat-toggle-reasoning-output
+                       rplaca::com-chat-toggle-metadata-output
+                       rplaca::com-chat-toggle-debug-mode
+                       rplaca::com-chat-open-skill-selector
+                       rplaca::com-chat-open-package-dashboard
+                       rplaca::com-chat-open-effort-selector
+                       rplaca::com-chat-submit-compose
+                       rplaca::com-chat-toggle-skill
+                       rplaca::com-chat-toggle-package
+                       rplaca::com-chat-select-effort
+                       rplaca::com-chat-safe-reload
+                       rplaca::com-chat-recurse))
       (is (clim:command-accessible-in-command-table-p
            command menu-table)))))
 
@@ -978,14 +978,14 @@
 (test mcclim-chat-system-menu-exposes-recurse-command
   "The McCLIM system menu exposes safe reload and recurse frame commands."
   (let* ((menu-table (clim:find-command-table
-                      'clawmacs::clawmacs-chat-frame))
+                      'rplaca::rplaca-chat-frame))
          (system-table (test-chat-menu-submenu menu-table "System")))
     (is (equal '("Safe Reload" "Recurse")
                (test-command-table-menu-labels system-table)))
-    (is (eq 'clawmacs::com-chat-safe-reload
+    (is (eq 'rplaca::com-chat-safe-reload
             (clim:command-menu-item-value
              (clim:find-menu-item "Safe Reload" system-table :errorp t))))
-    (is (eq 'clawmacs::com-chat-recurse
+    (is (eq 'rplaca::com-chat-recurse
             (clim:command-menu-item-value
              (clim:find-menu-item "Recurse" system-table :errorp t))))))
 
@@ -993,7 +993,7 @@
   "View commands mutate state without replacing the live menu gadget tree."
   (let* ((buf (make-buffer "view-toolbar" :agent-name "agent"))
          (frame (clim:make-application-frame
-                 'clawmacs::clawmacs-chat-frame
+                 'rplaca::rplaca-chat-frame
                  :buffer buf)))
     (let ((*debug-mode* nil))
       (let* ((before (clim:frame-command-table frame))
@@ -1004,15 +1004,15 @@
                      "Toggle Metadata Output"
                      "Toggle Debug Mode")
                    labels))
-        (clawmacs::run-chat-frame-buffer-command
+        (rplaca::run-chat-frame-buffer-command
          frame
-         #'clawmacs::toggle-reasoning-output-command)
-        (clawmacs::run-chat-frame-buffer-command
+         #'rplaca::toggle-reasoning-output-command)
+        (rplaca::run-chat-frame-buffer-command
          frame
-         #'clawmacs::toggle-metadata-output-command)
-        (clawmacs::run-chat-frame-buffer-command
+         #'rplaca::toggle-metadata-output-command)
+        (rplaca::run-chat-frame-buffer-command
          frame
-         #'clawmacs::toggle-debug-mode-command)
+         #'rplaca::toggle-debug-mode-command)
         (is (eq before (clim:frame-command-table frame)))
         (is (equal labels
                    (test-command-table-menu-labels
@@ -1024,7 +1024,7 @@
   (with-agent-definition-registry-override ()
     (let* ((buf (make-buffer "effort-toolbar" :agent-name "agent"))
            (frame (clim:make-application-frame
-                   'clawmacs::clawmacs-chat-frame
+                   'rplaca::rplaca-chat-frame
                    :buffer buf)))
       (set-buffer-provider-override buf :openai-codex)
       (set-buffer-model-override buf "gpt-5.4")
@@ -1036,9 +1036,9 @@
                (clim:find-menu-item "Select Think Level..."
                                     effort-menu :errorp nil)))
         (is (not (null effort-menu-item)))
-        (is (eq 'clawmacs::com-chat-open-effort-selector
+        (is (eq 'rplaca::com-chat-open-effort-selector
                 (clim:command-menu-item-value selector-item))))
-      (clawmacs::select-chat-effort-for-buffer buf "high")
+      (rplaca::select-chat-effort-for-buffer buf "high")
       (is (string= "high" (buffer-think-level-override buf))))))
 
 (test mcclim-chat-skills-menu-opens-selector-and-helper-toggles-state
@@ -1048,17 +1048,17 @@
     (register-skill-root root)
     (let* ((buf (make-buffer "skill-toolbar"))
            (skill (first (list-skills :include-disabled t)))
-           (key (clawmacs::skill-path-key skill)))
+           (key (rplaca::skill-path-key skill)))
       (let ((menu-table (clim:find-command-table
-                         'clawmacs::clawmacs-chat-frame)))
+                         'rplaca::rplaca-chat-frame)))
         (let* ((skills (test-chat-menu-submenu menu-table "Skills"))
                (item (clim:find-menu-item "Toggle Skill..."
                                           skills :errorp nil)))
-          (is (eq 'clawmacs::com-chat-open-skill-selector
+          (is (eq 'rplaca::com-chat-open-skill-selector
                   (clim:command-menu-item-value item)))))
-      (is-false (clawmacs::toggle-chat-skill-for-buffer buf key))
+      (is-false (rplaca::toggle-chat-skill-for-buffer buf key))
       (is-false (skill-enabled-p
-                 (clawmacs::find-skill-by-path key :include-disabled t)))
+                 (rplaca::find-skill-by-path key :include-disabled t)))
       (is (search "[Skill demo disabled]"
                   (message-text (message-prev (buffer-input-message buf))))))))
 
@@ -1070,10 +1070,10 @@
            (default-buffer (make-buffer "default-package-toolbar"
                                         :agent-name "agent"))
            (enabled-frame (clim:make-application-frame
-                           'clawmacs::clawmacs-chat-frame
+                           'rplaca::rplaca-chat-frame
                            :buffer enabled-buffer))
            (default-frame (clim:make-application-frame
-                           'clawmacs::clawmacs-chat-frame
+                           'rplaca::rplaca-chat-frame
                            :buffer default-buffer)))
       (is (eq (clim:frame-command-table enabled-frame)
               (clim:frame-command-table default-frame)))
@@ -1082,7 +1082,7 @@
                           (clim:frame-command-table frame) "Packages"))
                (item (clim:find-menu-item "Open Package Dashboard..."
                                           packages :errorp nil)))
-          (is (eq 'clawmacs::com-chat-open-package-dashboard
+          (is (eq 'rplaca::com-chat-open-package-dashboard
                   (clim:command-menu-item-value item))))))))
 
 (test mcclim-chat-package-helper-toggles-state-without-changing-menu
@@ -1090,27 +1090,27 @@
   (with-package-state-override ((default-package-test-channels))
     (let ((buf (make-buffer "package-toolbar" :agent-name "agent")))
       (let ((menu-table (clim:find-command-table
-                         'clawmacs::clawmacs-chat-frame)))
-        (is-true (clawmacs::toggle-chat-package-for-buffer buf "sexed"))
+                         'rplaca::rplaca-chat-frame)))
+        (is-true (rplaca::toggle-chat-package-for-buffer buf "sexed"))
         (is (member "sexed" (buffer-enabled-packages buf) :test #'string=))
-        (is-false (clawmacs::package-enabled-globally-p "sexed"))
-        (is-false (clawmacs::toggle-chat-package-for-buffer buf "sexed"))
+        (is-false (rplaca::package-enabled-globally-p "sexed"))
+        (is-false (rplaca::toggle-chat-package-for-buffer buf "sexed"))
         (is-false (member "sexed" (buffer-enabled-packages buf)
                           :test #'string=))
         (let* ((packages (test-chat-menu-submenu menu-table "Packages"))
                (item (clim:find-menu-item "Open Package Dashboard..."
                                           packages :errorp nil)))
-          (is (eq 'clawmacs::com-chat-open-package-dashboard
+          (is (eq 'rplaca::com-chat-open-package-dashboard
                   (clim:command-menu-item-value item))))))))
 
 (test chat-recurse-launch-spec-uses-current-buffer-state
   "Recurse launch specs inherit the current buffer agent and working directory."
   (let* ((working-directory
-           (uiop:ensure-directory-pathname #P"/tmp/clawmacs-recurse-spec/"))
+           (uiop:ensure-directory-pathname #P"/tmp/rplaca-recurse-spec/"))
          (buffer (make-buffer "spec-buffer"
                               :agent-name "tester"
                               :working-directory working-directory))
-         (spec (clawmacs::chat-recurse-launch-spec
+         (spec (rplaca::chat-recurse-launch-spec
                 buffer
                 :repo-root #P"/workspace/"
                 :quicklisp-setup #P"/tmp/fake-quicklisp/setup.lisp"
@@ -1121,12 +1121,12 @@
     (is (equal "Recursive Window" (getf spec :window-title)))
     (is (equal working-directory (getf spec :working-directory)))
     (is (equal "sbcl" (first (getf spec :argv))))
-    (is (member "(ql:quickload :clawmacs)" (getf spec :argv) :test #'string=))
-    (is (member "(asdf:load-system :clawmacs :force t)"
+    (is (member "(ql:quickload :rplaca)" (getf spec :argv) :test #'string=))
+    (is (member "(asdf:load-system :rplaca :force t)"
                 (getf spec :argv)
                 :test #'string=))
     (let* ((argv (getf spec :argv))
-           (startup-form (nth (+ 2 (position "(asdf:load-system :clawmacs :force t)"
+           (startup-form (nth (+ 2 (position "(asdf:load-system :rplaca :force t)"
                                             argv
                                             :test #'string=
                                             :from-end t))
@@ -1134,63 +1134,63 @@
       (is (search ":session-name \"recursive-session\"" startup-form))
       (is (search ":agent-name \"tester\"" startup-form))
       (is (search ":window-title \"Recursive Window\"" startup-form))
-      (is (search ":working-directory \"/tmp/clawmacs-recurse-spec/\""
+      (is (search ":working-directory \"/tmp/rplaca-recurse-spec/\""
                   startup-form)))))
 
 (test chat-recurse-command-records-child-launch-message
   "Running recurse inserts a status message describing the child launch."
   (let* ((working-directory
-           (uiop:ensure-directory-pathname #P"/tmp/clawmacs-recurse-command/"))
+           (uiop:ensure-directory-pathname #P"/tmp/rplaca-recurse-command/"))
          (buf (make-buffer "recurse-buffer"
                            :agent-name "tester"
                            :working-directory working-directory))
          (launch-calls nil)
-         (original-launch (symbol-function 'clawmacs::launch-chat-recurse)))
+         (original-launch (symbol-function 'rplaca::launch-chat-recurse)))
     (unwind-protect
          (progn
-           (setf (symbol-function 'clawmacs::launch-chat-recurse)
+           (setf (symbol-function 'rplaca::launch-chat-recurse)
                  (lambda (buffer)
                    (push buffer launch-calls)
-                   (list :window-title "Clawmacs Recurse - recurse-buffer"
+                   (list :window-title "RPLACA Recurse - recurse-buffer"
                          :session-name "recurse-session"
                          :working-directory working-directory)))
            (let ((frame (clim:make-application-frame
-                         'clawmacs::clawmacs-chat-frame
+                         'rplaca::rplaca-chat-frame
                          :buffer buf)))
-             (clim:execute-frame-command frame '(clawmacs::com-chat-recurse)))
+             (clim:execute-frame-command frame '(rplaca::com-chat-recurse)))
            (is (equal (list buf) launch-calls))
            (let ((status (message-prev (buffer-input-message buf))))
              (is (eq :system (message-sender status)))
-             (is (search "Opened recurse frame Clawmacs Recurse - recurse-buffer"
+             (is (search "Opened recurse frame RPLACA Recurse - recurse-buffer"
                          (message-text status)))
              (is (search "session recurse-session"
                          (message-text status)))
-             (is (search "/tmp/clawmacs-recurse-command/"
+             (is (search "/tmp/rplaca-recurse-command/"
                          (message-text status)))))
-      (setf (symbol-function 'clawmacs::launch-chat-recurse)
+      (setf (symbol-function 'rplaca::launch-chat-recurse)
             original-launch))))
 
-(test clawmacs-main-honors-working-directory-argument
-  "clawmacs-main seeds the initial chat buffer from the supplied working directory."
+(test rplaca-main-honors-working-directory-argument
+  "rplaca-main seeds the initial chat buffer from the supplied working directory."
   (let* ((working-directory
-           (uiop:ensure-directory-pathname #P"/tmp/clawmacs-main-working-directory/"))
+           (uiop:ensure-directory-pathname #P"/tmp/rplaca-main-working-directory/"))
          (*sessions-dir* (temp-session-test-directory "main-working-directory"))
-         (clawmacs::*buffer-ring* nil)
-         (clawmacs::*buffer-counter* 0)
-         (clawmacs::*startup-hook* nil)
-         (clawmacs::*initial-buffer-hook* nil)
-         (original-parse (symbol-function 'clawmacs::parse-clawmacs-args))
-         (original-init (symbol-function 'clawmacs::initialize-clawmacs-runtime))
-         (original-scratch (symbol-function 'clawmacs::ensure-scratch-buffer)))
+         (rplaca::*buffer-ring* nil)
+         (rplaca::*buffer-counter* 0)
+         (rplaca::*startup-hook* nil)
+         (rplaca::*initial-buffer-hook* nil)
+         (original-parse (symbol-function 'rplaca::parse-rplaca-args))
+         (original-init (symbol-function 'rplaca::initialize-rplaca-runtime))
+         (original-scratch (symbol-function 'rplaca::ensure-scratch-buffer)))
     (unwind-protect
          (progn
-           (setf (symbol-function 'clawmacs::parse-clawmacs-args)
+           (setf (symbol-function 'rplaca::parse-rplaca-args)
                  (lambda () nil)
-                 (symbol-function 'clawmacs::initialize-clawmacs-runtime)
+                 (symbol-function 'rplaca::initialize-rplaca-runtime)
                  (lambda () nil)
-                 (symbol-function 'clawmacs::ensure-scratch-buffer)
+                 (symbol-function 'rplaca::ensure-scratch-buffer)
                  (lambda () nil))
-           (let ((buffer (clawmacs:clawmacs-main
+           (let ((buffer (rplaca:rplaca-main
                           :session-name "main-working-directory"
                           :agent-name "tester"
                           :working-directory working-directory
@@ -1199,30 +1199,30 @@
                         (buffer-working-directory buffer)))
              (is (equal "main-working-directory"
                         (buffer-name buffer)))))
-      (setf (symbol-function 'clawmacs::parse-clawmacs-args) original-parse
-            (symbol-function 'clawmacs::initialize-clawmacs-runtime) original-init
-            (symbol-function 'clawmacs::ensure-scratch-buffer) original-scratch))))
+      (setf (symbol-function 'rplaca::parse-rplaca-args) original-parse
+            (symbol-function 'rplaca::initialize-rplaca-runtime) original-init
+            (symbol-function 'rplaca::ensure-scratch-buffer) original-scratch))))
 
 (test init-tools-hides-lispi-tools-until-package-enabled
   "init-tools exposes built-in core tools without lispi package tools."
   (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
-    (clawmacs::init-tools)
+    (clrhash rplaca::*tool-table*)
+    (rplaca::init-tools)
     (let* ((*current-caller* :user)
-           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tools (coerce (rplaca::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool)
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
       (is (equal '("lisp_eval" "recovery_list") tool-names))
-      (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*))))
+      (is (not (null (gethash "lisp_eval" rplaca::*tool-table*))))
       (is-false (member "read" tool-names :test #'string=)))))
 
 (test init-tools-only-reserves-core-tools
   "User tools may use Lispi names when Lispi is not active."
   (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
-    (clawmacs::register-tool
+    (clrhash rplaca::*tool-table*)
+    (rplaca::register-tool
      "read"
      "User read tool."
      '((:type . "object")
@@ -1230,26 +1230,26 @@
      (lambda (args)
        (declare (ignore args))
        "user-read"))
-    (clawmacs::init-tools)
+    (rplaca::init-tools)
     (let* ((*current-caller* :user)
-           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tools (coerce (rplaca::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool)
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
       (is (equal '("lisp_eval" "read" "recovery_list") tool-names))
       (is (string= "user-read"
-                   (clawmacs:execute-tool "read" nil))))))
+                   (rplaca:execute-tool "read" nil))))))
 
 (test direct-tools-with-lispi-names-are-not-package-scoped
   "A direct user tool named like a Lispi tool remains visible without Lispi."
   (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
-    (clawmacs::init-tools)
-    (clawmacs:set-package-enablement-scope "lispi" :global)
-    (clawmacs:load-active-packages)
-    (clawmacs:set-package-enablement-scope "lispi" :default)
-    (clawmacs::register-tool
+    (clrhash rplaca::*tool-table*)
+    (rplaca::init-tools)
+    (rplaca:set-package-enablement-scope "lispi" :global)
+    (rplaca:load-active-packages)
+    (rplaca:set-package-enablement-scope "lispi" :default)
+    (rplaca::register-tool
      "read"
      "User read tool."
      '((:type . "object")
@@ -1257,16 +1257,16 @@
      (lambda (args)
        (declare (ignore args))
        "user-read"))
-    (clawmacs::init-tools)
+    (rplaca::init-tools)
     (let* ((*current-caller* :user)
-           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tools (coerce (rplaca::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool)
                                        (cdr (assoc :name tool)))
                                      tools)
                              #'string<)))
       (is (equal '("lisp_eval" "read" "recovery_list") tool-names))
       (is (string= "user-read"
-                   (clawmacs:execute-tool "read" nil))))))
+                   (rplaca:execute-tool "read" nil))))))
 
 (defun tool-execution-test-events (buf)
   "Return durable tool-execution events recorded for BUF."
@@ -1277,8 +1277,8 @@
 (test execute-tool-safely-journals-tool-errors
   "Safe tool execution records start and error result events before returning."
   (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
-    (clawmacs:register-tool
+    (clrhash rplaca::*tool-table*)
+    (rplaca:register-tool
      "journal_fail"
      "Tool that fails for journaling tests."
      '((:type . "object") (:properties . nil))
@@ -1288,7 +1288,7 @@
     (let* ((buf (make-chat-buffer "tool-journal-error"))
            (*current-caller* :coder)
            (*current-tool-buffer* buf)
-           (result (clawmacs::execute-tool-safely
+           (result (rplaca::execute-tool-safely
                     "journal_fail" '(:value "x")
                     :buffer buf
                     :tool-id "toolu-journal-1"))
@@ -1306,8 +1306,8 @@
 (test execute-prompt-tool-call-journals-tool-errors
   "Prompt-mode tool execution uses the safe journaling wrapper."
   (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
-    (clawmacs:register-tool
+    (clrhash rplaca::*tool-table*)
+    (rplaca:register-tool
      "prompt_journal_fail"
      "Tool that fails in prompt-mode journaling tests."
      '((:type . "object") (:properties . nil))
@@ -1320,10 +1320,10 @@
                        (:name . "prompt_journal_fail")
                        (:input . ((:value . "x"))))))
       (multiple-value-bind (result event)
-          (clawmacs::execute-prompt-tool-call buf tool-use :coder)
+          (rplaca::execute-prompt-tool-call buf tool-use :coder)
         (is (search ":error" (cdr (assoc :result result))))
         (is (string= "prompt_journal_fail"
-                     (clawmacs:prompt-tool-event-name event))))
+                     (rplaca:prompt-tool-event-name event))))
       (let ((events (tool-execution-test-events buf)))
         (is (= 2 (length events)))
         (is (string= "start" (event-value (first events) :phase)))
@@ -1334,11 +1334,11 @@
 (test execute-tool-safely-journals-unavailable-tool-calls
   "Unavailable tool calls are journaled as ordinary execution errors."
   (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
+    (clrhash rplaca::*tool-table*)
     (let* ((buf (make-chat-buffer "tool-journal-unavailable"))
            (*current-caller* :coder)
            (*current-tool-buffer* buf)
-           (result (clawmacs::execute-tool-safely
+           (result (rplaca::execute-tool-safely
                     "not_registered" '(:value "x")
                     :buffer buf
                     :tool-id "toolu-unavailable-1"))
@@ -1370,7 +1370,7 @@
     (let* ((buf (make-chat-buffer "lisp-eval-checkpoint-live"))
            (*current-caller* :coder)
            (*current-tool-buffer* buf)
-           (result (clawmacs::execute-tool-safely
+           (result (rplaca::execute-tool-safely
                     "lisp_eval"
                     '(:code "(+ 20 22)" :package "CL-USER")
                     :buffer buf
@@ -1388,11 +1388,11 @@
 (test execute-tool-safely-checkpoints-lisp-eval-tool-errors
   "lisp_eval recovery checkpoints retain tool wrapper errors for repair."
   (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
+    (clrhash rplaca::*tool-table*)
     (let* ((buf (make-chat-buffer "lisp-eval-checkpoint-error"))
            (*current-caller* :coder)
            (*current-tool-buffer* buf)
-           (result (clawmacs::execute-tool-safely
+           (result (rplaca::execute-tool-safely
                     "lisp_eval"
                     '(:code "(+ 1 2)")
                     :buffer buf
@@ -1411,17 +1411,17 @@
     (let* ((buf (make-chat-buffer "recovery-list"))
            (*current-caller* :coder)
            (*current-tool-buffer* buf))
-      (clawmacs::execute-tool-safely
+      (rplaca::execute-tool-safely
        "lisp_eval"
        '(:code "(+ 3 4)" :package "CL-USER")
        :buffer buf
        :tool-id "toolu-recovery-eval")
-      (let* ((data (clawmacs::execute-tool-safely
+      (let* ((data (rplaca::execute-tool-safely
                     "recovery_list"
                     '(:kind "lisp-eval" :limit 5)
                     :buffer buf
                     :tool-id "toolu-recovery-list"))
-             (decoded (clawmacs::lisp-data-read data))
+             (decoded (rplaca::lisp-data-read data))
              (events (getf decoded :events)))
         (is (string= "lisp-eval" (getf decoded :kind)))
         (is (>= (getf decoded :event-count) 2))
@@ -1438,7 +1438,7 @@
                                   :working-directory root))
            (*current-caller* :coder)
            (*current-tool-buffer* buf)
-           (result (clawmacs::execute-tool-safely
+           (result (rplaca::execute-tool-safely
                     "write"
                     '((:path . "notes.txt")
                       (:content . "hello\n"))
@@ -1466,7 +1466,7 @@
       (write-test-file target "hello\n")
       (let* ((*current-caller* :coder)
              (*current-tool-buffer* buf)
-             (result (clawmacs::execute-tool-safely
+             (result (rplaca::execute-tool-safely
                       "edit"
                       '((:path . "notes.txt")
                         (:old-text . "hello")
@@ -1493,8 +1493,8 @@
                     (:type . "object")
                     (:properties)
                     (:required . #())))))
-         (json (clawmacs:api-json-encode
-                (clawmacs::tool-definitions->responses-tools tools))))
+         (json (rplaca:api-json-encode
+                (rplaca::tool-definitions->responses-tools tools))))
     (is (search "\"properties\":{}" json))
     (is-false (search "\"properties\":null" json))))
 
@@ -1507,25 +1507,25 @@
                     (:type . "object")
                     (:properties)
                     (:required . #())))))
-         (json (clawmacs:api-json-encode
-                (clawmacs::tool-definitions->openai-tools tools))))
+         (json (rplaca:api-json-encode
+                (rplaca::tool-definitions->openai-tools tools))))
     (is (search "\"properties\":{}" json))
     (is-false (search "\"properties\":null" json))))
 
 (test load-active-packages-reregisters-active-package-tools
   "Active package loading restores package tools after init-tools resets core."
   (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
-    (clawmacs::init-tools)
-    (clawmacs:set-package-enablement-scope "lispi" :global)
-    (clawmacs:load-active-packages)
-    (is (not (null (gethash "read" clawmacs::*tool-table*))))
-    (clrhash clawmacs::*tool-table*)
-    (clawmacs::init-tools)
-    (is (null (gethash "read" clawmacs::*tool-table*)))
-    (clawmacs:load-active-packages)
+    (clrhash rplaca::*tool-table*)
+    (rplaca::init-tools)
+    (rplaca:set-package-enablement-scope "lispi" :global)
+    (rplaca:load-active-packages)
+    (is (not (null (gethash "read" rplaca::*tool-table*))))
+    (clrhash rplaca::*tool-table*)
+    (rplaca::init-tools)
+    (is (null (gethash "read" rplaca::*tool-table*)))
+    (rplaca:load-active-packages)
     (let* ((*current-caller* :user)
-           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tools (coerce (rplaca::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool)
                                        (cdr (assoc :name tool)))
                                      tools)
@@ -1536,8 +1536,8 @@
 (test init-tools-preserves-custom-tools
   "init-tools resets built-ins without wiping user-added tools."
   (with-tool-table-restored
-    (clrhash clawmacs::*tool-table*)
-    (clawmacs::register-tool
+    (clrhash rplaca::*tool-table*)
+    (rplaca::register-tool
      "custom_probe"
      "Custom probe tool."
      '((:type . "object")
@@ -1547,13 +1547,13 @@
        "{\"ok\":true}"))
     (initialize-test-tools)
     (let* ((*current-caller* :user)
-           (tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+           (tools (coerce (rplaca::tool-definitions-for-api) 'list))
            (tool-names (sort (mapcar (lambda (tool) (cdr (assoc :name tool))) tools)
                              #'string<)))
       (is (equal '("custom_probe" "edit" "find" "grep" "lisp_eval" "read" "recovery_list" "write")
                  tool-names))
-      (is (not (null (gethash "custom_probe" clawmacs::*tool-table*))))
-      (is (not (null (gethash "lisp_eval" clawmacs::*tool-table*)))))))
+      (is (not (null (gethash "custom_probe" rplaca::*tool-table*))))
+      (is (not (null (gethash "lisp_eval" rplaca::*tool-table*)))))))
 
 (test default-file-tools-read-write-edit-plain-text
   "The default file tools mutate text relative to the tool working directory."
@@ -1562,10 +1562,10 @@
                   (temp-package-test-directory "file-tools")))
            (file (merge-pathnames "nested/demo.txt" root)))
       (ensure-directories-exist (merge-pathnames #P".keep" root))
-      (let ((clawmacs::*tool-working-directory* root))
+      (let ((rplaca::*tool-working-directory* root))
         (initialize-test-tools)
         (let ((write-result
-                (clawmacs:execute-tool
+                (rplaca:execute-tool
                  "write"
                  '(:path "nested/demo.txt"
                    :content "alpha
@@ -1577,7 +1577,7 @@ beta
 gamma"
                        (uiop:read-file-string file))))
         (let ((read-result
-                (clawmacs:execute-tool
+                (rplaca:execute-tool
                  "read"
                  '(:path "nested/demo.txt"
                    :limit 2))))
@@ -1585,7 +1585,7 @@ gamma"
           (is (search "beta" read-result))
           (is (search "Use offset=3 to continue" read-result)))
         (let ((edit-result
-                (clawmacs:execute-tool
+                (rplaca:execute-tool
                  "edit"
                  '(:path "nested/demo.txt"
                    :old-text "beta"
@@ -1597,7 +1597,7 @@ BETA
 gamma"
                        (uiop:read-file-string file))))
         (let ((delete-result
-                (clawmacs:execute-tool
+                (rplaca:execute-tool
                  "edit"
                  '(:path "nested/demo.txt"
                    :old-text "gamma"
@@ -1607,7 +1607,7 @@ gamma"
 BETA
 "
                        (uiop:read-file-string file))))
-        (clawmacs:execute-tool
+        (rplaca:execute-tool
          "write"
          '(:path "nested/demo.txt"
            :content "reset"))
@@ -1630,19 +1630,19 @@ needle here
 ")
       (write-test-file ignored "needle should not be seen
 ")
-      (let ((clawmacs::*tool-working-directory* root))
+      (let ((rplaca::*tool-working-directory* root))
         (initialize-test-tools)
-        (let ((find-result (clawmacs:execute-tool
+        (let ((find-result (rplaca:execute-tool
                             "find"
                             '(:pattern "*.lisp"))))
           (is (search "src/alpha.lisp" find-result))
           (is-false (search "src/beta.txt" find-result)))
-        (let ((find-result (clawmacs:execute-tool
+        (let ((find-result (rplaca:execute-tool
                             "find"
                             '(:pattern "beta"
                               :ignore-case t))))
           (is (search "src/beta.txt" find-result)))
-        (let ((grep-result (clawmacs:execute-tool
+        (let ((grep-result (rplaca:execute-tool
                             "grep"
                             '(:pattern "needle"
                               :glob "*.txt"))))
@@ -1696,27 +1696,27 @@ TWO"
              (format nil
                      "(list \"(\" #\\) ; ignored )~% #| ignored ) #| nested ( |# |# :ok)")))
       (ensure-directories-exist (merge-pathnames #P".keep" root))
-      (let ((clawmacs::*tool-working-directory* root))
+      (let ((rplaca::*tool-working-directory* root))
         (initialize-test-tools)
-        (clawmacs:execute-tool
+        (rplaca:execute-tool
          "write"
          `(:path "sample.lisp"
            :content ,balanced-with-ignored-parens))
         (is (string= balanced-with-ignored-parens
                      (uiop:read-file-string file)))
         (signals error
-          (clawmacs:execute-tool
+          (rplaca:execute-tool
            "write"
            '(:path "sample.lisp"
              :content "(defun broken ()")))
         (is (string= balanced-with-ignored-parens
                      (uiop:read-file-string file)))
-        (clawmacs:execute-tool
+        (rplaca:execute-tool
          "write"
          '(:path "sample.lisp"
            :content "(defun foo () (+ 1 2))"))
         (signals error
-          (clawmacs:execute-tool
+          (rplaca:execute-tool
            "edit"
            '(:path "sample.lisp"
              :old-text "(+ 1 2)"
@@ -1734,22 +1734,22 @@ TWO"
       (write-test-file file "same
 same
 ")
-      (let ((clawmacs::*tool-working-directory* root))
+      (let ((rplaca::*tool-working-directory* root))
         (initialize-test-tools)
         (signals error
-          (clawmacs:execute-tool
+          (rplaca:execute-tool
            "edit"
            '(:path "sample.txt"
              :old-text "missing"
              :new-text "replacement")))
         (signals error
-          (clawmacs:execute-tool
+          (rplaca:execute-tool
            "edit"
            '(:path "sample.txt"
              :old-text "same"
              :new-text "replacement")))
         (signals error
-          (clawmacs:execute-tool
+          (rplaca:execute-tool
            "edit"
            '(:path "sample.txt"
              :old-text ""
@@ -1760,12 +1760,12 @@ same
   (let* ((root (uiop:ensure-directory-pathname
                 (temp-package-test-directory "shell-exec-fast"))))
     (ensure-directories-exist (merge-pathnames #P".keep" root))
-    (let ((clawmacs::*tool-working-directory* root))
+    (let ((rplaca::*tool-working-directory* root))
       (let* ((result-json
-               (clawmacs::execute-shell-exec
+               (rplaca::execute-shell-exec
                 '((:command . "printf 'hello'")
                   (:timeout . 5))))
-             (result (clawmacs::api-json-decode result-json)))
+             (result (rplaca::api-json-decode result-json)))
         (is (string= "printf 'hello'" (cdr (assoc :command result))))
         (is (equal 0 (cdr (assoc :exit--code result))))
         (is-false (cdr (assoc :timed--out result)))
@@ -1777,12 +1777,12 @@ same
   (let* ((root (uiop:ensure-directory-pathname
                 (temp-package-test-directory "shell-exec-timeout"))))
     (ensure-directories-exist (merge-pathnames #P".keep" root))
-    (let ((clawmacs::*tool-working-directory* root))
+    (let ((rplaca::*tool-working-directory* root))
       (let* ((result-json
-               (clawmacs::execute-shell-exec
+               (rplaca::execute-shell-exec
                 '((:command . "sleep 2")
                   (:timeout . 0.2))))
-             (result (clawmacs::api-json-decode result-json)))
+             (result (rplaca::api-json-decode result-json)))
         (is (string= "sleep 2" (cdr (assoc :command result))))
         (is (cdr (assoc :timed--out result)))
         (is-false (cdr (assoc :exit--code result)))
@@ -1793,15 +1793,15 @@ same
   "The default system prompt lists the active provider tool surface."
   (with-tool-table-restored
     (initialize-test-tools)
-    (with-function-override (clawmacs::load-boot-files ()
+    (with-function-override (rplaca::load-boot-files ()
                               nil)
       (with-package-state-override ((default-package-test-channels))
-        (clawmacs:set-package-enablement-scope "lispi" :global)
-        (clawmacs:load-autoload-packages)
+        (rplaca:set-package-enablement-scope "lispi" :global)
+        (rplaca:load-autoload-packages)
         (is-false (search "## Structural editing with sexed"
-                          clawmacs::*default-core-system-prompt*))
-        (let ((prompt (clawmacs::build-system-prompt)))
-          (is (search "operating inside clawmacs" prompt))
+                          rplaca::*default-core-system-prompt*))
+        (let ((prompt (rplaca::build-system-prompt)))
+          (is (search "operating inside rplaca" prompt))
           (is (search "## Tools" prompt))
           (is (search "- read: Read a text file" prompt))
           (is (search "- find: Search for files" prompt))
@@ -1818,7 +1818,7 @@ same
           (is (search "provider-driven live evaluation is refused" prompt))
           (is (search "Current date:" prompt))
           (is (search "Current working directory:" prompt))
-          (is (search (clawmacs::current-system-prompt-date) prompt))
+          (is (search (rplaca::current-system-prompt-date) prompt))
           (is-false (search "only built-in tool available by default" prompt))
           (is-false (search "## Subagents" prompt))
           (is-false (search "Project file-buffer example" prompt))
@@ -1852,38 +1852,38 @@ same
   :name \"package_probe\"
   :description \"Probe tool from a package.\"
   :args ((value :type \"string\" :description \"Value to echo.\")))")))
-    (let ((clawmacs::*agent-tool-metadata-table* (make-hash-table :test #'eq))
-          (clawmacs::*agent-tool-name-table* (make-hash-table :test #'equal)))
+    (let ((rplaca::*agent-tool-metadata-table* (make-hash-table :test #'eq))
+          (rplaca::*agent-tool-name-table* (make-hash-table :test #'equal)))
       (with-tool-table-restored
-        (clrhash clawmacs::*tool-table*)
+        (clrhash rplaca::*tool-table*)
         (with-package-state-override (nil)
-          (clawmacs:register-package-channel "custom" channel-root
+          (rplaca:register-package-channel "custom" channel-root
                                              :description "Custom channel")
-          (clawmacs:load-clawmacs-package "package-tool")
-          (let* ((inactive-tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+          (rplaca:load-rplaca-package "package-tool")
+          (let* ((inactive-tools (coerce (rplaca::tool-definitions-for-api) 'list))
                  (inactive-tool-names (mapcar (lambda (tool)
                                                 (cdr (assoc :name tool)))
                                               inactive-tools)))
             (is-false (member "package_probe" inactive-tool-names :test #'string=))
             (signals error
-              (clawmacs:execute-tool "package_probe" '(:value "nope"))))
-          (clawmacs:set-package-enablement-scope "package-tool" :global)
-          (clawmacs:load-active-packages)
-          (let* ((tools (coerce (clawmacs::tool-definitions-for-api) 'list))
+              (rplaca:execute-tool "package_probe" '(:value "nope"))))
+          (rplaca:set-package-enablement-scope "package-tool" :global)
+          (rplaca:load-active-packages)
+          (let* ((tools (coerce (rplaca::tool-definitions-for-api) 'list))
                  (tool-names (mapcar (lambda (tool)
                                        (cdr (assoc :name tool)))
                                      tools))
-                 (prompt (clawmacs::build-system-prompt)))
+                 (prompt (rplaca::build-system-prompt)))
             (is (member "package_probe" tool-names :test #'string=))
             (is (search "- package_probe: Probe tool from a package." prompt))
             (is (string= "package=ok"
-                         (clawmacs:execute-tool "package_probe"
+                         (rplaca:execute-tool "package_probe"
                                                 '(:value "ok"))))))))))
 
 (test register-agent-definition-round-trips-through-registry
   "Programmatic agent definitions can be registered, replaced, found, and listed."
   (with-agent-definition-registry-override ()
-    (let ((first (clawmacs:register-agent-definition
+    (let ((first (rplaca:register-agent-definition
                   "Pair"
                   :provider :openai-codex
                   :model "gpt-5.4"
@@ -1891,31 +1891,31 @@ same
                   :core-prompt "pair core"
                   :personality-prompt "pair personality"
                   :tool-names '("lisp_eval" doc-lookup))))
-      (is (string= "Pair" (clawmacs:agent-definition-name first)))
-      (is (eq :openai-codex (clawmacs:agent-definition-provider first)))
-      (is (string= "high" (clawmacs:agent-definition-think-level first)))
+      (is (string= "Pair" (rplaca:agent-definition-name first)))
+      (is (eq :openai-codex (rplaca:agent-definition-provider first)))
+      (is (string= "high" (rplaca:agent-definition-think-level first)))
       (is (equal '("lisp_eval" "doc_lookup")
-                 (clawmacs:agent-definition-tool-names first))))
+                 (rplaca:agent-definition-tool-names first))))
     (is (string= "pair core"
-                 (clawmacs:agent-definition-core-prompt
-                  (clawmacs:find-agent-definition "pair"))))
+                 (rplaca:agent-definition-core-prompt
+                  (rplaca:find-agent-definition "pair"))))
     (is (string= "pair personality"
-                 (clawmacs:agent-definition-personality-prompt
-                  (clawmacs:find-agent-definition "pair"))))
-    (clawmacs:register-agent-definition "Writer" :personality-prompt "writer personality")
-    (clawmacs:register-agent-definition "pair" :provider :zai :model "glm-5")
-    (let* ((found (clawmacs:find-agent-definition "PAIR"))
-           (listed (clawmacs:list-agent-definitions)))
-      (is (eq :zai (clawmacs:agent-definition-provider found)))
-      (is (string= "glm-5" (clawmacs:agent-definition-model found)))
+                 (rplaca:agent-definition-personality-prompt
+                  (rplaca:find-agent-definition "pair"))))
+    (rplaca:register-agent-definition "Writer" :personality-prompt "writer personality")
+    (rplaca:register-agent-definition "pair" :provider :zai :model "glm-5")
+    (let* ((found (rplaca:find-agent-definition "PAIR"))
+           (listed (rplaca:list-agent-definitions)))
+      (is (eq :zai (rplaca:agent-definition-provider found)))
+      (is (string= "glm-5" (rplaca:agent-definition-model found)))
       (is (equal '("pair" "Writer")
-                 (mapcar #'clawmacs:agent-definition-name listed))))))
+                 (mapcar #'rplaca:agent-definition-name listed))))))
 
 (test register-pipeline-definition-round-trips-through-registry
   "Programmatic pipeline definitions normalize stages and can be listed."
   (with-pipeline-definition-registry-override ()
     (let ((definition
-            (clawmacs:define-pipeline
+            (rplaca:define-pipeline
              "Plan Build Test"
              :description "plan then build"
              :entry-stage "plan"
@@ -1928,15 +1928,15 @@ same
                         :agent "builder"
                         :prompt "Build {{stage:plan}}")))))
       (is (string= "plan build test"
-                   (clawmacs:pipeline-definition-name definition)))
+                   (rplaca:pipeline-definition-name definition)))
       (is (string= "plan"
-                   (clawmacs:pipeline-definition-entry-stage definition)))
-      (is (= 2 (length (clawmacs:pipeline-definition-stages definition))))
+                   (rplaca:pipeline-definition-entry-stage definition)))
+      (is (= 2 (length (rplaca:pipeline-definition-stages definition))))
       (is (eq definition
-              (clawmacs:find-pipeline-definition "PLAN BUILD TEST")))
+              (rplaca:find-pipeline-definition "PLAN BUILD TEST")))
       (is (equal '("plan build test")
-                 (mapcar #'clawmacs:pipeline-definition-name
-                         (clawmacs:list-pipeline-definitions)))))))
+                 (mapcar #'rplaca:pipeline-definition-name
+                         (rplaca:list-pipeline-definitions)))))))
 
 (test run-pipeline-prompt-pipes-stage-output
   "Pipeline stages can template the original prompt and prior stage output."
@@ -1946,7 +1946,7 @@ same
     (with-agent-defaults-path-override (path)
       (with-pipeline-definition-registry-override ()
         (let ((*sessions-dir* (temp-session-test-directory "pipeline-prompt")))
-          (clawmacs:define-pipeline
+          (rplaca:define-pipeline
            "plan-build"
            :stages '((:name "plan"
                       :agent "planner"
@@ -1955,7 +1955,7 @@ same
                      (:name "build"
                       :agent "builder"
                       :prompt "Build from this plan: {{stage:plan}}")))
-          (with-function-override (clawmacs::provider-request-streaming
+          (with-function-override (rplaca::provider-request-streaming
                                    (provider messages callback
                                              &key model max-tokens tools
                                              reasoning-effort system-prompt)
@@ -1964,27 +1964,27 @@ same
                                                     reasoning-effort
                                                     system-prompt))
                                    (incf request-count)
-                                   (push (clawmacs::api-json-encode messages)
+                                   (push (rplaca::api-json-encode messages)
                                          request-payloads)
                                    (make-completed-stream-state-response
                                     "end_turn"
-                                    (list (clawmacs::canonical-text-block
+                                    (list (rplaca::canonical-text-block
                                            (if (= request-count 1)
                                                "PLAN OK"
                                                "BUILD OK")))))
-            (clawmacs::init-default-keymap)
+            (rplaca::init-default-keymap)
             (initialize-test-tools)
-            (let ((result (clawmacs:run-pipeline-prompt
+            (let ((result (rplaca:run-pipeline-prompt
                            "ship fizzbuzz"
                            "plan-build"
                            :provider :zai
                            :model "glm-5")))
               (is (= 2 request-count))
               (is (string= "BUILD OK"
-                           (clawmacs:prompt-run-result-final-text result)))
+                           (rplaca:prompt-run-result-final-text result)))
               (is (string= "plan-build"
-                           (clawmacs:prompt-run-result-agent-name result)))
-              (is (= 2 (clawmacs:prompt-run-result-iterations result)))
+                           (rplaca:prompt-run-result-agent-name result)))
+              (is (= 2 (rplaca:prompt-run-result-iterations result)))
               (let ((payloads (nreverse request-payloads)))
                 (is (search "Plan this request: ship fizzbuzz"
                             (first payloads)))
@@ -1999,7 +1999,7 @@ same
     (with-agent-defaults-path-override (path)
       (with-pipeline-definition-registry-override ()
         (let ((*sessions-dir* (temp-session-test-directory "pipeline-loop")))
-          (clawmacs:define-pipeline
+          (rplaca:define-pipeline
            "repair"
            :max-steps 6
            :stages `((:name "plan"
@@ -2012,13 +2012,13 @@ same
                       :next ,(lambda (_context result)
                                (declare (ignore _context))
                                (if (search "FAIL"
-                                           (or (clawmacs:pipeline-stage-result-final-text
+                                           (or (rplaca:pipeline-stage-result-final-text
                                                 result)
                                                "")
                                            :test #'char-equal)
                                    "plan"
                                    nil)))))
-          (with-function-override (clawmacs::provider-request-streaming
+          (with-function-override (rplaca::provider-request-streaming
                                    (provider messages callback
                                              &key model max-tokens tools
                                              reasoning-effort system-prompt)
@@ -2026,7 +2026,7 @@ same
                                                     model max-tokens tools
                                                     reasoning-effort
                                                     system-prompt))
-                                   (let* ((payload (clawmacs::api-json-encode messages))
+                                   (let* ((payload (rplaca::api-json-encode messages))
                                           (last-plan
                                             (search "[pipeline stage: plan]" payload
                                                     :from-end t))
@@ -2048,40 +2048,40 @@ same
                                               (t "PASS tests"))))
                                      (make-completed-stream-state-response
                                       "end_turn"
-                                      (list (clawmacs::canonical-text-block
+                                      (list (rplaca::canonical-text-block
                                              text)))))
-            (clawmacs::init-default-keymap)
+            (rplaca::init-default-keymap)
             (initialize-test-tools)
-            (let* ((buf (clawmacs::make-prompt-buffer "fix failing tests"
+            (let* ((buf (rplaca::make-prompt-buffer "fix failing tests"
                                                        "agent"))
-                   (result (clawmacs:run-pipeline-on-buffer
+                   (result (rplaca:run-pipeline-on-buffer
                             "repair"
                             "fix failing tests"
                             :buffer buf)))
               (setf stage-order
-                    (mapcar #'clawmacs:pipeline-stage-result-stage-name
-                            (clawmacs:pipeline-run-result-stage-results
+                    (mapcar #'rplaca:pipeline-stage-result-stage-name
+                            (rplaca:pipeline-run-result-stage-results
                              result)))
               (is (equal '("plan" "test" "plan" "test")
                          stage-order))
               (is (eq :succeeded
-                      (clawmacs:pipeline-run-result-status result)))
+                      (rplaca:pipeline-run-result-status result)))
               (is (string= "PASS tests"
-                           (clawmacs:pipeline-run-result-final-text
+                           (rplaca:pipeline-run-result-final-text
                             result))))))))))
 
 (test run-pipeline-test-profiles-captures-command-results
   "Deterministic pipeline test profiles run shell commands and summarize failures."
   (with-pipeline-definition-registry-override ()
-    (clawmacs:register-pipeline-test-profile
+    (rplaca:register-pipeline-test-profile
      "pass"
      :description "Passing probe"
      :command "printf 'ok\\n'")
-    (clawmacs:register-pipeline-test-profile
+    (rplaca:register-pipeline-test-profile
      "fail"
      :description "Failing probe"
      :command "printf 'nope\\n' >&2; exit 3")
-    (let ((report (clawmacs:run-pipeline-test-profiles
+    (let ((report (rplaca:run-pipeline-test-profiles
                    '("pass" "fail")
                    :directory (uiop:ensure-directory-pathname (truename ".")))))
       (is-false (getf report :passed-p))
@@ -2108,21 +2108,21 @@ same
        :contents "---\nname: demo-skill\ndescription: Demo self-modify skill\n---\nUse the DEMO-SKILL marker when this skill is injected.\n")
       (with-agent-defaults-path-override (path)
         (with-pipeline-definition-registry-override ()
-          (let ((clawmacs::*agent-definition-registry*
+          (let ((rplaca::*agent-definition-registry*
                   (make-hash-table :test #'equal))
-                (clawmacs::*tool-table*
+                (rplaca::*tool-table*
                   (make-hash-table :test #'equal))
-                (clawmacs::*agent-tool-metadata-table*
+                (rplaca::*agent-tool-metadata-table*
                   (make-hash-table :test #'eq))
-                (clawmacs::*agent-tool-name-table*
+                (rplaca::*agent-tool-name-table*
                   (make-hash-table :test #'equal))
-                (clawmacs::*command-table*
+                (rplaca::*command-table*
                   (make-hash-table :test #'eq))
-                (clawmacs::*extended-docs*
+                (rplaca::*extended-docs*
                   (make-hash-table :test #'eq))
-                (clawmacs::*slash-command-table*
+                (rplaca::*slash-command-table*
                   (make-hash-table :test #'equal))
-                (clawmacs::*compaction-point* nil))
+                (rplaca::*compaction-point* nil))
             (with-package-state-override ((default-package-test-channels))
               (setf responses
                     (list
@@ -2171,17 +2171,17 @@ same
                                                 :stderr ""
                                                 :passed-p t))
                            :summary "unit: PASS (exit 0)\n\nOverall: PASSED")))
-              (clawmacs:set-package-enablement-scope "pipelines" :global)
-              (clawmacs:load-autoload-packages)
+              (rplaca:set-package-enablement-scope "pipelines" :global)
+              (rplaca:load-autoload-packages)
               (with-function-override
-                  (clawmacs:run-pipeline-test-profiles
+                  (rplaca:run-pipeline-test-profiles
                    (profile-names &key directory)
                    (declare (ignore directory))
                    (is (equal '("unit") profile-names))
                    (or (pop test-reports)
                        (error "no more deterministic test reports")))
                 (with-function-override
-                    (clawmacs::provider-request-streaming
+                    (rplaca::provider-request-streaming
                      (provider messages callback
                                &key model max-tokens tools
                                  reasoning-effort system-prompt)
@@ -2191,7 +2191,7 @@ same
                      (let ((response (or (pop responses)
                                          (error "no more provider responses"))))
                        (push (list :messages messages
-                                   :messages-json (clawmacs::api-json-encode messages)
+                                   :messages-json (rplaca::api-json-encode messages)
                                    :tool-names (mapcar (lambda (tool)
                                                          (cdr (assoc :name tool)))
                                                        (if (vectorp tools)
@@ -2203,27 +2203,27 @@ same
                          (:text
                           (make-completed-stream-state-response
                            "end_turn"
-                           (list (clawmacs::canonical-text-block
+                           (list (rplaca::canonical-text-block
                                   (getf response :text)))))
                          (:tool
                           (make-completed-stream-state-response
                            "tool_use"
-                           (list (clawmacs::canonical-tool-use-block
+                           (list (rplaca::canonical-tool-use-block
                                   (getf response :id)
                                   (getf response :name)
                                   (getf response :input))))))))
-                  (clawmacs::init-default-keymap)
+                  (rplaca::init-default-keymap)
                   (initialize-test-tools)
-                  (let* ((buf (clawmacs::make-prompt-buffer
+                  (let* ((buf (rplaca::make-prompt-buffer
                                "build a self-modifying workflow"
                                "agent"))
-                         (result (clawmacs:run-pipeline-on-buffer
+                         (result (rplaca:run-pipeline-on-buffer
                                   "self-modify"
                                   "build a self-modifying workflow"
                                   :buffer buf))
                          (stage-order
-                           (mapcar #'clawmacs:pipeline-stage-result-stage-name
-                                   (clawmacs:pipeline-run-result-stage-results
+                           (mapcar #'rplaca:pipeline-stage-result-stage-name
+                                   (rplaca:pipeline-run-result-stage-results
                                     result)))
                          (calls (nreverse captured-calls))
                          (first-implement (second calls))
@@ -2235,9 +2235,9 @@ same
                                  "docs" "init")
                                stage-order))
                     (is (eq :succeeded
-                            (clawmacs:pipeline-run-result-status result)))
+                            (rplaca:pipeline-run-result-status result)))
                     (is (string= "INIT DONE"
-                                 (clawmacs:pipeline-run-result-final-text
+                                 (rplaca:pipeline-run-result-final-text
                                   result)))
                     (is (search "Structural editing with sexed"
                                 (getf first-implement :system-prompt)
@@ -2262,7 +2262,7 @@ same
                     (is (search "unit failed on first run"
                                 (getf second-plan :messages-json)
                                 :test #'char-equal))
-                    (is (search (namestring clawmacs::*user-init-file*)
+                    (is (search (namestring rplaca::*user-init-file*)
                                 (princ-to-string (getf init-call :messages))
                                 :test #'char-equal))))))))))))
 
@@ -2272,12 +2272,12 @@ same
     (with-agent-defaults-path-override (path)
       (with-pipeline-definition-registry-override ()
         (let ((*sessions-dir* (temp-session-test-directory "pipeline-route")))
-          (clawmacs:define-pipeline
+          (rplaca:define-pipeline
            "bad-route"
            :stages '((:name "start"
                       :prompt "Start: {{input}}"
                       :next "missing")))
-          (with-function-override (clawmacs::provider-request-streaming
+          (with-function-override (rplaca::provider-request-streaming
                                    (provider messages callback
                                              &key model max-tokens tools
                                              reasoning-effort system-prompt)
@@ -2287,22 +2287,22 @@ same
                                                     system-prompt))
                                    (make-completed-stream-state-response
                                     "end_turn"
-                                    (list (clawmacs::canonical-text-block
+                                    (list (rplaca::canonical-text-block
                                            "DONE"))))
-            (clawmacs::init-default-keymap)
+            (rplaca::init-default-keymap)
             (initialize-test-tools)
-            (let* ((buf (clawmacs::make-prompt-buffer "go" "agent"))
-                   (result (clawmacs:run-pipeline-on-buffer
+            (let* ((buf (rplaca::make-prompt-buffer "go" "agent"))
+                   (result (rplaca:run-pipeline-on-buffer
                             "bad-route"
                             "go"
                             :buffer buf)))
               (is (eq :failed
-                      (clawmacs:pipeline-run-result-status result)))
+                      (rplaca:pipeline-run-result-status result)))
               (is (= 1
-                     (length (clawmacs:pipeline-run-result-stage-results
+                     (length (rplaca:pipeline-run-result-stage-results
                               result))))
               (is (search "no stage named missing"
-                          (clawmacs:pipeline-run-result-error result)
+                          (rplaca:pipeline-run-result-error result)
                           :test #'char-equal)))))))))
 
 (test send-message-runs-active-buffer-pipeline
@@ -2312,12 +2312,12 @@ same
     (with-agent-defaults-path-override (path)
       (with-pipeline-definition-registry-override ()
         (let ((*sessions-dir* (temp-session-test-directory "pipeline-send")))
-          (clawmacs:define-pipeline
+          (rplaca:define-pipeline
            "one-stage"
            :stages '((:name "stage"
                       :agent "pipeline-agent"
                       :prompt "Pipeline saw: {{input}}")))
-          (with-function-override (clawmacs::provider-request-streaming
+          (with-function-override (rplaca::provider-request-streaming
                                    (provider messages callback
                                              &key model max-tokens tools
                                              reasoning-effort system-prompt)
@@ -2326,31 +2326,31 @@ same
                                                     reasoning-effort
                                                     system-prompt))
                                    (setf request-payload
-                                         (clawmacs::api-json-encode messages))
+                                         (rplaca::api-json-encode messages))
                                    (make-completed-stream-state-response
                                     "end_turn"
-                                    (list (clawmacs::canonical-text-block
+                                    (list (rplaca::canonical-text-block
                                            "PIPELINE DONE"))))
-            (clawmacs::init-default-keymap)
+            (rplaca::init-default-keymap)
             (initialize-test-tools)
             (let ((buf (make-buffer "pipeline-chat"
                                     :pipeline-name "one-stage")))
-              (clawmacs:set-buffer-provider-override buf :zai)
-              (clawmacs:set-buffer-model-override buf "glm-5")
-              (clawmacs::set-message-text (buffer-input-message buf)
+              (rplaca:set-buffer-provider-override buf :zai)
+              (rplaca:set-buffer-model-override buf "glm-5")
+              (rplaca::set-message-text (buffer-input-message buf)
                                           "hello pipeline")
-              (let ((operation (clawmacs::send-message buf)))
+              (let ((operation (rplaca::send-message buf)))
                 (is-true
-                 (clawmacs::interactive-buffer-operation-p operation))
+                 (rplaca::interactive-buffer-operation-p operation))
                 (is-true
                  (wait-for-llm-test
                   (lambda ()
                     (not
                      (bt:thread-alive-p
-                      (clawmacs::interactive-buffer-operation-worker
+                      (rplaca::interactive-buffer-operation-worker
                        operation))))))
                 (is-true
-                 (clawmacs::update-interactive-buffer-operation buf)))
+                 (rplaca::update-interactive-buffer-operation buf)))
               (is (string= "PIPELINE DONE"
                            (message-text
                             (message-prev (buffer-input-message buf)))))
@@ -2363,13 +2363,13 @@ same
   (with-isolated-skills (root)
     root
     (with-agent-definition-registry-override ()
-      (clawmacs:register-agent-definition
+      (rplaca:register-agent-definition
        "pair"
        :core-prompt "PAIR CORE"
        :personality-prompt "PAIR PERSONALITY")
-      (with-function-override (clawmacs::load-boot-files ()
+      (with-function-override (rplaca::load-boot-files ()
                                 "BOOT PREFIX")
-        (let* ((prompt (clawmacs:build-agent-system-prompt "pair"))
+        (let* ((prompt (rplaca:build-agent-system-prompt "pair"))
                (boot-pos (search "BOOT PREFIX" prompt))
                (core-pos (search "PAIR CORE" prompt))
                (personality-pos (search "PAIR PERSONALITY" prompt))
@@ -2389,8 +2389,8 @@ same
     (ensure-directories-exist (merge-pathnames #P".keep" nested))
     (write-test-file root-agents "ROOT AGENTS MARKER")
     (write-test-file nested-agents "NESTED AGENTS MARKER")
-    (let* ((clawmacs::*boot-file-names* '("AGENTS.md"))
-           (instructions (clawmacs:load-boot-files :directory nested))
+    (let* ((rplaca::*boot-file-names* '("AGENTS.md"))
+           (instructions (rplaca:load-boot-files :directory nested))
            (root-pos (search "ROOT AGENTS MARKER" instructions))
            (nested-pos (search "NESTED AGENTS MARKER" instructions)))
       (is (search "# AGENTS.md instructions for " instructions))
@@ -2411,42 +2411,42 @@ same
                (agents-path (merge-pathnames "AGENTS.md" root)))
           (ensure-directories-exist (merge-pathnames #P".keep" nested))
           (write-test-file agents-path "BUFFER WORKING DIRECTORY AGENTS")
-          (let* ((clawmacs::*boot-file-names* '("AGENTS.md"))
-                 (clawmacs::*default-core-system-prompt* "CORE")
-                 (clawmacs::*default-personality-prompt* "PERSONALITY")
-                 (clawmacs::*buffer-system-prompt-display-enabled* nil)
+          (let* ((rplaca::*boot-file-names* '("AGENTS.md"))
+                 (rplaca::*default-core-system-prompt* "CORE")
+                 (rplaca::*default-personality-prompt* "PERSONALITY")
+                 (rplaca::*buffer-system-prompt-display-enabled* nil)
                  (buf (make-chat-buffer
                        "agents-buffer"
                        :working-directory nested
                        :session-persistence-mode :ephemeral))
-                 (prompt (clawmacs:build-agent-system-prompt "agent"
+                 (prompt (rplaca:build-agent-system-prompt "agent"
                                                              :buffer buf)))
             (is (search "BUFFER WORKING DIRECTORY AGENTS" prompt))
             (is (search (namestring nested) prompt))
-            (let ((clawmacs::*current-tool-buffer* buf))
+            (let ((rplaca::*current-tool-buffer* buf))
               (is (equal (buffer-working-directory buf)
-                         (clawmacs::default-prompt-working-directory))))))))))
+                         (rplaca::default-prompt-working-directory))))))))))
 
 (test build-agent-system-prompt-falls-back-to-default-components
   "Missing agent prompt slots fall back to the default core and personality prompts."
   (with-agent-definition-registry-override ()
-    (let ((clawmacs::*default-personality-prompt* "DEFAULT PERSONALITY"))
-      (clawmacs:register-agent-definition "writer" :personality-prompt "WRITER PERSONALITY")
-      (with-function-override (clawmacs::load-boot-files ()
+    (let ((rplaca::*default-personality-prompt* "DEFAULT PERSONALITY"))
+      (rplaca:register-agent-definition "writer" :personality-prompt "WRITER PERSONALITY")
+      (with-function-override (rplaca::load-boot-files ()
                                 nil)
-        (let ((prompt (clawmacs:build-agent-system-prompt "writer")))
+        (let ((prompt (rplaca:build-agent-system-prompt "writer")))
           (is (search "Tool calls and tool results use Lisp data mode" prompt))
           (is (search "WRITER PERSONALITY" prompt))
           (is-false (search "DEFAULT PERSONALITY" prompt))))
-      (with-function-override (clawmacs::load-boot-files ()
+      (with-function-override (rplaca::load-boot-files ()
                                 nil)
-        (let ((prompt (clawmacs:build-agent-system-prompt "missing")))
+        (let ((prompt (rplaca:build-agent-system-prompt "missing")))
           (is (search "Tool calls and tool results use Lisp data mode" prompt))
           (is (search "DEFAULT PERSONALITY" prompt)))))))
 
-(test parse-clawmacs-prompt-args-supports-routing-and-output-options
+(test parse-rplaca-prompt-args-supports-routing-and-output-options
   "The one-shot prompt parser accepts routing, visibility, and prompt text."
-  (let ((options (clawmacs::parse-clawmacs-prompt-args
+  (let ((options (rplaca::parse-rplaca-prompt-args
                   '("--agent" "writer"
                     "--provider" "openai-codex"
                     "--model" "gpt-5.4"
@@ -2467,49 +2467,49 @@ same
                     "--pipeline" "plan-build"
                     "--max-tool-iterations" "7"
                     "summarize" "this"))))
-    (is (string= "writer" (clawmacs::prompt-options-agent-name options)))
-    (is (string= "openai-codex" (clawmacs::prompt-options-provider options)))
-    (is (string= "gpt-5.4" (clawmacs::prompt-options-model options)))
-    (is (string= "high" (clawmacs::prompt-options-think-level options)))
-    (is (string= "review" (clawmacs::prompt-options-model-role options)))
-    (is (string= "priority" (clawmacs::prompt-options-service-tier options)))
-    (is (clawmacs::prompt-options-show-tools-p options))
-    (is (clawmacs::prompt-options-show-reasoning-p options))
-    (is (clawmacs::prompt-options-show-metadata-p options))
-    (is (clawmacs::prompt-options-json-p options))
-    (is (clawmacs::prompt-options-isolated-p options))
+    (is (string= "writer" (rplaca::prompt-options-agent-name options)))
+    (is (string= "openai-codex" (rplaca::prompt-options-provider options)))
+    (is (string= "gpt-5.4" (rplaca::prompt-options-model options)))
+    (is (string= "high" (rplaca::prompt-options-think-level options)))
+    (is (string= "review" (rplaca::prompt-options-model-role options)))
+    (is (string= "priority" (rplaca::prompt-options-service-tier options)))
+    (is (rplaca::prompt-options-show-tools-p options))
+    (is (rplaca::prompt-options-show-reasoning-p options))
+    (is (rplaca::prompt-options-show-metadata-p options))
+    (is (rplaca::prompt-options-json-p options))
+    (is (rplaca::prompt-options-isolated-p options))
     (is (equal '("sexed" "lispi")
-               (clawmacs::prompt-options-packages options)))
+               (rplaca::prompt-options-packages options)))
     (is (string= "cache-probe"
-                 (clawmacs::prompt-options-session-name options)))
-    (is (clawmacs::prompt-options-continue-session-p options))
-    (is (clawmacs::prompt-options-ephemeral-p options))
+                 (rplaca::prompt-options-session-name options)))
+    (is (rplaca::prompt-options-continue-session-p options))
+    (is (rplaca::prompt-options-ephemeral-p options))
     (is (string= "plan-build"
-                 (clawmacs::prompt-options-pipeline-name options)))
-    (is (= 7 (clawmacs::prompt-options-max-tool-iterations options)))
-    (is (string= "summarize this" (clawmacs::prompt-options-prompt options)))))
+                 (rplaca::prompt-options-pipeline-name options)))
+    (is (= 7 (rplaca::prompt-options-max-tool-iterations options)))
+    (is (string= "summarize this" (rplaca::prompt-options-prompt options)))))
 
-(test parse-clawmacs-prompt-args-supports-no-session-alias
+(test parse-rplaca-prompt-args-supports-no-session-alias
   "The prompt parser accepts --no-session as an explicit ephemeral alias."
-  (let ((options (clawmacs::parse-clawmacs-prompt-args
+  (let ((options (rplaca::parse-rplaca-prompt-args
                   '("--no-session" "say" "hello"))))
-    (is (clawmacs::prompt-options-ephemeral-p options))
-    (is (string= "say hello" (clawmacs::prompt-options-prompt options)))))
+    (is (rplaca::prompt-options-ephemeral-p options))
+    (is (string= "say hello" (rplaca::prompt-options-prompt options)))))
 
-(test parse-clawmacs-prompt-args-supports-jsonl-and-output-schema
+(test parse-rplaca-prompt-args-supports-jsonl-and-output-schema
   "Prompt parser accepts JSONL streaming and structured-output schema flags."
-  (let ((options (clawmacs::parse-clawmacs-prompt-args
+  (let ((options (rplaca::parse-rplaca-prompt-args
                   '("--jsonl"
                     "--output-schema" "{\"type\":\"object\"}"
                     "emit" "json"))))
-    (is (clawmacs::prompt-options-jsonl-p options))
+    (is (rplaca::prompt-options-jsonl-p options))
     (is (string= "{\"type\":\"object\"}"
-                 (clawmacs::prompt-options-output-schema options)))
-    (is (string= "emit json" (clawmacs::prompt-options-prompt options)))))
+                 (rplaca::prompt-options-output-schema options)))
+    (is (string= "emit json" (rplaca::prompt-options-prompt options)))))
 
 (test write-prompt-run-result-jsonl-emits-turn-completed-record
   "JSONL prompt output writes a turn-completed record with structured output."
-  (let* ((result (clawmacs::make-prompt-run-result
+  (let* ((result (rplaca::make-prompt-run-result
                   :prompt "emit json"
                   :final-text "{\"status\":\"ok\"}"
                   :structured-output '((:status . "ok"))
@@ -2518,10 +2518,10 @@ same
                   :model "glm-5"
                   :iterations 1
                   :stop-reason "end_turn"))
-         (options (clawmacs::make-prompt-options :jsonl-p t))
+         (options (rplaca::make-prompt-options :jsonl-p t))
          (output (with-output-to-string (stream)
                    (let ((*standard-output* stream))
-                     (clawmacs::write-prompt-run-result result options)))))
+                     (rplaca::write-prompt-run-result result options)))))
     (is (search "\"event\":\"turn.completed\"" output))
     (is (search "\"final_text\":\"{\\\"status\\\":\\\"ok\\\"}\"" output))
     (is (search "\"structured_output\":{\"status\":\"ok\"}" output))))
@@ -2540,12 +2540,12 @@ same
     (ensure-directories-exist (merge-pathnames #P".keep" working-directory))
     (save-session buf)
     (let ((*default-pathname-defaults* working-directory))
-      (with-function-override (clawmacs::run-session-prompt
+      (with-function-override (rplaca::run-session-prompt
                                (prompt &key session-name &allow-other-keys)
                                (setf captured (list prompt session-name))
                                :continued)
-        (let ((result (clawmacs::run-prompt-options
-                       (clawmacs::make-prompt-options
+        (let ((result (rplaca::run-prompt-options
+                       (rplaca::make-prompt-options
                         :prompt "continue now"
                         :continue-session-p t))))
           (is (eq :continued result))
@@ -2555,19 +2555,19 @@ same
 (test run-prompt-options-ephemeral-ignores-session-routing
   "Ephemeral prompt options bypass saved-session routing and run in no-session mode."
   (let ((captured nil))
-    (with-function-override (clawmacs::run-single-prompt
+    (with-function-override (rplaca::run-single-prompt
                              (prompt &key session-persistence-mode
                                      session-name continue-session-p
                                      &allow-other-keys)
                              (declare (ignore session-name continue-session-p))
                              (setf captured (list prompt session-persistence-mode))
                              :ephemeral)
-      (with-function-override (clawmacs::run-session-prompt
+      (with-function-override (rplaca::run-session-prompt
                                (prompt &rest args)
                                (declare (ignore prompt args))
                                :unexpected-session)
-        (let ((result (clawmacs::run-prompt-options
-                       (clawmacs::make-prompt-options
+        (let ((result (rplaca::run-prompt-options
+                       (rplaca::make-prompt-options
                         :prompt "no session"
                         :session-name "saved-session"
                         :continue-session-p t
@@ -2584,7 +2584,7 @@ same
         (*sessions-dir* (temp-session-test-directory "ephemeral-prompt")))
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -2594,27 +2594,27 @@ same
                                                   system-prompt))
                                  (incf request-count)
                                  (setf seen-persistence-mode
-                                       clawmacs::*default-buffer-session-persistence-mode*)
+                                       rplaca::*default-buffer-session-persistence-mode*)
                                  (make-completed-stream-state-response
                                   "end_turn"
-                                  (list (clawmacs::canonical-text-block
+                                  (list (rplaca::canonical-text-block
                                          "ephemeral answer"))))
-          (clawmacs::init-default-keymap)
+          (rplaca::init-default-keymap)
           (initialize-test-tools)
-          (let* ((options (clawmacs::parse-clawmacs-prompt-args
+          (let* ((options (rplaca::parse-rplaca-prompt-args
                            '("--ephemeral"
                              "--provider" "zai"
                              "--model" "glm-5"
                              "ephemeral" "prompt")))
-                 (result (clawmacs::run-prompt-options options)))
+                 (result (rplaca::run-prompt-options options)))
             (is (= 1 request-count))
             (is (eq :ephemeral seen-persistence-mode))
             (is (string= "ephemeral answer"
-                         (clawmacs::prompt-run-result-final-text result)))
-            (is-false (probe-file (clawmacs::session-path "clawmacs:prompt")))
+                         (rplaca::prompt-run-result-final-text result)))
+            (is-false (probe-file (rplaca::session-path "rplaca:prompt")))
             (is-false (probe-file
-                       (clawmacs::session-sidecar-manifest-path
-                        "clawmacs:prompt")))))))))
+                       (rplaca::session-sidecar-manifest-path
+                        "rplaca:prompt")))))))))
 
 (test default-session-prompt-session-name-prefers-most-recent-current-directory
   "session-prompt defaults to the newest saved session for the current cwd."
@@ -2630,34 +2630,34 @@ same
     (save-session buf)
     (let ((*default-pathname-defaults* working-directory))
       (is (string= "cwd-default"
-                   (clawmacs::default-session-prompt-session-name))))))
+                   (rplaca::default-session-prompt-session-name))))))
 
-(test parse-clawmacs-prompt-args-defaults-to-codex-for-plain-prompt-sh
+(test parse-rplaca-prompt-args-defaults-to-codex-for-plain-prompt-sh
   "Plain prompt.sh runs default to GPT-5.6 Sol without overriding explicit routing."
-  (let ((options (clawmacs::parse-clawmacs-prompt-args
+  (let ((options (rplaca::parse-rplaca-prompt-args
                   '("summarize" "this"))))
     (is (string= "openai-codex"
-                 (clawmacs::prompt-options-provider options)))
+                 (rplaca::prompt-options-provider options)))
     (is (string= "gpt-5.6-sol"
-                 (clawmacs::prompt-options-model options))))
-  (let ((options (clawmacs::parse-clawmacs-prompt-args
+                 (rplaca::prompt-options-model options))))
+  (let ((options (rplaca::parse-rplaca-prompt-args
                   '("--agent" "writer" "summarize" "this"))))
-    (is (null (clawmacs::prompt-options-provider options)))
-    (is (null (clawmacs::prompt-options-model options))))
-  (let ((options (clawmacs::parse-clawmacs-prompt-args
+    (is (null (rplaca::prompt-options-provider options)))
+    (is (null (rplaca::prompt-options-model options))))
+  (let ((options (rplaca::parse-rplaca-prompt-args
                   '("--provider" "zai" "summarize" "this"))))
-    (is (string= "zai" (clawmacs::prompt-options-provider options)))
-    (is (null (clawmacs::prompt-options-model options))))
-  (let ((options (clawmacs::parse-clawmacs-prompt-args
+    (is (string= "zai" (rplaca::prompt-options-provider options)))
+    (is (null (rplaca::prompt-options-model options))))
+  (let ((options (rplaca::parse-rplaca-prompt-args
                   '("--model" "custom-codex" "summarize" "this"))))
     (is (string= "openai-codex"
-                 (clawmacs::prompt-options-provider options)))
+                 (rplaca::prompt-options-provider options)))
     (is (string= "custom-codex"
-                 (clawmacs::prompt-options-model options)))))
+                 (rplaca::prompt-options-model options)))))
 
 (test prompt-usage-string-docs-prompt-sh-codex-default
   "prompt.sh help renders its default provider/model without FORMAT errors."
-  (let ((usage (clawmacs::prompt-usage-string)))
+  (let ((usage (rplaca::prompt-usage-string)))
     (is (search "Default without --agent: openai-codex" usage))
     (is (search "Default without --agent: gpt-5.6-sol" usage))
     (is (search "--model-role ROLE" usage))
@@ -2666,27 +2666,27 @@ same
     (is (search "--session NAME" usage))
     (is (search "--ephemeral" usage))
     (is (search "--pipeline NAME" usage))
-    (is (search "Skip ~/.clawmacs.d/init.lisp" usage))))
+    (is (search "Skip ~/.rplaca.d/init.lisp" usage))))
 
 (test compaction-threshold-policy
   "Compaction thresholds are configurable as nil, ratios, integers, or functions."
   (let ((buf (make-buffer "compact" :context-limit 1000)))
-    (let ((clawmacs::*compaction-point* nil))
-      (is (null (clawmacs:compaction-threshold-tokens buf :estimate 42))))
-    (let ((clawmacs::*compaction-point* 9/10))
-      (is (= 900 (clawmacs:compaction-threshold-tokens buf :estimate 42))))
-    (let ((clawmacs::*compaction-point* 1234))
-      (is (= 1234 (clawmacs:compaction-threshold-tokens buf :estimate 42))))
-    (let ((clawmacs::*compaction-point*
+    (let ((rplaca::*compaction-point* nil))
+      (is (null (rplaca:compaction-threshold-tokens buf :estimate 42))))
+    (let ((rplaca::*compaction-point* 9/10))
+      (is (= 900 (rplaca:compaction-threshold-tokens buf :estimate 42))))
+    (let ((rplaca::*compaction-point* 1234))
+      (is (= 1234 (rplaca:compaction-threshold-tokens buf :estimate 42))))
+    (let ((rplaca::*compaction-point*
             (lambda (buffer estimate limit)
               (declare (ignore buffer estimate))
               (/ limit 4))))
-      (is (= 250 (clawmacs:compaction-threshold-tokens buf :estimate 42))))
-    (let ((clawmacs::*compaction-point*
+      (is (= 250 (rplaca:compaction-threshold-tokens buf :estimate 42))))
+    (let ((rplaca::*compaction-point*
             (lambda (buffer estimate limit)
               (declare (ignore buffer limit))
               (>= estimate 42))))
-      (is (= 42 (clawmacs:compaction-threshold-tokens buf :estimate 42))))))
+      (is (= 42 (rplaca:compaction-threshold-tokens buf :estimate 42))))))
 
 (test maybe-compact-buffer-runs-custom-function-only-at-threshold
   "maybe-compact-buffer calls the configured function only when needed."
@@ -2694,27 +2694,27 @@ same
     (append-test-user-message buf "hello")
     (let ((calls 0)
           (reasons nil))
-      (let ((clawmacs::*compaction-point* 1000000)
-            (clawmacs::*compaction-function*
+      (let ((rplaca::*compaction-point* 1000000)
+            (rplaca::*compaction-function*
               (lambda (buffer &key reason)
                 (declare (ignore buffer))
                 (incf calls)
                 (push reason reasons)
                 t)))
         (multiple-value-bind (compacted-p estimate threshold)
-            (clawmacs:maybe-compact-buffer buf :reason :too-small)
+            (rplaca:maybe-compact-buffer buf :reason :too-small)
           (declare (ignore estimate threshold))
           (is-false compacted-p)
           (is (= 0 calls))))
-      (let ((clawmacs::*compaction-point* 1)
-            (clawmacs::*compaction-function*
+      (let ((rplaca::*compaction-point* 1)
+            (rplaca::*compaction-function*
               (lambda (buffer &key reason)
                 (declare (ignore buffer))
                 (incf calls)
                 (push reason reasons)
                 t)))
         (multiple-value-bind (compacted-p estimate threshold)
-            (clawmacs:maybe-compact-buffer buf :reason :large-enough)
+            (rplaca:maybe-compact-buffer buf :reason :large-enough)
           (declare (ignore estimate threshold))
           (is-true compacted-p)
           (is (= 1 calls))
@@ -2729,7 +2729,7 @@ same
     (append-test-user-message buf "first user context")
     (buffer-insert-agent-message buf "assistant work that should be summarized")
     (append-test-user-message buf "latest user request")
-    (with-function-override (clawmacs::provider-request-streaming
+    (with-function-override (rplaca::provider-request-streaming
                              (provider messages callback
                                        &key model max-tokens tools
                                        reasoning-effort system-prompt)
@@ -2740,14 +2740,14 @@ same
                                    captured-system-prompt system-prompt)
                              (make-completed-stream-state-response
                               "end_turn"
-                              (list (clawmacs::canonical-text-block
+                              (list (rplaca::canonical-text-block
                                      "summary body"))))
-      (let ((clawmacs::*compaction-preserved-user-message-token-limit* 1000))
-        (is (eq buf (clawmacs:default-compact-buffer buf :reason :manual)))))
+      (let ((rplaca::*compaction-preserved-user-message-token-limit* 1000))
+        (is (eq buf (rplaca:default-compact-buffer buf :reason :manual)))))
     (is (equal '(:compaction-summary :user :user :system)
                (test-buffer-history-senders buf)))
     (let ((history (test-buffer-history-messages buf)))
-      (is (search clawmacs:*compaction-summary-prefix*
+      (is (search rplaca:*compaction-summary-prefix*
                   (message-text (first history))))
       (is (search "summary body" (message-text (first history))))
       (is (string= "first user context" (message-text (second history))))
@@ -2758,14 +2758,14 @@ same
     (let* ((prompt-message (car (last captured-messages)))
            (content (cdr (assoc :content prompt-message)))
            (block (aref content 0)))
-      (is (string= clawmacs:*compaction-prompt*
+      (is (string= rplaca:*compaction-prompt*
                    (cdr (assoc :text block)))))
-    (let ((provider-messages (clawmacs:build-conversation-messages buf)))
+    (let ((provider-messages (rplaca:build-conversation-messages buf)))
       (is (every (lambda (message)
                    (string= "user" (cdr (assoc :role message))))
                  provider-messages))
       (is (not (search "Conversation compacted"
-                       (clawmacs:api-json-encode provider-messages)))))))
+                       (rplaca:api-json-encode provider-messages)))))))
 
 (test default-compact-buffer-rotates-session-transcript
   "Compaction starts a new transcript segment referencing the previous one."
@@ -2779,7 +2779,7 @@ same
     (buffer-insert-agent-message buf "assistant work that should be summarized")
     (append-test-user-message buf "latest user request")
     (let ((previous-path (session-current-transcript-path session)))
-      (with-function-override (clawmacs::provider-request-streaming
+      (with-function-override (rplaca::provider-request-streaming
                                (provider messages callback
                                          &key model max-tokens tools
                                          reasoning-effort system-prompt)
@@ -2788,10 +2788,10 @@ same
                                                 system-prompt))
                                (make-completed-stream-state-response
                                 "end_turn"
-                                (list (clawmacs::canonical-text-block
+                                (list (rplaca::canonical-text-block
                                        "summary body"))))
-        (let ((clawmacs::*compaction-preserved-user-message-token-limit* 1000))
-          (is (eq buf (clawmacs:default-compact-buffer
+        (let ((rplaca::*compaction-preserved-user-message-token-limit* 1000))
+          (is (eq buf (rplaca:default-compact-buffer
                        buf
                        :reason :manual)))))
       (is (not (equal (namestring previous-path)
@@ -2807,7 +2807,7 @@ same
         (is (= 4 (length old-events)))
         (is (string= "previous-transcript"
                      (event-value first-new :event)))
-        (is (string= (clawmacs::session-path-string previous-path)
+        (is (string= (rplaca::session-path-string previous-path)
                      (event-value first-new :previous-transcript-path)))
         (is (find "COMPACTION-SUMMARY" message-events
                   :key (lambda (event)
@@ -2825,13 +2825,13 @@ same
         (saw-input nil)
         (saw-read-only nil)
         (sent-p nil))
-    (clawmacs::set-message-text (buffer-input-message buf)
+    (rplaca::set-message-text (buffer-input-message buf)
                                 "current user request")
-    (with-function-override (clawmacs::send-to-agent-with-context (buffer)
+    (with-function-override (rplaca::send-to-agent-with-context (buffer)
                               (setf sent-p t)
                               buffer)
-      (let ((clawmacs::*compaction-point* 1)
-            (clawmacs::*compaction-function*
+      (let ((rplaca::*compaction-point* 1)
+            (rplaca::*compaction-function*
               (lambda (buffer &key reason)
                 (declare (ignore reason))
                 (setf compactor-called-p t
@@ -2839,7 +2839,7 @@ same
                       saw-read-only (message-read-only-p
                                      (buffer-input-message buffer)))
                 buffer)))
-        (clawmacs::send-message buf)))
+        (rplaca::send-message buf)))
     (is-false compactor-called-p)
     (is (null saw-input))
     (is-false saw-read-only)
@@ -2859,7 +2859,7 @@ same
   "Prompt mode applies compaction before sending provider requests."
   (let ((compacted-p nil)
         (provider-requested-p nil))
-    (with-function-override (clawmacs::provider-request-streaming
+    (with-function-override (rplaca::provider-request-streaming
                              (provider messages callback
                                        &key model max-tokens tools
                                        reasoning-effort system-prompt)
@@ -2869,28 +2869,28 @@ same
                              (setf provider-requested-p t)
                              (make-completed-stream-state-response
                               "end_turn"
-                              (list (clawmacs::canonical-text-block
+                              (list (rplaca::canonical-text-block
                                      "final after compaction"))))
-      (let ((clawmacs::*compaction-point* 1)
-            (clawmacs::*compaction-function*
+      (let ((rplaca::*compaction-point* 1)
+            (rplaca::*compaction-function*
               (lambda (buffer &key reason)
                 (declare (ignore buffer))
                 (when (eq reason :prompt-request)
                   (setf compacted-p t))
                 t)))
-        (let ((result (clawmacs:run-single-prompt
+        (let ((result (rplaca:run-single-prompt
                        "hello"
                        :provider :zai
                        :model "glm-5")))
           (is-true compacted-p)
           (is-true provider-requested-p)
           (is (string= "final after compaction"
-                       (clawmacs:prompt-run-result-final-text result))))))))
+                       (rplaca:prompt-run-result-final-text result))))))))
 
 (test make-prompt-buffer-attaches-session-transcript
   "Prompt-mode buffers are real sessions and record their seeded user prompt."
   (let* ((*sessions-dir* (temp-session-test-directory "prompt-buffer"))
-         (buf (clawmacs::make-prompt-buffer "hello from prompt" "agent"))
+         (buf (rplaca::make-prompt-buffer "hello from prompt" "agent"))
          (session (buffer-session buf)))
     (is (not (null session)))
     (is (probe-file (session-current-transcript-path session)))
@@ -2912,7 +2912,7 @@ same
         (seen-model nil)
         (seen-messages nil))
     (with-agent-defaults-path-override (path)
-      (with-function-override (clawmacs::provider-request-streaming
+      (with-function-override (rplaca::provider-request-streaming
                                (provider messages callback
                                          &key model max-tokens tools
                                          reasoning-effort system-prompt)
@@ -2924,12 +2924,12 @@ same
                                      seen-messages messages)
                                (make-completed-stream-state-response
                                 "end_turn"
-                                (list (clawmacs::canonical-text-block "final answer")
-                                      (clawmacs::canonical-reasoning-block
+                                (list (rplaca::canonical-text-block "final answer")
+                                      (rplaca::canonical-reasoning-block
                                        "provider reasoning summary"))))
-        (clawmacs::init-default-keymap)
+        (rplaca::init-default-keymap)
         (initialize-test-tools)
-        (let ((result (clawmacs:run-single-prompt
+        (let ((result (rplaca:run-single-prompt
                        "Say hello"
                        :provider :zai
                        :model "glm-5")))
@@ -2937,11 +2937,11 @@ same
           (is (string= "glm-5" seen-model))
           (is (= 1 (length seen-messages)))
           (is (string= "final answer"
-                       (clawmacs:prompt-run-result-final-text result)))
+                       (rplaca:prompt-run-result-final-text result)))
           (is (equal '("provider reasoning summary")
-                     (clawmacs:prompt-run-result-reasoning-blocks result)))
-          (is (= 1 (clawmacs:prompt-run-result-iterations result)))
-          (is (null (clawmacs:prompt-run-result-tool-events result))))))))
+                     (rplaca:prompt-run-result-reasoning-blocks result)))
+          (is (= 1 (rplaca:prompt-run-result-iterations result)))
+          (is (null (rplaca:prompt-run-result-tool-events result))))))))
 
 (test run-single-prompt-refuses-command-only-lisp-eval-and-continues
   "Prompt mode records a Command-Only refusal and continues the tool loop."
@@ -2950,7 +2950,7 @@ same
         (second-request-messages nil))
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -2962,7 +2962,7 @@ same
                                      (make-completed-stream-state-response
                                       "tool_use"
                                       (list
-                                       (clawmacs::canonical-tool-use-block
+                                       (rplaca::canonical-tool-use-block
                                         "call-1"
                                         "lisp_eval"
                                         '((:code . "(+ 2 3)"))))
@@ -2976,7 +2976,7 @@ same
                                        (setf second-request-messages messages)
                                        (make-completed-stream-state-response
                                         "end_turn"
-                                        (list (clawmacs::canonical-text-block
+                                        (list (rplaca::canonical-text-block
                                                "live evaluation was refused"))
                                         '(:input-tokens 120
                                           :output-tokens 20
@@ -2984,20 +2984,20 @@ same
                                           :cached-input-tokens 80
                                           :uncached-input-tokens 40
                                           :cache-hit-rate 0.6666667)))))
-          (clawmacs::init-default-keymap)
+          (rplaca::init-default-keymap)
           (initialize-test-tools)
-          (let* ((result (clawmacs:run-single-prompt
+          (let* ((result (rplaca:run-single-prompt
                           "Compute two plus three"
                           :provider :zai
                           :model "glm-5"))
-                 (events (clawmacs:prompt-run-result-tool-events result))
+                 (events (rplaca:prompt-run-result-tool-events result))
                  (event (first events)))
             (is (= 2 request-count))
             (is (= 3 (length second-request-messages)))
             (is (string= "live evaluation was refused"
-                         (clawmacs:prompt-run-result-final-text result)))
-            (is (= 2 (clawmacs:prompt-run-result-iterations result)))
-            (let ((usage (clawmacs:prompt-run-result-usage result)))
+                         (rplaca:prompt-run-result-final-text result)))
+            (is (= 2 (rplaca:prompt-run-result-iterations result)))
+            (let ((usage (rplaca:prompt-run-result-usage result)))
               (is (= 220 (getf usage :input-tokens)))
               (is (= 30 (getf usage :output-tokens)))
               (is (= 250 (getf usage :total-tokens)))
@@ -3008,15 +3008,15 @@ same
                      0.0001))
               (let ((json-usage
                       (cdr (assoc :usage
-                                  (clawmacs::prompt-run-result-json result)))))
+                                  (rplaca::prompt-run-result-json result)))))
                 (is (= 144 (cdr (assoc :cached--input--tokens
                                         json-usage))))))
             (is (= 1 (length events)))
-            (is (string= "lisp_eval" (clawmacs:prompt-tool-event-name event)))
-            (is-true (clawmacs:prompt-tool-event-denied-p event))
-            (is (search "REFUSED" (clawmacs:prompt-tool-event-display event)))
+            (is (string= "lisp_eval" (rplaca:prompt-tool-event-name event)))
+            (is-true (rplaca:prompt-tool-event-denied-p event))
+            (is (search "REFUSED" (rplaca:prompt-tool-event-display event)))
             (is (search "Command-Only"
-                        (clawmacs:prompt-tool-event-result-text event)))
+                        (rplaca:prompt-tool-event-result-text event)))
             (let* ((tool-result-message (third second-request-messages))
                    (content (coerce (cdr (assoc :content tool-result-message))
                                     'list))
@@ -3036,7 +3036,7 @@ same
         (second-request-messages nil))
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -3047,44 +3047,44 @@ same
                                  (if (= request-count 1)
                                      (make-completed-stream-state-response
                                       "end_turn"
-                                      (list (clawmacs::canonical-text-block
+                                      (list (rplaca::canonical-text-block
                                              "first answer")))
                                      (progn
                                        (setf second-request-messages messages)
                                        (make-completed-stream-state-response
                                         "end_turn"
-                                        (list (clawmacs::canonical-text-block
+                                        (list (rplaca::canonical-text-block
                                                "second answer"))))))
-          (clawmacs::init-default-keymap)
+          (rplaca::init-default-keymap)
           (initialize-test-tools)
-          (let* ((first (clawmacs:run-session-prompt
+          (let* ((first (rplaca:run-session-prompt
                          "First prompt"
                          :session-name "cache-probe"
                          :provider :zai
                          :model "glm-5"))
-                 (second (clawmacs:run-session-prompt
+                 (second (rplaca:run-session-prompt
                           "Second prompt"
                           :session-name "cache-probe"
                           :provider :zai
                           :model "glm-5")))
             (is (string= "first answer"
-                         (clawmacs:prompt-run-result-final-text first)))
+                         (rplaca:prompt-run-result-final-text first)))
             (is (string= "second answer"
-                         (clawmacs:prompt-run-result-final-text second)))
+                         (rplaca:prompt-run-result-final-text second)))
             (is (= 2 request-count))
             (is (= 3 (length second-request-messages)))
             (is (string= "First prompt"
-                         (clawmacs::content-text-blocks
+                         (rplaca::content-text-blocks
                           (coerce (cdr (assoc :content
                                               (first second-request-messages)))
                                   'list))))
             (is (string= "first answer"
-                         (clawmacs::content-text-blocks
+                         (rplaca::content-text-blocks
                           (coerce (cdr (assoc :content
                                               (second second-request-messages)))
                                   'list))))
             (is (string= "Second prompt"
-                         (clawmacs::content-text-blocks
+                         (rplaca::content-text-blocks
                           (coerce (cdr (assoc :content
                                               (third second-request-messages)))
                                   'list))))
@@ -3100,7 +3100,7 @@ same
         (captured-cache-retention nil))
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -3110,24 +3110,24 @@ same
                                  (is (eq :openai-codex provider))
                                  (is (string= "gpt-5.4" model))
                                  (setf captured-cache-key
-                                       clawmacs::*openai-codex-prompt-cache-key*
+                                       rplaca::*openai-codex-prompt-cache-key*
                                        captured-cache-retention
-                                       clawmacs::*openai-codex-prompt-cache-retention*)
+                                       rplaca::*openai-codex-prompt-cache-retention*)
                                  (make-completed-stream-state-response
                                   "end_turn"
-                                  (list (clawmacs::canonical-text-block
+                                  (list (rplaca::canonical-text-block
                                          "cached"))))
-          (clawmacs::init-default-keymap)
+          (rplaca::init-default-keymap)
           (initialize-test-tools)
-          (let ((result (clawmacs:run-session-prompt
+          (let ((result (rplaca:run-session-prompt
                          "Cache probe"
                          :session-name "cache-probe"
                          :provider :openai-codex
                          :model "gpt-5.4")))
             (is (string= "cached"
-                         (clawmacs:prompt-run-result-final-text result)))
-            (is (string= (format nil "clawmacs-agent-~(~A~)"
-                                  (clawmacs::session-name-hash
+                         (rplaca:prompt-run-result-final-text result)))
+            (is (string= (format nil "rplaca-agent-~(~A~)"
+                                  (rplaca::session-name-hash
                                    "cache-probe"))
                          captured-cache-key))
             (is (null captured-cache-retention))))))))
@@ -3140,12 +3140,12 @@ same
         (seen-think-level nil))
     (with-agent-defaults-path-override (path)
       (with-agent-definition-registry-override ()
-        (clawmacs:register-agent-definition
+        (rplaca:register-agent-definition
          "researcher"
          :provider :zai
          :model "glm-5"
          :personality-prompt "research personality")
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -3156,11 +3156,11 @@ same
                                        seen-think-level reasoning-effort)
                                  (make-completed-stream-state-response
                                   "end_turn"
-                                  (list (clawmacs::canonical-text-block
+                                  (list (rplaca::canonical-text-block
                                          "delegated answer"))))
-          (clawmacs::init-default-keymap)
+          (rplaca::init-default-keymap)
           (initialize-test-tools)
-          (let ((result (clawmacs:run-subagent
+          (let ((result (rplaca:run-subagent
                          "Research this"
                          :agent-name "researcher"
                          :provider :openai-codex
@@ -3170,9 +3170,9 @@ same
             (is (string= "gpt-5.3-codex" seen-model))
             (is (string= "high" seen-think-level))
             (is (string= "researcher"
-                         (clawmacs:prompt-run-result-agent-name result)))
+                         (rplaca:prompt-run-result-agent-name result)))
             (is (string= "delegated answer"
-                         (clawmacs:prompt-run-result-final-text result)))))))))
+                         (rplaca:prompt-run-result-final-text result)))))))))
 
 (test run-subagent-uses-transient-prompts-without-registering-agent
   "Custom subagent prompts are dynamically scoped and do not mutate the registry."
@@ -3180,9 +3180,9 @@ same
         (seen-system-prompt nil))
     (with-agent-defaults-path-override (path)
       (with-agent-definition-registry-override ()
-        (with-function-override (clawmacs::load-boot-files ()
+        (with-function-override (rplaca::load-boot-files ()
                                   nil)
-          (with-function-override (clawmacs::provider-request-streaming
+          (with-function-override (rplaca::provider-request-streaming
                                    (provider messages callback
                                              &key model max-tokens tools
                                              reasoning-effort system-prompt)
@@ -3191,11 +3191,11 @@ same
                                    (setf seen-system-prompt system-prompt)
                                    (make-completed-stream-state-response
                                     "end_turn"
-                                    (list (clawmacs::canonical-text-block
+                                    (list (rplaca::canonical-text-block
                                            "custom answer"))))
-            (clawmacs::init-default-keymap)
+            (rplaca::init-default-keymap)
             (initialize-test-tools)
-            (let ((result (clawmacs:run-subagent
+            (let ((result (rplaca:run-subagent
                            "Use a custom prompt"
                            :agent-name "temporary-doc-agent"
                            :provider :zai
@@ -3204,10 +3204,10 @@ same
                            :personality-prompt "TEMP PERSONALITY")))
               (is (search "TEMP CORE" seen-system-prompt))
               (is (search "TEMP PERSONALITY" seen-system-prompt))
-              (is (null (clawmacs:find-agent-definition
+              (is (null (rplaca:find-agent-definition
                          "temporary-doc-agent")))
               (is (string= "custom answer"
-                           (clawmacs:prompt-run-result-final-text result))))))))))
+                           (rplaca:prompt-run-result-final-text result))))))))))
 
 (test run-subagent-uses-agent-tool-selection-and-explicit-overrides
   "Agent defaults select request tools; explicit subagent names override them."
@@ -3216,9 +3216,9 @@ same
     (with-agent-defaults-path-override (path)
       (with-agent-definition-registry-override ()
         (with-tool-table-restored
-          (clrhash clawmacs::*tool-table*)
+          (clrhash rplaca::*tool-table*)
           (initialize-test-tools)
-          (clawmacs:register-tool
+          (rplaca:register-tool
            "doc_lookup"
            "Look up docs."
            '((:type . "object")
@@ -3226,12 +3226,12 @@ same
            (lambda (args)
              (declare (ignore args))
              "{\"doc\":\"ok\"}"))
-          (clawmacs:register-agent-definition
+          (rplaca:register-agent-definition
            "docs"
            :provider :zai
            :model "glm-5"
            :tool-names '("doc_lookup"))
-          (with-function-override (clawmacs::provider-request-streaming
+          (with-function-override (rplaca::provider-request-streaming
                                    (provider messages callback
                                              &key model max-tokens tools
                                              reasoning-effort system-prompt)
@@ -3244,13 +3244,13 @@ same
                                                  (coerce tools 'list)))
                                    (make-completed-stream-state-response
                                     "end_turn"
-                                    (list (clawmacs::canonical-text-block
+                                    (list (rplaca::canonical-text-block
                                            "done"))))
-            (clawmacs::init-default-keymap)
-            (clawmacs:run-subagent "Find docs" :agent-name "docs")
+            (rplaca::init-default-keymap)
+            (rplaca:run-subagent "Find docs" :agent-name "docs")
             (is (equal '("doc_lookup") captured-tool-names))
             (setf captured-tool-names nil)
-            (clawmacs:run-subagent
+            (rplaca:run-subagent
              "Use lisp instead"
              :agent-name "docs"
              :tool-names '("lisp_eval"))
@@ -3263,9 +3263,9 @@ same
         (captured-tool-names nil))
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
-        (clrhash clawmacs::*tool-table*)
+        (clrhash rplaca::*tool-table*)
         (initialize-test-tools)
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -3282,16 +3282,16 @@ same
                                      (make-completed-stream-state-response
                                       "tool_use"
                                       (list
-                                       (clawmacs::canonical-tool-use-block
+                                       (rplaca::canonical-tool-use-block
                                         "call-custom"
                                         "custom_echo"
                                         '((:payload . "ok")))))
                                      (make-completed-stream-state-response
                                       "end_turn"
-                                      (list (clawmacs::canonical-text-block
+                                      (list (rplaca::canonical-text-block
                                              "custom done")))))
-          (clawmacs::init-default-keymap)
-          (let* ((tool (clawmacs:make-subagent-tool
+          (rplaca::init-default-keymap)
+          (let* ((tool (rplaca:make-subagent-tool
                         :name "custom_echo"
                         :description "Echo a payload."
                         :input-schema
@@ -3301,24 +3301,24 @@ same
                         :execute-fn
                         (lambda (args)
                           (format nil "echo=~A" (cdr (assoc :payload args))))))
-                 (result (clawmacs:run-subagent
+                 (result (rplaca:run-subagent
                           "Use the custom tool"
                           :agent-name "custom-tool-agent"
                           :provider :zai
                           :model "glm-5"
                           :custom-tools (list tool)))
-                 (events (clawmacs:prompt-run-result-tool-events result))
+                 (events (rplaca:prompt-run-result-tool-events result))
                  (event (first events)))
             (is (equal '("custom_echo") captured-tool-names))
             (is (= 2 request-count))
             (is (string= "custom done"
-                         (clawmacs:prompt-run-result-final-text result)))
+                         (rplaca:prompt-run-result-final-text result)))
             (is (= 1 (length events)))
             (is (string= "custom_echo"
-                         (clawmacs:prompt-tool-event-name event)))
+                         (rplaca:prompt-tool-event-name event)))
             (is (search "echo=ok"
-                        (clawmacs:prompt-tool-event-result-text event)))
-            (is (null (gethash "custom_echo" clawmacs::*tool-table*)))))))))
+                        (rplaca:prompt-tool-event-result-text event)))
+            (is (null (gethash "custom_echo" rplaca::*tool-table*)))))))))
 
 (test run-subagent-custom-tool-plists-and-explicit-tool-names
   "Custom tool plists normalize correctly and explicit tool names can mix scopes."
@@ -3326,9 +3326,9 @@ same
         (captured-tool-names nil))
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
-        (clrhash clawmacs::*tool-table*)
+        (clrhash rplaca::*tool-table*)
         (initialize-test-tools)
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -3343,10 +3343,10 @@ same
                                         #'string<))
                                  (make-completed-stream-state-response
                                   "end_turn"
-                                  (list (clawmacs::canonical-text-block
+                                  (list (rplaca::canonical-text-block
                                          "done"))))
-          (clawmacs::init-default-keymap)
-          (clawmacs:run-subagent
+          (rplaca::init-default-keymap)
+          (rplaca:run-subagent
            "Use available tools"
            :agent-name "custom-tool-agent"
            :provider :zai
@@ -3361,7 +3361,7 @@ same
            :tool-names '("custom_plist" "lisp_eval"))
           (is (equal '("custom_plist" "lisp_eval")
                      captured-tool-names))
-          (is (null (gethash "custom_plist" clawmacs::*tool-table*))))))))
+          (is (null (gethash "custom_plist" rplaca::*tool-table*))))))))
 
 (test run-subagent-records-unexposed-tool-call-as-tool-result-error
   "A provider call outside the selected workflow tool set returns an error."
@@ -3370,9 +3370,9 @@ same
         (second-request-messages nil))
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
-        (clrhash clawmacs::*tool-table*)
+        (clrhash rplaca::*tool-table*)
         (initialize-test-tools)
-        (clawmacs:register-tool
+        (rplaca:register-tool
          "doc_lookup"
          "Look up docs."
          '((:type . "object")
@@ -3380,7 +3380,7 @@ same
          (lambda (args)
            (declare (ignore args))
            "{\"doc\":\"ok\"}"))
-        (clawmacs:register-tool
+        (rplaca:register-tool
          "write_probe"
          "A tool this subagent must not call."
          '((:type . "object")
@@ -3388,7 +3388,7 @@ same
          (lambda (args)
            (declare (ignore args))
            "{\"wrote\":true}"))
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -3400,7 +3400,7 @@ same
                                      (make-completed-stream-state-response
                                       "tool_use"
                                       (list
-                                       (clawmacs::canonical-tool-use-block
+                                       (rplaca::canonical-tool-use-block
                                         "call-write"
                                         "write_probe"
                                         '((:payload . "bad")))))
@@ -3408,16 +3408,16 @@ same
                                        (setf second-request-messages messages)
                                        (make-completed-stream-state-response
                                         "end_turn"
-                                        (list (clawmacs::canonical-text-block
+                                        (list (rplaca::canonical-text-block
                                                "handled unavailable tool"))))))
-          (clawmacs::init-default-keymap)
-          (let* ((result (clawmacs:run-subagent
+          (rplaca::init-default-keymap)
+          (let* ((result (rplaca:run-subagent
                           "Try the wrong tool"
                           :agent-name "docs"
                           :provider :zai
                           :model "glm-5"
                           :tool-names '("doc_lookup")))
-                 (events (clawmacs:prompt-run-result-tool-events result))
+                 (events (rplaca:prompt-run-result-tool-events result))
                  (event (first events))
                  (tool-result-message (third second-request-messages))
                  (tool-result (first (coerce
@@ -3427,20 +3427,20 @@ same
             (is (= 2 request-count))
             (is (= 1 (length events)))
             (is (string= "write_probe"
-                         (clawmacs:prompt-tool-event-name event)))
+                         (rplaca:prompt-tool-event-name event)))
             (is (search "not exposed"
-                        (clawmacs:prompt-tool-event-result-text event)))
+                        (rplaca:prompt-tool-event-result-text event)))
             (is (search "not exposed"
                         (cdr (assoc :content tool-result))))
             (is (string= "handled unavailable tool"
-                         (clawmacs:prompt-run-result-final-text result)))))))))
+                         (rplaca:prompt-run-result-final-text result)))))))))
 
 (test run-subagent-async-waits-and-registers-result
   "Async subagents return a handle, register it, and preserve final results."
   (let ((path (temp-agent-defaults-path)))
     (with-agent-defaults-path-override (path)
       (with-subagent-registry-override ()
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -3449,29 +3449,29 @@ same
                                                   reasoning-effort system-prompt))
                                  (make-completed-stream-state-response
                                   "end_turn"
-                                  (list (clawmacs::canonical-text-block
+                                  (list (rplaca::canonical-text-block
                                          "async answer"))))
-          (clawmacs::init-default-keymap)
+          (rplaca::init-default-keymap)
           (initialize-test-tools)
-          (let ((handle (clawmacs:run-subagent-async
+          (let ((handle (rplaca:run-subagent-async
                          "Do async work"
                          :agent-name "async-agent"
                          :provider :zai
                          :model "glm-5")))
             (is (string= "subagent-1"
-                         (clawmacs:subagent-handle-id handle)))
+                         (rplaca:subagent-handle-id handle)))
             (is (eq handle
-                    (clawmacs:find-subagent
-                     (clawmacs:subagent-handle-id handle))))
-            (is (member handle (clawmacs:list-subagents)))
+                    (rplaca:find-subagent
+                     (rplaca:subagent-handle-id handle))))
+            (is (member handle (rplaca:list-subagents)))
             (multiple-value-bind (result status returned-handle)
-                (clawmacs:wait-subagent handle :timeout 2)
+                (rplaca:wait-subagent handle :timeout 2)
               (is (eq :succeeded status))
               (is (eq handle returned-handle))
-              (is (clawmacs:subagent-done-p handle))
+              (is (rplaca:subagent-done-p handle))
               (is (string= "async answer"
-                           (clawmacs:prompt-run-result-final-text result)))
-              (let ((snapshot (clawmacs:subagent-snapshot handle)))
+                           (rplaca:prompt-run-result-final-text result)))
+              (let ((snapshot (rplaca:subagent-snapshot handle)))
                 (is (string= "subagent-1" (getf snapshot :id)))
                 (is (eq :succeeded (getf snapshot :status)))
                 (is (getf snapshot :done-p))
@@ -3482,7 +3482,7 @@ same
   (let ((path (temp-agent-defaults-path)))
     (with-agent-defaults-path-override (path)
       (with-subagent-registry-override ()
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -3490,25 +3490,25 @@ same
                                                   max-tokens tools
                                                   reasoning-effort system-prompt))
                                  (error "provider boom"))
-          (clawmacs::init-default-keymap)
+          (rplaca::init-default-keymap)
           (initialize-test-tools)
-          (let ((handle (clawmacs:run-subagent-async
+          (let ((handle (rplaca:run-subagent-async
                          "Fail async work"
                          :provider :zai
                          :model "glm-5")))
             (multiple-value-bind (result status)
-                (clawmacs:wait-subagent handle :timeout 2)
+                (rplaca:wait-subagent handle :timeout 2)
               (is (null result))
               (is (eq :failed status))
               (is (search "provider boom"
-                          (clawmacs:subagent-error handle))))))))))
+                          (rplaca:subagent-error handle))))))))))
 
 (test cancel-subagent-closes-stream-and-settles-worker
   "Cancellation settles only after the provider worker has unwound."
   (let ((path (temp-agent-defaults-path)))
     (with-agent-defaults-path-override (path)
       (with-subagent-registry-override ()
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -3518,27 +3518,27 @@ same
                                  (sleep 0.1)
                                  (make-completed-stream-state-response
                                   "end_turn"
-                                  (list (clawmacs::canonical-text-block
+                                  (list (rplaca::canonical-text-block
                                          "late answer"))))
-          (clawmacs::init-default-keymap)
+          (rplaca::init-default-keymap)
           (initialize-test-tools)
-          (let ((handle (clawmacs:run-subagent-async
+          (let ((handle (rplaca:run-subagent-async
                          "Cancel async work"
                          :provider :zai
                          :model "glm-5")))
-            (is (eq :running (clawmacs:subagent-status handle)))
-            (clawmacs:cancel-subagent handle)
-            (is (member (clawmacs:subagent-status handle)
+            (is (eq :running (rplaca:subagent-status handle)))
+            (rplaca:cancel-subagent handle)
+            (is (member (rplaca:subagent-status handle)
                         '(:cancelling :cancelled)))
             (multiple-value-bind (result status)
-                (clawmacs:wait-subagent handle :timeout 1)
+                (rplaca:wait-subagent handle :timeout 1)
               (is (null result))
               (is (eq :cancelled status)))
-            (is (eq :cancelled (clawmacs:subagent-status handle)))
-            (is (clawmacs:subagent-done-p handle))
-            (is (getf (clawmacs:subagent-snapshot handle)
+            (is (eq :cancelled (rplaca:subagent-status handle)))
+            (is (rplaca:subagent-done-p handle))
+            (is (getf (rplaca:subagent-snapshot handle)
                       :worker-finished-p))
-            (is (null (clawmacs:subagent-result handle)))))))))
+            (is (null (rplaca:subagent-result handle)))))))))
 
 (test cancel-subagent-cancels-active-provider-stream
   "An active stream is closed and no assistant/tool work is committed after cancel."
@@ -3546,105 +3546,105 @@ same
         (state nil))
     (with-agent-defaults-path-override (path)
       (with-subagent-registry-override ()
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
                                  (declare (ignore provider messages callback model
                                                   max-tokens tools
                                                   reasoning-effort system-prompt))
-                                 (setf state (clawmacs::make-stream-state)))
-          (clawmacs::init-default-keymap)
+                                 (setf state (rplaca::make-stream-state)))
+          (rplaca::init-default-keymap)
           (initialize-test-tools)
-          (let ((handle (clawmacs:run-subagent-async
+          (let ((handle (rplaca:run-subagent-async
                          "Cancel active stream"
                          :provider :zai
                          :model "glm-5")))
             (loop :repeat 200
-                  :until (clawmacs::subagent-handle-current-stream-state handle)
+                  :until (rplaca::subagent-handle-current-stream-state handle)
                   :do (sleep 0.005))
             (is (eq state
-                    (clawmacs::subagent-handle-current-stream-state handle)))
-            (clawmacs:cancel-subagent handle)
+                    (rplaca::subagent-handle-current-stream-state handle)))
+            (rplaca:cancel-subagent handle)
             (multiple-value-bind (result status)
-                (clawmacs:wait-subagent handle :timeout 2 :poll-interval 0.005)
+                (rplaca:wait-subagent handle :timeout 2 :poll-interval 0.005)
               (is (null result))
               (is (eq :cancelled status)))
-            (is-true (clawmacs::stream-state-cancel-requested-p-safe state))
-            (is (clawmacs:subagent-done-p handle))))))))
+            (is-true (rplaca::stream-state-cancel-requested-p-safe state))
+            (is (rplaca:subagent-done-p handle))))))))
 
 (test prompt-run-tool-verification-helpers
   "Parent agents can check tool usage without parsing raw events."
-  (let* ((result (clawmacs::make-prompt-run-result
+  (let* ((result (rplaca::make-prompt-run-result
                   :tool-events
-                  (list (clawmacs::make-prompt-tool-event
+                  (list (rplaca::make-prompt-tool-event
                          :name "doc_lookup")
-                        (clawmacs::make-prompt-tool-event
+                        (rplaca::make-prompt-tool-event
                          :name "lisp_eval")))))
     (is (equal '("doc_lookup" "lisp_eval")
-               (clawmacs:prompt-run-tool-names result)))
-    (is (= 2 (clawmacs:prompt-run-tool-count result)))
-    (is (= 1 (clawmacs:prompt-run-tool-count result "doc_lookup")))
-    (is (clawmacs:prompt-run-used-tool-p result 'doc-lookup))
-    (is-false (clawmacs:prompt-run-used-tool-p result "missing_tool"))))
+               (rplaca:prompt-run-tool-names result)))
+    (is (= 2 (rplaca:prompt-run-tool-count result)))
+    (is (= 1 (rplaca:prompt-run-tool-count result "doc_lookup")))
+    (is (rplaca:prompt-run-used-tool-p result 'doc-lookup))
+    (is-false (rplaca:prompt-run-used-tool-p result "missing_tool"))))
 
 (test execute-lisp-eval-captures-output-and-history
   "lisp_eval captures printed output, values, and returns Lisp data."
   (with-tool-table-restored
-    (let ((clawmacs::*lisp-eval-history* nil)
-          (clawmacs::*last-eval-result* nil)
-          (clawmacs::*last-eval-condition* nil))
+    (let ((rplaca::*lisp-eval-history* nil)
+          (rplaca::*last-eval-result* nil)
+          (rplaca::*last-eval-condition* nil))
       (initialize-test-tools)
-      (let* ((data (clawmacs:execute-tool
+      (let* ((data (rplaca:execute-tool
                     "lisp_eval"
                     '(:code "(progn (format t \"hello\") (values 4 5))")))
-             (decoded (clawmacs::lisp-data-read data)))
+             (decoded (rplaca::lisp-data-read data)))
         (is (search ":code" data :test #'char-equal))
         (is (search "4" (getf decoded :result)))
         (is (search "5" (getf decoded :result)))
         (is (string= "hello" (getf decoded :output)))
         (is (= 2 (getf decoded :values)))
-        (is (equal '(4 5) clawmacs:*last-eval-result*))
-        (is (null clawmacs:*last-eval-condition*))
-        (is (search "hello" (clawmacs:eval-history-to-string)))))))
+        (is (equal '(4 5) rplaca:*last-eval-result*))
+        (is (null rplaca:*last-eval-condition*))
+        (is (search "hello" (rplaca:eval-history-to-string)))))))
 
 (test execute-lisp-eval-prints-values-defensively
   "Result printing failures do not turn successful lisp_eval calls into errors."
   (with-tool-table-restored
-    (let ((clawmacs::*lisp-eval-history* nil)
-          (clawmacs::*last-eval-result* nil)
-          (clawmacs::*last-eval-condition* nil))
+    (let ((rplaca::*lisp-eval-history* nil)
+          (rplaca::*last-eval-result* nil)
+          (rplaca::*last-eval-condition* nil))
       (initialize-test-tools)
-      (let* ((data (clawmacs:execute-tool
+      (let* ((data (rplaca:execute-tool
                     "lisp_eval"
-                    '(:code "(clawmacs/tests::make-unprintable-eval-value)")))
-             (decoded (clawmacs::lisp-data-read data)))
+                    '(:code "(rplaca/tests::make-unprintable-eval-value)")))
+             (decoded (rplaca::lisp-data-read data)))
         (is (= 1 (getf decoded :values)))
         (is (search "unprintable value" (getf decoded :result)))
         (is (null (getf decoded :error)))
-        (is (not (null clawmacs:*last-eval-result*)))
-        (is (typep (first clawmacs:*last-eval-result*)
+        (is (not (null rplaca:*last-eval-result*)))
+        (is (typep (first rplaca:*last-eval-result*)
                    'unprintable-eval-value))
-        (is (null clawmacs:*last-eval-condition*))
+        (is (null rplaca:*last-eval-condition*))
         (is (search "unprintable value"
-                    (clawmacs:eval-history-to-string)))))))
+                    (rplaca:eval-history-to-string)))))))
 
 (test execute-lisp-eval-records-errors
   "Failed lisp_eval executions expose the condition and still record history."
   (with-tool-table-restored
-    (let ((clawmacs::*lisp-eval-history* nil)
-          (clawmacs::*last-eval-result* nil)
-          (clawmacs::*last-eval-condition* nil))
+    (let ((rplaca::*lisp-eval-history* nil)
+          (rplaca::*last-eval-result* nil)
+          (rplaca::*last-eval-condition* nil))
       (initialize-test-tools)
-      (let* ((data (clawmacs:execute-tool
+      (let* ((data (rplaca:execute-tool
                     "lisp_eval"
                     '(:code "(error \"boom\")")))
-             (decoded (clawmacs::lisp-data-read data)))
+             (decoded (rplaca::lisp-data-read data)))
         (is (search ":error" data :test #'char-equal))
         (is (search "boom" (getf decoded :error)))
-        (is (null clawmacs:*last-eval-result*))
-        (is (not (null clawmacs:*last-eval-condition*)))
-        (is (search "boom" (clawmacs:eval-history-to-string)))))))
+        (is (null rplaca:*last-eval-result*))
+        (is (not (null rplaca:*last-eval-condition*)))
+        (is (search "boom" (rplaca:eval-history-to-string)))))))
 
 (test execute-lisp-eval-isolated-mode-runs-in-worker
   "Isolated lisp_eval evaluates in a worker process without mutating this image."
@@ -3653,12 +3653,12 @@ same
     (let ((symbol (find-symbol "*ISOLATED-EVAL-PROOF*" :cl-user)))
       (when symbol
         (unintern symbol :cl-user)))
-    (let* ((data (clawmacs:execute-tool
+    (let* ((data (rplaca:execute-tool
                   "lisp_eval"
                   '(:mode "isolated"
                     :package "CL-USER"
                     :code "(progn (defparameter *isolated-eval-proof* :worker) (values 8 9))")))
-           (decoded (clawmacs::lisp-data-read data)))
+           (decoded (rplaca::lisp-data-read data)))
       (is (eq :isolated (getf decoded :mode)))
       (is (= 2 (getf decoded :values)))
       (is (search "8" (getf decoded :result)))
@@ -3669,12 +3669,12 @@ same
   "Isolated lisp_eval reports worker conditions as tool data instead of crashing."
   (with-tool-table-restored
     (initialize-test-tools)
-    (let* ((data (clawmacs:execute-tool
+    (let* ((data (rplaca:execute-tool
                   "lisp_eval"
                   '(:mode "isolated"
                     :package "CL-USER"
                     :code "(error \"isolated boom\")")))
-           (decoded (clawmacs::lisp-data-read data)))
+           (decoded (rplaca::lisp-data-read data)))
       (is (eq :isolated (getf decoded :mode)))
       (is (search "isolated boom" (getf decoded :error))))))
 
@@ -3683,7 +3683,7 @@ same
   (let ((path (temp-agent-defaults-path)))
     (with-agent-defaults-path-override (path)
       (with-tool-table-restored
-        (with-function-override (clawmacs::provider-request-streaming
+        (with-function-override (rplaca::provider-request-streaming
                                  (provider messages callback
                                            &key model max-tokens tools
                                            reasoning-effort system-prompt)
@@ -3693,52 +3693,52 @@ same
                                  (make-completed-stream-state-response
                                   "tool_use"
                                   (list
-                                   (clawmacs::canonical-tool-use-block
+                                   (rplaca::canonical-tool-use-block
                                     "loop-call"
                                     "lisp_eval"
                                     '((:code . "(+ 1 1)"))))))
-          (clawmacs::init-default-keymap)
+          (rplaca::init-default-keymap)
           (initialize-test-tools)
           (handler-case
               (progn
-                (clawmacs:run-single-prompt
+                (rplaca:run-single-prompt
                  "loop forever"
                  :provider :zai
                  :model "glm-5"
                  :max-tool-iterations 1)
                 (fail "Expected prompt-run-error"))
-            (clawmacs:prompt-run-error (condition)
-              (let ((events (clawmacs:prompt-run-error-tool-events condition)))
+            (rplaca:prompt-run-error (condition)
+              (let ((events (rplaca:prompt-run-error-tool-events condition)))
                 (is (search "Exceeded maximum tool iterations"
-                            (clawmacs:prompt-run-error-message condition)))
-                (is (= 1 (clawmacs:prompt-run-error-iterations condition)))
+                            (rplaca:prompt-run-error-message condition)))
+                (is (= 1 (rplaca:prompt-run-error-iterations condition)))
                 (is (= 1 (length events)))
                 (is (string= "lisp_eval"
-                             (clawmacs:prompt-tool-event-name
+                             (rplaca:prompt-tool-event-name
                               (first events))))
                 (is-true
-                 (clawmacs:prompt-tool-event-denied-p (first events)))
+                 (rplaca:prompt-tool-event-denied-p (first events)))
                 (is (search "Command-Only"
-                            (clawmacs:prompt-tool-event-result-text
+                            (rplaca:prompt-tool-event-result-text
                              (first events))))))))))))
 
 (test provider-token-anthropic-is-unsupported
   "Anthropic no longer has a provider-specific token path."
   (signals error
-    (clawmacs::provider-token-path :anthropic))
+    (rplaca::provider-token-path :anthropic))
   (signals error
-    (clawmacs::read-provider-token :anthropic))
+    (rplaca::read-provider-token :anthropic))
   (signals error
-    (clawmacs::save-provider-token :anthropic "removed")))
+    (rplaca::save-provider-token :anthropic "removed")))
 
 (test provider-token-round-trip-openai-codex
   "OpenAI Codex tokens round-trip through provider-specific helpers."
   (let ((openai-codex-path (temp-test-token-path :openai-codex)))
     (with-provider-token-path-overrides (nil openai-codex-path)
       (is (string= "openai-token"
-                   (clawmacs::save-provider-token :openai-codex "openai-token")))
+                   (rplaca::save-provider-token :openai-codex "openai-token")))
       (is (string= "openai-token"
-                   (clawmacs::read-provider-token :openai-codex))))))
+                   (rplaca::read-provider-token :openai-codex))))))
 
 (test read-provider-token-trims-whitespace
   "Provider token reads trim surrounding whitespace."
@@ -3751,7 +3751,7 @@ same
         (write-string "  trimmed-token  " stream)
         (terpri stream))
       (is (string= "trimmed-token"
-                   (clawmacs::read-provider-token :openai-codex))))))
+                   (rplaca::read-provider-token :openai-codex))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Environment Variable Token Tests
@@ -3775,64 +3775,64 @@ same
              (setf (uiop:getenv ,gvar) ,gold)
              (setf (uiop:getenv ,gvar) ""))))))
 
-(test ensure-prompt-workspace-project-registers-clawmacs-source-root
-  "Prompt mode registers the mounted workspace as the clawmacs project."
+(test ensure-prompt-workspace-project-registers-rplaca-source-root
+  "Prompt mode registers the mounted workspace as the rplaca project."
   (let* ((base (project-test-directory))
          (workspace (merge-pathnames #P"workspace/" base))
          (custom (merge-pathnames #P"custom/" base))
          (definitions (merge-pathnames #P"defs/" base))
          (*project-registry* (make-hash-table :test #'equal))
          (*project-definitions-directory* definitions)
-         (clawmacs::*project-definitions-loaded-p* nil))
+         (rplaca::*project-definitions-loaded-p* nil))
     (ensure-directories-exist (merge-pathnames #P".keep" workspace))
     (ensure-directories-exist (merge-pathnames #P".keep" custom))
     (ensure-directories-exist (merge-pathnames #P".keep" definitions))
-    (with-env-var ("CLAWMACS_PROMPT_PROJECT_ROOT" (namestring workspace))
-      (clawmacs::ensure-prompt-workspace-project)
-      (let ((project (find-project "clawmacs")))
+    (with-env-var ("RPLACA_PROMPT_PROJECT_ROOT" (namestring workspace))
+      (rplaca::ensure-prompt-workspace-project)
+      (let ((project (find-project "rplaca")))
         (is (not (null project)))
         (is (eq :builtin (project-source project)))
-        (is (equal '(:clawmacs :clawmacs/tests)
+        (is (equal '(:rplaca :rplaca/tests)
                    (project-systems project)))
         (is (string= (namestring (truename workspace))
                      (namestring (project-root project)))))
-      (define-project "clawmacs"
+      (define-project "rplaca"
         :root custom
-        :description "user-defined clawmacs project"
+        :description "user-defined rplaca project"
         :source :programmatic
         :replace t)
-      (clawmacs::ensure-prompt-workspace-project)
-      (let ((project (find-project "clawmacs")))
-        (is (string= "user-defined clawmacs project"
+      (rplaca::ensure-prompt-workspace-project)
+      (let ((project (find-project "rplaca")))
+        (is (string= "user-defined rplaca project"
                      (project-description project)))
         (is (string= (namestring (truename custom))
                      (namestring (project-root project))))))))
 
 (test read-env-token-returns-value-when-set
   "read-env-token returns the token from a set environment variable."
-  (with-env-var ("CLAWMACS_TEST_TOKEN" "test-env-token-123")
+  (with-env-var ("RPLACA_TEST_TOKEN" "test-env-token-123")
     (is (string= "test-env-token-123"
-                 (clawmacs::read-env-token "CLAWMACS_TEST_TOKEN")))))
+                 (rplaca::read-env-token "RPLACA_TEST_TOKEN")))))
 
 (test read-env-token-trims-whitespace
   "read-env-token trims leading and trailing whitespace."
-  (with-env-var ("CLAWMACS_TEST_TOKEN" "  env-token-padded  ")
+  (with-env-var ("RPLACA_TEST_TOKEN" "  env-token-padded  ")
     (is (string= "env-token-padded"
-                 (clawmacs::read-env-token "CLAWMACS_TEST_TOKEN")))))
+                 (rplaca::read-env-token "RPLACA_TEST_TOKEN")))))
 
 (test read-env-token-returns-nil-for-empty
   "read-env-token returns nil for an empty environment variable."
-  (with-env-var ("CLAWMACS_TEST_TOKEN" "")
-    (is (null (clawmacs::read-env-token "CLAWMACS_TEST_TOKEN")))))
+  (with-env-var ("RPLACA_TEST_TOKEN" "")
+    (is (null (rplaca::read-env-token "RPLACA_TEST_TOKEN")))))
 
 (test read-env-token-returns-nil-for-whitespace-only
   "read-env-token returns nil for a whitespace-only environment variable."
-  (with-env-var ("CLAWMACS_TEST_TOKEN" "   ")
-    (is (null (clawmacs::read-env-token "CLAWMACS_TEST_TOKEN")))))
+  (with-env-var ("RPLACA_TEST_TOKEN" "   ")
+    (is (null (rplaca::read-env-token "RPLACA_TEST_TOKEN")))))
 
 (test read-env-token-returns-nil-for-unset
   "read-env-token returns nil for an unset environment variable."
-  (is (null (clawmacs::read-env-token "CLAWMACS_DEFINITELY_NOT_SET_12345"))))
+  (is (null (rplaca::read-env-token "RPLACA_DEFINITELY_NOT_SET_12345"))))
 
 (test zai-env-var-takes-highest-priority
   "ZAI_CODING_MAX_API_KEY env var takes priority over the static token file."
@@ -3840,37 +3840,37 @@ same
         (zai-path (temp-test-token-path :zai)))
     (with-provider-token-path-overrides (nil openai-codex-path zai-path)
       ;; Set up file-based token
-      (clawmacs::save-provider-token :zai "file-zai-key")
+      (rplaca::save-provider-token :zai "file-zai-key")
       ;; Env var should win
       (with-env-var ("ZAI_CODING_MAX_API_KEY" "env-zai-key")
         (is (string= "env-zai-key"
-                     (clawmacs::read-provider-token :zai)))))))
+                     (rplaca::read-provider-token :zai)))))))
 
 (test zai-env-var-falls-through-to-file
   "When ZAI_CODING_MAX_API_KEY is unset, falls through to static token file."
   (let ((openai-codex-path (temp-test-token-path :openai-codex))
         (zai-path (temp-test-token-path :zai)))
     (with-provider-token-path-overrides (nil openai-codex-path zai-path)
-      (clawmacs::save-provider-token :zai "file-zai-key")
-      (let ((clawmacs::*zai-env-var* "CLAWMACS_UNSET_ZAI_ENV_98765"))
+      (rplaca::save-provider-token :zai "file-zai-key")
+      (let ((rplaca::*zai-env-var* "RPLACA_UNSET_ZAI_ENV_98765"))
         ;; With env var unset, should use file
         (is (string= "file-zai-key"
-                     (clawmacs::read-provider-token :zai)))))))
+                     (rplaca::read-provider-token :zai)))))))
 
 (test env-var-does-not-affect-openai-codex
   "OpenAI Codex provider is not affected by Z.AI/OpenRouter env vars."
   (let ((openai-codex-path (temp-test-token-path :openai-codex)))
     (with-provider-token-path-overrides (nil openai-codex-path)
-      (clawmacs::save-provider-token :openai-codex "codex-file-token")
+      (rplaca::save-provider-token :openai-codex "codex-file-token")
       (with-env-var ("ZAI_CODING_MAX_API_KEY" "env-zai-token")
         (with-env-var ("OPENROUTER_API_KEY" "env-openrouter-token")
           (is (string= "codex-file-token"
-                       (clawmacs::read-provider-token :openai-codex))))))))
+                       (rplaca::read-provider-token :openai-codex))))))))
 
 (test default-env-var-names-are-correct
   "Default environment variable names are as documented."
-  (is (string= "ZAI_CODING_MAX_API_KEY" clawmacs::*zai-env-var*))
-  (is (string= "OPENROUTER_API_KEY" clawmacs::*openrouter-env-var*)))
+  (is (string= "ZAI_CODING_MAX_API_KEY" rplaca::*zai-env-var*))
+  (is (string= "OPENROUTER_API_KEY" rplaca::*openrouter-env-var*)))
 
 ;;; --------------------------------------------------------------------------
 
@@ -3886,7 +3886,7 @@ same
     (set-buffer-think-level-override buf "high")
     (with-agent-defaults-path-override (path)
       (multiple-value-bind (provider model think-level)
-          (clawmacs::resolve-buffer-provider-and-model buf)
+          (rplaca::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
         (is (string= "gpt-5.3-codex" model))
         (is (string= "high" think-level))))))
@@ -3900,13 +3900,13 @@ same
      "{\"spark\":{\"provider\":\"zai\",\"model\":\"glm-5\"}}")
     (with-agent-defaults-path-override (path)
       (with-agent-definition-registry-override ()
-        (clawmacs:register-agent-definition
+        (rplaca:register-agent-definition
          "spark"
          :provider :openai-codex
          :model "gpt-5.4"
          :think-level "high")
         (multiple-value-bind (provider model think-level)
-            (clawmacs::resolve-buffer-provider-and-model buf)
+            (rplaca::resolve-buffer-provider-and-model buf)
           (is (eq :openai-codex provider))
           (is (string= "gpt-5.4" model))
           (is (string= "high" think-level)))))))
@@ -3920,7 +3920,7 @@ same
      "{\"spark\":{\"provider\":\"openai-codex\"}}")
     (with-agent-defaults-path-override (path)
       (multiple-value-bind (provider model think-level)
-          (clawmacs::resolve-buffer-provider-and-model buf)
+          (rplaca::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
         (is (string= "gpt-5.6-sol" model))
         (is (null think-level))))))
@@ -3934,7 +3934,7 @@ same
      "{\"spark\":{\"provider\":\"openai-codex\",\"model\":\"gpt-5.3-codex\"}}")
     (with-agent-defaults-path-override (path)
       (multiple-value-bind (provider model think-level)
-          (clawmacs::resolve-buffer-provider-and-model buf)
+          (rplaca::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
         (is (string= "gpt-5.3-codex" model))
         (is (null think-level))))))
@@ -3945,9 +3945,9 @@ same
         (buf (make-buffer "test" :agent-name "unknown-agent")))
     (with-agent-defaults-path-override (path)
       (multiple-value-bind (provider model think-level)
-          (clawmacs::resolve-buffer-provider-and-model buf)
-        (is (eq clawmacs::*default-provider* provider))
-        (is (string= (clawmacs::provider-fallback-model clawmacs::*default-provider*)
+          (rplaca::resolve-buffer-provider-and-model buf)
+        (is (eq rplaca::*default-provider* provider))
+        (is (string= (rplaca::provider-fallback-model rplaca::*default-provider*)
                      model))
         (is (null think-level))))))
 
@@ -3960,7 +3960,7 @@ same
      "{\"spark\":{\"provider\":\"openai-codex\"}}")
     (with-agent-defaults-path-override (path)
       (multiple-value-bind (provider model think-level)
-          (clawmacs::resolve-buffer-provider-and-model buf)
+          (rplaca::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
         (is (string= "gpt-5.6-sol" model))
         (is (null think-level))))))
@@ -3974,7 +3974,7 @@ same
     (set-buffer-think-level-override buf "xhigh")
     (with-agent-defaults-path-override (path)
       (multiple-value-bind (provider model think-level)
-          (clawmacs::resolve-buffer-provider-and-model buf)
+          (rplaca::resolve-buffer-provider-and-model buf)
         (is (eq :openai-codex provider))
         (is (string= "gpt-5.1-codex-max" model))
         (is (null think-level))))))
@@ -3986,7 +3986,7 @@ same
           (buffer-model-override buf) "gpt-5.1-codex-max")
     (set-buffer-think-level-override buf "xhigh")
     (multiple-value-bind (status think-level)
-        (clawmacs::reconcile-buffer-think-level-override buf)
+        (rplaca::reconcile-buffer-think-level-override buf)
       (is (eq :reset status))
       (is (null think-level))
       (is (null (buffer-think-level-override buf))))))
@@ -4000,7 +4000,7 @@ same
      "{\"spark\":{\"provider\":\"openai-codex\",\"model\":\"\"}}")
     (with-agent-defaults-path-override (path)
       (signals error
-        (clawmacs::resolve-buffer-provider-and-model buf)))))
+        (rplaca::resolve-buffer-provider-and-model buf)))))
 
 (test resolve-buffer-provider-and-model-rejects-blank-model
   "Blank buffer model overrides are rejected."
@@ -4009,7 +4009,7 @@ same
     (setf (buffer-model-override buf) "")
     (with-agent-defaults-path-override (path)
       (signals error
-        (clawmacs::resolve-buffer-provider-and-model buf)))))
+        (rplaca::resolve-buffer-provider-and-model buf)))))
 
 (test agent-defaults-lazy-initialization-loads-file-and-built-ins
   "Lazy init loads file-backed defaults once and keeps built-in fallbacks."
@@ -4018,23 +4018,23 @@ same
      path
      "{\"spark\":{\"provider\":\"openai-codex\"}}")
     (with-agent-defaults-path-override (path)
-       (let ((initial-registry clawmacs::*agent-defaults-registry*))
+       (let ((initial-registry rplaca::*agent-defaults-registry*))
          (is (null initial-registry))
-         (is (eq :openai-codex (clawmacs::agent-default "spark")))
-         (is (not (null clawmacs::*agent-defaults-registry*)))
-         (is (eq clawmacs::*default-provider*
-                 (clawmacs::agent-default "missing-agent")))))))
+         (is (eq :openai-codex (rplaca::agent-default "spark")))
+         (is (not (null rplaca::*agent-defaults-registry*)))
+         (is (eq rplaca::*default-provider*
+                 (rplaca::agent-default "missing-agent")))))))
 
 (test set-agent-default-persists-across-reload
   "set-agent-default persists provider and model across a registry reload."
   (let ((path (temp-agent-defaults-path))
         (buf (make-buffer "test" :agent-name "spark")))
     (with-agent-defaults-path-override (path)
-      (clawmacs::set-agent-default "spark" :openai-codex :model "gpt-5.3-codex")
-      (setf clawmacs::*agent-defaults-registry* nil)
-      (is (eq :openai-codex (clawmacs::agent-default "spark")))
+      (rplaca::set-agent-default "spark" :openai-codex :model "gpt-5.3-codex")
+      (setf rplaca::*agent-defaults-registry* nil)
+      (is (eq :openai-codex (rplaca::agent-default "spark")))
        (multiple-value-bind (provider model think-level)
-           (clawmacs::resolve-buffer-provider-and-model buf)
+           (rplaca::resolve-buffer-provider-and-model buf)
          (is (eq :openai-codex provider))
          (is (string= "gpt-5.3-codex" model))
          (is (null think-level))))))
@@ -4060,7 +4060,7 @@ same
   "Plain text content is normalized to one canonical text block."
   (is (equal '(((:type . "text")
                 (:text . "hello")))
-             (clawmacs::canonicalize-message-content "user" "hello"))))
+             (rplaca::canonicalize-message-content "user" "hello"))))
 
 (test canonicalize-message-content-accepts-assistant-tool-use
   "Assistant tool_use blocks are accepted as canonical content."
@@ -4068,7 +4068,7 @@ same
                 (:id . "toolu_123")
                 (:name . "read_file")
                 (:input . ((:path . "/tmp/example.txt")))))
-             (clawmacs::canonicalize-message-content
+             (rplaca::canonicalize-message-content
               "assistant"
               '(((:type . "tool_use")
                  (:id . "toolu_123")
@@ -4080,7 +4080,7 @@ same
   (is (equal '(((:type . "tool_result")
                 (:tool--use--id . "toolu_123")
                 (:content . "done")))
-             (clawmacs::canonicalize-message-content
+             (rplaca::canonicalize-message-content
               "user"
               '(((:type . "tool_result")
                  (:tool-use-id . "toolu_123")
@@ -4089,26 +4089,26 @@ same
 (test canonical-tool-result-json-uses-tool-use-id-underscore-key
   "Canonical tool_result blocks encode tool_use_id (underscore), not camelCase."
   (let* ((block (first
-                 (clawmacs::canonicalize-message-content
+                 (rplaca::canonicalize-message-content
                   "user"
                   '(((:type . "tool_result")
                      (:tool-use-id . "toolu_123")
                      (:content . "done"))))))
-         (json (clawmacs::api-json-encode block)))
+         (json (rplaca::api-json-encode block)))
     (is (search "\"tool_use_id\"" json))
     (is (not (search "\"toolUseId\"" json)))))
 
 (test canonicalize-message-content-rejects-invalid-role-block-pairings
   "Invalid role/block pairings signal an error."
   (signals error
-    (clawmacs::canonicalize-message-content
+    (rplaca::canonicalize-message-content
      "user"
      '(((:type . "tool_use")
         (:id . "toolu_123")
         (:name . "read_file")
         (:input . ((:path . "/tmp/example.txt")))))))
   (signals error
-    (clawmacs::canonicalize-message-content
+    (rplaca::canonicalize-message-content
      "assistant"
      '(((:type . "tool_result")
          (:tool--use--id . "toolu_123")
@@ -4117,17 +4117,17 @@ same
 (test canonicalize-message-content-rejects-invalid-role-for-plain-text
   "Plain string content rejects roles that cannot carry text blocks."
   (signals error
-    (clawmacs::canonicalize-message-content "system" "hello")))
+    (rplaca::canonicalize-message-content "system" "hello")))
 
 (test provider-request-rejects-anthropic-provider
   "Anthropic is no longer a dispatchable provider."
   (signals error
-    (clawmacs::provider-request
+    (rplaca::provider-request
      :anthropic
      '(((:role . "user") (:content . #())))
      :model "removed"))
   (signals error
-    (clawmacs::provider-request-streaming
+    (rplaca::provider-request-streaming
      :anthropic
      '(((:role . "user") (:content . #())))
      (lambda (state) (declare (ignore state)))
@@ -4137,7 +4137,7 @@ same
   "OpenAI Codex requests use the Codex adapter and preserve model + reasoning."
   (let ((captured-model nil)
         (captured-reasoning nil))
-    (with-function-override (clawmacs::openai-codex-request
+    (with-function-override (rplaca::openai-codex-request
                              (messages &key model max-tokens tools reasoning-effort system-prompt)
                              (declare (ignore messages max-tokens tools system-prompt))
                              (setf captured-model model
@@ -4146,7 +4146,7 @@ same
                                 (:content . #())))
       (is (equal '((:stop--reason . "stop")
                    (:content . #()))
-                 (clawmacs::provider-request
+                 (rplaca::provider-request
                   :openai-codex
                   '(((:role . "user") (:content . #())))
                   :model "gpt-5.3-codex"
@@ -4158,14 +4158,14 @@ same
   "Streaming adapter dispatch follows the selected provider, model, and reasoning."
   (let ((openai-model nil)
         (openai-reasoning nil))
-    (with-function-override (clawmacs::openai-codex-request-streaming
+    (with-function-override (rplaca::openai-codex-request-streaming
                               (messages callback &key model max-tokens tools reasoning-effort system-prompt)
                               (declare (ignore messages callback max-tokens tools system-prompt))
                               (setf openai-model model
                                     openai-reasoning reasoning-effort)
                               :openai-stream)
       (is (eq :openai-stream
-              (clawmacs::provider-request-streaming
+              (rplaca::provider-request-streaming
                :openai-codex
                '(((:role . "user") (:content . #())))
                (lambda (state) (declare (ignore state)))
@@ -4181,48 +4181,48 @@ same
         (captured-model nil)
         (captured-reasoning nil)
         (captured-system-prompt nil))
-    (with-function-override (clawmacs::resolve-buffer-provider-and-model (buffer)
+    (with-function-override (rplaca::resolve-buffer-provider-and-model (buffer)
                               (declare (ignore buffer))
                               (values :openai-codex "gpt-5.3-codex" "high"))
-      (with-function-override (clawmacs::tool-definitions-for-api (&key buffer agent-name)
+      (with-function-override (rplaca::tool-definitions-for-api (&key buffer agent-name)
                                 (declare (ignore buffer agent-name))
                                 #())
-        (with-function-override (clawmacs::build-conversation-messages (buffer)
+        (with-function-override (rplaca::build-conversation-messages (buffer)
                                   (declare (ignore buffer))
                                   '(((:role . "user") (:content . #()))))
-          (with-function-override (clawmacs::build-agent-system-prompt (agent-name &key buffer)
+          (with-function-override (rplaca::build-agent-system-prompt (agent-name &key buffer)
                                     (declare (ignore buffer))
                                     (format nil "prompt for ~A" agent-name))
-          (with-function-override (clawmacs::provider-request-streaming
+          (with-function-override (rplaca::provider-request-streaming
                                     (provider messages callback &key model max-tokens tools reasoning-effort system-prompt)
                                     (declare (ignore messages callback max-tokens tools))
                                     (setf captured-provider provider
                                           captured-model model
                                           captured-reasoning reasoning-effort
                                           captured-system-prompt system-prompt)
-                                    (clawmacs::make-stream-state))
-            (clawmacs::start-streaming-response buf)
+                                    (rplaca::make-stream-state))
+            (rplaca::start-streaming-response buf)
             (is (eq :openai-codex captured-provider))
             (is (string= "gpt-5.3-codex" captured-model))
             (is (string= "high" captured-reasoning))
             (is (string= "prompt for spark" captured-system-prompt))
             (let ((metadata (message-metadata (buffer-streaming-message buf))))
               (is (string= "spark"
-                           (clawmacs::message-metadata-value
+                           (rplaca::message-metadata-value
                             metadata :agent)))
               (is (eq :openai-codex
-                      (clawmacs::message-metadata-value metadata :provider)))
+                      (rplaca::message-metadata-value metadata :provider)))
               (is (string= "gpt-5.3-codex"
-                           (clawmacs::message-metadata-value
+                           (rplaca::message-metadata-value
                             metadata :model)))))))))))
 
 (test start-streaming-response-surfaces-resolver-errors-in-buffer
   "Resolver failures are caught and rendered into the buffer as agent errors."
   (let ((buf (make-buffer "routing-error-test" :agent-name "spark")))
-    (with-function-override (clawmacs::resolve-buffer-provider-and-model (buffer)
+    (with-function-override (rplaca::resolve-buffer-provider-and-model (buffer)
                               (declare (ignore buffer))
                               (error 'simple-error :format-control "resolver exploded"))
-      (finishes (clawmacs::start-streaming-response buf))
+      (finishes (rplaca::start-streaming-response buf))
       (is (eq :error (buffer-status buf)))
       (is (search "resolver exploded"
                   (message-text (buffer-first-message buf)))))))
@@ -4231,15 +4231,15 @@ same
   "OpenAI-compatible streams mirror partial text into content blocks; render it once."
   (let* ((buf (make-buffer "stream-openai" :agent-name "agent"))
          (msg (buffer-insert-agent-message buf ""))
-         (state (clawmacs::make-stream-state)))
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (setf (clawmacs::stream-state-text state) "hello"
-            (clawmacs::stream-state-content-blocks state)
-            (list (clawmacs::canonical-text-block "hello"))))
+         (state (rplaca::make-stream-state)))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (setf (rplaca::stream-state-text state) "hello"
+            (rplaca::stream-state-content-blocks state)
+            (list (rplaca::canonical-text-block "hello"))))
     (setf (buffer-pending-stream buf) state
           (buffer-streaming-message buf) msg
           (buffer-status buf) :streaming)
-    (is-true (clawmacs::update-streaming-response buf))
+    (is-true (rplaca::update-streaming-response buf))
     (is (string= "hello" (message-text msg)))
     (is (= 2 (buffer-message-count buf)))))
 
@@ -4247,15 +4247,15 @@ same
   "Streaming state displays completed blocks plus the current text accumulator."
   (let* ((buf (make-buffer "stream-accumulator" :agent-name "agent"))
          (msg (buffer-insert-agent-message buf ""))
-         (state (clawmacs::make-stream-state)))
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (setf (clawmacs::stream-state-text state) "world"
-            (clawmacs::stream-state-content-blocks state)
-            (list (clawmacs::canonical-text-block "Hello, "))))
+         (state (rplaca::make-stream-state)))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (setf (rplaca::stream-state-text state) "world"
+            (rplaca::stream-state-content-blocks state)
+            (list (rplaca::canonical-text-block "Hello, "))))
     (setf (buffer-pending-stream buf) state
           (buffer-streaming-message buf) msg
           (buffer-status buf) :streaming)
-    (is-true (clawmacs::update-streaming-response buf))
+    (is-true (rplaca::update-streaming-response buf))
     (is (string= "Hello, world" (message-text msg)))
     (is (= 2 (buffer-message-count buf)))))
 
@@ -4263,42 +4263,42 @@ same
   "Completing a stream updates the existing placeholder instead of inserting another agent message."
   (let* ((buf (make-buffer "stream-final" :agent-name "agent"))
          (msg (buffer-insert-agent-message buf "partial"))
-         (state (clawmacs::make-stream-state)))
-    (clawmacs::put-message-metadata
+         (state (rplaca::make-stream-state)))
+    (rplaca::put-message-metadata
      msg
      :agent "agent"
      :provider :zai
      :model "glm-5"
      :think-level nil)
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (setf (clawmacs::stream-state-text state) "final answer"
-            (clawmacs::stream-state-content-blocks state)
-            (list (clawmacs::canonical-text-block "final answer"))
-            (clawmacs::stream-state-stop-reason state) "end_turn"
-            (clawmacs::stream-state-usage state)
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (setf (rplaca::stream-state-text state) "final answer"
+            (rplaca::stream-state-content-blocks state)
+            (list (rplaca::canonical-text-block "final answer"))
+            (rplaca::stream-state-stop-reason state) "end_turn"
+            (rplaca::stream-state-usage state)
             '(:input-tokens 2006
               :output-tokens 300
               :total-tokens 2306
               :cached-input-tokens 1920
               :uncached-input-tokens 86
               :cache-hit-rate 0.9571286)
-            (clawmacs::stream-state-done-p state) t))
+            (rplaca::stream-state-done-p state) t))
     (setf (buffer-pending-stream buf) state
           (buffer-streaming-message buf) msg
           (buffer-status buf) :streaming)
-    (is-false (clawmacs::update-streaming-response buf))
+    (is-false (rplaca::update-streaming-response buf))
     (is (string= "final answer" (message-text msg)))
     (let ((metadata (message-metadata msg)))
-      (is (eq :zai (clawmacs::message-metadata-value metadata :provider)))
+      (is (eq :zai (rplaca::message-metadata-value metadata :provider)))
       (is (string= "end_turn"
-                   (clawmacs::message-metadata-value metadata :stop-reason)))
-      (is (= 1 (clawmacs::message-metadata-value
+                   (rplaca::message-metadata-value metadata :stop-reason)))
+      (is (= 1 (rplaca::message-metadata-value
                 metadata :content-block-count)))
-      (is (= 0 (clawmacs::message-metadata-value
+      (is (= 0 (rplaca::message-metadata-value
                 metadata :tool-call-count)))
-      (is (= 1920 (clawmacs::message-metadata-value
+      (is (= 1920 (rplaca::message-metadata-value
                    metadata :cached-input-tokens)))
-      (is (= 86 (clawmacs::message-metadata-value
+      (is (= 86 (rplaca::message-metadata-value
                  metadata :uncached-input-tokens))))
     (is (= 2 (buffer-message-count buf)))
     (is (null (buffer-pending-stream buf)))
@@ -4313,17 +4313,17 @@ same
                            :agent-name "agent"
                            :session session))
          (msg (buffer-insert-agent-message buf "" :record-p nil))
-         (state (clawmacs::make-stream-state)))
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (setf (clawmacs::stream-state-content-blocks state)
-            (list (clawmacs::canonical-text-block "final answer"))
-            (clawmacs::stream-state-stop-reason state) "end_turn"
-            (clawmacs::stream-state-done-p state) t))
+         (state (rplaca::make-stream-state)))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (setf (rplaca::stream-state-content-blocks state)
+            (list (rplaca::canonical-text-block "final answer"))
+            (rplaca::stream-state-stop-reason state) "end_turn"
+            (rplaca::stream-state-done-p state) t))
     (setf (buffer-pending-stream buf) state
           (buffer-streaming-message buf) msg
           (buffer-status buf) :streaming)
     (is (= 1 (length (session-current-events session))))
-    (is-false (clawmacs::update-streaming-response buf))
+    (is-false (rplaca::update-streaming-response buf))
     (let* ((events (session-current-events session))
            (message-events
              (remove-if-not (lambda (event)
@@ -4344,13 +4344,13 @@ same
                            :agent-name "agent"
                            :session session))
          (msg (buffer-insert-agent-message buf "" :record-p nil))
-         (state (clawmacs::make-stream-state)))
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (setf (clawmacs::stream-state-error-p state) "boom"))
+         (state (rplaca::make-stream-state)))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (setf (rplaca::stream-state-error-p state) "boom"))
     (setf (buffer-pending-stream buf) state
           (buffer-streaming-message buf) msg
           (buffer-status buf) :streaming)
-    (is-false (clawmacs::update-streaming-response buf))
+    (is-false (rplaca::update-streaming-response buf))
     (let* ((message-events
              (remove-if-not (lambda (event)
                               (string= "message"
@@ -4370,34 +4370,34 @@ same
                            :agent-name "agent"
                            :session session))
          (msg (buffer-insert-agent-message buf "" :record-p nil))
-         (state (clawmacs::make-stream-state)))
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (setf (clawmacs::stream-state-text state) "partial answer"
-            (clawmacs::stream-state-content-blocks state)
-            (list (clawmacs::canonical-text-block "partial answer"))))
+         (state (rplaca::make-stream-state)))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (setf (rplaca::stream-state-text state) "partial answer"
+            (rplaca::stream-state-content-blocks state)
+            (list (rplaca::canonical-text-block "partial answer"))))
     (setf (buffer-pending-stream buf) state
           (buffer-streaming-message buf) msg
           (buffer-status buf) :thinking)
-    (is-true (clawmacs::stop-streaming-response buf))
+    (is-true (rplaca::stop-streaming-response buf))
     (is (null (buffer-pending-stream buf)))
     (is (null (buffer-streaming-message buf)))
     (is (eq :cancelling (buffer-status buf)))
     (is-false (search "[Stopped by user]" (message-text msg)))
     (is-true
-     (clawmacs::deliver-buffer-runtime-stopped-notification buf))
+     (rplaca::deliver-buffer-runtime-stopped-notification buf))
     (is (eq :idle (buffer-status buf)))
     (is (search "[Stopped by user]" (message-text msg)))
     (is (string= "partial answer"
-                 (clawmacs::content-text-blocks (message-raw-content msg))))
+                 (rplaca::content-text-blocks (message-raw-content msg))))
     (is (not (search "[Stopped by user]"
-                     (clawmacs::content-text-blocks
+                     (rplaca::content-text-blocks
                       (message-raw-content msg)))))
     (is (string= "cancelled"
-                 (clawmacs::message-metadata-value
+                 (rplaca::message-metadata-value
                   (message-metadata msg)
                   :stop-reason)))
-    (is-true (bt:with-lock-held ((clawmacs::stream-state-lock state))
-               (clawmacs::stream-state-cancelled-p state)))
+    (is-true (bt:with-lock-held ((rplaca::stream-state-lock state))
+               (rplaca::stream-state-cancelled-p state)))
     (let* ((message-events
              (remove-if-not (lambda (event)
                               (string= "message"
@@ -4417,18 +4417,18 @@ same
                            :agent-name "agent"
                            :session session))
          (msg (buffer-insert-agent-message buf "" :record-p nil))
-         (state (clawmacs::make-stream-state)))
+         (state (rplaca::make-stream-state)))
     (setf (buffer-pending-stream buf) state
           (buffer-streaming-message buf) msg
           (buffer-status buf) :thinking)
-    (is-true (clawmacs::stop-streaming-response buf))
+    (is-true (rplaca::stop-streaming-response buf))
     (is (eq :agent (message-sender msg)))
     (is-true
-     (clawmacs::deliver-buffer-runtime-stopped-notification buf))
+     (rplaca::deliver-buffer-runtime-stopped-notification buf))
     (is (eq :system (message-sender msg)))
     (is (null (message-raw-content msg)))
     (is (string= "[Response stopped by user]" (message-text msg)))
-    (is (null (clawmacs::build-conversation-messages buf)))
+    (is (null (rplaca::build-conversation-messages buf)))
     (let* ((message-events
              (remove-if-not (lambda (event)
                               (string= "message"
@@ -4455,7 +4455,7 @@ same
          (applied
            (bt:make-semaphore :name "stream-terminal-applied"))
          (state
-           (clawmacs::make-stream-state
+           (rplaca::make-stream-state
             :callback
             (lambda (ignored-state)
               (declare (ignore ignored-state))
@@ -4464,7 +4464,7 @@ same
          (pump nil)
          (automatic-result :not-run)
          (preflight-called-p nil)
-         (clawmacs::*runtime-settlement-notify-function*
+         (rplaca::*runtime-settlement-notify-function*
            (lambda (changed-buffer reason)
              (declare (ignore changed-buffer))
              (when (eq reason :stream-settled)
@@ -4475,37 +4475,37 @@ same
              (setf (buffer-pending-stream buf) state
                    (buffer-streaming-message buf) msg
                    (buffer-status buf) :thinking)
-             (clawmacs::start-stream-state-reader-worker
+             (rplaca::start-stream-state-reader-worker
               state
-              (clawmacs::stream-state-callback state)
+              (rplaca::stream-state-callback state)
               "test-terminal-stream-cleanup-barrier"
               (lambda (worker-state)
                 (bt:with-lock-held
-                    ((clawmacs::stream-state-lock worker-state))
-                  (setf (clawmacs::stream-state-content-blocks worker-state)
-                        (list (clawmacs::canonical-text-block "settled"))
-                        (clawmacs::stream-state-stop-reason worker-state)
+                    ((rplaca::stream-state-lock worker-state))
+                  (setf (rplaca::stream-state-content-blocks worker-state)
+                        (list (rplaca::canonical-text-block "settled"))
+                        (rplaca::stream-state-stop-reason worker-state)
                         "end_turn"))))
              (is-true
               (bt:wait-on-semaphore callback-entered :timeout 2))
              (is-true
-              (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                (clawmacs::stream-state-done-p state)))
+              (bt:with-lock-held ((rplaca::stream-state-lock state))
+                (rplaca::stream-state-done-p state)))
              (setf pump
                    (bt:make-thread
                     (lambda ()
                       (when (bt:wait-on-semaphore settled-wake :timeout 5)
                         (setf automatic-result
-                              (clawmacs::update-streaming-response buf)))
+                              (rplaca::update-streaming-response buf)))
                       (bt:signal-semaphore applied))
                     :name "simulated-clim-stream-event-pump"))
              ;; The first update installs the joiner and returns immediately.
-             (is-true (clawmacs::update-streaming-response buf))
+             (is-true (rplaca::update-streaming-response buf))
              (is (eq state (buffer-pending-stream buf)))
              (is (eq :thinking (buffer-status buf)))
              (is-true
               (bt:thread-alive-p
-               (clawmacs::stream-state-reader-thread state)))
+               (rplaca::stream-state-reader-thread state)))
              (with-safe-reload-test-runners
                  ((lambda (&key timeout source-root)
                     (declare (ignore timeout source-root))
@@ -4514,10 +4514,10 @@ same
                   (lambda (&key buffer source-root)
                     (declare (ignore buffer source-root))
                     (safe-reload-test-result :ok "Must not run.")))
-               (let ((result (clawmacs:clawmacs-safe-reload
+               (let ((result (rplaca:rplaca-safe-reload
                               :buffer buf :notify-p nil)))
                  (is (eq :refused
-                         (clawmacs::safe-reload-result-status result)))
+                         (rplaca::safe-reload-result-status result)))
                  (is-false preflight-called-p)))
              (bt:signal-semaphore callback-release)
              ;; The joiner supplies the only retry wake.
@@ -4526,16 +4526,16 @@ same
              (setf pump nil)
              (is-false automatic-result)
              (is (null (buffer-pending-stream buf)))
-             (is (null (clawmacs::stream-state-reader-thread state)))
+             (is (null (rplaca::stream-state-reader-thread state)))
              (is (null
-                  (clawmacs::stream-state-reader-settlement-thread state)))
+                  (rplaca::stream-state-reader-settlement-thread state)))
              (is (eq :idle (buffer-status buf)))
              (is (string= "settled" (message-text msg))))
         (bt:signal-semaphore callback-release)
         (bt:signal-semaphore settled-wake)
         (when pump
           (bt:join-thread pump))
-        (clawmacs::settle-stream-state-reader state)))))
+        (rplaca::settle-stream-state-reader state)))))
 
 (test stopped-stream-retains-buffer-owner-until-reader-cleanup-settles
   "Stop transfers ownership to teardown without admitting work before exit."
@@ -4549,7 +4549,7 @@ same
            (bt:make-semaphore :name "stream-stop-cleanup-entered"))
          (cleanup-release
            (bt:make-semaphore :name "stream-stop-cleanup-release"))
-         (state (clawmacs::make-stream-state))
+         (state (rplaca::make-stream-state))
          (preflight-called-p nil))
     (with-safe-reload-quiescent-process (buf)
       (unwind-protect
@@ -4557,29 +4557,29 @@ same
              (setf (buffer-pending-stream buf) state
                    (buffer-streaming-message buf) msg
                    (buffer-status buf) :thinking)
-             (clawmacs::start-stream-state-reader-worker
+             (rplaca::start-stream-state-reader-worker
               state nil "test-stopped-stream-cleanup-barrier"
               (lambda (worker-state)
                 (bt:signal-semaphore reader-entered)
                 (loop :until
-                        (clawmacs::stream-state-cancel-requested-p-safe
+                        (rplaca::stream-state-cancel-requested-p-safe
                          worker-state)
                       :do (sleep 0.002))
                 (bt:signal-semaphore cleanup-entered)
                 (bt:wait-on-semaphore cleanup-release :timeout 5)))
              (is-true (bt:wait-on-semaphore reader-entered :timeout 2))
-             (is-true (clawmacs::stop-streaming-response buf))
+             (is-true (rplaca::stop-streaming-response buf))
              (is-true (bt:wait-on-semaphore cleanup-entered :timeout 2))
              ;; Stop detaches the public owner atomically; the teardown retains
              ;; the exact stream until its reader exits.
              (is (null (buffer-pending-stream buf)))
              (is (null (buffer-streaming-message buf)))
              (is (eq :cancelling (buffer-status buf)))
-             (is-true (clawmacs::buffer-runtime-stopping-p buf))
-             (is-true (clawmacs::buffer-runtime-teardown buf))
+             (is-true (rplaca::buffer-runtime-stopping-p buf))
+             (is-true (rplaca::buffer-runtime-teardown buf))
              (is-true
               (bt:thread-alive-p
-               (clawmacs::stream-state-reader-thread state)))
+               (rplaca::stream-state-reader-thread state)))
              (is-false (search "stopped by user"
                                (message-text msg) :test #'char-equal))
              (with-safe-reload-test-runners
@@ -4590,55 +4590,55 @@ same
                   (lambda (&key buffer source-root)
                     (declare (ignore buffer source-root))
                     (safe-reload-test-result :ok "Must not run.")))
-               (let ((result (clawmacs:clawmacs-safe-reload
+               (let ((result (rplaca:rplaca-safe-reload
                               :buffer buf :notify-p nil)))
                  (is (eq :refused
-                         (clawmacs::safe-reload-result-status result)))
+                         (rplaca::safe-reload-result-status result)))
                  (is-false preflight-called-p)))
              ;; No frame polling or join is needed after ownership transfers.
-             (is-false (clawmacs::update-streaming-response buf))
+             (is-false (rplaca::update-streaming-response buf))
              (bt:signal-semaphore cleanup-release)
              (loop :repeat 400
                    :until
                    (let ((teardown
-                           (clawmacs::buffer-runtime-teardown buf)))
+                           (rplaca::buffer-runtime-teardown buf)))
                      (and teardown
-                          (clawmacs::buffer-runtime-teardown-frame-delivery-p
+                          (rplaca::buffer-runtime-teardown-frame-delivery-p
                            teardown)))
                    :do (sleep 0.005))
              (is (null (buffer-pending-stream buf)))
-             (is (null (clawmacs::stream-state-reader-thread state)))
+             (is (null (rplaca::stream-state-reader-thread state)))
              (is (null
-                  (clawmacs::stream-state-reader-settlement-thread state)))
+                  (rplaca::stream-state-reader-settlement-thread state)))
              (is (eq :cancelling (buffer-status buf)))
              (is-false (search "stopped by user"
                                (message-text msg) :test #'char-equal))
              (is-true
-              (clawmacs::deliver-buffer-runtime-stopped-notification buf))
+              (rplaca::deliver-buffer-runtime-stopped-notification buf))
              (is (eq :idle (buffer-status buf)))
              (is (search "stopped by user"
                          (message-text msg) :test #'char-equal)))
         (bt:signal-semaphore cleanup-release)
-        (clawmacs::settle-stream-state-reader state)))))
+        (rplaca::settle-stream-state-reader state)))))
 
 (test handle-key-event-escape-stops-active-stream
   "Esc dispatches to the stop command while a stream is active."
   (let* ((buf (make-buffer "stream-stop-key" :agent-name "agent"))
          (msg (buffer-insert-agent-message buf "" :record-p nil))
-         (state (clawmacs::make-stream-state)))
-    (clawmacs::init-default-keymap)
+         (state (rplaca::make-stream-state)))
+    (rplaca::init-default-keymap)
     (setf (buffer-keymap buf) *default-keymap*)
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (setf (clawmacs::stream-state-text state) "partial"))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (setf (rplaca::stream-state-text state) "partial"))
     (setf (buffer-pending-stream buf) state
           (buffer-streaming-message buf) msg
           (buffer-status buf) :thinking)
     (is (eq :redraw
-            (clawmacs::handle-key-event buf #\Esc)))
+            (rplaca::handle-key-event buf #\Esc)))
     (is (null (buffer-pending-stream buf)))
     (is-false (search "[Stopped by user]" (message-text msg)))
     (is-true
-     (clawmacs::deliver-buffer-runtime-stopped-notification buf))
+     (rplaca::deliver-buffer-runtime-stopped-notification buf))
     (is (search "[Stopped by user]" (message-text msg)))))
 
 (test insert-tool-results-message-records-raw-content
@@ -4648,7 +4648,7 @@ same
          (buf (make-buffer "tool-result"
                            :agent-name "agent"
                            :session session)))
-    (clawmacs::insert-tool-results-message
+    (rplaca::insert-tool-results-message
      buf
      (list `((:result . "done")
              (:display . "[read_file] done")
@@ -4665,7 +4665,7 @@ same
 
 (test normalize-openai-token-usage-responses-shape
   "OpenAI Responses usage is normalized into prompt-cache telemetry."
-  (let ((usage (clawmacs::normalize-openai-token-usage
+  (let ((usage (rplaca::normalize-openai-token-usage
                 '((:input--tokens . 2006)
                   (:output--tokens . 300)
                   (:total--tokens . 2306)
@@ -4679,11 +4679,11 @@ same
                     (/ 1920.0 2006)))
            0.0001))
     (is (string= "tokens: input=2006 cached=1920 uncached=86 output=300 total=2306 cache-hit=95.7%"
-                 (clawmacs::format-token-usage-summary usage)))))
+                 (rplaca::format-token-usage-summary usage)))))
 
 (test normalize-openai-token-usage-chat-shape
   "Chat-style prompt token usage is normalized into the same telemetry shape."
-  (let ((usage (clawmacs::normalize-openai-token-usage
+  (let ((usage (rplaca::normalize-openai-token-usage
                 '((:prompt--tokens . 1000)
                   (:completion--tokens . 50)
                   (:total--tokens . 1050)
@@ -4698,7 +4698,7 @@ same
 
 (test openai-codex-request-normalizes-response-shape
   "OpenAI Codex non-streaming normalizes Responses output items."
-  (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+  (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                             (declare (ignore refresh-if-needed))
                             '(:source :token-override
                               :mode :api-key
@@ -4710,16 +4710,16 @@ same
                               (values
                                "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi from codex\"}]},{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/codex.txt\\\"}\"}],\"usage\":{\"input_tokens\":2006,\"output_tokens\":300,\"total_tokens\":2306,\"input_tokens_details\":{\"cached_tokens\":1920}}}"
                                200))
-      (let ((response (clawmacs::openai-codex-request '() :model "gpt-5.3-codex")))
-        (is (string= "tool_use" (clawmacs::response-stop-reason response)))
+      (let ((response (rplaca::openai-codex-request '() :model "gpt-5.3-codex")))
+        (is (string= "tool_use" (rplaca::response-stop-reason response)))
         (is (equal '(((:type . "text")
                       (:text . "hi from codex"))
                      ((:type . "tool_use")
                       (:id . "call_1")
                       (:name . "read_file")
                       (:input . ((:path . "/tmp/codex.txt")))))
-                   (clawmacs::response-content response)))
-        (let ((usage (clawmacs::response-usage response)))
+                   (rplaca::response-content response)))
+        (let ((usage (rplaca::response-usage response)))
           (is (= 2006 (getf usage :input-tokens)))
           (is (= 1920 (getf usage :cached-input-tokens)))
           (is (= 86 (getf usage :uncached-input-tokens))))))))
@@ -4733,13 +4733,13 @@ same
                                   (:role . "assistant")
                                   (:content . #(((:type . "output_text")
                                                  (:text . "final")))))))))
-         (canonical (clawmacs::responses-api-response->canonical-response
+         (canonical (rplaca::responses-api-response->canonical-response
                      response))
-         (content (clawmacs::response-content canonical)))
-    (is (string= "end_turn" (clawmacs::response-stop-reason canonical)))
-    (is (string= "final" (clawmacs::content-text-blocks content)))
+         (content (rplaca::response-content canonical)))
+    (is (string= "end_turn" (rplaca::response-stop-reason canonical)))
+    (is (string= "final" (rplaca::content-text-blocks content)))
     (is (equal '("provider summary")
-               (clawmacs::content-reasoning-blocks content)))))
+               (rplaca::content-reasoning-blocks content)))))
 
 (test openai-codex-request-normalizes-reasoning-content
   "OpenAI Codex non-streaming preserves Responses reasoning content parts."
@@ -4750,13 +4750,13 @@ same
                                   (:role . "assistant")
                                   (:content . #(((:type . "output_text")
                                                  (:text . "final")))))))))
-         (canonical (clawmacs::responses-api-response->canonical-response
+         (canonical (rplaca::responses-api-response->canonical-response
                      response))
-         (content (clawmacs::response-content canonical)))
-    (is (string= "end_turn" (clawmacs::response-stop-reason canonical)))
-    (is (string= "final" (clawmacs::content-text-blocks content)))
+         (content (rplaca::response-content canonical)))
+    (is (string= "end_turn" (rplaca::response-stop-reason canonical)))
+    (is (string= "final" (rplaca::content-text-blocks content)))
     (is (equal '("provider reasoning")
-               (clawmacs::content-reasoning-blocks content)))))
+               (rplaca::content-reasoning-blocks content)))))
 
 (test openai-codex-request-uses-responses-api-and-chatgpt-headers
   "OpenAI Codex requests target /responses and use instructions + ChatGPT headers."
@@ -4779,13 +4779,13 @@ same
                                     captured-headers (getf (rest args) :additional-headers))
                               (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
                                       200))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 auth)
-        (with-function-override (clawmacs::build-system-prompt ()
+        (with-function-override (rplaca::build-system-prompt ()
                                   "boot prompt")
-          (clawmacs::openai-codex-request messages :model "gpt-5.3-codex"))))
-    (let* ((body (clawmacs::api-json-decode captured-request-body))
+          (rplaca::openai-codex-request messages :model "gpt-5.3-codex"))))
+    (let* ((body (rplaca::api-json-decode captured-request-body))
            (input-items (coerce (cdr (assoc :input body)) 'list))
            (message-item (first input-items))
            (content-item (first (coerce (cdr (assoc :content message-item)) 'list))))
@@ -4816,17 +4816,17 @@ same
                               (setf captured-request-body (getf (rest args) :content))
                               (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
                                       200))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 '(:source :token-override
                                   :mode :api-key
                                   :token "openai-token"
                                   :base-url "https://api.openai.com/v1"
                                   :refreshable-p nil))
-        (clawmacs::openai-codex-request '()
+        (rplaca::openai-codex-request '()
                                         :model "gpt-5.4"
                                         :reasoning-effort "xhigh")))
-    (let* ((body (clawmacs::api-json-decode captured-request-body))
+    (let* ((body (rplaca::api-json-decode captured-request-body))
            (reasoning (cdr (assoc :reasoning body)))
            (effort (cdr (assoc :effort reasoning))))
       (is (string= "xhigh" effort))
@@ -4840,20 +4840,20 @@ same
                                     (getf (rest args) :content))
                               (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
                                       200))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 '(:source :token-override
                                   :mode :api-key
                                   :token "openai-token"
                                   :base-url "https://api.openai.com/v1"
                                   :refreshable-p nil))
-        (let ((clawmacs::*openai-codex-prompt-cache-key*
-                "clawmacs-agent-cache-probe")
-              (clawmacs::*openai-codex-prompt-cache-retention* "24h"))
-          (clawmacs::openai-codex-request '()
+        (let ((rplaca::*openai-codex-prompt-cache-key*
+                "rplaca-agent-cache-probe")
+              (rplaca::*openai-codex-prompt-cache-retention* "24h"))
+          (rplaca::openai-codex-request '()
                                           :model "gpt-5.4"))))
-    (let ((body (clawmacs::api-json-decode captured-request-body)))
-      (is (string= "clawmacs-agent-cache-probe"
+    (let ((body (rplaca::api-json-decode captured-request-body)))
+      (is (string= "rplaca-agent-cache-probe"
                    (cdr (assoc :prompt--cache--key body))))
       (is (string= "24h"
                    (cdr (assoc :prompt--cache--retention body)))))))
@@ -4863,7 +4863,7 @@ same
   (let ((captured-authz nil)
         (calls 0)
         (refresh-called-p nil))
-    (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+    (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                               (declare (ignore refresh-if-needed))
                               '(:source :codex-chatgpt
                                 :mode :chatgpt
@@ -4871,7 +4871,7 @@ same
                                 :base-url "https://chatgpt.com/backend-api/codex"
                                 :account-id "acct_123"
                                 :refreshable-p t))
-      (with-function-override (clawmacs::refresh-openai-codex-auth-descriptor ()
+      (with-function-override (rplaca::refresh-openai-codex-auth-descriptor ()
                                 (setf refresh-called-p t)
                                 '(:source :codex-chatgpt
                                   :mode :chatgpt
@@ -4890,8 +4890,8 @@ same
                                       (values "unauthorized" 401)
                                       (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
                                               200)))
-          (let ((response (clawmacs::openai-codex-request '() :model "gpt-5.3-codex")))
-            (is (string= "end_turn" (clawmacs::response-stop-reason response)))
+          (let ((response (rplaca::openai-codex-request '() :model "gpt-5.3-codex")))
+            (is (string= "end_turn" (rplaca::response-stop-reason response)))
             (is-true refresh-called-p)
             (is (= 2 calls))
             (is (equal '("Bearer expired-token" "Bearer fresh-token")
@@ -4922,7 +4922,7 @@ same
          (calls 0))
     (unwind-protect
          (with-function-override
-             (clawmacs::refresh-openai-codex-auth-descriptor () fresh-auth)
+             (rplaca::refresh-openai-codex-auth-descriptor () fresh-auth)
            (with-function-override (drakma:http-request (&rest args)
                                      (declare (ignore args))
                                      (incf calls)
@@ -4930,7 +4930,7 @@ same
                                          (values rejected-body 401 nil)
                                          (values accepted-body 200 nil)))
              (multiple-value-bind (body status ignored effective-auth)
-                 (clawmacs::openai-codex-http-request
+                 (rplaca::openai-codex-http-request
                   expired-auth "{}" :stream t)
                (declare (ignore ignored))
                (is (eq accepted-body body))
@@ -4948,14 +4948,14 @@ same
   "OpenAI Codex retries transient 503 responses before failing the request."
   (let ((calls 0)
         (sleeps nil))
-    (let ((clawmacs::*provider-http-max-retries* 3)
-          (clawmacs::*provider-http-initial-backoff-seconds* 0.5)
-          (clawmacs::*provider-http-backoff-multiplier* 2.0)
-          (clawmacs::*provider-http-max-backoff-seconds* 8.0)
-          (clawmacs::*provider-http-sleep-function*
+    (let ((rplaca::*provider-http-max-retries* 3)
+          (rplaca::*provider-http-initial-backoff-seconds* 0.5)
+          (rplaca::*provider-http-backoff-multiplier* 2.0)
+          (rplaca::*provider-http-max-backoff-seconds* 8.0)
+          (rplaca::*provider-http-sleep-function*
             (lambda (seconds)
               (push seconds sleeps))))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 '(:source :token-override
                                   :mode :api-key
@@ -4971,10 +4971,10 @@ same
                                     (otherwise
                                      (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
                                              200))))
-          (let ((response (clawmacs::openai-codex-request '()
+          (let ((response (rplaca::openai-codex-request '()
                                                           :model "gpt-5.3-codex")))
             (is (string= "end_turn"
-                         (clawmacs::response-stop-reason response)))))))
+                         (rplaca::response-stop-reason response)))))))
     (is (= 3 calls))
     (is (equalp '(0.5 1.0) (nreverse sleeps)))))
 
@@ -4982,11 +4982,11 @@ same
   "Retry-After controls the backoff delay for transient provider responses."
   (let ((calls 0)
         (sleeps nil))
-    (let ((clawmacs::*provider-http-max-retries* 2)
-          (clawmacs::*provider-http-sleep-function*
+    (let ((rplaca::*provider-http-max-retries* 2)
+          (rplaca::*provider-http-sleep-function*
             (lambda (seconds)
               (push seconds sleeps))))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 '(:source :token-override
                                   :mode :api-key
@@ -5002,10 +5002,10 @@ same
                                               '(("Retry-After" . "2")))
                                       (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
                                               200)))
-          (let ((response (clawmacs::openai-codex-request '()
+          (let ((response (rplaca::openai-codex-request '()
                                                           :model "gpt-5.3-codex")))
             (is (string= "end_turn"
-                         (clawmacs::response-stop-reason response)))))))
+                         (rplaca::response-stop-reason response)))))))
     (is (= 2 calls))
     (is (equal '(2) (nreverse sleeps)))))
 
@@ -5013,13 +5013,13 @@ same
   "A provider cannot force a retry sleep beyond the configured maximum."
   (let ((calls 0)
         (sleeps nil))
-    (let ((clawmacs::*provider-http-max-retries* 1)
-          (clawmacs::*provider-http-max-backoff-seconds* 1.25)
-          (clawmacs::*provider-http-sleep-function*
+    (let ((rplaca::*provider-http-max-retries* 1)
+          (rplaca::*provider-http-max-backoff-seconds* 1.25)
+          (rplaca::*provider-http-sleep-function*
             (lambda (seconds)
               (push seconds sleeps))))
       (multiple-value-bind (body status)
-          (clawmacs::provider-http-request-with-retries
+          (rplaca::provider-http-request-with-retries
            "retry-after-cap-test"
            (lambda ()
              (incf calls)
@@ -5037,17 +5037,17 @@ same
         (cancel-p nil)
         (calls 0)
         (result :unset)
-        (clawmacs::*provider-http-max-retries* 3)
-        (clawmacs::*provider-http-initial-backoff-seconds* 5.0)
-        (clawmacs::*provider-http-max-backoff-seconds* 5.0)
-        (clawmacs::*provider-http-cancel-poll-seconds* 0.01)
-        (clawmacs::*provider-http-sleep-function* #'sleep))
+        (rplaca::*provider-http-max-retries* 3)
+        (rplaca::*provider-http-initial-backoff-seconds* 5.0)
+        (rplaca::*provider-http-max-backoff-seconds* 5.0)
+        (rplaca::*provider-http-cancel-poll-seconds* 0.01)
+        (rplaca::*provider-http-sleep-function* #'sleep))
     (let ((worker
             (bt:make-thread
              (lambda ()
                (setf result
                      (multiple-value-list
-                      (clawmacs::provider-http-request-with-retries
+                      (rplaca::provider-http-request-with-retries
                        "cancel-backoff-test"
                        (lambda ()
                          (incf calls)
@@ -5065,11 +5065,11 @@ same
   "Non-transient HTTP errors are returned to the provider-specific handler."
   (let ((calls 0)
         (sleeps nil))
-    (let ((clawmacs::*provider-http-max-retries* 3)
-          (clawmacs::*provider-http-sleep-function*
+    (let ((rplaca::*provider-http-max-retries* 3)
+          (rplaca::*provider-http-sleep-function*
             (lambda (seconds)
               (push seconds sleeps))))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 '(:source :token-override
                                   :mode :api-key
@@ -5081,7 +5081,7 @@ same
                                   (incf calls)
                                   (values "bad request" 400 nil))
           (signals error
-            (clawmacs::openai-codex-request '()
+            (rplaca::openai-codex-request '()
                                             :model "gpt-5.3-codex")))))
     (is (= 1 calls))
     (is (null sleeps))))
@@ -5090,12 +5090,12 @@ same
   "Connection-level provider failures are retried before surfacing."
   (let ((calls 0)
         (sleeps nil))
-    (let ((clawmacs::*provider-http-max-retries* 2)
-          (clawmacs::*provider-http-initial-backoff-seconds* 0.25)
-          (clawmacs::*provider-http-sleep-function*
+    (let ((rplaca::*provider-http-max-retries* 2)
+          (rplaca::*provider-http-initial-backoff-seconds* 0.25)
+          (rplaca::*provider-http-sleep-function*
             (lambda (seconds)
               (push seconds sleeps))))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 '(:source :token-override
                                   :mode :api-key
@@ -5109,10 +5109,10 @@ same
                                       (error "connection refused")
                                       (values "{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}"
                                               200)))
-          (let ((response (clawmacs::openai-codex-request '()
+          (let ((response (rplaca::openai-codex-request '()
                                                           :model "gpt-5.3-codex")))
             (is (string= "end_turn"
-                         (clawmacs::response-stop-reason response)))))))
+                         (rplaca::response-stop-reason response)))))))
     (is (= 2 calls))
     (is (equalp '(0.25) (nreverse sleeps)))))
 
@@ -5134,68 +5134,68 @@ same
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 '(:source :token-override
                                   :mode :api-key
                                   :token "openai-token"
                                   :base-url "https://api.openai.com/v1"
                                   :refreshable-p nil))
-        (let ((state (clawmacs::openai-codex-request-streaming '() (lambda (state) (declare (ignore state)))
+        (let ((state (rplaca::openai-codex-request-streaming '() (lambda (state) (declare (ignore state)))
                                                               :model "gpt-5.3-codex")))
           (loop repeat 100
-                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                        (clawmacs::stream-state-done-p state))
+                until (bt:with-lock-held ((rplaca::stream-state-lock state))
+                        (rplaca::stream-state-done-p state))
                 do (sleep 0.01))
           (is-true captured-force-binary)
-          (is (= clawmacs::*provider-http-connection-timeout-seconds*
+          (is (= rplaca::*provider-http-connection-timeout-seconds*
                  captured-connection-timeout))
           (is (string= "end_turn"
-                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                         (clawmacs::stream-state-stop-reason state))))
+                       (bt:with-lock-held ((rplaca::stream-state-lock state))
+                         (rplaca::stream-state-stop-reason state))))
           (is (equal '(((:type . "text")
                         (:text . "hi from codex")))
-                     (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                       (reverse (clawmacs::stream-state-content-blocks state))))))))))
+                     (bt:with-lock-held ((rplaca::stream-state-lock state))
+                       (reverse (rplaca::stream-state-content-blocks state))))))))))
 
 (test openai-codex-streaming-preserves-reasoning-summary
   "OpenAI Codex streaming adapter preserves reasoning summary events."
-  (let ((state (clawmacs::make-stream-state)))
-    (clawmacs::process-openai-codex-responses-sse-event
+  (let ((state (rplaca::make-stream-state)))
+    (rplaca::process-openai-codex-responses-sse-event
      "{\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"provider \"}"
      state)
-    (clawmacs::process-openai-codex-responses-sse-event
+    (rplaca::process-openai-codex-responses-sse-event
      "{\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"summary\"}"
      state)
-    (clawmacs::process-openai-codex-responses-sse-event
+    (rplaca::process-openai-codex-responses-sse-event
      "{\"type\":\"response.reasoning_summary_text.done\",\"text\":\"provider summary\"}"
      state)
-    (clawmacs::process-openai-codex-responses-sse-event
+    (rplaca::process-openai-codex-responses-sse-event
      "{\"type\":\"response.output_text.delta\",\"delta\":\"final\"}"
      state)
-    (clawmacs::process-openai-codex-responses-sse-event
+    (rplaca::process-openai-codex-responses-sse-event
      "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}"
      state)
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
       (let ((content (reverse
                       (copy-list
-                       (clawmacs::stream-state-content-blocks state)))))
+                       (rplaca::stream-state-content-blocks state)))))
         (is (string= "end_turn"
-                     (clawmacs::stream-state-stop-reason state)))
+                     (rplaca::stream-state-stop-reason state)))
         (is (string= "final"
-                     (clawmacs::content-text-blocks content)))
+                     (rplaca::content-text-blocks content)))
         (is (equal '("provider summary")
-                   (clawmacs::content-reasoning-blocks content)))))))
+                   (rplaca::content-reasoning-blocks content)))))))
 
 (test openai-codex-streaming-records-completed-usage
   "OpenAI Codex streaming adapter records usage from response.completed."
-  (let ((state (clawmacs::make-stream-state)))
-    (clawmacs::process-openai-codex-responses-sse-event
+  (let ((state (rplaca::make-stream-state)))
+    (rplaca::process-openai-codex-responses-sse-event
      "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":2006,\"output_tokens\":300,\"total_tokens\":2306,\"input_tokens_details\":{\"cached_tokens\":1920}}}}"
      state)
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (is-true (clawmacs::stream-state-done-p state))
-      (let ((usage (clawmacs::stream-state-usage state)))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (is-true (rplaca::stream-state-done-p state))
+      (let ((usage (rplaca::stream-state-usage state)))
         (is (= 2006 (getf usage :input-tokens)))
         (is (= 300 (getf usage :output-tokens)))
         (is (= 2306 (getf usage :total-tokens)))
@@ -5220,24 +5220,24 @@ same
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 '(:source :token-override
                                   :mode :api-key
                                   :token "openai-token"
                                   :base-url "https://api.openai.com/v1"
                                   :refreshable-p nil))
-        (with-function-override (clawmacs::build-system-prompt ()
+        (with-function-override (rplaca::build-system-prompt ()
                                   "boot prompt")
-          (let ((state (clawmacs::openai-codex-request-streaming
+          (let ((state (rplaca::openai-codex-request-streaming
                         messages
                         (lambda (state) (declare (ignore state)))
                         :model "gpt-5.3-codex")))
             (loop repeat 100
-                  until (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                          (clawmacs::stream-state-done-p state))
+                  until (bt:with-lock-held ((rplaca::stream-state-lock state))
+                          (rplaca::stream-state-done-p state))
                   do (sleep 0.01)))))
-    (let* ((body (clawmacs::api-json-decode captured-request-body))
+    (let* ((body (rplaca::api-json-decode captured-request-body))
            (input-items (coerce (cdr (assoc :input body)) 'list))
            (message-item (first input-items))
            (content-item (first (coerce (cdr (assoc :content message-item)) 'list))))
@@ -5259,23 +5259,23 @@ same
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 '(:source :token-override
                                   :mode :api-key
                                   :token "openai-token"
                                   :base-url "https://api.openai.com/v1"
                                   :refreshable-p nil))
-        (let ((state (clawmacs::openai-codex-request-streaming
+        (let ((state (rplaca::openai-codex-request-streaming
                       '()
                       (lambda (state) (declare (ignore state)))
                       :model "gpt-5.4"
                       :reasoning-effort "high")))
           (loop repeat 100
-                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                        (clawmacs::stream-state-done-p state))
+                until (bt:with-lock-held ((rplaca::stream-state-lock state))
+                        (rplaca::stream-state-done-p state))
                 do (sleep 0.01)))))
-    (let* ((body (clawmacs::api-json-decode captured-request-body))
+    (let* ((body (rplaca::api-json-decode captured-request-body))
            (reasoning (cdr (assoc :reasoning body))))
       (is (string= "high" (cdr (assoc :effort reasoning))))
       (is (string= "detailed" (cdr (assoc :summary reasoning)))))))
@@ -5293,27 +5293,27 @@ same
                               (values (flexi-streams:make-in-memory-input-stream octets)
                                       200
                                       nil))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 '(:source :token-override
                                   :mode :api-key
                                   :token "openai-token"
                                   :base-url "https://api.openai.com/v1"
                                   :refreshable-p nil))
-        (let ((state (clawmacs::openai-codex-request-streaming '() (lambda (state) (declare (ignore state)))
+        (let ((state (rplaca::openai-codex-request-streaming '() (lambda (state) (declare (ignore state)))
                                                               :model "gpt-5.3-codex")))
           (loop repeat 100
-                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                        (clawmacs::stream-state-done-p state))
+                until (bt:with-lock-held ((rplaca::stream-state-lock state))
+                        (rplaca::stream-state-done-p state))
                 do (sleep 0.01))
           (is-true captured-force-binary)
           (is (string= "end_turn"
-                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                         (clawmacs::stream-state-stop-reason state))))
+                       (bt:with-lock-held ((rplaca::stream-state-lock state))
+                         (rplaca::stream-state-stop-reason state))))
           (is (equal `(((:type . "text")
                         (:text . ,expected)))
-                     (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                       (reverse (clawmacs::stream-state-content-blocks state))))))))))
+                     (bt:with-lock-held ((rplaca::stream-state-lock state))
+                       (reverse (rplaca::stream-state-content-blocks state))))))))))
 
 (test openai-codex-streaming-supports-multiple-tool-calls
   "OpenAI Codex streaming keeps two Responses function calls separate and canonical."
@@ -5328,22 +5328,22 @@ same
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::resolve-openai-codex-auth (&key refresh-if-needed)
+      (with-function-override (rplaca::resolve-openai-codex-auth (&key refresh-if-needed)
                                 (declare (ignore refresh-if-needed))
                                 '(:source :token-override
                                   :mode :api-key
                                   :token "openai-token"
                                   :base-url "https://api.openai.com/v1"
                                   :refreshable-p nil))
-        (let ((state (clawmacs::openai-codex-request-streaming '() (lambda (state) (declare (ignore state)))
+        (let ((state (rplaca::openai-codex-request-streaming '() (lambda (state) (declare (ignore state)))
                                                               :model "gpt-5.3-codex")))
           (loop repeat 100
-                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                        (clawmacs::stream-state-done-p state))
+                until (bt:with-lock-held ((rplaca::stream-state-lock state))
+                        (rplaca::stream-state-done-p state))
                 do (sleep 0.01))
           (is (string= "tool_use"
-                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                         (clawmacs::stream-state-stop-reason state))))
+                       (bt:with-lock-held ((rplaca::stream-state-lock state))
+                         (rplaca::stream-state-stop-reason state))))
           (is (equal '(((:type . "tool_use")
                         (:id . "call_1")
                         (:name . "read_file")
@@ -5353,8 +5353,8 @@ same
                         (:name . "write_file")
                         (:input . ((:path . "/tmp/two.txt")
                                    (:content . "hello")))))
-                     (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                       (reverse (clawmacs::stream-state-content-blocks state))))))))))
+                     (bt:with-lock-held ((rplaca::stream-state-lock state))
+                       (reverse (rplaca::stream-state-content-blocks state))))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; OpenAI Codex OAuth Tests
@@ -5362,19 +5362,19 @@ same
 
 (test generate-code-verifier-length-and-characters
   "Code verifier is 43 alphanumeric characters."
-  (let ((verifier (clawmacs::generate-code-verifier)))
+  (let ((verifier (rplaca::generate-code-verifier)))
     (is (= 43 (length verifier)))
     (is (every #'alphanumericp verifier))))
 
 (test generate-code-verifier-uniqueness
   "Two generated verifiers are different."
-  (let ((v1 (clawmacs::generate-code-verifier))
-        (v2 (clawmacs::generate-code-verifier)))
+  (let ((v1 (rplaca::generate-code-verifier))
+        (v2 (rplaca::generate-code-verifier)))
     (is (not (string= v1 v2)))))
 
 (test generate-oauth-state-length
   "OAuth state is a base64url token."
-  (let ((state (clawmacs::generate-oauth-state)))
+  (let ((state (rplaca::generate-oauth-state)))
     (is (> (length state) 30))
     (is (not (find #\+ state)))
     (is (not (find #\/ state)))
@@ -5382,7 +5382,7 @@ same
 
 (test compute-code-challenge-is-base64url
   "Code challenge is base64url encoded (no +, /, or = characters)."
-  (let ((challenge (clawmacs::compute-code-challenge "test-verifier-12345678901234567890123456")))
+  (let ((challenge (rplaca::compute-code-challenge "test-verifier-12345678901234567890123456")))
     (is (plusp (length challenge)))
     (is (not (find #\+ challenge)))
     (is (not (find #\/ challenge)))
@@ -5391,26 +5391,26 @@ same
 (test compute-code-challenge-deterministic
   "Same verifier produces the same challenge."
   (let* ((verifier "deterministic-test-verifier-1234567890abcdef")
-         (c1 (clawmacs::compute-code-challenge verifier))
-         (c2 (clawmacs::compute-code-challenge verifier)))
+         (c1 (rplaca::compute-code-challenge verifier))
+         (c2 (rplaca::compute-code-challenge verifier)))
     (is (string= c1 c2))))
 
 (test url-encode-param-preserves-safe-characters
   "URL encoding preserves unreserved characters (RFC 3986)."
-  (is (string= "abc-_.~" (clawmacs::url-encode-param "abc-_.~")))
-  (is (string= "ABCxyz0189" (clawmacs::url-encode-param "ABCxyz0189"))))
+  (is (string= "abc-_.~" (rplaca::url-encode-param "abc-_.~")))
+  (is (string= "ABCxyz0189" (rplaca::url-encode-param "ABCxyz0189"))))
 
 (test url-encode-param-encodes-special-characters
   "URL encoding percent-encodes spaces, slashes, and other special characters."
-  (is (string= "hello%20world" (clawmacs::url-encode-param "hello world")))
-  (is (string= "a%2Fb" (clawmacs::url-encode-param "a/b")))
-  (is (string= "key%3Dvalue" (clawmacs::url-encode-param "key=value")))
-  (is (string= "q%26a" (clawmacs::url-encode-param "q&a"))))
+  (is (string= "hello%20world" (rplaca::url-encode-param "hello world")))
+  (is (string= "a%2Fb" (rplaca::url-encode-param "a/b")))
+  (is (string= "key%3Dvalue" (rplaca::url-encode-param "key=value")))
+  (is (string= "q%26a" (rplaca::url-encode-param "q&a"))))
 
 (test extract-oauth-callback-params-extracts-code-and-state
   "Callback URL parameters are correctly extracted."
   (multiple-value-bind (code state)
-      (clawmacs::extract-oauth-callback-params
+      (rplaca::extract-oauth-callback-params
        "http://localhost:1455/auth/callback?code=abc123&state=xyz789")
     (is (string= "abc123" code))
     (is (string= "xyz789" state))))
@@ -5418,7 +5418,7 @@ same
 (test extract-oauth-callback-params-code-only
   "Callback URL with only code (no state) still works."
   (multiple-value-bind (code state)
-      (clawmacs::extract-oauth-callback-params
+      (rplaca::extract-oauth-callback-params
        "http://localhost:1455/auth/callback?code=onlycode")
     (is (string= "onlycode" code))
     (is (null state))))
@@ -5426,19 +5426,19 @@ same
 (test extract-oauth-callback-params-rejects-missing-query
   "Callback URL without query parameters signals an error."
   (signals error
-    (clawmacs::extract-oauth-callback-params
+    (rplaca::extract-oauth-callback-params
      "http://localhost:1455/auth/callback")))
 
 (test extract-oauth-callback-params-rejects-missing-code
   "Callback URL without a code parameter signals an error."
   (signals error
-    (clawmacs::extract-oauth-callback-params
+    (rplaca::extract-oauth-callback-params
      "http://localhost:1455/auth/callback?state=xyz789")))
 
 (test openai-codex-oauth-start-returns-valid-url
   "oauth-start returns an authorization URL with all required PKCE parameters."
   (multiple-value-bind (url verifier state)
-      (clawmacs::openai-codex-oauth-start)
+      (rplaca::openai-codex-oauth-start)
     (is (search "https://auth.openai.com/oauth/authorize?" url))
     (is (search "client_id=app_EMoamEEZ73f0CkXaXp7hrann" url))
     (is (search "response_type=code" url))
@@ -5457,13 +5457,13 @@ same
   "OpenAI Codex auth.json round-trips through the compatibility helpers."
   (let ((path (temp-codex-auth-path)))
     (with-codex-auth-path-override (path)
-      (clawmacs::save-openai-codex-oauth-tokens
+      (rplaca::save-openai-codex-oauth-tokens
        "access-tok" "refresh-tok" nil
        :id-token "id-tok"
        :account-id "acct_123"
        :openai-api-key "sk-api"
        :auth-mode :chatgpt)
-      (let ((creds (clawmacs::read-openai-codex-oauth-tokens)))
+      (let ((creds (rplaca::read-openai-codex-oauth-tokens)))
         (is (eq :chatgpt (getf creds :auth-mode)))
         (is (string= "access-tok" (getf creds :access-token)))
         (is (string= "refresh-tok" (getf creds :refresh-token)))
@@ -5472,8 +5472,8 @@ same
 
 (test read-openai-codex-oauth-tokens-returns-nil-when-missing
   "Reading from a nonexistent path returns nil."
-  (with-codex-auth-path-override (#P"/tmp/nonexistent-clawmacs-oauth/auth.json")
-    (is (null (clawmacs::read-openai-codex-oauth-tokens)))))
+  (with-codex-auth-path-override (#P"/tmp/nonexistent-rplaca-oauth/auth.json")
+    (is (null (rplaca::read-openai-codex-oauth-tokens)))))
 
 (test read-openai-codex-oauth-token-returns-valid-token
   "read-openai-codex-oauth-token returns the ChatGPT access token from auth.json."
@@ -5483,11 +5483,11 @@ same
                              (make-codex-chatgpt-auth-payload
                               :access-token "fresh-token"
                               :refresh-token "refresh-tok"))
-      (with-function-override (clawmacs::openai-codex-chatgpt-auth-stale-p (auth-json)
+      (with-function-override (rplaca::openai-codex-chatgpt-auth-stale-p (auth-json)
                                 (declare (ignore auth-json))
                                 nil)
         (is (string= "fresh-token"
-                     (clawmacs::read-openai-codex-oauth-token)))))))
+                     (rplaca::read-openai-codex-oauth-token)))))))
 
 (test read-openai-codex-oauth-token-refreshes-when-expired
   "read-openai-codex-oauth-token refreshes stale ChatGPT auth via auth.json."
@@ -5498,21 +5498,21 @@ same
                              (make-codex-chatgpt-auth-payload
                               :access-token "old-token"
                               :refresh-token "good-refresh"))
-      (with-function-override (clawmacs::openai-codex-chatgpt-auth-stale-p (auth-json)
+      (with-function-override (rplaca::openai-codex-chatgpt-auth-stale-p (auth-json)
                                 (declare (ignore auth-json))
                                 t)
-        (with-function-override (clawmacs::refresh-openai-codex-auth-json (&optional auth-json)
+        (with-function-override (rplaca::refresh-openai-codex-auth-json (&optional auth-json)
                                   (declare (ignore auth-json))
                                   (setf refresh-called-p t)
                                   (make-codex-chatgpt-auth-payload
                                    :access-token "refreshed-token"
                                    :refresh-token "good-refresh"))
           (is (string= "refreshed-token"
-                       (clawmacs::read-openai-codex-oauth-token)))
+                       (rplaca::read-openai-codex-oauth-token)))
           (is-true refresh-called-p))))))
 
 (test read-provider-token-prefers-static-override-for-openai-codex
-  "OpenAI Codex uses the clawmacs token file before shared auth.json."
+  "OpenAI Codex uses the rplaca token file before shared auth.json."
   (let ((path (temp-codex-auth-path))
         (openai-codex-path (temp-test-token-path :openai-codex)))
     (with-codex-auth-path-override (path)
@@ -5520,9 +5520,9 @@ same
                              (make-codex-chatgpt-auth-payload
                               :access-token "oauth-token"))
       (with-provider-token-path-overrides (nil openai-codex-path)
-      (clawmacs::save-provider-token :openai-codex "static-token")
+      (rplaca::save-provider-token :openai-codex "static-token")
         (is (string= "static-token"
-                     (clawmacs::read-provider-token :openai-codex)))))))
+                     (rplaca::read-provider-token :openai-codex)))))))
 
 (test read-provider-token-ignores-url-like-openai-codex-override
   "A URL-like OpenAI Codex override token is ignored in favor of shared auth.json."
@@ -5534,11 +5534,11 @@ same
                               :access-token "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig"
                               :account-id "acct_456"))
       (with-provider-token-path-overrides (nil openai-codex-path)
-        (clawmacs::save-provider-token
+        (rplaca::save-provider-token
          :openai-codex
          "http://localhost:1455/auth/callback?code=abc&state=xyz")
         (is (string= "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig"
-                     (clawmacs::read-provider-token :openai-codex)))))))
+                     (rplaca::read-provider-token :openai-codex)))))))
 
 (test read-provider-token-falls-back-to-codex-auth-json-for-openai-codex
   "OpenAI Codex falls back to shared auth.json when no override token exists."
@@ -5550,7 +5550,7 @@ same
                               :access-token "oauth-token"))
       (with-provider-token-path-overrides (nil openai-codex-path)
         (is (string= "oauth-token"
-                     (clawmacs::read-provider-token :openai-codex)))))))
+                     (rplaca::read-provider-token :openai-codex)))))))
 
 (test resolve-openai-codex-auth-api-key-mode-uses-openai-base-url
   "API-key auth.json resolves to the OpenAI base URL."
@@ -5559,7 +5559,7 @@ same
       (write-codex-auth-json path
                              (make-codex-api-key-auth-payload
                               :api-key "sk-api"))
-      (let ((auth (clawmacs::resolve-openai-codex-auth)))
+      (let ((auth (rplaca::resolve-openai-codex-auth)))
         (is (eq :api-key (getf auth :mode)))
         (is (string= "sk-api" (getf auth :token)))
         (is (string= "https://api.openai.com/v1" (getf auth :base-url)))))))
@@ -5573,10 +5573,10 @@ same
                               :access-token "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig"
                               :refresh-token "chatgpt-refresh"
                               :account-id "acct_456"))
-      (with-function-override (clawmacs::openai-codex-chatgpt-auth-stale-p (auth-json)
+      (with-function-override (rplaca::openai-codex-chatgpt-auth-stale-p (auth-json)
                                 (declare (ignore auth-json))
                                 nil)
-        (let ((auth (clawmacs::resolve-openai-codex-auth)))
+        (let ((auth (rplaca::resolve-openai-codex-auth)))
           (is (eq :chatgpt (getf auth :mode)))
           (is (eq :codex-chatgpt (getf auth :source)))
           (is (string= "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.sig"
@@ -5593,7 +5593,7 @@ same
                              (make-codex-chatgpt-auth-payload
                               :account-id nil))
       (signals error
-        (clawmacs::resolve-openai-codex-auth)))))
+        (rplaca::resolve-openai-codex-auth)))))
 
 (test provider-has-token-p-openai-codex-accepts-codex-auth-json
   "provider-has-token-p treats shared Codex auth.json as valid OpenAI Codex auth."
@@ -5604,7 +5604,7 @@ same
                              (make-codex-api-key-auth-payload
                               :api-key "sk-selector"))
       (with-provider-token-path-overrides (nil openai-codex-path)
-        (is-true (clawmacs::provider-has-token-p :openai-codex))))))
+        (is-true (rplaca::provider-has-token-p :openai-codex))))))
 
 (test exchange-openai-oauth-code-makes-correct-request
   "Token exchange sends the correct form parameters to the token endpoint."
@@ -5615,7 +5615,7 @@ same
                                     captured-content (getf args :content))
                               (values "{\"id_token\":\"id-token\",\"access_token\":\"new-access\",\"refresh_token\":\"new-refresh\"}"
                                       200))
-      (let ((tokens (clawmacs::exchange-openai-oauth-code "auth-code-123" "verifier-xyz")))
+      (let ((tokens (rplaca::exchange-openai-oauth-code "auth-code-123" "verifier-xyz")))
         (is (string= "https://auth.openai.com/oauth/token" captured-url))
         (is (search "grant_type=authorization_code" captured-content))
         (is (search "code=auth-code-123" captured-content))
@@ -5626,7 +5626,7 @@ same
 
 (test openai-codex-oauth-finish-validates-state
   "oauth-finish rejects mismatched state parameters."
-  (with-function-override (clawmacs::exchange-openai-oauth-code (code verifier &key redirect-uri)
+  (with-function-override (rplaca::exchange-openai-oauth-code (code verifier &key redirect-uri)
                             (declare (ignore code verifier redirect-uri))
                             (list :id-token "id-token"
                                   :access-token "tok"
@@ -5635,32 +5635,32 @@ same
     (let ((path (temp-codex-auth-path)))
       (with-codex-auth-path-override (path)
       (signals error
-        (clawmacs::openai-codex-oauth-finish
+        (rplaca::openai-codex-oauth-finish
          "http://localhost:1455/auth/callback?code=abc&state=wrong"
          "verifier"
          "expected-state"))))))
 
 (test openai-codex-oauth-finish-succeeds-with-matching-state
   "oauth-finish completes and persists a Codex-compatible auth.json payload."
-  (with-function-override (clawmacs::exchange-openai-oauth-code (code verifier &key redirect-uri)
+  (with-function-override (rplaca::exchange-openai-oauth-code (code verifier &key redirect-uri)
                             (is (string= "auth-code" code))
                             (is (string= "my-verifier" verifier))
-                            (is (string= (clawmacs::openai-oauth-redirect-uri) redirect-uri))
+                            (is (string= (rplaca::openai-oauth-redirect-uri) redirect-uri))
                             (list :id-token "id-token"
                                   :access-token "final-token"
                                   :refresh-token "final-refresh"
                                   :account-id "acct_789"))
-    (with-function-override (clawmacs::obtain-openai-codex-api-key (id-token)
+    (with-function-override (rplaca::obtain-openai-codex-api-key (id-token)
                               (is (string= "id-token" id-token))
                               "sk-exchanged")
       (let ((path (temp-codex-auth-path)))
         (with-codex-auth-path-override (path)
-          (let ((result (clawmacs::openai-codex-oauth-finish
+          (let ((result (rplaca::openai-codex-oauth-finish
                          "http://localhost:1455/auth/callback?code=auth-code&state=good-state"
                          "my-verifier"
                          "good-state")))
             (is (string= "final-token" result))
-            (let ((saved (clawmacs::read-openai-codex-oauth-tokens)))
+            (let ((saved (rplaca::read-openai-codex-oauth-tokens)))
               (is (eq :chatgpt (getf saved :auth-mode)))
               (is (string= "final-token" (getf saved :access-token)))
               (is (string= "final-refresh" (getf saved :refresh-token)))
@@ -5672,24 +5672,24 @@ same
   "A PKCE/start failure cannot leak the listener bound before it."
   (let ((captured-port nil)
         (original-bind
-          (symbol-function 'clawmacs::bind-openai-oauth-listener)))
+          (symbol-function 'rplaca::bind-openai-oauth-listener)))
     (with-function-override
-        (clawmacs::bind-openai-oauth-listener
-            (&optional (preferred-port clawmacs::*openai-oauth-default-port*))
+        (rplaca::bind-openai-oauth-listener
+            (&optional (preferred-port rplaca::*openai-oauth-default-port*))
           (multiple-value-bind (listener port)
               (funcall original-bind preferred-port)
             (setf captured-port port)
             (values listener port)))
       (with-function-override
-          (clawmacs::openai-codex-oauth-start (&key redirect-uri)
+          (rplaca::openai-codex-oauth-start (&key redirect-uri)
             (declare (ignore redirect-uri))
             (error "injected PKCE construction failure"))
         (signals error
-          (clawmacs::start-openai-codex-oauth-login
+          (rplaca::start-openai-codex-oauth-login
            :open-browser-p nil))))
     (is-true captured-port)
     (multiple-value-bind (listener rebound-port)
-        (clawmacs::bind-openai-oauth-listener captured-port)
+        (rplaca::bind-openai-oauth-listener captured-port)
       (unwind-protect
            (is (= captured-port rebound-port))
         (ignore-errors
@@ -5700,16 +5700,16 @@ same
   "A thread-constructor failure leaves no orphan callback listener."
   (let ((captured-port nil)
         (original-bind
-          (symbol-function 'clawmacs::bind-openai-oauth-listener)))
+          (symbol-function 'rplaca::bind-openai-oauth-listener)))
     (with-function-override
-        (clawmacs::bind-openai-oauth-listener
-            (&optional (preferred-port clawmacs::*openai-oauth-default-port*))
+        (rplaca::bind-openai-oauth-listener
+            (&optional (preferred-port rplaca::*openai-oauth-default-port*))
           (multiple-value-bind (listener port)
               (funcall original-bind preferred-port)
             (setf captured-port port)
             (values listener port)))
       (signals error
-        (clawmacs::start-openai-codex-oauth-login
+        (rplaca::start-openai-codex-oauth-login
          :open-browser-p nil
          :thread-constructor
          (lambda (&rest arguments)
@@ -5717,7 +5717,7 @@ same
            (error "injected thread construction failure")))))
     (is-true captured-port)
     (multiple-value-bind (listener rebound-port)
-        (clawmacs::bind-openai-oauth-listener captured-port)
+        (rplaca::bind-openai-oauth-listener captured-port)
       (unwind-protect
            (is (= captured-port rebound-port))
         (ignore-errors
@@ -5776,7 +5776,7 @@ same
 (defun openai-oauth-test-port-released-p (port)
   "Return true when a fresh listener can reclaim PORT."
   (multiple-value-bind (listener rebound-port)
-      (clawmacs::bind-openai-oauth-listener port)
+      (rplaca::bind-openai-oauth-listener port)
     (unwind-protect
          (= port rebound-port)
       (ignore-errors
@@ -5792,12 +5792,12 @@ same
         (code-verifier nil)
         (expected-state nil))
     (with-function-override
-        (clawmacs::openai-codex-oauth-start (&key redirect-uri)
+        (rplaca::openai-codex-oauth-start (&key redirect-uri)
           (values (format nil "https://auth.invalid/?redirect=~A" redirect-uri)
                   "test-verifier"
                   "test-state"))
       (with-function-override
-          (clawmacs::openai-codex-oauth-finish
+          (rplaca::openai-codex-oauth-finish
               (url verifier state &key redirect-uri)
             (declare (ignore redirect-uri))
             (setf callback-url url
@@ -5807,14 +5807,14 @@ same
         (unwind-protect
              (progn
                (setf flow
-                     (clawmacs::start-openai-codex-oauth-login
+                     (rplaca::start-openai-codex-oauth-login
                       :open-browser-p nil)
-                     worker (clawmacs::openai-oauth-flow-thread-snapshot flow)
-                     port (clawmacs::openai-oauth-flow-port flow))
+                     worker (rplaca::openai-oauth-flow-thread-snapshot flow)
+                     port (rplaca::openai-oauth-flow-port flow))
                (let* ((rejection-response
                         (openai-oauth-test-http-request port method target))
                       (after-rejection
-                        (clawmacs::openai-oauth-flow-snapshot flow))
+                        (rplaca::openai-oauth-flow-snapshot flow))
                       (worker-alive-after-rejection-p
                         (bt:thread-alive-p worker))
                       (success-response
@@ -5825,7 +5825,7 @@ same
                       (worker-exited-p
                         (wait-for-openai-oauth-test-worker worker))
                       (final-snapshot
-                        (clawmacs::openai-oauth-flow-snapshot flow)))
+                        (rplaca::openai-oauth-flow-snapshot flow)))
                  (list :rejection-response rejection-response
                        :after-rejection after-rejection
                        :worker-alive-after-rejection-p
@@ -5840,7 +5840,7 @@ same
                        (and worker-exited-p
                             (openai-oauth-test-port-released-p port)))))
           (when (and flow worker (bt:thread-alive-p worker))
-            (clawmacs::cancel-openai-codex-oauth-login flow)
+            (rplaca::cancel-openai-codex-oauth-login flow)
             (wait-for-openai-oauth-test-worker worker)))))))
 
 #+sbcl
@@ -5890,39 +5890,39 @@ same
         (worker nil)
         (port nil))
     (with-function-override
-        (clawmacs::openai-codex-oauth-start (&key redirect-uri)
+        (rplaca::openai-codex-oauth-start (&key redirect-uri)
           (values (format nil "https://auth.invalid/?redirect=~A" redirect-uri)
                   "test-verifier"
                   "test-state"))
       (unwind-protect
            (progn
              (setf flow
-                   (clawmacs::start-openai-codex-oauth-login
+                   (rplaca::start-openai-codex-oauth-login
                     :open-browser-p nil)
-                   worker (clawmacs::openai-oauth-flow-thread-snapshot flow)
-                   port (clawmacs::openai-oauth-flow-port flow))
-             (loop :repeat clawmacs::*openai-oauth-max-rejected-callback-requests*
+                   worker (rplaca::openai-oauth-flow-thread-snapshot flow)
+                   port (rplaca::openai-oauth-flow-port flow))
+             (loop :repeat rplaca::*openai-oauth-max-rejected-callback-requests*
                    :for response :=
                      (openai-oauth-test-http-request port "GET" "/favicon.ico")
                    :do (is (search "404 Not Found" response)))
              (is-true (wait-for-openai-oauth-test-worker worker))
-             (let ((snapshot (clawmacs::openai-oauth-flow-snapshot flow)))
+             (let ((snapshot (rplaca::openai-oauth-flow-snapshot flow)))
                (is-true (getf snapshot :done-p))
                (is-false (getf snapshot :success-p))
                (is (search "Too many rejected"
                            (getf snapshot :error))))
              (is-true (openai-oauth-test-port-released-p port)))
         (when (and flow worker (bt:thread-alive-p worker))
-          (clawmacs::cancel-openai-codex-oauth-login flow)
+          (rplaca::cancel-openai-codex-oauth-login flow)
           (wait-for-openai-oauth-test-worker worker))))))
 
 #+sbcl
 (test cancelling-openai-oauth-partial-request-interrupts-client
   "Cancellation closes an accepted client blocked on an incomplete header."
-  (let* ((flow (clawmacs::start-openai-codex-oauth-login
+  (let* ((flow (rplaca::start-openai-codex-oauth-login
                 :open-browser-p nil))
-         (port (clawmacs::openai-oauth-flow-port flow))
-         (worker (clawmacs::openai-oauth-flow-thread-snapshot flow))
+         (port (rplaca::openai-oauth-flow-port flow))
+         (worker (rplaca::openai-oauth-flow-thread-snapshot flow))
          (client-socket nil)
          (client-stream nil))
     (unwind-protect
@@ -5948,14 +5948,14 @@ same
                    #\Return #\Linefeed #\Return #\Linefeed)
            (finish-output client-stream)
            (loop :repeat 400
-                 :until (getf (clawmacs::openai-oauth-flow-snapshot flow)
+                 :until (getf (rplaca::openai-oauth-flow-snapshot flow)
                               :client-active-p)
                  :do (sleep 0.005))
            (is-true
-            (getf (clawmacs::openai-oauth-flow-snapshot flow)
+            (getf (rplaca::openai-oauth-flow-snapshot flow)
                   :client-active-p))
            (multiple-value-bind (cancelled-flow cancelled-now-p)
-               (clawmacs::cancel-openai-codex-oauth-login flow)
+               (rplaca::cancel-openai-codex-oauth-login flow)
              (is (eq flow cancelled-flow))
              (is-true cancelled-now-p))
            (loop :repeat 400
@@ -5964,7 +5964,7 @@ same
            (is-false (bt:thread-alive-p worker))
            (unless (bt:thread-alive-p worker)
              (bt:join-thread worker))
-           (let ((snapshot (clawmacs::openai-oauth-flow-snapshot flow)))
+           (let ((snapshot (rplaca::openai-oauth-flow-snapshot flow)))
              (is-true (getf snapshot :cancelled-p))
              (is-false (getf snapshot :client-active-p))))
       (when client-stream
@@ -5974,7 +5974,7 @@ same
         (ignore-errors
           (sb-bsd-sockets:socket-close client-socket)))
       (when (and worker (bt:thread-alive-p worker))
-        (clawmacs::cancel-openai-codex-oauth-login flow)
+        (rplaca::cancel-openai-codex-oauth-login flow)
         (loop :repeat 400
               :while (bt:thread-alive-p worker)
               :do (sleep 0.005)))
@@ -5985,71 +5985,71 @@ same
   "A replaced flow cannot clear its successor or apply stale cancellation."
   (let* ((buf (make-buffer "oauth-stale-claim"
                            :session-persistence-mode :ephemeral))
-         (stale (clawmacs::make-openai-oauth-flow :buffer buf))
-         (replacement (clawmacs::make-openai-oauth-flow :buffer buf))
+         (stale (rplaca::make-openai-oauth-flow :buffer buf))
+         (replacement (rplaca::make-openai-oauth-flow :buffer buf))
          (original-snapshot
-           (symbol-function 'clawmacs::openai-oauth-flow-snapshot))
-         (clawmacs::*openai-oauth-pending* nil)
-         (clawmacs::*openai-oauth-pending-lock*
+           (symbol-function 'rplaca::openai-oauth-flow-snapshot))
+         (rplaca::*openai-oauth-pending* nil)
+         (rplaca::*openai-oauth-pending-lock*
            (bt:make-lock "test-openai-oauth-pending"))
-         (clawmacs::*after-buffer-display-change-hook* nil))
+         (rplaca::*after-buffer-display-change-hook* nil))
     (setf (buffer-status buf) :oauth)
-    (clawmacs::openai-oauth-flow-set-result stale :cancelled t)
-    (is-true (clawmacs::publish-openai-oauth-pending-flow stale))
+    (rplaca::openai-oauth-flow-set-result stale :cancelled t)
+    (is-true (rplaca::publish-openai-oauth-pending-flow stale))
     (with-function-override
-        (clawmacs::openai-oauth-flow-snapshot (flow)
+        (rplaca::openai-oauth-flow-snapshot (flow)
           (let ((snapshot (funcall original-snapshot flow)))
             (when (eq flow stale)
               (is (eq stale
-                      (clawmacs::claim-openai-oauth-pending-flow stale)))
+                      (rplaca::claim-openai-oauth-pending-flow stale)))
               (is-true
-               (clawmacs::publish-openai-oauth-pending-flow replacement)))
+               (rplaca::publish-openai-oauth-pending-flow replacement)))
             snapshot))
-      (is-true (clawmacs::update-openai-oauth-login buf)))
-    (is (eq replacement (clawmacs::openai-oauth-pending-flow)))
+      (is-true (rplaca::update-openai-oauth-login buf)))
+    (is (eq replacement (rplaca::openai-oauth-pending-flow)))
     (is (eq :oauth (buffer-status buf)))
     (is-false
      (some (lambda (message)
              (search "OAuth cancelled" (message-text message)))
            (test-buffer-history-messages buf)))
-    (is (eq replacement (clawmacs::take-openai-oauth-pending-flow)))))
+    (is (eq replacement (rplaca::take-openai-oauth-pending-flow)))))
 
 (test oauth-command-rejection-preserves-existing-flow-status
   "Rejecting a second login cannot idle or cancel the already pending login."
   (let* ((buf (make-buffer "oauth-existing-command"
                            :session-persistence-mode :ephemeral))
-         (flow (clawmacs::make-openai-oauth-flow :buffer buf))
-         (clawmacs::*openai-oauth-pending* nil)
-         (clawmacs::*openai-oauth-pending-lock*
+         (flow (rplaca::make-openai-oauth-flow :buffer buf))
+         (rplaca::*openai-oauth-pending* nil)
+         (rplaca::*openai-oauth-pending-lock*
            (bt:make-lock "test-openai-oauth-existing-command"))
-         (clawmacs::*after-buffer-display-change-hook* nil))
+         (rplaca::*after-buffer-display-change-hook* nil))
     (setf (buffer-status buf) :oauth)
-    (is-true (clawmacs::publish-openai-oauth-pending-flow flow))
-    (clawmacs::openai-codex-oauth-command buf)
-    (is (eq flow (clawmacs::openai-oauth-pending-flow)))
+    (is-true (rplaca::publish-openai-oauth-pending-flow flow))
+    (rplaca::openai-codex-oauth-command buf)
+    (is (eq flow (rplaca::openai-oauth-pending-flow)))
     (is (eq :oauth (buffer-status buf)))
     (is-false
-     (getf (clawmacs::openai-oauth-flow-snapshot flow) :done-p))
-    (is (eq flow (clawmacs::take-openai-oauth-pending-flow)))))
+     (getf (rplaca::openai-oauth-flow-snapshot flow) :done-p))
+    (is (eq flow (rplaca::take-openai-oauth-pending-flow)))))
 
 (test oauth-buffer-teardown-clears-pending-flow-and-status
   "Buffer teardown atomically retires OAuth ownership and leaves idle status."
   (let* ((buf (make-buffer "oauth-teardown"
                            :session-persistence-mode :ephemeral))
-         (flow (clawmacs::make-openai-oauth-flow :buffer buf))
-         (clawmacs::*openai-oauth-pending* nil)
-         (clawmacs::*openai-oauth-pending-lock*
+         (flow (rplaca::make-openai-oauth-flow :buffer buf))
+         (rplaca::*openai-oauth-pending* nil)
+         (rplaca::*openai-oauth-pending-lock*
            (bt:make-lock "test-openai-oauth-teardown"))
-         (clawmacs::*after-buffer-display-change-hook* nil))
+         (rplaca::*after-buffer-display-change-hook* nil))
     (setf (buffer-status buf) :oauth)
-    (is-true (clawmacs::publish-openai-oauth-pending-flow flow))
-    (clawmacs::cancel-buffer-runtime-operations buf)
-    (is (null (clawmacs::openai-oauth-pending-flow)))
+    (is-true (rplaca::publish-openai-oauth-pending-flow flow))
+    (rplaca::cancel-buffer-runtime-operations buf)
+    (is (null (rplaca::openai-oauth-pending-flow)))
     (is-true
-     (clawmacs::deliver-buffer-runtime-stopped-notification buf))
+     (rplaca::deliver-buffer-runtime-stopped-notification buf))
     (is (eq :idle (buffer-status buf)))
     (is-true
-     (getf (clawmacs::openai-oauth-flow-snapshot flow) :cancelled-p))))
+     (getf (rplaca::openai-oauth-flow-snapshot flow) :cancelled-p))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Z.AI (Zhipu AI) Provider Tests
@@ -6057,35 +6057,35 @@ same
 
 (test zai-provider-token-path
   "Z.AI provider token path is zai-api-key."
-  (let ((path (clawmacs::provider-token-path :zai)))
+  (let ((path (rplaca::provider-token-path :zai)))
     (is (search "zai-api-key" (namestring path)))))
 
 (test zai-known-provider-p
   "Z.AI is recognized as a known provider."
-  (is-true (clawmacs::known-provider-p :zai)))
+  (is-true (rplaca::known-provider-p :zai)))
 
 (test zai-fallback-model-is-glm-5-2
   "Z.AI fallback model is glm-5.2."
   (is (string= "glm-5.2"
-               (clawmacs::provider-fallback-model :zai))))
+               (rplaca::provider-fallback-model :zai))))
 
 (test zai-normalize-provider-keyword
   "normalize-provider accepts :zai."
-  (is (eq :zai (clawmacs::normalize-provider :zai))))
+  (is (eq :zai (rplaca::normalize-provider :zai))))
 
 (test zai-normalize-provider-string
   "normalize-provider accepts \"zai\" string."
-  (is (eq :zai (clawmacs::normalize-provider "zai"))))
+  (is (eq :zai (rplaca::normalize-provider "zai"))))
 
 (test zai-read-provider-token-from-file
   "read-provider-token reads Z.AI API key from static file."
   (let ((zai-path (temp-test-token-path :zai))
         (openai-codex-path (temp-test-token-path :openai-codex))
-        (clawmacs::*zai-env-var* "CLAWMACS_UNSET_ZAI_ENV_98765"))
+        (rplaca::*zai-env-var* "RPLACA_UNSET_ZAI_ENV_98765"))
     (with-provider-token-path-overrides (nil openai-codex-path zai-path)
-      (clawmacs::save-provider-token :zai "zai-test-key-abc123")
+      (rplaca::save-provider-token :zai "zai-test-key-abc123")
       (is (string= "zai-test-key-abc123"
-                   (clawmacs::read-provider-token :zai))))))
+                   (rplaca::read-provider-token :zai))))))
 
 (test zai-request-sends-correct-headers-and-body
   "Z.AI non-streaming sends correct Authorization and Accept-Language headers."
@@ -6102,16 +6102,16 @@ same
                                     captured-body (getf args :content))
                               (values "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"hi from glm\"}}]}"
                                       200))
-      (with-function-override (clawmacs::read-provider-token (provider)
+      (with-function-override (rplaca::read-provider-token (provider)
                                 (declare (ignore provider))
                                 "zai-key-test")
-        (clawmacs::zai-request messages :model "glm-5")))
+        (rplaca::zai-request messages :model "glm-5")))
     (is (string= "https://api.z.ai/api/coding/paas/v4/chat/completions" captured-url))
     (is (string= "Bearer zai-key-test"
                  (cdr (assoc "Authorization" captured-headers :test #'string=))))
     (is (string= "en-US,en"
                  (cdr (assoc "Accept-Language" captured-headers :test #'string=))))
-    (let ((body (clawmacs::api-json-decode captured-body)))
+    (let ((body (rplaca::api-json-decode captured-body)))
       (is (string= "glm-5" (cdr (assoc :model body)))))))
 
 (test zai-request-sends-glm-5-2-reasoning-effort
@@ -6122,14 +6122,14 @@ same
                               (setf captured-body (getf args :content))
                               (values "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"ok\"}}]}"
                                       200))
-      (with-function-override (clawmacs::read-provider-token (provider)
+      (with-function-override (rplaca::read-provider-token (provider)
                                 (declare (ignore provider))
                                 "zai-key-test")
-        (clawmacs::zai-request
+        (rplaca::zai-request
          '()
          :model "glm-5.2"
          :reasoning-effort "high")))
-    (let ((body (clawmacs::api-json-decode captured-body)))
+    (let ((body (rplaca::api-json-decode captured-body)))
       (is (string= "glm-5.2" (cdr (assoc :model body))))
       (is (string= "high" (cdr (assoc :reasoning--effort body)))))))
 
@@ -6140,22 +6140,22 @@ same
                             (values
                              "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"你好世界\"}}]}"
                              200))
-    (with-function-override (clawmacs::read-provider-token (provider)
+    (with-function-override (rplaca::read-provider-token (provider)
                               (declare (ignore provider))
                               "zai-key")
-      (let ((response (clawmacs::zai-request '() :model "glm-5")))
-        (is (string= "end_turn" (clawmacs::response-stop-reason response)))
+      (let ((response (rplaca::zai-request '() :model "glm-5")))
+        (is (string= "end_turn" (rplaca::response-stop-reason response)))
         (is (equal '(((:type . "text")
                       (:text . "你好世界")))
-                    (clawmacs::response-content response)))))))
+                    (rplaca::response-content response)))))))
 
 (test zai-request-retries-transient-503
   "Z.AI non-streaming requests use the shared transient HTTP retry path."
   (let ((calls 0)
         (sleeps nil))
-    (let ((clawmacs::*provider-http-max-retries* 1)
-          (clawmacs::*provider-http-initial-backoff-seconds* 0.5)
-          (clawmacs::*provider-http-sleep-function*
+    (let ((rplaca::*provider-http-max-retries* 1)
+          (rplaca::*provider-http-initial-backoff-seconds* 0.5)
+          (rplaca::*provider-http-sleep-function*
             (lambda (seconds)
               (push seconds sleeps))))
       (with-function-override (drakma:http-request (&rest args)
@@ -6166,12 +6166,12 @@ same
                                     (values
                                      "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"ok\"}}]}"
                                      200)))
-        (with-function-override (clawmacs::read-provider-token (provider)
+        (with-function-override (rplaca::read-provider-token (provider)
                                   (declare (ignore provider))
                                   "zai-key")
-          (let ((response (clawmacs::zai-request '() :model "glm-5")))
+          (let ((response (rplaca::zai-request '() :model "glm-5")))
             (is (string= "end_turn"
-                         (clawmacs::response-stop-reason response)))))))
+                         (rplaca::response-stop-reason response)))))))
     (is (= 2 calls))
     (is (equalp '(0.5) (nreverse sleeps)))))
 
@@ -6182,18 +6182,18 @@ same
                             (values
                              "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"content\":\"let me check\",\"tool_calls\":[{\"id\":\"call_z1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/test.txt\\\"}\"}}]}}]}"
                              200))
-    (with-function-override (clawmacs::read-provider-token (provider)
+    (with-function-override (rplaca::read-provider-token (provider)
                               (declare (ignore provider))
                               "zai-key")
-      (let ((response (clawmacs::zai-request '() :model "glm-5")))
-        (is (string= "tool_use" (clawmacs::response-stop-reason response)))
+      (let ((response (rplaca::zai-request '() :model "glm-5")))
+        (is (string= "tool_use" (rplaca::response-stop-reason response)))
         (is (equal '(((:type . "text")
                       (:text . "let me check"))
                      ((:type . "tool_use")
                       (:id . "call_z1")
                       (:name . "read_file")
                       (:input . ((:path . "/tmp/test.txt")))))
-                    (clawmacs::response-content response)))))))
+                    (rplaca::response-content response)))))))
 
 (test zai-request-includes-system-prompt-message
   "Z.AI requests prepend the built system prompt as an OpenAI system message."
@@ -6206,13 +6206,13 @@ same
                               (setf captured-request-body (getf (rest args) :content))
                               (values "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"ok\"}}]}"
                                       200))
-      (with-function-override (clawmacs::read-provider-token (provider)
+      (with-function-override (rplaca::read-provider-token (provider)
                                 (declare (ignore provider))
                                 "zai-key")
-        (with-function-override (clawmacs::build-system-prompt ()
+        (with-function-override (rplaca::build-system-prompt ()
                                   "zai boot prompt")
-          (clawmacs::zai-request messages :model "glm-5"))))
-    (let* ((body (clawmacs::api-json-decode captured-request-body))
+          (rplaca::zai-request messages :model "glm-5"))))
+    (let* ((body (rplaca::api-json-decode captured-request-body))
            (sent-messages (coerce (cdr (assoc :messages body)) 'list)))
       (is (string= "system" (cdr (assoc :role (first sent-messages)))))
       (is (string= "zai boot prompt" (cdr (assoc :content (first sent-messages)))))
@@ -6225,11 +6225,11 @@ same
                               (setf captured-request-body (getf (rest args) :content))
                               (values "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"ok\"}}]}"
                                       200))
-      (with-function-override (clawmacs::read-provider-token (provider)
+      (with-function-override (rplaca::read-provider-token (provider)
                                 (declare (ignore provider))
                                 "zai-key")
-        (clawmacs::zai-request '() :model "glm-5" :max-tokens 4096)))
-    (let ((body (clawmacs::api-json-decode captured-request-body)))
+        (rplaca::zai-request '() :model "glm-5" :max-tokens 4096)))
+    (let ((body (rplaca::api-json-decode captured-request-body)))
       (is (= 4096 (cdr (assoc :max--tokens body))))
       (is (null (assoc :max--completion--tokens body))))))
 
@@ -6248,22 +6248,22 @@ same
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::read-provider-token (provider)
+      (with-function-override (rplaca::read-provider-token (provider)
                                 (declare (ignore provider))
                                 "zai-key")
-        (let ((state (clawmacs::zai-request-streaming '() (lambda (state) (declare (ignore state)))
+        (let ((state (rplaca::zai-request-streaming '() (lambda (state) (declare (ignore state)))
                                                       :model "glm-5")))
           (loop repeat 100
-                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                        (clawmacs::stream-state-done-p state))
+                until (bt:with-lock-held ((rplaca::stream-state-lock state))
+                        (rplaca::stream-state-done-p state))
                 do (sleep 0.01))
           (is (string= "end_turn"
-                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                         (clawmacs::stream-state-stop-reason state))))
+                       (bt:with-lock-held ((rplaca::stream-state-lock state))
+                         (rplaca::stream-state-stop-reason state))))
           (is (equal '(((:type . "text")
                         (:text . "你好世界")))
-                     (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                       (reverse (clawmacs::stream-state-content-blocks state))))))))))
+                     (bt:with-lock-held ((rplaca::stream-state-lock state))
+                       (reverse (rplaca::stream-state-content-blocks state))))))))))
 
 (test zai-streaming-includes-system-prompt
   "Z.AI streaming requests prepend the built system prompt."
@@ -6281,20 +6281,20 @@ same
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::read-provider-token (provider)
+      (with-function-override (rplaca::read-provider-token (provider)
                                 (declare (ignore provider))
                                 "zai-key")
-        (with-function-override (clawmacs::build-system-prompt ()
+        (with-function-override (rplaca::build-system-prompt ()
                                   "zai system prompt")
-          (let ((state (clawmacs::zai-request-streaming
+          (let ((state (rplaca::zai-request-streaming
                         messages
                         (lambda (state) (declare (ignore state)))
                         :model "glm-5")))
             (loop repeat 100
-                  until (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                          (clawmacs::stream-state-done-p state))
+                  until (bt:with-lock-held ((rplaca::stream-state-lock state))
+                          (rplaca::stream-state-done-p state))
                   do (sleep 0.01))))))
-    (let* ((body (clawmacs::api-json-decode captured-request-body))
+    (let* ((body (rplaca::api-json-decode captured-request-body))
            (sent-messages (coerce (cdr (assoc :messages body)) 'list)))
       (is (string= "system" (cdr (assoc :role (first sent-messages)))))
       (is (string= "zai system prompt" (cdr (assoc :content (first sent-messages))))))))
@@ -6312,24 +6312,24 @@ same
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::read-provider-token (provider)
+      (with-function-override (rplaca::read-provider-token (provider)
                                 (declare (ignore provider))
                                 "zai-key")
-        (let ((state (clawmacs::zai-request-streaming '() (lambda (state) (declare (ignore state)))
+        (let ((state (rplaca::zai-request-streaming '() (lambda (state) (declare (ignore state)))
                                                       :model "glm-5")))
           (loop repeat 100
-                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                        (clawmacs::stream-state-done-p state))
+                until (bt:with-lock-held ((rplaca::stream-state-lock state))
+                        (rplaca::stream-state-done-p state))
                 do (sleep 0.01))
           (is (string= "tool_use"
-                       (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                         (clawmacs::stream-state-stop-reason state))))
+                       (bt:with-lock-held ((rplaca::stream-state-lock state))
+                         (rplaca::stream-state-stop-reason state))))
           (is (equal '(((:type . "tool_use")
                         (:id . "call_z2")
                         (:name . "shell")
                         (:input . ((:command . "ls")))))
-                     (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                       (reverse (clawmacs::stream-state-content-blocks state))))))))))
+                     (bt:with-lock-held ((rplaca::stream-state-lock state))
+                       (reverse (rplaca::stream-state-content-blocks state))))))))))
 
 (test zai-streaming-sends-glm-5-2-tool-options
   "Z.AI streaming opts into tool argument streaming and preserves effort."
@@ -6352,11 +6352,11 @@ same
                                        (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::read-provider-token (provider)
+      (with-function-override (rplaca::read-provider-token (provider)
                                 (declare (ignore provider))
                                 "zai-key-test")
         (let ((state
-                (clawmacs::zai-request-streaming
+                (rplaca::zai-request-streaming
                  '()
                  (lambda (stream-state)
                    (declare (ignore stream-state)))
@@ -6365,10 +6365,10 @@ same
                  :tools tools)))
           (loop repeat 100
                 until (bt:with-lock-held
-                          ((clawmacs::stream-state-lock state))
-                        (clawmacs::stream-state-done-p state))
+                          ((rplaca::stream-state-lock state))
+                        (rplaca::stream-state-done-p state))
                 do (sleep 0.01)))))
-    (let ((body (clawmacs::api-json-decode captured-body)))
+    (let ((body (rplaca::api-json-decode captured-body)))
       (is (eq t (cdr (assoc :tool--stream body))))
       (is (string= "max" (cdr (assoc :reasoning--effort body)))))))
 
@@ -6376,33 +6376,33 @@ same
   "provider-request forwards supported Z.AI reasoning effort."
   (let ((captured-effort nil))
     (with-function-override
-        (clawmacs::zai-request
+        (rplaca::zai-request
          (messages &key model max-tokens tools reasoning-effort system-prompt)
          (declare (ignore messages model max-tokens tools system-prompt))
          (setf captured-effort reasoning-effort)
          '((:stop--reason . "end_turn") (:content . #())))
-      (clawmacs::provider-request
+      (rplaca::provider-request
        :zai '() :model "glm-5.2" :reasoning-effort "high")
       (is (string= "high" captured-effort)))))
 
 (test zai-provider-dispatch-routes-correctly
   "provider-request dispatches :zai to zai-request."
   (let ((dispatched-provider nil))
-    (with-function-override (clawmacs::zai-request (messages &key model max-tokens tools system-prompt)
+    (with-function-override (rplaca::zai-request (messages &key model max-tokens tools system-prompt)
                               (declare (ignore messages model max-tokens tools system-prompt))
                               (setf dispatched-provider :zai)
                               '((:stop--reason . "end_turn") (:content . #())))
-      (clawmacs::provider-request :zai '() :model "glm-5")
+      (rplaca::provider-request :zai '() :model "glm-5")
       (is (eq :zai dispatched-provider)))))
 
 (test zai-agent-defaults-round-trip
   "Agent defaults registry handles :zai as a provider."
   (let ((path (temp-agent-defaults-path)))
     (with-agent-defaults-path-override (path)
-      (clawmacs::set-agent-default "zhipu" :zai :model "glm-4.7")
-      (is (eq :zai (clawmacs::agent-default "zhipu")))
+      (rplaca::set-agent-default "zhipu" :zai :model "glm-4.7")
+      (is (eq :zai (rplaca::agent-default "zhipu")))
       (is (string= "glm-4.7"
-                   (clawmacs::agent-default-model "zhipu" :zai))))))
+                   (rplaca::agent-default-model "zhipu" :zai))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Reasoning Content Handling (Z.AI GLM, DeepSeek R1, etc.)
@@ -6415,15 +6415,15 @@ same
                             (values
                              "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"Hello\",\"reasoning_content\":\"The user wants a greeting...\"}}]}"
                              200))
-    (with-function-override (clawmacs::read-provider-token (provider)
+    (with-function-override (rplaca::read-provider-token (provider)
                               (declare (ignore provider))
                               "zai-key")
-      (let* ((response (clawmacs::zai-request '() :model "glm-5"))
-             (content (clawmacs::response-content response)))
+      (let* ((response (rplaca::zai-request '() :model "glm-5"))
+             (content (rplaca::response-content response)))
         (is (string= "Hello"
                      (cdr (assoc :text (first content)))))
         (is (equal '("The user wants a greeting...")
-                   (clawmacs::content-reasoning-blocks content)))))))
+                   (rplaca::content-reasoning-blocks content)))))))
 
 (test reasoning-content-non-streaming-fallback
   "Non-streaming: when content is blank but reasoning_content is present, use reasoning."
@@ -6432,14 +6432,14 @@ same
                             (values
                              "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"\",\"reasoning_content\":\"The user wants a greeting. Options: Hello, Hi...\"}}]}"
                              200))
-    (with-function-override (clawmacs::read-provider-token (provider)
+    (with-function-override (rplaca::read-provider-token (provider)
                               (declare (ignore provider))
                               "zai-key")
-      (let ((response (clawmacs::zai-request '() :model "glm-5")))
+      (let ((response (rplaca::zai-request '() :model "glm-5")))
         (is (string= "The user wants a greeting. Options: Hello, Hi..."
-                     (cdr (assoc :text (first (clawmacs::response-content response))))))
+                     (cdr (assoc :text (first (rplaca::response-content response))))))
         ;; finish_reason should be "max_tokens" (mapped from "length")
-        (is (string= "max_tokens" (clawmacs::response-stop-reason response)))))))
+        (is (string= "max_tokens" (rplaca::response-stop-reason response)))))))
 
 (test reasoning-content-non-streaming-no-reasoning
   "Non-streaming: when only content is present (no reasoning), works normally."
@@ -6448,12 +6448,12 @@ same
                             (values
                              "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"Hello world\"}}]}"
                              200))
-    (with-function-override (clawmacs::read-provider-token (provider)
+    (with-function-override (rplaca::read-provider-token (provider)
                               (declare (ignore provider))
                               "zai-key")
-      (let ((response (clawmacs::zai-request '() :model "glm-5")))
+      (let ((response (rplaca::zai-request '() :model "glm-5")))
         (is (string= "Hello world"
-                     (cdr (assoc :text (first (clawmacs::response-content response))))))))))
+                     (cdr (assoc :text (first (rplaca::response-content response))))))))))
 
 (test reasoning-content-streaming-with-reasoning-then-content
   "Streaming: reasoning_content chunks are preserved separately from content."
@@ -6472,29 +6472,29 @@ same
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::read-provider-token (provider)
+      (with-function-override (rplaca::read-provider-token (provider)
                                 (declare (ignore provider))
                                 "zai-key")
-        (let ((state (clawmacs::zai-request-streaming '() (lambda (state) (declare (ignore state)))
+        (let ((state (rplaca::zai-request-streaming '() (lambda (state) (declare (ignore state)))
                                                       :model "glm-5")))
           (loop repeat 100
-                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                        (clawmacs::stream-state-done-p state))
+                until (bt:with-lock-held ((rplaca::stream-state-lock state))
+                        (rplaca::stream-state-done-p state))
                 do (sleep 0.01))
           (let ((content-blocks
-                  (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                    (is (string= "Hello" (clawmacs::stream-state-text state)))
+                  (bt:with-lock-held ((rplaca::stream-state-lock state))
+                    (is (string= "Hello" (rplaca::stream-state-text state)))
                     (nreverse
                      (copy-list
-                      (clawmacs::stream-state-content-blocks state))))))
+                      (rplaca::stream-state-content-blocks state))))))
             (is (equal '("Thinking... more thoughts")
-                       (clawmacs::content-reasoning-blocks content-blocks)))
+                       (rplaca::content-reasoning-blocks content-blocks)))
             (is (string= "Hello"
-                         (clawmacs::content-text-blocks content-blocks)))
+                         (rplaca::content-text-blocks content-blocks)))
             (is (string= "Hello"
-                         (clawmacs::stream-state-display-text state)))
+                         (rplaca::stream-state-display-text state)))
             (is (string= (format nil "Hello~%;; reasoning~%Thinking... more thoughts")
-                         (clawmacs::stream-state-display-text
+                         (rplaca::stream-state-display-text
                           state
                           :show-reasoning-p t)))))))))
 
@@ -6513,29 +6513,29 @@ same
                               (values (make-string-input-stream (format nil "~{~A~%~}" payloads))
                                       200
                                       nil))
-      (with-function-override (clawmacs::read-provider-token (provider)
+      (with-function-override (rplaca::read-provider-token (provider)
                                 (declare (ignore provider))
                                 "zai-key")
-        (let ((state (clawmacs::zai-request-streaming '() (lambda (state) (declare (ignore state)))
+        (let ((state (rplaca::zai-request-streaming '() (lambda (state) (declare (ignore state)))
                                                       :model "glm-5")))
           (loop repeat 100
-                until (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                        (clawmacs::stream-state-done-p state))
+                until (bt:with-lock-held ((rplaca::stream-state-lock state))
+                        (rplaca::stream-state-done-p state))
                 do (sleep 0.01))
           (let ((content-blocks
-                  (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                    (is (string= "" (clawmacs::stream-state-text state)))
+                  (bt:with-lock-held ((rplaca::stream-state-lock state))
+                    (is (string= "" (rplaca::stream-state-text state)))
                     (is (string= "max_tokens"
-                                 (clawmacs::stream-state-stop-reason state)))
+                                 (rplaca::stream-state-stop-reason state)))
                     (nreverse
                      (copy-list
-                      (clawmacs::stream-state-content-blocks state))))))
+                      (rplaca::stream-state-content-blocks state))))))
             (is (equal '("Step 1: analyze... Step 2: decide...")
-                       (clawmacs::content-reasoning-blocks content-blocks)))
+                       (rplaca::content-reasoning-blocks content-blocks)))
             (is (string= ""
-                         (clawmacs::stream-state-display-text state)))
+                         (rplaca::stream-state-display-text state)))
             (is (string= (format nil ";; reasoning~%Step 1: analyze... Step 2: decide...")
-                         (clawmacs::stream-state-display-text
+                         (rplaca::stream-state-display-text
                           state
                           :show-reasoning-p t)))))))))
 
@@ -6545,7 +6545,7 @@ same
 
 (test provider-known-models-openai-codex
   "Known OpenAI Codex models list is non-empty and contains the default."
-  (let ((models (clawmacs::provider-known-models :openai-codex)))
+  (let ((models (rplaca::provider-known-models :openai-codex)))
     (is (listp models))
     (is (plusp (length models)))
     (is (member "gpt-5.6-sol" models :test #'string=))
@@ -6560,35 +6560,35 @@ same
     (is (member "gpt-5.1-codex-max" models :test #'string=))
     (is (member "gpt-5.1-codex-mini" models :test #'string=))
     (is (member "gpt-5.2" models :test #'string=))
-    (is (member clawmacs::*openai-codex-model* models :test #'string=))
+    (is (member rplaca::*openai-codex-model* models :test #'string=))
     (is (= 12 (length models)))))
 
 (test normalize-provider-openai-codex-storage-forms
   "normalize-provider accepts both kebab-case and JSON camelCase storage forms."
   (is (eq :openai-codex
-          (clawmacs::normalize-provider "openai-codex")))
+          (rplaca::normalize-provider "openai-codex")))
   (is (eq :openai-codex
-          (clawmacs::normalize-provider "openaiCodex"))))
+          (rplaca::normalize-provider "openaiCodex"))))
 
 (test provider-model-supported-think-levels-openai-codex
   "OpenAI-Codex think levels are model-specific."
-  (let ((gpt-56-sol (clawmacs::provider-model-supported-think-levels
+  (let ((gpt-56-sol (rplaca::provider-model-supported-think-levels
                      :openai-codex "gpt-5.6-sol"))
-        (gpt-56-terra (clawmacs::provider-model-supported-think-levels
+        (gpt-56-terra (rplaca::provider-model-supported-think-levels
                        :openai-codex "gpt-5.6-terra"))
-        (gpt-56-luna (clawmacs::provider-model-supported-think-levels
+        (gpt-56-luna (rplaca::provider-model-supported-think-levels
                       :openai-codex "gpt-5.6-luna"))
-        (gpt-55 (clawmacs::provider-model-supported-think-levels
+        (gpt-55 (rplaca::provider-model-supported-think-levels
                  :openai-codex "gpt-5.5"))
-        (gpt-54 (clawmacs::provider-model-supported-think-levels
+        (gpt-54 (rplaca::provider-model-supported-think-levels
                  :openai-codex "gpt-5.4"))
-        (gpt-54-mini (clawmacs::provider-model-supported-think-levels
+        (gpt-54-mini (rplaca::provider-model-supported-think-levels
                       :openai-codex "gpt-5.4-mini"))
-        (gpt-54-nano (clawmacs::provider-model-supported-think-levels
+        (gpt-54-nano (rplaca::provider-model-supported-think-levels
                       :openai-codex "gpt-5.4-nano"))
-        (gpt-53-codex (clawmacs::provider-model-supported-think-levels
+        (gpt-53-codex (rplaca::provider-model-supported-think-levels
                        :openai-codex "gpt-5.3-codex"))
-        (gpt-51-max (clawmacs::provider-model-supported-think-levels
+        (gpt-51-max (rplaca::provider-model-supported-think-levels
                      :openai-codex "gpt-5.1-codex-max")))
     (is (equal '("none" "low" "medium" "high" "xhigh" "max")
                gpt-56-sol))
@@ -6601,17 +6601,17 @@ same
     (is (equal '("low" "medium" "high" "xhigh") gpt-53-codex))
     (is (equal '("none" "low" "medium" "high") gpt-51-max))
     (is (equal '("high" "max")
-               (clawmacs::provider-model-supported-think-levels
+               (rplaca::provider-model-supported-think-levels
                 :zai "glm-5.2")))
     ;; GLM-5.1 documents thinking mode but not a reasoning_effort enum.
-    (is (null (clawmacs::provider-model-supported-think-levels
+    (is (null (rplaca::provider-model-supported-think-levels
                :zai "glm-5.1")))
-    (is (null (clawmacs::provider-model-supported-think-levels
+    (is (null (rplaca::provider-model-supported-think-levels
                :zai "glm-5")))))
 
 (test provider-known-models-zai
   "Known Z.AI models list is non-empty and contains the default."
-  (let ((models (clawmacs::provider-known-models :zai)))
+  (let ((models (rplaca::provider-known-models :zai)))
     (is (listp models))
     (is (plusp (length models)))
     (is (string= "glm-5.2" (first models)))
@@ -6624,19 +6624,19 @@ same
 
 (test provider-known-models-unknown-returns-nil
   "Unknown provider returns nil for known models."
-  (is (null (clawmacs::provider-known-models :unknown-provider))))
+  (is (null (rplaca::provider-known-models :unknown-provider))))
 
 (test available-models-for-selector-marks-active
   "available-models-for-selector marks the current buffer's model as active."
   (let ((path (temp-agent-defaults-path)))
     (with-agent-defaults-path-override (path)
       ;; Set agent default so resolution works
-      (clawmacs::set-agent-default "coder" :zai :model "glm-5")
+      (rplaca::set-agent-default "coder" :zai :model "glm-5")
       (let ((buf (make-buffer "test" :agent-name "coder")))
         ;; Mock provider-has-token-p to only return t for :zai
-        (with-function-override (clawmacs::provider-has-token-p (provider)
+        (with-function-override (rplaca::provider-has-token-p (provider)
                                   (eq provider :zai))
-          (let ((entries (clawmacs::available-models-for-selector buf)))
+          (let ((entries (rplaca::available-models-for-selector buf)))
             ;; Should have entries for Z.AI only
             (is (plusp (length entries)))
             (is (every (lambda (e) (eq :zai (getf e :provider))) entries))
@@ -6651,12 +6651,12 @@ same
   "available-models-for-selector includes models from multiple providers."
   (let ((path (temp-agent-defaults-path)))
     (with-agent-defaults-path-override (path)
-      (clawmacs::set-agent-default "coder" :zai :model "glm-5")
+      (rplaca::set-agent-default "coder" :zai :model "glm-5")
       (let ((buf (make-buffer "test" :agent-name "coder")))
         ;; Mock: both openai-codex and zai have tokens
-        (with-function-override (clawmacs::provider-has-token-p (provider)
+        (with-function-override (rplaca::provider-has-token-p (provider)
                                   (not (null (member provider '(:openai-codex :zai)))))
-          (let ((entries (clawmacs::available-models-for-selector buf)))
+          (let ((entries (rplaca::available-models-for-selector buf)))
             ;; Should have entries from both providers
             (is (plusp (length entries)))
             (let ((providers (remove-duplicates
@@ -6670,10 +6670,10 @@ same
     (with-agent-defaults-path-override (path)
       (let ((buf (make-buffer "test" :agent-name "agent")))
         ;; Mock: no tokens available
-        (with-function-override (clawmacs::provider-has-token-p (provider)
+        (with-function-override (rplaca::provider-has-token-p (provider)
                                   (declare (ignore provider))
                                   nil)
-          (let ((entries (clawmacs::available-models-for-selector buf)))
+          (let ((entries (rplaca::available-models-for-selector buf)))
             (is (null entries))))))))
 
 ;;; --------------------------------------------------------------------------
@@ -6683,57 +6683,57 @@ same
 (test openrouter-provider-token-path
   "OpenRouter provider token path is provider-specific."
   (let ((home (user-homedir-pathname)))
-    (is (equal (merge-pathnames #P".config/clawmacs/openrouter-api-key" home)
-               (clawmacs::provider-token-path :openrouter)))))
+    (is (equal (merge-pathnames #P".config/rplaca/openrouter-api-key" home)
+               (rplaca::provider-token-path :openrouter)))))
 
 (test openrouter-token-round-trip
   "OpenRouter API keys round-trip through provider-specific helpers."
   (let ((or-path (merge-pathnames
-                  (format nil ".config/clawmacs/test-openrouter-~A" (gensym))
+                  (format nil ".config/rplaca/test-openrouter-~A" (gensym))
                   (user-homedir-pathname)))
-        (clawmacs::*openrouter-env-var* "CLAWMACS_UNSET_OPENROUTER_ENV_98765"))
+        (rplaca::*openrouter-env-var* "RPLACA_UNSET_OPENROUTER_ENV_98765"))
     (unwind-protect
-         (let ((original (symbol-function 'clawmacs::provider-token-path)))
+         (let ((original (symbol-function 'rplaca::provider-token-path)))
            (unwind-protect
                 (progn
-                  (setf (symbol-function 'clawmacs::provider-token-path)
+                  (setf (symbol-function 'rplaca::provider-token-path)
                         (lambda (provider)
                           (if (eq provider :openrouter)
                               or-path
                               (funcall original provider))))
                   (is (string= "sk-or-test-key"
-                               (clawmacs::save-provider-token :openrouter "sk-or-test-key")))
+                               (rplaca::save-provider-token :openrouter "sk-or-test-key")))
                   (is (string= "sk-or-test-key"
-                               (clawmacs::read-provider-token :openrouter))))
-             (setf (symbol-function 'clawmacs::provider-token-path) original)))
+                               (rplaca::read-provider-token :openrouter))))
+             (setf (symbol-function 'rplaca::provider-token-path) original)))
       (ignore-errors (delete-file or-path)))))
 
 (test openrouter-env-var-token
   "read-provider-token prefers OPENROUTER_API_KEY environment variable."
   (with-env-var ("OPENROUTER_API_KEY" "sk-or-env-token")
     (is (string= "sk-or-env-token"
-                 (clawmacs::read-env-token clawmacs::*openrouter-env-var*)))))
+                 (rplaca::read-env-token rplaca::*openrouter-env-var*)))))
 
 (test openrouter-provider-known
   "known-provider-p recognises :openrouter."
-  (is (clawmacs::known-provider-p :openrouter)))
+  (is (rplaca::known-provider-p :openrouter)))
 
 (test openrouter-normalize-provider
   "normalize-provider accepts :openrouter and the string form."
-  (is (eq :openrouter (clawmacs::normalize-provider :openrouter)))
-  (is (eq :openrouter (clawmacs::normalize-provider "openrouter")))
-  (is (eq :openrouter (clawmacs::normalize-provider "OPENROUTER"))))
+  (is (eq :openrouter (rplaca::normalize-provider :openrouter)))
+  (is (eq :openrouter (rplaca::normalize-provider "openrouter")))
+  (is (eq :openrouter (rplaca::normalize-provider "OPENROUTER"))))
 
 (test openrouter-fallback-model
   "provider-fallback-model returns a model string for :openrouter."
-  (let ((m (clawmacs::provider-fallback-model :openrouter)))
+  (let ((m (rplaca::provider-fallback-model :openrouter)))
     (is (and (stringp m) (plusp (length m))))))
 
 (test openrouter-provider-known-models-static
   "provider-known-models returns the static fallback list for :openrouter
 when no cached models are present."
-  (let ((clawmacs::*openrouter-cached-models* nil))
-    (let ((models (clawmacs::provider-known-models :openrouter)))
+  (let ((rplaca::*openrouter-cached-models* nil))
+    (let ((models (rplaca::provider-known-models :openrouter)))
       (is (listp models))
       (is (plusp (length models)))
       ;; First static model is the default
@@ -6756,20 +6756,20 @@ when no cached models are present."
 
 (test openrouter-provider-known-models-cached
   "provider-known-models returns the cached list when *openrouter-cached-models* is set."
-  (let ((clawmacs::*openrouter-cached-models* '("custom/model-a" "custom/model-b")))
+  (let ((rplaca::*openrouter-cached-models* '("custom/model-a" "custom/model-b")))
     (is (equal '("custom/model-a" "custom/model-b")
-               (clawmacs::provider-known-models :openrouter)))))
+               (rplaca::provider-known-models :openrouter)))))
 
 (test fetch-openrouter-models-returns-cached
   "fetch-openrouter-models returns *openrouter-cached-models* without an HTTP call."
-  (let ((clawmacs::*openrouter-cached-models* '("cached/model-1" "cached/model-2")))
+  (let ((rplaca::*openrouter-cached-models* '("cached/model-1" "cached/model-2")))
     (is (equal '("cached/model-1" "cached/model-2")
-               (clawmacs::fetch-openrouter-models)))))
+               (rplaca::fetch-openrouter-models)))))
 
 (test fetch-openrouter-models-parses-api-response
   "fetch-openrouter-models populates *openrouter-cached-models* from parsed JSON."
-  (let ((clawmacs::*openrouter-cached-models* nil))
-    (with-function-override (clawmacs::read-provider-token
+  (let ((rplaca::*openrouter-cached-models* nil))
+    (with-function-override (rplaca::read-provider-token
                              (provider)
                              (when (eq provider :openrouter) "sk-or-test"))
       (with-function-override (drakma:http-request
@@ -6777,59 +6777,59 @@ when no cached models are present."
                                (declare (ignore url args))
                                (values "{\"data\":[{\"id\":\"openai/gpt-4o\"},{\"id\":\"google/gemini-2.5-pro\"}]}"
                                        200))
-        (let ((models (clawmacs::fetch-openrouter-models)))
+        (let ((models (rplaca::fetch-openrouter-models)))
           (is (member "openai/gpt-4o" models :test #'string=))
           (is (member "google/gemini-2.5-pro" models :test #'string=))
           ;; Cache should be populated
-          (is (equal models clawmacs::*openrouter-cached-models*)))))))
+          (is (equal models rplaca::*openrouter-cached-models*)))))))
 
 (test fetch-openrouter-models-falls-back-on-no-token
   "fetch-openrouter-models returns static fallback when no API key is configured."
-  (let ((clawmacs::*openrouter-cached-models* nil))
-    (with-function-override (clawmacs::read-provider-token
+  (let ((rplaca::*openrouter-cached-models* nil))
+    (with-function-override (rplaca::read-provider-token
                              (provider)
                              (declare (ignore provider))
                              nil)
-      (let ((models (clawmacs::fetch-openrouter-models)))
+      (let ((models (rplaca::fetch-openrouter-models)))
         (is (listp models))
         (is (plusp (length models)))))))
 
 (test fetch-openrouter-models-falls-back-on-http-error
   "fetch-openrouter-models returns static fallback on HTTP errors."
-  (let ((clawmacs::*openrouter-cached-models* nil))
-    (with-function-override (clawmacs::read-provider-token
+  (let ((rplaca::*openrouter-cached-models* nil))
+    (with-function-override (rplaca::read-provider-token
                              (provider)
                              (when (eq provider :openrouter) "sk-or-test"))
       (with-function-override (drakma:http-request
                                (url &rest args)
                                (declare (ignore url args))
                                (values "Unauthorized" 401))
-        (let ((models (clawmacs::fetch-openrouter-models)))
+        (let ((models (rplaca::fetch-openrouter-models)))
           (is (listp models))
           (is (plusp (length models))))))))
 
 (test provider-request-routes-openrouter
   "provider-request dispatches :openrouter to openrouter-request."
   (let ((routed-to nil))
-    (with-function-override (clawmacs::openrouter-request
+    (with-function-override (rplaca::openrouter-request
                              (messages &key model max-tokens tools system-prompt)
                              (declare (ignore messages max-tokens tools system-prompt))
                              (setf routed-to model)
                              `((:stop--reason . "end_turn")
                                (:content . ,(vector `((:type . "text")
                                                       (:text . "ok"))))))
-      (clawmacs::provider-request :openrouter nil :model "openai/gpt-4o-mini")
+      (rplaca::provider-request :openrouter nil :model "openai/gpt-4o-mini")
       (is (string= "openai/gpt-4o-mini" routed-to)))))
 
 (test provider-request-streaming-routes-openrouter
   "provider-request-streaming dispatches :openrouter to openrouter-request-streaming."
   (let ((routed-to nil))
-    (with-function-override (clawmacs::openrouter-request-streaming
+    (with-function-override (rplaca::openrouter-request-streaming
                              (messages callback &key model max-tokens tools system-prompt)
                              (declare (ignore messages callback max-tokens tools system-prompt))
                              (setf routed-to model)
-                             (clawmacs::make-stream-state))
-      (clawmacs::provider-request-streaming :openrouter nil nil
+                             (rplaca::make-stream-state))
+      (rplaca::provider-request-streaming :openrouter nil nil
                                             :model "anthropic/claude-3-5-haiku")
       (is (string= "anthropic/claude-3-5-haiku" routed-to)))))
 
@@ -6839,44 +6839,44 @@ when no cached models are present."
 
 (test sse-event-processors-reject-mutation-after-terminal-state
   "Chat Completions and Responses event processors ignore post-terminal data."
-  (let ((state (clawmacs::make-stream-state)))
+  (let ((state (rplaca::make-stream-state)))
     (is (eq :updated
-            (clawmacs::process-openai-sse-event
+            (rplaca::process-openai-sse-event
              "{\"choices\":[{\"delta\":{\"content\":\"before\"}}]}"
              state)))
     (is (eq :terminal
-            (clawmacs::process-openai-sse-event "[DONE]" state)))
+            (rplaca::process-openai-sse-event "[DONE]" state)))
     (is (null
-         (clawmacs::process-openai-sse-event
+         (rplaca::process-openai-sse-event
           "{\"choices\":[{\"delta\":{\"content\":\"-after\"}}]}"
           state)))
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (is (string= "before" (clawmacs::stream-state-text state)))
-      (is-true (clawmacs::stream-state-done-p state))))
-  (let ((state (clawmacs::make-stream-state)))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (is (string= "before" (rplaca::stream-state-text state)))
+      (is-true (rplaca::stream-state-done-p state))))
+  (let ((state (rplaca::make-stream-state)))
     (is (eq :updated
-            (clawmacs::process-openai-codex-responses-sse-event
+            (rplaca::process-openai-codex-responses-sse-event
              "{\"type\":\"response.output_text.delta\",\"delta\":\"before\"}"
              state)))
     (is (eq :terminal
-            (clawmacs::process-openai-codex-responses-sse-event
+            (rplaca::process-openai-codex-responses-sse-event
              "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}"
              state)))
     (is (null
-         (clawmacs::process-openai-codex-responses-sse-event
+         (rplaca::process-openai-codex-responses-sse-event
           "{\"type\":\"response.output_text.delta\",\"delta\":\"-after\"}"
           state)))
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (is (string= "before" (clawmacs::stream-state-text state)))
-      (is-true (clawmacs::stream-state-done-p state)))))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (is (string= "before" (rplaca::stream-state-text state)))
+      (is-true (rplaca::stream-state-done-p state)))))
 
 (test cancellation-wins-against-in-flight-sse-delta-commit
   "A delta parsed before cancellation re-checks active state before mutation."
   (dolist (case
            (list
-            (list #'clawmacs::process-openai-sse-event
+            (list #'rplaca::process-openai-sse-event
                   "{\"choices\":[{\"delta\":{\"content\":\"late\"}}]}")
-            (list #'clawmacs::process-openai-codex-responses-sse-event
+            (list #'rplaca::process-openai-codex-responses-sse-event
                   "{\"type\":\"response.output_text.delta\",\"delta\":\"late\"}")))
     (let* ((decode-entered
              (bt:make-semaphore :name "test-sse-decode-entered"))
@@ -6884,11 +6884,11 @@ when no cached models are present."
              (bt:make-semaphore :name "test-sse-decode-release"))
            (callback-count 0)
            (state
-             (clawmacs::make-stream-state
+             (rplaca::make-stream-state
               :callback (lambda (ignored-state)
                           (declare (ignore ignored-state))
                           (incf callback-count)))))
-      (with-function-override (clawmacs::api-json-decode (json)
+      (with-function-override (rplaca::api-json-decode (json)
                                 (let ((decoded (funcall original-function json)))
                                   (bt:signal-semaphore decode-entered)
                                   (bt:wait-on-semaphore decode-release
@@ -6900,13 +6900,13 @@ when no cached models are present."
                    (funcall (first case) (second case) state))
                  :name "test-cancel-vs-sse-delta")))
           (is-true (bt:wait-on-semaphore decode-entered :timeout 2))
-          (is-true (clawmacs::cancel-stream-state state))
+          (is-true (rplaca::cancel-stream-state state))
           (bt:signal-semaphore decode-release)
           (bt:join-thread thread)))
-      (bt:with-lock-held ((clawmacs::stream-state-lock state))
-        (is (string= "" (clawmacs::stream-state-text state)))
-        (is-true (clawmacs::stream-state-cancelled-p state))
-        (is-true (clawmacs::stream-state-done-p state)))
+      (bt:with-lock-held ((rplaca::stream-state-lock state))
+        (is (string= "" (rplaca::stream-state-text state)))
+        (is-true (rplaca::stream-state-cancelled-p state))
+        (is-true (rplaca::stream-state-done-p state)))
       (is (= 1 callback-count)))))
 
 (test cancellation-closes-blocked-reader-once-and-clears-reader-refs
@@ -6916,43 +6916,43 @@ when no cached models are present."
                           :block-first-read-p t))
          (callback-count 0)
          (state
-           (clawmacs::make-stream-state
+           (rplaca::make-stream-state
             :callback (lambda (ignored-state)
                         (declare (ignore ignored-state))
                         (incf callback-count)))))
-    (clawmacs::start-stream-state-reader-worker
+    (rplaca::start-stream-state-reader-worker
      state
-     (clawmacs::stream-state-callback state)
+     (rplaca::stream-state-callback state)
      "test-blocked-sse-reader"
      (lambda (worker-state)
-       (when (clawmacs::register-stream-state-stream worker-state stream)
-         (clawmacs::read-openai-sse-stream
+       (when (rplaca::register-stream-state-stream worker-state stream)
+         (rplaca::read-openai-sse-stream
           stream worker-state nil :defer-terminal-callback t))))
     (let ((thread (stream-state-reader-thread-snapshot state)))
       (is-true thread)
       (is-true
        (bt:wait-on-semaphore (controlled-stream-read-entered stream)
                              :timeout 2))
-      (is-true (clawmacs::cancel-stream-state state))
-      (clawmacs::settle-stream-state-reader state))
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (is-true (clawmacs::stream-state-cancelled-p state))
-      (is-true (clawmacs::stream-state-done-p state))
-      (is (null (clawmacs::stream-state-close-stream state)))
-      (is (null (clawmacs::stream-state-reader-thread state))))
+      (is-true (rplaca::cancel-stream-state state))
+      (rplaca::settle-stream-state-reader state))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (is-true (rplaca::stream-state-cancelled-p state))
+      (is-true (rplaca::stream-state-done-p state))
+      (is (null (rplaca::stream-state-close-stream state)))
+      (is (null (rplaca::stream-state-reader-thread state))))
     (is (= 1 (controlled-stream-close-count stream)))
     (is (= 1 callback-count))))
 
 (test cancellation-closes-attached-stream-with-no-reader-owner
   "Cancellation closes an attached orphan stream that has no managed reader."
   (let ((stream (make-instance 'controlled-character-input-stream))
-        (state (clawmacs::make-stream-state)))
-    (is-true (clawmacs::register-stream-state-stream state stream))
-    (is-true (clawmacs::cancel-stream-state state))
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (is-true (clawmacs::stream-state-cancelled-p state))
-      (is (null (clawmacs::stream-state-close-stream state)))
-      (is (null (clawmacs::stream-state-reader-thread state))))
+        (state (rplaca::make-stream-state)))
+    (is-true (rplaca::register-stream-state-stream state stream))
+    (is-true (rplaca::cancel-stream-state state))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (is-true (rplaca::stream-state-cancelled-p state))
+      (is (null (rplaca::stream-state-close-stream state)))
+      (is (null (rplaca::stream-state-reader-thread state))))
     (is (= 1 (controlled-stream-close-count stream)))))
 
 #+sbcl
@@ -6967,7 +6967,7 @@ when no cached models are present."
                             :socket raw-stream
                             :close-callback nil)))
       (is (= file-descriptor
-             (clawmacs::provider-stream-transport-file-descriptor
+             (rplaca::provider-stream-transport-file-descriptor
               ssl-stream))))))
 
 #+sbcl
@@ -7042,13 +7042,13 @@ when no cached models are present."
              (setf observed-stream
                    (make-instance 'observed-provider-character-input-stream
                                   :underlying-stream body)
-                   state (clawmacs::make-stream-state))
-             (clawmacs::start-stream-state-reader-worker
+                   state (rplaca::make-stream-state))
+             (rplaca::start-stream-state-reader-worker
               state nil "test-blocked-drakma-sse-reader"
               (lambda (worker-state)
-                (when (clawmacs::register-stream-state-stream
+                (when (rplaca::register-stream-state-stream
                        worker-state observed-stream)
-                  (clawmacs::read-openai-sse-stream
+                  (rplaca::read-openai-sse-stream
                    observed-stream worker-state nil
                    :defer-terminal-callback t))))
              (setf reader (stream-state-reader-thread-snapshot state))
@@ -7060,7 +7060,7 @@ when no cached models are present."
              (let* ((started-at (get-internal-real-time))
                     (deadline
                       (+ started-at internal-time-units-per-second)))
-               (is-true (clawmacs::cancel-stream-state state))
+               (is-true (rplaca::cancel-stream-state state))
                (loop :while (and (bt:thread-alive-p reader)
                                  (< (get-internal-real-time) deadline))
                      :do (sleep 0.005))
@@ -7069,11 +7069,11 @@ when no cached models are present."
                       1.0)))
              (is-false (bt:thread-alive-p reader))
              (unless (bt:thread-alive-p reader)
-               (clawmacs::settle-stream-state-reader state))
-             (bt:with-lock-held ((clawmacs::stream-state-lock state))
-               (is-true (clawmacs::stream-state-cancelled-p state))
-               (is (null (clawmacs::stream-state-close-stream state)))
-               (is (null (clawmacs::stream-state-reader-thread state)))))
+               (rplaca::settle-stream-state-reader state))
+             (bt:with-lock-held ((rplaca::stream-state-lock state))
+               (is-true (rplaca::stream-state-cancelled-p state))
+               (is (null (rplaca::stream-state-close-stream state)))
+               (is (null (rplaca::stream-state-reader-thread state)))))
         (bt:signal-semaphore server-release)
         (when server-thread
           (loop :repeat 400
@@ -7106,7 +7106,7 @@ when no cached models are present."
           (bt:make-semaphore :name "test-http-request-release"))
         (callback-count 0)
         (callback-suppression-value :unset))
-    (with-function-override (clawmacs::read-provider-token (provider)
+    (with-function-override (rplaca::read-provider-token (provider)
                               (declare (ignore provider))
                               "zai-key")
       (with-function-override (drakma:http-request (&rest args)
@@ -7120,28 +7120,28 @@ when no cached models are present."
                                  200
                                  nil))
         (let* ((state
-                 (let ((clawmacs::*suppress-chat-redisplay-requests* t))
-                   (clawmacs::zai-request-streaming
+                 (let ((rplaca::*suppress-chat-redisplay-requests* t))
+                   (rplaca::zai-request-streaming
                     nil
                     (lambda (ignored-state)
                       (declare (ignore ignored-state))
                       (setf callback-suppression-value
-                            clawmacs::*suppress-chat-redisplay-requests*)
+                            rplaca::*suppress-chat-redisplay-requests*)
                       (incf callback-count))
                     :model "glm-5")))
                (thread (stream-state-reader-thread-snapshot state)))
           (is-true thread)
           (is-true (bt:wait-on-semaphore request-entered :timeout 2))
           (is-false
-           (bt:with-lock-held ((clawmacs::stream-state-lock state))
-             (clawmacs::stream-state-done-p state)))
+           (bt:with-lock-held ((rplaca::stream-state-lock state))
+             (rplaca::stream-state-done-p state)))
           (bt:signal-semaphore request-release)
-          (clawmacs::settle-stream-state-reader state)
-          (bt:with-lock-held ((clawmacs::stream-state-lock state))
-            (is-true (clawmacs::stream-state-done-p state))
-            (is (null (clawmacs::stream-state-error-p state)))
-            (is (null (clawmacs::stream-state-close-stream state)))
-            (is (null (clawmacs::stream-state-reader-thread state)))))))
+          (rplaca::settle-stream-state-reader state)
+          (bt:with-lock-held ((rplaca::stream-state-lock state))
+            (is-true (rplaca::stream-state-done-p state))
+            (is (null (rplaca::stream-state-error-p state)))
+            (is (null (rplaca::stream-state-close-stream state)))
+            (is (null (rplaca::stream-state-reader-thread state)))))))
     (is (= 1 callback-count))
     (is (null callback-suppression-value))))
 
@@ -7153,7 +7153,7 @@ when no cached models are present."
           (bt:make-semaphore :name "test-stream-auth-release"))
         (http-calls 0)
         (callback-count 0))
-    (with-function-override (clawmacs::read-provider-token (provider)
+    (with-function-override (rplaca::read-provider-token (provider)
                               (declare (ignore provider))
                               (bt:signal-semaphore auth-entered)
                               (bt:wait-on-semaphore auth-release :timeout 2)
@@ -7163,7 +7163,7 @@ when no cached models are present."
                                 (incf http-calls)
                                 (error "HTTP must not start after cancellation"))
         (let* ((state
-                 (clawmacs::zai-request-streaming
+                 (rplaca::zai-request-streaming
                   nil
                   (lambda (ignored-state)
                     (declare (ignore ignored-state))
@@ -7172,12 +7172,12 @@ when no cached models are present."
                (thread (stream-state-reader-thread-snapshot state)))
           (is-true thread)
           (is-true (bt:wait-on-semaphore auth-entered :timeout 2))
-          (is-true (clawmacs::cancel-stream-state state))
+          (is-true (rplaca::cancel-stream-state state))
           (bt:signal-semaphore auth-release)
-          (clawmacs::settle-stream-state-reader state)
-          (bt:with-lock-held ((clawmacs::stream-state-lock state))
-            (is-true (clawmacs::stream-state-cancelled-p state))
-            (is (null (clawmacs::stream-state-reader-thread state)))))))
+          (rplaca::settle-stream-state-reader state)
+          (bt:with-lock-held ((rplaca::stream-state-lock state))
+            (is-true (rplaca::stream-state-cancelled-p state))
+            (is (null (rplaca::stream-state-reader-thread state)))))))
     (is (= 0 http-calls))
     (is (= 1 callback-count))))
 
@@ -7188,7 +7188,7 @@ when no cached models are present."
             (make-instance 'controlled-character-input-stream
                            :contents "denied"))
           (callback-count 0))
-      (with-function-override (clawmacs::read-provider-token (ignored-provider)
+      (with-function-override (rplaca::read-provider-token (ignored-provider)
                                 (declare (ignore ignored-provider))
                                 "provider-key")
         (with-function-override (drakma:http-request (&rest args)
@@ -7197,26 +7197,26 @@ when no cached models are present."
           (let* ((state
                    (ecase provider
                      (:openrouter
-                      (clawmacs::openrouter-request-streaming
+                      (rplaca::openrouter-request-streaming
                        nil
                        (lambda (ignored-state)
                          (declare (ignore ignored-state))
                          (incf callback-count))))
                      (:zai
-                      (clawmacs::zai-request-streaming
+                      (rplaca::zai-request-streaming
                        nil
                        (lambda (ignored-state)
                          (declare (ignore ignored-state))
                          (incf callback-count))))))
                  (thread (stream-state-reader-thread-snapshot state)))
             (is-true thread)
-            (clawmacs::settle-stream-state-reader state)
-            (bt:with-lock-held ((clawmacs::stream-state-lock state))
-              (is-true (clawmacs::stream-state-done-p state))
+            (rplaca::settle-stream-state-reader state)
+            (bt:with-lock-held ((rplaca::stream-state-lock state))
+              (is-true (rplaca::stream-state-done-p state))
               (is (search "401"
-                          (clawmacs::stream-state-error-p state)))
-              (is (null (clawmacs::stream-state-close-stream state)))
-              (is (null (clawmacs::stream-state-reader-thread state)))))))
+                          (rplaca::stream-state-error-p state)))
+              (is (null (rplaca::stream-state-close-stream state)))
+              (is (null (rplaca::stream-state-reader-thread state)))))))
       (is (= 1 (controlled-stream-close-count stream)))
       (is (= 1 callback-count)))))
 
@@ -7228,15 +7228,15 @@ when no cached models are present."
         (callback-count 0)
         (reader nil))
     (unwind-protect
-         (with-function-override (clawmacs::read-provider-token (provider)
+         (with-function-override (rplaca::read-provider-token (provider)
                                    (declare (ignore provider))
                                    "provider-key")
            (with-function-override (drakma:http-request (&rest args)
                                      (declare (ignore args))
                                      (values stream 401 nil))
-             (let* ((clawmacs::*provider-http-max-retries* 0)
+             (let* ((rplaca::*provider-http-max-retries* 0)
                     (state
-                      (clawmacs::openrouter-request-streaming
+                      (rplaca::openrouter-request-streaming
                        nil
                        (lambda (ignored-state)
                          (declare (ignore ignored-state))
@@ -7247,13 +7247,13 @@ when no cached models are present."
                 (bt:wait-on-semaphore
                  (controlled-stream-read-entered stream)
                  :timeout 2))
-               (bt:with-lock-held ((clawmacs::stream-state-lock state))
+               (bt:with-lock-held ((rplaca::stream-state-lock state))
                  (is (eq stream
-                         (clawmacs::stream-state-close-stream state))))
+                         (rplaca::stream-state-close-stream state))))
                (let* ((started-at (get-internal-real-time))
                       (deadline
                         (+ started-at internal-time-units-per-second)))
-                 (is-true (clawmacs::cancel-stream-state state))
+                 (is-true (rplaca::cancel-stream-state state))
                  (loop :while (and (bt:thread-alive-p reader)
                                    (< (get-internal-real-time) deadline))
                        :do (sleep 0.005))
@@ -7262,14 +7262,14 @@ when no cached models are present."
                         1.0)))
                (is-false (bt:thread-alive-p reader))
                (unless (bt:thread-alive-p reader)
-                 (clawmacs::settle-stream-state-reader state))
-               (bt:with-lock-held ((clawmacs::stream-state-lock state))
-                 (is-true (clawmacs::stream-state-cancelled-p state))
-                 (is (null (clawmacs::stream-state-close-stream state)))
-                 (is (null (clawmacs::stream-state-reader-thread state)))))))
+                 (rplaca::settle-stream-state-reader state))
+               (bt:with-lock-held ((rplaca::stream-state-lock state))
+                 (is-true (rplaca::stream-state-cancelled-p state))
+                 (is (null (rplaca::stream-state-close-stream state)))
+                 (is (null (rplaca::stream-state-reader-thread state)))))))
       (bt:signal-semaphore (controlled-stream-read-release stream))
       (when (and reader (bt:thread-alive-p reader))
-        (clawmacs::settle-stream-state-reader state))
+        (rplaca::settle-stream-state-reader state))
       (unless (controlled-stream-closed-p stream)
         (close stream :abort t)))
     (is (= 1 (controlled-stream-close-count stream)))
@@ -7291,23 +7291,23 @@ when no cached models are present."
     (set-buffer-model-override buffer "e2e-model")
     (unwind-protect
          (with-function-override
-             (clawmacs::provider-request-streaming
+             (rplaca::provider-request-streaming
               (provider messages callback &rest args)
               (declare (ignore provider messages args))
               (setf captured-state
-                    (clawmacs::make-stream-state :callback callback))
-              (clawmacs::start-stream-state-reader-worker
+                    (rplaca::make-stream-state :callback callback))
+              (rplaca::start-stream-state-reader-worker
                captured-state callback
                "test-prompt-callback-owned-reader"
                (lambda (worker-state)
-                 (when (clawmacs::register-stream-state-stream
+                 (when (rplaca::register-stream-state-stream
                         worker-state stream)
                    (read-char stream nil nil))))
               (setf captured-reader
                     (stream-state-reader-thread-snapshot captured-state))
               captured-state)
            (handler-case
-               (clawmacs::prompt-request-once
+               (rplaca::prompt-request-once
                 buffer
                 :stream-state-callback
                 (lambda (state)
@@ -7317,7 +7317,7 @@ when no cached models are present."
                (setf observed-condition condition))))
       (bt:signal-semaphore (controlled-stream-read-release stream))
       (when captured-reader
-        (clawmacs::settle-stream-state-reader captured-state))
+        (rplaca::settle-stream-state-reader captured-state))
       (unless (controlled-stream-closed-p stream)
         (close stream :abort t)))
     (is-true observed-condition)
@@ -7326,9 +7326,9 @@ when no cached models are present."
     (is-true captured-state)
     (is-true captured-reader)
     (is-false (bt:thread-alive-p captured-reader))
-    (bt:with-lock-held ((clawmacs::stream-state-lock captured-state))
-      (is-true (clawmacs::stream-state-cancelled-p captured-state))
-      (is-true (clawmacs::stream-state-done-p captured-state))
-      (is (null (clawmacs::stream-state-close-stream captured-state)))
-      (is (null (clawmacs::stream-state-reader-thread captured-state))))
+    (bt:with-lock-held ((rplaca::stream-state-lock captured-state))
+      (is-true (rplaca::stream-state-cancelled-p captured-state))
+      (is-true (rplaca::stream-state-done-p captured-state))
+      (is (null (rplaca::stream-state-close-stream captured-state)))
+      (is (null (rplaca::stream-state-reader-thread captured-state))))
     (is (= 1 (controlled-stream-close-count stream)))))

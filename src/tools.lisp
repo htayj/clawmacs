@@ -1,10 +1,10 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Tool Registry
 ;;; --------------------------------------------------------------------------
 
-(defvar *tool-registry-lock* (bt:make-lock "clawmacs tool registry")
+(defvar *tool-registry-lock* (bt:make-lock "rplaca tool registry")
   "Process-wide lock for the global tool definition and metadata tables.")
 
 (defvar *tool-table* (make-hash-table :test #'equal)
@@ -211,7 +211,7 @@ code while traversing it."
      :execution execution
      :command-p (not (null command-p))
      :lambda-list lambda-list
-     :package *current-clawmacs-package*)))
+     :package *current-rplaca-package*)))
 
 (defun call-agent-tool-provider-bridge (metadata)
   "Register METADATA with the provider tool table when that bridge is loaded."
@@ -249,7 +249,7 @@ code while traversing it."
 (defun register-agent-tool-metadata (symbol tool-spec
                                      &key command-p lambda-list docstring)
   "Register SYMBOL as an agent tool from explicit TOOL-SPEC metadata."
-  (when (and *current-clawmacs-package*
+  (when (and *current-rplaca-package*
              (not (package-resource-type-allowed-p :tool)))
     (return-from register-agent-tool-metadata nil))
   (if (null tool-spec)
@@ -340,7 +340,7 @@ buffer is supplied automatically during execution."
   (let ((metadata-var (gensym "COMMAND-METADATA")))
     `(let ((,metadata-var (find-command-metadata ',symbol)))
        (ensure-agent-tool-function-defined ',symbol)
-       (when (or (null *current-clawmacs-package*)
+       (when (or (null *current-rplaca-package*)
                  (package-resource-type-allowed-p :tool))
          (register-agent-tool-metadata
           ',symbol ',tool-spec
@@ -428,7 +428,7 @@ provider request after the frame has withdrawn it."
 (defvar *http-connection-timeout* 15
   "Connection timeout in seconds for HTTP requests.")
 
-(defvar *http-user-agent* "Clawmacs/0.1"
+(defvar *http-user-agent* "RPLACA/0.1"
   "User-Agent header used by HTTP requests.")
 
 (defvar *shell-exec-default-timeout* 30
@@ -439,7 +439,7 @@ provider request after the frame has withdrawn it."
 
 (defparameter *built-in-tool-names*
   '("lisp_eval" "recovery_list")
-  "Names reserved for core Clawmacs provider tools.
+  "Names reserved for core RPLACA provider tools.
 INIT-TOOLS removes these entries before re-registering tagged tools, so
 user-added tools stored in *tool-table* are left intact.")
 
@@ -567,7 +567,7 @@ Temporary tools are visited first and same-named global tools are suppressed."
 (defun register-tool (name description schema execute-fn
                       &key package (execution :background))
   "Register a full-trust tool in *tool-table*.
-PACKAGE records the owning Clawmacs package for package-scoped exposure."
+PACKAGE records the owning RPLACA package for package-scoped exposure."
   (let* ((normalized-name (normalize-tool-name name))
          (definition
            (make-tool-definition
@@ -1459,7 +1459,7 @@ E.g., (lisp_eval
                :description "Lisp data :code, one Common Lisp form to read and evaluate.")
          (package :type "string"
                   :required nil
-                  :description "Lisp data :package, the package name used while reading and evaluating :code. Default: CLAWMACS.")
+                  :description "Lisp data :package, the package name used while reading and evaluating :code. Default: RPLACA.")
          (mode :type "string"
                :required nil
                :description "Provider calls must specify isolated, which evaluates in a fresh SBCL worker process. Live mode is refused for provider calls and remains available through the listener/direct Lisp API.")
@@ -1468,11 +1468,11 @@ E.g., (lisp_eval
                   :description "Timeout in seconds for isolated mode. Default: 10.")))
 
 (defun init-tools ()
-  "Register the default clawmacs built-in tools.
+  "Register the default rplaca built-in tools.
 This removes any previously registered built-in entries, then re-registers
 tagged agent tools. User-added tools remain untouched."
 
   (remove-registered-tools *built-in-tool-names*)
 
-  (setf *lisp-eval-default-package* "CLAWMACS")
+  (setf *lisp-eval-default-package* "RPLACA")
   (register-agent-tool-provider-definitions))

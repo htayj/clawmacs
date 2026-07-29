@@ -1,10 +1,10 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 (in-suite projects-suite)
 
 (defun project-test-directory ()
   "Return a fresh temporary directory for project tests."
   (let ((dir (merge-pathnames
-              (format nil "clawmacs-project-tests-~D-~D-~36R/"
+              (format nil "rplaca-project-tests-~D-~D-~36R/"
                       (get-universal-time)
                       (get-internal-real-time)
                       (random (expt 36 8)))
@@ -27,9 +27,9 @@
           (,definitions-var (merge-pathnames #P"defs/" base))
           (*project-registry* (make-hash-table :test #'equal))
           (*project-definitions-directory* ,definitions-var)
-          (clawmacs::*project-definitions-loaded-p* nil)
-          (clawmacs::*buffer-ring* nil)
-          (clawmacs::*buffer-counter* 0))
+          (rplaca::*project-definitions-loaded-p* nil)
+          (rplaca::*buffer-ring* nil)
+          (rplaca::*buffer-counter* 0))
      (ensure-directories-exist (merge-pathnames #P".keep" ,root-var))
      (ensure-directories-exist (merge-pathnames #P".keep" ,definitions-var))
      ,@body))
@@ -53,7 +53,7 @@
     (let ((project (create-project "Persisted"
                      :root root
                      :description "from manifest")))
-      (is (probe-file (clawmacs::project-manifest-path "Persisted"
+      (is (probe-file (rplaca::project-manifest-path "Persisted"
                                                        definitions)))
       (is (eq :manifest (project-source project))))
     (clrhash *project-registry*)
@@ -71,7 +71,7 @@
       (ensure-directories-exist (merge-pathnames #P".keep" other-root))
       (define-project "same" :root root :description "from init")
       (write-project-test-file
-       (clawmacs::project-manifest-path "same" definitions)
+       (rplaca::project-manifest-path "same" definitions)
        (format nil "(:name \"same\" :root ~S :description \"from manifest\")"
                (namestring other-root)))
       (load-project-definitions)
@@ -82,7 +82,7 @@
 (test config-project-uses-user-init-directory
   "The user init directory is exposed as the config project."
   (with-project-test-state (root definitions)
-    (let ((clawmacs::*user-init-directory* root))
+    (let ((rplaca::*user-init-directory* root))
       (load-project-definitions)
       (let ((config (find-project "config")))
         (is (not (null config)))
@@ -143,38 +143,38 @@
 (test project-file-buffer-uses-editor-keymap-and-emacs-editing
   "Project file buffers use the file keymap and can be edited with normal keys."
   (with-project-test-state (root definitions)
-    (clawmacs::init-default-keymap)
+    (rplaca::init-default-keymap)
     (define-project "keys" :root root)
     (project-create-file "keys" "notes.txt" :content "alpha")
     (let ((buffer (project-open-file "keys" "notes.txt")))
-      (is (eq clawmacs::*file-keymap* (buffer-keymap buffer)))
-      (clawmacs::handle-key-event buffer '(:meta #\>))
-      (clawmacs::handle-key-event buffer #\Return)
+      (is (eq rplaca::*file-keymap* (buffer-keymap buffer)))
+      (rplaca::handle-key-event buffer '(:meta #\>))
+      (rplaca::handle-key-event buffer #\Return)
       (dolist (char '(#\b #\e #\t #\a))
-        (clawmacs::handle-key-event buffer char))
+        (rplaca::handle-key-event buffer char))
       (is (string= "alpha
 beta" (file-buffer-text buffer)))
       (is (buffer-dirty-p buffer))
-      (clawmacs::save-session-command buffer)
+      (rplaca::save-session-command buffer)
       (is (string= "alpha
 beta" (project-read-file "keys" "notes.txt"))))))
 
 (test project-file-buffer-region-editing
   "File buffers support mark, region kill, and write-file-as."
   (with-project-test-state (root definitions)
-    (clawmacs::init-default-keymap)
+    (rplaca::init-default-keymap)
     (define-project "region" :root root)
     (project-create-file "region" "notes.txt" :content "abcdef")
     (let ((buffer (project-open-file "region" "notes.txt"))
           (msg nil))
       (setf msg (buffer-input-message buffer))
-      (clawmacs::set-message-point-from-absolute-offset msg 1)
-      (clawmacs::handle-key-event buffer (code-char 0))
-      (clawmacs::set-message-point-from-absolute-offset msg 4)
-      (clawmacs::handle-key-event buffer (code-char 23))
+      (rplaca::set-message-point-from-absolute-offset msg 1)
+      (rplaca::handle-key-event buffer (code-char 0))
+      (rplaca::set-message-point-from-absolute-offset msg 4)
+      (rplaca::handle-key-event buffer (code-char 23))
       (is (string= "aef" (file-buffer-text buffer)))
       (is (string= "bcd" (kill-ring-top)))
-      (clawmacs::write-project-file-as-command buffer "renamed.txt")
+      (rplaca::write-project-file-as-command buffer "renamed.txt")
       (is (string= "renamed.txt" (buffer-resource-path buffer)))
       (is (string= "aef" (project-read-file "region" "renamed.txt"))))))
 
@@ -206,12 +206,12 @@ beta" (project-read-file "keys" "notes.txt"))))))
 (test save-session-command-saves-project-file-buffers
   "C-x C-s behavior saves project file buffers instead of sessions."
   (with-project-test-state (root definitions)
-    (clawmacs::init-default-keymap)
+    (rplaca::init-default-keymap)
     (define-project "save" :root root)
     (project-create-file "save" "draft.txt" :content "old")
     (let ((buffer (project-open-file "save" "draft.txt")))
       (setf (file-buffer-text buffer) "new")
-      (clawmacs::save-session-command buffer)
+      (rplaca::save-session-command buffer)
       (is (string= "new" (project-read-file "save" "draft.txt")))
       (is-false (buffer-dirty-p buffer))
       (let ((notice (message-prev (buffer-input-message buffer))))
@@ -223,14 +223,14 @@ beta" (project-read-file "keys" "notes.txt"))))))
   (with-project-test-state (root definitions)
     (let ((project (define-project "meta"
                      :root root
-                     :systems '("clawmacs")
+                     :systems '("rplaca")
                      :check-functions
                      (list (lambda (project)
                              (list :checked (project-name project))))
                      :reload-function
                      (lambda (project)
                        (list :reloaded (project-name project))))))
-      (is (equal '("clawmacs") (project-systems project)))
+      (is (equal '("rplaca") (project-systems project)))
       (is (= 1 (length (project-check-functions project))))
       (is (functionp (project-reload-function project)))
       (let ((checks (run-project-checks "meta")))
@@ -325,10 +325,10 @@ beta" (project-read-file "keys" "notes.txt"))))))
                  (unwind-protect
                       (progn
                         ;; The production helper mutates only this detached copy.
-                        (clawmacs::apply-change-set-entry entry)
+                        (rplaca::apply-change-set-entry entry)
                         (cond
                           ((string= "new-first"
-                                    (clawmacs::change-set-entry-new-text entry))
+                                    (rplaca::change-set-entry-new-text entry))
                            (bt:signal-semaphore first-entered)
                            (unless (bt:wait-on-semaphore release-first
                                                          :timeout 5.0)
@@ -344,8 +344,8 @@ beta" (project-read-file "keys" "notes.txt"))))))
                      (bt:make-thread
                       (lambda ()
                         (let ((*project-registry* project-table)
-                              (clawmacs::*buffer-ring* nil)
-                              (clawmacs::*change-set-entry-apply-function*
+                              (rplaca::*buffer-ring* nil)
+                              (rplaca::*change-set-entry-apply-function*
                                 #'apply-with-pause))
                           (handler-case
                               (apply-change-set first-change-set)
@@ -357,17 +357,17 @@ beta" (project-read-file "keys" "notes.txt"))))))
                ;; but registry readers still see the last committed generation.
                (let* ((snapshot
                         (cdr (assoc (change-set-id first-change-set)
-                                    (clawmacs::change-set-registry-snapshot)
+                                    (rplaca::change-set-registry-snapshot)
                                     :test #'string=)))
                       (entry (first (change-set-entries snapshot))))
                  (is (eq :applying (change-set-status snapshot)))
-                 (is-false (clawmacs::change-set-entry-applied-p entry)))
+                 (is-false (rplaca::change-set-entry-applied-p entry)))
                (setf second-thread
                      (bt:make-thread
                       (lambda ()
                         (let ((*project-registry* project-table)
-                              (clawmacs::*buffer-ring* nil)
-                              (clawmacs::*change-set-entry-apply-function*
+                              (rplaca::*buffer-ring* nil)
+                              (rplaca::*change-set-entry-apply-function*
                                 #'apply-with-pause))
                           (handler-case
                               (apply-change-set second-change-set)
@@ -389,7 +389,7 @@ beta" (project-read-file "keys" "notes.txt"))))))
                (is (eq :applied (change-set-status first-change-set)))
                (is (eq :applied (change-set-status second-change-set)))
                (is-true
-                (clawmacs::change-set-entry-applied-p
+                (rplaca::change-set-entry-applied-p
                  (first (change-set-entries first-change-set))))
                (is (string= "new-first"
                             (project-read-file "serialized" "first.txt")))
@@ -406,7 +406,7 @@ beta" (project-read-file "keys" "notes.txt"))))))
   (with-project-test-state (root definitions)
     (let* ((first-project (create-project "atomic" :root root
                                           :description "original"))
-           (second-project (clawmacs::copy-project first-project))
+           (second-project (rplaca::copy-project first-project))
            (first-entered
              (bt:make-semaphore :name "first manifest writer entered"))
            (second-entered
@@ -435,7 +435,7 @@ beta" (project-read-file "keys" "notes.txt"))))))
                                                             :timeout 5.0)
                                 (error "Timed out releasing manifest writer.")))
                             (bt:signal-semaphore second-entered))
-                        (clawmacs::write-project-manifest-generation
+                        (rplaca::write-project-manifest-generation
                          path manifest))
                    (bt:with-lock-held (counter-lock)
                      (decf active)))))
@@ -444,10 +444,10 @@ beta" (project-read-file "keys" "notes.txt"))))))
                (setf first-thread
                      (bt:make-thread
                       (lambda ()
-                        (let ((clawmacs::*project-manifest-write-function*
+                        (let ((rplaca::*project-manifest-write-function*
                                 #'write-with-pause))
                           (handler-case
-                              (clawmacs::write-project-manifest
+                              (rplaca::write-project-manifest
                                first-project definitions)
                             (error (condition)
                               (setf first-error condition)))))
@@ -456,10 +456,10 @@ beta" (project-read-file "keys" "notes.txt"))))))
                (setf second-thread
                      (bt:make-thread
                       (lambda ()
-                        (let ((clawmacs::*project-manifest-write-function*
+                        (let ((rplaca::*project-manifest-write-function*
                                 #'write-with-pause))
                           (handler-case
-                              (clawmacs::write-project-manifest
+                              (rplaca::write-project-manifest
                                second-project definitions)
                             (error (condition)
                               (setf second-error condition)))))
@@ -477,8 +477,8 @@ beta" (project-read-file "keys" "notes.txt"))))))
                (is (null second-error))
                (is (= 1 maximum-active))
                (is (string= "second"
-                            (getf (clawmacs::read-project-manifest
-                                   (clawmacs::project-manifest-path
+                            (getf (rplaca::read-project-manifest
+                                   (rplaca::project-manifest-path
                                     "atomic" definitions))
                                   :description))))
           (bt:signal-semaphore release-first)
@@ -487,7 +487,7 @@ beta" (project-read-file "keys" "notes.txt"))))))
           (when (and second-thread (bt:thread-alive-p second-thread))
             (bt:join-thread second-thread))))
       ;; A failed temporary generation cannot truncate the committed target.
-      (let ((clawmacs::*project-manifest-write-function*
+      (let ((rplaca::*project-manifest-write-function*
               (lambda (path manifest)
                 (declare (ignore manifest))
                 (with-open-file (stream path
@@ -498,10 +498,10 @@ beta" (project-read-file "keys" "notes.txt"))))))
                 (error "Injected manifest write failure."))))
         (setf (project-description first-project) "must-not-publish")
         (signals error
-          (clawmacs::write-project-manifest first-project definitions)))
+          (rplaca::write-project-manifest first-project definitions)))
       (is (string= "second"
-                   (getf (clawmacs::read-project-manifest
-                          (clawmacs::project-manifest-path
+                   (getf (rplaca::read-project-manifest
+                          (rplaca::project-manifest-path
                            "atomic" definitions))
                          :description)))
       (is (null (directory
@@ -518,28 +518,28 @@ beta" (project-read-file "keys" "notes.txt"))))))
     (let ((failed-apply (begin-change-set :name "failed-apply")))
       (stage-project-file "compensate" "state.txt" "new"
                           :change-set failed-apply)
-      (let ((clawmacs::*change-set-entry-apply-function*
+      (let ((rplaca::*change-set-entry-apply-function*
               (lambda (entry)
-                (clawmacs::apply-change-set-entry entry)
+                (rplaca::apply-change-set-entry entry)
                 (error "Injected failure after apply mutation."))))
         (signals error (apply-change-set failed-apply)))
       (is (eq :failed (change-set-status failed-apply)))
       (is-false
-       (clawmacs::change-set-entry-applied-p
+       (rplaca::change-set-entry-applied-p
         (first (change-set-entries failed-apply))))
       (is (string= "old" (project-read-file "compensate" "state.txt"))))
     (let ((failed-revert (begin-change-set :name "failed-revert")))
       (stage-project-file "compensate" "state.txt" "new"
                           :change-set failed-revert)
       (apply-change-set failed-revert)
-      (let ((clawmacs::*change-set-entry-revert-function*
+      (let ((rplaca::*change-set-entry-revert-function*
               (lambda (entry)
-                (clawmacs::revert-change-set-entry entry)
+                (rplaca::revert-change-set-entry entry)
                 (error "Injected failure after revert mutation."))))
         (signals error (revert-change-set failed-revert)))
       (is (eq :revert-failed (change-set-status failed-revert)))
       (is-true
-       (clawmacs::change-set-entry-applied-p
+       (rplaca::change-set-entry-applied-p
         (first (change-set-entries failed-revert))))
       (is (string= "new"
                    (project-read-file "compensate" "state.txt"))))))
@@ -559,7 +559,7 @@ beta" (project-read-file "keys" "notes.txt"))))))
              (bt:make-thread
               (lambda ()
                 (let ((*project-registry* project-table)
-                      (clawmacs::*tool-effect-recorder*
+                      (rplaca::*tool-effect-recorder*
                         (lambda (kind effect)
                           (push (cons kind effect) effects))))
                   (setf worker-thread (bt:current-thread))
@@ -575,7 +575,7 @@ beta" (project-read-file "keys" "notes.txt"))))))
       (is (string= "old" (file-buffer-text buffer)))
       (is (= 1 (length effects)))
       (is (eq :project-buffer (caar effects)))
-      (clawmacs::apply-interactive-tool-effects buffer (nreverse effects))
+      (rplaca::apply-interactive-tool-effects buffer (nreverse effects))
       (is (string= "new" (file-buffer-text buffer)))
       (is-false (buffer-dirty-p buffer)))))
 

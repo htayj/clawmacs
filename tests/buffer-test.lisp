@@ -1,4 +1,4 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 (in-suite buffer-suite)
 
 (defvar *mx-test-command-log* nil
@@ -8,7 +8,7 @@
   "Return a fresh temporary directory for session transcript tests."
   (make-pathname :directory
                  (list :absolute "tmp"
-                       (format nil "clawmacs-session-tests-~A-~A-~A"
+                       (format nil "rplaca-session-tests-~A-~A-~A"
                                label
                                (get-universal-time)
                                (gensym)))))
@@ -36,7 +36,7 @@
 (defun make-recorded-test-message (sender text)
   "Return a read-only test message."
   (let ((msg (make-message sender :read-only-p t)))
-    (clawmacs::set-message-text msg text)
+    (rplaca::set-message-text msg text)
     (setf (message-timestamp msg) (get-universal-time))
     msg))
 
@@ -44,50 +44,50 @@
   "Return BUFFER's first non-synthetic finalized message, or NIL."
   (loop :for msg := (buffer-first-message buffer) :then (message-next msg)
         :while (and msg (not (eq msg (buffer-input-message buffer))))
-        :unless (clawmacs::buffer-system-prompt-display-message-p msg)
+        :unless (rplaca::buffer-system-prompt-display-message-p msg)
           :return msg))
 
 (defun mx-test-noarg-command (buffer)
   "Test command used to verify M-x invocation without arguments."
   (declare (ignore buffer))
   (setf *mx-test-command-log* '(:noarg)))
-(clawmacs:defcommand mx-test-noarg-command)
+(rplaca:defcommand mx-test-noarg-command)
 
 (defun mx-test-arg-command (buffer count label)
   "Test command used to verify M-x argument prompting."
   (declare (ignore buffer))
   (setf *mx-test-command-log* (list :args count label)))
-(clawmacs:defcommand mx-test-arg-command
+(rplaca:defcommand mx-test-arg-command
   :prompts ((count :prompt "Count" :reader parse-integer)
             (label :prompt "Label")))
 
 (test scroll-down-command-clamps-near-bottom
   "One page down from within one page of bottom returns to offset zero."
   (let ((buf (make-buffer "scroll-clamp")))
-    (let ((clawmacs::*scroll-page-size* 16))
+    (let ((rplaca::*scroll-page-size* 16))
       (setf (buffer-scroll-offset buf) 17)
-      (clawmacs::scroll-down-command buf)
+      (rplaca::scroll-down-command buf)
       (is (= 0 (buffer-scroll-offset buf))))))
 
 (test scroll-down-command-subtracts-page-when-far-from-bottom
   "Page down keeps a positive offset when more than one page from bottom."
   (let ((buf (make-buffer "scroll-page")))
-    (let ((clawmacs::*scroll-page-size* 16))
+    (let ((rplaca::*scroll-page-size* 16))
       (setf (buffer-scroll-offset buf) 40)
-      (clawmacs::scroll-down-command buf)
+      (rplaca::scroll-down-command buf)
       (is (= 24 (buffer-scroll-offset buf))))))
 
 (defmacro with-interactive-command-test-buffer ((buffer-var) &body body)
   `(let ((*buffer-ring* nil)
-         (clawmacs::*buffer-counter* 0)
-         (clawmacs::*chat-interaction-state*
-           (clawmacs::make-chat-interaction-state))
+         (rplaca::*buffer-counter* 0)
+         (rplaca::*chat-interaction-state*
+           (rplaca::make-chat-interaction-state))
          (*buffer-selector-active* nil)
          (*model-selector-active* nil)
          (*think-selector-active* nil)
          (*openai-oauth-pending* nil)
          (*mx-test-command-log* nil))
-     (clawmacs::init-default-keymap)
+     (rplaca::init-default-keymap)
      (let ((,buffer-var (make-buffer "test-session")))
        (setf (buffer-keymap ,buffer-var) *default-keymap*)
        (add-buffer-to-ring ,buffer-var)
@@ -136,18 +136,18 @@
     (is (buffer-ephemeral-p buf))
     (is-false (buffer-persistent-session-p buf))
     (is (null (buffer-session buf)))
-    (is (null (clawmacs::ensure-buffer-session buf)))
-    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (is (null (rplaca::ensure-buffer-session buf)))
+    (rplaca::set-message-text (buffer-input-message buf) "hello")
     (buffer-finalize-input buf)
     (save-session buf)
-    (is-false (probe-file (clawmacs::session-path "ephemeral-session")))
-    (is-false (probe-file (clawmacs::session-sidecar-manifest-path
+    (is-false (probe-file (rplaca::session-path "ephemeral-session")))
+    (is-false (probe-file (rplaca::session-sidecar-manifest-path
                            "ephemeral-session")))))
 
 (test package-buffer-type-registration-controls-buffer-defaults
   "Registered buffer types provide package-extensible kind metadata."
-  (let ((clawmacs::*buffer-type-registry*
-          (clawmacs::make-buffer-type-registry)))
+  (let ((rplaca::*buffer-type-registry*
+          (rplaca::make-buffer-type-registry)))
     (let ((type (register-buffer-type
                  :ledger
                  :description "Ledger view"
@@ -167,16 +167,16 @@
 
 (test package-buffer-type-defaults-major-mode-from-kind
   "Custom buffer types without an explicit major-mode use their kind label."
-  (let ((clawmacs::*buffer-type-registry*
-          (clawmacs::make-buffer-type-registry)))
+  (let ((rplaca::*buffer-type-registry*
+          (rplaca::make-buffer-type-registry)))
     (register-buffer-type :dashboard)
     (let ((buf (make-buffer "dashboard" :kind :dashboard)))
       (is (string= "dashboard" (buffer-major-mode buf))))))
 
 (test built-in-special-buffer-types-are-registered
   "Help, info, listener, and font editor buffers are first-class non-document kinds."
-  (let ((clawmacs::*buffer-type-registry*
-          (clawmacs::make-buffer-type-registry)))
+  (let ((rplaca::*buffer-type-registry*
+          (rplaca::make-buffer-type-registry)))
     (let ((help (find-buffer-type :help))
           (info (find-buffer-type :info))
           (listener (find-buffer-type :listener))
@@ -197,8 +197,8 @@
 (test make-listener-buffer-evaluates-lisp-and-comma-commands
   "Listener buffers evaluate Lisp forms and dispatch McCLIM-style comma commands."
   (let ((*buffer-ring* nil)
-        (clawmacs::*listener-buffer-states* (make-hash-table :test #'eq)))
-    (clawmacs::init-default-keymap)
+        (rplaca::*listener-buffer-states* (make-hash-table :test #'eq)))
+    (rplaca::init-default-keymap)
     (let ((buf (make-listener-buffer :working-directory #P"/tmp/"
                                      :add-to-ring-p t)))
       (is (listener-buffer-p buf))
@@ -210,7 +210,7 @@
       (set-message-text (buffer-input-message buf) "(+ 1 2)")
       (submit-listener-input buf)
       (is (search "=> 3" (message-text (latest-buffer-message buf))))
-      (is (search ">" (clawmacs::message-metadata-value
+      (is (search ">" (rplaca::message-metadata-value
                        (message-metadata
                         (message-prev (message-prev (buffer-input-message buf))))
                        :listener-prompt)))
@@ -244,26 +244,26 @@
   "The reasoning output toggle controls per-buffer reasoning display."
   (let ((buf (make-buffer "reasoning-toggle")))
     (is (not (buffer-show-reasoning-p buf)))
-    (clawmacs::toggle-reasoning-output-command buf)
+    (rplaca::toggle-reasoning-output-command buf)
     (is (buffer-show-reasoning-p buf))
-    (clawmacs::toggle-reasoning-output-command buf)
+    (rplaca::toggle-reasoning-output-command buf)
     (is (not (buffer-show-reasoning-p buf)))))
 
 (test toggle-metadata-output-command-flips-buffer-flag
   "The metadata output toggle controls per-buffer metadata display."
   (let ((buf (make-buffer "metadata-toggle")))
     (is (not (buffer-show-metadata-p buf)))
-    (clawmacs::toggle-metadata-output-command buf)
+    (rplaca::toggle-metadata-output-command buf)
     (is (buffer-show-metadata-p buf))
-    (clawmacs::toggle-metadata-output-command buf)
+    (rplaca::toggle-metadata-output-command buf)
     (is (not (buffer-show-metadata-p buf)))))
 
 (test make-chat-buffer-shows-system-prompt-header-without-counting-it
   "Chat buffers show the full system prompt as a synthetic display header."
-  (let ((original (symbol-function 'clawmacs:build-agent-system-prompt)))
+  (let ((original (symbol-function 'rplaca:build-agent-system-prompt)))
     (unwind-protect
          (progn
-           (setf (symbol-function 'clawmacs:build-agent-system-prompt)
+           (setf (symbol-function 'rplaca:build-agent-system-prompt)
                  (lambda (agent-name &key buffer)
                    (declare (ignore buffer))
                    (format nil "PROMPT FOR ~A" agent-name)))
@@ -271,34 +271,34 @@
                                         :agent-name "writer"
                                         :session-persistence-mode :ephemeral)))
              (let ((first (buffer-first-message buf)))
-               (is (clawmacs::buffer-system-prompt-display-message-p first))
+               (is (rplaca::buffer-system-prompt-display-message-p first))
                (is (search "PROMPT FOR writer" (message-text first)))
                (is (eq (buffer-input-message buf) (message-next first)))
                (is (= 1 (buffer-message-count buf))))))
-      (setf (symbol-function 'clawmacs:build-agent-system-prompt) original))))
+      (setf (symbol-function 'rplaca:build-agent-system-prompt) original))))
 
 (test serialize-buffer-omits-system-prompt-header
   "Synthetic system-prompt headers do not become durable session messages."
-  (let ((original (symbol-function 'clawmacs:build-agent-system-prompt)))
+  (let ((original (symbol-function 'rplaca:build-agent-system-prompt)))
     (unwind-protect
          (progn
-           (setf (symbol-function 'clawmacs:build-agent-system-prompt)
+           (setf (symbol-function 'rplaca:build-agent-system-prompt)
                  (lambda (agent-name &key buffer)
                    (declare (ignore buffer))
                    (format nil "PROMPT FOR ~A" agent-name)))
            (let ((buf (make-chat-buffer "serialize-header"
                                         :agent-name "writer"
                                         :session-persistence-mode :ephemeral)))
-             (let ((data (clawmacs::serialize-buffer buf)))
+             (let ((data (rplaca::serialize-buffer buf)))
                (is (null (coerce (cdr (assoc :messages data)) 'list))))
-             (clawmacs::set-message-text (buffer-input-message buf) "hello")
+             (rplaca::set-message-text (buffer-input-message buf) "hello")
              (buffer-finalize-input buf)
-             (let* ((data (clawmacs::serialize-buffer buf))
+             (let* ((data (rplaca::serialize-buffer buf))
                     (messages (coerce (cdr (assoc :messages data)) 'list)))
                (is (= 1 (length messages)))
                (is (string= "USER" (cdr (assoc :sender (first messages)))))
                (is (string= "hello" (cdr (assoc :text (first messages))))))))
-      (setf (symbol-function 'clawmacs:build-agent-system-prompt) original))))
+      (setf (symbol-function 'rplaca:build-agent-system-prompt) original))))
 
 (test explicit-session-records-transcript-events
   "Buffers with an attached session append durable JSONL message events."
@@ -313,10 +313,10 @@
       (is (= 1 (length initial-events)))
       (is (string= "session-start"
                    (event-value (first initial-events) :event))))
-    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (rplaca::set-message-text (buffer-input-message buf) "hello")
     (buffer-finalize-input buf)
     (buffer-insert-system-message buf "display-only")
-    (clawmacs::buffer-insert-context-message buf "late context")
+    (rplaca::buffer-insert-context-message buf "late context")
     (buffer-insert-agent-message buf "answer")
     (let* ((events (session-current-events session))
            (message-events
@@ -336,7 +336,7 @@
   "Plain unit-test buffers stay transcript-free unless a session is attached."
   (let* ((*sessions-dir* (temp-session-test-directory "quiet"))
          (buf (make-buffer "plain-buffer")))
-    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (rplaca::set-message-text (buffer-input-message buf) "hello")
     (buffer-finalize-input buf)
     (buffer-insert-agent-message buf "answer")
     (is (null (buffer-session buf)))
@@ -350,9 +350,9 @@
          (buf (make-buffer session-name
                            :agent-name "echo"
                            :session session))
-         (path (clawmacs::session-path session-name)))
+         (path (rplaca::session-path session-name)))
     (is (not (probe-file path)))
-    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (rplaca::set-message-text (buffer-input-message buf) "hello")
     (buffer-finalize-input buf)
     (is (probe-file path))
     (is (member session-name (list-saved-sessions) :test #'string=))
@@ -368,10 +368,10 @@
   "Loaded session buffers prepend the current full system prompt as a header."
   (let* ((session-name "session-with-prompt-header")
          (*sessions-dir* (temp-session-test-directory "load-prompt-header"))
-         (original (symbol-function 'clawmacs:build-agent-system-prompt)))
+         (original (symbol-function 'rplaca:build-agent-system-prompt)))
     (unwind-protect
          (progn
-           (setf (symbol-function 'clawmacs:build-agent-system-prompt)
+           (setf (symbol-function 'rplaca:build-agent-system-prompt)
                  (lambda (agent-name &key buffer)
                    (declare (ignore buffer))
                    (format nil "LOADED PROMPT FOR ~A" agent-name)))
@@ -379,28 +379,28 @@
                   (buf (make-buffer session-name
                                     :agent-name "reader"
                                     :session session)))
-             (clawmacs::set-message-text (buffer-input-message buf) "hello")
+             (rplaca::set-message-text (buffer-input-message buf) "hello")
              (buffer-finalize-input buf)
              (save-session buf))
            (let ((loaded (load-session session-name :agent-name "reader")))
              (is (not (null loaded)))
              (let ((first (buffer-first-message loaded)))
-               (is (clawmacs::buffer-system-prompt-display-message-p first))
+               (is (rplaca::buffer-system-prompt-display-message-p first))
                (is (search "LOADED PROMPT FOR reader" (message-text first)))
                (let ((next (message-next first)))
                  (is (not (null next)))
                  (is (eq :user (message-sender next)))
                  (is (string= "hello" (message-text next)))))))
-      (setf (symbol-function 'clawmacs:build-agent-system-prompt) original))))
+      (setf (symbol-function 'rplaca:build-agent-system-prompt) original))))
 
 (test sidecar-only-session-is-listed-and-loadable
   "Transcript sidecars are visible to the load-session command before a snapshot exists."
   (let* ((session-name "sidecar-only-session")
          (*sessions-dir* (temp-session-test-directory "sidecar"))
          (session (load-or-create-session session-name))
-         (path (clawmacs::session-path session-name))
+         (path (rplaca::session-path session-name))
          (msg (make-message :user :read-only-p t)))
-    (clawmacs::set-message-text msg "from transcript")
+    (rplaca::set-message-text msg "from transcript")
     (setf (message-timestamp msg) 42)
     (record-session-message session msg)
     (is (not (probe-file path)))
@@ -416,12 +416,12 @@
 (test sidecar-only-session-round-trips-working-directory
   "Sidecar-backed session loads preserve the original working directory."
   (let* ((session-name "sidecar-working-directory")
-         (working-directory #P"/tmp/clawmacs-sidecar-session/")
+         (working-directory #P"/tmp/rplaca-sidecar-session/")
          (*sessions-dir* (temp-session-test-directory "sidecar-working-directory"))
          (session (load-or-create-session session-name
                                           :working-directory working-directory))
          (msg (make-message :user :read-only-p t)))
-    (clawmacs::set-message-text msg "from transcript")
+    (rplaca::set-message-text msg "from transcript")
     (setf (message-timestamp msg) 42)
     (record-session-message session msg)
     (let ((loaded (load-session session-name)))
@@ -429,7 +429,7 @@
       (is (equal (uiop:ensure-directory-pathname working-directory)
                  (buffer-working-directory loaded)))
       (is (equal (uiop:ensure-directory-pathname working-directory)
-                 (clawmacs::session-working-directory
+                 (rplaca::session-working-directory
                   (buffer-session loaded)))))))
 
 (test session-transcripts-are-tree-shaped
@@ -439,7 +439,7 @@
          (buf (make-buffer "Tree Shape"
                            :agent-name "agent"
                            :session session)))
-    (clawmacs::set-message-text (buffer-input-message buf) "root")
+    (rplaca::set-message-text (buffer-input-message buf) "root")
     (buffer-finalize-input buf)
     (buffer-insert-agent-message buf "answer")
     (let* ((events (session-current-events session))
@@ -498,22 +498,22 @@
     (record-session-label-change session (message-entry-id msg) "mark")
     (session-tree-selector-activate buf (lambda (item) (declare (ignore item))))
     (let ((item (find (message-entry-id msg)
-                      clawmacs::*session-tree-selector-filtered-items*
+                      rplaca::*session-tree-selector-filtered-items*
                       :key (lambda (candidate) (getf candidate :id))
                       :test #'string=)))
       (is (not (null item)))
       (is (string= "mark" (getf item :label))))
-    (clawmacs::session-tree-selector-set-filter :labeled-only)
-    (is (= 1 (length clawmacs::*session-tree-selector-filtered-items*)))
+    (rplaca::session-tree-selector-set-filter :labeled-only)
+    (is (= 1 (length rplaca::*session-tree-selector-filtered-items*)))
     (session-tree-selector-deactivate)))
 
 (test ensure-scratch-buffer-creates-loaded-scratch-without-stealing-current
   "The scratch buffer is loaded into the ring but does not become current."
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
+        (rplaca::*buffer-counter* 0)
         (*scratch-buffer-name* "*scratch*")
         (*scratch-buffer-initial-text* "notes"))
-    (clawmacs::init-default-keymap)
+    (rplaca::init-default-keymap)
     (let ((chat (make-buffer "chat")))
       (setf (buffer-keymap chat) *default-keymap*)
       (add-buffer-to-ring chat)
@@ -525,7 +525,7 @@
         (is (string= "*scratch*" (buffer-name scratch)))
         (is (string= "scratch" (buffer-major-mode scratch)))
         (is (string= "notes" (scratch-buffer-text scratch)))
-        (is (eq clawmacs::*scratch-keymap* (buffer-keymap scratch)))
+        (is (eq rplaca::*scratch-keymap* (buffer-keymap scratch)))
         (is (= 2 (length *buffer-ring*)))
         (is (eq scratch (ensure-scratch-buffer)))
         (is (= 2 (length *buffer-ring*)))))))
@@ -534,7 +534,7 @@
   "The scratch text accessor reads and replaces the editable document."
   (let ((*buffer-ring* nil)
         (*scratch-buffer-initial-text* ""))
-    (clawmacs::init-default-keymap)
+    (rplaca::init-default-keymap)
     (let ((scratch (ensure-scratch-buffer)))
       (setf (scratch-buffer-text scratch) "alpha")
       (is (string= "alpha" (scratch-buffer-text scratch)))
@@ -606,7 +606,7 @@
           (buffer-pipeline-name buf) "plan-build"
           (buffer-enabled-packages buf) '("sexed"))
     (set-buffer-think-level-override buf "medium")
-    (let ((data (clawmacs::serialize-buffer buf)))
+    (let ((data (rplaca::serialize-buffer buf)))
       (is (eq :zai (cdr (assoc :provider-override data))))
       (is (string= "glm-5" (cdr (assoc :model-override data))))
       (is (string= "medium" (cdr (assoc :think-level-override data))))
@@ -617,8 +617,8 @@
 (test load-session-missing-overrides-default-to-nil
   "Sessions without override fields load nil overrides."
   (let* ((session-name "missing-overrides")
-         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
-         (path (clawmacs::session-path session-name)))
+         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "rplaca-buffer-tests")))
+         (path (rplaca::session-path session-name)))
     (ensure-directories-exist path)
     (with-open-file (stream path :direction :output
                                  :if-exists :supersede
@@ -644,20 +644,20 @@
   "Malformed sidecar manifests return a structured parse error object."
   (let* ((session-name "malformed-manifest")
          (*sessions-dir* (temp-session-test-directory "malformed-manifest"))
-         (manifest-path (clawmacs::session-sidecar-manifest-path session-name)))
+         (manifest-path (rplaca::session-sidecar-manifest-path session-name)))
     (ensure-directories-exist manifest-path)
     (with-open-file (stream manifest-path :direction :output
                                          :if-exists :supersede
                                          :if-does-not-exist :create)
       (write-string "{not valid json" stream))
-    (let ((result (clawmacs::read-session-manifest manifest-path)))
-      (is (typep result 'clawmacs::session-manifest-parse-error))
+    (let ((result (rplaca::read-session-manifest manifest-path)))
+      (is (typep result 'rplaca::session-manifest-parse-error))
       (is (search "malformed-manifest"
-                  (clawmacs::session-manifest-parse-error-path result)))
+                  (rplaca::session-manifest-parse-error-path result)))
       (is (search "Failed to parse session manifest"
                   (format nil "~A" result))))
-    (signals clawmacs::session-manifest-parse-error
-      (clawmacs::load-session-sidecar session-name))))
+    (signals rplaca::session-manifest-parse-error
+      (rplaca::load-session-sidecar session-name))))
 
 (test list-saved-sessions-skips-malformed-sidecars-with-warning
   "Malformed sidecars warn and do not hide valid saved sessions."
@@ -665,8 +665,8 @@
          (bad-session "bad-sidecar-session")
          (*sessions-dir* (temp-session-test-directory "malformed-sidecars"))
          (good-session-object (load-or-create-session good-session))
-         (bad-manifest-path (clawmacs::session-sidecar-manifest-path bad-session))
-         (good-manifest-path (clawmacs::session-sidecar-manifest-path good-session))
+         (bad-manifest-path (rplaca::session-sidecar-manifest-path bad-session))
+         (good-manifest-path (rplaca::session-sidecar-manifest-path good-session))
          (warnings nil))
     (declare (ignore good-session-object))
     (ensure-directories-exist bad-manifest-path)
@@ -689,7 +689,7 @@
   "Loading a snapshot attaches a session but does not replay old messages into JSONL."
   (let* ((session-name "legacy-transcript-replay")
          (*sessions-dir* (temp-session-test-directory "load"))
-         (path (clawmacs::session-path session-name)))
+         (path (rplaca::session-path session-name)))
     (ensure-directories-exist path)
     (with-open-file (stream path :direction :output
                                  :if-exists :supersede
@@ -724,7 +724,7 @@
 (test save-and-load-session-round-trips-overrides
   "Saved sessions preserve override values and types when reloaded."
   (let* ((session-name "override-round-trip")
-         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
+         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "rplaca-buffer-tests")))
          (buf (make-buffer session-name :agent-name "echo")))
     (setf (buffer-provider-override buf) :openai-codex
           (buffer-model-override buf) "gpt-5.4"
@@ -750,15 +750,15 @@
 (test save-and-load-session-round-trips-working-directory
   "Saved sessions preserve the buffer working directory and session root."
   (let* ((session-name "working-directory-round-trip")
-         (working-directory #P"/tmp/clawmacs-working-directory-session/")
-         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
+         (working-directory #P"/tmp/rplaca-working-directory-session/")
+         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "rplaca-buffer-tests")))
          (session (load-or-create-session session-name
                                           :working-directory working-directory))
          (buf (make-buffer session-name
                            :agent-name "echo"
                            :session session
                            :working-directory working-directory)))
-    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (rplaca::set-message-text (buffer-input-message buf) "hello")
     (buffer-finalize-input buf)
     (save-session buf)
     (let ((loaded (load-session session-name)))
@@ -766,7 +766,7 @@
       (is (equal (uiop:ensure-directory-pathname working-directory)
                  (buffer-working-directory loaded)))
       (is (equal (uiop:ensure-directory-pathname working-directory)
-                 (clawmacs::session-working-directory
+                 (rplaca::session-working-directory
                   (buffer-session loaded)))))))
 
 (test save-and-load-session-round-trips-display-name
@@ -778,21 +778,21 @@
          (buf (make-buffer session-name
                            :agent-name "echo"
                            :session session)))
-    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+    (rplaca::set-message-text (buffer-input-message buf) "hello")
     (buffer-finalize-input buf)
     (save-session buf)
     (let ((loaded (load-session session-name)))
       (is (string= "Focus Session"
-                   (clawmacs::session-display-name
+                   (rplaca::session-display-name
                     (buffer-session loaded)))))
-    (let ((records (clawmacs::list-saved-session-records)))
+    (let ((records (rplaca::list-saved-session-records)))
       (let ((record (find session-name records
                           :key (lambda (entry)
                                  (getf entry :session-name))
                           :test #'string=)))
         (is (not (null record)))
         (is (string= "Focus Session" (getf record :display-name)))
-        (is (string= (clawmacs::session-id session)
+        (is (string= (rplaca::session-id session)
                      (getf record :session-id)))))))
 
 (test load-session-accepts-unique-session-id-prefix
@@ -803,8 +803,8 @@
          (buf (make-buffer session-name
                            :agent-name "echo"
                            :session session))
-         (prefix (subseq (clawmacs::session-id session) 0 8)))
-    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+         (prefix (subseq (rplaca::session-id session) 0 8)))
+    (rplaca::set-message-text (buffer-input-message buf) "hello")
     (buffer-finalize-input buf)
     (save-session buf)
     (let ((loaded (load-session prefix)))
@@ -820,8 +820,8 @@
                            :agent-name "echo"
                            :session session))
          (manifest-path
-           (clawmacs::session-sidecar-manifest-path session-name)))
-    (clawmacs::set-message-text (buffer-input-message buf) "hello")
+           (rplaca::session-sidecar-manifest-path session-name)))
+    (rplaca::set-message-text (buffer-input-message buf) "hello")
     (buffer-finalize-input buf)
     (save-session buf)
     (let ((loaded (load-session (namestring manifest-path))))
@@ -831,16 +831,16 @@
 (test listener-buffer-state-round-trips-through-session-save
   "Listener buffers preserve package, directory stack, history, and values."
   (let* ((session-name "listener-state-round-trip")
-         (working-directory #P"/tmp/clawmacs-listener-session/")
-         (stack-entry #P"/tmp/clawmacs-listener-stack/")
-         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
-         (clawmacs::*listener-buffer-states* (make-hash-table :test #'eq))
+         (working-directory #P"/tmp/rplaca-listener-session/")
+         (stack-entry #P"/tmp/rplaca-listener-stack/")
+         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "rplaca-buffer-tests")))
+         (rplaca::*listener-buffer-states* (make-hash-table :test #'eq))
          (session (load-or-create-session session-name
                                           :working-directory working-directory))
          (buf (make-listener-buffer :name session-name
                                     :working-directory working-directory)))
     (setf (buffer-session buf) session)
-    (clawmacs::listener-set-package buf "KEYWORD")
+    (rplaca::listener-set-package buf "KEYWORD")
     (setf (listener-state-directory-stack (listener-buffer-state buf))
           (list stack-entry)
           (listener-state-last-values (listener-buffer-state buf))
@@ -875,8 +875,8 @@
 (test load-session-normalizes-legacy-raw-content
   "Legacy saved session raw-content is normalized to canonical blocks on load."
   (let* ((session-name "legacy-raw-content")
-         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "clawmacs-buffer-tests")))
-         (path (clawmacs::session-path session-name)))
+         (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "rplaca-buffer-tests")))
+         (path (rplaca::session-path session-name)))
     (ensure-directories-exist path)
     (with-open-file (stream path :direction :output
                                  :if-exists :supersede
@@ -903,23 +903,23 @@
 (test previous-command-argument-extraction
   "Extract first and last argument from previous user command."
   (let ((buf (make-buffer "test")))
-    (clawmacs::set-message-text (buffer-input-message buf) "git commit -m msg")
+    (rplaca::set-message-text (buffer-input-message buf) "git commit -m msg")
     (buffer-finalize-input buf)
-    (is (string= "commit" (clawmacs::buffer-previous-command-first-argument buf)))
-    (is (string= "msg" (clawmacs::buffer-previous-command-last-argument buf)))))
+    (is (string= "commit" (rplaca::buffer-previous-command-first-argument buf)))
+    (is (string= "msg" (rplaca::buffer-previous-command-last-argument buf)))))
 
 (test previous-command-argument-extraction-no-arguments
   "Return nil when previous command has no arguments."
   (let ((buf (make-buffer "test")))
-    (clawmacs::set-message-text (buffer-input-message buf) "ls")
+    (rplaca::set-message-text (buffer-input-message buf) "ls")
     (buffer-finalize-input buf)
-    (is (null (clawmacs::buffer-previous-command-first-argument buf)))
-    (is (string= "ls" (clawmacs::buffer-previous-command-last-argument buf)))))
+    (is (null (rplaca::buffer-previous-command-first-argument buf)))
+    (is (string= "ls" (rplaca::buffer-previous-command-last-argument buf)))))
 
 (test handle-key-event-control-l-requests-redraw-in-minibuffer-mode
   "Ctrl+l requests a redraw even when modal UI state like the minibuffer is active."
-  (let ((clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state))
+  (let ((rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state))
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
         (*think-selector-active* nil)
@@ -927,12 +927,12 @@
     (setf *minibuffer-active* t)
     (let ((buf (make-buffer "test")))
       (is (eq :redraw
-              (clawmacs::handle-key-event buf (code-char 12)))))))
+              (rplaca::handle-key-event buf (code-char 12)))))))
 
 (test minibuffer-completion-navigation-wraps-with-tab-and-backtab
   "Completion navigation accepts Emacs-style keys and wraps at both ends."
-  (let ((clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state))
+  (let ((rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state))
         (*minibuffer-max-height* 3))
     (minibuffer-activate
      "Pick"
@@ -968,8 +968,8 @@
 (test minibuffer-completion-return-with-no-match-keeps-query
   "Return on an empty completion result keeps the minibuffer active."
   (let ((submitted nil)
-        (clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state)))
+        (rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state)))
     (minibuffer-activate
      "Pick"
      (list (list :display "alpha"))
@@ -983,8 +983,8 @@
 
 (test minibuffer-completion-mode-supports-emacs-motion-keys
   "Completion minibuffers support compose-like C-b/C-f/M-b/M-f editing motions."
-  (let ((clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state)))
+  (let ((rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state)))
     (minibuffer-activate
      "Edit"
      (list (list :display "foo bar baz"))
@@ -1003,9 +1003,9 @@
 
 (test minibuffer-completion-mode-supports-emacs-kill-and-yank-keys
   "Completion minibuffers support C-d/M-d/M-Backspace/C-k/C-y editing."
-  (let ((clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state))
-        (clawmacs::*kill-ring* nil))
+  (let ((rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state))
+        (rplaca::*kill-ring* nil))
     (minibuffer-activate
      "Edit"
      (list (list :display "foo bar baz"))
@@ -1020,7 +1020,7 @@
     (handle-minibuffer-key '(:meta #\d))
     (is (string= "foo  baz" *minibuffer-input*))
     (is (= 4 *minibuffer-point*))
-    (is (string= "bar" (first clawmacs::*kill-ring*)))
+    (is (string= "bar" (first rplaca::*kill-ring*)))
     (handle-minibuffer-key '(:control #\y))
     (is (string= "foo bar baz" *minibuffer-input*))
     (setf *minibuffer-point* 8)
@@ -1039,8 +1039,8 @@
 (test minibuffer-prompt-mode-preserves-editing-keys
   "Prompt mode still edits raw input instead of cycling completion candidates."
   (let ((submitted nil)
-        (clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state)))
+        (rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state)))
     (minibuffer-prompt "Raw" (lambda (input) (setf submitted input)))
     (handle-minibuffer-key #\a)
     (handle-minibuffer-key #\b)
@@ -1058,7 +1058,7 @@
 
 (test default-keymap-binds-m-x-to-execute-extended-command
   "The default keymap exposes M-x as execute-extended-command."
-  (clawmacs::init-default-keymap)
+  (rplaca::init-default-keymap)
   (is (eq 'execute-extended-command
           (keymap-lookup *default-keymap* '(:meta #\x))))
   (is (null (keymap-lookup *default-keymap* '(:alt #\x)))))
@@ -1066,7 +1066,7 @@
 (test execute-extended-command-opens-the-command-picker
   "M-x opens the minibuffer with commands."
   (with-interactive-command-test-buffer (buf)
-    (clawmacs::handle-key-event buf '(:meta #\x))
+    (rplaca::handle-key-event buf '(:meta #\x))
     (is (eq t *minibuffer-active*))
     (is (eq :completion *minibuffer-mode*))
     (is (string= "M-x" *minibuffer-prompt*))
@@ -1080,7 +1080,7 @@
 (test execute-extended-command-runs-noarg-commands-immediately
   "Selecting a no-arg command from M-x invokes it without another prompt."
   (with-interactive-command-test-buffer (buf)
-    (clawmacs::handle-key-event buf '(:meta #\x))
+    (rplaca::handle-key-event buf '(:meta #\x))
     (select-minibuffer-command 'mx-test-noarg-command)
     (is (null *minibuffer-active*))
     (is (equal '(:noarg) *mx-test-command-log*))))
@@ -1088,9 +1088,9 @@
 (test execute-extended-command-fuzzy-matches-and-runs-selection
   "M-x filters command names by fuzzy abbreviation and Return runs the selection."
   (with-interactive-command-test-buffer (buf)
-    (clawmacs::handle-key-event buf '(:meta #\x))
+    (rplaca::handle-key-event buf '(:meta #\x))
     (dolist (char (coerce "mxno" 'list))
-      (clawmacs::handle-key-event buf char))
+      (rplaca::handle-key-event buf char))
     (is (string= "mxno" *minibuffer-input*))
     (is (eq 'mx-test-noarg-command
             (getf (first *minibuffer-filtered-items*) :command)))
@@ -1101,7 +1101,7 @@
 (test execute-extended-command-prompts-for-each-argument
   "Selecting a parameterized command prompts for each command argument."
   (with-interactive-command-test-buffer (buf)
-    (clawmacs::handle-key-event buf '(:meta #\x))
+    (rplaca::handle-key-event buf '(:meta #\x))
     (select-minibuffer-command 'mx-test-arg-command)
     (is (eq t *minibuffer-active*))
     (is (eq :prompt *minibuffer-mode*))
@@ -1121,7 +1121,7 @@
 (test execute-extended-command-reprompts-on-invalid-argument
   "Reader errors keep the command pending and preserve the user's input."
   (with-interactive-command-test-buffer (buf)
-    (clawmacs::handle-key-event buf '(:meta #\x))
+    (rplaca::handle-key-event buf '(:meta #\x))
     (select-minibuffer-command 'mx-test-arg-command)
     (setf *minibuffer-input* "oops"
           *minibuffer-point* 4)
@@ -1139,7 +1139,7 @@
 (test execute-extended-command-cancels-parameter-prompts-with-c-g
   "Cancelling a prompted command abandons the invocation cleanly."
   (with-interactive-command-test-buffer (buf)
-    (clawmacs::handle-key-event buf '(:meta #\x))
+    (rplaca::handle-key-event buf '(:meta #\x))
     (select-minibuffer-command 'mx-test-arg-command)
     (handle-minibuffer-key (code-char 7))
     (is (null *minibuffer-active*))
@@ -1151,7 +1151,7 @@
     (let ((km (make-keymap :test :parent *default-keymap*)))
       (keymap-bind km #\? 'mx-test-arg-command)
       (setf (buffer-keymap buf) km)
-      (clawmacs::handle-key-event buf #\?)
+      (rplaca::handle-key-event buf #\?)
       (is (eq t *minibuffer-active*))
       (is (eq :prompt *minibuffer-mode*))
       (is (string= "Count" *minibuffer-prompt*)))))
@@ -1189,8 +1189,8 @@
 
 (test minibuffer-query-selects-the-highest-scoring-match
   "Typing after an explicit preselection resets Return to fuzzy result zero."
-  (let ((clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state)))
+  (let ((rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state)))
     (minibuffer-activate
      "Pick"
      (list (list :display "switch-e2e-0")
@@ -1199,7 +1199,7 @@
      #'identity)
     (setf *minibuffer-selected-index* 1)
     (dolist (character (coerce "switch-e2e-0" 'list))
-      (clawmacs::minibuffer-insert-char character))
+      (rplaca::minibuffer-insert-char character))
     (is (= 0 *minibuffer-selected-index*))
     (is (string= "switch-e2e-0"
                  (getf (first *minibuffer-filtered-items*) :display)))))
@@ -1207,8 +1207,8 @@
 (test buffer-selector-fuzzy-matches-semantic-names
   "An exact buffer name outranks prefix neighbors despite decorated rows."
   (let ((*buffer-selection-history* nil)
-        (clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state)))
+        (rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state)))
     (let* ((current (make-buffer "selector-origin"
                                  :session-persistence-mode :ephemeral))
            (exact (make-buffer "switch-e2e-1"
@@ -1218,13 +1218,13 @@
            (neighbor-11 (make-buffer "switch-e2e-11"
                                      :session-persistence-mode :ephemeral))
            (*buffer-ring* (list current neighbor-11 neighbor-10 exact)))
-      (clawmacs::minibuffer-select-buffer-command current)
+      (rplaca::minibuffer-select-buffer-command current)
       (is (every (lambda (item)
                    (string= (getf item :name)
                             (getf item :match-text)))
                  *minibuffer-items*))
       (dolist (character (coerce "switch-e2e-1" 'list))
-        (clawmacs::minibuffer-insert-char character))
+        (rplaca::minibuffer-insert-char character))
       (is (string= "switch-e2e-1"
                    (getf (first *minibuffer-filtered-items*) :name))))))
 
@@ -1232,27 +1232,27 @@
   "Unfiltered Return selects a non-current buffer instead of doing nothing."
   (let ((*buffer-ring* nil)
         (*buffer-selection-history* nil)
-        (clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state)))
+        (rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state)))
     (let ((current (make-buffer "selector-current"
                                 :session-persistence-mode :ephemeral))
           (other (make-buffer "selector-other"
                               :session-persistence-mode :ephemeral)))
       (add-buffer-to-ring other)
       (add-buffer-to-ring current)
-      (clawmacs::minibuffer-select-buffer-command current)
+      (rplaca::minibuffer-select-buffer-command current)
       (is-true *minibuffer-active*)
       (is (eq other
               (getf (nth *minibuffer-selected-index*
                          *minibuffer-filtered-items*)
                     :buffer)))
       (dolist (character (coerce "selector-current" 'list))
-        (clawmacs::minibuffer-insert-char character))
+        (rplaca::minibuffer-insert-char character))
       (is (eq current
               (getf (first *minibuffer-filtered-items*) :buffer)))
       (dotimes (ignored (length "selector-current"))
         (declare (ignore ignored))
-        (clawmacs::minibuffer-delete-backward))
+        (rplaca::minibuffer-delete-backward))
       (is (eq other
               (getf (nth *minibuffer-selected-index*
                          *minibuffer-filtered-items*)
@@ -1265,13 +1265,13 @@
 (test list-buffers-command-uses-visible-minibuffer
   "The legacy command name delegates to the visible minibuffer selector."
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
-        (clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state))
+        (rplaca::*buffer-counter* 0)
+        (rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state))
         (*buffer-selector-active* nil)
         (*buffer-selector-index* 99)
-        (clawmacs::*buffer-selector-scroll* 99))
-    (clawmacs::init-default-keymap)
+        (rplaca::*buffer-selector-scroll* 99))
+    (rplaca::init-default-keymap)
     (let ((buf (make-buffer "test")))
       (setf (buffer-keymap buf) *default-keymap*)
       (add-buffer-to-ring buf)
@@ -1284,10 +1284,10 @@
 (test buffer-selector-navigate-down-and-up
   "Navigating the buffer selector moves the index."
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
+        (rplaca::*buffer-counter* 0)
         (*buffer-selector-active* t)
         (*buffer-selector-index* 0)
-        (clawmacs::*buffer-selector-scroll* 0))
+        (rplaca::*buffer-selector-scroll* 0))
     (let ((buf1 (make-buffer "session-1"))
           (buf2 (make-buffer "session-2"))
           (buf3 (make-buffer "session-3")))
@@ -1295,46 +1295,46 @@
       (add-buffer-to-ring buf2)
       (add-buffer-to-ring buf1)
       ;; Navigate down (C-n = ASCII 14)
-      (clawmacs::handle-buffer-selector-key (code-char 14))
+      (rplaca::handle-buffer-selector-key (code-char 14))
       (is (= 1 *buffer-selector-index*))
-      (clawmacs::handle-buffer-selector-key (code-char 14))
+      (rplaca::handle-buffer-selector-key (code-char 14))
       (is (= 2 *buffer-selector-index*))
       ;; Can't go past end
-      (clawmacs::handle-buffer-selector-key (code-char 14))
+      (rplaca::handle-buffer-selector-key (code-char 14))
       (is (= 2 *buffer-selector-index*))
       ;; Navigate up (C-p = ASCII 16)
-      (clawmacs::handle-buffer-selector-key (code-char 16))
+      (rplaca::handle-buffer-selector-key (code-char 16))
       (is (= 1 *buffer-selector-index*)))))
 
 (test buffer-selector-enter-selects-buffer
   "Pressing Enter in the buffer selector switches to the highlighted buffer."
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
+        (rplaca::*buffer-counter* 0)
         (*buffer-selector-active* t)
         (*buffer-selector-index* 1)
-        (clawmacs::*buffer-selector-scroll* 0))
+        (rplaca::*buffer-selector-scroll* 0))
     (let ((buf1 (make-buffer "session-1"))
           (buf2 (make-buffer "session-2")))
       (add-buffer-to-ring buf2)
       (add-buffer-to-ring buf1)
       ;; Select index 1 (session-2) and press Enter
-      (clawmacs::handle-buffer-selector-key #\Newline)
+      (rplaca::handle-buffer-selector-key #\Newline)
       (is (eq nil *buffer-selector-active*))
       (is (eq buf2 (current-buffer))))))
 
 (test buffer-selector-cancel-with-c-g
   "C-g closes the buffer selector without switching."
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
+        (rplaca::*buffer-counter* 0)
         (*buffer-selector-active* t)
         (*buffer-selector-index* 1)
-        (clawmacs::*buffer-selector-scroll* 0))
+        (rplaca::*buffer-selector-scroll* 0))
     (let ((buf1 (make-buffer "session-1"))
           (buf2 (make-buffer "session-2")))
       (add-buffer-to-ring buf2)
       (add-buffer-to-ring buf1)
       ;; C-g = ASCII 7
-      (clawmacs::handle-buffer-selector-key (code-char 7))
+      (rplaca::handle-buffer-selector-key (code-char 7))
       (is (eq nil *buffer-selector-active*))
       ;; Current buffer unchanged (buf1 is still first)
       (is (eq buf1 (current-buffer))))))
@@ -1342,15 +1342,15 @@
 (test buffer-selector-new-buffer
   "Pressing n creates a new buffer and closes the selector."
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
+        (rplaca::*buffer-counter* 0)
         (*buffer-selector-active* t)
         (*buffer-selector-index* 0)
-        (clawmacs::*buffer-selector-scroll* 0))
-    (clawmacs::init-default-keymap)
+        (rplaca::*buffer-selector-scroll* 0))
+    (rplaca::init-default-keymap)
     (let ((buf1 (make-buffer "session-1")))
       (setf (buffer-keymap buf1) *default-keymap*)
       (add-buffer-to-ring buf1)
-      (clawmacs::handle-buffer-selector-key #\n)
+      (rplaca::handle-buffer-selector-key #\n)
       (is (eq nil *buffer-selector-active*))
       (is (= 2 (length *buffer-ring*)))
       (is (string= "session-1" (buffer-name buf1)))
@@ -1360,10 +1360,10 @@
 (test buffer-selector-kill-buffer
   "Pressing k kills the highlighted buffer."
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
+        (rplaca::*buffer-counter* 0)
         (*buffer-selector-active* t)
         (*buffer-selector-index* 1)
-        (clawmacs::*buffer-selector-scroll* 0))
+        (rplaca::*buffer-selector-scroll* 0))
     (let ((buf1 (make-buffer "session-1"))
           (buf2 (make-buffer "session-2"))
           (buf3 (make-buffer "session-3")))
@@ -1371,7 +1371,7 @@
       (add-buffer-to-ring buf2)
       (add-buffer-to-ring buf1)
       ;; Kill index 1 (session-2)
-      (clawmacs::handle-buffer-selector-key #\k)
+      (rplaca::handle-buffer-selector-key #\k)
       (is (= 2 (length *buffer-ring*)))
       (is (null (find-buffer-by-name "session-2")))
       ;; Index clamped
@@ -1379,22 +1379,22 @@
 
   ;; Cannot kill the last buffer
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
+        (rplaca::*buffer-counter* 0)
         (*buffer-selector-active* t)
         (*buffer-selector-index* 0)
-        (clawmacs::*buffer-selector-scroll* 0))
+        (rplaca::*buffer-selector-scroll* 0))
     (let ((buf1 (make-buffer "only-buffer")))
       (add-buffer-to-ring buf1)
-      (clawmacs::handle-buffer-selector-key #\k)
+      (rplaca::handle-buffer-selector-key #\k)
       (is (= 1 (length *buffer-ring*)))
       (is (eq buf1 (current-buffer))))))
 
 (test scratch-buffer-cannot-be-killed
   "Scratch remains loaded when kill commands target it."
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
+        (rplaca::*buffer-counter* 0)
         (*scratch-buffer-initial-text* ""))
-    (clawmacs::init-default-keymap)
+    (rplaca::init-default-keymap)
     (let ((chat (make-buffer "chat")))
       (setf (buffer-keymap chat) *default-keymap*)
       (add-buffer-to-ring chat)
@@ -1404,7 +1404,7 @@
         (is (= 2 (length *buffer-ring*)))
         (is (eq scratch (scratch-buffer)))
         (switch-to-buffer scratch)
-        (clawmacs::kill-buffer-command scratch)
+        (rplaca::kill-buffer-command scratch)
         (is (= 2 (length *buffer-ring*)))
         (is (eq scratch (scratch-buffer)))
         (kill-buffer-from-ring chat)
@@ -1414,56 +1414,56 @@
 (test buffer-selector-does-not-kill-scratch-buffer
   "The buffer selector kill key refuses to remove scratch."
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
+        (rplaca::*buffer-counter* 0)
         (*buffer-selector-active* t)
         (*buffer-selector-index* 1)
-        (clawmacs::*buffer-selector-scroll* 0)
+        (rplaca::*buffer-selector-scroll* 0)
         (*scratch-buffer-initial-text* ""))
-    (clawmacs::init-default-keymap)
+    (rplaca::init-default-keymap)
     (let ((chat (make-buffer "chat")))
       (setf (buffer-keymap chat) *default-keymap*)
       (add-buffer-to-ring chat)
       (let ((scratch (ensure-scratch-buffer)))
         (is (equal (list chat scratch) *buffer-ring*))
-        (clawmacs::handle-buffer-selector-key #\k)
+        (rplaca::handle-buffer-selector-key #\k)
         (is (= 2 (length *buffer-ring*)))
         (is (eq scratch (scratch-buffer)))))))
 
 (test scratch-return-inserts-newline-without-sending
   "RET edits scratch text instead of finalizing and sending a chat turn."
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
-        (clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state))
+        (rplaca::*buffer-counter* 0)
+        (rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state))
         (*buffer-selector-active* nil)
         (*model-selector-active* nil)
         (*think-selector-active* nil)
         (*openai-oauth-pending* nil)
         (*scratch-buffer-initial-text* ""))
-    (clawmacs::init-default-keymap)
+    (rplaca::init-default-keymap)
     (let ((scratch (ensure-scratch-buffer)))
-      (clawmacs::handle-key-event scratch #\a)
-      (clawmacs::handle-key-event scratch #\Return)
-      (clawmacs::handle-key-event scratch #\b)
+      (rplaca::handle-key-event scratch #\a)
+      (rplaca::handle-key-event scratch #\Return)
+      (rplaca::handle-key-event scratch #\b)
       (is (= 1 (buffer-message-count scratch)))
       (is (string= (format nil "a~%b") (scratch-buffer-text scratch))))))
 
 (test save-session-command-skips-scratch-buffer
   "Saving scratch does not write a session file."
   (let* ((*buffer-ring* nil)
-         (clawmacs::*buffer-counter* 0)
+         (rplaca::*buffer-counter* 0)
          (*scratch-buffer-name* "scratch-test")
          (*scratch-buffer-initial-text* "draft")
          (*sessions-dir*
            (make-pathname
             :directory (list :absolute "tmp"
-                             (format nil "clawmacs-scratch-test-~A"
+                             (format nil "rplaca-scratch-test-~A"
                                      (string-downcase
                                       (symbol-name (gensym "DIR")))))))
-         (path (clawmacs::session-path *scratch-buffer-name*)))
-    (clawmacs::init-default-keymap)
+         (path (rplaca::session-path *scratch-buffer-name*)))
+    (rplaca::init-default-keymap)
     (let ((scratch (ensure-scratch-buffer)))
-      (clawmacs::save-session-command scratch)
+      (rplaca::save-session-command scratch)
       (is (not (probe-file path)))
       (is (string= "draft" (scratch-buffer-text scratch)))
       (let ((notice (message-prev (buffer-input-message scratch))))
@@ -1479,7 +1479,7 @@
            (*sessions-dir* (temp-session-test-directory "selector")))
       (save-session (make-buffer session-name-b :agent-name "echo"))
       (save-session (make-buffer session-name-a :agent-name "echo"))
-      (clawmacs::load-session-command buf)
+      (rplaca::load-session-command buf)
       (is (eq t *minibuffer-active*))
       (is (eq :completion *minibuffer-mode*))
       (is (string= "Load Session" *minibuffer-prompt*))
@@ -1497,22 +1497,22 @@
                                             :display-name "Focused Work"))
            (saved (make-buffer session-name :agent-name "echo" :session session)))
       (save-session saved)
-      (clawmacs::load-session-command buf)
+      (rplaca::load-session-command buf)
       (let ((item (find session-name *minibuffer-filtered-items*
                         :key (lambda (entry)
                                (getf entry :session-name))
                         :test #'string=)))
         (is (not (null item)))
         (is (search "Focused Work" (getf item :display)))
-        (is (search (clawmacs::session-id session)
+        (is (search (rplaca::session-id session)
                     (getf item :match-text)))
-        (is (search (namestring (clawmacs::session-path session-name))
+        (is (search (namestring (rplaca::session-path session-name))
                     (getf item :match-text)))))))
 
 (test load-session-command-preselects-most-recent-session-for-working-directory
   "The load-session selector preselects the newest session for the buffer cwd."
   (with-interactive-command-test-buffer (buf)
-    (let* ((working-directory #P"/tmp/clawmacs-load-session-selector/")
+    (let* ((working-directory #P"/tmp/rplaca-load-session-selector/")
            (*sessions-dir* (temp-session-test-directory "selector-recent"))
            (older-session (load-or-create-session "selector-older"
                                                   :working-directory
@@ -1522,7 +1522,7 @@
                                                   working-directory))
            (other-session (load-or-create-session "selector-other"
                                                   :working-directory
-                                                  #P"/tmp/clawmacs-selector-other/"))
+                                                  #P"/tmp/rplaca-selector-other/"))
            (older-buffer (make-buffer "selector-older"
                                       :agent-name "echo"
                                       :working-directory working-directory
@@ -1533,16 +1533,16 @@
                                       :session newer-session))
            (other-buffer (make-buffer "selector-other"
                                       :agent-name "echo"
-                                      :working-directory #P"/tmp/clawmacs-selector-other/"
+                                      :working-directory #P"/tmp/rplaca-selector-other/"
                                       :session other-session)))
-      (setf (clawmacs::session-updated-at older-session) 10
-            (clawmacs::session-updated-at newer-session) 20
-            (clawmacs::session-updated-at other-session) 30
+      (setf (rplaca::session-updated-at older-session) 10
+            (rplaca::session-updated-at newer-session) 20
+            (rplaca::session-updated-at other-session) 30
             (buffer-working-directory buf) working-directory)
       (save-session older-buffer)
       (save-session newer-buffer)
       (save-session other-buffer)
-      (clawmacs::load-session-command buf)
+      (rplaca::load-session-command buf)
       (let ((selected (nth *minibuffer-selected-index*
                            *minibuffer-filtered-items*)))
         (is (string= "selector-newer"
@@ -1554,10 +1554,10 @@
     (let* ((session-name "saved-session-load")
            (*sessions-dir* (temp-session-test-directory "load-command"))
            (saved (make-buffer session-name :agent-name "echo")))
-      (clawmacs::set-message-text (buffer-input-message saved) "hello")
+      (rplaca::set-message-text (buffer-input-message saved) "hello")
       (buffer-finalize-input saved)
       (save-session saved)
-      (clawmacs::load-session-command buf)
+      (rplaca::load-session-command buf)
       (let ((index (position session-name *minibuffer-filtered-items*
                              :key (lambda (item)
                                     (getf item :session-name))
@@ -1583,13 +1583,13 @@
     (let* ((session-name "saved-session-open")
            (*sessions-dir* (temp-session-test-directory "load-command-open"))
            (saved (make-buffer session-name :agent-name "echo")))
-      (clawmacs::set-message-text (buffer-input-message saved) "hello")
+      (rplaca::set-message-text (buffer-input-message saved) "hello")
       (buffer-finalize-input saved)
       (save-session saved)
       (let ((existing (load-session session-name)))
         (is (not (null existing)))
         (add-buffer-to-ring existing)
-        (clawmacs::load-session-command buf)
+        (rplaca::load-session-command buf)
         (let ((index (position session-name *minibuffer-filtered-items*
                                :key (lambda (item)
                                       (getf item :session-name))
@@ -1601,18 +1601,18 @@
           (is (not (eq existing loaded)))
           (is (string= "saved-session-open<2>" (buffer-name loaded)))
           (is (string= session-name
-                       (clawmacs::session-name (buffer-session loaded)))))))))
+                       (rplaca::session-name (buffer-session loaded)))))))))
 
 (test new-buffer-command-creates-loadable-session
   "New interactive chat buffers are saved immediately for later loading."
   (with-interactive-command-test-buffer (buf)
     (let ((*sessions-dir* (temp-session-test-directory "new-command")))
-      (clawmacs::new-buffer-command buf)
+      (rplaca::new-buffer-command buf)
       (let* ((created (current-buffer))
              (session-name (buffer-name created)))
         (is (not (eq buf created)))
         (is (not (null (buffer-session created))))
-        (is (probe-file (clawmacs::session-path session-name)))
+        (is (probe-file (rplaca::session-path session-name)))
         (is (member session-name (list-saved-sessions) :test #'string=))
         (let ((loaded (load-session session-name)))
           (is (not (null loaded)))
@@ -1621,7 +1621,7 @@
 (test continue-session-command-loads-most-recent-session-for-working-directory
   "Continuing a session picks the most recent saved session for the buffer cwd."
   (with-interactive-command-test-buffer (buf)
-    (let* ((working-directory #P"/tmp/clawmacs-continue-session/")
+    (let* ((working-directory #P"/tmp/rplaca-continue-session/")
            (*sessions-dir* (temp-session-test-directory "continue-session"))
            (older-session (load-or-create-session "older-session"
                                                   :working-directory
@@ -1631,7 +1631,7 @@
                                                   working-directory))
            (other-session (load-or-create-session "other-session"
                                                   :working-directory
-                                                  #P"/tmp/clawmacs-other-session/"))
+                                                  #P"/tmp/rplaca-other-session/"))
            (older-buffer (make-buffer "older-session"
                                       :agent-name "echo"
                                       :working-directory working-directory
@@ -1642,23 +1642,23 @@
                                       :session newer-session))
            (other-buffer (make-buffer "other-session"
                                       :agent-name "echo"
-                                      :working-directory #P"/tmp/clawmacs-other-session/"
+                                      :working-directory #P"/tmp/rplaca-other-session/"
                                       :session other-session)))
-      (setf (clawmacs::session-created-at older-session) 10
-            (clawmacs::session-updated-at older-session) 10
-            (clawmacs::session-created-at newer-session) 20
-            (clawmacs::session-updated-at newer-session) 20
-            (clawmacs::session-created-at other-session) 30
-            (clawmacs::session-updated-at other-session) 30
+      (setf (rplaca::session-created-at older-session) 10
+            (rplaca::session-updated-at older-session) 10
+            (rplaca::session-created-at newer-session) 20
+            (rplaca::session-updated-at newer-session) 20
+            (rplaca::session-created-at other-session) 30
+            (rplaca::session-updated-at other-session) 30
             (buffer-working-directory buf) working-directory)
       (save-session older-buffer)
       (save-session newer-buffer)
       (save-session other-buffer)
-      (clawmacs::continue-session-command buf)
+      (rplaca::continue-session-command buf)
       (let ((loaded (current-buffer)))
         (is (not (eq buf loaded)))
         (is (string= "newer-session"
-                     (clawmacs::session-name
+                     (rplaca::session-name
                       (buffer-session loaded))))))))
 
 (test session-info-command-opens-help-buffer-with-display-name
@@ -1668,13 +1668,13 @@
       (setf (buffer-session buf)
             (load-or-create-session "info-session"
                                     :display-name "Info Session"))
-      (clawmacs::set-buffer-provider-override buf :openai-codex)
-      (clawmacs::set-buffer-model-override buf "gpt-5.4")
-      (clawmacs::set-buffer-think-level-override buf "high")
+      (rplaca::set-buffer-provider-override buf :openai-codex)
+      (rplaca::set-buffer-model-override buf "gpt-5.4")
+      (rplaca::set-buffer-think-level-override buf "high")
       (let ((agent-message (buffer-insert-agent-message buf "Done"
                                                         :record-p nil
                                                         :run-hook-p nil)))
-        (clawmacs::put-message-metadata
+        (rplaca::put-message-metadata
          agent-message
          :provider :openai-codex
          :model "gpt-5.4"
@@ -1685,7 +1685,7 @@
          :output-tokens 30
          :total-tokens 150
          :cache-hit-rate 0.8))
-      (clawmacs::session-info-command buf)
+      (rplaca::session-info-command buf)
       (let* ((help (current-buffer))
              (text (help-buffer-text help)))
         (is (help-buffer-p help))
@@ -1700,14 +1700,14 @@
   "Message entry ids are enough to fork a new session buffer."
   (with-interactive-command-test-buffer (buf)
     (let ((*sessions-dir* (temp-session-test-directory "fork-from-entry")))
-      (clawmacs::ensure-buffer-session buf)
+      (rplaca::ensure-buffer-session buf)
       (set-message-text (buffer-input-message buf) "Draft feature plan")
       (buffer-finalize-input buf)
       (let* ((message (message-prev (buffer-input-message buf)))
              (entry-id (message-entry-id message)))
         (is (stringp entry-id))
         (is (not (string= "" entry-id)))
-        (clawmacs::fork-session-from-entry-id buf entry-id)
+        (rplaca::fork-session-from-entry-id buf entry-id)
         (let ((forked (current-buffer)))
           (is (not (eq buf forked)))
           (is (search "branch" (buffer-name forked) :test #'char-equal))
@@ -1725,7 +1725,7 @@
   "The package enable command lists installed packages with scope and description."
   (with-interactive-command-test-buffer (buf)
     (with-package-state-override ((default-package-test-channels))
-      (clawmacs::minibuffer-toggle-package-command buf)
+      (rplaca::minibuffer-toggle-package-command buf)
       (is (eq t *minibuffer-active*))
       (is (string= "Enable Package" *minibuffer-prompt*))
       (let ((item (find "sexed" *minibuffer-filtered-items*
@@ -1745,7 +1745,7 @@
   "Confirming a package cycles scope and reopens the package selector."
   (with-interactive-command-test-buffer (buf)
     (with-package-state-override ((default-package-test-channels))
-      (clawmacs::minibuffer-toggle-package-command buf)
+      (rplaca::minibuffer-toggle-package-command buf)
       (let ((index (position "sexed" *minibuffer-filtered-items*
                              :key (lambda (entry)
                                     (getf entry :package-name))
@@ -1755,7 +1755,7 @@
         (minibuffer-confirm))
       (is (eq t *minibuffer-active*))
       (is (eq :buffer
-              (clawmacs:package-enablement-scope "sexed" :buffer buf)))
+              (rplaca:package-enablement-scope "sexed" :buffer buf)))
       (is (equal '("sexed") (buffer-enabled-packages buf)))
       (is (null (find :context
                       (buffer-test-history-messages buf)
@@ -1770,10 +1770,10 @@
   "Enabling a package in an existing conversation appends package prompt context."
   (with-interactive-command-test-buffer (buf)
     (with-package-state-override ((default-package-test-channels))
-      (clawmacs::set-message-text (buffer-input-message buf)
+      (rplaca::set-message-text (buffer-input-message buf)
                                   "existing conversation context")
       (buffer-finalize-input buf)
-      (clawmacs::minibuffer-toggle-package-command buf)
+      (rplaca::minibuffer-toggle-package-command buf)
       (let ((index (position "sexed" *minibuffer-filtered-items*
                              :key (lambda (entry)
                                     (getf entry :package-name))
@@ -1800,17 +1800,17 @@
   "Disabling an enabled package retracts its injected context cleanly."
   (with-interactive-command-test-buffer (buf)
     (with-package-state-override ((default-package-test-channels))
-      (clawmacs::set-message-text (buffer-input-message buf)
+      (rplaca::set-message-text (buffer-input-message buf)
                                   "existing conversation context")
       (buffer-finalize-input buf)
-      (clawmacs:set-package-enablement-scope "sexed" :global :buffer buf)
+      (rplaca:set-package-enablement-scope "sexed" :global :buffer buf)
       (let ((context (find :context
                            (buffer-test-history-messages buf)
                            :key #'message-sender)))
         (is (not (null context)))
         (is (search "<package_context package=\"sexed\">"
                     (message-text context))))
-      (clawmacs:set-package-enablement-scope "sexed" :default :buffer buf)
+      (rplaca:set-package-enablement-scope "sexed" :default :buffer buf)
       (is (null (find :context
                       (buffer-test-history-messages buf)
                       :key #'message-sender)))
@@ -1825,7 +1825,7 @@
   "The describe package command loads package metadata and opens a help buffer."
   (with-interactive-command-test-buffer (buf)
     (with-package-state-override ((default-package-test-channels))
-      (clawmacs::describe-installed-package-command buf)
+      (rplaca::describe-installed-package-command buf)
       (let ((index (position "sexed" *minibuffer-filtered-items*
                              :key (lambda (entry)
                                     (getf entry :package-name))
@@ -1844,11 +1844,11 @@
   "The package dashboard opens a dedicated special buffer."
   (with-interactive-command-test-buffer (buf)
     (with-package-state-override ((default-package-test-channels))
-      (clawmacs::package-dashboard-command buf)
+      (rplaca::package-dashboard-command buf)
       (let ((dashboard (current-buffer)))
         (is (eq :package-dashboard (buffer-kind dashboard)))
         (is (string= "*Packages*" (buffer-name dashboard)))
-        (is (eq buf (clawmacs::package-dashboard-origin-buffer dashboard)))
+        (is (eq buf (rplaca::package-dashboard-origin-buffer dashboard)))
         (is (string= "package-dashboard" (buffer-major-mode dashboard)))))))
 
 ;;; --------------------------------------------------------------------------
@@ -1858,12 +1858,12 @@
 (test minibuffer-agent-selector-activates
   "C-c A opens the minibuffer agent selector with the active agent preselected."
   (with-interactive-command-test-buffer (buf)
-    (let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal))
-          (clawmacs::*agent-defaults-registry* (clawmacs::make-agent-defaults-registry)))
+    (let ((rplaca::*agent-definition-registry* (make-hash-table :test #'equal))
+          (rplaca::*agent-defaults-registry* (rplaca::make-agent-defaults-registry)))
       (setf (buffer-agent-name buf) "writer")
       (register-agent-definition "writer" :provider :zai :model "glm-5")
       (register-agent-definition "pair" :provider :openai-codex :model "gpt-5.4")
-      (clawmacs::handle-key-event buf '(:ctrl-c #\A))
+      (rplaca::handle-key-event buf '(:ctrl-c #\A))
       (is (eq t *minibuffer-active*))
       (is (string= "Select Agent" *minibuffer-prompt*))
       (is (string= "writer" (getf (first *minibuffer-filtered-items*) :agent-name)))
@@ -1873,8 +1873,8 @@
 (test minibuffer-agent-selector-switches-buffer-and-clears-overrides
   "Selecting an agent updates the buffer, clears overrides, and ensures a face set."
   (with-interactive-command-test-buffer (buf)
-    (let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal))
-          (clawmacs::*agent-defaults-registry* (clawmacs::make-agent-defaults-registry)))
+    (let ((rplaca::*agent-definition-registry* (make-hash-table :test #'equal))
+          (rplaca::*agent-defaults-registry* (rplaca::make-agent-defaults-registry)))
       (register-agent-definition "writer" :provider :zai :model "glm-5")
       (register-agent-definition "pair"
                                  :provider :openai-codex
@@ -1884,7 +1884,7 @@
             (buffer-provider-override buf) :zai
             (buffer-model-override buf) "glm-5")
       (set-buffer-think-level-override buf "medium")
-      (clawmacs::handle-key-event buf '(:ctrl-c #\A))
+      (rplaca::handle-key-event buf '(:ctrl-c #\A))
       (let ((index (position-if (lambda (item)
                                   (string= "pair" (getf item :agent-name)))
                                 *minibuffer-filtered-items*)))
@@ -1906,8 +1906,8 @@
 (test minibuffer-agent-selector-cancel-leaves-buffer-unchanged
   "Cancelling the agent selector leaves the buffer state untouched."
   (with-interactive-command-test-buffer (buf)
-    (let ((clawmacs::*agent-definition-registry* (make-hash-table :test #'equal))
-          (clawmacs::*agent-defaults-registry* (clawmacs::make-agent-defaults-registry)))
+    (let ((rplaca::*agent-definition-registry* (make-hash-table :test #'equal))
+          (rplaca::*agent-defaults-registry* (rplaca::make-agent-defaults-registry)))
       (register-agent-definition "writer" :provider :zai :model "glm-5")
       (register-agent-definition "pair" :provider :openai-codex :model "gpt-5.4")
       (setf (buffer-agent-name buf) "writer"
@@ -1915,7 +1915,7 @@
             (buffer-model-override buf) "glm-5")
       (set-buffer-think-level-override buf "medium")
       (let ((before-count (buffer-message-count buf)))
-        (clawmacs::handle-key-event buf '(:ctrl-c #\A))
+        (rplaca::handle-key-event buf '(:ctrl-c #\A))
         (handle-minibuffer-key (code-char 7))
         (is (null *minibuffer-active*))
         (is (string= "writer" (buffer-agent-name buf)))
@@ -1931,10 +1931,10 @@
 (test model-selector-activates
   "Legacy model selector data remains testable without owning key capture."
   (let ((*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0)
+        (rplaca::*buffer-counter* 0)
         (*model-selector-active* nil)
         (*model-selector-index* 0)
-        (clawmacs::*model-selector-scroll* 0)
+        (rplaca::*model-selector-scroll* 0)
         (*model-selector-entries* nil))
     (let ((buf (make-buffer "test-session" :agent-name "coder")))
       (add-buffer-to-ring buf)
@@ -1952,39 +1952,39 @@
   "C-n and C-p navigate the model selector."
   (let ((*model-selector-active* t)
         (*model-selector-index* 0)
-        (clawmacs::*model-selector-scroll* 0)
+        (rplaca::*model-selector-scroll* 0)
         (*model-selector-entries*
           (list (list :provider :zai :model "model-a" :active-p t)
                 (list :provider :zai :model "model-b" :active-p nil)
                 (list :provider :openai-codex :model "model-c" :active-p nil))))
     (let ((buf (make-buffer "test")))
       ;; C-n = move down
-      (clawmacs::handle-model-selector-key (code-char 14) buf)
+      (rplaca::handle-model-selector-key (code-char 14) buf)
       (is (= 1 *model-selector-index*))
       ;; C-n again
-      (clawmacs::handle-model-selector-key (code-char 14) buf)
+      (rplaca::handle-model-selector-key (code-char 14) buf)
       (is (= 2 *model-selector-index*))
       ;; C-n at bottom = no change
-      (clawmacs::handle-model-selector-key (code-char 14) buf)
+      (rplaca::handle-model-selector-key (code-char 14) buf)
       (is (= 2 *model-selector-index*))
       ;; C-p = move up
-      (clawmacs::handle-model-selector-key (code-char 16) buf)
+      (rplaca::handle-model-selector-key (code-char 16) buf)
       (is (= 1 *model-selector-index*)))))
 
 (test model-selector-enter-selects-model
   "Enter in model selector sets buffer overrides and closes."
   (let ((*model-selector-active* t)
         (*model-selector-index* 1)
-        (clawmacs::*model-selector-scroll* 0)
+        (rplaca::*model-selector-scroll* 0)
         (*model-selector-entries*
           (list (list :provider :openai-codex :model "gpt-5.4" :active-p t)
                 (list :provider :zai :model "glm-5" :active-p nil)))
         (*buffer-ring* nil)
-        (clawmacs::*buffer-counter* 0))
+        (rplaca::*buffer-counter* 0))
     (let ((buf (make-buffer "test")))
       (add-buffer-to-ring buf)
       ;; Select index 1 (zai/glm-5)
-      (clawmacs::handle-model-selector-key #\Return buf)
+      (rplaca::handle-model-selector-key #\Return buf)
       (is (null *model-selector-active*))
       (is (eq :zai (buffer-provider-override buf)))
       (is (string= "glm-5" (buffer-model-override buf)))
@@ -1994,7 +1994,7 @@
   "Switching models keeps the current think level when the new model supports it."
   (let ((*model-selector-active* t)
         (*model-selector-index* 1)
-        (clawmacs::*model-selector-scroll* 0)
+        (rplaca::*model-selector-scroll* 0)
         (*model-selector-entries*
           (list (list :provider :openai-codex :model "gpt-5.4" :active-p t)
                 (list :provider :openai-codex :model "gpt-5.2" :active-p nil))))
@@ -2002,7 +2002,7 @@
       (set-buffer-provider-override buf :openai-codex)
       (set-buffer-model-override buf "gpt-5.4")
       (set-buffer-think-level-override buf "high")
-      (clawmacs::handle-model-selector-key #\Return buf)
+      (rplaca::handle-model-selector-key #\Return buf)
       (is (string= "gpt-5.2" (buffer-model-override buf)))
       (is (string= "high" (buffer-think-level-override buf))))))
 
@@ -2010,7 +2010,7 @@
   "Switching models clears the current think level when unsupported by the new model."
   (let ((*model-selector-active* t)
         (*model-selector-index* 1)
-        (clawmacs::*model-selector-scroll* 0)
+        (rplaca::*model-selector-scroll* 0)
         (*model-selector-entries*
           (list (list :provider :openai-codex :model "gpt-5.4" :active-p t)
                 (list :provider :openai-codex :model "gpt-5.1-codex-max" :active-p nil))))
@@ -2018,7 +2018,7 @@
       (set-buffer-provider-override buf :openai-codex)
       (set-buffer-model-override buf "gpt-5.4")
       (set-buffer-think-level-override buf "xhigh")
-      (clawmacs::handle-model-selector-key #\Return buf)
+      (rplaca::handle-model-selector-key #\Return buf)
       (is (string= "gpt-5.1-codex-max" (buffer-model-override buf)))
       (is (null (buffer-think-level-override buf))))))
 
@@ -2026,13 +2026,13 @@
   "C-g in model selector closes without changing the model."
   (let ((*model-selector-active* t)
         (*model-selector-index* 1)
-        (clawmacs::*model-selector-scroll* 0)
+        (rplaca::*model-selector-scroll* 0)
         (*model-selector-entries*
           (list (list :provider :openai-codex :model "gpt-5.4" :active-p t)
                 (list :provider :zai :model "glm-5" :active-p nil))))
     (let ((buf (make-buffer "test")))
       ;; C-g = cancel
-      (clawmacs::handle-model-selector-key (code-char 7) buf)
+      (rplaca::handle-model-selector-key (code-char 7) buf)
       (is (null *model-selector-active*))
       ;; No overrides set
       (is (null (buffer-provider-override buf)))
@@ -2055,11 +2055,11 @@
 
 (test think-selector-activates
   "The legacy think command delegates to the visible minibuffer selector."
-  (let ((clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state))
+  (let ((rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state))
         (*think-selector-active* nil)
         (*think-selector-index* 99)
-        (clawmacs::*think-selector-scroll* 99)
+        (rplaca::*think-selector-scroll* 99)
         (*think-selector-entries* nil))
     (let ((buf (make-buffer "test-session" :agent-name "spark")))
       (set-buffer-provider-override buf :openai-codex)
@@ -2074,11 +2074,11 @@
 
 (test think-selector-active-level-pre-selected
   "The visible think selector preselects the active level."
-  (let ((clawmacs::*chat-interaction-state*
-          (clawmacs::make-chat-interaction-state))
+  (let ((rplaca::*chat-interaction-state*
+          (rplaca::make-chat-interaction-state))
         (*think-selector-active* nil)
         (*think-selector-index* 0)
-        (clawmacs::*think-selector-scroll* 0)
+        (rplaca::*think-selector-scroll* 0)
         (*think-selector-entries* nil))
     (let ((buf (make-buffer "test-session" :agent-name "spark")))
       (set-buffer-provider-override buf :openai-codex)
@@ -2091,13 +2091,13 @@
   "Enter in think selector sets the buffer think level and closes."
   (let ((*think-selector-active* t)
         (*think-selector-index* 3)
-        (clawmacs::*think-selector-scroll* 0))
+        (rplaca::*think-selector-scroll* 0))
     (let ((buf (make-buffer "test")))
       (set-buffer-provider-override buf :openai-codex)
       (set-buffer-model-override buf "gpt-5.3-codex")
-      (setf *think-selector-entries* (clawmacs::available-think-levels-for-selector buf))
+      (setf *think-selector-entries* (rplaca::available-think-levels-for-selector buf))
       ;; Index 3 = high for gpt-5.3-codex: default, low, medium, high, xhigh
-      (clawmacs::handle-think-selector-key #\Return buf)
+      (rplaca::handle-think-selector-key #\Return buf)
       (is (null *think-selector-active*))
       (is (string= "high" (buffer-think-level-override buf))))))
 
@@ -2105,13 +2105,13 @@
   "Selecting the default think entry clears the buffer think override."
   (let ((*think-selector-active* t)
         (*think-selector-index* 0)
-        (clawmacs::*think-selector-scroll* 0))
+        (rplaca::*think-selector-scroll* 0))
     (let ((buf (make-buffer "test")))
       (set-buffer-provider-override buf :openai-codex)
       (set-buffer-model-override buf "gpt-5.4")
       (set-buffer-think-level-override buf "high")
-      (setf *think-selector-entries* (clawmacs::available-think-levels-for-selector buf))
-      (clawmacs::handle-think-selector-key #\Return buf)
+      (setf *think-selector-entries* (rplaca::available-think-levels-for-selector buf))
+      (rplaca::handle-think-selector-key #\Return buf)
       (is (null *think-selector-active*))
       (is (null (buffer-think-level-override buf))))))
 
@@ -2119,13 +2119,13 @@
   "C-g in think selector closes without changing the think level."
   (let ((*think-selector-active* t)
         (*think-selector-index* 1)
-        (clawmacs::*think-selector-scroll* 0))
+        (rplaca::*think-selector-scroll* 0))
     (let ((buf (make-buffer "test")))
       (set-buffer-provider-override buf :openai-codex)
       (set-buffer-model-override buf "gpt-5.4")
       (set-buffer-think-level-override buf "medium")
-      (setf *think-selector-entries* (clawmacs::available-think-levels-for-selector buf))
-      (clawmacs::handle-think-selector-key (code-char 7) buf)
+      (setf *think-selector-entries* (rplaca::available-think-levels-for-selector buf))
+      (rplaca::handle-think-selector-key (code-char 7) buf)
       (is (null *think-selector-active*))
       (is (string= "medium" (buffer-think-level-override buf))))))
 
@@ -2158,7 +2158,7 @@
      :metadata '((:provider . :openai-codex)
                  (:model . "gpt-5.4")
                  (:think-level . "high")))
-    (let* ((result (clawmacs::export-buffer-session-html
+    (let* ((result (rplaca::export-buffer-session-html
                     buf
                     :path export-path
                     :show-reasoning-p t
@@ -2184,7 +2184,7 @@
           (message-raw-content msg) '(((:type . "text") (:text . "Hello")))
           (message-metadata msg) '((:provider . :test)
                                    (:model . "model-1")))
-    (let ((help (clawmacs::message-metadata-help-string msg)))
+    (let ((help (rplaca::message-metadata-help-string msg)))
       (is (search "Sender: AGENT" help))
       (is (search "Entry id: entry-1" help))
       (is (search "Parent entry id: parent-1" help))
@@ -2210,7 +2210,7 @@
                  (:model . "gpt-5.4")
                  (:think-level . "high")))
     (let ((html (progn
-                  (clawmacs::export-buffer-session-html
+                  (rplaca::export-buffer-session-html
                    buf
                    :path export-path
                    :show-reasoning-p nil
@@ -2230,36 +2230,36 @@
          (buf (make-buffer "export-share"
                            :agent-name "echo"
                            :session session))
-         (clawmacs::*session-share-handler-table*
+         (rplaca::*session-share-handler-table*
            (make-hash-table :test #'equal))
-         (clawmacs::*session-share-hook* nil)
+         (rplaca::*session-share-hook* nil)
          (registered-call nil)
          (hook-call nil))
     (set-message-text (buffer-input-message buf) "Share me")
     (buffer-finalize-input buf)
-    (let ((export-info (clawmacs::export-buffer-session-html
+    (let ((export-info (rplaca::export-buffer-session-html
                         buf
                         :path export-path)))
-      (clawmacs::register-session-share-handler
+      (rplaca::register-session-share-handler
        "capture"
        (lambda (buffer info)
          (setf registered-call (list buffer info))
          "share://capture"))
-      (let ((captured (clawmacs::share-session-export
+      (let ((captured (rplaca::share-session-export
                        buf export-info :handler "capture")))
         (is (equal "capture" (getf captured :handler)))
         (is (equal "share://capture" (getf captured :result)))
         (is (eq buf (first registered-call))))
-      (setf clawmacs::*session-share-hook*
+      (setf rplaca::*session-share-hook*
             (list (lambda (buffer info)
                     (setf hook-call (list buffer info))
                     "share://hook")))
-      (let ((hooked (clawmacs::share-session-export
+      (let ((hooked (rplaca::share-session-export
                      buf export-info :handler "hook")))
         (is (equal "hook" (getf hooked :handler)))
         (is (equal "share://hook" (getf hooked :result)))
         (is (eq buf (first hook-call))))
-      (let* ((shared (clawmacs::share-session-export
+      (let* ((shared (rplaca::share-session-export
                       buf export-info :handler "local-copy"))
              (shared-path (getf shared :result)))
         (is (equal "local-copy" (getf shared :handler)))
@@ -2273,12 +2273,12 @@
          (session-name "ephemeral-chat")
          (buf (make-chat-buffer session-name
                                 :session-persistence-mode :ephemeral)))
-    (is (clawmacs::buffer-ephemeral-p buf))
+    (is (rplaca::buffer-ephemeral-p buf))
     (is (null (buffer-session buf)))
     (set-message-text (buffer-input-message buf) "hello")
     (buffer-finalize-input buf)
     (buffer-insert-agent-message buf "world")
-    (is (null (clawmacs::ensure-buffer-session buf)))
-    (is-false (probe-file (clawmacs::session-path session-name)))
+    (is (null (rplaca::ensure-buffer-session buf)))
+    (is-false (probe-file (rplaca::session-path session-name)))
     (is-false (probe-file
-               (clawmacs::session-sidecar-manifest-path session-name)))))
+               (rplaca::session-sidecar-manifest-path session-name)))))

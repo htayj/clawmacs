@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Pipeline Data
@@ -81,7 +81,7 @@
   "Process-global pipeline profile table, distinct from test bindings.")
 
 (defvar *pipeline-registry-lock*
-  (bt:make-lock "clawmacs pipeline registry")
+  (bt:make-lock "rplaca pipeline registry")
   "Lock guarding the process-global pipeline definition and profile tables.")
 
 (defun call-with-pipeline-registry-lock (function &rest tables)
@@ -263,8 +263,8 @@ deterministic behavior."
              :max-steps max-steps
              :max-tool-iterations max-tool-iterations
              :package
-             (and *current-clawmacs-package*
-                  (package-identifier-string *current-clawmacs-package*)))))
+             (and *current-rplaca-package*
+                  (package-identifier-string *current-rplaca-package*)))))
       (call-with-pipeline-registry-lock
        (lambda ()
          (setf (gethash normalized-name *pipeline-definition-registry*)
@@ -319,8 +319,8 @@ deterministic behavior."
              :description (or description "")
              :command command
              :package
-             (and *current-clawmacs-package*
-                  (package-identifier-string *current-clawmacs-package*)))))
+             (and *current-rplaca-package*
+                  (package-identifier-string *current-rplaca-package*)))))
       (call-with-pipeline-registry-lock
        (lambda ()
          (setf (gethash normalized-name *pipeline-test-profile-registry*)

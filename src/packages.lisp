@@ -1,4 +1,4 @@
-(defpackage #:clawmacs/matching-core
+(defpackage #:rplaca/matching-core
   (:use #:coalton #:coalton-prelude)
   (:export
    #:split-query-tokens
@@ -9,7 +9,7 @@
    #:fuzzy-token-score-or-negative-one
    #:fuzzy-score-or-negative-one))
 
-(defpackage :clawmacs
+(defpackage :rplaca
   (:use :cl)
   (:shadowing-import-from :lispi
    #:*tool-working-directory*
@@ -526,43 +526,43 @@
    #:list-saved-sessions
 
    ;; Windows
-   #:clawmacs-window
-   #:make-clawmacs-window
-   #:clawmacs-window-id
-   #:clawmacs-window-buffer
-   #:clawmacs-window-node
-   #:clawmacs-window-node-kind
-   #:clawmacs-window-node-window
-   #:clawmacs-window-node-orientation
-   #:clawmacs-window-node-first
-   #:clawmacs-window-node-second
-   #:make-clawmacs-window-tree
-   #:make-clawmacs-window-leaf
-   #:make-clawmacs-window-split
-   #:clawmacs-window-node-leaf-p
-   #:clawmacs-window-node-split-p
-   #:clawmacs-window-tree-windows
-   #:clawmacs-window-tree-count
-   #:clawmacs-window-tree-find-window
-   #:clawmacs-window-tree-find-node
-   #:split-clawmacs-window-tree
-   #:clawmacs-window-tree-next-window
-   #:delete-clawmacs-window-from-tree
-   #:delete-other-clawmacs-windows
-   #:clawmacs-window-tree-replace-dead-buffers
-   #:clawmacs-window-layout-entry
-   #:clawmacs-window-layout-entry-window
-   #:clawmacs-window-layout-entry-row
-   #:clawmacs-window-layout-entry-col
-   #:clawmacs-window-layout-entry-rows
-   #:clawmacs-window-layout-entry-cols
-   #:clawmacs-window-separator
-   #:clawmacs-window-separator-orientation
-   #:clawmacs-window-separator-row
-   #:clawmacs-window-separator-col
-   #:clawmacs-window-separator-rows
-   #:clawmacs-window-separator-cols
-   #:clawmacs-window-tree-layout
+   #:rplaca-window
+   #:make-rplaca-window
+   #:rplaca-window-id
+   #:rplaca-window-buffer
+   #:rplaca-window-node
+   #:rplaca-window-node-kind
+   #:rplaca-window-node-window
+   #:rplaca-window-node-orientation
+   #:rplaca-window-node-first
+   #:rplaca-window-node-second
+   #:make-rplaca-window-tree
+   #:make-rplaca-window-leaf
+   #:make-rplaca-window-split
+   #:rplaca-window-node-leaf-p
+   #:rplaca-window-node-split-p
+   #:rplaca-window-tree-windows
+   #:rplaca-window-tree-count
+   #:rplaca-window-tree-find-window
+   #:rplaca-window-tree-find-node
+   #:split-rplaca-window-tree
+   #:rplaca-window-tree-next-window
+   #:delete-rplaca-window-from-tree
+   #:delete-other-rplaca-windows
+   #:rplaca-window-tree-replace-dead-buffers
+   #:rplaca-window-layout-entry
+   #:rplaca-window-layout-entry-window
+   #:rplaca-window-layout-entry-row
+   #:rplaca-window-layout-entry-col
+   #:rplaca-window-layout-entry-rows
+   #:rplaca-window-layout-entry-cols
+   #:rplaca-window-separator
+   #:rplaca-window-separator-orientation
+   #:rplaca-window-separator-row
+   #:rplaca-window-separator-col
+   #:rplaca-window-separator-rows
+   #:rplaca-window-separator-cols
+   #:rplaca-window-tree-layout
 
    ;; Commands
    #:*current-caller*
@@ -1000,14 +1000,14 @@
    #:init-tools
 
    ;; Safe in-place reload
-   #:clawmacs-safe-reload
-   #:clawmacs-safe-reload-preflight
-   #:clawmacs-reload-result-ok-p
-   #:clawmacs-reload-result-summary
+   #:rplaca-safe-reload
+   #:rplaca-safe-reload-preflight
+   #:rplaca-reload-result-ok-p
+   #:rplaca-reload-result-summary
    #:call-with-runtime-admission
    #:call-with-runtime-settlement-admission
    #:runtime-admission-closed
-   #:safe-reload-clawmacs-command
+   #:safe-reload-rplaca-command
 
    ;; Standard reference / library discovery
    #:*common-lisp-spec-root*
@@ -1221,7 +1221,7 @@
    #:new-listener-buffer-command
    #:info-directory-command
    #:info-open-manual-command
-   #:clawmacs-manual-command
+   #:rplaca-manual-command
    #:info-goto-node-command
    #:help-buffer-p
    #:help-buffer-text
@@ -1315,7 +1315,7 @@
    #:*enabled-builtin-packages*
    #:*package-configuration-path*
    #:*packages-directory*
-   #:*current-clawmacs-package*
+   #:*current-rplaca-package*
    ;; Package-owned appearance declarations
    #:current-package-appearance-catalog
    #:register-package-appearance-declarations
@@ -1360,14 +1360,14 @@
    #:maybe-insert-enabled-package-context
    #:describe-installed-package-to-string
    #:open-package-dashboard
-   #:load-clawmacs-package
+   #:load-rplaca-package
    #:load-active-packages
    #:reload-active-packages
    #:load-autoload-packages
    #:register-package-prompt-section
    #:list-package-prompt-sections
    #:render-package-prompt-sections
-   #:clawmacs-use-package
+   #:rplaca-use-package
 
    ;; User init
    #:*user-init-directory*
@@ -1416,10 +1416,10 @@
    #:chat-message
 
    ;; Main
-   #:clawmacs-main
-   #:clawmacs-prompt-main
-   #:clawmacs-session-prompt-main
-   #:clawmacs-app-server-main
+   #:rplaca-main
+   #:rplaca-prompt-main
+   #:rplaca-session-prompt-main
+   #:rplaca-app-server-main
    #:run-single-prompt
    #:run-session-prompt
    #:pipeline-stage

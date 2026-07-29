@@ -5,10 +5,10 @@
  :system-prompt-section "## Slash commands and prompt templates
 
 - Type `/name` in the composer to invoke a registered slash command.
-- If no slash command is registered for that name, Clawmacs also checks for a
-  prompt template in the current project's `.clawmacs/prompts/*.md`, any
+- If no slash command is registered for that name, RPLACA also checks for a
+  prompt template in the current project's `.rplaca/prompts/*.md`, any
   enabled package prompt-template directories declared in their manifests, and
-  the global `~/.clawmacs.d/prompts/*.md`.
+  the global `~/.rplaca.d/prompts/*.md`.
 - Template placeholders support `$1`, `$2`, `$@`, `$ARGUMENTS`,
   `${@:N}`, and `${@:N:M}`."
  :slash-commands ((:name "model"

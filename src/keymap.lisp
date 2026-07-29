@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Keymap
@@ -187,7 +187,7 @@
     (keymap-bind km '(:ctrl-h #\F) 'customize-appearance-command) ; C-h F = appearance editor
     (keymap-bind km '(:ctrl-h #\v) 'describe-variable-command)  ; C-h v = describe variable
     (keymap-bind km '(:ctrl-h #\i) 'info-directory-command)     ; C-h i = Info directory
-    (keymap-bind km '(:ctrl-h #\I) 'clawmacs-manual-command)    ; C-h I = Clawmacs manual
+    (keymap-bind km '(:ctrl-h #\I) 'rplaca-manual-command)    ; C-h I = RPLACA manual
     (keymap-bind km '(:ctrl-h #\T) 'describe-type-command)      ; C-h T = describe type
     (keymap-bind km '(:ctrl-c #\b) 'describe-bindings-command)  ; compatibility alias
     (keymap-bind km '(:ctrl-c #\f) 'describe-function-command)  ; compatibility alias

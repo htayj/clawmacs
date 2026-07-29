@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 #+sbcl
 (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -112,7 +112,7 @@ REASON and is captured when the short settlement waiter is constructed.")
                                   (openai-oauth-flow-settlement-waiter-done-p
                                    flow)
                                   t)))))
-                         :name "clawmacs-oauth-settlement"
+                         :name "rplaca-oauth-settlement"
                          :initial-bindings
                          (acons '*suppress-chat-redisplay-requests*
                                 nil
@@ -763,7 +763,7 @@ clears the published process owner before returning."
                              ;; bounded control line is consumed separately
                              ;; from command output.
                              "printf '%s\\n' \"$$\"; exec \"$@\""
-                             "clawmacs-managed-command"
+                             "rplaca-managed-command"
                              (if (pathnamep program)
                                  (namestring program)
                                  program))
@@ -824,9 +824,9 @@ clears the published process owner before returning."
              ;; memory is fixed, while excess output is discarded so neither
              ;; child channel can deadlock on a full pipe or grow a disk file.
              (start-bounded-subprocess-output-drain
-              stdout-stream stdout-state "clawmacs-subprocess-stdout")
+              stdout-stream stdout-state "rplaca-subprocess-stdout")
              (start-bounded-subprocess-output-drain
-              stderr-stream stderr-state "clawmacs-subprocess-stderr")
+              stderr-stream stderr-state "rplaca-subprocess-stderr")
              (when process-callback
                (funcall process-callback process))
              (loop :while (eq :running (sb-ext:process-status process))
@@ -988,7 +988,7 @@ the operation, RESULT, and ERROR after exact frame-process claim."
                                      t))
                                   (wake-buffer-display-change
                                    buf :interactive-operation-complete))))
-                            (format nil "clawmacs-~(~A~)-~A"
+                            (format nil "rplaca-~(~A~)-~A"
                                     kind (buffer-name buf))))
                    (error (condition)
                      (setf start-error (format nil "~A" condition)))))
@@ -1339,7 +1339,7 @@ value and never unwinds the command loop."
                                            t))
                                         (wake-buffer-display-change
                                          buf :tool-complete))))
-                                  (format nil "clawmacs-tool-~A" tool-name)
+                                  (format nil "rplaca-tool-~A" tool-name)
                                   ;; Caller-local notification suppression is
                                   ;; not portably inherited by Bordeaux Threads.
                                   :initial-bindings
@@ -1506,7 +1506,7 @@ value and never unwinds the command loop."
                            (interactive-tool-execution-settlement-waiter-done-p
                             state)
                            t)))))
-                  :name "clawmacs-tool-settlement"
+                  :name "rplaca-tool-settlement"
                   :initial-bindings
                   (acons '*suppress-chat-redisplay-requests*
                          nil
@@ -1708,7 +1708,7 @@ owner without recursively acquiring that lock."
                            (interactive-buffer-operation-settlement-waiter-done-p
                             operation)
                            t)))))
-                  :name "clawmacs-interactive-operation-settlement"
+                  :name "rplaca-interactive-operation-settlement"
                   :initial-bindings
                   (acons '*suppress-chat-redisplay-requests*
                          nil
@@ -1978,7 +1978,7 @@ only when already dead."
                                 (stream-state-reader-settlement-waiter-done-p
                                  state)
                                 t)))))
-                       :name "clawmacs-stream-settlement"
+                       :name "rplaca-stream-settlement"
                        :initial-bindings
                        (acons '*suppress-chat-redisplay-requests*
                               nil
@@ -2352,7 +2352,7 @@ therefore records protocol completion silently before releasing ownership."
                  (setf (buffer-runtime-teardown-reaper-started-p teardown)
                        nil)))
              nil)))
-       :name (format nil "clawmacs-runtime-reaper-~A" (buffer-name buf)))
+       :name (format nil "rplaca-runtime-reaper-~A" (buffer-name buf)))
     (error (condition)
       ;; Retain STOPPING on spawn failure.  Safety wins over falsely exposing
       ;; the buffer as idle while an unjoined worker may still have effects.
@@ -3287,7 +3287,7 @@ provider reader threads surface updates asynchronously."
                          *default-buffer-session-persistence-mode*))
   "Create a buffer seeded with PROMPT as the only finalized user message."
   (let* ((*buffer-system-prompt-display-enabled* nil)
-         (buf (make-chat-buffer "clawmacs:prompt"
+         (buf (make-chat-buffer "rplaca:prompt"
                                 :agent-name agent-name
                                 :working-directory working-directory
                                 :session-persistence-mode
@@ -3321,7 +3321,7 @@ provider reader threads surface updates asynchronously."
 
 (defun prompt-cache-key-for-buffer (buf)
   "Return a stable OpenAI prompt cache routing key for BUF."
-  (format nil "clawmacs-~(~A~)-~(~A~)"
+  (format nil "rplaca-~(~A~)-~(~A~)"
           (buffer-agent-name buf)
           (session-name-hash (buffer-name buf))))
 

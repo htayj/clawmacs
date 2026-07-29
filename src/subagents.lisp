@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Subagents
@@ -443,7 +443,7 @@ arguments override the registered definition for this run only."
                                   :failed
                                   :error (format nil "~A" condition))))
                           (finish-subagent-worker handle)))
-                      (format nil "clawmacs-~A"
+                      (format nil "rplaca-~A"
                               (subagent-handle-id handle)))))
                ;; A very short worker can settle before MAKE-THREAD returns.
                ;; Do not reinstall its thread after history eviction.

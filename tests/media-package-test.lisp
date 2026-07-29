@@ -1,4 +1,4 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite media-package-suite)
 
@@ -6,36 +6,36 @@
   "Run BODY with isolated media, package, tool, and session registries."
   `(with-package-state-override ((default-package-test-channels))
      (let* ((*sessions-dir* (temp-session-test-directory "media"))
-            (clawmacs::*tool-working-directory* *sessions-dir*)
-            (clawmacs::*buffer-ring* nil)
-            (clawmacs::*buffer-counter* 0)
-            (clawmacs::*default-keymap* nil)
-            (clawmacs::*scratch-keymap* nil)
-            (clawmacs::*file-keymap* nil)
-            (clawmacs::*command-table* (make-hash-table :test #'eq))
-            (clawmacs::*extended-docs* (make-hash-table :test #'eq))
-            (clawmacs::*agent-tool-metadata-table* (make-hash-table :test #'eq))
-            (clawmacs::*agent-tool-name-table* (make-hash-table :test #'equal))
-            (clawmacs::*tool-table* (make-hash-table :test #'equal))
-            (clawmacs::*slash-command-table* (make-hash-table :test #'equal))
-            (clawmacs::*media-provider-registry* (make-hash-table :test #'equal))
-            (clawmacs::*media-operation-registry* (make-hash-table :test #'equal))
-            (clawmacs::*media-provider-registry-lock*
+            (rplaca::*tool-working-directory* *sessions-dir*)
+            (rplaca::*buffer-ring* nil)
+            (rplaca::*buffer-counter* 0)
+            (rplaca::*default-keymap* nil)
+            (rplaca::*scratch-keymap* nil)
+            (rplaca::*file-keymap* nil)
+            (rplaca::*command-table* (make-hash-table :test #'eq))
+            (rplaca::*extended-docs* (make-hash-table :test #'eq))
+            (rplaca::*agent-tool-metadata-table* (make-hash-table :test #'eq))
+            (rplaca::*agent-tool-name-table* (make-hash-table :test #'equal))
+            (rplaca::*tool-table* (make-hash-table :test #'equal))
+            (rplaca::*slash-command-table* (make-hash-table :test #'equal))
+            (rplaca::*media-provider-registry* (make-hash-table :test #'equal))
+            (rplaca::*media-operation-registry* (make-hash-table :test #'equal))
+            (rplaca::*media-provider-registry-lock*
              (bt:make-lock "test media provider registry"))
-            (clawmacs::*media-default-provider* nil)
-            (clawmacs::*media-operation-counter* 0))
+            (rplaca::*media-default-provider* nil)
+            (rplaca::*media-operation-counter* 0))
        (set-package-enablement-scope "media" :global)
        (load-active-packages)
-       (clawmacs::init-default-keymap)
+       (rplaca::init-default-keymap)
        ,@body)))
 
 (defun make-media-test-buffer (label)
   "Return a persistent chat buffer suitable for durable generated media."
   (let ((root (merge-pathnames (format nil "~A/" label)
-                               clawmacs::*tool-working-directory*)))
+                               rplaca::*tool-working-directory*)))
     (ensure-directories-exist (merge-pathnames #P".keep" root))
-    (let ((buffer (clawmacs::make-chat-buffer label :working-directory root)))
-      (setf (clawmacs::buffer-keymap buffer) clawmacs::*default-keymap*)
+    (let ((buffer (rplaca::make-chat-buffer label :working-directory root)))
+      (setf (rplaca::buffer-keymap buffer) rplaca::*default-keymap*)
       (add-buffer-to-ring buffer)
       (switch-to-buffer buffer)
       buffer)))
@@ -43,12 +43,12 @@
 (defun media-test-tool-result (args)
   "Execute the media image tool and decode its Lisp data result."
   (nth-value 0
-    (clawmacs::lisp-data-read
-     (clawmacs:execute-tool "media_generate_image" args))))
+    (rplaca::lisp-data-read
+     (rplaca:execute-tool "media_generate_image" args))))
 
 (defun media-test-png-asset ()
   "Return a deterministic tiny PNG-shaped binary asset for provider tests."
-  (clawmacs:make-media-asset
+  (rplaca:make-media-asset
    :name "fake-image.png"
    :mime-type "image/png"
    :octets (make-array 8 :element-type '(unsigned-byte 8)
@@ -72,13 +72,13 @@
            (definition (find "media_generate_image" tools
                              :key (lambda (tool) (cdr (assoc :name tool)))
                              :test #'string=))
-           (metadata (clawmacs:find-agent-tool-metadata
-                      'clawmacs::media-generate-image-tool)))
+           (metadata (rplaca:find-agent-tool-metadata
+                      'rplaca::media-generate-image-tool)))
       (is-true definition)
-      (is (eq :background (clawmacs:agent-tool-metadata-execution metadata)))
+      (is (eq :background (rplaca:agent-tool-metadata-execution metadata)))
       (is (search "Generated media with media" (render-package-prompt-sections)))
       (is (not (find "provider"
-                     (clawmacs:agent-tool-metadata-args metadata)
+                     (rplaca:agent-tool-metadata-args metadata)
                      :key (lambda (arg) (getf arg :name))
                      :test #'string=))))))
 
@@ -86,50 +86,50 @@
   "Providers are package-owned and selected through trusted configuration."
   (with-media-package-state
     (let ((provider
-            (clawmacs:register-media-provider
+            (rplaca:register-media-provider
              "fake" '(:image)
              (lambda (_request)
                (declare (ignore _request))
-               (clawmacs:make-media-provider-outcome
+               (rplaca:make-media-provider-outcome
                 :status :succeeded
                 :assets (list (media-test-png-asset)))))))
-      (is (string= "fake" (clawmacs:media-provider-id provider)))
-      (is (equal '(:image) (clawmacs:media-provider-kinds provider)))
-      (is (eq provider (clawmacs:find-media-provider "FAKE")))
-      (signals error (clawmacs:set-media-default-provider "missing"))
-      (is (string= "fake" (clawmacs:set-media-default-provider "fake")))
-      (is (string= "fake" (clawmacs:media-default-provider)))
+      (is (string= "fake" (rplaca:media-provider-id provider)))
+      (is (equal '(:image) (rplaca:media-provider-kinds provider)))
+      (is (eq provider (rplaca:find-media-provider "FAKE")))
+      (signals error (rplaca:set-media-default-provider "missing"))
+      (is (string= "fake" (rplaca:set-media-default-provider "fake")))
+      (is (string= "fake" (rplaca:media-default-provider)))
       (signals error
-        (clawmacs:make-media-generation-request :audio "not supported")))))
+        (rplaca:make-media-generation-request :audio "not supported")))))
 
 (test media-provider-owner-and-running-job-invariants-are-canonical
   "Provider ownership and asynchronous backend identifiers cannot be ambiguous."
   (with-media-package-state
     (let ((provider
-            (clawmacs:register-media-provider
+            (rplaca:register-media-provider
              "owner-fake" '(:image)
              (lambda (_request)
                (declare (ignore _request))
-               (clawmacs:make-media-provider-outcome :status :failed))
+               (rplaca:make-media-provider-outcome :status :failed))
              :package " Media ")))
-      (is (string= "media" (clawmacs:media-provider-package provider)))
+      (is (string= "media" (rplaca:media-provider-package provider)))
       (is (equal '("owner-fake")
-                 (clawmacs:remove-media-providers-for-package "MEDIA")))
-      (is-false (clawmacs:find-media-provider "owner-fake")))
+                 (rplaca:remove-media-providers-for-package "MEDIA")))
+      (is-false (rplaca:find-media-provider "owner-fake")))
     (signals error
-      (clawmacs:register-media-provider
+      (rplaca:register-media-provider
        "bad-owner" '(:image) (lambda (_request) (declare (ignore _request)))
        :package "   "))
-    (clawmacs:register-media-provider
+    (rplaca:register-media-provider
      "missing-job" '(:image)
      (lambda (_request)
        (declare (ignore _request))
-       (clawmacs:make-media-provider-outcome :status :running :backend-id "  ")))
-    (clawmacs:set-media-default-provider "missing-job")
-    (let ((operation (clawmacs:start-media-operation
-                      (clawmacs:make-media-generation-request :image "job"))))
-      (is (eq :failed (clawmacs:media-operation-status operation)))
-      (is (search "backend id" (clawmacs:media-operation-error operation))))))
+       (rplaca:make-media-provider-outcome :status :running :backend-id "  ")))
+    (rplaca:set-media-default-provider "missing-job")
+    (let ((operation (rplaca:start-media-operation
+                      (rplaca:make-media-generation-request :image "job"))))
+      (is (eq :failed (rplaca:media-operation-status operation)))
+      (is (search "backend id" (rplaca:media-operation-error operation))))))
 
 (test media-request-constructor-enforces-regular-reference-files
   "Direct callers cannot bypass the tool's bounded regular-file reference rule."
@@ -145,28 +145,28 @@
                                :if-does-not-exist :create)
         (write-sequence #(1 2 3) stream))
       (ensure-directories-exist (merge-pathnames #P".keep" directory))
-      (let ((request (clawmacs:make-media-generation-request
+      (let ((request (rplaca:make-media-generation-request
                       :image "regular reference"
                       :referenced-image-paths (vector (namestring regular)))))
         (is (equal (list (namestring (truename regular)))
-                   (clawmacs:media-request-referenced-image-paths request))))
+                   (rplaca:media-request-referenced-image-paths request))))
       (signals error
-        (clawmacs:make-media-generation-request
+        (rplaca:make-media-generation-request
          :image "relative" :referenced-image-paths #("relative.png")))
       (signals error
-        (clawmacs:make-media-generation-request
+        (rplaca:make-media-generation-request
          :image "directory" :referenced-image-paths (vector (namestring directory))))
       (signals error
-        (clawmacs:make-media-generation-request
+        (rplaca:make-media-generation-request
          :image "empty" :referenced-image-paths #()))
       (signals error
-        (clawmacs:make-media-generation-request
+        (rplaca:make-media-generation-request
          :image "too many"
          :referenced-image-paths (make-array 6 :initial-element (namestring regular))))
       (when (media-test-create-fifo fifo)
         (unwind-protect
              (signals error
-               (clawmacs:make-media-generation-request
+               (rplaca:make-media-generation-request
                 :image "fifo" :referenced-image-paths (vector (namestring fifo))))
           (ignore-errors (delete-file fifo)))))))
 
@@ -175,9 +175,9 @@
   (with-media-package-state
     (let* ((buffer (make-media-test-buffer "success"))
            (reference (merge-pathnames "reference.png"
-                                       (clawmacs:buffer-working-directory buffer)))
+                                       (rplaca:buffer-working-directory buffer)))
            (directory-reference (merge-pathnames "directory-reference/"
-                                                 (clawmacs:buffer-working-directory buffer)))
+                                                 (rplaca:buffer-working-directory buffer)))
            (seen-request nil))
       (with-open-file (stream reference
                               :direction :output
@@ -185,33 +185,33 @@
                               :if-exists :supersede
                               :if-does-not-exist :create)
         (write-sequence #(1 2 3) stream))
-      (clawmacs:register-media-provider
+      (rplaca:register-media-provider
        "fake" '(:image)
        (lambda (request)
          (setf seen-request request)
-         (clawmacs:make-media-provider-outcome
+         (rplaca:make-media-provider-outcome
           :status :succeeded
           :assets (list (media-test-png-asset))
           :revised-prompt "a revised fake image"
           :backend-id "fake-1")))
-      (clawmacs:set-media-default-provider "fake")
-      (let* ((clawmacs::*current-tool-buffer* buffer)
+      (rplaca:set-media-default-provider "fake")
+      (let* ((rplaca::*current-tool-buffer* buffer)
              (result (media-test-tool-result
                       `((:prompt . " draw a test image ")
                         (:referenced_image_paths . ,(vector (namestring reference))))))
-             (records (clawmacs:artifactum-session-records buffer))
+             (records (rplaca:artifactum-session-records buffer))
              (artifact (first (coerce (getf result :artifacts) 'list))))
         (is (string= "succeeded" (getf result :status)))
         (is (string= "fake-1" (getf result :backend-id)))
         (is (string= "draw a test image"
-                     (clawmacs:media-request-prompt seen-request)))
+                     (rplaca:media-request-prompt seen-request)))
         (is (equal (list (namestring (truename reference)))
-                   (clawmacs:media-request-referenced-image-paths seen-request)))
+                   (rplaca:media-request-referenced-image-paths seen-request)))
         (is (= 1 (length records)))
         (is (string= "generated-media" (getf artifact :kind)))
         (is (probe-file (pathname (getf artifact :path))))
         (is (string= "fake"
-                     (clawmacs::artifactum-json-value
+                     (rplaca::artifactum-json-value
                       (getf artifact :metadata) "provider")))
         (signals error
           (media-test-tool-result
@@ -235,38 +235,38 @@
   (with-media-package-state
     (let ((poll-count 0)
           (cancel-count 0))
-      (clawmacs:register-media-provider
+      (rplaca:register-media-provider
        "async-fake" '(:image :video)
        (lambda (_request)
          (declare (ignore _request))
-         (clawmacs:make-media-provider-outcome :status :running :backend-id "job-1"))
+         (rplaca:make-media-provider-outcome :status :running :backend-id "job-1"))
        :poll-fn (lambda (_operation)
                   (declare (ignore _operation))
                   (incf poll-count)
-                  (clawmacs:make-media-provider-outcome
+                  (rplaca:make-media-provider-outcome
                    :status :succeeded :backend-id "job-1"
                    :assets (list (media-test-png-asset))))
        :cancel-fn (lambda (_operation)
                     (declare (ignore _operation))
                     (incf cancel-count)
-                    (clawmacs:make-media-provider-outcome
+                    (rplaca:make-media-provider-outcome
                      :status :cancelled :backend-id "job-1")))
-      (clawmacs:set-media-default-provider "async-fake")
-      (let ((operation (clawmacs:start-media-operation
-                        (clawmacs:make-media-generation-request :video "animate"))))
-        (is (eq :running (clawmacs:media-operation-status operation)))
-        (is (eq operation (clawmacs:find-media-operation
-                           (clawmacs:media-operation-id operation))))
-        (is (eq operation (clawmacs:poll-media-operation operation)))
+      (rplaca:set-media-default-provider "async-fake")
+      (let ((operation (rplaca:start-media-operation
+                        (rplaca:make-media-generation-request :video "animate"))))
+        (is (eq :running (rplaca:media-operation-status operation)))
+        (is (eq operation (rplaca:find-media-operation
+                           (rplaca:media-operation-id operation))))
+        (is (eq operation (rplaca:poll-media-operation operation)))
         (is (= 1 poll-count))
-        (is (eq :succeeded (clawmacs:media-operation-status operation))))
-      (let ((operation (clawmacs:start-media-operation
-                        (clawmacs:make-media-generation-request :image "cancel"))))
-        (is (eq :running (clawmacs:media-operation-status operation)))
-        (is (eq operation (clawmacs:cancel-media-operation
-                           (clawmacs:media-operation-id operation))))
+        (is (eq :succeeded (rplaca:media-operation-status operation))))
+      (let ((operation (rplaca:start-media-operation
+                        (rplaca:make-media-generation-request :image "cancel"))))
+        (is (eq :running (rplaca:media-operation-status operation)))
+        (is (eq operation (rplaca:cancel-media-operation
+                           (rplaca:media-operation-id operation))))
         (is (= 1 cancel-count))
-        (is (eq :cancelled (clawmacs:media-operation-status operation)))))))
+        (is (eq :cancelled (rplaca:media-operation-status operation)))))))
 
 (test media-cancellation-bridges-the-managed-background-tool-boundary
   "Interactive cancellation invokes provider cancellation before a late start settles."
@@ -278,7 +278,7 @@
           (cancel-count 0)
           (cancelled-operation nil)
           (buffer (make-media-test-buffer "cancel-bridge")))
-      (clawmacs:register-media-provider
+      (rplaca:register-media-provider
        "cancel-fake" '(:image)
        (lambda (_request)
          (declare (ignore _request))
@@ -286,116 +286,116 @@
          (bt:signal-semaphore entered)
          (unless (bt:wait-on-semaphore release :timeout 5.0)
            (error "Timed out releasing media start."))
-         (clawmacs:make-media-provider-outcome
+         (rplaca:make-media-provider-outcome
           :status :succeeded :assets (list (media-test-png-asset))))
        :cancel-fn (lambda (operation)
                     (setf cancelled-operation operation)
                     (incf cancel-count)
                     (bt:signal-semaphore cancelled)
-                    (clawmacs:make-media-provider-outcome :status :cancelled)))
-      (clawmacs:set-media-default-provider "cancel-fake")
-      (let ((state (clawmacs::start-interactive-tool-execution
+                    (rplaca:make-media-provider-outcome :status :cancelled)))
+      (rplaca:set-media-default-provider "cancel-fake")
+      (let ((state (rplaca::start-interactive-tool-execution
                     buffer "media_generate_image"
                     '((:prompt . "cancel this image")) "media-cancel-1")))
         (unwind-protect
              (progn
                (is-true state)
                (is-true (bt:wait-on-semaphore entered :timeout 2.0))
-               (clawmacs::cancel-interactive-tool-execution state)
+               (rplaca::cancel-interactive-tool-execution state)
                (is-true (bt:wait-on-semaphore cancelled :timeout 2.0))
                (is (= 1 start-count))
                (is (= 1 cancel-count))
                (is (eq :cancelled
-                       (clawmacs:media-operation-status cancelled-operation)))
+                       (rplaca:media-operation-status cancelled-operation)))
                ;; The late successful start result loses deterministically to
                ;; cancellation and cannot create an Artifactum artifact.
                (bt:signal-semaphore release)
                (loop :repeat 400
                      :while (bt:thread-alive-p
-                             (clawmacs::interactive-tool-execution-worker state))
+                             (rplaca::interactive-tool-execution-worker state))
                      :do (sleep 0.005))
                (is (eq :cancelled
-                       (clawmacs:media-operation-status cancelled-operation)))
-               (is (null (clawmacs:artifactum-session-records buffer))))
+                       (rplaca:media-operation-status cancelled-operation)))
+               (is (null (rplaca:artifactum-session-records buffer))))
           (bt:signal-semaphore release))))))
 
 (test media-cancellation-before-run-skips-the-provider-start
   "A published pending operation can be cancelled before any provider call."
   (with-media-package-state
     (let ((starts 0))
-      (clawmacs:register-media-provider
+      (rplaca:register-media-provider
        "pending-cancel" '(:image)
        (lambda (_request)
          (declare (ignore _request))
          (incf starts)
-         (clawmacs:make-media-provider-outcome
+         (rplaca:make-media-provider-outcome
           :status :succeeded :assets (list (media-test-png-asset)))))
-      (clawmacs:set-media-default-provider "pending-cancel")
-      (let ((operation (clawmacs::begin-media-operation
-                        (clawmacs:make-media-generation-request :image "do not start"))))
-        (clawmacs:cancel-media-operation operation)
-        (clawmacs::run-media-operation operation)
-        (is (eq :cancelled (clawmacs:media-operation-status operation)))
+      (rplaca:set-media-default-provider "pending-cancel")
+      (let ((operation (rplaca::begin-media-operation
+                        (rplaca:make-media-generation-request :image "do not start"))))
+        (rplaca:cancel-media-operation operation)
+        (rplaca::run-media-operation operation)
+        (is (eq :cancelled (rplaca:media-operation-status operation)))
         (is (= 0 starts))))))
 
 (test media-artifact-write-failures-have-a-stable-media-category
   "Artifactum write failures retain media operation context for a tool result."
   (with-media-package-state
     (let ((buffer (make-media-test-buffer "artifact-write-failure")))
-      (clawmacs:register-media-provider
+      (rplaca:register-media-provider
        "write-fail" '(:image)
        (lambda (_request)
          (declare (ignore _request))
-         (clawmacs:make-media-provider-outcome
+         (rplaca:make-media-provider-outcome
           :status :succeeded :assets (list (media-test-png-asset)))))
-      (clawmacs:set-media-default-provider "write-fail")
-      (let* ((operation (clawmacs:start-media-operation
-                         (clawmacs:make-media-generation-request :image "write fails")))
-             (original (symbol-function 'clawmacs:artifactum-create-from-octets)))
+      (rplaca:set-media-default-provider "write-fail")
+      (let* ((operation (rplaca:start-media-operation
+                         (rplaca:make-media-generation-request :image "write fails")))
+             (original (symbol-function 'rplaca:artifactum-create-from-octets)))
         (unwind-protect
              (progn
-               (setf (symbol-function 'clawmacs:artifactum-create-from-octets)
+               (setf (symbol-function 'rplaca:artifactum-create-from-octets)
                      (lambda (&rest _arguments)
                        (declare (ignore _arguments))
                        (error "simulated artifact storage failure")))
                (handler-case
                    (progn
-                     (clawmacs:persist-media-operation-assets buffer operation)
+                     (rplaca:persist-media-operation-assets buffer operation)
                      (fail "Expected a media artifact write failure."))
-                 (clawmacs::media-artifact-write-failed (condition)
+                 (rplaca::media-artifact-write-failed (condition)
                    (is (eq operation
-                           (clawmacs::media-artifact-write-failed-operation condition)))
+                           (rplaca::media-artifact-write-failed-operation condition)))
                    (is (search "simulated artifact storage failure"
                                (format nil "~A" condition))))))
-          (setf (symbol-function 'clawmacs:artifactum-create-from-octets)
+          (setf (symbol-function 'rplaca:artifactum-create-from-octets)
                 original))))))
 
 (test media-provider-cleanup-follows-package-reset-and-reload
   "Package lifecycle reset removes provider registrations owned by that package."
   (with-media-package-state
-    (let ((clawmacs::*current-clawmacs-package* "media"))
-      (clawmacs:register-media-provider
+    (let ((rplaca::*current-rplaca-package* "media"))
+      (rplaca:register-media-provider
        "owned-fake" '(:image)
        (lambda (_request)
          (declare (ignore _request))
-         (clawmacs:make-media-provider-outcome :status :failed
+         (rplaca:make-media-provider-outcome :status :failed
                                                 :public-error "not used"))))
-    (clawmacs:set-media-default-provider "owned-fake")
-    (is (clawmacs:find-media-provider "owned-fake"))
-    (clawmacs::reset-package-runtime-state "media")
-    (is-false (clawmacs:find-media-provider "owned-fake"))
-    (is-false (clawmacs:media-default-provider))))
+    (rplaca:set-media-default-provider "owned-fake")
+    (is (rplaca:find-media-provider "owned-fake"))
+    (rplaca::reset-package-runtime-state "media")
+    (is-false (rplaca:find-media-provider "owned-fake"))
+    (is-false (rplaca:media-default-provider))))
 
 (test media-provider-failures-are-returned-as-operation-data
   "Provider exceptions become public failed outcomes instead of crashing a tool worker."
   (with-media-package-state
-    (clawmacs:register-media-provider
+    (rplaca:register-media-provider
      "broken" '(:image)
      (lambda (_request)
        (declare (ignore _request))
        (error "intentional fake failure")))
-    (clawmacs:set-media-default-provider "broken")
-    (let ((operation (clawmacs:start-media-operation
-                      (clawmacs:make-media-generation-request :image "broken"))))
-      (is (eq :failed (clawmacs:media-operation-status operation)))
-      (is (search "intentional fake failure" (clawmacs:media-operation-error operation))))))
+    (rplaca:set-media-default-provider "broken")
+    (let ((operation (rplaca:start-media-operation
+                      (rplaca:make-media-generation-request :image "broken"))))
+      (is (eq :failed (rplaca:media-operation-status operation)))
+      (is (search "intentional fake failure" (rplaca:media-operation-error operation))))))

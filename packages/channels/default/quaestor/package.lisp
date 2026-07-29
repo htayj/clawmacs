@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defvar *quaestor-package-name* "quaestor"
   "Bundled package name for structured questions and queued delivery.")
@@ -796,13 +796,13 @@ Returns true when the key was consumed."
                      :presentation-type 'quaestor-submit-ref
                      :unique-id (list :quaestor-submit question-id))))))))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-quaestor-select-option :name nil)
     ((option 'quaestor-option-ref))
   (clim:with-application-frame (frame)
     (quaestor-activate-option (chat-frame-buffer frame) option)))
 
-(define-clawmacs-chat-frame-command
+(define-rplaca-chat-frame-command
     (com-quaestor-submit-request :name nil)
     ((submit 'quaestor-submit-ref))
   (declare (ignore submit))
@@ -821,7 +821,7 @@ Returns true when the key was consumed."
 
 (clim:define-presentation-to-command-translator select-quaestor-option
     (quaestor-option-ref com-quaestor-select-option
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Select answer option"
      :menu t)
@@ -830,7 +830,7 @@ Returns true when the key was consumed."
 
 (clim:define-presentation-to-command-translator select-quaestor-submit
     (quaestor-submit-ref com-quaestor-submit-request
-     clawmacs-chat-frame
+     rplaca-chat-frame
      :gesture :select
      :documentation "Advance request"
      :menu t)
@@ -961,7 +961,7 @@ Returns true when the key was consumed."
   missing requirement before you can continue safely.
 - Questions may be freeform, single-choice, or multi-choice. Keep them short,
   concrete, and grounded in the current task.
-- While a response is running, Clawmacs can queue follow-up or steering
+- While a response is running, RPLACA can queue follow-up or steering
   messages instead of losing them. The user can inspect or recall the queue
   with the quaestor commands."
  :title "Structured user questions with quaestor"

@@ -8,13 +8,13 @@ if ! command -v sbcl >/dev/null 2>&1; then
   exit 127
 fi
 
-if [ -z "${CLAWMACS_ULTRALISP_SETUP:-}" ]; then
-  if [ -n "${CLAWMACS_QUICKLISP_SETUP:-}" ]; then
-    CLAWMACS_ULTRALISP_SETUP=$CLAWMACS_QUICKLISP_SETUP
+if [ -z "${RPLACA_ULTRALISP_SETUP:-}" ]; then
+  if [ -n "${RPLACA_QUICKLISP_SETUP:-}" ]; then
+    RPLACA_ULTRALISP_SETUP=$RPLACA_QUICKLISP_SETUP
   elif [ -f "${HOME:-}/quicklisp/setup.lisp" ]; then
-    CLAWMACS_ULTRALISP_SETUP="${HOME}/quicklisp/setup.lisp"
+    RPLACA_ULTRALISP_SETUP="${HOME}/quicklisp/setup.lisp"
   else
-    printf '%s\n' "run-native.sh: set CLAWMACS_ULTRALISP_SETUP or install a Quicklisp-compatible setup at ~/quicklisp/setup.lisp" >&2
+    printf '%s\n' "run-native.sh: set RPLACA_ULTRALISP_SETUP or install a Quicklisp-compatible setup at ~/quicklisp/setup.lisp" >&2
     exit 1
   fi
 fi
@@ -33,8 +33,8 @@ prepend_ld_library_path() {
 }
 
 resolve_openssl_runtime_path() {
-  if [ -n "${CLAWMACS_SSL_LIB:-}" ] && [ -d "$CLAWMACS_SSL_LIB" ]; then
-    printf '%s\n' "$CLAWMACS_SSL_LIB"
+  if [ -n "${RPLACA_SSL_LIB:-}" ] && [ -d "$RPLACA_SSL_LIB" ]; then
+    printf '%s\n' "$RPLACA_SSL_LIB"
     return 0
   fi
 
@@ -83,24 +83,24 @@ if ssl_lib_path=$(resolve_openssl_runtime_path); then
   export LD_LIBRARY_PATH
 fi
 
-export CLAWMACS_ULTRALISP_SETUP
-export CLAWMACS_SESSION_NAME=${CLAWMACS_SESSION_NAME:-"clawmacs:native-session-01"}
-export CLAWMACS_DEBUG_LOG=${CLAWMACS_DEBUG_LOG:-"$SCRIPT_DIR/debug.log"}
+export RPLACA_ULTRALISP_SETUP
+export RPLACA_SESSION_NAME=${RPLACA_SESSION_NAME:-"rplaca:native-session-01"}
+export RPLACA_DEBUG_LOG=${RPLACA_DEBUG_LOG:-"$SCRIPT_DIR/debug.log"}
 
-sbcl_dynamic_space_size=${CLAWMACS_SBCL_DYNAMIC_SPACE_SIZE:-2048}
+sbcl_dynamic_space_size=${RPLACA_SBCL_DYNAMIC_SPACE_SIZE:-2048}
 case "$sbcl_dynamic_space_size" in
   ''|*[!0-9]*)
-    printf '%s\n' "run-native.sh: CLAWMACS_SBCL_DYNAMIC_SPACE_SIZE must be a positive integer number of MiB" >&2
+    printf '%s\n' "run-native.sh: RPLACA_SBCL_DYNAMIC_SPACE_SIZE must be a positive integer number of MiB" >&2
     exit 1
     ;;
 esac
 if [ "$sbcl_dynamic_space_size" -le 0 ]; then
-  printf '%s\n' "run-native.sh: CLAWMACS_SBCL_DYNAMIC_SPACE_SIZE must be a positive integer number of MiB" >&2
+  printf '%s\n' "run-native.sh: RPLACA_SBCL_DYNAMIC_SPACE_SIZE must be a positive integer number of MiB" >&2
   exit 1
 fi
 
-: "${CLAWMACS_RUN_CLEAN_BUILD:=0}"
-export CLAWMACS_RUN_CLEAN_BUILD
+: "${RPLACA_RUN_CLEAN_BUILD:=0}"
+export RPLACA_RUN_CLEAN_BUILD
 
 cd "$SCRIPT_DIR"
 exec sbcl --dynamic-space-size "$sbcl_dynamic_space_size" --noinform --script scripts/run-ultralisp.lisp "$@"

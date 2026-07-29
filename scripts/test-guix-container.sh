@@ -24,11 +24,11 @@ else
   PRODUCTION_SETUP_DIGEST=''
   PRODUCTION_SETUP_INODE=''
 fi
-export CLAWMACS_ENABLE_TEST_TOGGLES=1
-export CLAWMACS_TEST_CACHE_ROOT_SET=1
-export CLAWMACS_TEST_CACHE_RELATIVE="$TEST_CACHE_RELATIVE"
-export CLAWMACS_TEST_QUICKLISP_ENV_PATH_SET=1
-export CLAWMACS_TEST_QUICKLISP_ENV_PATH="$BOOTSTRAP_ENV"
+export RPLACA_ENABLE_TEST_TOGGLES=1
+export RPLACA_TEST_CACHE_ROOT_SET=1
+export RPLACA_TEST_CACHE_RELATIVE="$TEST_CACHE_RELATIVE"
+export RPLACA_TEST_QUICKLISP_ENV_PATH_SET=1
+export RPLACA_TEST_QUICKLISP_ENV_PATH="$BOOTSTRAP_ENV"
 
 cleanup() {
   rm -rf "$TEST_CACHE_ROOT"
@@ -83,7 +83,7 @@ chmod +x "$TMP_BIN/mkdir"
 
 cat > "$TMP_BIN/sbcl" <<'EOF'
 #!/bin/sh
-if [ "${CLAWMACS_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
+if [ "${RPLACA_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
   exit 98
 fi
 exec "$TEST_CONTAINER_PATH/sbcl" "$@"
@@ -117,7 +117,7 @@ while [ "$#" -gt 0 ]; do
       shift
       eval_arg="$1"
       case "$eval_arg" in
-        *'(ql:quickload :clawmacs)'*)
+        *'(ql:quickload :rplaca)'*)
           is_warm=1
           ;;
         *quicklisp-quickstart:install*':path "'*'"'*)
@@ -136,13 +136,13 @@ done
 if [ -n "$install_path" ]; then
   mkdir -p "$install_path"
   printf '(load "ok")\n' > "$install_path/setup.lisp"
-  if [ -n "${CLAWMACS_TEST_BOOTSTRAP_LOG:-}" ]; then
-    printf 'bootstrap %s\n' "$$" >> "$CLAWMACS_TEST_BOOTSTRAP_LOG"
+  if [ -n "${RPLACA_TEST_BOOTSTRAP_LOG:-}" ]; then
+    printf 'bootstrap %s\n' "$$" >> "$RPLACA_TEST_BOOTSTRAP_LOG"
   fi
 fi
 
 if [ "$is_probe" -eq 1 ]; then
-  if [ "${CLAWMACS_TEST_SBCL_FAIL_PROBE:-0}" = "1" ]; then
+  if [ "${RPLACA_TEST_SBCL_FAIL_PROBE:-0}" = "1" ]; then
     exit 1
   fi
   if [ ! -f "$setup" ]; then
@@ -157,22 +157,22 @@ if [ "$is_provenance_check" -eq 1 ]; then
   fi
 fi
 
-if [ "${CLAWMACS_TEST_SBCL_FAIL_BOOTSTRAP:-0}" = "1" ]; then
+if [ "${RPLACA_TEST_SBCL_FAIL_BOOTSTRAP:-0}" = "1" ]; then
   exit 1
 fi
 
-if [ "$is_warm" -eq 1 ] && [ "${CLAWMACS_TEST_SBCL_FAIL_WARM:-0}" = "1" ]; then
+if [ "$is_warm" -eq 1 ] && [ "${RPLACA_TEST_SBCL_FAIL_WARM:-0}" = "1" ]; then
   exit 1
 fi
 
-if [ "$is_warm" -eq 1 ] && [ -n "${CLAWMACS_TEST_WARM_LOG:-}" ]; then
-  guard="${CLAWMACS_TEST_WARM_GUARD:?missing warm guard}"
+if [ "$is_warm" -eq 1 ] && [ -n "${RPLACA_TEST_WARM_LOG:-}" ]; then
+  guard="${RPLACA_TEST_WARM_GUARD:?missing warm guard}"
   if ! "$REAL_MKDIR" "$guard" 2>/dev/null; then
     echo "mock warmup overlap" >&2
     exit 96
   fi
   trap 'rmdir "$guard" >/dev/null 2>&1 || true' EXIT INT TERM
-  printf 'warm %s\n' "$$" >> "$CLAWMACS_TEST_WARM_LOG"
+  printf 'warm %s\n' "$$" >> "$RPLACA_TEST_WARM_LOG"
   sleep 0.2
   rmdir "$guard"
   trap - EXIT INT TERM
@@ -184,7 +184,7 @@ chmod +x "$TMP_CONTAINER_BIN/sbcl"
 
 cat > "$TMP_BIN/python3" <<'EOF'
 #!/bin/sh
-if [ "${CLAWMACS_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
+if [ "${RPLACA_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
   exit 98
 fi
 exec "$TEST_CONTAINER_PATH/python3" "$@"
@@ -229,9 +229,9 @@ chmod +x "$TMP_CONTAINER_BIN/import"
 
 cat > "$TMP_BIN/guix" <<'EOF'
 #!/bin/sh
-if [ -n "${CLAWMACS_GUIX_ARGS_LOG:-}" ]; then
-  printf 'CALL\n' >> "$CLAWMACS_GUIX_ARGS_LOG"
-  printf '%s\n' "$@" >> "$CLAWMACS_GUIX_ARGS_LOG"
+if [ -n "${RPLACA_GUIX_ARGS_LOG:-}" ]; then
+  printf 'CALL\n' >> "$RPLACA_GUIX_ARGS_LOG"
+  printf '%s\n' "$@" >> "$RPLACA_GUIX_ARGS_LOG"
 fi
 share=''
 while [ "$#" -gt 0 ]; do
@@ -307,7 +307,7 @@ chmod +x "$TMP_BIN/guix"
 
 cat > "$TMP_BIN/curl" <<'EOF'
 #!/bin/sh
-if [ "${CLAWMACS_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
+if [ "${RPLACA_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
   exit 98
 fi
 exec "$TEST_CONTAINER_PATH/curl" "$@"
@@ -316,7 +316,7 @@ chmod +x "$TMP_BIN/curl"
 
 cat > "$TMP_CONTAINER_BIN/curl" <<'EOF'
 #!/bin/sh
-if [ "${CLAWMACS_TEST_CURL_FAIL:-0}" = "1" ]; then
+if [ "${RPLACA_TEST_CURL_FAIL:-0}" = "1" ]; then
   exit 22
 fi
 
@@ -341,21 +341,21 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-if [ -n "${CLAWMACS_EXPECT_CURL_TIMEOUT:-}" ] && [ "$seen_timeout" != "$CLAWMACS_EXPECT_CURL_TIMEOUT" ]; then
+if [ -n "${RPLACA_EXPECT_CURL_TIMEOUT:-}" ] && [ "$seen_timeout" != "$RPLACA_EXPECT_CURL_TIMEOUT" ]; then
   exit 99
 fi
-if [ -n "${CLAWMACS_EXPECT_CURL_RETRIES:-}" ] && [ "$seen_retries" != "$CLAWMACS_EXPECT_CURL_RETRIES" ]; then
+if [ -n "${RPLACA_EXPECT_CURL_RETRIES:-}" ] && [ "$seen_retries" != "$RPLACA_EXPECT_CURL_RETRIES" ]; then
   exit 99
 fi
 
-printf '%s\n' "${CLAWMACS_TEST_CURL_BODY:-quicklisp}" > "$outfile"
+printf '%s\n' "${RPLACA_TEST_CURL_BODY:-quicklisp}" > "$outfile"
 exit 0
 EOF
 chmod +x "$TMP_CONTAINER_BIN/curl"
 
 cat > "$TMP_BIN/sha256sum" <<'EOF'
 #!/bin/sh
-if [ "${CLAWMACS_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
+if [ "${RPLACA_FAIL_HOST_TOOL_USE:-0}" = "1" ]; then
   exit 98
 fi
 exec "$TEST_CONTAINER_PATH/sha256sum" "$@"
@@ -370,10 +370,10 @@ chmod +x "$TMP_CONTAINER_BIN/sha256sum"
 
 cat > "$TMP_BIN/ldconfig" <<EOF
 #!/bin/sh
-if [ "\${CLAWMACS_TEST_LDCONFIG_EMPTY:-0}" = "1" ]; then
+if [ "\${RPLACA_TEST_LDCONFIG_EMPTY:-0}" = "1" ]; then
   exit 0
 fi
-if [ "\${CLAWMACS_TEST_LDCONFIG_MODE:-ssl}" = "crypto" ]; then
+if [ "\${RPLACA_TEST_LDCONFIG_MODE:-ssl}" = "crypto" ]; then
   echo "libcrypto.so.3 (libc6,x86-64) => $TMP_SSL_LIB/libcrypto.so.3"
   exit 0
 fi
@@ -392,13 +392,13 @@ run_case() {
   set +e
   if [ "$toggle_var" = "-" ]; then
     env PATH="$TMP_BIN:$PATH" \
-      CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-      CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
+      RPLACA_ENABLE_TEST_TOGGLES=1 \
+      RPLACA_SSL_LIB="$TMP_SSL_LIB" \
       "$LAUNCHER" "$@" 2>"$stderr_file"
   else
     env PATH="$TMP_BIN:$PATH" \
-      CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-      CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
+      RPLACA_ENABLE_TEST_TOGGLES=1 \
+      RPLACA_SSL_LIB="$TMP_SSL_LIB" \
       "$toggle_var=1" \
       "$LAUNCHER" "$@" 2>"$stderr_file"
   fi
@@ -411,7 +411,7 @@ run_case() {
     exit 1
   fi
 
-  if [ "$expect_prefix" = "yes" ] && ! grep -q '^\[clawmacs-env\]' "$stderr_file"; then
+  if [ "$expect_prefix" = "yes" ] && ! grep -q '^\[rplaca-env\]' "$stderr_file"; then
     echo "FAIL $name: missing stderr prefix" >&2
     cat "$stderr_file" >&2
     exit 1
@@ -425,8 +425,8 @@ run_override_case() {
   stderr_file="$TMP_DIR/$name.stderr"
   set +e
   env PATH="$TMP_BIN:$PATH" \
-    CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-    CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
+    RPLACA_ENABLE_TEST_TOGGLES=1 \
+    RPLACA_SSL_LIB="$TMP_SSL_LIB" \
     "$@" \
     "$LAUNCHER" --mode run --preflight-only 2>"$stderr_file"
   actual_code=$?
@@ -438,7 +438,7 @@ run_override_case() {
     exit 1
   fi
 
-  if ! grep -q '^\[clawmacs-env\]' "$stderr_file"; then
+  if ! grep -q '^\[rplaca-env\]' "$stderr_file"; then
     echo "FAIL $name: missing stderr prefix" >&2
     cat "$stderr_file" >&2
     exit 1
@@ -453,8 +453,8 @@ run_env_case() {
   stderr_file="$TMP_DIR/$name.stderr"
   set +e
   env PATH="$TMP_BIN:$PATH" \
-    CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-    CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
+    RPLACA_ENABLE_TEST_TOGGLES=1 \
+    RPLACA_SSL_LIB="$TMP_SSL_LIB" \
     OPENAI_API_KEY= \
     ZAI_CODING_MAX_API_KEY= \
     OPENROUTER_API_KEY= \
@@ -468,7 +468,7 @@ run_env_case() {
     exit 1
   fi
 
-  if [ "$expected_code" -ne 0 ] && ! grep -q '^\[clawmacs-env\]' "$stderr_file"; then
+  if [ "$expected_code" -ne 0 ] && ! grep -q '^\[rplaca-env\]' "$stderr_file"; then
     echo "FAIL $name: missing stderr prefix" >&2
     cat "$stderr_file" >&2
     exit 1
@@ -478,39 +478,39 @@ run_env_case() {
 run_case invalid-mode 118 yes - --mode nope -- true
 run_case missing-mode 118 yes - -- true
 run_case missing-payload 119 yes - --mode run --
-run_case missing-guix-toggle 110 yes CLAWMACS_TEST_MISSING_GUIX --mode run --preflight-only
-run_case repo-root-failure-toggle 120 yes CLAWMACS_TEST_FAIL_REPO_ROOT --mode run --preflight-only
-run_case missing-mount-toggle 111 yes CLAWMACS_TEST_MISSING_MOUNT --mode run --preflight-only
-run_case hidden-sbcl-run 113 yes CLAWMACS_TEST_HIDE_SBCL --mode run --preflight-only
-run_case hidden-sbcl-e2e 113 yes CLAWMACS_TEST_HIDE_SBCL --mode e2e --preflight-only
-run_case hidden-python3-e2e 114 yes CLAWMACS_TEST_HIDE_PYTHON3 --mode e2e --preflight-only
-run_case hidden-xvfb-e2e 114 yes CLAWMACS_TEST_HIDE_XVFB --mode e2e --preflight-only
-run_case hidden-setsid-e2e 114 yes CLAWMACS_TEST_HIDE_SETSID --mode e2e --preflight-only
-run_case hidden-xdotool-e2e 114 yes CLAWMACS_TEST_HIDE_XDOTOOL --mode e2e --preflight-only
-run_case hidden-screenshot-e2e 114 yes CLAWMACS_TEST_HIDE_SCREENSHOT --mode e2e --preflight-only
-run_case quicklisp-bootstrap-toggle 112 yes CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL --mode run --preflight-only
-run_case missing-flock-toggle 123 yes CLAWMACS_TEST_MISSING_FLOCK --mode run --preflight-only
-run_case missing-provider-credential-toggle 116 yes CLAWMACS_TEST_MISSING_PROVIDER_CREDENTIAL --mode run --preflight-only
-run_case invalid-override-path-toggle 117 yes CLAWMACS_TEST_INVALID_OVERRIDE_PATH --mode run --preflight-only
-run_case invalid-e2e-args-toggle 122 yes CLAWMACS_TEST_INVALID_E2E_ARGS --mode e2e --preflight-only
-run_env_case preflight-precedence-credential-over-bootstrap 116 CLAWMACS_TEST_MISSING_PROVIDER_CREDENTIAL=1 CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
-run_env_case preflight-precedence-override-over-bootstrap 117 CLAWMACS_TEST_INVALID_OVERRIDE_PATH=1 CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
-run_env_case preflight-precedence-openssl-over-bootstrap 121 CLAWMACS_TEST_MISSING_OPENSSL_PATH=1 CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
+run_case missing-guix-toggle 110 yes RPLACA_TEST_MISSING_GUIX --mode run --preflight-only
+run_case repo-root-failure-toggle 120 yes RPLACA_TEST_FAIL_REPO_ROOT --mode run --preflight-only
+run_case missing-mount-toggle 111 yes RPLACA_TEST_MISSING_MOUNT --mode run --preflight-only
+run_case hidden-sbcl-run 113 yes RPLACA_TEST_HIDE_SBCL --mode run --preflight-only
+run_case hidden-sbcl-e2e 113 yes RPLACA_TEST_HIDE_SBCL --mode e2e --preflight-only
+run_case hidden-python3-e2e 114 yes RPLACA_TEST_HIDE_PYTHON3 --mode e2e --preflight-only
+run_case hidden-xvfb-e2e 114 yes RPLACA_TEST_HIDE_XVFB --mode e2e --preflight-only
+run_case hidden-setsid-e2e 114 yes RPLACA_TEST_HIDE_SETSID --mode e2e --preflight-only
+run_case hidden-xdotool-e2e 114 yes RPLACA_TEST_HIDE_XDOTOOL --mode e2e --preflight-only
+run_case hidden-screenshot-e2e 114 yes RPLACA_TEST_HIDE_SCREENSHOT --mode e2e --preflight-only
+run_case quicklisp-bootstrap-toggle 112 yes RPLACA_TEST_QUICKLISP_BOOTSTRAP_FAIL --mode run --preflight-only
+run_case missing-flock-toggle 123 yes RPLACA_TEST_MISSING_FLOCK --mode run --preflight-only
+run_case missing-provider-credential-toggle 116 yes RPLACA_TEST_MISSING_PROVIDER_CREDENTIAL --mode run --preflight-only
+run_case invalid-override-path-toggle 117 yes RPLACA_TEST_INVALID_OVERRIDE_PATH --mode run --preflight-only
+run_case invalid-e2e-args-toggle 122 yes RPLACA_TEST_INVALID_E2E_ARGS --mode e2e --preflight-only
+run_env_case preflight-precedence-credential-over-bootstrap 116 RPLACA_TEST_MISSING_PROVIDER_CREDENTIAL=1 RPLACA_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
+run_env_case preflight-precedence-override-over-bootstrap 117 RPLACA_TEST_INVALID_OVERRIDE_PATH=1 RPLACA_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
+run_env_case preflight-precedence-openssl-over-bootstrap 121 RPLACA_TEST_MISSING_OPENSSL_PATH=1 RPLACA_TEST_QUICKLISP_BOOTSTRAP_FAIL=1 "$LAUNCHER" --mode run --preflight-only
 run_env_case e2e-credential-generic-command-optional 0 "$LAUNCHER" --mode e2e --preflight-only -- python3 -c 'print("ok")'
-run_env_case host-tools-not-required-for-run-preflight 0 CLAWMACS_FAIL_HOST_TOOL_USE=1 "$LAUNCHER" --mode run --preflight-only
-run_env_case host-tools-not-required-for-e2e-preflight 0 CLAWMACS_FAIL_HOST_TOOL_USE=1 OPENAI_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 --version
+run_env_case host-tools-not-required-for-run-preflight 0 RPLACA_FAIL_HOST_TOOL_USE=1 "$LAUNCHER" --mode run --preflight-only
+run_env_case host-tools-not-required-for-e2e-preflight 0 RPLACA_FAIL_HOST_TOOL_USE=1 OPENAI_API_KEY=dummy "$LAUNCHER" --mode e2e --preflight-only -- python3 --version
 run_case payload-exit-code-passthrough 37 no - --mode run -- sh -c 'exit 37'
 
-run_override_case ssl-override-missing-path CLAWMACS_SSL_LIB="$TMP_DIR/ssl/missing"
-run_override_case ssl-override-non-directory CLAWMACS_SSL_LIB="$TMP_SSL_LIB/libssl.so.3"
-run_override_case ssl-override-traversal CLAWMACS_SSL_LIB="$TMP_DIR/ssl/../ssl/lib"
-run_override_case ssl-override-disallowed-prefix CLAWMACS_SSL_LIB="/usr/lib"
+run_override_case ssl-override-missing-path RPLACA_SSL_LIB="$TMP_DIR/ssl/missing"
+run_override_case ssl-override-non-directory RPLACA_SSL_LIB="$TMP_SSL_LIB/libssl.so.3"
+run_override_case ssl-override-traversal RPLACA_SSL_LIB="$TMP_DIR/ssl/../ssl/lib"
+run_override_case ssl-override-disallowed-prefix RPLACA_SSL_LIB="/usr/lib"
 
-run_override_case font-override-missing-path CLAWMACS_FONT_PATH="$TMP_FONT_DIR/missing.ttf"
-run_override_case font-override-unreadable CLAWMACS_FONT_PATH="$TMP_FONT_UNREADABLE"
-run_override_case font-override-non-file CLAWMACS_FONT_PATH="$TMP_FONT_DIR"
-run_override_case font-override-traversal CLAWMACS_FONT_PATH="$TMP_FONT_DIR/../fonts/ok.ttf"
-run_override_case font-override-disallowed-prefix CLAWMACS_FONT_PATH="/etc/passwd"
+run_override_case font-override-missing-path RPLACA_FONT_PATH="$TMP_FONT_DIR/missing.ttf"
+run_override_case font-override-unreadable RPLACA_FONT_PATH="$TMP_FONT_UNREADABLE"
+run_override_case font-override-non-file RPLACA_FONT_PATH="$TMP_FONT_DIR"
+run_override_case font-override-traversal RPLACA_FONT_PATH="$TMP_FONT_DIR/../fonts/ok.ttf"
+run_override_case font-override-disallowed-prefix RPLACA_FONT_PATH="/etc/passwd"
 
 write_bootstrap_env "$EXPECTED_SHA"
 printf '%s\n' \
@@ -520,7 +520,7 @@ printf '%s\n' \
   'QUICKLISP_BOOTSTRAP_RETRIES=2' > "$BOOTSTRAP_ENV"
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
   "$LAUNCHER" --mode run --preflight-only 2>"$TMP_DIR/pin-sentinel.stderr"
 actual_code=$?
 set -e
@@ -533,10 +533,10 @@ fi
 write_bootstrap_env "$EXPECTED_SHA"
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  CLAWMACS_EXPECT_CURL_TIMEOUT=27 \
-  CLAWMACS_EXPECT_CURL_RETRIES=4 \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_EXPECT_CURL_TIMEOUT=27 \
+  RPLACA_EXPECT_CURL_RETRIES=4 \
   QUICKLISP_BOOTSTRAP_TIMEOUT_SECS=27 \
   QUICKLISP_BOOTSTRAP_RETRIES=4 \
   "$LAUNCHER" --mode run --preflight-only 2>"$TMP_DIR/bootstrap-timeout.stderr"
@@ -551,8 +551,8 @@ fi
 set +e
 rm -rf "$QUICKLISP_HOME"
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
   QUICKLISP_BOOTSTRAP_URL=https://invalid.example/quicklisp.lisp \
   QUICKLISP_BOOTSTRAP_SHA256=0000000000000000000000000000000000000000000000000000000000000000 \
   "$LAUNCHER" --mode run --preflight-only 2>"$TMP_DIR/bootstrap-pin-override.stderr"
@@ -566,10 +566,10 @@ fi
 
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  CLAWMACS_TEST_SBCL_FAIL_PROBE=1 \
-  CLAWMACS_TEST_CURL_FAIL=1 \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_TEST_SBCL_FAIL_PROBE=1 \
+  RPLACA_TEST_CURL_FAIL=1 \
   "$LAUNCHER" --mode run --preflight-only 2>"$TMP_DIR/bootstrap-fail.stderr"
 actual_code=$?
 set -e
@@ -583,10 +583,10 @@ mkdir -p "$QUICKLISP_HOME"
 printf '(load "existing")\n' > "$QUICKLISP_HOME/setup.lisp"
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  CLAWMACS_TEST_SBCL_FAIL_PROBE=1 \
-  CLAWMACS_TEST_CURL_FAIL=1 \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_TEST_SBCL_FAIL_PROBE=1 \
+  RPLACA_TEST_CURL_FAIL=1 \
   "$LAUNCHER" --mode run --preflight-only 2>"$TMP_DIR/bootstrap-preserve.stderr"
 actual_code=$?
 set -e
@@ -608,8 +608,8 @@ fi
 
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_TEST_MISSING_OPENSSL_PATH=1 \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_TEST_MISSING_OPENSSL_PATH=1 \
   "$LAUNCHER" --mode run --preflight-only 2>"$TMP_DIR/openssl-run.stderr"
 actual_code=$?
 set -e
@@ -621,8 +621,8 @@ fi
 
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_DIR/does-not-exist" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_DIR/does-not-exist" \
   "$LAUNCHER" --mode run --preflight-only 2>"$TMP_DIR/openssl-override-invalid.stderr"
 actual_code=$?
 set -e
@@ -634,9 +634,9 @@ fi
 
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB= \
-  CLAWMACS_TEST_LDCONFIG_EMPTY=1 \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB= \
+  RPLACA_TEST_LDCONFIG_EMPTY=1 \
   OPENAI_API_KEY=dummy \
   "$LAUNCHER" --mode e2e --preflight-only -- python3 --version 2>"$TMP_DIR/openssl-e2e.stderr"
 actual_code=$?
@@ -649,9 +649,9 @@ fi
 
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB= \
-  CLAWMACS_TEST_LDCONFIG_MODE=crypto \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB= \
+  RPLACA_TEST_LDCONFIG_MODE=crypto \
   "$LAUNCHER" --mode run --preflight-only 2>"$TMP_DIR/openssl-run-libcrypto.stderr"
 actual_code=$?
 set -e
@@ -663,10 +663,16 @@ fi
 
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_APPEARANCE_THEME=dark \
+  RPLACA_CRASH_REPORT_DIR=/tmp/rplaca-crash-test \
+  RPLACA_E2E_PROVIDER=echo \
+  RPLACA_E2E_EVENTS=/tmp/rplaca-e2e-events \
+  RPLACA_GUI_E2E_INITIAL_INPUT_FOCUS=1 \
+  XDG_STATE_HOME=/tmp/rplaca-state-test \
   CL_SOURCE_REGISTRY=/hostile/host/registry/ \
-  "$LAUNCHER" --mode run -- sh -c 'case "$HOME" in /workspace/.cache/launcher-test-*/home) ;; *) exit 1 ;; esac; test "$CLAWMACS_QUICKLISP_SETUP" = "$HOME/quicklisp/setup.lisp" && test "$XDG_CACHE_HOME" = "${HOME%/home}" && test "$CLAWMACS_PROMPT_PROJECT_ROOT" = "/workspace" && test "$CL_SOURCE_REGISTRY" = "$GUIX_ENVIRONMENT/share/common-lisp/systems/" && test -f "${CLAWMACS_QUICKLISP_SETUP#/workspace/}"' 2>"$TMP_DIR/runtime-env.stderr"
+  "$LAUNCHER" --mode run -- sh -c 'case "$HOME" in /workspace/.cache/launcher-test-*/home) ;; *) exit 1 ;; esac; test "$RPLACA_QUICKLISP_SETUP" = "$HOME/quicklisp/setup.lisp" && test "$XDG_CACHE_HOME" = "${HOME%/home}" && test "$RPLACA_PROMPT_PROJECT_ROOT" = "/workspace" && test "$CL_SOURCE_REGISTRY" = "$GUIX_ENVIRONMENT/share/common-lisp/systems/" && test "$RPLACA_APPEARANCE_THEME" = dark && test "$RPLACA_CRASH_REPORT_DIR" = /tmp/rplaca-crash-test && test "$RPLACA_E2E_PROVIDER" = echo && test "$RPLACA_E2E_EVENTS" = /tmp/rplaca-e2e-events && test "$RPLACA_GUI_E2E_INITIAL_INPUT_FOCUS" = 1 && test "$XDG_STATE_HOME" = /tmp/rplaca-state-test && test -f "${RPLACA_QUICKLISP_SETUP#/workspace/}"' 2>"$TMP_DIR/runtime-env.stderr"
 actual_code=$?
 set -e
 if [ "$actual_code" -ne 0 ]; then
@@ -679,9 +685,9 @@ guix_args_log="$TMP_DIR/guix-args.log"
 rm -f "$guix_args_log"
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  CLAWMACS_GUIX_ARGS_LOG="$guix_args_log" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_GUIX_ARGS_LOG="$guix_args_log" \
   "$LAUNCHER" --mode e2e -- true 2>"$TMP_DIR/preserved-gui-env.stderr"
 actual_code=$?
 set -e
@@ -691,13 +697,44 @@ if [ "$actual_code" -ne 0 ]; then
   exit 1
 fi
 for variable in \
-  CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS \
-  CLAWMACS_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS \
-  CLAWMACS_GUI_E2E_STABILITY_MENU_ITERATIONS \
-  CLAWMACS_GUI_E2E_STABILITY_EXPOSE_ITERATIONS \
-  CLAWMACS_GUI_E2E_COLD_CACHE; do
+  RPLACA_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS \
+  RPLACA_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS \
+  RPLACA_GUI_E2E_STABILITY_MENU_ITERATIONS \
+  RPLACA_GUI_E2E_STABILITY_EXPOSE_ITERATIONS \
+  RPLACA_GUI_E2E_COLD_CACHE; do
   if ! grep -q "$variable" "$guix_args_log"; then
     echo "FAIL preserved-gui-env: missing $variable from guix arguments" >&2
+    cat "$guix_args_log" >&2
+    exit 1
+  fi
+done
+
+legacy_home="$TMP_DIR/legacy-home"
+mkdir -p \
+  "$legacy_home/.config/clawmacs" \
+  "$legacy_home/.clawmacs.d" \
+  "$legacy_home/.clawmacs.projects.d"
+rm -f "$guix_args_log"
+set +e
+env PATH="$TMP_BIN:$PATH" \
+  HOME="$legacy_home" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_GUIX_ARGS_LOG="$guix_args_log" \
+  "$LAUNCHER" --mode run -- true 2>"$TMP_DIR/legacy-exposes.stderr"
+actual_code=$?
+set -e
+if [ "$actual_code" -ne 0 ]; then
+  echo "FAIL legacy-read-only-exposes: expected exit 0 got $actual_code" >&2
+  cat "$TMP_DIR/legacy-exposes.stderr" >&2
+  exit 1
+fi
+for mapping in \
+  "$legacy_home/.config/clawmacs=/workspace/.cache/launcher-test-" \
+  "$legacy_home/.clawmacs.d=/workspace/.cache/launcher-test-" \
+  "$legacy_home/.clawmacs.projects.d=/workspace/.cache/launcher-test-"; do
+  if ! grep -F -- "--expose=$mapping" "$guix_args_log" >/dev/null; then
+    echo "FAIL legacy-read-only-exposes: missing mapping prefix $mapping" >&2
     cat "$guix_args_log" >&2
     exit 1
   fi
@@ -711,17 +748,17 @@ rm -f "$warm_log"
 rm -rf "$warm_guard"
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  CLAWMACS_TEST_WARM_LOG="$warm_log" \
-  CLAWMACS_TEST_WARM_GUARD="$warm_guard" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_TEST_WARM_LOG="$warm_log" \
+  RPLACA_TEST_WARM_GUARD="$warm_guard" \
   "$LAUNCHER" --mode e2e -- true 2>"$warm_one_stderr" &
 warm_one_pid=$!
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  CLAWMACS_TEST_WARM_LOG="$warm_log" \
-  CLAWMACS_TEST_WARM_GUARD="$warm_guard" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_TEST_WARM_LOG="$warm_log" \
+  RPLACA_TEST_WARM_GUARD="$warm_guard" \
   "$LAUNCHER" --mode e2e -- true 2>"$warm_two_stderr" &
 warm_two_pid=$!
 wait "$warm_one_pid"
@@ -745,9 +782,9 @@ fi
 warm_failure_sentinel="$TMP_DIR/warm-failure-payload-ran"
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  CLAWMACS_TEST_SBCL_FAIL_WARM=1 \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_TEST_SBCL_FAIL_WARM=1 \
   "$LAUNCHER" --mode run -- sh -c 'touch "$1"' sh "$warm_failure_sentinel" \
   2>"$TMP_DIR/warm-failure.stderr"
 warm_failure_status=$?
@@ -781,8 +818,8 @@ kill -KILL -- "-$lock_owner_pid" >/dev/null 2>&1 || true
 wait "$lock_owner_pid" >/dev/null 2>&1 || true
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
   "$LAUNCHER" --mode run --preflight-only \
   2>"$TMP_DIR/lock-owner-death.stderr"
 lock_recovery_status=$?
@@ -800,15 +837,15 @@ rm -rf "$QUICKLISP_HOME"
 rm -f "$cold_bootstrap_log"
 set +e
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  CLAWMACS_TEST_BOOTSTRAP_LOG="$cold_bootstrap_log" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_TEST_BOOTSTRAP_LOG="$cold_bootstrap_log" \
   "$LAUNCHER" --mode run --preflight-only 2>"$cold_one_stderr" &
 cold_one_pid=$!
 env PATH="$TMP_BIN:$PATH" \
-  CLAWMACS_ENABLE_TEST_TOGGLES=1 \
-  CLAWMACS_SSL_LIB="$TMP_SSL_LIB" \
-  CLAWMACS_TEST_BOOTSTRAP_LOG="$cold_bootstrap_log" \
+  RPLACA_ENABLE_TEST_TOGGLES=1 \
+  RPLACA_SSL_LIB="$TMP_SSL_LIB" \
+  RPLACA_TEST_BOOTSTRAP_LOG="$cold_bootstrap_log" \
   "$LAUNCHER" --mode run --preflight-only 2>"$cold_two_stderr" &
 cold_two_pid=$!
 wait "$cold_one_pid"

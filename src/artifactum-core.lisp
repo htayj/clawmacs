@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defvar *artifactum-directory-name* #P"artifacts/"
   "Directory name under a session root for durable artifact files.")
@@ -7,7 +7,7 @@
   "Artifact metadata index file stored under the artifact root.")
 
 (defvar *artifactum-index-lock*
-  (bt:make-lock "clawmacs artifactum index")
+  (bt:make-lock "rplaca artifactum index")
   "Process-wide lock serializing Artifactum index and store transactions.
 
 Detached tool buffers copy session objects and therefore do not share the

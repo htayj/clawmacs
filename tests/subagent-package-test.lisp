@@ -1,4 +1,4 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite subagent-package-suite)
 
@@ -16,45 +16,45 @@
 (defmacro with-subagent-package-state (&body body)
   "Run BODY with isolated package, agent, subagent, and tool registries."
   `(let* ((root (temp-package-test-directory "subagent-config"))
-          (clawmacs::*agent-tool-metadata-table*
+          (rplaca::*agent-tool-metadata-table*
            (make-hash-table :test #'eq))
-          (clawmacs::*agent-tool-name-table*
+          (rplaca::*agent-tool-name-table*
            (make-hash-table :test #'equal))
-          (clawmacs::*tool-table* (make-hash-table :test #'equal))
-          (clawmacs::*agent-definition-registry*
+          (rplaca::*tool-table* (make-hash-table :test #'equal))
+          (rplaca::*agent-definition-registry*
            (make-hash-table :test #'equal))
-          (clawmacs::*subagent-handle-counter* 0)
-          (clawmacs::*subagent-handles* (make-hash-table :test #'equal))
-          (clawmacs::*subagent-terminal-history-limit* 64)
-          (clawmacs::*subagent-terminal-sequence-counter* 0)
-          (clawmacs::*synchronous-subagent-runs*
+          (rplaca::*subagent-handle-counter* 0)
+          (rplaca::*subagent-handles* (make-hash-table :test #'equal))
+          (rplaca::*subagent-terminal-history-limit* 64)
+          (rplaca::*subagent-terminal-sequence-counter* 0)
+          (rplaca::*synchronous-subagent-runs*
            (make-hash-table :test #'eq))
-          (clawmacs::*subagent-registry-lock*
+          (rplaca::*subagent-registry-lock*
            (bt:make-lock "test-subagent-package-registry"))
-          (clawmacs::*package-configuration-path*
+          (rplaca::*package-configuration-path*
            (merge-pathnames "packages.json" root))
-          (clawmacs::*package-configuration* nil)
-          (clawmacs::*package-channels* (default-package-test-channels))
-          (clawmacs::*available-packages* nil)
-          (clawmacs::*package-registry-loaded-p* nil)
-          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
-          (clawmacs::*package-prompt-sections* nil)
-          (clawmacs::*enabled-builtin-packages* nil))
+          (rplaca::*package-configuration* nil)
+          (rplaca::*package-channels* (default-package-test-channels))
+          (rplaca::*available-packages* nil)
+          (rplaca::*package-registry-loaded-p* nil)
+          (rplaca::*loaded-packages* (make-hash-table :test #'equal))
+          (rplaca::*package-prompt-sections* nil)
+          (rplaca::*enabled-builtin-packages* nil))
      ,@body))
 
 (test settled-subagent-history-is-bounded-without-evicting-active-work
   "Pruning retains active handles and releases resources held by old history."
   (with-subagent-package-state
-    (let* ((clawmacs::*subagent-terminal-history-limit* 1)
+    (let* ((rplaca::*subagent-terminal-history-limit* 1)
            (running
-             (clawmacs::make-subagent-handle
+             (rplaca::make-subagent-handle
               :id "subagent-running"
               :prompt "running prompt"
               :status :running
               :thread (list :running-thread)
               :started-at 1))
            (cancelling
-             (clawmacs::make-subagent-handle
+             (rplaca::make-subagent-handle
               :id "subagent-cancelling"
               :prompt "cancelling prompt"
               :status :cancelling
@@ -64,7 +64,7 @@
            (old-result (list :large "old-result"))
            (old-thread (list :old-thread))
            (old
-             (clawmacs::make-subagent-handle
+             (rplaca::make-subagent-handle
               :id "subagent-old"
               :prompt "old prompt"
               :status :succeeded
@@ -74,38 +74,38 @@
               :started-at 3))
            (recent-result (list :large "recent-result"))
            (recent
-             (clawmacs::make-subagent-handle
+             (rplaca::make-subagent-handle
               :id "subagent-recent"
               :prompt "recent prompt"
               :status :succeeded
               :result recent-result
               :thread (list :recent-thread)
               :started-at 4)))
-      (mapc #'clawmacs::register-subagent-handle
+      (mapc #'rplaca::register-subagent-handle
             (list running cancelling old))
-      (clawmacs::finish-subagent-worker old)
-      (clawmacs::register-subagent-handle recent)
-      (clawmacs::finish-subagent-worker recent)
-      (is (eq running (clawmacs:find-subagent "subagent-running")))
-      (is (eq cancelling (clawmacs:find-subagent "subagent-cancelling")))
-      (is (eq recent (clawmacs:find-subagent "subagent-recent")))
-      (is-false (clawmacs:find-subagent "subagent-old"))
-      (is (= 3 (hash-table-count clawmacs::*subagent-handles*)))
+      (rplaca::finish-subagent-worker old)
+      (rplaca::register-subagent-handle recent)
+      (rplaca::finish-subagent-worker recent)
+      (is (eq running (rplaca:find-subagent "subagent-running")))
+      (is (eq cancelling (rplaca:find-subagent "subagent-cancelling")))
+      (is (eq recent (rplaca:find-subagent "subagent-recent")))
+      (is-false (rplaca:find-subagent "subagent-old"))
+      (is (= 3 (hash-table-count rplaca::*subagent-handles*)))
       (is (= 1
-             (count-if #'clawmacs::settled-subagent-handle-p
-                       (clawmacs:list-subagents))))
+             (count-if #'rplaca::settled-subagent-handle-p
+                       (rplaca:list-subagents))))
       (is-true
-       (clawmacs::subagent-handle-retained-resources-released-p old))
-      (is (null (clawmacs::subagent-handle-prompt old)))
-      (is (null (clawmacs::subagent-handle-result old)))
-      (is (null (clawmacs::subagent-handle-error old)))
-      (is (null (clawmacs::subagent-handle-thread old)))
+       (rplaca::subagent-handle-retained-resources-released-p old))
+      (is (null (rplaca::subagent-handle-prompt old)))
+      (is (null (rplaca::subagent-handle-result old)))
+      (is (null (rplaca::subagent-handle-error old)))
+      (is (null (rplaca::subagent-handle-thread old)))
       (is (equal '(:running-thread)
-                 (clawmacs::subagent-handle-thread running)))
+                 (rplaca::subagent-handle-thread running)))
       (is (equal '(:cancelling-thread)
-                 (clawmacs::subagent-handle-thread cancelling)))
+                 (rplaca::subagent-handle-thread cancelling)))
       (multiple-value-bind (result status handle)
-          (clawmacs:wait-subagent recent :timeout 0)
+          (rplaca:wait-subagent recent :timeout 0)
         (is (eq recent handle))
         (is (eq :succeeded status))
         (is (eq recent-result result))))))
@@ -115,13 +115,13 @@
   (with-subagent-package-state
     (let ((entered (bt:make-semaphore :name "sync-subagent-entered"))
           (release (bt:make-semaphore :name "sync-subagent-release"))
-          (runs clawmacs::*synchronous-subagent-runs*)
+          (runs rplaca::*synchronous-subagent-runs*)
           (worker nil)
           (result nil)
           (worker-error nil)
           (prompt-call-count 0))
       (with-subagent-package-function-override
-          (clawmacs::run-single-prompt (prompt &rest arguments)
+          (rplaca::run-single-prompt (prompt &rest arguments)
            (declare (ignore prompt arguments))
            (incf prompt-call-count)
            (bt:signal-semaphore entered)
@@ -133,35 +133,35 @@
                (setf worker
                      (bt:make-thread
                       (lambda ()
-                        (let ((clawmacs::*synchronous-subagent-runs* runs))
+                        (let ((rplaca::*synchronous-subagent-runs* runs))
                           (handler-case
                               (setf result
-                                    (clawmacs:run-subagent "Hold admission"))
+                                    (rplaca:run-subagent "Hold admission"))
                             (error (condition)
                               (setf worker-error condition)))))
                       :name "synchronous-subagent-admission-test"))
                (is (bt:wait-on-semaphore entered :timeout 2.0))
                (is (= 1
-                      (clawmacs:active-synchronous-subagent-run-count)))
+                      (rplaca:active-synchronous-subagent-run-count)))
                (bt:signal-semaphore release)
                (bt:join-thread worker)
                (setf worker nil)
                (is (null worker-error))
                (is (eq :synchronous-result result))
                (is (= 0
-                      (clawmacs:active-synchronous-subagent-run-count))))
+                      (rplaca:active-synchronous-subagent-run-count))))
           (bt:signal-semaphore release)
           (when worker
             (bt:join-thread worker))))
-      (let ((clawmacs::*safe-reload-active-request* :reload-owned))
-        (signals clawmacs:runtime-admission-closed
-          (clawmacs:run-subagent "Refuse direct run"))
-        (signals clawmacs:runtime-admission-closed
-          (clawmacs:run-subagent-async "Refuse async run")))
+      (let ((rplaca::*safe-reload-active-request* :reload-owned))
+        (signals rplaca:runtime-admission-closed
+          (rplaca:run-subagent "Refuse direct run"))
+        (signals rplaca:runtime-admission-closed
+          (rplaca:run-subagent-async "Refuse async run")))
       (is (= 1 prompt-call-count))
-      (is (= 0 clawmacs::*subagent-handle-counter*))
-      (is (= 0 (hash-table-count clawmacs::*subagent-handles*)))
-      (is (= 0 (clawmacs:active-synchronous-subagent-run-count))))))
+      (is (= 0 rplaca::*subagent-handle-counter*))
+      (is (= 0 (hash-table-count rplaca::*subagent-handles*)))
+      (is (= 0 (rplaca:active-synchronous-subagent-run-count))))))
 
 (defun load-test-subagent-package ()
   "Enable and load the bundled subagent package."
@@ -171,19 +171,19 @@
 (defun subagent-package-tool-result (tool-name args)
   "Execute TOOL-NAME with ARGS and read its Lisp data result."
   (nth-value 0
-    (clawmacs::lisp-data-read
-     (clawmacs:execute-tool tool-name args))))
+    (rplaca::lisp-data-read
+     (rplaca:execute-tool tool-name args))))
 
 (defun make-subagent-package-completed-stream-state-response
     (stop-reason content-blocks &optional usage)
   "Return a completed stream state fixture for subagent package tests."
-  (let ((state (clawmacs::make-stream-state)))
-    (bt:with-lock-held ((clawmacs::stream-state-lock state))
-      (setf (clawmacs::stream-state-stop-reason state) stop-reason
-            (clawmacs::stream-state-content-blocks state)
+  (let ((state (rplaca::make-stream-state)))
+    (bt:with-lock-held ((rplaca::stream-state-lock state))
+      (setf (rplaca::stream-state-stop-reason state) stop-reason
+            (rplaca::stream-state-content-blocks state)
             (reverse content-blocks)
-            (clawmacs::stream-state-usage state) usage
-            (clawmacs::stream-state-done-p state) t))
+            (rplaca::stream-state-usage state) usage
+            (rplaca::stream-state-done-p state) t))
     state))
 
 (test subagent-package-registers-agent-tools-and-prompt
@@ -212,14 +212,14 @@
     (let ((seen-provider nil)
           (seen-model nil)
           (seen-think-level nil))
-      (clawmacs:register-agent-definition
+      (rplaca:register-agent-definition
        "researcher"
        :provider :zai
        :model "glm-5"
        :personality-prompt "research personality")
       (load-test-subagent-package)
       (with-subagent-package-function-override
-          (clawmacs::provider-request-streaming
+          (rplaca::provider-request-streaming
            (provider messages callback
                      &key model max-tokens tools reasoning-effort system-prompt)
            (declare (ignore messages callback max-tokens tools system-prompt))
@@ -228,8 +228,8 @@
                  seen-think-level reasoning-effort)
            (make-subagent-package-completed-stream-state-response
             "end_turn"
-            (list (clawmacs::canonical-text-block "delegated answer"))))
-        (clawmacs::init-default-keymap)
+            (list (rplaca::canonical-text-block "delegated answer"))))
+        (rplaca::init-default-keymap)
         (let* ((result (subagent-package-tool-result
                         "subagent_run"
                         '(:prompt "Research this"
@@ -250,10 +250,10 @@
   (with-subagent-package-state
     (let ((seen-system-prompt nil))
       (load-test-subagent-package)
-      (with-subagent-package-function-override (clawmacs::load-boot-files ()
+      (with-subagent-package-function-override (rplaca::load-boot-files ()
                                                 nil)
         (with-subagent-package-function-override
-            (clawmacs::provider-request-streaming
+            (rplaca::provider-request-streaming
              (provider messages callback
                        &key model max-tokens tools reasoning-effort system-prompt)
              (declare (ignore provider messages callback model max-tokens tools
@@ -261,8 +261,8 @@
              (setf seen-system-prompt system-prompt)
              (make-subagent-package-completed-stream-state-response
               "end_turn"
-              (list (clawmacs::canonical-text-block "custom answer"))))
-          (clawmacs::init-default-keymap)
+              (list (rplaca::canonical-text-block "custom answer"))))
+          (rplaca::init-default-keymap)
           (let* ((result (subagent-package-tool-result
                           "subagent_run"
                           '(:prompt "Use custom instructions"
@@ -276,7 +276,7 @@
             (is (getf result :ok))
             (is (search "TEMP CORE" seen-system-prompt))
             (is (search "TEMP PERSONALITY" seen-system-prompt))
-            (is (null (clawmacs:find-agent-definition "temporary-doc-agent")))
+            (is (null (rplaca:find-agent-definition "temporary-doc-agent")))
             (is (string= "custom answer" (getf run-result :final-text)))))))))
 
 (test subagent-async-tools-start-status-wait-and-cancel
@@ -284,15 +284,15 @@
   (with-subagent-package-state
     (load-test-subagent-package)
     (with-subagent-package-function-override
-        (clawmacs::provider-request-streaming
+        (rplaca::provider-request-streaming
          (provider messages callback
                    &key model max-tokens tools reasoning-effort system-prompt)
          (declare (ignore provider messages callback model max-tokens tools
                           reasoning-effort system-prompt))
          (make-subagent-package-completed-stream-state-response
           "end_turn"
-          (list (clawmacs::canonical-text-block "async answer"))))
-      (clawmacs::init-default-keymap)
+          (list (rplaca::canonical-text-block "async answer"))))
+      (rplaca::init-default-keymap)
       (let* ((started (subagent-package-tool-result
                        "subagent_start"
                        '(:prompt "Do async work"
@@ -319,7 +319,7 @@
           (is (getf waited-subagent :done-p))
           (is (string= "async answer" (getf run-result :final-text)))))
       (with-subagent-package-function-override
-          (clawmacs::provider-request-streaming
+          (rplaca::provider-request-streaming
            (provider messages callback
                      &key model max-tokens tools reasoning-effort system-prompt)
            (declare (ignore provider messages callback model max-tokens tools
@@ -327,7 +327,7 @@
            (sleep 0.1)
            (make-subagent-package-completed-stream-state-response
             "end_turn"
-            (list (clawmacs::canonical-text-block "late answer"))))
+            (list (rplaca::canonical-text-block "late answer"))))
         (let* ((started (subagent-package-tool-result
                          "subagent_start"
                          '(:prompt "Cancel me"

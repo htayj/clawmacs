@@ -832,7 +832,7 @@ and both existing and not-yet-existing targets are accepted."
 
 (defun isolated-lisp-eval-marker ()
   "Return the stdout marker used by isolated lisp_eval workers."
-  "CLAWMACS-ISOLATED-EVAL-RESULT ")
+  "RPLACA-ISOLATED-EVAL-RESULT ")
 
 (defun isolated-lisp-eval-script (code package-name)
   "Return a standalone SBCL script evaluating CODE in PACKAGE-NAME."
@@ -917,7 +917,7 @@ and both existing and not-yet-existing targets are accepted."
 (defun execute-isolated-lisp-eval (code package-name timeout)
   "Evaluate CODE in a fresh SBCL worker and return a Lisp data payload string."
   (let* ((script-path (merge-pathnames
-                       (format nil "clawmacs-isolated-eval-~A.lisp" (gensym))
+                       (format nil "rplaca-isolated-eval-~A.lisp" (gensym))
                        (uiop:temporary-directory))))
     (unwind-protect
          (progn

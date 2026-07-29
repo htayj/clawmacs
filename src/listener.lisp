@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Listener Buffers
@@ -19,7 +19,7 @@
                       directory-stack
                       last-values
                       command-history)))
-  "State for a Clawmacs McCLIM-style listener buffer."
+  "State for a RPLACA McCLIM-style listener buffer."
   (package-name "CL-USER" :type string)
   (directory-stack nil :type list)
   (last-values nil :type list)
@@ -309,7 +309,7 @@
             ",Room                    show implementation memory information"
             ",Clear Output History    clear this listener buffer"
             ""
-            "This buffer provides Lisp evaluation inside Clawmacs buffers.")))
+            "This buffer provides Lisp evaluation inside RPLACA buffers.")))
 
 (defparameter *listener-command-phrases*
   '(("help commands" . :help)
@@ -671,7 +671,7 @@
           (package-name (listener-default-package-name))
           (working-directory (truename "."))
           (add-to-ring-p nil))
-  "Create a Clawmacs listener buffer."
+  "Create a RPLACA listener buffer."
   (let ((buf (make-buffer name
                           :agent-name "listener"
                           :kind :listener

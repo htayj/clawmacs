@@ -1,4 +1,4 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite matching-suite)
 
@@ -27,13 +27,13 @@
 (test matching-core-exported-contracts-are-stable
   "Direct matching-core calls preserve CL-facing sentinel and list contracts."
   (is (equal '(0 2)
-             (clawmacs/matching-core:fuzzy-token-positions "gm" "glm-5")))
-  (is (null (clawmacs/matching-core:fuzzy-token-positions "zz" "glm-5")))
-  (is-true (clawmacs/matching-core:fuzzy-token-match-p "" "glm-5"))
-  (is-false (clawmacs/matching-core:fuzzy-token-match-p "zz" "glm-5"))
-  (is (= -1 (clawmacs/matching-core:fuzzy-token-score-or-negative-one
+             (rplaca/matching-core:fuzzy-token-positions "gm" "glm-5")))
+  (is (null (rplaca/matching-core:fuzzy-token-positions "zz" "glm-5")))
+  (is-true (rplaca/matching-core:fuzzy-token-match-p "" "glm-5"))
+  (is-false (rplaca/matching-core:fuzzy-token-match-p "zz" "glm-5"))
+  (is (= -1 (rplaca/matching-core:fuzzy-token-score-or-negative-one
              "zz" "glm-5")))
-  (is (= -1 (clawmacs/matching-core:fuzzy-score-or-negative-one
+  (is (= -1 (rplaca/matching-core:fuzzy-score-or-negative-one
              "zz" "glm-5")))
   (is (= 0 (fuzzy-score "" "glm-5"))))
 

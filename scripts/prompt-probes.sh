@@ -18,10 +18,10 @@ EOF
 }
 
 ONLY=""
-PROVIDER="${CLAWMACS_PROMPT_PROBE_PROVIDER:-openai-codex}"
-MODEL="${CLAWMACS_PROMPT_PROBE_MODEL:-gpt-5.6-sol}"
-FALLBACK_PROVIDER="${CLAWMACS_PROMPT_PROBE_FALLBACK_PROVIDER:-openrouter}"
-FALLBACK_MODEL="${CLAWMACS_PROMPT_PROBE_FALLBACK_MODEL:-openai/gpt-5.6-sol}"
+PROVIDER="${RPLACA_PROMPT_PROBE_PROVIDER:-openai-codex}"
+MODEL="${RPLACA_PROMPT_PROBE_MODEL:-gpt-5.6-sol}"
+FALLBACK_PROVIDER="${RPLACA_PROMPT_PROBE_FALLBACK_PROVIDER:-openrouter}"
+FALLBACK_MODEL="${RPLACA_PROMPT_PROBE_FALLBACK_MODEL:-openai/gpt-5.6-sol}"
 THINK=""
 KEEP_LOGS=0
 EXPLICIT_PROVIDER=0
@@ -112,7 +112,7 @@ if [ "$EXPLICIT_PROVIDER" -eq 1 ] && [ "$EXPLICIT_MODEL" -eq 0 ]; then
   esac
 fi
 
-ROOT=$(mktemp -d "${TMPDIR:-/tmp}/clawmacs-prompt-probes.XXXXXX")
+ROOT=$(mktemp -d "${TMPDIR:-/tmp}/rplaca-prompt-probes.XXXXXX")
 trap 'if [ "$KEEP_LOGS" -eq 0 ]; then rm -rf "$ROOT"; else echo "logs kept in $ROOT" >&2; fi' EXIT
 
 run_prompt() {
@@ -210,7 +210,7 @@ mkdir -p "$skills_root/demo/references"
 cat >"$skills_root/demo/SKILL.md" <<'EOF'
 ---
 name: demo-skill
-description: Demo probe skill for Clawmacs.
+description: Demo probe skill for RPLACA.
 ---
 When this skill is used, inspect references/guide.md and report the phrase skill-probe-marker.
 EOF

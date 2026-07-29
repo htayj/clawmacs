@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;;; Appearance declarations and resolution
 ;;;;
@@ -259,6 +259,7 @@ implementation-specific initialization path cannot provide this copy boundary."
             (:constructor %make-appearance-profile
                 (&key (selected-theme :classic) (strict-contrast nil)
                       (role-overrides nil)))
+            (:copier nil)
             (:conc-name %appearance-profile-))
   "Immutable frame-selectable profile; it contains no resolved CLIM objects."
   (selected-theme :classic :read-only t)

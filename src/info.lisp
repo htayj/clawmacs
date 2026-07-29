@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Info / Manual Buffers
@@ -10,8 +10,8 @@
 (defvar *info-buffer-states* (make-hash-table :test #'eq)
   "Per-buffer Info browser state.")
 
-(defvar *clawmacs-info-manual-path* nil
-  "Optional pathname to a generated Clawmacs Info manual.")
+(defvar *rplaca-info-manual-path* nil
+  "Optional pathname to a generated RPLACA Info manual.")
 
 (defvar *info-manual-cache* (make-hash-table :test #'equal)
   "Cache of parsed Info manuals keyed by source location.")
@@ -409,39 +409,39 @@
   "Return the top-level Info directory LOCATION."
   (make-info-location :system "dir" node))
 
-(defun clawmacs-info-manual-candidate-paths ()
-  "Return possible generated Info manual paths for Clawmacs."
+(defun rplaca-info-manual-candidate-paths ()
+  "Return possible generated Info manual paths for RPLACA."
   (remove nil
           (list
-           (and *clawmacs-info-manual-path*
-                (pathname *clawmacs-info-manual-path*))
+           (and *rplaca-info-manual-path*
+                (pathname *rplaca-info-manual-path*))
            (ignore-errors
-             (asdf:system-relative-pathname "clawmacs"
-                                            #P"docs/clawmacs.info"))
+             (asdf:system-relative-pathname "rplaca"
+                                            #P"docs/rplaca.info"))
            (ignore-errors
-             (asdf:system-relative-pathname "clawmacs"
-                                            #P"docs/manual/clawmacs.info"))
+             (asdf:system-relative-pathname "rplaca"
+                                            #P"docs/manual/rplaca.info"))
            (ignore-errors
-             (asdf:system-relative-pathname "clawmacs"
-                                            #P"manual/clawmacs.info"))
+             (asdf:system-relative-pathname "rplaca"
+                                            #P"manual/rplaca.info"))
            (ignore-errors
-             (asdf:system-relative-pathname "clawmacs"
-                                            #P"doc/clawmacs.info")))))
+             (asdf:system-relative-pathname "rplaca"
+                                            #P"doc/rplaca.info")))))
 
-(defun resolve-clawmacs-info-manual-file ()
-  "Return the first existing local Clawmacs Info manual, or NIL."
-  (loop :for candidate :in (clawmacs-info-manual-candidate-paths)
+(defun resolve-rplaca-info-manual-file ()
+  "Return the first existing local RPLACA Info manual, or NIL."
+  (loop :for candidate :in (rplaca-info-manual-candidate-paths)
         :for path := (and candidate
                           (ignore-errors (probe-file candidate)))
         :when path
           :return path))
 
-(defun resolve-clawmacs-info-location (&optional (node "Top"))
-  "Return a LOCATION for the Clawmacs manual."
-  (let ((path (resolve-clawmacs-info-manual-file)))
+(defun resolve-rplaca-info-location (&optional (node "Top"))
+  "Return a LOCATION for the RPLACA manual."
+  (let ((path (resolve-rplaca-info-manual-file)))
     (if path
-        (make-info-location :file "clawmacs" node :file-path path)
-        (make-info-location :synthetic "clawmacs" node))))
+        (make-info-location :file "rplaca" node :file-path path)
+        (make-info-location :synthetic "rplaca" node))))
 
 (defun info-location-for-manual (manual &key (node "Top") current-location)
   "Resolve MANUAL and NODE into an Info location."
@@ -459,8 +459,8 @@
                            manual-name
                            node-name
                            :file-path (info-location-file-path current-location)))
-      ((string-equal manual-name "clawmacs")
-       (resolve-clawmacs-info-location node-name))
+      ((string-equal manual-name "rplaca")
+       (resolve-rplaca-info-location node-name))
       (t
        (make-info-location :system manual-name node-name)))))
 
@@ -547,7 +547,7 @@
 
 (defun info-program-available-p ()
   "Return true when at least one Info manual directory is available."
-  (or (not (null (resolve-clawmacs-info-manual-file)))
+  (or (not (null (resolve-rplaca-info-manual-file)))
       (not (null (info-system-manual-files "dir")))))
 
 (defun info-parse-header-line (line)
@@ -673,12 +673,12 @@
                         :links nil
                         :error-p t)))
 
-(defun synthetic-clawmacs-info-document (location)
-  "Return the placeholder Clawmacs manual document for LOCATION."
+(defun synthetic-rplaca-info-document (location)
+  "Return the placeholder RPLACA manual document for LOCATION."
   (let* ((dir-target (info-directory-location))
          (lines
            (list
-            (list (make-info-segment :text "Clawmacs Manual"
+            (list (make-info-segment :text "RPLACA Manual"
                                      :face :selector-title))
             (list (make-info-segment
                    :text "***************"
@@ -687,10 +687,10 @@
                    :text ""
                    :face :default-text))
             (list (make-info-segment
-                   :text "The Clawmacs Texinfo manual is not installed yet."
+                   :text "The RPLACA Texinfo manual is not installed yet."
                    :face :default-text))
             (list (make-info-segment
-                   :text "When a generated clawmacs.info file is present, this buffer will"
+                   :text "When a generated rplaca.info file is present, this buffer will"
                    :face :default-text))
             (list (make-info-segment
                    :text "open it automatically through the same Info browser."
@@ -702,7 +702,7 @@
     (make-info-document
      :manual (info-location-manual location)
      :node (info-location-node location)
-     :title "Clawmacs Manual"
+     :title "RPLACA Manual"
      :up-target dir-target
      :top-target (copy-info-location location)
      :lines lines
@@ -1010,7 +1010,7 @@
   "Return an Info document for LOCATION."
   (case (info-location-source-kind location)
     (:synthetic
-     (synthetic-clawmacs-info-document location))
+     (synthetic-rplaca-info-document location))
     (otherwise
      (let ((record (info-find-node-record location)))
        (cond
@@ -1234,11 +1234,11 @@
 (defcommand info-open-manual-command
   :prompts ((manual :prompt "Info manual or (manual)node")))
 
-(defun clawmacs-manual-command (buffer)
-  "Open the Clawmacs manual, falling back to a placeholder when absent."
+(defun rplaca-manual-command (buffer)
+  "Open the RPLACA manual, falling back to a placeholder when absent."
   (declare (ignore buffer))
-  (show-info-location (resolve-clawmacs-info-location "Top")))
-(defcommand clawmacs-manual-command)
+  (show-info-location (resolve-rplaca-info-location "Top")))
+(defcommand rplaca-manual-command)
 
 (defun info-goto-node-command (buffer target)
   "In an Info buffer, visit TARGET in the current manual or explicit manual."

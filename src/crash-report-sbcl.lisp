@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; SBCL fatal-hook, stack, thread, and private-file adapter
@@ -61,7 +61,7 @@
              (let ((package (symbol-package symbol)))
                (and package
                     (let ((name (package-name package)))
-                      (or (string= name "CLAWMACS")
+                      (or (string= name "RPLACA")
                           (string= name "CL")
                           (string= name "COMMON-LISP")
                           (string= name "UIOP")
@@ -72,7 +72,7 @@
                           (string= name "CLIME")
                           (string= name "ESA")
                           (string= name "DREI")
-                          (uiop:string-prefix-p "CLAWMACS/" name)
+                          (uiop:string-prefix-p "RPLACA/" name)
                           (uiop:string-prefix-p "SB-" name))))))
            (walk (object)
              (cond
@@ -142,7 +142,7 @@
            (search "subprocess" name))
        :tool-worker)
       ((search "subagent" name) :subagent-worker)
-      ((search "clawmacs" name) :clawmacs-worker)
+      ((search "rplaca" name) :rplaca-worker)
       ((eq thread current) :other)
       (t :other))))
 

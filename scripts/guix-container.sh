@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-LAUNCHER_PREFIX='[clawmacs-env]'
+LAUNCHER_PREFIX='[rplaca-env]'
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 MODE=''
 PREFLIGHT_ONLY=0
@@ -20,7 +20,7 @@ CONTAINER_LAUNCH_DIR=/tmp
 GUIX_MANIFEST_PATH=''
 HOST_USER_HOME=${HOME:-}
 QUICKLISP_CACHE_LOCK_TIMEOUT_SECS=600
-PRESERVED_ENV_PATTERN='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|CLAWMACS_SSL_LIB|CLAWMACS_FONT_PATH|CLAWMACS_DEBUG_LOG|CLAWMACS_PROMPT_PROJECT_ROOT|CLAWMACS_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS|CLAWMACS_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS|CLAWMACS_GUI_E2E_STABILITY_MENU_ITERATIONS|CLAWMACS_GUI_E2E_STABILITY_EXPOSE_ITERATIONS|CLAWMACS_GUI_E2E_COLD_CACHE|HOME|CLAWMACS_QUICKLISP_SETUP|XDG_CACHE_HOME|RUNTIME_LD_LIBRARY_PATH'
+PRESERVED_ENV_PATTERN='TERM|DISPLAY|XAUTHORITY|OPENAI_API_KEY|ZAI_CODING_MAX_API_KEY|OPENROUTER_API_KEY|RPLACA_SSL_LIB|RPLACA_FONT_PATH|RPLACA_DEBUG_LOG|RPLACA_PROMPT_PROJECT_ROOT|RPLACA_APPEARANCE_THEME|RPLACA_CRASH_REPORT_DIR|RPLACA_E2E_PROVIDER|RPLACA_E2E_EVENTS|RPLACA_GUI_E2E_INITIAL_INPUT_FOCUS|RPLACA_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS|RPLACA_GUI_E2E_APP_EXIT_TIMEOUT_SECONDS|RPLACA_GUI_E2E_STABILITY_MENU_ITERATIONS|RPLACA_GUI_E2E_STABILITY_EXPOSE_ITERATIONS|RPLACA_GUI_E2E_COLD_CACHE|HOME|RPLACA_QUICKLISP_SETUP|XDG_CACHE_HOME|XDG_STATE_HOME|RUNTIME_LD_LIBRARY_PATH'
 
 stderr() {
   printf '%s %s\n' "$LAUNCHER_PREFIX" "$*" >&2
@@ -35,7 +35,7 @@ fail() {
 
 is_test_toggle_enabled() {
   key="$1"
-  if [ "${CLAWMACS_ENABLE_TEST_TOGGLES:-0}" != "1" ]; then
+  if [ "${RPLACA_ENABLE_TEST_TOGGLES:-0}" != "1" ]; then
     return 1
   fi
   eval "value=\${$key:-0}"
@@ -124,7 +124,7 @@ validate_launcher_cli() {
 }
 
 resolve_repo_root() {
-  if is_test_toggle_enabled CLAWMACS_TEST_FAIL_REPO_ROOT; then
+  if is_test_toggle_enabled RPLACA_TEST_FAIL_REPO_ROOT; then
     fail 120 "failed to resolve repository root"
   fi
 
@@ -140,7 +140,7 @@ resolve_repo_root() {
 }
 
 validate_guix_available() {
-  if is_test_toggle_enabled CLAWMACS_TEST_MISSING_GUIX; then
+  if is_test_toggle_enabled RPLACA_TEST_MISSING_GUIX; then
     fail 110 "missing guix"
   fi
 
@@ -150,7 +150,7 @@ validate_guix_available() {
 }
 
 validate_project_mount() {
-  if is_test_toggle_enabled CLAWMACS_TEST_MISSING_MOUNT; then
+  if is_test_toggle_enabled RPLACA_TEST_MISSING_MOUNT; then
     fail 111 "missing project mount"
   fi
 
@@ -173,8 +173,8 @@ load_quicklisp_bootstrap_env() {
   QUICKLISP_BOOTSTRAP_RETRIES='2'
 
   env_path="$SCRIPT_DIR/quicklisp-bootstrap.env"
-  if is_test_toggle_enabled CLAWMACS_TEST_QUICKLISP_ENV_PATH_SET; then
-    env_path=${CLAWMACS_TEST_QUICKLISP_ENV_PATH:-}
+  if is_test_toggle_enabled RPLACA_TEST_QUICKLISP_ENV_PATH_SET; then
+    env_path=${RPLACA_TEST_QUICKLISP_ENV_PATH:-}
     case "$env_path" in
       "$REPO_ROOT"/.cache/launcher-test-*/quicklisp-bootstrap.env)
         ;;
@@ -201,7 +201,7 @@ load_quicklisp_bootstrap_env() {
 }
 
 validate_quicklisp_pin_values() {
-  if is_test_toggle_enabled CLAWMACS_TEST_PIN_VALUES_MISSING; then
+  if is_test_toggle_enabled RPLACA_TEST_PIN_VALUES_MISSING; then
     fail 115 "quicklisp bootstrap pin values missing"
   fi
 
@@ -218,8 +218,8 @@ validate_quicklisp_pin_values() {
 
 set_quicklisp_runtime_env() {
   cache_relative='.cache'
-  if is_test_toggle_enabled CLAWMACS_TEST_CACHE_ROOT_SET; then
-    cache_relative=${CLAWMACS_TEST_CACHE_RELATIVE:-}
+  if is_test_toggle_enabled RPLACA_TEST_CACHE_ROOT_SET; then
+    cache_relative=${RPLACA_TEST_CACHE_RELATIVE:-}
     case "$cache_relative" in
       .cache/launcher-test-*)
         cache_suffix=${cache_relative#.cache/launcher-test-}
@@ -247,13 +247,13 @@ set_quicklisp_runtime_env() {
   mkdir -p "$HOST_HOME/.config"
 
   if [ -n "$HOST_USER_HOME" ]; then
-    HOST_CONFIG_DIR="$HOST_USER_HOME/.config/clawmacs"
+    HOST_CONFIG_DIR="$HOST_USER_HOME/.config/rplaca"
   fi
 
   export HOME="$WORKSPACE_HOME"
-  export CLAWMACS_QUICKLISP_SETUP="$WORKSPACE_QUICKLISP_SETUP"
+  export RPLACA_QUICKLISP_SETUP="$WORKSPACE_QUICKLISP_SETUP"
   export XDG_CACHE_HOME="$WORKSPACE_XDG_CACHE"
-  export CLAWMACS_PROMPT_PROJECT_ROOT="${CLAWMACS_PROMPT_PROJECT_ROOT:-/workspace}"
+  export RPLACA_PROMPT_PROJECT_ROOT="${RPLACA_PROMPT_PROJECT_ROOT:-/workspace}"
 }
 
 run_in_container() {
@@ -278,7 +278,7 @@ bootstrap_quicklisp_once() {
   bootstrap_target_home="$1"
   download_path="$WORKSPACE_HOME/quicklisp.lisp"
 
-  if is_test_toggle_enabled CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL; then
+  if is_test_toggle_enabled RPLACA_TEST_QUICKLISP_BOOTSTRAP_FAIL; then
     return 1
   fi
 
@@ -286,7 +286,7 @@ bootstrap_quicklisp_once() {
 }
 
 validate_quicklisp_bootstrap() {
-  if is_test_toggle_enabled CLAWMACS_TEST_QUICKLISP_BOOTSTRAP_FAIL; then
+  if is_test_toggle_enabled RPLACA_TEST_QUICKLISP_BOOTSTRAP_FAIL; then
     fail 112 "quicklisp bootstrap failed"
   fi
 
@@ -348,7 +348,7 @@ validate_quicklisp_bootstrap() {
 }
 
 validate_quicklisp_cache_lock_tool() {
-  if is_test_toggle_enabled CLAWMACS_TEST_MISSING_FLOCK; then
+  if is_test_toggle_enabled RPLACA_TEST_MISSING_FLOCK; then
     fail 123 "quicklisp cache preparation failed: missing flock"
   fi
 
@@ -365,9 +365,9 @@ warm_quicklisp_for_payload() {
   host_warmup_log="$HOST_CACHE_ROOT/quicklisp-warmup.log"
   container_warmup_log="$WORKSPACE_XDG_CACHE/quicklisp-warmup.log"
   rm -f "$host_warmup_log"
-  if ! run_in_container 'set -eu; cd /workspace; HOME="$1" XDG_CACHE_HOME="$2"; CL_SOURCE_REGISTRY="${GUIX_ENVIRONMENT:?missing Guix environment}/share/common-lisp/systems/"; export HOME XDG_CACHE_HOME CL_SOURCE_REGISTRY; if [ -n "$4" ]; then LD_LIBRARY_PATH="$4"; export LD_LIBRARY_PATH; else unset LD_LIBRARY_PATH; fi; sbcl --noinform --non-interactive --disable-debugger --load "$3" --load "/workspace/scripts/assert-mcclim-provenance.lisp" --eval "(push (truename \".\") asdf:*central-registry*)" --eval "(ql:quickload :clawmacs)" --eval "(quit)" >"$5" 2>&1' "$WORKSPACE_HOME" "$WORKSPACE_XDG_CACHE" "$WORKSPACE_QUICKLISP_SETUP" "$RUNTIME_LD_LIBRARY_PATH" "$container_warmup_log"; then
+  if ! run_in_container 'set -eu; cd /workspace; HOME="$1" XDG_CACHE_HOME="$2"; CL_SOURCE_REGISTRY="${GUIX_ENVIRONMENT:?missing Guix environment}/share/common-lisp/systems/"; export HOME XDG_CACHE_HOME CL_SOURCE_REGISTRY; if [ -n "$4" ]; then LD_LIBRARY_PATH="$4"; export LD_LIBRARY_PATH; else unset LD_LIBRARY_PATH; fi; sbcl --noinform --non-interactive --disable-debugger --load "$3" --load "/workspace/scripts/assert-mcclim-provenance.lisp" --eval "(push (truename \".\") asdf:*central-registry*)" --eval "(ql:quickload :rplaca)" --eval "(quit)" >"$5" 2>&1' "$WORKSPACE_HOME" "$WORKSPACE_XDG_CACHE" "$WORKSPACE_QUICKLISP_SETUP" "$RUNTIME_LD_LIBRARY_PATH" "$container_warmup_log"; then
     [ -f "$host_warmup_log" ] && tail -80 "$host_warmup_log" >&2
-    fail 123 "quicklisp cache preparation failed: clawmacs warmup"
+    fail 123 "quicklisp cache preparation failed: rplaca warmup"
   fi
 }
 
@@ -438,7 +438,7 @@ e2e_invocation_requires_credential() {
 }
 
 validate_provider_credential() {
-  if is_test_toggle_enabled CLAWMACS_TEST_MISSING_PROVIDER_CREDENTIAL; then
+  if is_test_toggle_enabled RPLACA_TEST_MISSING_PROVIDER_CREDENTIAL; then
     fail 116 "missing required provider credential"
   fi
 
@@ -458,12 +458,12 @@ validate_provider_credential() {
 }
 
 validate_override_path() {
-  if is_test_toggle_enabled CLAWMACS_TEST_INVALID_OVERRIDE_PATH; then
+  if is_test_toggle_enabled RPLACA_TEST_INVALID_OVERRIDE_PATH; then
     fail 117 "invalid override path"
   fi
 
-  validate_canonical_override CLAWMACS_SSL_LIB directory
-  validate_canonical_override CLAWMACS_FONT_PATH readable-file
+  validate_canonical_override RPLACA_SSL_LIB directory
+  validate_canonical_override RPLACA_FONT_PATH readable-file
 }
 
 resolve_canonical_path() {
@@ -551,14 +551,14 @@ add_runtime_library_path() {
 }
 
 validate_runtime_openssl_path() {
-  if is_test_toggle_enabled CLAWMACS_TEST_MISSING_OPENSSL_PATH; then
+  if is_test_toggle_enabled RPLACA_TEST_MISSING_OPENSSL_PATH; then
     fail 121 "missing required runtime OpenSSL path"
   fi
 
   RESOLVED_SSL_LIB_PATH=''
 
-  if [ -n "${CLAWMACS_SSL_LIB:-}" ]; then
-    RESOLVED_SSL_LIB_PATH=$(resolve_canonical_path "$CLAWMACS_SSL_LIB") || fail 117 "invalid override path"
+  if [ -n "${RPLACA_SSL_LIB:-}" ]; then
+    RESOLVED_SSL_LIB_PATH=$(resolve_canonical_path "$RPLACA_SSL_LIB") || fail 117 "invalid override path"
   fi
 
   if [ -z "$RESOLVED_SSL_LIB_PATH" ]; then
@@ -604,7 +604,7 @@ validate_e2e_args() {
     return 0
   fi
 
-  if is_test_toggle_enabled CLAWMACS_TEST_INVALID_E2E_ARGS; then
+  if is_test_toggle_enabled RPLACA_TEST_INVALID_E2E_ARGS; then
     fail 122 "invalid e2e arguments"
   fi
 
@@ -623,28 +623,28 @@ binary_visible() {
 }
 
 screenshot_command_visible() {
-  if is_test_toggle_enabled CLAWMACS_TEST_HIDE_SCREENSHOT; then
+  if is_test_toggle_enabled RPLACA_TEST_HIDE_SCREENSHOT; then
     return 1
   fi
   run_in_container 'set -eu; command -v import >/dev/null 2>&1 || command -v magick >/dev/null 2>&1 || command -v xwd >/dev/null 2>&1'
 }
 
 validate_mode_binaries() {
-  if ! binary_visible sbcl CLAWMACS_TEST_HIDE_SBCL; then
+  if ! binary_visible sbcl RPLACA_TEST_HIDE_SBCL; then
     fail 113 "missing required binary: sbcl"
   fi
 
   if [ "$MODE" = "e2e" ]; then
-    if ! binary_visible python3 CLAWMACS_TEST_HIDE_PYTHON3; then
+    if ! binary_visible python3 RPLACA_TEST_HIDE_PYTHON3; then
       fail 114 "missing required binary: python3"
     fi
-    if ! binary_visible Xvfb CLAWMACS_TEST_HIDE_XVFB; then
+    if ! binary_visible Xvfb RPLACA_TEST_HIDE_XVFB; then
       fail 114 "missing required binary: Xvfb"
     fi
-    if ! binary_visible xdotool CLAWMACS_TEST_HIDE_XDOTOOL; then
+    if ! binary_visible xdotool RPLACA_TEST_HIDE_XDOTOOL; then
       fail 114 "missing required binary: xdotool"
     fi
-    if ! binary_visible setsid CLAWMACS_TEST_HIDE_SETSID; then
+    if ! binary_visible setsid RPLACA_TEST_HIDE_SETSID; then
       fail 114 "missing required binary: setsid"
     fi
     if ! screenshot_command_visible; then
@@ -669,11 +669,11 @@ run_preflight() {
 }
 
 clear_test_toggles() {
-  names=$(env | grep '^CLAWMACS_TEST_' | cut -d= -f1 || true)
+  names=$(env | grep '^RPLACA_TEST_' | cut -d= -f1 || true)
   for name in $names; do
     unset "$name"
   done
-  unset CLAWMACS_ENABLE_TEST_TOGGLES
+  unset RPLACA_ENABLE_TEST_TOGGLES
 }
 
 launch_payload() {
@@ -689,14 +689,25 @@ launch_payload() {
     fail 112 "quicklisp bootstrap failed"
   fi
 
-  # User init directory: share ~/.clawmacs.d/ so init.lisp is available
+  # Canonical state is writable. Legacy state is exposed read-only at its
+  # same-shape path so inert migration fallbacks can see it while executable
+  # init, package, skill, project, and MCP stores remain refusal-only.
   extra_container_args=""
   if [ -n "$HOST_CONFIG_DIR" ]; then
     mkdir -p "$HOST_CONFIG_DIR"
-    extra_container_args="$extra_container_args --share=$HOST_CONFIG_DIR=$WORKSPACE_HOME/.config/clawmacs"
+    extra_container_args="$extra_container_args --share=$HOST_CONFIG_DIR=$WORKSPACE_HOME/.config/rplaca"
+  fi
+  if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.rplaca.d" ]; then
+    extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.rplaca.d=$WORKSPACE_HOME/.rplaca.d"
+  fi
+  if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.config/clawmacs" ]; then
+    extra_container_args="$extra_container_args --expose=$HOST_USER_HOME/.config/clawmacs=$WORKSPACE_HOME/.config/clawmacs"
   fi
   if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.clawmacs.d" ]; then
-    extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.clawmacs.d=$WORKSPACE_HOME/.clawmacs.d"
+    extra_container_args="$extra_container_args --expose=$HOST_USER_HOME/.clawmacs.d=$WORKSPACE_HOME/.clawmacs.d"
+  fi
+  if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.clawmacs.projects.d" ]; then
+    extra_container_args="$extra_container_args --expose=$HOST_USER_HOME/.clawmacs.projects.d=$WORKSPACE_HOME/.clawmacs.projects.d"
   fi
   if [ -n "$HOST_USER_HOME" ] && [ -d "$HOST_USER_HOME/.codex" ]; then
     extra_container_args="$extra_container_args --share=$HOST_USER_HOME/.codex=$WORKSPACE_HOME/.codex"
@@ -705,7 +716,7 @@ launch_payload() {
   # other graphical toolkit) can connect to the host display server. McCLIM
   # E2E starts Xvfb inside the container, so it needs a private writable X
   # socket directory instead of the host socket exposed read-only.
-  if [ "${CLAWMACS_CONTAINER_DISABLE_HOST_X:-0}" != "1" ]; then
+  if [ "${RPLACA_CONTAINER_DISABLE_HOST_X:-0}" != "1" ]; then
     if [ -d "/tmp/.X11-unix" ]; then
       extra_container_args="$extra_container_args --expose=/tmp/.X11-unix"
     fi
@@ -716,13 +727,13 @@ launch_payload() {
 
   export RUNTIME_LD_LIBRARY_PATH
   # shellcheck disable=SC2086
-  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --no-cwd --network --preserve="$PRESERVED_ENV_PATTERN" --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export CLAWMACS_IN_GUIX_CONTAINER=1 HOME="${HOME:-/workspace/.cache/home}" CLAWMACS_QUICKLISP_SETUP="${CLAWMACS_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}" CLAWMACS_PROMPT_PROJECT_ROOT="${CLAWMACS_PROMPT_PROJECT_ROOT:-/workspace}" CL_SOURCE_REGISTRY="${GUIX_ENVIRONMENT:?missing Guix environment}/share/common-lisp/systems/"; if [ -n "${RUNTIME_LD_LIBRARY_PATH:-}" ]; then export LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH"; else unset LD_LIBRARY_PATH; fi; exec "$@"' bash "$@"
+  cd "$CONTAINER_LAUNCH_DIR" && guix shell -f "$GUIX_MANIFEST_PATH" --container --no-cwd --network --preserve="$PRESERVED_ENV_PATTERN" --share="$REPO_ROOT=/workspace" $extra_container_args -- bash -lc 'cd /workspace && export RPLACA_IN_GUIX_CONTAINER=1 HOME="${HOME:-/workspace/.cache/home}" RPLACA_QUICKLISP_SETUP="${RPLACA_QUICKLISP_SETUP:-/workspace/.cache/home/quicklisp/setup.lisp}" XDG_CACHE_HOME="${XDG_CACHE_HOME:-/workspace/.cache}" RPLACA_PROMPT_PROJECT_ROOT="${RPLACA_PROMPT_PROJECT_ROOT:-/workspace}" CL_SOURCE_REGISTRY="${GUIX_ENVIRONMENT:?missing Guix environment}/share/common-lisp/systems/"; if [ -n "${RUNTIME_LD_LIBRARY_PATH:-}" ]; then export LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH"; else unset LD_LIBRARY_PATH; fi; exec "$@"' bash "$@"
 }
 
 main() {
   run_preflight "$@"
 
-  if [ "${CLAWMACS_DEBUG:-0}" = "1" ]; then
+  if [ "${RPLACA_DEBUG:-0}" = "1" ]; then
     diagnostic_env OPENAI_API_KEY
     diagnostic_env ZAI_CODING_MAX_API_KEY
     diagnostic_env OPENROUTER_API_KEY

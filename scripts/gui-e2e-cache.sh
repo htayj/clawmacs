@@ -7,7 +7,7 @@
 GUI_E2E_CACHE_SEED_STATUS=not-attempted
 
 gui_e2e_cold_cache_requested_p() {
-  case "${CLAWMACS_GUI_E2E_COLD_CACHE:-0}" in
+  case "${RPLACA_GUI_E2E_COLD_CACHE:-0}" in
     1|true|TRUE|yes|YES|on|ON)
       return 0
       ;;

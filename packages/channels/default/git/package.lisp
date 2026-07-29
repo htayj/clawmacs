@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (defvar *git-tool-default-max-chars* 12000
   "Default maximum characters returned from git stdout or stderr.")
@@ -296,7 +296,7 @@
   messages concise and specific.
 - Use `git_push` for normal pushes only. There are no force-push, reset,
   checkout, restore, clean, rebase, or stash tools in this package.
-- Prefer `project` when a Clawmacs project is known. Otherwise use a
+- Prefer `project` when a RPLACA project is known. Otherwise use a
   `repository` path or omit both to use the current buffer or tool working
   directory. Absolute and parent-relative repository paths are allowed.
 - Avoid `lisp_eval` or shell-style workarounds for git operations when a
@@ -309,7 +309,7 @@
   :description "Return git status for a repository. Defaults to compact short output."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. Takes precedence over repository.")
+                  :description "Optional RPLACA project name. Takes precedence over repository.")
          (repository :type "string" :required nil
                      :description "Optional repository directory path.")
          (short :type "boolean" :required nil
@@ -322,7 +322,7 @@
   :description "Return compact git log output for a repository."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. Takes precedence over repository.")
+                  :description "Optional RPLACA project name. Takes precedence over repository.")
          (repository :type "string" :required nil
                      :description "Optional repository directory path.")
          (revision :type "string" :required nil
@@ -339,7 +339,7 @@
   :description "Return git diff output for unstaged or staged changes."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. Takes precedence over repository.")
+                  :description "Optional RPLACA project name. Takes precedence over repository.")
          (repository :type "string" :required nil
                      :description "Optional repository directory path.")
          (path :type "string" :required nil
@@ -356,7 +356,7 @@
   :description "Return git show output for a revision. Defaults to HEAD."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. Takes precedence over repository.")
+                  :description "Optional RPLACA project name. Takes precedence over repository.")
          (repository :type "string" :required nil
                      :description "Optional repository directory path.")
          (revision :type "string" :required nil
@@ -371,7 +371,7 @@
   :description "List git branches for a repository."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. Takes precedence over repository.")
+                  :description "Optional RPLACA project name. Takes precedence over repository.")
          (repository :type "string" :required nil
                      :description "Optional repository directory path.")
          (all :type "boolean" :required nil
@@ -382,7 +382,7 @@
   :description "List git remotes for a repository."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. Takes precedence over repository.")
+                  :description "Optional RPLACA project name. Takes precedence over repository.")
          (repository :type "string" :required nil
                      :description "Optional repository directory path.")
          (verbose :type "boolean" :required nil
@@ -393,7 +393,7 @@
   :description "Stage specific safe repo-relative paths with git add."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. Takes precedence over repository.")
+                  :description "Optional RPLACA project name. Takes precedence over repository.")
          (repository :type "string" :required nil
                      :description "Optional repository directory path.")
          (paths :type "array" :items ((:type . "string"))
@@ -404,7 +404,7 @@
   :description "Create a git commit with the supplied message."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. Takes precedence over repository.")
+                  :description "Optional RPLACA project name. Takes precedence over repository.")
          (repository :type "string" :required nil
                      :description "Optional repository directory path.")
          (message :type "string"
@@ -415,7 +415,7 @@
   :description "Push the current repository to a remote. Supports normal pushes only."
   :call-style :raw-args
   :args ((project :type "string" :required nil
-                  :description "Optional Clawmacs project name. Takes precedence over repository.")
+                  :description "Optional RPLACA project name. Takes precedence over repository.")
          (repository :type "string" :required nil
                      :description "Optional repository directory path.")
          (remote :type "string" :required nil

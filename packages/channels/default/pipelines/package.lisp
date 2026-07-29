@@ -1,13 +1,13 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 (register-package-prompt-section
  "pipelines"
  "## Deterministic pipelines
 
-- Clawmacs pipelines are user-defined, deterministic routing graphs that run
+- RPLACA pipelines are user-defined, deterministic routing graphs that run
   one or more agent stages for a user request.
 - A pipeline stage can use the original user input, the previous stage output,
-  or a named prior stage output. Clawmacs handles that routing outside the
+  or a named prior stage output. RPLACA handles that routing outside the
   model; do not simulate the routing yourself unless the user explicitly asks.
 - When a buffer has an active pipeline, normal message sending runs the
   configured pipeline instead of a single agent response.
@@ -185,11 +185,11 @@
   (let ((previous-plan (pipeline-stage-parsed-output context "plan"))
         (previous-test (self-modify-test-feedback context)))
     (format nil
-            "You are planning a Clawmacs self-modification workflow. Do not implement yet.~%~%
+            "You are planning a RPLACA self-modification workflow. Do not implement yet.~%~%
 Return JSON only with these keys:~%
 - \"plan\": short high-signal plan summary~%
 - \"implementation\": implementation-stage instructions~%
-- \"packages\": array of installed Clawmacs package names to enable~%
+- \"packages\": array of installed RPLACA package names to enable~%
 - \"skills\": array of enabled skill names to inject~%
 - \"tests\": array of deterministic self-test method names to run after implementation~%
 - \"docs\": documentation update instructions to apply only after tests pass~%
@@ -222,7 +222,7 @@ lisp_eval are checkpointed automatically, `recovery_list` can summarize recent
 checkpoints after failures, and risky compile/load/eval probes should use
 `lisp_eval` with :mode \"isolated\". Provider-driven live evaluation is refused
 because it can block or terminate the CLIM frame process. Do not reduce
-Clawmacs self-modification capability; make
+RPLACA self-modification capability; make
 changes recoverable and repairable.
 
 Do the code changes now. Do not update docs or init.lisp yet unless doing so is
@@ -236,7 +236,7 @@ strictly necessary to make the code build or test."
   "Return the self-testing stage prompt for the bundled self-modify pipeline."
   (let ((plan (self-modify-plan-data context)))
     (format nil
-            "You are verifying a completed Clawmacs code change. Do not modify code in this stage.~%~%
+            "You are verifying a completed RPLACA code change. Do not modify code in this stage.~%~%
 User request:~%~A~%~%
 Plan summary:~%~A~%~%
 Selected deterministic test methods: ~{~A~^, ~}.~%~%
@@ -344,7 +344,7 @@ manual change for the user instead."
    :description "Run the full FiveAM unit suite in the Guix runtime container."
    :command
    '("./scripts/guix-container.sh" "--mode" "run" "--" "sh" "-lc"
-     "sbcl --noinform --load \"$CLAWMACS_QUICKLISP_SETUP\" --eval \"(push (truename \\\".\\\") asdf:*central-registry*)\" --eval \"(ql:quickload :clawmacs/tests)\" --eval \"(fiveam:run! (quote clawmacs/tests::clawmacs-suite))\" --eval \"(quit)\""))
+     "sbcl --noinform --load \"$RPLACA_QUICKLISP_SETUP\" --eval \"(push (truename \\\".\\\") asdf:*central-registry*)\" --eval \"(ql:quickload :rplaca/tests)\" --eval \"(fiveam:run! (quote rplaca/tests::rplaca-suite))\" --eval \"(quit)\""))
   (register-pipeline-test-profile
    "prompt-probes"
    :description "Run the full live prompt.sh probe harness."

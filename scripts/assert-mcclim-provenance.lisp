@@ -20,7 +20,7 @@
           (unless (uiop:subpathp source expected-root)
             (error "ASDF system ~S resolved outside pinned McCLIM tree: ~A"
                    name source))
-          (format *trace-output* "[clawmacs-env] ~A => ~A~%"
+          (format *trace-output* "[rplaca-env] ~A => ~A~%"
                   name source))))))
 
 (assert-guix-mcclim-provenance)

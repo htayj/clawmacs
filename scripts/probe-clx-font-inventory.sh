@@ -2,15 +2,15 @@
 # Run the real public font-enumeration round trip in an isolated Guix Xvfb.
 set -eu
 
-probe_test_double=${CLAWMACS_PROBE_TEST_DOUBLE:-}
+probe_test_double=${RPLACA_PROBE_TEST_DOUBLE:-}
 
-if [ "${CLAWMACS_IN_GUIX_CONTAINER:-0}" != "1" ]; then
+if [ "${RPLACA_IN_GUIX_CONTAINER:-0}" != "1" ]; then
   if [ -n "$probe_test_double" ]; then
     exec "$probe_test_double" launcher \
       ./scripts/guix-container.sh --mode e2e -- \
       sh scripts/probe-clx-font-inventory.sh --inner
   fi
-  export CLAWMACS_CONTAINER_DISABLE_HOST_X=1
+  export RPLACA_CONTAINER_DISABLE_HOST_X=1
   exec ./scripts/guix-container.sh --mode e2e -- \
     sh scripts/probe-clx-font-inventory.sh --inner
 fi
@@ -27,8 +27,8 @@ fi
 exec sh -lc '
   set -eu
   tmp=$(mktemp -d)
-  payload_timeout_tenths=${CLAWMACS_PROBE_PAYLOAD_TIMEOUT_TENTHS:-1800}
-  termination_grace_tenths=${CLAWMACS_PROBE_TERMINATION_GRACE_TENTHS:-50}
+  payload_timeout_tenths=${RPLACA_PROBE_PAYLOAD_TIMEOUT_TENTHS:-1800}
+  termination_grace_tenths=${RPLACA_PROBE_TERMINATION_GRACE_TENTHS:-50}
   case "$payload_timeout_tenths:$termination_grace_tenths" in
     *[!0-9:]*|:*|*:) echo "invalid probe timeout" >&2; exit 64 ;;
   esac
@@ -84,8 +84,8 @@ exec sh -lc '
     rm -rf "$tmp"
   }
   trap cleanup EXIT INT TERM
-  if [ -n "${CLAWMACS_PROBE_TEST_DOUBLE:-}" ]; then
-    "$CLAWMACS_PROBE_TEST_DOUBLE" xvfb 3>"$tmp/display" >"$tmp/xvfb.log" 2>&1 &
+  if [ -n "${RPLACA_PROBE_TEST_DOUBLE:-}" ]; then
+    "$RPLACA_PROBE_TEST_DOUBLE" xvfb 3>"$tmp/display" >"$tmp/xvfb.log" 2>&1 &
   else
     Xvfb -displayfd 3 -screen 0 800x600x24 -nolisten tcp -ac \
       3>"$tmp/display" >"$tmp/xvfb.log" 2>&1 &
@@ -98,12 +98,12 @@ exec sh -lc '
   fi
   export DISPLAY=":$(tr -d "\r\n" < "$tmp/display")"
   payload_log="$tmp/payload.log"
-  if [ -n "${CLAWMACS_PROBE_TEST_DOUBLE:-}" ]; then
-    setsid env CLAWMACS_PROBE_KIND=font \
-      "$CLAWMACS_PROBE_TEST_DOUBLE" sbcl >"$payload_log" 2>&1 &
+  if [ -n "${RPLACA_PROBE_TEST_DOUBLE:-}" ]; then
+    setsid env RPLACA_PROBE_KIND=font \
+      "$RPLACA_PROBE_TEST_DOUBLE" sbcl >"$payload_log" 2>&1 &
   else
     setsid sbcl --noinform --non-interactive \
-      --load "$CLAWMACS_QUICKLISP_SETUP" \
+      --load "$RPLACA_QUICKLISP_SETUP" \
       --eval "(push (truename \".\") asdf:*central-registry*)" \
       --load scripts/probe-clx-font-inventory.lisp --eval "(quit)" \
       >"$payload_log" 2>&1 &

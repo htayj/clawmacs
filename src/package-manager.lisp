@@ -1,11 +1,11 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Package Loader
 ;;; --------------------------------------------------------------------------
 
 (defstruct package-channel
-  "A local channel root that advertises Clawmacs packages."
+  "A local channel root that advertises RPLACA packages."
   name
   root
   description
@@ -33,27 +33,27 @@
   handler)
 
 (defstruct package-prompt-section
-  "A prompt section contributed by a loaded Clawmacs package."
+  "A prompt section contributed by a loaded RPLACA package."
   name
   title
   package
   body)
 
-(defun clawmacs-system-source-directory ()
-  "Return the source directory for the clawmacs ASDF system."
-  (or (ignore-errors (asdf:system-source-directory :clawmacs))
+(defun rplaca-system-source-directory ()
+  "Return the source directory for the rplaca ASDF system."
+  (or (ignore-errors (asdf:system-source-directory :rplaca))
       (truename ".")))
 
 (defvar *default-package-channel-directory*
   (merge-pathnames #P"packages/channels/default/"
-                   (clawmacs-system-source-directory))
+                   (rplaca-system-source-directory))
   "Directory containing the bundled default package channel.")
 
 (defvar *package-channels*
   (list (make-package-channel
          :name "default"
          :root *default-package-channel-directory*
-         :description "Bundled Clawmacs packages"
+         :description "Bundled RPLACA packages"
          :source :builtin))
   "Registered package channels. init.lisp may set or extend this list.")
 
@@ -67,37 +67,51 @@
   "Legacy compatibility variable for old builtin package autoload init files.
 Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
 
-(defvar *package-configuration-path*
+(defparameter +default-package-configuration-path+
+  (merge-pathnames #P".rplaca.d/packages.json" (user-homedir-pathname))
+  "Canonical path to persisted package enablement configuration.")
+
+(defparameter +legacy-package-configuration-path+
   (merge-pathnames #P".clawmacs.d/packages.json" (user-homedir-pathname))
+  "Legacy read-only fallback for package enablement configuration.")
+
+(defvar *package-configuration-path* +default-package-configuration-path+
   "Path to persisted package enablement configuration.")
 
 (defvar *package-configuration* nil
   "Memoized package enablement configuration.")
 
 (defvar *package-configuration-lock*
-  (bt:make-lock "clawmacs package configuration")
+  (bt:make-lock "rplaca package configuration")
   "Lock guarding the published package enablement configuration.")
 
 (defvar *package-configuration-save-lock*
-  (bt:make-lock "clawmacs package configuration save")
+  (bt:make-lock "rplaca package configuration save")
   "Lock serializing package configuration commits with their disk writes.")
 
 (defvar *package-configuration-write-function* nil
   "Test override called with JSON and target path instead of the atomic writer.")
 
-(defvar *packages-directory*
+(defparameter +default-packages-directory+
+  (merge-pathnames #P".rplaca.d/packages/" (user-homedir-pathname))
+  "Canonical directory for user-installed packages.")
+
+(defparameter +legacy-packages-directory+
   (merge-pathnames #P".clawmacs.d/packages/" (user-homedir-pathname))
-  "Directory where user-installed Clawmacs packages are cloned.")
+  "Legacy executable package directory, detected but never auto-loaded.")
+
+(defvar *packages-directory* +default-packages-directory+
+  "Directory where user-installed RPLACA packages are cloned.")
 
 (defvar *loaded-packages* (make-hash-table :test #'equal)
   "Session-local registry of package install directories already loaded.")
 
 (defvar *package-lifecycle-lock*
-  (bt:make-lock "clawmacs package lifecycle")
+  (bt:make-lock "rplaca package lifecycle")
   "Short-held lock guarding the exact process-wide package lifecycle owner.")
 
 (defvar *package-lifecycle-condition*
-  (bt:make-condition-variable :name "clawmacs package lifecycle")
+  (bt:make-condition-variable :name "rplaca package lifecycle")
   "Condition variable used by package lifecycle contenders.")
 
 (defvar *package-lifecycle-owner* nil
@@ -119,7 +133,7 @@ Package enablement now lives in *PACKAGE-CONFIGURATION-PATH*.")
             :reader package-runtime-maintenance-refused-blocker))
   (:report
    (lambda (condition stream)
-     (format stream "Cannot ~A while Clawmacs runtime activity is ~A."
+     (format stream "Cannot ~A while RPLACA runtime activity is ~A."
              (package-runtime-maintenance-refused-operation condition)
              (package-runtime-maintenance-refused-blocker condition)))))
 
@@ -512,6 +526,12 @@ outer admission rather than attempting to claim it recursively."
 
 (defun project-packages-directory (project-designator)
   "Return the directory used for project-local package installs."
+  (let ((project (ensure-project project-designator)))
+    (merge-pathnames #P".rplaca.d/packages/"
+                     (project-root project))))
+
+(defun legacy-project-packages-directory (project-designator)
+  "Return the legacy project package directory, never auto-loaded."
   (let ((project (ensure-project project-designator)))
     (merge-pathnames #P".clawmacs.d/packages/"
                      (project-root project))))
@@ -962,10 +982,17 @@ outer admission rather than attempting to claim it recursively."
 
 (defun load-package-configuration ()
   "Load and memoize persisted package enablement configuration."
-  (let ((configuration (make-package-configuration)))
-    (when (probe-file *package-configuration-path*)
+  (let ((configuration (make-package-configuration))
+        (read-path
+          (configured-migration-read-path
+           *package-configuration-path*
+           +default-package-configuration-path+
+           +legacy-package-configuration-path+
+           :label "package enablement configuration"
+           :executable-p t)))
+    (when (and read-path (probe-file read-path))
       (handler-case
-          (let* ((json (uiop:read-file-string *package-configuration-path*))
+          (let* ((json (uiop:read-file-string read-path))
                  (data (cl-json:decode-json-from-string json))
                  (global (package-lookup-json-value data "global"))
                  (agents (package-lookup-json-value data "agents")))
@@ -981,7 +1008,7 @@ outer admission rather than attempting to claim it recursively."
                           (make-package-enable-table (cdr entry))))))))
         (error (e)
           (emit-package-warning "Failed to load package configuration ~A: ~A"
-                                (namestring *package-configuration-path*)
+                                (namestring read-path)
                                 e))))
     ;; File I/O and JSON decoding occur before the short publication lock.
     ;; If another loader or writer won meanwhile, preserve its newer object.
@@ -1311,12 +1338,12 @@ removes the package from the other scopes in the same context."
 
 (defun register-package-prompt-section (name body &key title package)
   "Register BODY as a system-prompt section contributed by a package."
-  (when (and *current-clawmacs-package*
+  (when (and *current-rplaca-package*
              (not (package-resource-type-allowed-p :prompt-section)))
     (return-from register-package-prompt-section nil))
   (let ((normalized-name (manifest-package-name name))
         (normalized-package (or (and package (manifest-package-name package))
-                                *current-clawmacs-package*))
+                                *current-rplaca-package*))
         (text (manifest-string body)))
     (unless normalized-name
       (error "Package prompt section name must be a non-empty string or symbol."))
@@ -1497,7 +1524,7 @@ removes the package from the other scopes in the same context."
 
 (defun package-system-prompt-context-text (definition buffer)
   "Return package prompt content that should be appended to existing context."
-  (when (load-clawmacs-package definition)
+  (when (load-rplaca-package definition)
     (let* ((name (package-definition-name definition))
            (prompt-section
              (render-package-prompt-sections
@@ -1543,7 +1570,7 @@ removes the package from the other scopes in the same context."
 
 (defun describe-installed-package-to-string (definition buffer)
   "Return the help text for installed package DEFINITION."
-  (load-clawmacs-package definition)
+  (load-rplaca-package definition)
   (let* ((name (package-definition-name definition))
          (scope (package-enablement-scope name :buffer buffer)))
     (with-output-to-string (s)
@@ -1760,11 +1787,11 @@ Returns a normalized plist or NIL on failure."
 (defun resolve-package-manifest-handler (definition handler-name)
   "Return the function named by HANDLER-NAME for DEFINITION, or NIL on warning."
   (let* ((symbol-name (string-upcase handler-name))
-         (symbol (find-symbol symbol-name :clawmacs)))
+         (symbol (find-symbol symbol-name :rplaca)))
     (cond
       ((null symbol)
        (emit-package-warning
-        "Package ~A slash command handler ~A is not interned in the CLAWMACS package"
+        "Package ~A slash command handler ~A is not interned in the RPLACA package"
         (package-definition-name definition)
         handler-name)
        nil)
@@ -1805,8 +1832,8 @@ Returns a normalized plist or NIL on failure."
       (return-from %load-package-definition-entrypoint definition))
     (handler-case
         (let ((*default-pathname-defaults* (package-definition-root definition))
-              (*package* (find-package :clawmacs))
-              (*current-clawmacs-package* package-name)
+              (*package* (find-package :rplaca))
+              (*current-rplaca-package* package-name)
               (*package-appearance-entrypoint-staging*
                 (and (fboundp 'begin-package-appearance-entrypoint-staging)
                      (funcall 'begin-package-appearance-entrypoint-staging definition))))
@@ -1909,14 +1936,14 @@ Returns a normalized plist or NIL on failure."
    (lambda () (%reset-package-runtime-state package))
    :operation (format nil "reset package ~A" package)))
 
-(defun %reload-clawmacs-package (package)
+(defun %reload-rplaca-package (package)
   "Reload PACKAGE by removing package-owned runtime state, then loading it."
   (let* ((definition (typecase package
                        (package-definition package)
                        (t (find-installed-package package))))
          (name (and definition (package-definition-name definition))))
     (unless definition
-      (return-from %reload-clawmacs-package nil))
+      (return-from %reload-rplaca-package nil))
     (let ((runtime-snapshot (snapshot-package-runtime-registries))
           (*defer-package-appearance-removal-p* t)
           (*package-appearance-entrypoint-reload-p* t)
@@ -1926,7 +1953,7 @@ Returns a normalized plist or NIL on failure."
            (let ((reset-definition (reset-package-runtime-state definition)))
              (unless reset-definition
                (error "Package ~A could not be reset for reload." name))
-             (let ((result (load-clawmacs-package reset-definition)))
+             (let ((result (load-rplaca-package reset-definition)))
                (unless result
                  (error "Package ~A entrypoint did not reload." name))
                (setf completed-p t)
@@ -1934,10 +1961,10 @@ Returns a normalized plist or NIL on failure."
         (unless completed-p
           (restore-package-runtime-registries runtime-snapshot name))))))
 
-(defun reload-clawmacs-package (package)
+(defun reload-rplaca-package (package)
   "Reload PACKAGE only after process quiescence is proven."
   (call-with-package-runtime-maintenance
-   (lambda () (%reload-clawmacs-package package))
+   (lambda () (%reload-rplaca-package package))
    :operation (format nil "reload package ~A" package)))
 
 (defun %reload-active-packages (&key buffer agent-name)
@@ -1971,10 +1998,10 @@ Returns a normalized plist or NIL on failure."
                      (cond
                        ((null definition)
                         (emit-package-warning
-                         "Enabled Clawmacs package ~A is not installed"
+                         "Enabled RPLACA package ~A is not installed"
                          name))
                        (t
-                        (let ((result (reload-clawmacs-package definition)))
+                        (let ((result (reload-rplaca-package definition)))
                           (unless result
                             (error "Active package ~A failed to reload." name))
                           (when
@@ -2118,12 +2145,25 @@ Returns a normalized plist or NIL on failure."
 (defun installed-package-manifest-roots (&key project)
   "Return package roots installed under the configured install roots."
   (let ((roots nil))
-    (when (probe-file *packages-directory*)
-      (push *packages-directory* roots))
+    (dolist (root
+             (configured-migration-read-roots
+              *packages-directory*
+              +default-packages-directory+
+              +legacy-packages-directory+
+              :label "installed package directory"
+              :executable-p t))
+      (when (probe-file root)
+        (push root roots)))
     (when project
       (let ((project-root (project-packages-directory project)))
-        (when (probe-file project-root)
-          (push project-root roots))))
+        (dolist (root
+                 (migration-read-roots
+                  project-root
+                  (legacy-project-packages-directory project)
+                  :label "project installed package directory"
+                  :executable-p t))
+          (when (probe-file root)
+            (push root roots)))))
     (nreverse roots)))
 
 (defun scan-installed-package-definitions (&key project)
@@ -2183,7 +2223,7 @@ Returns a normalized plist or NIL on failure."
                :key #'package-definition-name
                :test #'string=))))
 
-(defun %load-clawmacs-package (package &key seen buffer project)
+(defun %load-rplaca-package (package &key seen buffer project)
   "Load PACKAGE by name or definition, including dependencies.
 Returns the loaded package definition on success, or NIL on warning/failure."
   (let* ((definition (typecase package
@@ -2193,29 +2233,29 @@ Returns the loaded package definition on success, or NIL on warning/failure."
                                                  :project project))))
          (name (and definition (package-definition-name definition))))
     (unless definition
-      (return-from %load-clawmacs-package
-        (emit-package-warning "Unknown Clawmacs package ~S" package)))
+      (return-from %load-rplaca-package
+        (emit-package-warning "Unknown RPLACA package ~S" package)))
     (let ((seen-table (or seen (make-hash-table :test #'equal))))
       (when (gethash name seen-table)
-        (return-from %load-clawmacs-package definition))
+        (return-from %load-rplaca-package definition))
       (setf (gethash name seen-table) t)
       (dolist (dependency (package-definition-dependencies definition))
-        (unless (load-clawmacs-package dependency
+        (unless (load-rplaca-package dependency
                                        :seen seen-table
                                        :buffer buffer
                                        :project project)
-          (return-from %load-clawmacs-package
+          (return-from %load-rplaca-package
             (emit-package-warning
              "Package ~A dependency ~A failed to load"
              name
              dependency))))
       (load-package-definition-entrypoint definition))))
 
-(defun load-clawmacs-package (package &key seen buffer project)
+(defun load-rplaca-package (package &key seen buffer project)
   "Load PACKAGE and dependencies under the process-wide cold-load owner."
   (call-with-package-lifecycle
    (lambda ()
-     (%load-clawmacs-package package
+     (%load-rplaca-package package
                              :seen seen
                              :buffer buffer
                              :project project))
@@ -2228,10 +2268,10 @@ Returns the loaded package definition on success, or NIL on warning/failure."
       (let ((definition (find-installed-package name :buffer buffer)))
         (cond
           ((null definition)
-           (emit-package-warning "Enabled Clawmacs package ~A is not installed"
+           (emit-package-warning "Enabled RPLACA package ~A is not installed"
                                  name))
           (t
-           (let ((result (load-clawmacs-package definition
+           (let ((result (load-rplaca-package definition
                                                 :buffer buffer)))
              (when result
                (when (fboundp 'register-package-agent-tool-provider-definitions)
@@ -2253,9 +2293,9 @@ Returns the loaded package definition on success, or NIL on warning/failure."
   "Compatibility wrapper that loads globally enabled packages."
   (load-active-packages))
 
-(defun clawmacs-use-package (&key (src-type :git) repo ref scope project
+(defun rplaca-use-package (&key (src-type :git) repo ref scope project
                                resource-types &allow-other-keys)
-  "Install a Clawmacs package from a git repository without enabling it.
+  "Install a RPLACA package from a git repository without enabling it.
 Returns the installed package definition on success, or NIL on warning/failure."
   (let ((normalized-source-type (normalize-package-source-type src-type))
         (normalized-repo (normalize-package-repo repo))
@@ -2265,7 +2305,7 @@ Returns the installed package definition on success, or NIL on warning/failure."
           (normalize-package-resource-type-list resource-types)))
     (cond
       ((null normalized-repo)
-        (emit-package-warning "clawmacs-use-package requires :repo to be a string or pathname"))
+        (emit-package-warning "rplaca-use-package requires :repo to be a string or pathname"))
       ((null normalized-source-type)
         (emit-package-warning "Unsupported package source type ~S" src-type))
       (t
@@ -2654,7 +2694,7 @@ Returns the installed package definition on success, or NIL on warning/failure."
            (setf (getf record :updated-at) (get-universal-time))
            record))
         (clear-package-registry)
-        (reload-clawmacs-package definition)))))
+        (reload-rplaca-package definition)))))
 
 (defun update-installed-package (package &key buffer project)
   "Update PACKAGE only after quiescence, before refreshing its source tree."
@@ -2682,7 +2722,7 @@ Returns the installed package definition on success, or NIL on warning/failure."
             (getf record :updated-at) (get-universal-time))
       (write-package-install-record root record)
       (clear-package-registry)
-      (reload-clawmacs-package definition)
+      (reload-rplaca-package definition)
       normalized)))
 
 (defun set-installed-package-resource-types (package resource-types

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""External xdotool/ImageMagick driver for the Clawmacs GUI E2E suites."""
+"""External xdotool/ImageMagick driver for the RPLACA GUI E2E suites."""
 
 from __future__ import annotations
 
@@ -14,15 +14,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 EVENT_MARKER = "[e2e-event]"
-HELLO_SENTINEL = "CLAWMACS_E2E_HELLO_SENTINEL"
+HELLO_SENTINEL = "RPLACA_E2E_HELLO_SENTINEL"
 DEBUG_LOG_ANCHOR_BYTES = 256
-SWITCH_BUFFER_LARGE_DRAFT_PREFIX = "CLAWMACS_SWITCH_BUFFER_LARGE_DRAFT:"
+SWITCH_BUFFER_LARGE_DRAFT_PREFIX = "RPLACA_SWITCH_BUFFER_LARGE_DRAFT:"
 SWITCH_BUFFER_LARGE_DRAFT_SIZE = 32 * 1024
 SWITCH_BUFFER_LARGE_DRAFT_LINE_WIDTH = 80
 
 
 def stable_text_fingerprint(text: str) -> str:
-    """Return Clawmacs' uppercase 64-bit FNV-1a fingerprint for TEXT."""
+    """Return RPLACA' uppercase 64-bit FNV-1a fingerprint for TEXT."""
     value = 0xCBF29CE484222325
     for character in text:
         value ^= ord(character)
@@ -757,9 +757,9 @@ def run_stability(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     """Stress stable menus, semantic selectors, X lifecycle, and redisplay."""
     screenshots = prepare_session(session)
     menu_iterations = positive_environment_integer(
-        "CLAWMACS_GUI_E2E_STABILITY_MENU_ITERATIONS", 24)
+        "RPLACA_GUI_E2E_STABILITY_MENU_ITERATIONS", 24)
     expose_iterations = positive_environment_integer(
-        "CLAWMACS_GUI_E2E_STABILITY_EXPOSE_ITERATIONS", 6)
+        "RPLACA_GUI_E2E_STABILITY_EXPOSE_ITERATIONS", 6)
 
     session.wait_snapshot(
         "effort-capable stability fixture selected",
@@ -1268,7 +1268,7 @@ def run_switch_buffer_regression(session: McCLIMGuiSession) -> dict[str, Any]:
     session.wait_snapshot(
         "ESA standard input initially owns keyboard focus",
         lambda snapshot: (
-            snapshot.get("buffer_name") == "clawmacs:e2e"
+            snapshot.get("buffer_name") == "rplaca:e2e"
             and snapshot.get("input_focus_pane") == "standard-input"
             and switch_buffer_large_draft_state_p(snapshot)
         ),
@@ -1287,7 +1287,7 @@ def run_switch_buffer_regression(session: McCLIMGuiSession) -> dict[str, Any]:
         session, after_cancel, "switch-buffer accepts C-g",
         lambda snapshot: (
             not snapshot.get("minibuffer_active")
-            and snapshot.get("buffer_name") == "clawmacs:e2e"
+            and snapshot.get("buffer_name") == "rplaca:e2e"
             and snapshot.get("input_focus_pane") == "compose"
             and switch_buffer_large_draft_state_p(snapshot)
         ),
@@ -1312,7 +1312,7 @@ def run_switch_buffer_regression(session: McCLIMGuiSession) -> dict[str, Any]:
         session, "switch-e2e-1", "switch-e2e-1", "bravo-tail", 2,
         minimum_matches=2)
     restored_large = switch_buffer_with_keyboard(
-        session, "clawmacs:e2e", "clawmacs:e2e", "", 0,
+        session, "rplaca:e2e", "rplaca:e2e", "", 0,
         expected_state=switch_buffer_large_draft_state_p)
     assert_switch_buffer_large_draft(restored_large, "buffer round trip")
     switch_buffer_with_keyboard(
@@ -1332,7 +1332,7 @@ def press_chord(session: McCLIMGuiSession, *keys: str) -> None:
 
 def expect_key_command(session: McCLIMGuiSession, keys: tuple[str, ...],
                        command: str, *, timeout: float = 10.0) -> dict[str, Any]:
-    """Press KEYS and assert the normalized Clawmacs keymap command fired."""
+    """Press KEYS and assert the normalized RPLACA keymap command fired."""
     after_sequence = session.latest_sequence()
     press_chord(session, *keys)
     return session.wait_event_after(
@@ -1377,7 +1377,7 @@ def close_current_buffer_with_key(session: McCLIMGuiSession,
 
 def kill_current_buffer_with_key(session: McCLIMGuiSession,
                                  expected_name: str | None = None) -> None:
-    """Assert C-x k dispatches through the Clawmacs keymap and kills a buffer."""
+    """Assert C-x k dispatches through the RPLACA keymap and kills a buffer."""
     expect_key_command(session, ("ctrl+x", "k"), "kill-buffer-command")
     if expected_name is not None:
         session.wait_snapshot(f"buffer {expected_name!r} selected after kill",
@@ -1679,7 +1679,7 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
 
     for keys, command in [
         (("ctrl+h", "i"), "info-directory-command"),
-        (("ctrl+h", "shift+i"), "clawmacs-manual-command"),
+        (("ctrl+h", "shift+i"), "rplaca-manual-command"),
     ]:
         expect_key_command(session, keys, command)
         session.wait_snapshot("info buffer shown",
@@ -1697,13 +1697,13 @@ def run_keybinds(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     expect_key_command(session, ("ctrl+x", "b"), "minibuffer-select-buffer-command")
     wait_minibuffer_text(session, "C-x b buffer selector opened",
                          lambda text: "Switch Buffer" in text)
-    session.type_text("clawmacs")
+    session.type_text("rplaca")
     session.wait_snapshot("original buffer selected in C-x b selector",
-                          lambda snapshot: selected_candidate_contains(snapshot, "clawmacs:e2e"),
+                          lambda snapshot: selected_candidate_contains(snapshot, "rplaca:e2e"),
                           timeout=10.0)
     session.press("Return")
     session.wait_snapshot("C-x b switched back to original buffer",
-                          lambda snapshot: snapshot.get("buffer_name") == "clawmacs:e2e",
+                          lambda snapshot: snapshot.get("buffer_name") == "rplaca:e2e",
                           timeout=10.0)
 
     expect_key_command(session, ("ctrl+x", "ctrl+b"), "minibuffer-select-buffer-command")
@@ -1841,7 +1841,7 @@ def run_compose_geometry_regression(session: McCLIMGuiSession) -> list[dict[str,
 
 
 def run_features(session: McCLIMGuiSession) -> list[dict[str, Any]]:
-    """Exercise broad no-network GUI feature coverage in one Clawmacs session."""
+    """Exercise broad no-network GUI feature coverage in one RPLACA session."""
     screenshots = prepare_session(session)
 
     # Compose-pane editing: ordinary typing, C-a/C-e movement, C-b movement,
@@ -1915,13 +1915,13 @@ def run_features(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     run_mx_selection(session, "minibuffer-select-buffer-command")
     wait_minibuffer_text(session, "buffer selector opened",
                          lambda text: "Switch Buffer" in text)
-    session.type_text("clawmacs")
+    session.type_text("rplaca")
     session.wait_snapshot("original e2e buffer candidate selected",
-                          lambda snapshot: selected_candidate_contains(snapshot, "clawmacs:e2e"),
+                          lambda snapshot: selected_candidate_contains(snapshot, "rplaca:e2e"),
                           timeout=10.0)
     session.press("Return")
     session.wait_snapshot("original e2e buffer restored",
-                          lambda snapshot: snapshot.get("buffer_name") == "clawmacs:e2e",
+                          lambda snapshot: snapshot.get("buffer_name") == "rplaca:e2e",
                           timeout=10.0)
     screenshots.append(session.screenshot("05-buffer-selector"))
 
@@ -1967,7 +1967,7 @@ def run_features(session: McCLIMGuiSession) -> list[dict[str, Any]]:
                           lambda snapshot: "[Session display name: E2E Label]" in str(snapshot.get("screen_text", "")),
                           timeout=10.0)
     run_mx_selection(session, "save-session-command")
-    expected_session_dir = session.artifact_dir / "home" / ".config" / "clawmacs" / "sessions"
+    expected_session_dir = session.artifact_dir / "home" / ".config" / "rplaca" / "sessions"
     session.wait_snapshot("session saved under isolated artifact home",
                           lambda snapshot: (
                               "[Session saved to" in str(snapshot.get("screen_text", ""))
@@ -2006,15 +2006,15 @@ def run_reload(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     screenshots.append(session.screenshot("02-before-safe-reload"))
 
     after_sequence = session.latest_sequence()
-    run_mx_selection(session, "safe-reload-clawmacs-command", timeout=20.0)
+    run_mx_selection(session, "safe-reload-rplaca-command", timeout=20.0)
     session.wait_event_after(
         "ui-snapshot", after_sequence,
         lambda snapshot: (
-            snapshot.get("buffer_name") == "clawmacs:e2e"
+            snapshot.get("buffer_name") == "rplaca:e2e"
             and snapshot.get("status") == "reloading"
             and snapshot.get("compose_text") == "reload draft remains visible"
             and " reloading " in str(snapshot.get("info_text", ""))
-            and "Clawmacs safe reload started" in str(snapshot.get("screen_text", ""))
+            and "RPLACA safe reload started" in str(snapshot.get("screen_text", ""))
         ),
         timeout=15.0,
     )
@@ -2027,10 +2027,10 @@ def run_reload(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     final_snapshot = session.wait_snapshot(
         "safe reload success notification visible",
         lambda snapshot: (
-            snapshot.get("buffer_name") == "clawmacs:e2e"
+            snapshot.get("buffer_name") == "rplaca:e2e"
             and snapshot.get("status") == "idle"
             and snapshot.get("compose_text") == "reload draft remains visible"
-            and "Clawmacs safe reload succeeded" in str(snapshot.get("screen_text", ""))
+            and "RPLACA safe reload succeeded" in str(snapshot.get("screen_text", ""))
         ),
         timeout=30.0,
     )
@@ -2227,7 +2227,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--suite", default="smoke")
     parser.add_argument("--artifact-dir", required=True)
     parser.add_argument("--debug-log", required=True)
-    parser.add_argument("--window-title", default="Clawmacs E2E")
+    parser.add_argument("--window-title", default="RPLACA E2E")
     parser.add_argument("--window-id", default=None)
     args = parser.parse_args(argv)
 

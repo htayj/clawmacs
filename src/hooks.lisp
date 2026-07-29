@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Hooks
@@ -18,7 +18,7 @@
   "Process-global hook metadata table, distinct from dynamic test bindings.")
 
 (defvar *hook-registry-lock*
-  (bt:make-lock "clawmacs hook registry")
+  (bt:make-lock "rplaca hook registry")
   "Lock guarding process-global hook metadata, members, and ownership records.")
 
 (defun call-with-hook-registry-lock
@@ -61,16 +61,16 @@ Hook resolution and invocation must happen after the lock has been released."
 (defun register-hook-metadata (name args docstring)
   "Register NAME as a hook variable that receives ARGS."
   (check-type name symbol)
-  (when (and *current-clawmacs-package*
+  (when (and *current-rplaca-package*
              (not (package-resource-type-allowed-p :hook)))
     (return-from register-hook-metadata nil))
   (let ((metadata (make-hook-metadata
                    :name name
                    :args args
                    :docstring (or docstring "")
-                   :package (and *current-clawmacs-package*
+                   :package (and *current-rplaca-package*
                                  (manifest-package-name
-                                  *current-clawmacs-package*)))))
+                                  *current-rplaca-package*)))))
     (call-with-hook-registry-lock
      (lambda ()
        (setf (gethash name *hook-metadata-table*) metadata))
@@ -107,11 +107,11 @@ HOOK-VAR should name a special variable containing a list of function
 designators. When APPEND is non-nil, add FUNCTION at the end instead of the
 front."
   (check-type hook-var symbol)
-  (when (and *current-clawmacs-package*
+  (when (and *current-rplaca-package*
              (not (package-resource-type-allowed-p :hook)))
     (return-from add-hook function))
-  (let ((package (and *current-clawmacs-package*
-                      (manifest-package-name *current-clawmacs-package*))))
+  (let ((package (and *current-rplaca-package*
+                      (manifest-package-name *current-rplaca-package*))))
     (call-with-hook-registry-lock
      (lambda ()
        (let ((hooks (symbol-value hook-var)))
@@ -297,7 +297,7 @@ Each function receives BUFFER and EXPORT-INFO, and may return a share result.")
   "Process-global advice table, distinct from dynamic test bindings.")
 
 (defvar *advice-registry-lock*
-  (bt:make-lock "clawmacs advice registry")
+  (bt:make-lock "rplaca advice registry")
   "Lock guarding process-global advice table and advice-state mutation.")
 
 (defun call-with-advice-registry-lock
@@ -430,7 +430,7 @@ The caller must hold the applicable advice registry lock."
   "Adopt a redefined SYMBOL as STATE's new original and reinstall advice.
 
 ASDF and package reloads may replace a target fdefinition without first
-clearing Clawmacs advice bookkeeping.  Comparing the exact installed dispatcher
+clearing RPLACA advice bookkeeping.  Comparing the exact installed dispatcher
 prevents later cleanup from restoring a stale pre-reload function.  The caller
 must hold the applicable advice registry lock."
   (let ((current (fdefinition symbol)))
@@ -453,7 +453,7 @@ must hold the applicable advice registry lock."
   "Add ADVICE around SYMBOL at WHERE and return the registered advice entry."
   (validate-advice-target symbol)
   (validate-advice-where where)
-  (when (and *current-clawmacs-package*
+  (when (and *current-rplaca-package*
              (not (package-resource-type-allowed-p :advice)))
     (return-from add-advice nil))
   (resolve-advice-function advice)
@@ -462,9 +462,9 @@ must hold the applicable advice registry lock."
                  :name entry-name
                  :where where
                  :designator advice
-                 :package (and *current-clawmacs-package*
+                 :package (and *current-rplaca-package*
                                (manifest-package-name
-                                *current-clawmacs-package*)))))
+                                *current-rplaca-package*)))))
     (call-with-advice-registry-lock
      (lambda ()
        (let* ((state (ensure-advice-state-locked symbol))

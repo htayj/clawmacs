@@ -23,6 +23,7 @@ debug-prompt.log
 .serena/
 CLAUDE.md
 .clawmacs.d/
+.rplaca.d/
 
 # Local scratch files
 /notes.org

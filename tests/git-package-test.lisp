@@ -1,11 +1,11 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 
 (in-suite git-package-suite)
 
 (defun git-package-test-directory (label)
   "Return a fresh temporary directory for git package tests."
   (let ((dir (merge-pathnames
-              (format nil "clawmacs-git-package-tests-~A-~36R-~36R/"
+              (format nil "rplaca-git-package-tests-~A-~36R-~36R/"
                       label
                       (get-universal-time)
                       (get-internal-real-time))
@@ -16,21 +16,21 @@
 (defmacro with-git-package-state (&body body)
   "Run BODY with isolated package, project, and tool registries."
   `(let* ((root (git-package-test-directory "config"))
-          (clawmacs::*agent-tool-metadata-table*
+          (rplaca::*agent-tool-metadata-table*
            (make-hash-table :test #'eq))
-          (clawmacs::*agent-tool-name-table*
+          (rplaca::*agent-tool-name-table*
            (make-hash-table :test #'equal))
-          (clawmacs::*tool-table* (make-hash-table :test #'equal))
-          (clawmacs::*project-registry* (make-hash-table :test #'equal))
-          (clawmacs::*project-definitions-loaded-p* nil)
-          (clawmacs::*package-configuration-path*
+          (rplaca::*tool-table* (make-hash-table :test #'equal))
+          (rplaca::*project-registry* (make-hash-table :test #'equal))
+          (rplaca::*project-definitions-loaded-p* nil)
+          (rplaca::*package-configuration-path*
            (merge-pathnames "packages.json" root))
-          (clawmacs::*package-configuration* nil)
-          (clawmacs::*package-channels* (default-package-test-channels))
-          (clawmacs::*available-packages* nil)
-          (clawmacs::*package-registry-loaded-p* nil)
-          (clawmacs::*loaded-packages* (make-hash-table :test #'equal))
-          (clawmacs::*package-prompt-sections* nil))
+          (rplaca::*package-configuration* nil)
+          (rplaca::*package-channels* (default-package-test-channels))
+          (rplaca::*available-packages* nil)
+          (rplaca::*package-registry-loaded-p* nil)
+          (rplaca::*loaded-packages* (make-hash-table :test #'equal))
+          (rplaca::*package-prompt-sections* nil))
      ,@body))
 
 (defun make-git-package-repo (&optional (label "repo"))
@@ -52,8 +52,8 @@
 (defun git-package-tool-result (tool-name args)
   "Execute TOOL-NAME with ARGS and read its Lisp data result."
   (nth-value 0
-    (clawmacs::lisp-data-read
-     (clawmacs:execute-tool tool-name args))))
+    (rplaca::lisp-data-read
+     (rplaca:execute-tool tool-name args))))
 
 (test git-package-registers-agent-tools-and-prompt
   "Enabling git exposes package-scoped provider tools and prompt guidance."
@@ -77,7 +77,7 @@
       (is (search "force-push" prompt)))))
 
 (test git-package-read-only-tools-return-structured-results
-  "Read-only git tools operate on a Clawmacs project and return Lisp data."
+  "Read-only git tools operate on a RPLACA project and return Lisp data."
   (with-git-package-state
     (let ((repo (make-git-package-repo "readonly")))
       (define-project "git-readonly" :root repo)
@@ -86,7 +86,7 @@
                        "hello from git package tests
 new line
 ")
-      (run-git-command repo "remote" "add" "origin" "/tmp/clawmacs-git-package-origin.git")
+      (run-git-command repo "remote" "add" "origin" "/tmp/rplaca-git-package-origin.git")
       (let ((status (git-package-tool-result
                      "git_status"
                      '(:project "git-readonly" :branch t))))
@@ -166,23 +166,23 @@ new line
       (define-project "git-safety" :root repo)
       (load-test-git-package)
       (signals error
-        (clawmacs:execute-tool
+        (rplaca:execute-tool
          "git_add"
          '(:project "git-safety" :paths #("../outside"))))
       (signals error
-        (clawmacs:execute-tool
+        (rplaca:execute-tool
          "git_diff"
          '(:project "git-safety" :path "/tmp/outside")))
       (signals error
-        (clawmacs:execute-tool
+        (rplaca:execute-tool
          "git_diff"
          '(:project "git-safety" :path "*.lisp")))
       (signals error
-        (clawmacs:execute-tool
+        (rplaca:execute-tool
          "git_show"
          '(:project "git-safety" :revision "--help")))
       (signals error
-        (clawmacs:execute-tool
+        (rplaca:execute-tool
          "git_push"
          '(:project "git-safety" :branch "main")))
       (let ((missing (git-package-tool-result

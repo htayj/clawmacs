@@ -1,4 +1,4 @@
-(in-package :clawmacs)
+(in-package :rplaca)
 
 ;;; --------------------------------------------------------------------------
 ;;; Self-insert support (must be defined before commands that reference it)
@@ -1812,7 +1812,7 @@ to navigate. Shows buffer name, agent, status, and message count."
     ((scratch-buffer-p buffer)
      (buffer-insert-system-message
       buffer
-      "[Scratch buffer is not saved; it lasts only until Clawmacs exits.]"))
+      "[Scratch buffer is not saved; it lasts only until RPLACA exits.]"))
     (t
      (let ((path (save-session buffer)))
        ;; Insert a system message confirming the save
@@ -2302,11 +2302,11 @@ Bound to C-c C-d."
 ;;; --------------------------------------------------------------------------
 
 (defun list-functions ()
-  "Return a sorted list of function symbols exported from the clawmacs package.
+  "Return a sorted list of function symbols exported from the rplaca package.
 Includes all exported symbols that have function bindings (functions, generic
 functions, commands, macros)."
   (let ((functions nil))
-    (do-external-symbols (sym :clawmacs)
+    (do-external-symbols (sym :rplaca)
       (when (fboundp sym)
         (push sym functions)))
     (sort functions #'string< :key #'symbol-name)))
@@ -2459,11 +2459,11 @@ Bound to C-h f."
 ;;; --------------------------------------------------------------------------
 
 (defun list-variables ()
-  "Return a sorted list of variable symbols exported from the clawmacs package.
+  "Return a sorted list of variable symbols exported from the rplaca package.
 Includes all exported symbols that have global variable bindings (special
 variables, constants, parameters)."
   (let ((variables nil))
-    (do-external-symbols (sym :clawmacs)
+    (do-external-symbols (sym :rplaca)
       (when (boundp sym)
         (push sym variables)))
     (sort variables #'string< :key #'symbol-name)))
@@ -2584,11 +2584,11 @@ Bound to C-h v."
 ;;; --------------------------------------------------------------------------
 
 (defun list-types ()
-  "Return a sorted list of type-name symbols exported from the clawmacs package.
+  "Return a sorted list of type-name symbols exported from the rplaca package.
 Includes CLOS classes, structures, and conditions — any exported symbol that
 names a class (via find-class)."
   (let ((types nil))
-    (do-external-symbols (sym :clawmacs)
+    (do-external-symbols (sym :rplaca)
       (when (find-class sym nil)
         (push sym types)))
     (sort types #'string< :key #'symbol-name)))
@@ -3055,25 +3055,44 @@ KEY is already normalized by the interface before calling this."
        nil)
       (t nil)))))
 
-(defvar *user-init-directory*
+(defparameter +default-user-init-directory+
+  (merge-pathnames #P".rplaca.d/" (user-homedir-pathname))
+  "Canonical directory for user Lisp configuration.")
+
+(defparameter +legacy-user-init-directory+
   (merge-pathnames #P".clawmacs.d/" (user-homedir-pathname))
+  "Legacy user configuration directory, never loaded automatically.")
+
+(defvar *user-init-directory* +default-user-init-directory+
   "Directory for user Lisp configuration files.")
 
-(defvar *user-init-file*
-  (merge-pathnames "init.lisp" *user-init-directory*)
+(defparameter +default-user-init-file+
+  (merge-pathnames "init.lisp" +default-user-init-directory+))
+
+(defparameter +legacy-user-init-file+
+  (merge-pathnames "init.lisp" +legacy-user-init-directory+))
+
+(defvar *user-init-file* +default-user-init-file+
   "Path to the user init file, loaded at startup if it exists.")
 
 (defvar *inhibit-user-init* nil
   "When non-nil, skip loading the user init file at startup.")
 
 (defun load-user-init-file ()
-  "Load ~/.clawmacs.d/init.lisp if it exists. Errors are caught and reported."
+  "Load ~/.rplaca.d/init.lisp if it exists. Errors are caught and reported."
   (when *inhibit-user-init*
     (return-from load-user-init-file nil))
-  (let ((init-path (probe-file *user-init-file*)))
+  (let* ((selected-path
+           (configured-migration-read-path
+            *user-init-file*
+            +default-user-init-file+
+            +legacy-user-init-file+
+            :label "user init"
+            :executable-p t))
+         (init-path (and selected-path (probe-file selected-path))))
     (when init-path
       (handler-case
-          (let ((*package* (find-package :clawmacs)))
+          (let ((*package* (find-package :rplaca)))
             (load init-path :verbose nil :print nil))
         (error (e)
           (format *error-output*
@@ -3082,14 +3101,14 @@ KEY is already normalized by the interface before calling this."
           (file-debug-log "init" "error loading ~A: ~A" init-path e)
           nil)))))
 
-(defun parse-clawmacs-args ()
+(defun parse-rplaca-args ()
   "Parse command-line arguments and environment variables.
 Recognized flags:
   --debug-log <path>   Enable file-based debug logging to <path>.
   --clean-build        Clear cached Lisp build artifacts before loading.
   --no-init            Skip loading the user init file.
 Environment variables:
-  CLAWMACS_DEBUG_LOG   Same as --debug-log (CLI flag takes precedence)."
+  RPLACA_DEBUG_LOG   Same as --debug-log (CLI flag takes precedence)."
   ;; CLI args (everything after SBCL's -- separator)
   (let ((args (uiop:command-line-arguments)))
     (setf *appearance-cli-selector*
@@ -3108,14 +3127,14 @@ Environment variables:
                  (setf *inhibit-user-init* t)))))
   ;; Environment variable fallback
   (unless *debug-log-file*
-    (let ((env (uiop:getenv "CLAWMACS_DEBUG_LOG")))
+    (let ((env (uiop:getenv "RPLACA_DEBUG_LOG")))
       (when (and env (plusp (length env)))
         (setf *debug-log-file* (pathname env)))))
   ;; Log startup marker
   (when *debug-log-file*
     (file-debug-log "startup" "debug log enabled, writing to ~A" *debug-log-file*)))
 
-(defun initialize-clawmacs-runtime ()
+(defun initialize-rplaca-runtime ()
   "Initialize shared runtime state before either UI or prompt execution."
   (init-default-keymap)
   (when (fboundp 'install-chat-frame-keybindings)
@@ -3177,7 +3196,7 @@ Environment variables:
   (format nil "Usage: prompt.sh [options] PROMPT...
 
 Options:
-  --agent NAME              Use the named clawmacs agent.
+  --agent NAME              Use the named rplaca agent.
   --provider PROVIDER       Override provider: openai-codex, zai, openrouter.
                             Default without --agent: ~A.
   --model MODEL             Override the model name.
@@ -3204,7 +3223,7 @@ Options:
   --isolated                Use temporary prompt config/project/session dirs.
   --clean-build             Clear cached Lisp build artifacts before loading.
   --force-clean-build       Alias for --clean-build.
-  --no-init                 Skip ~~/.clawmacs.d/init.lisp.
+  --no-init                 Skip ~~/.rplaca.d/init.lisp.
   --help                    Show this help.
 
 If PROMPT is omitted, non-interactive stdin is read as the prompt."
@@ -3213,7 +3232,7 @@ If PROMPT is omitted, non-interactive stdin is read as the prompt."
 
 (defun default-session-prompt-session-name ()
   "Return the default saved session name for session-prompt.sh."
-  (let ((name (uiop:getenv "CLAWMACS_SESSION_PROMPT_SESSION")))
+  (let ((name (uiop:getenv "RPLACA_SESSION_PROMPT_SESSION")))
     (if (and name (not (blank-string-p name)))
         name
         (or (most-recent-saved-session-name :working-directory (truename "."))
@@ -3234,7 +3253,7 @@ Session options:
   --continue                Continue the most recent saved session for the current cwd.
   --ephemeral               Run without a saved session, transcript file, or autosave.
   --no-session              Alias for --ephemeral.
-  CLAWMACS_SESSION_PROMPT_SESSION
+  RPLACA_SESSION_PROMPT_SESSION
                             Environment default for --session.
 
 All prompt.sh routing/output options are also supported.
@@ -3279,7 +3298,7 @@ Example:
       (t
        nil))))
 
-(defun parse-clawmacs-prompt-args (&optional (args (uiop:command-line-arguments)))
+(defun parse-rplaca-prompt-args (&optional (args (uiop:command-line-arguments)))
   "Parse ARGS for non-interactive prompt mode and return PROMPT-OPTIONS."
   (let ((options (make-prompt-options))
         (prompt-parts nil)
@@ -3419,7 +3438,7 @@ Example:
     (when path
       (setf *debug-log-file* (pathname path))))
   (unless *debug-log-file*
-    (let ((env (uiop:getenv "CLAWMACS_DEBUG_LOG")))
+    (let ((env (uiop:getenv "RPLACA_DEBUG_LOG")))
       (when (and env (plusp (length env)))
         (setf *debug-log-file* (pathname env)))))
   (when *debug-log-file*
@@ -3429,7 +3448,7 @@ Example:
 (defun prompt-isolation-root ()
   "Create and return a temporary root for isolated prompt execution."
   (let ((root (merge-pathnames
-               (format nil "clawmacs-prompt-isolated-~D-~D/"
+               (format nil "rplaca-prompt-isolated-~D-~D/"
                        (get-universal-time)
                        (get-internal-real-time))
                #P"/tmp/")))
@@ -3439,7 +3458,7 @@ Example:
 (defun apply-prompt-isolation ()
   "Redirect prompt-mode mutable config paths into a temporary directory."
   (let* ((root (prompt-isolation-root))
-         (config-dir (merge-pathnames #P".clawmacs.d/" root)))
+         (config-dir (merge-pathnames #P".rplaca.d/" root)))
     (ensure-directories-exist (merge-pathnames #P".keep" config-dir))
     (setf *user-init-directory* config-dir
           *user-init-file* (merge-pathnames #P"init.lisp" config-dir)
@@ -3481,22 +3500,22 @@ Example:
      (merge-pathnames #P".keep" *skill-system-directory*))
     root))
 
-(defparameter *prompt-workspace-project-name* "clawmacs"
+(defparameter *prompt-workspace-project-name* "rplaca"
   "Project name used for the source tree mounted into prompt.sh runs.")
 
 (defun prompt-workspace-project-root ()
-  "Return the source root that prompt.sh should expose as a Clawmacs project."
-  (let ((root (uiop:getenv "CLAWMACS_PROMPT_PROJECT_ROOT")))
+  "Return the source root that prompt.sh should expose as a RPLACA project."
+  (let ((root (uiop:getenv "RPLACA_PROMPT_PROJECT_ROOT")))
     (if (and root (plusp (length root)))
         (truename (uiop:ensure-directory-pathname root))
         (truename "."))))
 
 (defun ensure-prompt-workspace-project ()
-  "Expose the prompt workspace source tree as project \"clawmacs\"."
+  "Expose the prompt workspace source tree as project \"rplaca\"."
   (define-project *prompt-workspace-project-name*
     :root (prompt-workspace-project-root)
-    :description "Clawmacs source tree mounted for prompt-mode analysis"
-    :systems '(:clawmacs :clawmacs/tests)
+    :description "RPLACA source tree mounted for prompt-mode analysis"
+    :systems '(:rplaca :rplaca/tests)
     :source :builtin
     :replace nil))
 
@@ -3702,12 +3721,12 @@ Example:
              (prompt-options-packages options)
              :event-callback event-callback)))))
 
-(defun clawmacs-prompt-main* (&key default-session-name usage-string-function)
+(defun rplaca-prompt-main* (&key default-session-name usage-string-function)
   "Shared CLI entry point for one-shot and saved-session prompt modes."
   (let ((options nil))
     (handler-case
       (progn
-        (setf options (parse-clawmacs-prompt-args))
+        (setf options (parse-rplaca-prompt-args))
         (when (and default-session-name
                    (not (prompt-options-ephemeral-p options))
                    (not (prompt-options-session-name options))
@@ -3729,7 +3748,7 @@ Example:
         (let ((*inhibit-user-init* (or (prompt-options-isolated-p options)
                                        (prompt-options-inhibit-user-init-p
                                         options))))
-          (initialize-clawmacs-runtime)
+          (initialize-rplaca-runtime)
           (reset-interaction-state)
           (ensure-prompt-workspace-project)
           (let* ((jsonl-lock (and (prompt-options-jsonl-p options)
@@ -3747,7 +3766,7 @@ Example:
       (prompt-run-error (e)
         (when (and options (prompt-options-jsonl-p options))
           (write-jsonl-record (prompt-run-error-jsonl-record e)))
-        (format *error-output* "~&clawmacs prompt error: ~A~%" e)
+        (format *error-output* "~&rplaca prompt error: ~A~%" e)
         (when options
           (when (prompt-options-show-metadata-p options)
             (format *error-output* ";; partial iterations: ~D~%"
@@ -3764,32 +3783,32 @@ Example:
              *error-output*)))
         (uiop:quit 1))
     (error (e)
-      (format *error-output* "~&clawmacs prompt error: ~A~%" e)
+      (format *error-output* "~&rplaca prompt error: ~A~%" e)
       (uiop:quit 1)))))
 
-(defun clawmacs-prompt-main ()
+(defun rplaca-prompt-main ()
   "CLI entry point for one-shot prompt execution.
 This function exits the Lisp image with status 0 on success and 1 on errors."
-  (clawmacs-prompt-main*
+  (rplaca-prompt-main*
    :usage-string-function #'prompt-usage-string))
 
-(defun clawmacs-session-prompt-main ()
+(defun rplaca-session-prompt-main ()
   "CLI entry point for saved-session prompt execution."
-  (clawmacs-prompt-main*
+  (rplaca-prompt-main*
    :default-session-name (default-session-prompt-session-name)
    :usage-string-function #'session-prompt-usage-string))
 
-(defun clawmacs-main (&key (session-name "clawmacs:session-01")
+(defun rplaca-main (&key (session-name "rplaca:session-01")
                            (agent-name *default-agent-name*)
-                           (window-title "Clawmacs")
+                           (window-title "RPLACA")
                            (working-directory (truename "."))
                            (run-frame t))
-  "Entry point for clawmacs. Initializes state and starts the McCLIM frame."
+  "Entry point for rplaca. Initializes state and starts the McCLIM frame."
   (call-with-installed-crash-reporter
    (lambda ()
      (publish-crash-report-runtime-snapshot :phase :startup)
-     (parse-clawmacs-args)
-     (initialize-clawmacs-runtime)
+     (parse-rplaca-args)
+     (initialize-rplaca-runtime)
      (publish-crash-report-runtime-snapshot :phase :initialized)
      ;; Create initial buffer and initialize global state
      (reset-interaction-state)
@@ -3803,7 +3822,7 @@ This function exits the Lisp image with status 0 on success and 1 on errors."
          ;; package registration and init.lisp have completed, while prompt
          ;; entry points never reach this GUI-only boundary.
          (let ((appearance-profile (resolve-startup-appearance-profile)))
-           (funcall (symbol-function 'run-clawmacs-chat-frame)
+           (funcall (symbol-function 'run-rplaca-chat-frame)
                     buf
                     :window-title window-title
                     :appearance-profile appearance-profile)))

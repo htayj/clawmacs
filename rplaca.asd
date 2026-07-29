@@ -9,7 +9,7 @@
                 :components ((:file "lispi-packages")
                              (:file "lispi")))))
 
-(defsystem "clawmacs"
+(defsystem "rplaca"
   :description "A Lisp-native Emacs-inspired LLM chat interface"
   :version "0.1.0"
   :licence "AGPL-3.0-only"
@@ -68,15 +68,16 @@
                              (:file "slop")
                              (:file "docs")))))
 
-(defsystem "clawmacs/tests"
-  :description "Tests for clawmacs"
+(defsystem "rplaca/tests"
+  :description "Tests for rplaca"
   :licence "AGPL-3.0-only"
-  :depends-on ("clawmacs" "fiveam")
+  :depends-on ("rplaca" "fiveam")
   :serial t
   :components ((:module "tests"
                 :serial t
                  :components ((:file "packages")
                               (:file "legacy-path-test")
+                              (:file "migration-integration-test")
                               (:file "package-manager-test")
                               (:file "git-package-test")
                               (:file "organa-package-test")
@@ -116,10 +117,10 @@
                               (:file "keymap-test")
                               (:file "info-test")))))
 
-(defsystem "clawmacs/gui-e2e"
-  :description "Opt-in GUI E2E suites for clawmacs"
+(defsystem "rplaca/gui-e2e"
+  :description "Opt-in GUI E2E suites for rplaca"
   :licence "AGPL-3.0-only"
-  :depends-on ("clawmacs")
+  :depends-on ("rplaca")
   :perform (test-op (op c)
              (declare (ignore op))
              (let ((script (merge-pathnames "scripts/run-gui-e2e.sh"

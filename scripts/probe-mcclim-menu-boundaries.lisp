@@ -1,10 +1,10 @@
 (require :asdf)
 (asdf:load-system :mcclim-clx)
 
-(defpackage #:clawmacs-mcclim-menu-boundary-probe
+(defpackage #:rplaca-mcclim-menu-boundary-probe
   (:use #:clim #:clim-lisp))
 
-(in-package #:clawmacs-mcclim-menu-boundary-probe)
+(in-package #:rplaca-mcclim-menu-boundary-probe)
 
 (defun record-probe (name &rest fields)
   (format *trace-output* "~&MENU-BOUNDARY-PROBE ~S ~S~%" name fields)

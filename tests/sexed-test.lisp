@@ -1,10 +1,10 @@
-(in-package :clawmacs/tests)
+(in-package :rplaca/tests)
 (in-suite sexed-suite)
 
 (defun sexed-test-directory ()
   "Return a fresh temporary directory for sexed tests."
   (let ((dir (merge-pathnames
-              (format nil "clawmacs-sexed-tests-~36R/"
+              (format nil "rplaca-sexed-tests-~36R/"
                       (random (expt 36 8)))
               #P"/tmp/")))
     (ensure-directories-exist dir)
@@ -35,36 +35,36 @@
 (defmacro with-sexed-tool-registry-restored (&body body)
   "Run BODY with tool registries restored afterwards."
   `(let ((tool-snapshot
-           (make-hash-table :test (hash-table-test clawmacs::*tool-table*)))
+           (make-hash-table :test (hash-table-test rplaca::*tool-table*)))
          (agent-tool-snapshot
            (make-hash-table
-            :test (hash-table-test clawmacs::*agent-tool-metadata-table*)))
+            :test (hash-table-test rplaca::*agent-tool-metadata-table*)))
          (agent-tool-name-snapshot
            (make-hash-table
-            :test (hash-table-test clawmacs::*agent-tool-name-table*))))
+            :test (hash-table-test rplaca::*agent-tool-name-table*))))
      (maphash (lambda (key value)
                 (setf (gethash key tool-snapshot) value))
-              clawmacs::*tool-table*)
+              rplaca::*tool-table*)
      (maphash (lambda (key value)
                 (setf (gethash key agent-tool-snapshot) value))
-              clawmacs::*agent-tool-metadata-table*)
+              rplaca::*agent-tool-metadata-table*)
      (maphash (lambda (key value)
                 (setf (gethash key agent-tool-name-snapshot) value))
-              clawmacs::*agent-tool-name-table*)
+              rplaca::*agent-tool-name-table*)
      (unwind-protect
           (progn ,@body)
-       (clrhash clawmacs::*tool-table*)
+       (clrhash rplaca::*tool-table*)
        (maphash (lambda (key value)
-                  (setf (gethash key clawmacs::*tool-table*) value))
+                  (setf (gethash key rplaca::*tool-table*) value))
                 tool-snapshot)
-       (clrhash clawmacs::*agent-tool-metadata-table*)
+       (clrhash rplaca::*agent-tool-metadata-table*)
        (maphash (lambda (key value)
-                  (setf (gethash key clawmacs::*agent-tool-metadata-table*)
+                  (setf (gethash key rplaca::*agent-tool-metadata-table*)
                         value))
                 agent-tool-snapshot)
-       (clrhash clawmacs::*agent-tool-name-table*)
+       (clrhash rplaca::*agent-tool-name-table*)
        (maphash (lambda (key value)
-                  (setf (gethash key clawmacs::*agent-tool-name-table*) value))
+                  (setf (gethash key rplaca::*agent-tool-name-table*) value))
                 agent-tool-name-snapshot))))
 
 (test sexed-balanced-p-ignores-strings-comments-and-character-literals
@@ -225,9 +225,9 @@
          (*tool-working-directory* (truename dir))
          (text "(defun small () :ok)"))
     (write-sexed-test-file file text)
-    (let ((clawmacs::*sexed-read-form-count-limit* 3))
+    (let ((rplaca::*sexed-read-form-count-limit* 3))
       (is (string= text
-                   (clawmacs::sexed-tool-file-read
+                   (rplaca::sexed-tool-file-read
                     '(:path "small.lisp")))))))
 
 (test sexed-read-tools-page-structurally-large-files
@@ -237,9 +237,9 @@
          (*tool-working-directory* (truename dir))
          (text (sexed-test-top-level-calls 5)))
     (write-sexed-test-file file text)
-    (let ((clawmacs::*sexed-read-form-count-limit* 3))
+    (let ((rplaca::*sexed-read-form-count-limit* 3))
       (let ((first-page
-              (clawmacs::sexed-tool-file-read
+              (rplaca::sexed-tool-file-read
                '(:path "large.lisp"))))
         (is (search "Sexed structural read page" first-page))
         (is (search "Mode: safety fallback" first-page))
@@ -250,14 +250,14 @@
         (is-false (search "item-4" first-page))
         (is-false (string= text first-page)))
       (let ((next-page
-              (clawmacs::sexed-tool-file-read
+              (rplaca::sexed-tool-file-read
                '(:path "large.lisp" :offset 4 :limit 2))))
         (is (search "Page: offset 4, limit 2" next-page))
         (is (search "item-3" next-page))
         (is (search "item-4" next-page))
         (is-false (search "item-0" next-page)))
       (is (string= text
-                   (clawmacs::sexed-tool-file-read
+                   (rplaca::sexed-tool-file-read
                     '(:path "large.lisp" :full t)))))))
 
 (test sexed-read-tools-page-inside-selected-forms
@@ -267,15 +267,15 @@
          (*tool-working-directory* (truename dir))
          (text (sexed-test-wide-form 5)))
     (write-sexed-test-file file text)
-    (let ((clawmacs::*sexed-read-form-count-limit* 3))
+    (let ((rplaca::*sexed-read-form-count-limit* 3))
       (let ((top-page
-              (clawmacs::sexed-tool-file-read
+              (rplaca::sexed-tool-file-read
                '(:path "wide.lisp"))))
         (is (search "Sexed structural read page" top-page))
         (is (search "progn" top-page))
         (is (search "Drill down: call sexed_file_read with selector" top-page)))
       (let ((child-page
-              (clawmacs::sexed-tool-file-read
+              (rplaca::sexed-tool-file-read
                '(:path "wide.lisp"
                  :selector ((:id . 0))
                  :level 1
@@ -292,7 +292,7 @@
   (item-2)
   (item-3)
   (item-4))"
-                   (clawmacs::sexed-tool-file-read
+                   (rplaca::sexed-tool-file-read
                     '(:path "wide.lisp"
                       :selector ((:id . 0))
                       :full t)))))))
@@ -304,9 +304,9 @@
          (file (merge-pathnames "large.lisp" dir)))
     (write-sexed-test-file file (sexed-test-top-level-calls 5))
     (define-project "sexed-page" :root dir)
-    (let ((clawmacs::*sexed-read-form-count-limit* 3))
+    (let ((rplaca::*sexed-read-form-count-limit* 3))
       (let ((page
-              (clawmacs::sexed-tool-project-read
+              (rplaca::sexed-tool-project-read
                '(:project "sexed-page"
                  :path "large.lisp"))))
         (is (search "Sexed structural read page" page))
@@ -317,7 +317,7 @@
   "The package prompt advertises provider tools instead of function-call examples."
   (with-sexed-tool-registry-restored
     (with-package-state-override ((default-package-test-channels))
-      (clawmacs::init-tools)
+      (rplaca::init-tools)
       (set-package-enablement-scope "sexed" :global)
       (load-active-packages)
       (let ((prompt (render-package-prompt-sections
@@ -342,7 +342,7 @@
              (file (merge-pathnames "source.lisp" dir)))
         (write-sexed-test-file file "(defun foo () (+ 1 2))")
         (define-project "sexed-tool" :root dir)
-        (clawmacs::init-tools)
+        (rplaca::init-tools)
         (set-package-enablement-scope "sexed" :global)
         (load-active-packages)
         (let* ((*current-caller* :user)
@@ -380,7 +380,7 @@
           (is-false (member "sexed_scratch_edit" tool-names :test #'string=))
           (is (member "sexed_text_diagnostics" tool-names :test #'string=))
           (let ((diagnostics
-                  (clawmacs::lisp-data-read
+                  (rplaca::lisp-data-read
                    (execute-tool "sexed_text_diagnostics"
                                  '(:text "(defun broken ()")))))
             (is-false (getf diagnostics :balanced))
@@ -421,7 +421,7 @@
                          :head ""
                          :max-depth 0))))
           (let ((batch-result
-                  (clawmacs::lisp-data-read
+                  (rplaca::lisp-data-read
                    (execute-tool
                     "sexed_text_edits"
                     '(:text "(defun foo () (+ 1 2))"
@@ -443,7 +443,7 @@
                         '(:project "sexed-tool"
                           :path "source.lisp"))))
           (let ((result
-                  (clawmacs::lisp-data-read
+                  (rplaca::lisp-data-read
                    (execute-tool
                     "sexed_project_edit"
                     '(:project "sexed-tool"
@@ -456,7 +456,7 @@
           (is (string= "(defun foo () (list 1 2))"
                        (project-read-file "sexed-tool" "source.lisp")))
           (let ((write-result
-                  (clawmacs::lisp-data-read
+                  (rplaca::lisp-data-read
                    (execute-tool
                     "sexed_project_write"
                     '(:project "sexed-tool"
@@ -467,7 +467,7 @@
           (is (string= "(defun generated () :ok)"
                        (project-read-file "sexed-tool" "generated.lisp")))
           (let ((project-batch-result
-                  (clawmacs::lisp-data-read
+                  (rplaca::lisp-data-read
                    (execute-tool
                     "sexed_project_edits"
                     '(:project "sexed-tool"
@@ -482,7 +482,7 @@
           (is (string= "(defun generated () :batch)"
                        (project-read-file "sexed-tool" "generated.lisp")))
           (let ((file-write-result
-                  (clawmacs::lisp-data-read
+                  (rplaca::lisp-data-read
                    (execute-tool
                     "sexed_file_write"
                     '(:path "local.lisp"
@@ -490,7 +490,7 @@
             (is (eq :ok (getf file-write-result :status)))
             (is-true (getf file-write-result :balanced)))
           (let ((file-batch-result
-                  (clawmacs::lisp-data-read
+                  (rplaca::lisp-data-read
                    (execute-tool
                     "sexed_file_edits"
                     '(:path "local.lisp"
