@@ -80,11 +80,20 @@ conversation encoding, auth, and agent/provider definitions.
 
 ### UI
 
-`src/mcclim-interface.lisp` owns the fresh presentation-based chat frame. It
-should stay as a CLIM adapter over buffer state: display functions render
-messages, commands mutate buffers, and async updates request normal McCLIM pane
-redisplay. `src/windows.lisp` and `src/minibuffer.lisp` are legacy logical UI
-support and should not become feature-policy owners.
+`src/listener-frame.lisp` owns the `rplaca-listener` application frame and its
+single chronological CLIM interactor. `src/listener-dispatch.lisp` classifies
+form, command, prose, shell, and mode-switch input. `src/listener-commands.lisp`
+connects those inputs to Lisp evaluation, agent turns, session operations, and
+listener-native selectors.
+
+The frame stays a CLIM adapter over buffer and listener-context state. The
+interactor owns ordinary input and durable inline output, the optional details
+pane renders a selected turn facet, and the wholine reports package, directory,
+session, and request progress. Async updates enter through the frame wake
+handler and request normal McCLIM redisplay. There is no transcript pane,
+private compose pane, or parallel conversation view. `src/windows.lisp` and
+`src/minibuffer.lisp` remain logical UI support for non-listener paths and
+should not become listener feature-policy owners.
 
 ## Current Boundaries
 

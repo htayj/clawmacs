@@ -16,6 +16,8 @@ Follow the repository’s Common Lisp posture in `docs/DESIGN.md`: functional-fi
 ## McCLIM Interface Work
 For any McCLIM UI work, use the `mcclim-manual` skill first and treat canonical CLIM/McCLIM patterns as the default design constraint.
 
+The primary UI is the `rplaca-listener` application frame. Extend its chronological interactor, listener command table, presentations, details layout, and wholine through normal CLIM mechanisms. Do not recreate the retired chat frame, transcript pane, or private compose pane.
+
 - Application frames are the application object. They own UI state, command tables, pane layout, and standard CLIM streams. Prefer `define-application-frame`, `make-application-frame`, and `run-frame-top-level` over ad hoc top-level windows.
 - Panes divide the interface into functional regions. Declare them in the frame. Use `:application` panes for display-function-driven output, presentations, formatted output, tables, graphs, and reports. Use layout panes for structure. Use Drei/text-editor panes for text composition and editor behavior.
 - Presentation-based interfaces are the default for semantic UI. If visible text or graphics represent a domain object the user can act on, render it as a presentation with an appropriate presentation type, then use presentation translators or commands for operations on it. Do not use raw pointer coordinate hit testing for semantic object selection.

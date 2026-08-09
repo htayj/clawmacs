@@ -154,6 +154,30 @@ Migrate these surfaces manually:
 8. Recreate project manifests under `~/.rplaca.projects.d/`, updating roots,
    ASDF systems, packages, and hooks before loading them.
 
+### Listener UI forms in reviewed init files
+
+The listener-first interface removed the old chat-frame and in-buffer listener
+APIs. When reviewing an old init file, replace or remove these forms rather
+than adding aliases:
+
+| Removed API or pattern | Current replacement |
+|---|---|
+| `rplaca-chat-frame` | `rplaca-listener` application frame |
+| `run-rplaca-chat-frame` | Public `rplaca:run`, or internal `run-rplaca-listener` frame startup |
+| `define-rplaca-chat-frame-command` | `define-rplaca-listener-command` and CLIM presentation translators |
+| `com-chat-*`, `chat-frame-*`, and old chat interaction selectors | Named listener commands, listener context/frame accessors, and listener-native presentation completers |
+| `rplaca-transcript-pane`, transcript filtering, and `view-buffer` | No replacement pane; turns remain inline in the chronological interactor, with facets in the details layout |
+| `rplaca-chat-compose-pane` and `compose-pane-*` | Ordinary input uses the interactor; multiline prose uses `,Compose` |
+| `listener-state` and `make-listener-state` | `listener-context` |
+| `listener-state-last-values` and `listener-state-command-history` | No replacement; resumed history is replayed inline |
+| `listener-buffer-p`, `make-listener-buffer`, and `ensure-listener-buffer` | The application object is `rplaca-listener`; `,New Listener` creates another listener frame |
+| `submit-listener-input` | Submit through the CLIM interactor; programmatic command entrypoints are `com-eval` and `com-say` |
+| Live buffer kind `:listener` | Retired snapshot input only; new conversations use `:chat` behind the listener frame |
+
+The McCLIM command loop, frame, pane, presentation, translator, and redisplay
+contracts still apply. The removed names were UI-specific APIs, not a move away
+from CLIM.
+
 Do not rename an old directory in place: that makes rollback difficult and can
 turn unreviewed executable state into canonical state.
 

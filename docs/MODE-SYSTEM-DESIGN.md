@@ -37,16 +37,25 @@ overload them:
 | minibuffer interaction state | frame | Short-lived selector/completion state |
 | agent definition | agent registry | Model role, prompt, and default tools for an agent |
 | pipeline | pipeline package | A multi-stage operation |
-| **interaction mode** | chat buffer/session | The durable workflow policy composed into each run |
+| **interaction mode** | conversation buffer/session | The durable workflow policy composed into each run |
+| `listener-input-mode` | listener context | Whether a bare interactor line defaults to Lisp evaluation or agent prose |
 
 The Lisp name is therefore `interaction-mode`; the concise UI label is
 “Mode”. The info line should show major mode and interaction mode separately.
+
+`listener-input-mode` is an independent input-dispatch axis. Its values are
+`:eval` and `:say`, and it changes only the meaning of a bare interactor line
+and the prompt suffix. It does not contribute prompt text, filter tools, scope
+commands, persist an agent workflow policy, or change the selected
+`interaction-mode`. Likewise, selecting an interaction mode does not switch
+the listener between Lisp and Say input. The two settings may vary in any
+combination.
 
 ## V1 Boundaries
 
 V1 intentionally has a small algebra:
 
-- A chat buffer has exactly one selected interaction mode.
+- A conversation buffer has exactly one selected interaction mode.
 - `normal` is always available and has no prompt or tool effects.
 - Modes do not inherit from or compose with other modes.
 - There are no minor modes, mode stacks, or one-turn overrides.
@@ -69,7 +78,7 @@ The mode system has four distinct layers of state:
 | Layer | Owner | Lifetime | Contents |
 |---|---|---|---|
 | Definitions | process registry | package generation | Immutable package-owned mode definitions |
-| Selection | chat buffer | buffer lifetime | Selected mode name |
+| Selection | conversation buffer | buffer lifetime | Selected mode name |
 | History | session branch | session lifetime | Durable mode-change events |
 | Effective run | buffer runtime or lexical headless run | one user turn and its tool continuations | Sealed prompt and tool contributions |
 | Lifecycle repair | buffer runtime | until the next safe turn boundary | Optional internal fallback-to-`normal` marker after package loss |
@@ -148,7 +157,7 @@ A mode is selectable for a buffer only when:
 
 1. its definition exists;
 2. it is `normal`, or its owning package is active for that buffer; and
-3. the buffer is a chat buffer that can run an agent turn.
+3. the buffer is a conversation buffer that can run an agent turn.
 
 Selecting a package mode must not implicitly enable its package. Package
 activation remains an explicit, separately visible operation.
@@ -301,8 +310,8 @@ call sites while the context remains authoritative.
 is atomic from the caller's perspective:
 
 1. normalize the requested name;
-2. verify that the buffer is a chat buffer;
-3. resolve an available definition for that buffer;
+2. verify that the buffer is a conversation buffer;
+3. verify that the buffer can run an agent turn;
 4. verify that no agent run is busy;
 5. return without events or redisplay if the name is already selected;
 6. update the durable selection;
@@ -451,38 +460,32 @@ The UI uses standard CLIM semantics and the existing ESA/Drei integration.
 
 Define an `interaction-mode-ref` presentation type for the current mode label.
 Its object contains the mode name and enough buffer/generation identity to
-reject a stale record. A presentation-to-command translator invokes a frame
-command such as `com-chat-open-interaction-mode-selector`.
+reject a stale record. A presentation-to-command translator invokes a listener
+command that accepts a listener-native presentation argument.
 
-The core `select-interaction-mode-command` and that frame command open the
-existing nonblocking semantic minibuffer with
-`list-interaction-modes :buffer ...`. Reuse the existing
-`chat-interaction-candidate` presentations for its rows: each row carries an
-immutable mode-choice item, and the selector callback delegates to
-`set-buffer-interaction-mode`. This preserves the existing stale-candidate
-generation checks instead of introducing a parallel picker. Keyboard
-selection, M-x, the menu, and pointer selection all reach the same
-command/helper boundary without raw pointer handling.
+The listener command completes from `list-interaction-modes :buffer ...` in the
+CLIM interactor. Each candidate is an immutable presentation object, and the
+command delegates to `set-buffer-interaction-mode`. Keyboard and pointer
+selection reach the same command/helper boundary without raw pointer handling.
 
 ### Command tables and menu
 
-Add a stable `Mode` menu to `rplaca-chat-frame` with `Select Mode...`. The
-menu entry itself is state-independent, so the existing stable application
-command table remains appropriate in v1.
+Add a stable `Mode` command to the `rplaca-listener` command table. Its entry is
+state-independent, so the stable application command table remains appropriate
+in v1.
 
 If a future feature needs a menu whose entries genuinely vary by mode, build a
 fresh frame-local command table and install it once at the mode transition.
-Do not mutate the process-global `rplaca-chat-frame` table. Continue to use
-`esa:find-applicable-command-table` as the McCLIM/ESA selection point. The
-existing guard against repeatedly reinstalling an identical frame command
-table must remain intact.
+Do not mutate the process-global `rplaca-listener` table. The existing guard
+against repeatedly reinstalling an identical frame command table must remain
+intact.
 
 ### Display and redisplay
 
-Show both values in the info pane, for example:
+Show both values in the listener wholine, for example:
 
 ```text
- chat  lisp  Mode: research  idle  openrouter/model
+CL-USER>   Mode: research   idle   openrouter/model
 ```
 
 Render the interaction-mode label as an
@@ -491,14 +494,14 @@ ID derived from the buffer and a cache value containing the selected name and
 availability state. The display function reads buffer/domain state only; it
 does not change the mode.
 
-Configure the info pane for incremental redisplay if it is not already. Verify
+Configure the wholine for incremental redisplay if it is not already. Verify
 that enabling output-record reuse there does not duplicate status text or leave
 stale model/busy labels; the complete line's cache value must cover every field
 inside the updated record.
 
 Mode transitions call the existing `notify-buffer-display-change` path. The
 frame queues a normal redisplay request, and CLIM incrementally updates the
-info pane and any other affected records. Do not add:
+wholine and any other affected records. Do not add:
 
 - `window-clear` plus redraw;
 - a private repaint loop;
@@ -509,9 +512,9 @@ info pane and any other affected records. Do not add:
 
 Portable CLIM concepts here are frames, panes, commands, command tables,
 presentation types, translators, and incremental output recording.
-`esa:find-applicable-command-table`, Drei compose integration, and the existing
-nonblocking minibuffer are McCLIM/ESA-specific implementation choices and
-should be labelled as such in code comments where relevant.
+The CLIM interactor, listener-native presentation completers, and frame wake
+handler are McCLIM-specific implementation choices and should be labelled as
+such in code comments where relevant.
 
 ## CLI and Interop Contract
 
@@ -580,7 +583,7 @@ Implementation should proceed in narrow, independently testable phases.
 
 ### Phase 2: Buffer selection and persistence
 
-- Add the selected interaction-mode name to the chat buffer state in
+- Add the selected interaction-mode name to the conversation buffer state in
   `src/buffer.lisp`.
 - Extend buffer snapshot encode/decode and migration defaults.
 - Implement atomic `set-buffer-interaction-mode` and display notification.
@@ -636,7 +639,7 @@ Implementation should proceed in narrow, independently testable phases.
 
 - Add the mode presentation type, selector command, translator, and stable menu
   entry in `src/mcclim-interface.lisp`.
-- Render the semantic mode label in `display-chat-info-pane` using incremental
+- Render the semantic mode label in the listener wholine using incremental
   output recording.
 - Reuse the existing minibuffer candidate machinery and queued redisplay path.
 - Add focused McCLIM unit tests and one GUI E2E selector/redisplay scenario.
