@@ -314,6 +314,30 @@ line2"))
             (clim:find-command-table 'rplaca::rplaca-listener)))
   (is (find-class 'rplaca::rplaca-listener nil)))
 
+(defparameter *listener-utility-command-inventory*
+  '((rplaca::com-push-directory . "Push Directory")
+    (rplaca::com-pop-directory . "Pop Directory")
+    (rplaca::com-display-directory-stack . "Display Directory Stack")
+    (rplaca::com-apropos . "Apropos")
+    (rplaca::com-describe . "Describe")
+    (rplaca::com-inspect . "Inspect")
+    (rplaca::com-load-file . "Load File")
+    (rplaca::com-compile-file . "Compile File")
+    (rplaca::com-in-package . "In Package")
+    (rplaca::com-room . "Room")
+    (rplaca::com-help-commands . "Help Commands")))
+
+(test listener-utility-commands-are-present-and-completable
+  (let ((table (clim:find-command-table 'rplaca::rplaca-listener)))
+    (dolist (entry *listener-utility-command-inventory*)
+      (is-true (clim:command-present-in-command-table-p (car entry) table))
+      (is (eq (car entry)
+              (clim:find-command-from-command-line-name
+               (cdr entry) table :errorp nil)))
+      (is (string= (cdr entry)
+                   (clim:command-line-name-for-command
+                    (car entry) table :errorp nil))))))
+
 ;;; ===========================================================================
 ;;; Todo 5: single-interactor frame, dual layouts, output mapping, assistant/
 ;;; detail state, lifecycle, and startup seams.
@@ -1028,6 +1052,79 @@ when it differs from both the directory-stack top and the process cwd."
      :conversation-buffer (make-test-conversation-buffer)
      :appearance-profile (rplaca::make-appearance-profile)
      :listener-context (rplaca::make-listener-context))))
+
+(test read-frame-command-binds-the-context-package
+  (let* ((frame (make-eval-frame))
+         (observed-package nil))
+    (setf (rplaca::rplaca-listener-context frame)
+          (rplaca::listener-context-in-package
+           (rplaca::rplaca-listener-context frame)
+           (find-package :keyword)))
+    (with-listener-function-override
+        (clim:accept (&rest arguments)
+          (declare (ignore arguments))
+          (setf observed-package *package*)
+          (rplaca::make-listener-input-token :kind :no-op :source ""))
+      (clim:read-frame-command frame))
+    (is (eq (find-package :keyword) observed-package))))
+
+(test help-commands-is-generated-from-the-active-command-table
+  (let ((frame (make-eval-frame))
+        (output (make-string-output-stream)))
+    (with-listener-function-override
+        (clim:frame-standard-output (f) (declare (ignore f)) output)
+      (let ((clim:*application-frame* frame))
+        (rplaca::com-help-commands)))
+    (let ((text (get-output-stream-string output)))
+      (is (search ",Help Commands" text))
+      (is (search ",Push Directory" text))
+      (is (search ",Fixture-Pong" text)))))
+
+(test utility-directory-commands-update-context-and-buffer-together
+  (let* ((first (ensure-directories-exist #P"/tmp/rplaca-12-command-first/.keep"))
+         (second (ensure-directories-exist #P"/tmp/rplaca-12-command-second/.keep"))
+         (first-directory (uiop:pathname-directory-pathname first))
+         (second-directory (uiop:pathname-directory-pathname second))
+         (frame (make-eval-frame))
+         (buffer (rplaca::rplaca-listener-conversation-buffer frame))
+         (output (make-string-output-stream)))
+    (setf (rplaca::buffer-working-directory buffer) first-directory)
+    (unwind-protect
+         (with-listener-function-override
+             (clim:frame-standard-output (f) (declare (ignore f)) output)
+           (let ((clim:*application-frame* frame))
+             (rplaca::com-push-directory second-directory)
+             (is (equal second-directory
+                        (rplaca::buffer-working-directory buffer)))
+             (is (equal (list first-directory)
+                        (rplaca::listener-context-directory-stack
+                         (rplaca::rplaca-listener-context frame))))
+             (rplaca::com-eval '(namestring (truename "."))
+                               "(namestring (truename \".\"))")
+             (is (string= (namestring second-directory) *))
+             (rplaca::com-pop-directory)
+             (is (equal first-directory
+                        (rplaca::buffer-working-directory buffer)))
+             (is (null (rplaca::listener-context-directory-stack
+                        (rplaca::rplaca-listener-context frame))))))
+      (ignore-errors
+        (uiop:delete-directory-tree first-directory
+                                    :validate t :if-does-not-exist :ignore))
+      (ignore-errors
+        (uiop:delete-directory-tree second-directory
+                                    :validate t :if-does-not-exist :ignore)))))
+
+(test listener-wholine-resolves-directory-through-listener-context
+  (let* ((frame (make-eval-frame))
+         (context (rplaca::rplaca-listener-context frame))
+         (received-context nil)
+         (stream (make-string-output-stream)))
+    (with-listener-function-override
+        (rplaca::listener-context-current-directory (actual supplied)
+          (setf received-context actual)
+          supplied)
+      (rplaca::display-listener-wholine frame stream))
+    (is (eq context received-context))))
 
 (defun eval-with-stubbed-output (frame form &optional source-text)
   "Call com-eval with frame-standard-output stubbed to a string stream."

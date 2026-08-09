@@ -310,6 +310,18 @@
     #:unknown-listener-package-name
     #:empty-listener-directory-stack
     #:run-listener-shell-command
+    #:listener-context-current-directory
+    #:listener-command-pushd
+    #:listener-command-popd
+    #:listener-command-dirs
+    #:listener-context-apropos
+    #:listener-context-describe
+    #:listener-context-inspect
+    #:listener-context-load-file
+    #:listener-context-compile-file
+    #:listener-context-in-package
+    #:listener-context-room
+    #:listener-context-help-commands
     ;; Listener frame fixture and delegated presentation acceptance
     #:*listener-input-mode*
     #:rplaca-listener

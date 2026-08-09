@@ -99,3 +99,92 @@
    :directory (uiop:ensure-directory-pathname directory)
    :timeout timeout
    :output-limit output-limit))
+
+(defun listener-context-package (context)
+  (check-type context listener-context)
+  (or (find-package (listener-context-package-name context))
+      (error 'unknown-listener-package
+             :name (listener-context-package-name context))))
+
+(defun listener-existing-directory (directory)
+  (let* ((candidate (uiop:ensure-directory-pathname directory))
+         (existing (uiop:directory-exists-p candidate)))
+    (unless existing
+      (error "Directory does not exist: ~A" (namestring candidate)))
+    (uiop:ensure-directory-pathname existing)))
+
+(defun listener-context-current-directory (context directory)
+  (check-type context listener-context)
+  (uiop:ensure-directory-pathname directory))
+
+(defun listener-command-pushd (context current-directory new-directory)
+  (let ((current (listener-context-current-directory context current-directory))
+        (target (listener-existing-directory new-directory)))
+    (values (listener-context-push-directory context current)
+            target)))
+
+(defun listener-command-popd (context)
+  (check-type context listener-context)
+  (listener-context-pop-directory context))
+
+(defun listener-command-dirs (context)
+  (check-type context listener-context)
+  (copy-list (listener-context-directory-stack context)))
+
+(defun listener-context-apropos (context text)
+  (when (blank-string-p text)
+    (error "Apropos text is required."))
+  (sort (copy-list (apropos-list text (listener-context-package context)))
+        (lambda (left right)
+          (let ((left-name (symbol-name left))
+                (right-name (symbol-name right)))
+            (if (string= left-name right-name)
+                (string< (package-name (symbol-package left))
+                         (package-name (symbol-package right)))
+                (string< left-name right-name))))))
+
+(defun listener-context-describe (context object)
+  (let ((*package* (listener-context-package context)))
+    (with-output-to-string (stream)
+      (describe object stream))))
+
+(defun listener-context-inspect (context form)
+  (let ((*package* (listener-context-package context)))
+    (eval form)))
+
+(defun listener-existing-file (pathname)
+  (or (probe-file pathname)
+      (error "File does not exist: ~A" (namestring pathname))))
+
+(defun listener-context-load-file (context pathname)
+  (let ((file (listener-existing-file pathname))
+        (*package* (listener-context-package context)))
+    (load file)
+    file))
+
+(defun listener-context-compile-file (context pathname)
+  (let ((file (listener-existing-file pathname))
+        (*package* (listener-context-package context)))
+    (compile-file file)))
+
+(defun listener-context-in-package (context package)
+  (listener-context-set-package
+   context
+   (if (packagep package) (package-name package) package)))
+
+(defun listener-context-room (context)
+  (let ((*package* (listener-context-package context)))
+    (with-output-to-string (stream)
+      (let ((*standard-output* stream))
+        (room)))))
+
+(defun listener-context-help-commands (context command-names)
+  (check-type context listener-context)
+  (let ((names (sort (remove-duplicates (copy-list command-names)
+                                        :test #'string=)
+                     #'string-lessp)))
+    (with-output-to-string (stream)
+      (write-line "Available listener commands" stream)
+      (terpri stream)
+      (dolist (name names)
+        (format stream ",~A~%" name)))))

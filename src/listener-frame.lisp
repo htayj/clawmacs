@@ -600,8 +600,10 @@ todo9's gesture-loop cancellation.  When idle, neither is shown."
          (buffer (rplaca-listener-conversation-buffer frame))
          (package-name (listener-context-package-name context))
          (directory (if buffer
-                        (namestring (buffer-working-directory buffer))
-                        ""))
+                         (namestring
+                          (listener-context-current-directory
+                           context (buffer-working-directory buffer)))
+                         ""))
          (progress (rplaca-listener-progress frame))
          (request (rplaca-listener-active-await-request frame))
          (active-p (and request

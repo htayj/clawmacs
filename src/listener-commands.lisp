@@ -36,7 +36,9 @@ McCLIM Listener) to complete partial commands from the frame's command table."
 Uses *command-dispatchers* '(#\,) so comma is the command prefix.  Reader errors
 remain input-editor/accept concerns; this method does not catch arbitrary
 conditions (matching McCLIM Listener behavior at frames.lisp:506)."
-  (let* ((clim:*command-dispatchers* '(#\,))
+  (let* ((*package* (listener-context-package
+                     (rplaca-listener-context frame)))
+         (clim:*command-dispatchers* '(#\,))
          (token (clim:accept 'command-form-or-prose
                              :stream stream :prompt nil)))
     (listener-token->command token frame stream)))
@@ -251,8 +253,13 @@ Returns the source-text if ASK-AGENT was invoked, or NIL otherwise."
                                   :target interactor
                                   :remaining +listener-eval-output-limit+))
          (ask-tag (gensym "ASK-AGENT-TRANSFER")))
-    (let ((*package* *package*)
-          (*default-pathname-defaults* *default-pathname-defaults*))
+    (let ((*package* (listener-context-package
+                      (rplaca-listener-context frame)))
+          (*default-pathname-defaults*
+            (listener-context-current-directory
+             (rplaca-listener-context frame)
+             (buffer-working-directory
+              (rplaca-listener-conversation-buffer frame)))))
       (unwind-protect
            (catch ask-tag
              (let ((*standard-output* bounded)
@@ -376,6 +383,137 @@ once.  Blank and busy are rejected before any interpolation or send."
   "Open a multiline compose dialog and submit the result once to com-say."
   (let ((frame clim:*application-frame*))
     (listener-compose-multiline-prose frame)))
+
+(defun listener-command-buffer-directory (frame)
+  (listener-context-current-directory
+   (rplaca-listener-context frame)
+   (buffer-working-directory (rplaca-listener-conversation-buffer frame))))
+
+(defun listener-command-pathname (frame pathname)
+  (merge-pathnames pathname (listener-command-buffer-directory frame)))
+
+(defun listener-write-expression (stream object)
+  (clim:with-output-as-presentation (stream object 'clim:expression)
+    (prin1 object stream))
+  (terpri stream))
+
+(defun listener-command-line-names (table)
+  (let ((names nil))
+    (clim:map-over-command-table-commands
+     (lambda (command)
+       (let ((name (clim:command-line-name-for-command
+                    command table :errorp nil)))
+         (when name
+           (push name names))))
+     table)
+    names))
+
+(define-rplaca-listener-command (com-push-directory :name "Push Directory")
+    ((directory clim:pathname))
+  (let* ((frame clim:*application-frame*)
+         (buffer (rplaca-listener-conversation-buffer frame))
+         (context (rplaca-listener-context frame)))
+    (multiple-value-bind (updated target)
+        (listener-command-pushd
+         context
+         (listener-command-buffer-directory frame)
+         (listener-command-pathname frame directory))
+      (setf (rplaca-listener-context frame) updated
+            (buffer-working-directory buffer) target)
+      (format (clim:frame-standard-output frame)
+              "Directory: ~A~%" (namestring target)))))
+
+(define-rplaca-listener-command (com-pop-directory :name "Pop Directory") ()
+  (let* ((frame clim:*application-frame*)
+         (buffer (rplaca-listener-conversation-buffer frame)))
+    (multiple-value-bind (updated target)
+        (listener-command-popd (rplaca-listener-context frame))
+      (setf (rplaca-listener-context frame) updated
+            (buffer-working-directory buffer) target)
+      (format (clim:frame-standard-output frame)
+              "Directory: ~A~%" (namestring target)))))
+
+(define-rplaca-listener-command
+    (com-display-directory-stack :name "Display Directory Stack") ()
+  (let* ((frame clim:*application-frame*)
+         (stream (clim:frame-standard-output frame))
+         (directories (listener-command-dirs
+                       (rplaca-listener-context frame))))
+    (if directories
+        (progn
+          (write-line "Directory stack:" stream)
+          (loop :for directory :in directories
+                :for index :from 0
+                :do (format stream "~D: " index)
+                    (clim:present directory 'clim:pathname :stream stream)
+                    (terpri stream)))
+        (write-line "Directory stack is empty." stream))))
+
+(define-rplaca-listener-command (com-apropos :name "Apropos")
+    ((text clim:string))
+  (let* ((frame clim:*application-frame*)
+         (stream (clim:frame-standard-output frame)))
+    (dolist (symbol (listener-context-apropos
+                     (rplaca-listener-context frame) text))
+      (listener-write-expression stream symbol))))
+
+(define-rplaca-listener-command (com-describe :name "Describe")
+    ((object clim:form))
+  (let* ((frame clim:*application-frame*)
+         (stream (clim:frame-standard-output frame))
+         (context (rplaca-listener-context frame)))
+    (listener-write-expression stream object)
+    (write-string (listener-context-describe context object) stream)))
+
+(define-rplaca-listener-command (com-inspect :name "Inspect")
+    ((form clim:form))
+  (let* ((frame clim:*application-frame*)
+         (stream (clim:frame-standard-output frame))
+         (value (listener-context-inspect
+                 (rplaca-listener-context frame) form)))
+    (listener-write-expression stream value)))
+
+(define-rplaca-listener-command (com-load-file :name "Load File")
+    ((pathname clim:pathname))
+  (let* ((frame clim:*application-frame*)
+         (file (listener-context-load-file
+                (rplaca-listener-context frame)
+                (listener-command-pathname frame pathname))))
+    (format (clim:frame-standard-output frame)
+            "Loaded: ~A~%" (namestring file))))
+
+(define-rplaca-listener-command (com-compile-file :name "Compile File")
+    ((pathname clim:pathname))
+  (let ((frame clim:*application-frame*))
+    (multiple-value-bind (output warnings-p failure-p)
+        (listener-context-compile-file
+         (rplaca-listener-context frame)
+         (listener-command-pathname frame pathname))
+      (format (clim:frame-standard-output frame)
+              "Compiled: ~A~@[ (warnings)~]~@[ (failed)~]~%"
+              (and output (namestring output)) warnings-p failure-p))))
+
+(define-rplaca-listener-command (com-in-package :name "In Package")
+    ((package rplaca-package))
+  (let ((frame clim:*application-frame*))
+    (setf (rplaca-listener-context frame)
+          (listener-context-in-package
+           (rplaca-listener-context frame) package))
+    (format (clim:frame-standard-output frame)
+            "Package set to ~A~%" (package-name package))))
+
+(define-rplaca-listener-command (com-room :name "Room") ()
+  (let* ((frame clim:*application-frame*)
+         (report (listener-context-room (rplaca-listener-context frame))))
+    (write-string report (clim:frame-standard-output frame))))
+
+(define-rplaca-listener-command (com-help-commands :name "Help Commands") ()
+  (let* ((frame clim:*application-frame*)
+         (table (clim:frame-command-table frame))
+         (text (listener-context-help-commands
+                (rplaca-listener-context frame)
+                (listener-command-line-names table))))
+    (write-string text (clim:frame-standard-output frame))))
 
 (define-rplaca-listener-command (com-new-session :name "New Session") ()
   "Create and activate a fresh persistent listener conversation."
