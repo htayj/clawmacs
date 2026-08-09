@@ -99,6 +99,171 @@
       (write-line "No saved sessions available." stream))
   records)
 
+(defstruct (session-history-item
+             (:constructor make-session-history-item (kind text source)))
+  kind
+  (text "" :type string)
+  source)
+
+(clim:define-presentation-type session-history-item ()
+  :inherit-from t)
+
+(clim:define-presentation-method clim:present
+    (object (type session-history-item) stream
+            (view clim:textual-view) &key)
+  (declare (ignore view))
+  (write-string (session-history-item-text object) stream))
+
+(defun listener-history-metadata-plist (metadata)
+  (loop :for (key . value) :in metadata
+        :append (list key value)))
+
+(defun listener-history-list-value (value)
+  (if (vectorp value) (coerce value 'list) (copy-list value)))
+
+(defun listener-history-assistant-status (metadata)
+  (let ((status (or (message-metadata-value metadata :status)
+                    (message-metadata-value metadata :stop-reason))))
+    (cond
+      ((and status (search "cancel" (string-downcase (princ-to-string status))))
+       :cancelled)
+      ((and status (search "error" (string-downcase (princ-to-string status))))
+       :error)
+      (t :complete))))
+
+(defun listener-history-assistant-sender-p (sender)
+  (not (member sender
+               '(:user :tool-result :compaction-summary :branch-summary
+                 :context :system :listener)
+               :test #'eq)))
+
+(defun listener-history-event-raw-content (event)
+  (let ((raw-content (session-alist-value event :raw-content)))
+    (and raw-content (normalize-legacy-raw-content raw-content))))
+
+(defun listener-history-event-assistant-turn (event)
+  (let* ((raw-content (listener-history-event-raw-content event))
+         (metadata (copy-tree (or (session-alist-value event :metadata) nil)))
+         (raw-text (and raw-content (content-text-blocks raw-content)))
+         (text (if (and raw-text (not (blank-string-p raw-text)))
+                   raw-text
+                   (or (session-alist-value event :text) ""))))
+    (make-assistant-turn
+     :primary-text text
+     :tool-uses (mapcar #'listener-tool-use-plist
+                        (content-tool-use-blocks raw-content))
+     :reasoning (content-reasoning-blocks raw-content)
+     :metadata (listener-history-metadata-plist metadata)
+     :artifact-refs
+     (listener-history-list-value
+      (or (message-metadata-value metadata :artifact-refs) nil))
+     :media-refs
+     (listener-history-list-value
+      (or (message-metadata-value metadata :media-refs) nil))
+     :inspect-payload raw-content
+     :status (listener-history-assistant-status metadata))))
+
+(defun listener-history-simple-text (kind source text)
+  (cond
+    ((eq kind :compaction)
+     (format nil "[Compaction~@[: ~A~]]~@[ ~A~]"
+             (session-alist-value source :reason)
+             (session-alist-value source :summary)))
+    ((eq kind :branch)
+     (format nil "[Branch] ~A" (or (session-alist-value source :summary) "")))
+    ((eq kind :user) (format nil "User: ~A" text))
+    ((eq kind :tool) (format nil "Tool: ~A" text))
+    ((eq kind :listener-output) (format nil "Listener: ~A" text))
+    ((eq kind :error) (format nil "[Error] ~A" text))
+    ((eq kind :cancelled) (format nil "[Cancelled] ~A" text))
+    (t text)))
+
+(defun emit-listener-history-item (frame kind text source)
+  (let* ((stream (clim:frame-standard-output frame))
+         (display-text (listener-history-simple-text kind source text))
+         (item (make-session-history-item kind display-text source)))
+    (clim:with-output-as-presentation
+        (stream item 'session-history-item :single-box t)
+      (write-string display-text stream))
+    (terpri stream)
+    item))
+
+(defun listener-history-message-kind (sender metadata)
+  (cond
+    ((message-metadata-value metadata :legacy-listener-history)
+     :listener-output)
+    ((eq sender :user) :user)
+    ((eq sender :tool-result) :tool)
+    ((and (message-metadata-value metadata :status)
+          (search "cancel"
+                  (string-downcase
+                   (princ-to-string
+                    (message-metadata-value metadata :status)))))
+     :cancelled)
+    ((and (message-metadata-value metadata :status)
+          (search "error"
+                  (string-downcase
+                   (princ-to-string
+                    (message-metadata-value metadata :status)))))
+     :error)
+    (t :message)))
+
+(defun emit-listener-history-message-event (frame event)
+  (let* ((sender-name (or (session-alist-value event :sender) "SYSTEM"))
+         (sender (intern (string-upcase sender-name) :keyword))
+         (metadata (copy-tree (or (session-alist-value event :metadata) nil)))
+         (text (or (session-alist-value event :text) "")))
+    (if (listener-history-assistant-sender-p sender)
+        (let ((turn (listener-history-event-assistant-turn event)))
+          (setf (rplaca-listener-pending-assistant-turn frame) turn)
+          (emit-listener-assistant-turn frame turn))
+        (emit-listener-history-item
+         frame (listener-history-message-kind sender metadata) text event))))
+
+(defun emit-listener-history-branch-event (frame event)
+  (let ((kind (session-event-kind event)))
+    (cond
+      ((string= kind "message")
+       (emit-listener-history-message-event frame event))
+      ((string= kind "compaction")
+       (emit-listener-history-item frame :compaction "" event))
+      ((string= kind "branch-summary")
+       (emit-listener-history-item frame :branch "" event)))))
+
+(defun listener-legacy-history-events (buffer)
+  (loop :for message := (buffer-first-message buffer) :then (message-next message)
+        :while (and message (not (eq message (buffer-input-message buffer))))
+        :for metadata := (message-metadata message)
+        :when (and metadata
+                   (message-metadata-value metadata :legacy-listener-history))
+          :collect `((:event . "message")
+                     (:sender . "LISTENER")
+                     (:text . ,(message-text message))
+                     (:timestamp . ,(message-timestamp message))
+                     (:read-only-p . t)
+                     (:metadata . ,metadata))))
+
+(defun listener-session-replay-key (buffer)
+  (let ((session (buffer-session buffer)))
+    (list (and session (session-id session))
+          (and session (session-name session))
+          (and session (session-effective-leaf-id session)))))
+
+(defun render-session-history-inline (frame &optional buffer)
+  "Emit BUFFER's restored active branch once into FRAME's interactor."
+  (let* ((buffer (or buffer (rplaca-listener-conversation-buffer frame)))
+         (key (listener-session-replay-key buffer))
+         (rendered (rplaca-listener-replayed-session-branches frame)))
+    (unless (gethash key rendered)
+      (setf (rplaca-listener-selected-detail frame) nil)
+      (let* ((session (buffer-session buffer))
+             (branch-events (and session (session-branch-events session)))
+             (events (or branch-events (listener-legacy-history-events buffer))))
+        (dolist (event events)
+          (emit-listener-history-branch-event frame event)))
+      (setf (gethash key rendered) t))
+    buffer))
+
 (defun listener-session-name-available-p (name)
   (and (null (find-buffer-by-name name))
        (not (member name (list-saved-sessions) :test #'string=))))
@@ -138,7 +303,8 @@
          (existing (find-open-session-buffer name))
          (buffer (or existing (load-session name))))
     (when buffer
-      (listener-activate-session-buffer frame buffer))))
+      (listener-activate-session-buffer frame buffer)
+      (render-session-history-inline frame buffer))))
 
 (register-buffer-type
  :listener

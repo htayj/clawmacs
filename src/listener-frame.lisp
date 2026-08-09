@@ -67,6 +67,9 @@ ignored: the context accessor or require-listener-input-mode signals."
    (selected-detail
     :initform nil
     :accessor rplaca-listener-selected-detail)
+   (replayed-session-branches
+    :initform (make-hash-table :test #'equal)
+    :reader rplaca-listener-replayed-session-branches)
    (listener-liveness
     :initform :live
     :accessor rplaca-listener-liveness)
