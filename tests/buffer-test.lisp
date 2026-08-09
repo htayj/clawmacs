@@ -174,62 +174,21 @@
       (is (string= "dashboard" (buffer-major-mode buf))))))
 
 (test built-in-special-buffer-types-are-registered
-  "Help, info, listener, and font editor buffers are first-class non-document kinds."
+  "Help, info, and font editor buffers are first-class non-document kinds."
   (let ((rplaca::*buffer-type-registry*
           (rplaca::make-buffer-type-registry)))
     (let ((help (find-buffer-type :help))
           (info (find-buffer-type :info))
-          (listener (find-buffer-type :listener))
           (font-editor (find-buffer-type :font-editor)))
       (is (not (null help)))
       (is (not (null info)))
-      (is (not (null listener)))
       (is (not (null font-editor)))
       (is (string= "help" (buffer-type-major-mode help)))
       (is (string= "info" (buffer-type-major-mode info)))
-      (is (string= "listener" (buffer-type-major-mode listener)))
       (is (string= "font-editor" (buffer-type-major-mode font-editor)))
       (is (not (buffer-type-document-p help)))
       (is (not (buffer-type-document-p info)))
-      (is (not (buffer-type-document-p listener)))
       (is (not (buffer-type-document-p font-editor))))))
-
-(test make-listener-buffer-evaluates-lisp-and-comma-commands
-  "Listener buffers evaluate Lisp forms and dispatch McCLIM-style comma commands."
-  (let ((*buffer-ring* nil)
-        (rplaca::*listener-buffer-states* (make-hash-table :test #'eq)))
-    (rplaca::init-default-keymap)
-    (let ((buf (make-listener-buffer :working-directory #P"/tmp/"
-                                     :add-to-ring-p t)))
-      (is (listener-buffer-p buf))
-      (is (string= "listener" (buffer-major-mode buf)))
-      (is (not (document-buffer-p buf)))
-      (is (search "McCLIM-style Common Lisp Listener"
-                  (message-text (latest-buffer-message buf))))
-
-      (set-message-text (buffer-input-message buf) "(+ 1 2)")
-      (submit-listener-input buf)
-      (is (search "=> 3" (message-text (latest-buffer-message buf))))
-      (is (search ">" (rplaca::message-metadata-value
-                       (message-metadata
-                        (message-prev (message-prev (buffer-input-message buf))))
-                       :listener-prompt)))
-
-      (set-message-text (buffer-input-message buf) ",Help Commands")
-      (submit-listener-input buf)
-      (is (search "Common Lisp listener commands"
-                  (message-text (latest-buffer-message buf))))
-
-      (set-message-text (buffer-input-message buf) ",Package cl-user")
-      (submit-listener-input buf)
-      (is (search "Package set to"
-                  (message-text (latest-buffer-message buf))))
-
-      (set-message-text (buffer-input-message buf) ",Clear Output History")
-      (submit-listener-input buf)
-      (is (search "Listener history cleared"
-                  (message-text (latest-buffer-message buf))))
-      (is (= 1 (length (buffer-test-history-messages buf)))))))
 
 (test make-help-buffer-stores-read-only-help-content
   "Help buffers expose their text through help-buffer-text."
@@ -834,18 +793,30 @@
          (working-directory #P"/tmp/rplaca-listener-session/")
          (stack-entry #P"/tmp/rplaca-listener-stack/")
          (*sessions-dir* (make-pathname :directory (list :absolute "tmp" "rplaca-buffer-tests")))
+         (rplaca::*buffer-type-registry* (rplaca::make-buffer-type-registry))
          (rplaca::*listener-buffer-states* (make-hash-table :test #'eq))
          (session (load-or-create-session session-name
                                           :working-directory working-directory))
-         (buf (make-listener-buffer :name session-name
-                                    :working-directory working-directory)))
+         (buf (make-buffer session-name
+                           :kind :listener
+                           :major-mode "listener"
+                           :working-directory working-directory)))
+    (register-buffer-type
+     :listener
+     :serialize-state-function 'rplaca::listener-serialize-buffer-state
+     :restore-state-function 'rplaca::listener-restore-buffer-state)
     (setf (buffer-session buf) session)
-    (rplaca::listener-set-package buf "KEYWORD")
-    (setf (listener-state-directory-stack (listener-buffer-state buf))
+    (setf (rplaca::listener-state-package-name
+           (rplaca::listener-buffer-state buf))
+          "KEYWORD"
+          (rplaca::listener-state-directory-stack
+           (rplaca::listener-buffer-state buf))
           (list stack-entry)
-          (listener-state-last-values (listener-buffer-state buf))
+          (rplaca::listener-state-last-values
+           (rplaca::listener-buffer-state buf))
           '(42 "done")
-          (listener-state-command-history (listener-buffer-state buf))
+          (rplaca::listener-state-command-history
+           (rplaca::listener-buffer-state buf))
           '(",pwd" "(+ 1 2)"))
     (save-session buf)
     (let* ((snapshot-path (rplaca::session-path session-name))

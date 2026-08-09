@@ -167,7 +167,6 @@ application state on the caller's thread.")
       (install :chat "Default agent conversation buffer." "chat" nil)
       (install :help "Read-only help buffer." "help" nil)
       (install :info "Read-only Info manual browser." "info" nil)
-      (install :listener "Interactive Common Lisp listener buffer." "listener" nil)
       (install :font-editor "Interactive CADR-style bitmap font editor." "font-editor" nil)
       (install :scratch "Editable scratch buffer." "scratch" t)
       (install :file "Project-backed editable file buffer." "file" t))
@@ -427,8 +426,16 @@ major-mode label, and optional McCLIM presentation functions."
                    (remove-if-not
                     (lambda (provider)
                       (buffer-input-presentation-provider-active-p provider buf))
-                    (reverse
-                     (buffer-input-presentation-provider-snapshot)))))))
+                     (reverse
+                      (buffer-input-presentation-provider-snapshot)))))))
+
+(defvar *buffer-input-presentation-text* nil)
+
+(defun buffer-input-presentation-text (buffer)
+  "Return the text visible to input presentation providers for BUFFER."
+  (or *buffer-input-presentation-text*
+      (and buffer (message-text (buffer-input-message buffer)))
+      ""))
 
 (defun buffer-state-serializer (buf)
   "Return BUF's optional persistence serializer function."
@@ -484,7 +491,7 @@ major-mode label, and optional McCLIM presentation functions."
                       :accessor buffer-kind
                       :initform :chat
                       :type keyword
-                      :documentation "Buffer kind. Built-ins include :chat, :help, :info, :listener, :scratch, and :file.")
+                      :documentation "Buffer kind. Built-ins include :chat, :help, :info, :scratch, and :file.")
    (working-directory :initarg :working-directory
                       :accessor buffer-working-directory
                       :initform (truename ".")
@@ -2090,7 +2097,11 @@ When OVERWRITE-NIL-P is false, NIL branch values leave snapshot metadata alone."
                   :when (stringp package)
                     :collect package))
       (replay-serialized-messages buf messages)
-      (restore-buffer-extra-state buf buffer-state)
+      (if (and (eq (buffer-kind buf) :listener)
+               (fboundp 'restore-retired-listener-buffer-state))
+          (funcall (symbol-function 'restore-retired-listener-buffer-state)
+                   buf buffer-state)
+          (restore-buffer-extra-state buf buffer-state))
       (ignore-errors
         (reconcile-buffer-think-level-override buf))
       (sync-buffer-system-prompt-display buf)

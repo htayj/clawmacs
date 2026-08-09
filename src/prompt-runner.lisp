@@ -114,7 +114,7 @@ REASON and is captured when the short settlement waiter is constructed.")
                                   t)))))
                          :name "rplaca-oauth-settlement"
                          :initial-bindings
-                         (acons '*suppress-chat-redisplay-requests*
+                         (acons '*suppress-buffer-display-wakeup-requests*
                                 nil
                                 bt:*default-special-bindings*))))
               (error (condition)
@@ -464,7 +464,7 @@ process claims this exact operation."
        function
        :name name
        :initial-bindings
-       (acons '*suppress-chat-redisplay-requests*
+       (acons '*suppress-buffer-display-wakeup-requests*
               nil
               bt:*default-special-bindings*))))
 
@@ -1344,7 +1344,7 @@ value and never unwinds the command loop."
                                   ;; not portably inherited by Bordeaux Threads.
                                   :initial-bindings
                                   (append media-thread-bindings
-                                          (acons '*suppress-chat-redisplay-requests*
+                                          (acons '*suppress-buffer-display-wakeup-requests*
                                                  nil
                                                  bt:*default-special-bindings*)))))
                         (error (condition)
@@ -1508,7 +1508,7 @@ value and never unwinds the command loop."
                            t)))))
                   :name "rplaca-tool-settlement"
                   :initial-bindings
-                  (acons '*suppress-chat-redisplay-requests*
+                  (acons '*suppress-buffer-display-wakeup-requests*
                          nil
                          bt:*default-special-bindings*))))
             (error (condition)
@@ -1710,7 +1710,7 @@ owner without recursively acquiring that lock."
                            t)))))
                   :name "rplaca-interactive-operation-settlement"
                   :initial-bindings
-                  (acons '*suppress-chat-redisplay-requests*
+                  (acons '*suppress-buffer-display-wakeup-requests*
                          nil
                          bt:*default-special-bindings*))))
             (error (condition)
@@ -1980,7 +1980,7 @@ only when already dead."
                                 t)))))
                        :name "rplaca-stream-settlement"
                        :initial-bindings
-                       (acons '*suppress-chat-redisplay-requests*
+                       (acons '*suppress-buffer-display-wakeup-requests*
                               nil
                               bt:*default-special-bindings*))))
             (error (condition)
@@ -2172,7 +2172,7 @@ therefore records protocol completion silently before releasing ownership."
           (bt:condition-notify (buffer-runtime-condition buf))))
       ;; This is deliberately the private wake-only path.  The reaper may be a
       ;; managed worker; package hooks and all visible buffer mutation run only
-      ;; after HANDLE-CHAT-FRAME-REDISPLAY claims the exact retained teardown.
+      ;; after the listener wake handler claims the exact retained teardown.
       (when wake-frame-p
         (wake-buffer-display-change buf :runtime-stopped-pending)))
     t))

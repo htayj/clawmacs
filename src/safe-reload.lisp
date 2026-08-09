@@ -329,8 +329,6 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
   ;; user's buffers, sessions, frame, and compose draft.
   (when (fboundp 'init-tools)
     (funcall 'init-tools))
-  (when (fboundp 'install-chat-frame-keybindings)
-    (funcall 'install-chat-frame-keybindings))
   (when (fboundp 'install-listener-frame-keybindings)
     (funcall 'install-listener-frame-keybindings))
   (when (fboundp 'reload-package-channels)
@@ -457,36 +455,16 @@ The current Lisp image is not mutated by this function."
   (when buffer
     (buffer-insert-system-message buffer (safe-reload-start-notification-text))))
 
-(defun safe-reload-current-chat-frame ()
-  "Return the currently active chat frame, when running under McCLIM."
-  (let ((class (find-class 'rplaca-chat-frame nil))
-        (frame clim:*application-frame*))
-    (and class (typep frame class) frame)))
-
-(defun redisplay-safe-reload-status-now ()
-  "Synchronously redisplay the current chat frame after a reload status change."
-  (let ((frame (safe-reload-current-chat-frame)))
-    (when (and frame (fboundp 'handle-chat-frame-redisplay))
-      (ignore-errors
-        (funcall 'handle-chat-frame-redisplay frame)))))
-
 (defun safe-reload-current-frame ()
-  "Return the active listener or compatibility chat application frame."
+  "Return the active listener application frame."
   (let ((frame clim:*application-frame*))
-    (and frame
-         (or (typep frame 'rplaca-listener)
-             (let ((chat-class (find-class 'rplaca-chat-frame nil)))
-               (and chat-class (typep frame chat-class))))
-         frame)))
+    (and (typep frame 'rplaca-listener) frame)))
 
 (defun redisplay-safe-reload-frame-now (frame)
   "Refresh FRAME through its concrete UI adapter after a status change."
-  (cond
-    ((typep frame 'rplaca-listener)
-     (when (fboundp 'handle-listener-safe-reload-redisplay)
-       (funcall 'handle-listener-safe-reload-redisplay frame)))
-    ((and frame (fboundp 'handle-chat-frame-redisplay))
-     (ignore-errors (funcall 'handle-chat-frame-redisplay frame)))))
+  (when (and (typep frame 'rplaca-listener)
+             (fboundp 'handle-listener-safe-reload-redisplay))
+    (funcall 'handle-listener-safe-reload-redisplay frame)))
 
 (defun safe-reload-one-line-summary (summary)
   "Return SUMMARY collapsed to one display line."

@@ -396,8 +396,6 @@ Blank or busy submissions return NIL values without mutating BUFFER."
   (cond
     ((document-buffer-p buffer)
      (insert-newline-command buffer))
-    ((listener-buffer-p buffer)
-     (submit-listener-input buffer))
     (t
      (let ((input-text (message-text (buffer-input-message buffer))))
        (when (plusp (length (string-trim '(#\Space #\Tab #\Newline) input-text)))
@@ -2043,12 +2041,6 @@ to navigate. Shows buffer name, agent, status, and message count."
     (switch-to-buffer new-buf)))
 (defcommand new-buffer-command)
 
-(defun new-listener-buffer-command (buffer)
-  "Create or switch to the Common Lisp listener buffer."
-  (declare (ignore buffer))
-  (switch-to-buffer (ensure-listener-buffer)))
-(defcommand new-listener-buffer-command)
-
 (defun next-buffer-command (buffer)
   "Switch to the next buffer in the ring."
   (declare (ignore buffer))
@@ -3407,16 +3399,12 @@ Environment variables:
 (defun initialize-rplaca-runtime ()
   "Initialize shared runtime state before either UI or prompt execution."
   (init-default-keymap)
-  (when (fboundp 'install-chat-frame-keybindings)
-    (install-chat-frame-keybindings))
   (init-tools)
   ;; Load the configured personality prompt file before init.lisp so user init
   ;; may still override it directly or reload after changing the path.
   (load-personality-prompt-file)
   (load-user-init-file)
   (install-e2e-agent-definition)
-  (when (fboundp 'install-chat-frame-keybindings)
-    (install-chat-frame-keybindings))
   (reload-package-channels)
   (load-autoload-packages)
   (load-project-definitions)

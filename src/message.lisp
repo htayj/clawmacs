@@ -746,3 +746,19 @@ Must be called after message-yank or message-yank-pop."
                       (message-insert-newline msg)
                       (message-insert-char msg char))))))
   msg)
+
+(defun message-metadata-help-string (msg)
+  "Return help text describing MSG metadata."
+  (with-output-to-string (stream)
+    (format stream "Message~2%")
+    (format stream "Sender: ~A~%" (message-sender msg))
+    (format stream "Timestamp: ~A~%" (or (message-timestamp msg) "none"))
+    (format stream "Entry id: ~A~%" (or (message-entry-id msg) "none"))
+    (format stream "Parent entry id: ~A~%"
+            (or (message-parent-entry-id msg) "none"))
+    (format stream "Read only: ~:[no~;yes~]~%" (message-read-only-p msg))
+    (format stream "Text length: ~D~%" (length (message-text msg)))
+    (format stream "Line count: ~D~%" (message-line-count msg))
+    (format stream "Raw content blocks: ~D~%"
+            (length (or (message-raw-content msg) nil)))
+    (format stream "~%Metadata:~%~S~%" (message-metadata msg))))

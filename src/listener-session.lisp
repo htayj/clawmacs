@@ -2,6 +2,110 @@
 
 (defvar *listener-contexts-by-buffer* (make-hash-table :test #'eq))
 
+(defvar *listener-buffer-states* (make-hash-table :test #'eq))
+
+(defstruct (listener-state
+            (:constructor make-listener-state
+                (&key (package-name "CL-USER")
+                      directory-stack
+                      last-values
+                      command-history)))
+  (package-name "CL-USER" :type string)
+  (directory-stack nil :type list)
+  (last-values nil :type list)
+  (command-history nil :type list))
+
+(defun listener-default-package-name ()
+  (let ((name (and (boundp '*lisp-eval-default-package*)
+                   *lisp-eval-default-package*)))
+    (if (and (stringp name)
+             (plusp (length (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                         name))))
+        (string-upcase name)
+        "CL-USER")))
+
+(defun listener-buffer-p (buffer)
+  (and buffer (eq (buffer-kind buffer) :listener)))
+
+(defun listener-buffer-state (buffer)
+  (unless (listener-buffer-p buffer)
+    (error "Not a retired listener buffer: ~A"
+           (and buffer (buffer-name buffer))))
+  (or (gethash buffer *listener-buffer-states*)
+      (setf (gethash buffer *listener-buffer-states*)
+            (make-listener-state
+             :package-name (listener-default-package-name)))))
+
+(defun listener-safe-value-string (value)
+  (handler-case
+      (let ((*print-length* 100)
+            (*print-level* 8)
+            (*print-circle* t)
+            (*print-pretty* nil)
+            (*print-readably* nil)
+            (*print-escape* t))
+        (prin1-to-string value))
+    (error () "#<unprintable value>")))
+
+(defun listener-normalize-package-name (value)
+  (let* ((candidate (and value (string-upcase (string value))))
+         (package (and candidate (find-package candidate))))
+    (package-name (or package (find-package (listener-default-package-name))))))
+
+(defun listener-serialize-last-values (values)
+  (coerce (mapcar #'listener-safe-value-string values) 'vector))
+
+(defun listener-restore-last-values (items)
+  (loop :for item :in (coerce (or items #()) 'list)
+        :collect (if (stringp item)
+                     (handler-case
+                         (let ((*read-eval* nil)
+                               (*package* (find-package :cl-user)))
+                           (read-from-string item))
+                       (error () item))
+                     item)))
+
+(defun listener-serialize-buffer-state (buffer)
+  "Serialize the retired listener state for snapshot compatibility."
+  (let ((state (listener-buffer-state buffer)))
+    `((:package-name . ,(listener-state-package-name state))
+      (:directory-stack
+       . ,(coerce (mapcar #'namestring
+                          (listener-state-directory-stack state))
+                  'vector))
+      (:last-values
+       . ,(listener-serialize-last-values
+           (listener-state-last-values state)))
+      (:command-history
+       . ,(coerce (copy-list (listener-state-command-history state))
+                  'vector)))))
+
+(defun listener-restore-buffer-state (buffer persisted-state)
+  "Restore the retired listener state long enough to migrate its snapshot."
+  (let ((state (listener-buffer-state buffer)))
+    (setf (listener-state-package-name state)
+          (listener-normalize-package-name
+           (cdr (assoc :package-name persisted-state)))
+          (listener-state-directory-stack state)
+          (loop :for item :in (coerce (or (cdr (assoc :directory-stack
+                                                      persisted-state))
+                                          #())
+                                      'list)
+                :when item
+                  :collect (uiop:ensure-directory-pathname
+                            (if (pathnamep item) item (pathname item))))
+          (listener-state-last-values state)
+          (listener-restore-last-values
+           (cdr (assoc :last-values persisted-state)))
+          (listener-state-command-history state)
+          (loop :for item :in (coerce (or (cdr (assoc :command-history
+                                                      persisted-state))
+                                          #())
+                                      'list)
+                :when (stringp item)
+                  :collect item)))
+  buffer)
+
 (defun listener-context-for-buffer (buffer)
   "Return BUFFER's immutable listener context, creating a default one."
   (or (gethash buffer *listener-contexts-by-buffer*)
@@ -33,6 +137,10 @@
          :directory-stack (legacy-listener-directory-stack state)))
   buffer)
 
+(defun restore-retired-listener-buffer-state (buffer state)
+  (ignore-errors (listener-restore-buffer-state buffer state))
+  (restore-legacy-listener-context buffer state))
+
 (defun mark-legacy-listener-history-display-only (buffer)
   (loop :for message := (buffer-first-message buffer) :then (message-next message)
         :while (and message (not (eq message (buffer-input-message buffer))))
@@ -49,8 +157,7 @@
     (mark-legacy-listener-history-display-only buffer)
     (setf (buffer-kind buffer) :chat
           (buffer-major-mode buffer) "chat")
-    (when (boundp '*listener-buffer-states*)
-      (remhash buffer *listener-buffer-states*)))
+    (remhash buffer *listener-buffer-states*))
   buffer)
 
 (defun migrate-retired-listener-session-after-load (buffer session-name)
@@ -305,10 +412,6 @@
     (when buffer
       (listener-activate-session-buffer frame buffer)
       (render-session-history-inline frame buffer))))
-
-(register-buffer-type
- :listener
- :restore-state-function 'restore-legacy-listener-context)
 
 (add-hook '*after-session-load-hook*
           #'migrate-retired-listener-session-after-load

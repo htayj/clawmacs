@@ -238,7 +238,7 @@
            (is (= 0 cancel-applies))
            (is-true (rplaca::buffer-runtime-stopping-p buffer))
            (is-false (rplaca::update-interactive-buffer-operation buffer))
-           ;; This models HANDLE-CHAT-FRAME-REDISPLAY after the private reaper
+            ;; This models listener wake handling after the private reaper
            ;; wake.  The cancellation callback is a frame-owned UI effect.
            (is-true
             (rplaca::deliver-buffer-runtime-stopped-notification buffer))
@@ -871,7 +871,7 @@
              (is (eq :test-request
                      (rplaca::buffer-user-input-pending buffer))))
            (is (string= "" (message-text (buffer-input-message buffer))))
-           ;; This call models HANDLE-CHAT-FRAME-REDISPLAY on the frame thread.
+            ;; This call models listener wake handling on the frame thread.
            (is-true
             (rplaca::deliver-buffer-runtime-stopped-notification buffer))
            (is (= 1 (length public-events)))

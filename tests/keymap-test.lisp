@@ -107,12 +107,6 @@
   (is (eq 'rplaca::load-session-command
           (keymap-lookup *default-keymap* (list :ctrl-x (code-char 18))))))
 
-(test default-keymap-listener-binding
-  "Default keymap binds C-x l to the in-buffer Lisp listener."
-  (rplaca::init-default-keymap)
-  (is (eq 'rplaca::new-listener-buffer-command
-          (keymap-lookup *default-keymap* '(:ctrl-x #\l)))))
-
 (test file-keymap-emacs-editor-bindings
   "File buffers have Emacs-style editor bindings over the global keymap."
   (rplaca::init-default-keymap)
@@ -218,13 +212,9 @@ and C-c R to its compatibility command alias."
   (is (eq 'rplaca::describe-function-command
           (keymap-lookup *default-keymap* '(:ctrl-c #\f)))))
 
-(test default-keymap-appearance-bindings-preserve-neighboring-commands
-  "Uppercase F opens appearance while established lowercase and global keys remain."
+(test default-keymap-neighboring-help-and-control-commands-remain-bound
+  "Established lowercase and global keys remain after appearance editor retirement."
   (rplaca::init-default-keymap)
-  (is (eq 'rplaca::customize-appearance-command
-          (keymap-lookup *default-keymap* '(:ctrl-h #\F))))
-  (is (eq 'rplaca::customize-appearance-command
-          (keymap-lookup *default-keymap* '(:ctrl-c #\F))))
   (is (eq 'rplaca::describe-function-command
           (keymap-lookup *default-keymap* '(:ctrl-h #\f))))
   (is (eq 'rplaca::describe-function-command

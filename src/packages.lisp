@@ -272,7 +272,6 @@
    #:scratch-buffer-p
    #:file-buffer-p
    #:info-buffer-p
-   #:listener-buffer-p
    #:document-buffer-p
    #:buffer-llm-running-p
    #:make-chat-buffer
@@ -370,19 +369,6 @@
     #:listener-pane-appearance-initargs
     #:make-rplaca-listener-pane
     #:run-rplaca-listener
-   #:listener-state
-   #:make-listener-state
-   #:listener-state-package-name
-   #:listener-state-directory-stack
-   #:listener-state-last-values
-   #:listener-state-command-history
-   #:listener-buffer-state
-   #:listener-prompt-text
-   #:listener-wholine-text
-   #:listener-command-help-text
-   #:make-listener-buffer
-   #:ensure-listener-buffer
-   #:submit-listener-input
    ;; Font editor buffers
    #:*font-editor-buffer-name*
    #:*font-editor-default-extract-directory*
@@ -1227,10 +1213,6 @@
    #:minibuffer-toggle-package-command
    #:describe-installed-package-command
    #:package-dashboard-command
-   #:switch-appearance-theme-command
-   #:describe-current-appearance-command
-   #:customize-appearance-command
-   #:customize-face-command
    #:apply-staged-appearance-command
    #:save-appearance-command
    #:revert-staged-appearance-command
@@ -1298,7 +1280,6 @@
    #:continue-session-command
    #:session-info-command
    #:set-session-display-name-command
-   #:new-listener-buffer-command
    #:info-directory-command
    #:info-open-manual-command
    #:rplaca-manual-command

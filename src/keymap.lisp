@@ -184,14 +184,12 @@
     ;; prefer avoiding the C-h / Backspace ambiguity.
     (keymap-bind km '(:ctrl-h #\b) 'describe-bindings-command)  ; C-h b = describe keybindings
     (keymap-bind km '(:ctrl-h #\f) 'describe-function-command)  ; C-h f = describe function
-    (keymap-bind km '(:ctrl-h #\F) 'customize-appearance-command) ; C-h F = appearance editor
     (keymap-bind km '(:ctrl-h #\v) 'describe-variable-command)  ; C-h v = describe variable
     (keymap-bind km '(:ctrl-h #\i) 'info-directory-command)     ; C-h i = Info directory
     (keymap-bind km '(:ctrl-h #\I) 'rplaca-manual-command)    ; C-h I = RPLACA manual
     (keymap-bind km '(:ctrl-h #\T) 'describe-type-command)      ; C-h T = describe type
     (keymap-bind km '(:ctrl-c #\b) 'describe-bindings-command)  ; compatibility alias
     (keymap-bind km '(:ctrl-c #\f) 'describe-function-command)  ; compatibility alias
-    (keymap-bind km '(:ctrl-c #\F) 'customize-appearance-command) ; appearance editor alias
     (keymap-bind km '(:ctrl-c #\v) 'describe-variable-command)  ; compatibility alias
     (keymap-bind km '(:ctrl-c #\T) 'describe-type-command)      ; compatibility alias
     ;; ----- C-x prefix: global / cross-buffer commands -----
@@ -200,7 +198,6 @@
     (keymap-bind km (list :ctrl-x (code-char 6)) 'open-project-file-command) ; C-x C-f
     (keymap-bind km '(:ctrl-x #\p) 'minibuffer-select-project-command) ; C-x p
     (keymap-bind km '(:ctrl-x #\n) 'new-buffer-command)       ; C-x n = new buffer
-    (keymap-bind km '(:ctrl-x #\l) 'new-listener-buffer-command) ; C-x l = listener
     (keymap-bind km '(:ctrl-x #\F) 'font-editor-command) ; C-x F = font editor
     (keymap-bind km '(:ctrl-x #\k) 'kill-buffer-command)      ; C-x k = kill buffer
     (keymap-bind km (list :ctrl-x (code-char 19)) 'save-session-command) ; C-x C-s

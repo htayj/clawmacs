@@ -177,11 +177,7 @@
     (with-listener-parity-function-override
         (rplaca::handle-listener-safe-reload-redisplay (actual-frame)
           (setf refreshed actual-frame))
-      (with-listener-parity-function-override
-          (rplaca::handle-chat-frame-redisplay (actual-frame)
-            (declare (ignore actual-frame))
-            (error "listener reload invoked the chat redisplay adapter"))
-        (rplaca::redisplay-safe-reload-frame-now frame)))
+      (rplaca::redisplay-safe-reload-frame-now frame))
     (is (eq frame refreshed))))
 
 (test listener-help-populates-details-and-close-restores-listener-layout
@@ -265,8 +261,7 @@
                (make-listener-parity-buffer "appearance-two")))
          (frames (list one two)))
     (let ((rplaca::*package-appearance-catalog* old-catalog)
-          (rplaca::*package-appearance-live-listener-frames* frames)
-          (rplaca::*package-appearance-live-chat-frames* nil))
+          (rplaca::*package-appearance-live-listener-frames* frames))
       (let ((plans (rplaca::package-appearance-frame-plan frames catalog)))
         (rplaca::publish-package-appearance-catalog
          catalog plans "listener-parity" nil)))
@@ -297,7 +292,6 @@
          (frames (list one two))
          (rplaca::*package-appearance-catalog* base)
          (rplaca::*package-appearance-live-listener-frames* frames)
-         (rplaca::*package-appearance-live-chat-frames* nil)
          (snapshot (funcall rplaca::*package-appearance-batch-begin-function*)))
     (unwind-protect
          (progn

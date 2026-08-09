@@ -98,10 +98,6 @@
   :description "Private bounded fatal crash reports"
   :in rplaca-suite)
 
-(def-suite mcclim-interface-suite
-  :description "Frame-local McCLIM interface and lifecycle tests"
-  :in rplaca-suite)
-
 (def-suite sexed-suite
   :description "Agent-oriented s-expression editing tests"
   :in rplaca-suite)

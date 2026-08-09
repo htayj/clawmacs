@@ -19,6 +19,8 @@
 (defvar *listener-package-appearance-batch-lock*
   (bt:make-lock "listener package appearance batch"))
 (defvar *active-listener-package-appearance-batch* nil)
+(defparameter *appearance-package-transition-timeout-seconds* 5)
+(defvar *appearance-package-prepared-frame-resume-hook* (constantly nil))
 
 (defstruct (listener-input-token
              (:constructor make-listener-input-token
@@ -1073,6 +1075,138 @@ cached object."
     (setf (getf snapshot :lock-held-p) nil)
     (bt:release-lock *listener-package-appearance-batch-lock*))
   nil)
+
+(defun appearance-package-transition-notify-all (token)
+  #+sbcl
+  (sb-thread:condition-broadcast
+   (appearance-package-transition-token-condition token))
+  #-sbcl
+  (bt:condition-notify
+   (appearance-package-transition-token-condition token)))
+
+(defun wait-for-appearance-package-transition-count
+    (token count-reader expected deadline &key (stop-on-failure-p t))
+  (loop
+    (when (and stop-on-failure-p
+               (appearance-package-transition-token-failure token))
+      (return nil))
+    (when (>= (funcall count-reader token) expected)
+      (return t))
+    (when (>= (get-internal-real-time) deadline)
+      (setf (appearance-package-transition-token-failure token)
+            :frame-transition-timeout)
+      (return nil))
+    (bt:condition-wait
+     (appearance-package-transition-token-condition token)
+     (appearance-package-transition-token-lock token)
+     :timeout 0.05)))
+
+(defun finalize-package-appearance-frame-transition
+    (token reservations commit-function rollback-function)
+  "Run a two-phase listener-frame barrier around catalog publication."
+  (declare (ignore rollback-function))
+  (let ((deadline (+ (get-internal-real-time)
+                     (* *appearance-package-transition-timeout-seconds*
+                        internal-time-units-per-second))))
+    (bt:with-lock-held ((appearance-package-transition-token-lock token))
+      (let ((expected (appearance-package-transition-token-expected-count token))
+            (local-reservations
+              (remove-if-not
+               (lambda (reservation)
+                 (or (getf reservation :origin-frame-p)
+                     (null (getf reservation :sheet))))
+               reservations)))
+        (dolist (reservation local-reservations)
+          (unless (listener-package-appearance-reservation-current-p reservation)
+            (setf (appearance-package-transition-token-failure token)
+                  :origin-frame-state-changed))
+          (incf (appearance-package-transition-token-ready-count token)))
+        (unless (wait-for-appearance-package-transition-count
+                 token
+                 #'appearance-package-transition-token-ready-count
+                 expected deadline)
+          (setf (appearance-package-transition-token-state token) :aborted)
+          (appearance-package-transition-notify-all token)
+          (error "Appearance frame transition preparation failed: ~A"
+                 (appearance-package-transition-token-failure token)))
+        (funcall commit-function)
+        (setf (appearance-package-transition-token-state token) :committing)
+        (appearance-package-transition-notify-all token)
+        (dolist (reservation local-reservations)
+          (apply-listener-package-appearance-frame-reservation-target reservation)
+          (incf (appearance-package-transition-token-applied-count token)))
+        (unless (wait-for-appearance-package-transition-count
+                 token
+                 #'appearance-package-transition-token-applied-count
+                 expected
+                 (+ (get-internal-real-time)
+                    (* *appearance-package-transition-timeout-seconds*
+                       internal-time-units-per-second))
+                 :stop-on-failure-p nil)
+          (ignore-errors
+            (warn "Committed appearance transition is still settling on ~D frame(s)."
+                  (- expected
+                     (appearance-package-transition-token-applied-count token)))))
+        (setf (appearance-package-transition-token-state token) :committed)
+        (appearance-package-transition-notify-all token)
+        t))))
+
+(defun handle-listener-package-appearance-frame-reservation
+    (frame reservation token)
+  (let ((commit-p nil))
+    (bt:with-lock-held ((appearance-package-transition-token-lock token))
+      (unless (and (typep frame 'rplaca-listener)
+                   (eq frame (getf reservation :frame))
+                   (listener-package-appearance-reservation-current-p reservation))
+        (setf (appearance-package-transition-token-failure token)
+              :frame-state-changed))
+      (incf (appearance-package-transition-token-ready-count token))
+      (appearance-package-transition-notify-all token)
+      (loop :while (eq :preparing
+                       (appearance-package-transition-token-state token))
+            :do (bt:condition-wait
+                 (appearance-package-transition-token-condition token)
+                 (appearance-package-transition-token-lock token)))
+      (setf commit-p
+            (member (appearance-package-transition-token-state token)
+                    '(:committing :committed)
+                    :test #'eq)))
+    (when commit-p
+      (funcall *appearance-package-prepared-frame-resume-hook* frame reservation)
+      (apply-listener-package-appearance-frame-reservation-target reservation)
+      (bt:with-lock-held ((appearance-package-transition-token-lock token))
+        (incf (appearance-package-transition-token-applied-count token))
+        (appearance-package-transition-notify-all token))))
+  (when (eq :committed (appearance-package-transition-token-state token))
+    (ignore-errors (clim:redisplay-frame-panes frame :force-p t)))
+  nil)
+
+(defmethod clim:handle-event
+    ((sheet clime:top-level-sheet-mixin)
+     (event rplaca-listener-appearance-catalog-event))
+  (handle-listener-package-appearance-frame-reservation
+   (ignore-errors (clim:pane-frame sheet))
+   (listener-appearance-event-reservation event)
+   (listener-appearance-event-token event)))
+
+(setf *appearance-package-live-frame-provider*
+      #'package-appearance-live-listener-frames
+      *appearance-package-frame-transition-planner*
+      #'listener-package-appearance-frame-transition-plan
+      *appearance-package-frame-transition-reserver*
+      #'reserve-listener-package-appearance-frame-transition
+      *appearance-package-frame-transition-publisher*
+      #'release-listener-package-appearance-frame-transition
+      *appearance-package-frame-transition-finalizer*
+      #'finalize-package-appearance-frame-transition
+      *appearance-package-batch-checkpoint-function*
+      #'checkpoint-listener-package-appearance-frame-batch
+      *package-appearance-batch-begin-function*
+      #'begin-listener-package-appearance-frame-batch
+      *package-appearance-batch-restore-function*
+      #'restore-listener-package-appearance-frame-batch
+      *package-appearance-batch-end-function*
+      #'end-listener-package-appearance-frame-batch)
 
 (defun listener-frame-cleanup (frame hook)
   "Tear down FRAME-owned runtime: mark dead, advance lifecycle generation,

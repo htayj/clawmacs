@@ -1,5 +1,7 @@
 (in-package :rplaca)
 
+(defvar *suppress-buffer-display-wakeup-requests* nil)
+
 (eval-when (:compile-toplevel :load-toplevel :execute)
   #+sbcl
   (require :sb-bsd-sockets))
@@ -4093,7 +4095,7 @@ worker settlement."
              ;; is implementation-defined, so readers explicitly re-enable
              ;; terminal/update wakeups.
              :initial-bindings
-             (acons '*suppress-chat-redisplay-requests*
+              (acons '*suppress-buffer-display-wakeup-requests*
                     nil
                     bt:*default-special-bindings*)))
       (register-stream-state-reader-thread state thread))

@@ -217,9 +217,9 @@ environment values, payloads, transcripts, compose text, or provider stderr."
 (defun crash-report-frame-buffer ()
   "Return the active frame buffer without assuming a live McCLIM backend."
   (or (and *crash-report-frame*
-           (fboundp 'chat-frame-buffer)
-           (crash-report-safe-value #'chat-frame-buffer
-                                    *crash-report-frame*))
+           (typep *crash-report-frame* 'rplaca-listener)
+           (crash-report-safe-value #'rplaca-listener-conversation-buffer
+                                     *crash-report-frame*))
       (first (or *buffer-ring* nil))))
 
 (defun publish-crash-report-runtime-snapshot (&rest state)
@@ -245,8 +245,8 @@ environment values, payloads, transcripts, compose text, or provider stderr."
      (and frame (fboundp 'clim:frame-state)
           (crash-report-safe-value #'clim:frame-state frame))
      :frame-lifecycle
-     (and frame (fboundp 'chat-frame-lifecycle-state)
-          (crash-report-safe-value #'chat-frame-lifecycle-state frame))
+     (and (typep frame 'rplaca-listener)
+          (crash-report-safe-value #'rplaca-listener-liveness frame))
      :buffer-kind (and buffer (crash-report-safe-value #'buffer-kind buffer))
      :buffer-status (and buffer (crash-report-safe-value #'buffer-status buffer))
      :buffer-dirty-p
