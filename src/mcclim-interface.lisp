@@ -3401,16 +3401,18 @@ handler, which is delivered by the frame's normal CLIM event process."
       (let ((expected
               (rplaca::appearance-package-transition-token-expected-count
                token))
-            (origin
-              (find-if (lambda (reservation)
-                         (getf reservation :origin-frame-p))
-                       reservations)))
+            (local-reservations
+              (remove-if-not
+               (lambda (reservation)
+                 (or (getf reservation :origin-frame-p)
+                     (null (getf reservation :sheet))))
+               reservations)))
         ;; A command may initiate reload on its own CLIM event thread.  That
         ;; frame cannot consume a queued barrier event while this coordinator
         ;; is waiting, so stage and commit its exact reservation synchronously
         ;; on the already-correct owning process.
-        (when origin
-          (unless (package-appearance-reservation-current-p origin)
+        (dolist (reservation local-reservations)
+          (unless (package-appearance-reservation-current-p reservation)
             (setf
              (rplaca::appearance-package-transition-token-failure token)
              :origin-frame-state-changed))
@@ -3434,8 +3436,8 @@ handler, which is delivered by the frame's normal CLIM event process."
         ;; and the origin is already executing on its owner.  Nothing can
         ;; change the captured slots between prepare and this bounded install,
         ;; so commit contains no fallible resolution or compensating rollback.
-        (when origin
-          (apply-package-appearance-frame-reservation-target origin)
+        (dolist (reservation local-reservations)
+          (apply-package-appearance-frame-reservation-target reservation)
           (incf
            (rplaca::appearance-package-transition-token-applied-count token)))
         (unless
@@ -4079,41 +4081,46 @@ to test without manufacturing a backend top-level sheet."
 (defun apply-package-appearance-frame-reservation-target (reservation)
   "Install RESERVATION's admitted target on its owning frame."
   (let ((frame (getf reservation :frame)))
-    (publish-admitted-package-appearance-frame-state
-     frame
-     (getf reservation :catalog)
-     (getf reservation :profile)
-     (getf reservation :bundle)
-     :revision (getf reservation :target-revision))
-    (when (getf reservation :target-state-p)
-      (setf (slot-value frame 'appearance-staged-candidate)
-            (getf reservation :target-staged)
-            (chat-frame-appearance-persisted-profile frame)
-            (getf reservation :target-persisted)))
-    (when (getf reservation :target-font-state-p)
-      (setf (slot-value frame 'appearance-font-inventory)
-            (getf reservation :target-font-inventory)
-            (slot-value frame 'appearance-font-inventory-generation)
-            (getf reservation :target-font-generation)))
-    (when (getf reservation :target-cache-p)
-      (clrhash (chat-frame-appearance-resolved-roles frame))
-      (maphash
-       (lambda (key value)
-         (setf (gethash key (chat-frame-appearance-resolved-roles frame))
-               value))
-       (getf reservation :target-resolved-roles))
-      (clrhash (chat-frame-appearance-role-keys frame))
-      (maphash
-       (lambda (key value)
-         (setf (gethash key (chat-frame-appearance-role-keys frame)) value))
-       (getf reservation :target-role-keys)))
+    (if (typep frame 'rplaca-listener)
+        (apply-listener-package-appearance-frame-reservation-target reservation)
+        (progn
+          (publish-admitted-package-appearance-frame-state
+           frame
+           (getf reservation :catalog)
+           (getf reservation :profile)
+           (getf reservation :bundle)
+           :revision (getf reservation :target-revision))
+          (when (getf reservation :target-state-p)
+            (setf (slot-value frame 'appearance-staged-candidate)
+                  (getf reservation :target-staged)
+                  (chat-frame-appearance-persisted-profile frame)
+                  (getf reservation :target-persisted)))
+          (when (getf reservation :target-font-state-p)
+            (setf (slot-value frame 'appearance-font-inventory)
+                  (getf reservation :target-font-inventory)
+                  (slot-value frame 'appearance-font-inventory-generation)
+                  (getf reservation :target-font-generation)))
+          (when (getf reservation :target-cache-p)
+            (clrhash (chat-frame-appearance-resolved-roles frame))
+            (maphash
+             (lambda (key value)
+               (setf (gethash key (chat-frame-appearance-resolved-roles frame))
+                     value))
+             (getf reservation :target-resolved-roles))
+            (clrhash (chat-frame-appearance-role-keys frame))
+            (maphash
+             (lambda (key value)
+               (setf (gethash key (chat-frame-appearance-role-keys frame)) value))
+             (getf reservation :target-role-keys)))))
     frame))
 
 (defun package-appearance-reservation-current-p (reservation)
   "Return true when RESERVATION still names the exact captured frame state."
   (let ((frame (getf reservation :frame)))
-    (and (eq (getf reservation :expected-catalog)
-             (chat-frame-appearance-catalog frame))
+    (if (typep frame 'rplaca-listener)
+        (listener-package-appearance-reservation-current-p reservation)
+        (and (eq (getf reservation :expected-catalog)
+              (chat-frame-appearance-catalog frame))
          (eq (getf reservation :expected-profile)
              (chat-frame-appearance-profile frame))
          (eq (getf reservation :expected-bundle)
@@ -4126,8 +4133,8 @@ to test without manufacturing a backend top-level sheet."
              (chat-frame-appearance-persisted-profile frame))
          (eq (getf reservation :expected-font-inventory)
              (chat-frame-appearance-font-inventory frame))
-         (= (getf reservation :expected-font-generation)
-            (chat-frame-appearance-font-inventory-generation frame)))))
+             (= (getf reservation :expected-font-generation)
+                (chat-frame-appearance-font-inventory-generation frame))))))
 
 (defun handle-package-appearance-frame-reservation
     (frame reservation token)
@@ -4135,7 +4142,8 @@ to test without manufacturing a backend top-level sheet."
   (let ((commit-p nil))
     (bt:with-lock-held
         ((rplaca::appearance-package-transition-token-lock token))
-      (unless (and (typep frame 'rplaca-chat-frame)
+      (unless (and (or (typep frame 'rplaca-chat-frame)
+                       (typep frame 'rplaca-listener))
                    (eq frame (getf reservation :frame))
                    (package-appearance-reservation-current-p reservation))
         (setf (rplaca::appearance-package-transition-token-failure token)
@@ -4169,7 +4177,9 @@ to test without manufacturing a backend top-level sheet."
         (appearance-package-transition-notify-all token))))
   (when (eq :committed
             (rplaca::appearance-package-transition-token-state token))
-    (ignore-errors (request-chat-frame-redisplay frame)))
+    (if (typep frame 'rplaca-listener)
+        (ignore-errors (clim:redisplay-frame-panes frame :force-p t))
+        (ignore-errors (request-chat-frame-redisplay frame))))
   nil)
 
 (defmethod clim:handle-event
@@ -4180,6 +4190,14 @@ to test without manufacturing a backend top-level sheet."
    (ignore-errors (clim:pane-frame sheet))
    (chat-appearance-catalog-event-reservation event)
    (chat-appearance-catalog-event-token event)))
+
+(defmethod clim:handle-event
+    ((sheet clime:top-level-sheet-mixin)
+     (event rplaca-listener-appearance-catalog-event))
+  (handle-package-appearance-frame-reservation
+   (ignore-errors (clim:pane-frame sheet))
+   (listener-appearance-event-reservation event)
+   (listener-appearance-event-token event)))
 
 (defun run-chat-frame-buffer-command (frame command)
   "Run COMMAND on FRAME's buffer and refresh frame UI state."
@@ -5361,23 +5379,71 @@ the existing Drei/ESA pane declarations."
            (clim:run-frame-top-level frame)
         (publish-crash-report-runtime-snapshot :phase :frame-stopped)))))
 
-;; The declaration layer remains CLIM-free; this is its concrete McCLIM
-;; adapter.  It plans before catalog publication and queues the actual frame
-;; change through the regular window-manager event loop.
-(setf *appearance-package-live-frame-provider* #'package-appearance-live-chat-frames
+;; The declaration layer remains CLIM-free; this adapter keeps both application
+;; frame classes live until the chat frame is retired.
+(defun package-appearance-live-frames ()
+  (append (package-appearance-live-chat-frames)
+          (package-appearance-live-listener-frames)))
+
+(defun combined-package-appearance-frame-transition-plan (frame catalog)
+  (if (typep frame 'rplaca-listener)
+      (listener-package-appearance-frame-transition-plan frame catalog)
+      (package-appearance-frame-transition-plan frame catalog)))
+
+(defun combined-reserve-package-appearance-frame-transition
+    (frame plan catalog token)
+  (if (typep frame 'rplaca-listener)
+      (reserve-listener-package-appearance-frame-transition
+       frame plan catalog token)
+      (reserve-package-appearance-frame-transition frame plan catalog token)))
+
+(defun combined-release-package-appearance-frame-transition (reservation)
+  (if (typep (getf reservation :frame) 'rplaca-listener)
+      (release-listener-package-appearance-frame-transition reservation)
+      (release-package-appearance-frame-transition reservation)))
+
+(defun combined-checkpoint-package-appearance-frame-batch (reservations)
+  (checkpoint-package-appearance-frame-batch
+   (remove-if (lambda (reservation)
+                (typep (getf reservation :frame) 'rplaca-listener))
+              reservations))
+  (checkpoint-listener-package-appearance-frame-batch
+   (remove-if-not (lambda (reservation)
+                    (typep (getf reservation :frame) 'rplaca-listener))
+                  reservations)))
+
+(defun begin-combined-package-appearance-frame-batch ()
+  (let ((chat (begin-package-appearance-frame-batch)))
+    (handler-case
+        (list :chat chat
+              :listener (begin-listener-package-appearance-frame-batch))
+      (error (condition)
+        (end-package-appearance-frame-batch chat)
+        (error condition)))))
+
+(defun restore-combined-package-appearance-frame-batch (snapshot)
+  (restore-package-appearance-frame-batch (getf snapshot :chat))
+  (restore-listener-package-appearance-frame-batch (getf snapshot :listener)))
+
+(defun end-combined-package-appearance-frame-batch (snapshot)
+  (unwind-protect
+       (end-listener-package-appearance-frame-batch (getf snapshot :listener))
+    (end-package-appearance-frame-batch (getf snapshot :chat))))
+
+(setf *appearance-package-live-frame-provider* #'package-appearance-live-frames
       *appearance-package-frame-transition-planner*
-      #'package-appearance-frame-transition-plan
+      #'combined-package-appearance-frame-transition-plan
       *appearance-package-frame-transition-reserver*
-      #'reserve-package-appearance-frame-transition
+      #'combined-reserve-package-appearance-frame-transition
       *appearance-package-frame-transition-publisher*
-      #'release-package-appearance-frame-transition
+      #'combined-release-package-appearance-frame-transition
       *appearance-package-frame-transition-finalizer*
       #'finalize-package-appearance-frame-transition
       *appearance-package-batch-checkpoint-function*
-      #'checkpoint-package-appearance-frame-batch
+      #'combined-checkpoint-package-appearance-frame-batch
       *package-appearance-batch-begin-function*
-      #'begin-package-appearance-frame-batch
+      #'begin-combined-package-appearance-frame-batch
       *package-appearance-batch-restore-function*
-      #'restore-package-appearance-frame-batch
+      #'restore-combined-package-appearance-frame-batch
       *package-appearance-batch-end-function*
-      #'end-package-appearance-frame-batch)
+      #'end-combined-package-appearance-frame-batch)

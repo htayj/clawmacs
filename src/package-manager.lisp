@@ -161,15 +161,22 @@ special here lets the loader establish its dynamic extent before it is used.")
 (defvar *propagate-package-entrypoint-errors-p* nil
   "True when a transactional reload requires an entrypoint failure to escape.")
 
-(defvar *package-appearance-batch-begin-function* (lambda () nil)
+(defun default-package-appearance-batch-begin () nil)
+(defun default-package-appearance-batch-restore (snapshot)
+  (declare (ignore snapshot)) nil)
+(defun default-package-appearance-batch-end (snapshot)
+  (declare (ignore snapshot)) nil)
+
+(defvar *package-appearance-batch-begin-function*
+  #'default-package-appearance-batch-begin
   "Return an opaque snapshot while excluding frame registration from a batch.")
 
 (defvar *package-appearance-batch-restore-function*
-  (lambda (snapshot) (declare (ignore snapshot)) nil)
+  #'default-package-appearance-batch-restore
   "Restore the complete appearance/frame snapshot after a batch failure.")
 
 (defvar *package-appearance-batch-end-function*
-  (lambda (snapshot) (declare (ignore snapshot)) nil)
+  #'default-package-appearance-batch-end
   "Release coordination acquired by the batch begin function.")
 
 (defstruct package-runtime-registry-snapshot

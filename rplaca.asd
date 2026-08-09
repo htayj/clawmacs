@@ -78,6 +78,7 @@
                                (:file "listener-await-test")
                                (:file "listener-presentation-test")
                                (:file "listener-session-test")
+                               (:file "listener-parity-test")
                                (:file "legacy-path-test")
                               (:file "migration-integration-test")
                               (:file "package-manager-test")

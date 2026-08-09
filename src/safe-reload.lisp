@@ -331,6 +331,8 @@ redefinition has ended.  FUNCTION may acquire the operation's inner lock."
     (funcall 'init-tools))
   (when (fboundp 'install-chat-frame-keybindings)
     (funcall 'install-chat-frame-keybindings))
+  (when (fboundp 'install-listener-frame-keybindings)
+    (funcall 'install-listener-frame-keybindings))
   (when (fboundp 'reload-package-channels)
     (funcall 'reload-package-channels))
   (when (fboundp 'reload-active-packages)
@@ -467,6 +469,24 @@ The current Lisp image is not mutated by this function."
     (when (and frame (fboundp 'handle-chat-frame-redisplay))
       (ignore-errors
         (funcall 'handle-chat-frame-redisplay frame)))))
+
+(defun safe-reload-current-frame ()
+  "Return the active listener or compatibility chat application frame."
+  (let ((frame clim:*application-frame*))
+    (and frame
+         (or (typep frame 'rplaca-listener)
+             (let ((chat-class (find-class 'rplaca-chat-frame nil)))
+               (and chat-class (typep frame chat-class))))
+         frame)))
+
+(defun redisplay-safe-reload-frame-now (frame)
+  "Refresh FRAME through its concrete UI adapter after a status change."
+  (cond
+    ((typep frame 'rplaca-listener)
+     (when (fboundp 'handle-listener-safe-reload-redisplay)
+       (funcall 'handle-listener-safe-reload-redisplay frame)))
+    ((and frame (fboundp 'handle-chat-frame-redisplay))
+     (ignore-errors (funcall 'handle-chat-frame-redisplay frame)))))
 
 (defun safe-reload-one-line-summary (summary)
   "Return SUMMARY collapsed to one display line."
@@ -879,7 +899,9 @@ before this check and is observed, or sees the installed request and refuses."
                         :preflight preflight
                         :source-root
                         (safe-reload-request-source-root request)))))
-             (finalize-safe-reload-result result buffer notify-p))
+              (finalize-safe-reload-result result buffer notify-p)
+              (redisplay-safe-reload-frame-now
+               (safe-reload-request-frame request)))
         (finish-safe-reload-request request))
       result)))
 
@@ -923,10 +945,10 @@ before this check and is observed, or sees the installed request and refuses."
            buffer
            notify-p)))))
 
-(defun start-interactive-safe-reload (buffer)
+(defun start-interactive-safe-reload
+    (buffer &optional (frame (safe-reload-current-frame)))
   "Start a managed preflight and return before it completes."
-  (let* ((frame (safe-reload-current-chat-frame))
-         (request
+  (let* ((request
            (make-safe-reload-request
             :token (cons :safe-reload (gensym "REQUEST-"))
             :mode :interactive
@@ -946,7 +968,7 @@ before this check and is observed, or sees the installed request and refuses."
           (finalize-safe-reload-result
            (safe-reload-blocked-result blocker) buffer t))))
     (notify-safe-reload-started buffer)
-    (redisplay-safe-reload-status-now)
+    (redisplay-safe-reload-frame-now frame)
     (handler-case
         (let ((worker
                 (make-safe-reload-preflight-thread

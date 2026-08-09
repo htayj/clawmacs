@@ -58,7 +58,33 @@
 (defvar *package-appearance-entrypoint-staging* nil
   "Dynamically bound only while one package entrypoint is loading.")
 
-(defvar *appearance-package-live-frame-provider* (constantly nil)
+(defun default-appearance-package-live-frame-provider () nil)
+
+(defun default-appearance-package-frame-transition-planner (frame catalog)
+  (declare (ignore frame catalog))
+  (list :status :ready))
+
+(defun default-appearance-package-frame-transition-reserver
+    (frame plan catalog token)
+  (list frame plan catalog token))
+
+(defun default-appearance-package-frame-transition-publisher (reservation)
+  (declare (ignore reservation))
+  t)
+
+(defun default-appearance-package-frame-transition-finalizer
+    (token reservations commit-function rollback-function)
+  (declare (ignore reservations rollback-function))
+  (funcall commit-function)
+  (setf (appearance-package-transition-token-state token) :committed)
+  t)
+
+(defun default-appearance-package-batch-checkpoint (reservations)
+  (declare (ignore reservations))
+  nil)
+
+(defvar *appearance-package-live-frame-provider*
+  #'default-appearance-package-live-frame-provider
   "Function returning the frames which must classify a catalog transition.
 
 The McCLIM adapter installs the real provider after its frame class is loaded.
@@ -66,32 +92,23 @@ Tests may bind this seam with ordinary objects; declaration publication itself
 does not depend on CLIM implementation details.")
 
 (defvar *appearance-package-frame-transition-planner*
-  (lambda (frame catalog)
-    (declare (ignore frame catalog))
-    (list :status :ready))
+  #'default-appearance-package-frame-transition-planner
   "Function which classifies one prospective catalog transition without mutation.")
 
 (defvar *appearance-package-frame-transition-reserver*
-  (lambda (frame plan catalog token)
-    (list frame plan catalog token))
+  #'default-appearance-package-frame-transition-reserver
   "Side-effect-free admission for one frame catalog transition.")
 
 (defvar *appearance-package-frame-transition-publisher*
-  (lambda (reservation)
-    (declare (ignore reservation))
-    t)
+  #'default-appearance-package-frame-transition-publisher
   "Release a committed reservation through the frame's canonical event boundary.")
 
 (defvar *appearance-package-frame-transition-finalizer*
-  (lambda (token reservations commit-function rollback-function)
-    (declare (ignore reservations rollback-function))
-    (funcall commit-function)
-    (setf (appearance-package-transition-token-state token) :committed)
-    t)
+  #'default-appearance-package-frame-transition-finalizer
   "Coordinate queued frame reservations with process-global publication.")
 
 (defvar *appearance-package-batch-checkpoint-function*
-  (lambda (reservations) (declare (ignore reservations)) nil)
+  #'default-appearance-package-batch-checkpoint
   "Record one committed package transition in an enclosing reload batch.")
 
 (defun abort-appearance-package-transition (token)

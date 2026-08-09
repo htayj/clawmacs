@@ -34,6 +34,10 @@
   :description "Listener session commands and retired listener snapshot migration tests"
   :in rplaca-suite)
 
+(def-suite listener-parity-suite
+  :description "Listener selector, reload, help, and appearance parity tests"
+  :in rplaca-suite)
+
 (def-suite legacy-path-suite
   :description "Legacy path migration tests"
   :in rplaca-suite)

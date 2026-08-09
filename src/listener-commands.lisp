@@ -515,6 +515,136 @@ once.  Blank and busy are rejected before any interpolation or send."
                 (listener-command-line-names table))))
     (write-string text (clim:frame-standard-output frame))))
 
+;;; Listener-native parity selectors.  Candidate construction delegates to the
+;;; established item builders; acceptance is owned by CLIM presentations in the
+;;; listener interactor and never activates the legacy minibuffer.
+
+(defun listener-model-choice-entries (buffer)
+  (sort-models-by-recency
+   (build-model-selector-items (available-models-for-selector buffer))))
+
+(defun listener-think-level-choice-entries (buffer)
+  (copy-list (or (available-think-levels-for-selector buffer) nil)))
+
+(defun listener-buffer-choice-entries (buffer)
+  (declare (ignore buffer))
+  (mapcar (lambda (candidate)
+            (list :buffer candidate
+                  :display (buffer-name candidate)))
+          (copy-list *buffer-ring*)))
+
+(defun listener-session-choice-entries (buffer)
+  (declare (ignore buffer))
+  (mapcar (lambda (record)
+            (append (copy-list record)
+                    (list :display (session-selector-display-text record))))
+          (listener-saved-session-records)))
+
+(defun listener-skill-choice-entries (buffer)
+  (declare (ignore buffer))
+  (skill-selector-items :include-disabled t :include-enabled-marker t))
+
+(defun listener-project-choice-entries (buffer)
+  (project-selector-items (and buffer (buffer-project-name buffer))))
+
+(defun listener-file-choice-entries (buffer)
+  (let ((project (and buffer (current-buffer-project buffer))))
+    (and project (project-file-selector-items project))))
+
+(defun listener-selector-buffer (frame)
+  (rplaca-listener-conversation-buffer frame))
+
+(define-rplaca-listener-command (com-model :name "Model")
+    ((choice listener-model-choice))
+  (let* ((frame clim:*application-frame*)
+         (buffer (listener-selector-buffer frame))
+         (provider (getf choice :provider))
+         (model (getf choice :model)))
+    (multiple-value-bind (think-status think-level)
+        (apply-buffer-model-selection buffer provider model)
+      (record-model-selection-history (getf choice :display))
+      (insert-model-selection-message
+       buffer provider model think-status think-level))))
+
+(define-rplaca-listener-command (com-think-level :name "Think-Level")
+    ((choice listener-think-level-choice))
+  (apply-buffer-think-level-selection
+   (listener-selector-buffer clim:*application-frame*) choice))
+
+(define-rplaca-listener-command (com-buffer :name "Buffer")
+    ((choice listener-buffer-choice))
+  (listener-activate-session-buffer clim:*application-frame*
+                                    (if (typep choice 'buffer)
+                                        choice
+                                        (getf choice :buffer))))
+
+(define-rplaca-listener-command (com-skill :name "Skill")
+    ((choice listener-skill-choice))
+  (let* ((buffer (listener-selector-buffer clim:*application-frame*))
+         (skill (getf choice :skill))
+         (enabled-p (not (skill-enabled-p skill))))
+    (set-skill-enabled skill enabled-p)
+    (buffer-insert-system-message
+     buffer
+     (format nil "[Skill ~A ~A]"
+             (skill-name skill) (if enabled-p "enabled" "disabled")))
+    enabled-p))
+
+(define-rplaca-listener-command (com-package :name "Package")
+    ((package rplaca-package))
+  (let ((frame clim:*application-frame*))
+    (setf (rplaca-listener-context frame)
+          (listener-context-in-package
+           (rplaca-listener-context frame) package))
+    package))
+
+(define-rplaca-listener-command (com-project :name "Project")
+    ((choice listener-project-choice))
+  (let* ((buffer (listener-selector-buffer clim:*application-frame*))
+         (project (getf choice :project)))
+    (setf (buffer-project-name buffer) (project-name project)
+          (buffer-working-directory buffer) (project-root project))
+    project))
+
+(define-rplaca-listener-command (com-file :name "File")
+    ((choice listener-file-choice))
+  (project-open-file (getf choice :project) (getf choice :path)))
+
+(define-rplaca-listener-command (com-safe-reload :name "Safe Reload") ()
+  (let ((frame clim:*application-frame*))
+    (start-interactive-safe-reload (listener-selector-buffer frame) frame)))
+
+(defun listener-show-text-detail (frame text)
+  (set-rplaca-listener-selected-detail frame text :text)
+  (listener-set-details-layout frame)
+  text)
+
+(defun listener-frame-command-help-text (frame)
+  (listener-context-help-commands
+   (rplaca-listener-context frame)
+   (listener-command-line-names (clim:frame-command-table frame))))
+
+(defun listener-info-text (location)
+  (info-document-display-text (info-fetch-location location)))
+
+(define-rplaca-listener-command (com-help :name "Help") ()
+  (let ((frame clim:*application-frame*))
+    (listener-show-text-detail frame (listener-frame-command-help-text frame))))
+
+(define-rplaca-listener-command (com-manual :name "Manual") ()
+  (let ((frame clim:*application-frame*))
+    (listener-show-text-detail
+     frame (listener-info-text (resolve-rplaca-info-location "Top")))))
+
+(define-rplaca-listener-command (com-info :name "Info") ()
+  (let ((frame clim:*application-frame*))
+    (listener-show-text-detail
+     frame (listener-info-text (info-directory-location)))))
+
+(define-rplaca-listener-command
+    (com-reload-appearance :name "Reload Appearance") ()
+  (listener-adopt-current-appearance clim:*application-frame*))
+
 (define-rplaca-listener-command (com-new-session :name "New Session") ()
   "Create and activate a fresh persistent listener conversation."
   (listener-create-session clim:*application-frame*))

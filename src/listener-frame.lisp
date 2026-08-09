@@ -13,6 +13,13 @@
 (defvar *listener-input-mode* :eval
   "Headless fallback for the listener input mode when no frame is active.")
 
+(defvar *package-appearance-live-listener-frames* nil)
+(defvar *package-appearance-live-listener-frames-lock*
+  (bt:make-lock "package appearance live listener frames"))
+(defvar *listener-package-appearance-batch-lock*
+  (bt:make-lock "listener package appearance batch"))
+(defvar *active-listener-package-appearance-batch* nil)
+
 (defstruct (listener-input-token
              (:constructor make-listener-input-token
                  (&key kind value source)))
@@ -61,6 +68,12 @@ ignored: the context accessor or require-listener-input-mode signals."
     :initarg :appearance-profile
     :initform (make-appearance-profile)
     :reader rplaca-listener-appearance-profile)
+   (appearance-catalog
+    :initform nil
+    :accessor rplaca-listener-appearance-catalog)
+   (appearance-revision
+    :initform 0
+    :accessor rplaca-listener-appearance-revision)
    (pending-assistant-turn
     :initform nil
     :accessor rplaca-listener-pending-assistant-turn)
@@ -206,6 +219,50 @@ over every package name and nickname."
     (clim:completing-from-suggestions (stream)
       (dolist (entry entries)
         (clim:suggest (car entry) (cdr entry))))))
+
+(clim:define-presentation-type listener-model-choice () :inherit-from t)
+(clim:define-presentation-type listener-think-level-choice () :inherit-from t)
+(clim:define-presentation-type listener-buffer-choice () :inherit-from t)
+(clim:define-presentation-type listener-session-choice () :inherit-from t)
+(clim:define-presentation-type listener-skill-choice () :inherit-from t)
+(clim:define-presentation-type listener-project-choice () :inherit-from t)
+(clim:define-presentation-type listener-file-choice () :inherit-from t)
+
+(defun listener-choice-display (choice)
+  (or (and (listp choice) (getf choice :display))
+      (and (typep choice 'buffer) (buffer-name choice))
+      (princ-to-string choice)))
+
+(defmacro define-listener-choice-presentation (type entry-function)
+  `(progn
+     (clim:define-presentation-method clim:present
+         (object (type ,type) stream (view clim:textual-view) &key)
+       (declare (ignore type view))
+       (write-string (listener-choice-display object) stream))
+     (clim:define-presentation-method clim:accept
+         ((type ,type) stream (view clim:textual-view) &key)
+       (declare (ignore type view))
+       (clim:with-application-frame (frame)
+         (let ((buffer (and (typep frame 'rplaca-listener)
+                            (rplaca-listener-conversation-buffer frame))))
+           (clim:completing-from-suggestions (stream)
+             (dolist (entry (,entry-function buffer))
+               (clim:suggest (listener-choice-display entry) entry))))))))
+
+(define-listener-choice-presentation listener-model-choice
+  listener-model-choice-entries)
+(define-listener-choice-presentation listener-think-level-choice
+  listener-think-level-choice-entries)
+(define-listener-choice-presentation listener-buffer-choice
+  listener-buffer-choice-entries)
+(define-listener-choice-presentation listener-session-choice
+  listener-session-choice-entries)
+(define-listener-choice-presentation listener-skill-choice
+  listener-skill-choice-entries)
+(define-listener-choice-presentation listener-project-choice
+  listener-project-choice-entries)
+(define-listener-choice-presentation listener-file-choice
+  listener-file-choice-entries)
 
 ;;; prose presentation type.
 
@@ -581,14 +638,16 @@ com-close-details via the close-details presentation-to-command-translator."
       (let ((turn (car detail))
             (facet (cdr detail)))
         (when (and turn facet)
-          (clim:with-output-as-presentation (pane turn 'assistant-turn)
-            (ecase facet
-              (:tools (render-listener-tool-facets pane turn))
-              (:reasoning (render-listener-reasoning-facets pane turn))
-              (:metadata (render-listener-metadata-facets pane turn))
-              (:artifacts (render-listener-artifact-facets pane turn))
-              (:media (render-listener-media-facets pane turn))
-              (:inspect (render-listener-inspect-facet pane turn)))))))))
+          (if (eq facet :text)
+              (write-string turn pane)
+              (clim:with-output-as-presentation (pane turn 'assistant-turn)
+                (ecase facet
+                  (:tools (render-listener-tool-facets pane turn))
+                  (:reasoning (render-listener-reasoning-facets pane turn))
+                  (:metadata (render-listener-metadata-facets pane turn))
+                  (:artifacts (render-listener-artifact-facets pane turn))
+                  (:media (render-listener-media-facets pane turn))
+                  (:inspect (render-listener-inspect-facet pane turn))))))))))
 
 (defun display-listener-wholine (frame pane)
   "Render a compact package/directory/liveness status line for FRAME.
@@ -689,12 +748,24 @@ listener-only layout."
 ;;; await gesture loop (listener-escape-gesture-p in await-listener-agent-turn)
 ;;; and is NOT rebound here.  Stop/mode/compose commands are likewise present in
 ;;; this frame-local command table and reachable via their comma-prefix names.
-(let ((table (clim:find-command-table 'rplaca-listener)))
-  (handler-case
-      (clim:add-keystroke-to-command-table
-       table '(:control #\w) :command '(com-close-details) :errorp nil)
-    (error (condition)
-      (file-debug-log "listener-keystroke-registration-failed" "~A" condition))))
+(defun install-listener-frame-keybindings ()
+  "Refresh listener-owned command-table keystrokes after source redefinition."
+  (let ((table (clim:find-command-table 'rplaca-listener)))
+    (handler-case
+        (clim:add-keystroke-to-command-table
+         table '(:control #\w) :command '(com-close-details) :errorp nil)
+      (error (condition)
+        (file-debug-log "listener-keystroke-registration-failed" "~A" condition))))
+  t)
+
+(defun handle-listener-safe-reload-redisplay (frame)
+  "Refresh redefined listener keystrokes and all listener-owned display panes."
+  (install-listener-frame-keybindings)
+  (dolist (pane '(interactor details wholine pointer-doc))
+    (ignore-errors (clim:redisplay-frame-pane frame pane :force-p t)))
+  frame)
+
+(install-listener-frame-keybindings)
 
 ;;; --------------------------------------------------------------------------
 ;;; Construction-time pane appearance, lifecycle, and frame launcher.
@@ -756,10 +827,11 @@ configuration errors propagate (no swallowed fallback)."
 
 (defmethod initialize-instance :after ((frame rplaca-listener) &key)
   "Resolve the immutable pane-appearance snapshot before pane construction."
-  (setf (slot-value frame 'pane-appearance-snapshot)
-        (listener-resolve-pane-appearance-initargs
-         (rplaca-listener-appearance-profile frame)
-         (current-package-appearance-catalog))))
+  (let ((catalog (current-package-appearance-catalog)))
+    (setf (rplaca-listener-appearance-catalog frame) catalog
+          (slot-value frame 'pane-appearance-snapshot)
+          (listener-resolve-pane-appearance-initargs
+           (rplaca-listener-appearance-profile frame) catalog))))
 
 (defun listener-pane-appearance-initargs (frame pane-name)
   "Return the cached initarg plist for PANE-NAME (resolved once at construction)."
@@ -788,9 +860,219 @@ cached object."
                                ((wholine) (list :scroll-bars nil
                                                 :end-of-line-action :allow))
                                ((details) (list :scroll-bars t)))
-                             (when display-function
-                               (list :display-function display-function
-                                     :display-time :command-loop))))))))
+                              (when display-function
+                                (list :display-function display-function
+                                      :display-time :command-loop))))))))
+
+(defun listener-apply-pane-appearance-initargs (pane initargs)
+  (let ((medium (and pane (ignore-errors (clim:sheet-medium pane)))))
+    (when medium
+      (when (getf initargs :foreground)
+        (setf (clim:medium-foreground medium) (getf initargs :foreground)))
+      (when (getf initargs :background)
+        (setf (clim:medium-background medium) (getf initargs :background)))
+      (when (getf initargs :text-style)
+        (setf (clim:medium-text-style medium) (getf initargs :text-style)))))
+  pane)
+
+(defun listener-apply-pane-appearance-snapshot (frame snapshot)
+  (dolist (entry snapshot)
+    (let ((pane (or (gethash (car entry) (rplaca-listener-pane-cache frame))
+                    (ignore-errors (clim:find-pane-named frame (car entry))))))
+      (when pane
+        (listener-apply-pane-appearance-initargs pane (cdr entry)))))
+  (ignore-errors (clim:redisplay-frame-panes frame :force-p t))
+  snapshot)
+
+(defun listener-adopt-current-appearance (frame)
+  (let* ((catalog (current-package-appearance-catalog))
+         (snapshot (listener-resolve-pane-appearance-initargs
+                    (rplaca-listener-appearance-profile frame) catalog)))
+    (setf (rplaca-listener-appearance-catalog frame) catalog
+          (slot-value frame 'pane-appearance-snapshot) snapshot)
+    (incf (rplaca-listener-appearance-revision frame))
+    (listener-apply-pane-appearance-snapshot frame snapshot)))
+
+(defun package-appearance-live-listener-frames ()
+  (bt:with-lock-held (*package-appearance-live-listener-frames-lock*)
+    (copy-list *package-appearance-live-listener-frames*)))
+
+(defun register-package-appearance-live-listener-frame (frame)
+  (bt:with-lock-held (*listener-package-appearance-batch-lock*)
+    (bt:with-lock-held (*package-appearance-catalog-lock*)
+      (bt:with-lock-held (*package-appearance-live-listener-frames-lock*)
+        (let ((catalog (package-appearance-current-catalog-under-lock)))
+          (setf (rplaca-listener-appearance-catalog frame) catalog
+                (slot-value frame 'pane-appearance-snapshot)
+                (listener-resolve-pane-appearance-initargs
+                 (rplaca-listener-appearance-profile frame) catalog))
+          (pushnew frame *package-appearance-live-listener-frames* :test #'eq)))))
+  frame)
+
+(defun unregister-package-appearance-live-listener-frame (frame)
+  (bt:with-lock-held (*listener-package-appearance-batch-lock*)
+    (bt:with-lock-held (*package-appearance-catalog-lock*)
+      (bt:with-lock-held (*package-appearance-live-listener-frames-lock*)
+        (setf *package-appearance-live-listener-frames*
+              (remove frame *package-appearance-live-listener-frames* :test #'eq)))))
+  frame)
+
+(defun listener-package-appearance-frame-transition-plan (frame catalog)
+  (handler-case
+      (let* ((expected-catalog (rplaca-listener-appearance-catalog frame))
+             (expected-revision (rplaca-listener-appearance-revision frame))
+             (expected-snapshot (rplaca-listener-pane-appearance-snapshot frame))
+             (snapshot (listener-resolve-pane-appearance-initargs
+                        (rplaca-listener-appearance-profile frame) catalog)))
+        (list :status (if (equalp snapshot expected-snapshot) :no-op :ready)
+              :snapshot snapshot
+              :expected-catalog expected-catalog
+              :expected-revision expected-revision
+              :expected-snapshot expected-snapshot))
+    (condition (condition)
+      (list :status :failed :condition condition))))
+
+(defun listener-package-appearance-reservation-current-p (reservation)
+  (let ((frame (getf reservation :frame)))
+    (and (typep frame 'rplaca-listener)
+         (eq (getf reservation :expected-catalog)
+             (rplaca-listener-appearance-catalog frame))
+         (= (getf reservation :expected-revision)
+            (rplaca-listener-appearance-revision frame))
+         (eq (getf reservation :expected-snapshot)
+             (rplaca-listener-pane-appearance-snapshot frame)))))
+
+(defun reserve-listener-package-appearance-frame-transition
+    (frame plan catalog token)
+  (let ((reservation
+          (list :frame frame
+                :sheet (listener-grafted-top-level-sheet frame)
+                :catalog catalog
+                :snapshot (getf plan :snapshot)
+                :target-revision (1+ (getf plan :expected-revision))
+                :token token
+                :expected-catalog (getf plan :expected-catalog)
+                :expected-revision (getf plan :expected-revision)
+                :expected-snapshot (getf plan :expected-snapshot)
+                :origin-frame-p (eq frame clim:*application-frame*))))
+    (and (listener-package-appearance-reservation-current-p reservation)
+         reservation)))
+
+(defun apply-listener-package-appearance-frame-reservation-target (reservation)
+  (let ((frame (getf reservation :frame)))
+    (setf (rplaca-listener-appearance-catalog frame) (getf reservation :catalog)
+          (rplaca-listener-appearance-revision frame)
+          (getf reservation :target-revision)
+          (slot-value frame 'pane-appearance-snapshot)
+          (getf reservation :snapshot))
+    (listener-apply-pane-appearance-snapshot frame (getf reservation :snapshot))))
+
+(defclass rplaca-listener-appearance-catalog-event (clim:window-manager-event)
+  ((reservation :initarg :reservation :reader listener-appearance-event-reservation)
+   (token :initarg :token :reader listener-appearance-event-token)))
+
+(defun release-listener-package-appearance-frame-transition (reservation)
+  (cond
+    ((getf reservation :origin-frame-p) t)
+    ((null (getf reservation :sheet)) t)
+    (t
+     (handler-case
+         (progn
+           (clim:queue-event
+            (getf reservation :sheet)
+            (make-instance 'rplaca-listener-appearance-catalog-event
+                           :sheet (getf reservation :sheet)
+                           :reservation reservation
+                           :token (getf reservation :token)))
+           t)
+       (error () nil)))))
+
+(defun listener-appearance-default-seam-functions ()
+  (list #'default-appearance-package-live-frame-provider
+        #'default-appearance-package-frame-transition-planner
+        #'default-appearance-package-frame-transition-reserver
+        #'default-appearance-package-frame-transition-publisher
+        #'default-appearance-package-frame-transition-finalizer
+        #'default-appearance-package-batch-checkpoint
+        #'default-package-appearance-batch-begin
+        #'default-package-appearance-batch-restore
+        #'default-package-appearance-batch-end))
+
+(defun snapshot-listener-package-appearance-frame-state (frame)
+  (list :frame frame
+        :catalog (rplaca-listener-appearance-catalog frame)
+        :revision (rplaca-listener-appearance-revision frame)
+        :snapshot (rplaca-listener-pane-appearance-snapshot frame)))
+
+(defun begin-listener-package-appearance-frame-batch ()
+  (bt:acquire-lock *listener-package-appearance-batch-lock*)
+  (handler-case
+      (bt:with-lock-held (*package-appearance-catalog-lock*)
+        (bt:with-lock-held (*package-appearance-live-listener-frames-lock*)
+          (let ((frames
+                  (mapcar #'snapshot-listener-package-appearance-frame-state
+                          *package-appearance-live-listener-frames*)))
+            (setf *active-listener-package-appearance-batch*
+                  (list :lock-held-p t
+                        :catalog (package-appearance-current-catalog-under-lock)
+                        :frames frames
+                        :expected-frames (copy-list frames)
+                        :concurrent-change-p nil)))))
+    (error (condition)
+      (bt:release-lock *listener-package-appearance-batch-lock*)
+      (error condition))))
+
+(defun checkpoint-listener-package-appearance-frame-batch (reservations)
+  (let ((batch *active-listener-package-appearance-batch*))
+    (when batch
+      (dolist (reservation reservations)
+        (when (typep (getf reservation :frame) 'rplaca-listener)
+          (let ((expected
+                  (find (getf reservation :frame)
+                        (getf batch :expected-frames)
+                        :key (lambda (snapshot) (getf snapshot :frame))
+                        :test #'eq)))
+            (unless (and expected
+                         (eq (getf expected :catalog)
+                             (getf reservation :expected-catalog))
+                         (= (getf expected :revision)
+                            (getf reservation :expected-revision))
+                         (eq (getf expected :snapshot)
+                             (getf reservation :expected-snapshot)))
+              (setf (getf batch :concurrent-change-p) t)))))
+      (setf (getf batch :expected-frames)
+            (mapcar #'snapshot-listener-package-appearance-frame-state
+                    (mapcar (lambda (state) (getf state :frame))
+                            (getf batch :frames))))))
+  nil)
+
+(defun restore-listener-package-appearance-frame-batch (snapshot)
+  (when (getf snapshot :concurrent-change-p)
+    (error "Listener appearance batch rollback refused after concurrent change."))
+  (dolist (state (getf snapshot :frames))
+    (let* ((frame (getf state :frame))
+           (expected (find frame (getf snapshot :expected-frames)
+                           :key (lambda (entry) (getf entry :frame))
+                           :test #'eq)))
+      (unless (and expected
+                   (eq (getf expected :catalog)
+                       (rplaca-listener-appearance-catalog frame))
+                   (= (getf expected :revision)
+                      (rplaca-listener-appearance-revision frame)))
+        (error "Listener appearance batch rollback refused for stale frame."))
+      (setf (rplaca-listener-appearance-catalog frame) (getf state :catalog)
+            (rplaca-listener-appearance-revision frame) (getf state :revision)
+            (slot-value frame 'pane-appearance-snapshot) (getf state :snapshot))
+      (listener-apply-pane-appearance-snapshot frame (getf state :snapshot))))
+  t)
+
+(defun end-listener-package-appearance-frame-batch (snapshot)
+  (when (getf snapshot :lock-held-p)
+    (when (eq snapshot *active-listener-package-appearance-batch*)
+      (setf *active-listener-package-appearance-batch* nil))
+    (setf (getf snapshot :lock-held-p) nil)
+    (bt:release-lock *listener-package-appearance-batch-lock*))
+  nil)
 
 (defun listener-frame-cleanup (frame hook)
   "Tear down FRAME-owned runtime: mark dead, advance lifecycle generation,
@@ -798,6 +1080,7 @@ retire the wake hook and any active await request/coalescing state, dispose the
 owned conversation buffer, and ignore late events.  Idempotent and error-bounded
 so a broken buffer/pane cannot retain a dead frame."
   (setf (rplaca-listener-liveness frame) :dead)
+  (unregister-package-appearance-live-listener-frame frame)
   (bt:with-lock-held ((rplaca-listener-wake-lock frame))
     (incf (rplaca-listener-lifecycle-generation frame))
     (let ((request (rplaca-listener-active-await-request frame)))
@@ -1341,9 +1624,10 @@ on frame exit/debugger unwind."
   "Run CONTINUATION with FRAME's top-level runtime installed and protected."
   (let ((hook nil))
     (unwind-protect
-         (progn
-           (setf (rplaca-listener-liveness frame) :live)
-           (setf hook (listener-make-wake-hook frame))
+          (progn
+            (setf (rplaca-listener-liveness frame) :live)
+            (register-package-appearance-live-listener-frame frame)
+            (setf hook (listener-make-wake-hook frame))
            (add-hook '*buffer-display-wakeup-hook* hook :append t)
            (funcall continuation))
       (listener-frame-cleanup frame hook))))
