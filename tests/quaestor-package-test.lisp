@@ -100,6 +100,13 @@
     (ensure-directories-exist (merge-pathnames #P".keep" root))
     (rplaca::make-chat-buffer name :working-directory root)))
 
+(defun make-quaestor-listener-frame (buffer)
+  "Return a listener frame whose conversation buffer is BUFFER."
+  (clim:make-application-frame
+   'rplaca::rplaca-listener
+   :conversation-buffer buffer
+   :listener-context (rplaca::make-listener-context)))
+
 (test quaestor-package-registers-tool-prompt-commands-and-bindings
   "Enabling quaestor exposes its tool, prompt, commands, and queue bindings."
   (with-quaestor-package-state
@@ -189,7 +196,46 @@
           (is (find-if (lambda (entry)
                          (and (search "[x] Beta" (getf entry :text))
                               (eq :selector-selected (getf entry :face))))
-                       updated)))))))
+                        updated)))))))
+
+(test quaestor-listener-commands-and-translators-are-registered
+  "Quaestor options, freeform answers, and submission use the listener command table."
+  (with-quaestor-package-state
+    (load-test-quaestor-package)
+    (let ((table (clim:find-command-table 'rplaca::rplaca-listener)))
+      (dolist (command '(rplaca::com-quaestor-select-option
+                         rplaca::com-quaestor-answer-request
+                         rplaca::com-quaestor-submit-request))
+        (is-true (clim:command-present-in-command-table-p command table)))
+      (dolist (translator '(rplaca::select-quaestor-option
+                            rplaca::select-quaestor-submit))
+        (is-true (clim:find-presentation-translator translator table
+                                                    :errorp nil))))))
+
+(test quaestor-pending-question-emits-inline-listener-presentations
+  "A pending request writes its question and clickable choices to the listener interactor."
+  (with-quaestor-package-state
+    (load-test-quaestor-package)
+    (let* ((buffer (make-quaestor-test-buffer "quaestor-listener-inline"))
+           (frame (make-quaestor-listener-frame buffer))
+           (output (make-string-output-stream)))
+      (rplaca::quaestor-request-user-input
+       buffer
+       '((:header "Scope"
+          :id "scope"
+          :question "Pick a scope."
+          :options ((:label "Alpha" :description "Smaller change.")
+                    (:label "Beta" :description "Broader change."))
+          :freeform t)))
+      (with-quaestor-function-override (clim:frame-standard-output (actual-frame)
+                                         (declare (ignore actual-frame))
+                                         output)
+        (rplaca::emit-quaestor-pending-request frame))
+      (let ((text (get-output-stream-string output)))
+        (is (search "Quaestor request 1/1: Scope" text))
+        (is (search "Pick a scope." text))
+        (is (search "Beta" text))
+        (is (search "[Submit request]" text))))))
 
 (test quaestor-tool-request-suspends-interactive-run-and-records-answer
   "Interactive request_user_input suspends tool execution, routes keys, and records the answer."
@@ -268,11 +314,12 @@
                      (getf (second events) :event)))
         (is-true (getf (second events) :denied-p)))))))
 
-(test quaestor-compose-submit-advances-multi-question-requests
-  "Compose submit advances active requests instead of prematurely completing them."
+(test quaestor-interactor-answer-advances-multi-question-requests
+  "Listener interactor answers advance active requests instead of prematurely completing them."
   (with-quaestor-package-state
     (load-test-quaestor-package)
-    (let ((buf (make-quaestor-test-buffer "quaestor-multi-question")))
+    (let* ((buf (make-quaestor-test-buffer "quaestor-multi-question"))
+           (frame (make-quaestor-listener-frame buf)))
       (rplaca::quaestor-request-user-input
        buf
        '((:header "First"
@@ -280,16 +327,22 @@
           :question "First answer?")
          (:header "Second"
           :id "second"
-          :question "Second answer?"))
+           :question "Second answer?"))
        :resume-function 'quaestor-test-resume-handler)
-      (set-message-text (buffer-input-message buf) "one")
-      (rplaca::send-message buf)
+      (with-quaestor-function-override (clim:frame-standard-output (actual-frame)
+                                         (declare (ignore actual-frame))
+                                         (make-broadcast-stream))
+        (let ((clim:*application-frame* frame))
+          (rplaca::com-quaestor-answer-request "one")))
       (is (rplaca::buffer-user-input-pending buf))
       (is (= 1 (rplaca::quaestor-request-current-index
-                (rplaca::buffer-user-input-pending buf))))
+                 (rplaca::buffer-user-input-pending buf))))
       (is (string= "" (message-text (buffer-input-message buf))))
-      (set-message-text (buffer-input-message buf) "two")
-      (rplaca::send-message buf)
+      (with-quaestor-function-override (clim:frame-standard-output (actual-frame)
+                                         (declare (ignore actual-frame))
+                                         (make-broadcast-stream))
+        (let ((clim:*application-frame* frame))
+          (rplaca::com-quaestor-answer-request "two")))
       (is-false (rplaca::buffer-user-input-pending buf))
       (is (equalp '(:answers (("first" :answers #("one"))
                               ("second" :answers #("two"))))

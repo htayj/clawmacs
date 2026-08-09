@@ -380,6 +380,9 @@
         (quaestor-switch-question buffer 1)
         (quaestor-submit-current-request buffer))))
 
+(declaim (ftype (function (rplaca-listener) list)
+                emit-quaestor-pending-request))
+
 (defun quaestor-begin-request
     (buffer questions &key source tool-id resume-function resume-state)
   "Start a structured user-input request on BUFFER."
@@ -413,6 +416,11 @@
                  (:request . ,request)))
     (quaestor-set-current-request buffer request)
     (quaestor-restore-question-input buffer request)
+    (when (and (typep clim:*application-frame* 'rplaca-listener)
+               (eq buffer
+                   (rplaca-listener-conversation-buffer
+                    clim:*application-frame*)))
+      (emit-quaestor-pending-request clim:*application-frame*))
     request))
 
 (defun quaestor-clear-request (buffer)
@@ -790,38 +798,68 @@ Returns true when the key was consumed."
                                  :selector-selected
                                  :selector-footer)
                        :unique-id (list :quaestor-notes question-id))))
-         (list (list :text (format nil "[~A request]" next-label)
-                     :face :selector-footer
-                     :object (quaestor-submit-presentation-object request)
-                     :presentation-type 'quaestor-submit-ref
-                     :unique-id (list :quaestor-submit question-id))))))))
+          (list (list :text (format nil "[~A request]" next-label)
+                      :face :selector-footer
+                      :object (quaestor-submit-presentation-object request)
+                      :presentation-type 'quaestor-submit-ref
+                      :unique-id (list :quaestor-submit question-id))))))))
 
-(define-rplaca-chat-frame-command
+(defun emit-quaestor-pending-request (frame)
+  "Emit FRAME's pending Quaestor request as listener presentations."
+  (let* ((buffer (rplaca-listener-conversation-buffer frame))
+         (stream (clim:frame-standard-output frame))
+         (entries (quaestor-input-presentation-entries buffer 100)))
+    (dolist (entry entries)
+      (let ((object (getf entry :object))
+            (presentation-type (getf entry :presentation-type))
+            (text (getf entry :text)))
+        (if (and object presentation-type)
+            (clim:with-output-as-presentation
+                (stream object presentation-type :single-box t)
+              (write-string text stream))
+            (write-string text stream))
+        (terpri stream)))
+    (finish-output stream)
+    entries))
+
+(defun quaestor-emit-current-request-if-pending (frame)
+  "Emit FRAME's current request when one remains pending."
+  (when (quaestor-current-request
+         (rplaca-listener-conversation-buffer frame))
+    (emit-quaestor-pending-request frame)))
+
+(define-rplaca-listener-command
     (com-quaestor-select-option :name nil)
     ((option 'quaestor-option-ref))
   (clim:with-application-frame (frame)
-    (quaestor-activate-option (chat-frame-buffer frame) option)))
+    (quaestor-activate-option
+     (rplaca-listener-conversation-buffer frame) option)
+    (quaestor-emit-current-request-if-pending frame)))
 
-(define-rplaca-chat-frame-command
+(define-rplaca-listener-command
+    (com-quaestor-answer-request :name "Answer Question")
+    ((answer 'prose))
+  (clim:with-application-frame (frame)
+    (let ((buffer (rplaca-listener-conversation-buffer frame)))
+      (unless (quaestor-current-request buffer)
+        (error "There is no pending Quaestor question."))
+      (set-message-text (buffer-input-message buffer) answer)
+      (mark-buffer-dirty buffer)
+      (quaestor-next-question-or-submit buffer)
+      (quaestor-emit-current-request-if-pending frame))))
+
+(define-rplaca-listener-command
     (com-quaestor-submit-request :name nil)
     ((submit 'quaestor-submit-ref))
   (declare (ignore submit))
   (clim:with-application-frame (frame)
-    (let* ((buffer (chat-frame-buffer frame))
-           (compose (ignore-errors (clim:find-pane-named frame 'compose)))
-           (text (and compose (ignore-errors (clim:gadget-value compose)))))
-      (when (stringp text)
-        (set-message-text (buffer-input-message buffer) text)
-        (mark-buffer-dirty buffer))
+    (let ((buffer (rplaca-listener-conversation-buffer frame)))
       (quaestor-next-question-or-submit buffer)
-      (when compose
-        (setf (clim:gadget-value compose)
-              (message-text (buffer-input-message buffer))))
-      (request-chat-frame-redisplay frame))))
+      (quaestor-emit-current-request-if-pending frame))))
 
 (clim:define-presentation-to-command-translator select-quaestor-option
     (quaestor-option-ref com-quaestor-select-option
-     rplaca-chat-frame
+     rplaca-listener
      :gesture :select
      :documentation "Select answer option"
      :menu t)
@@ -830,7 +868,7 @@ Returns true when the key was consumed."
 
 (clim:define-presentation-to-command-translator select-quaestor-submit
     (quaestor-submit-ref com-quaestor-submit-request
-     rplaca-chat-frame
+     rplaca-listener
      :gesture :select
      :documentation "Advance request"
      :menu t)

@@ -1102,33 +1102,31 @@ Blank AFTER moves the TODO before the first headline."
 (defcommand organa-cycle-view-command
   :docstring "Cycle the current Organa buffer view.")
 
-(define-rplaca-chat-frame-command
+(define-rplaca-listener-command
     (com-organa-cycle-todo-status :name nil)
     ((todo 'organa-todo-ref))
   (clim:with-application-frame (frame)
-    (organa-cycle-todo-status (chat-frame-buffer frame) todo)))
+    (organa-cycle-todo-status
+     (rplaca-listener-conversation-buffer frame) todo)))
 
-(define-rplaca-chat-frame-command
+(define-rplaca-listener-command
     (com-organa-focus-dependency :name nil)
     ((dependency 'organa-dependency-ref))
   (clim:with-application-frame (frame)
-    (organa-focus-todo-by-id (chat-frame-buffer frame) dependency)))
+    (organa-focus-todo-by-id
+     (rplaca-listener-conversation-buffer frame) dependency)))
 
-(define-rplaca-chat-frame-command
+(define-rplaca-listener-command
     (com-organa-describe-todo :name nil)
     ((todo 'organa-todo-ref))
   (clim:with-application-frame (frame)
-    (let ((buffer (make-help-buffer
-                   (format nil "*help:organa:~A*" (organa-todo-id todo))
-                   (organa-todo-description todo))))
-      (switch-to-buffer buffer)
-      (setf (chat-frame-buffer frame) buffer)
-      (request-chat-frame-redisplay frame)
-      buffer)))
+    (set-rplaca-listener-selected-detail
+     frame (organa-todo-description todo) :text)
+    (listener-set-details-layout frame)))
 
 (clim:define-presentation-to-command-translator select-organa-todo
     (organa-todo-ref com-organa-cycle-todo-status
-     rplaca-chat-frame
+     rplaca-listener
      :gesture :select
      :documentation "Cycle TODO status"
      :menu t)
@@ -1137,7 +1135,7 @@ Blank AFTER moves the TODO before the first headline."
 
 (clim:define-presentation-to-command-translator describe-organa-todo
     (organa-todo-ref com-organa-describe-todo
-     rplaca-chat-frame
+     rplaca-listener
      :gesture :describe
      :documentation "Describe TODO"
      :menu t)
@@ -1146,7 +1144,7 @@ Blank AFTER moves the TODO before the first headline."
 
 (clim:define-presentation-to-command-translator select-organa-dependency
     (organa-dependency-ref com-organa-focus-dependency
-     rplaca-chat-frame
+     rplaca-listener
      :gesture :select
      :documentation "Focus dependency target"
      :menu t)

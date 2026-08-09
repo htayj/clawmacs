@@ -67,6 +67,24 @@
   (mapcar (lambda (todo) (getf todo :title))
           (organa-plist-vector summary :todos)))
 
+(defmacro with-organa-function-override ((name lambda-list &body implementation)
+                                         &body body)
+  `(let ((original-function (symbol-function ',name)))
+     (unwind-protect
+          (progn
+            (setf (symbol-function ',name)
+                  (lambda ,lambda-list
+                    ,@implementation))
+            ,@body)
+       (setf (symbol-function ',name) original-function))))
+
+(defun make-organa-listener-frame (buffer)
+  "Return a listener frame whose conversation buffer is BUFFER."
+  (clim:make-application-frame
+   'rplaca::rplaca-listener
+   :conversation-buffer buffer
+   :listener-context (rplaca::make-listener-context)))
+
 (test organa-package-registers-buffer-type-tools-and-prompt
   "Enabling Organa registers its buffer type, commands, tools, and prompt text."
   (with-organa-package-state
@@ -181,6 +199,53 @@
       (rplaca::organa-cycle-view-command buffer)
       (is (eq :dependency (rplaca::organa-view-for-buffer buffer)))
       (is (not (null (find-buffer-type :organa)))))))
+
+(test organa-listener-commands-and-translators-are-registered
+  "Organa presentation actions belong to the listener command table."
+  (with-organa-package-state
+    (load-test-organa-package)
+    (let ((table (clim:find-command-table 'rplaca::rplaca-listener)))
+      (dolist (command '(rplaca::com-organa-cycle-todo-status
+                         rplaca::com-organa-focus-dependency
+                         rplaca::com-organa-describe-todo))
+        (is-true (clim:command-present-in-command-table-p command table)))
+      (dolist (translator '(rplaca::select-organa-todo
+                            rplaca::describe-organa-todo
+                            rplaca::select-organa-dependency))
+        (is-true (clim:find-presentation-translator translator table
+                                                    :errorp nil))))))
+
+(test organa-listener-presentation-actions-use-conversation-and-details
+  "Organa listener commands mutate the conversation buffer and show descriptions in details."
+  (with-organa-package-state
+    (write-organa-test-file
+     root
+     "#+TITLE: Project
+
+* TODO First task
+  Explain the first task.
+")
+    (load-test-organa-package)
+    (let* ((buffer (rplaca::organa-open-todo-file "tasks.org"))
+           (frame (make-organa-listener-frame buffer))
+           (todo (first (rplaca::organa-model-todos
+                         (rplaca::organa-location-model
+                          (rplaca::organa-read-buffer-location buffer)))))
+           (layout-selection nil))
+      (let ((clim:*application-frame* frame))
+        (rplaca::com-organa-cycle-todo-status todo))
+      (is (search "* NEXT First task"
+                  (uiop:read-file-string (organa-test-file root))))
+      (with-organa-function-override
+          (rplaca::listener-set-details-layout (actual-frame)
+            (setf layout-selection
+                  (rplaca::rplaca-listener-selected-detail actual-frame)))
+        (let ((clim:*application-frame* frame))
+          (rplaca::com-organa-describe-todo todo)))
+      (is (equal layout-selection
+                 (rplaca::rplaca-listener-selected-detail frame)))
+      (is (eq :text (cdr layout-selection)))
+      (is (search "Status: TODO" (car layout-selection))))))
 
 (test organa-todo-presentations-can-cycle-status
   "Selecting an Organa TODO advances it to the next workflow status."
