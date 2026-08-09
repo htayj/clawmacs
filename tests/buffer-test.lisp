@@ -828,8 +828,8 @@
       (is (not (null loaded)))
       (is (string= session-name (buffer-name loaded))))))
 
-(test listener-buffer-state-round-trips-through-session-save
-  "Listener buffers preserve package, directory stack, history, and values."
+(test retired-listener-buffer-state-migrates-through-session-load
+  "Retired listener snapshots preserve only frame-relevant context as chat."
   (let* ((session-name "listener-state-round-trip")
          (working-directory #P"/tmp/rplaca-listener-session/")
          (stack-entry #P"/tmp/rplaca-listener-stack/")
@@ -848,18 +848,21 @@
           (listener-state-command-history (listener-buffer-state buf))
           '(",pwd" "(+ 1 2)"))
     (save-session buf)
-    (let* ((loaded (load-session session-name))
-           (loaded-state (listener-buffer-state loaded)))
-      (is (listener-buffer-p loaded))
+    (let* ((snapshot-path (rplaca::session-path session-name))
+           (snapshot-before (uiop:read-file-string snapshot-path))
+           (loaded (load-session session-name))
+           (context (rplaca::listener-context-for-buffer loaded)))
+      (is (eq :chat (buffer-kind loaded)))
       (is (equal (uiop:ensure-directory-pathname working-directory)
-                 (buffer-working-directory loaded)))
-      (is (string= "KEYWORD" (listener-state-package-name loaded-state)))
+                  (buffer-working-directory loaded)))
+      (is (string= "KEYWORD"
+                   (rplaca::listener-context-package-name context)))
       (is (equal (list (uiop:ensure-directory-pathname stack-entry))
-                 (listener-state-directory-stack loaded-state)))
-      (is (equal '(42 "done")
-                 (listener-state-last-values loaded-state)))
-      (is (equal '(",pwd" "(+ 1 2)")
-                 (listener-state-command-history loaded-state))))))
+                  (rplaca::listener-context-directory-stack context)))
+      (is (every #'rplaca::buffer-ephemeral-display-message-p
+                 (buffer-test-history-messages loaded)))
+      (is (string= snapshot-before
+                   (uiop:read-file-string snapshot-path))))))
 
 (test clear-buffer-overrides-clears-think-level
   "Clearing buffer overrides also clears think-level state."

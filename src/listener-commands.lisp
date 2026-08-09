@@ -376,3 +376,29 @@ once.  Blank and busy are rejected before any interpolation or send."
   "Open a multiline compose dialog and submit the result once to com-say."
   (let ((frame clim:*application-frame*))
     (listener-compose-multiline-prose frame)))
+
+(define-rplaca-listener-command (com-new-session :name "New Session") ()
+  "Create and activate a fresh persistent listener conversation."
+  (listener-create-session clim:*application-frame*))
+
+(define-rplaca-listener-command (com-list-sessions :name "List Sessions") ()
+  "Display saved sessions as presentations that can be selected to resume."
+  (let ((records (listener-saved-session-records)))
+    (display-listener-session-list
+     records
+     (clim:frame-standard-output clim:*application-frame*))))
+
+(define-rplaca-listener-command (com-resume-session :name "Resume Session")
+    ((record saved-listener-session))
+  "Load and activate an existing persistent listener conversation."
+  (listener-resume-session clim:*application-frame* record))
+
+(clim:define-presentation-to-command-translator
+    com-resume-listener-session-translator
+    (saved-listener-session com-resume-session rplaca-listener
+     :gesture :select
+     :documentation "Resume session"
+     :pointer-documentation "Resume this session"
+     :menu t)
+    (object)
+  (list object))

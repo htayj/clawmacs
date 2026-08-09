@@ -605,7 +605,11 @@ todo9's gesture-loop cancellation.  When idle, neither is shown."
                         (member (listener-await-request-phase request)
                                 '(:waiting :cancelling :detached-cancelling)))))
     (format pane "~A  pkg:~A  dir:~A"
-            (or (rplaca-listener-session-label frame) "rplaca")
+            (if (and buffer (buffer-session buffer))
+                (session-display-name-or-name (buffer-session buffer))
+                (or (rplaca-listener-session-label frame)
+                    (and buffer (buffer-name buffer))
+                    "rplaca"))
             package-name directory)
     (when (and progress active-p)
       (format pane "  ~A" progress))
@@ -1357,7 +1361,11 @@ cleanup.  When :NEW-PROCESS is non-nil, run on a fresh process and return it."
                  :pending-session-name pending-session-name
                  :appearance-profile
                  (or appearance-profile (make-appearance-profile))
-                 :listener-context (make-listener-context)
+                  :listener-context
+                  (if (fboundp 'listener-context-for-buffer)
+                      (funcall (symbol-function 'listener-context-for-buffer)
+                               buffer)
+                      (make-listener-context))
                  :pretty-name (or window-title "RPLACA"))))
     (flet ((run ()
              (unwind-protect
