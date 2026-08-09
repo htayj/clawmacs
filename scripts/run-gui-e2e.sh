@@ -17,7 +17,7 @@ WINDOW_TITLE='RPLACA E2E'
 
 usage() {
   cat <<'EOF'
-Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|appearance|menu-boundaries|stability] [--artifact-dir DIR]
+Usage: scripts/run-gui-e2e.sh [--preflight-only] [--suite listener|smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|appearance|menu-boundaries|stability] [--artifact-dir DIR]
 
 Runs an opt-in RPLACA GUI E2E suite inside an isolated Xvfb display.
 Set RPLACA_GUI_E2E_FRAME_READY_TIMEOUT_SECONDS to override the 300-second
@@ -79,6 +79,7 @@ inside_preflight() {
   need_binary python3
   need_binary Xvfb
   need_binary xdotool
+  need_binary xauth
   need_binary setsid
   need_binary flock
   need_binary cp
@@ -192,7 +193,7 @@ fi
 PREWARMED_XDG_CACHE_HOME=${XDG_CACHE_HOME:-}
 
 case "$SUITE" in
-  smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|appearance-stage|appearance-restart|menu-boundaries|stability) ;;
+  listener|smoke|mx|features|keybinds|compose-geometry|organa|quaestor|reload|appearance-stage|appearance-restart|menu-boundaries|stability) ;;
   *) fail "unsupported GUI E2E suite: $SUITE" ;;
 esac
 
@@ -277,7 +278,6 @@ if [ -e /tmp/.X11-unix ] || [ -L /tmp/.X11-unix ]; then
     "Xvfb socket directory pre-exists before startup ($xvfb_socket_metadata)"
   exit "$GUI_E2E_XVFB_NAMESPACE_RETRY_STATUS"
 fi
-
 if [ -n "$PREWARMED_XDG_CACHE_HOME" ]; then
   if ! gui_e2e_seed_private_common_lisp_cache \
        "$PREWARMED_XDG_CACHE_HOME" \
@@ -417,6 +417,7 @@ export RPLACA_E2E_PROVIDER=1
 export RPLACA_CONTAINER_DISABLE_HOST_X=1
 export RPLACA_PROMPT_PROJECT_ROOT=/workspace
 export RPLACA_GUI_E2E_SUITE="$SUITE"
+export RPLACA_GUI_E2E_ARTIFACT_DIR="$ARTIFACT_DIR"
 if [ "$SUITE" = "keybinds" ]; then
   export RPLACA_GUI_E2E_INITIAL_INPUT_FOCUS=standard-input
 else
@@ -446,9 +447,26 @@ XVFB_DISPLAY_FILE="$ARTIFACT_DIR/xvfb.display"
 rm -f "$XVFB_DISPLAY_FILE"
 
 log "artifacts: $ARTIFACT_DIR"
-log 'starting Xvfb on a dynamically allocated Unix display'
-Xvfb -displayfd 3 -screen 0 1280x900x24 -nolisten tcp -ac \
-  3>"$XVFB_DISPLAY_FILE" >"$ARTIFACT_DIR/xvfb.log" 2>&1 &
+case "$SUITE" in
+  listener|smoke|features|keybinds)
+    DISPLAY_NUM=$((100 + ($$ % 500)))
+    XAUTHORITY="$ARTIFACT_DIR/xauthority"
+    export XAUTHORITY
+    : > "$XAUTHORITY"
+    cookie=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+    xauth -f "$XAUTHORITY" add "localhost:$DISPLAY_NUM" . "$cookie"
+    printf '%s\n' "$DISPLAY_NUM" > "$XVFB_DISPLAY_FILE"
+    log "starting Xvfb on authenticated loopback display localhost:$DISPLAY_NUM"
+    Xvfb ":$DISPLAY_NUM" -screen 0 1280x900x24 -nolisten unix -listen tcp \
+      -from 127.0.0.1 -auth "$XAUTHORITY" \
+      >"$ARTIFACT_DIR/xvfb.log" 2>&1 &
+    ;;
+  *)
+    log 'starting Xvfb on a dynamically allocated Unix display'
+    Xvfb -displayfd 3 -screen 0 1280x900x24 -nolisten tcp -ac \
+      3>"$XVFB_DISPLAY_FILE" >"$ARTIFACT_DIR/xvfb.log" 2>&1 &
+    ;;
+esac
 XVFB_PID=$!
 
 ready=0
@@ -462,7 +480,14 @@ while [ "$i" -lt 100 ]; do
         exit 1
         ;;
     esac
-    XVFB_DISPLAY=":$DISPLAY_NUM"
+    case "$SUITE" in
+      listener|smoke|features|keybinds)
+        XVFB_DISPLAY="localhost:$DISPLAY_NUM"
+        ;;
+      *)
+        XVFB_DISPLAY=":$DISPLAY_NUM"
+        ;;
+    esac
     export DISPLAY="$XVFB_DISPLAY"
     log "Xvfb allocated private Unix display $DISPLAY"
     break
@@ -506,12 +531,13 @@ setsid --wait sh -c '
   --load "$RPLACA_QUICKLISP_SETUP" \
   --eval '(push (truename ".") asdf:*central-registry*)' \
   --eval '(ql:quickload :rplaca)' \
+  --eval '(when (member (or (uiop:getenv "RPLACA_GUI_E2E_SUITE") "") (list "listener" "smoke" "features" "keybinds") :test (function string=)) (ql:quickload :fiveam) (load "tests/packages.lisp") (load "tests/gui-e2e-test.lisp"))' \
   --eval '(setf rplaca:*inhibit-user-init* t)' \
   --eval '(let ((suite (or (uiop:getenv "RPLACA_GUI_E2E_SUITE") ""))) (when (member suite (list "organa" "quaestor") :test (function string=)) (rplaca:set-package-enablement-scope suite :global) (rplaca:load-active-packages)))' \
   --eval '(when (string= (or (uiop:getenv "RPLACA_GUI_E2E_SUITE") "") "keybinds") (rplaca:add-hook (quote rplaca:*initial-buffer-hook*) (lambda (buffer) (let* ((prefix "RPLACA_SWITCH_BUFFER_LARGE_DRAFT:") (draft (concatenate (quote string) prefix (make-string (- 32768 (length prefix)) :initial-element #\x))) (message (rplaca:buffer-input-message buffer))) (loop for offset from 79 below (length draft) by 80 do (setf (char draft offset) #\Newline)) (rplaca:set-message-text message draft) (rplaca:set-message-point-from-absolute-offset message 8192) (rplaca:set-message-mark-from-absolute-offset message 24576)) (dotimes (index 12) (rplaca:make-chat-buffer (format nil "switch-e2e-~D" index) :agent-name "agent" :working-directory (truename ".") :session-persistence-mode :ephemeral :add-to-ring-p t)) (rplaca:switch-to-buffer buffer)) :append t))' \
   --eval '(when (string= (or (uiop:getenv "RPLACA_GUI_E2E_SUITE") "") "quaestor") (rplaca:add-hook (quote rplaca:*initial-buffer-hook*) (lambda (buffer) (rplaca::quaestor-request-user-input buffer (quote ((:header "Scope" :id "scope" :question "Pick a scope." :options ((:label "Alpha" :description "Smaller change.") (:label "Beta" :description "Broader change.")) :freeform t))))) :append t))' \
   --eval '(when (member (or (uiop:getenv "RPLACA_GUI_E2E_SUITE") "") (list "menu-boundaries" "stability") :test (function string=)) (rplaca:add-hook (quote rplaca:*initial-buffer-hook*) (lambda (buffer) (rplaca:set-buffer-provider-override buffer :openai-codex) (rplaca:set-buffer-model-override buffer "gpt-5.3-codex")) :append t))' \
-  --eval '(rplaca:rplaca-main :session-name "rplaca:e2e" :agent-name "agent" :window-title "RPLACA E2E" :working-directory (truename "."))' \
+  --eval '(let ((suite (or (uiop:getenv "RPLACA_GUI_E2E_SUITE") ""))) (if (member suite (list "listener" "smoke" "features" "keybinds") :test (function string=)) (rplaca/tests::run-listener-gui-e2e :window-title "RPLACA E2E") (rplaca:rplaca-main :session-name "rplaca:e2e" :agent-name "agent" :window-title "RPLACA E2E" :working-directory (truename "."))))' \
   --eval '(uiop:quit)' \
   >"$APP_STDOUT" 2>"$APP_STDERR" &
 APP_PID=$!

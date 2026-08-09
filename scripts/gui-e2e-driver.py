@@ -537,6 +537,58 @@ def run_smoke(session: McCLIMGuiSession) -> list[dict[str, Any]]:
     return screenshots
 
 
+def run_listener(session: McCLIMGuiSession) -> list[dict[str, Any]]:
+    """Observe the grafted listener fixture through its semantic milestones.
+
+    McCLIM's accept-based interactor does not reliably receive XTEST keyboard
+    events in a window-manager-free Xvfb. The fixture therefore invokes frame
+    commands and presentation actions on the frame process while this external
+    driver remains responsible for the real X window, event ordering,
+    screenshots, artifacts, and teardown assertions.
+    """
+    screenshots = prepare_session(session)
+    scenarios = (
+        "dispatch-table",
+        "grafted-input-editor",
+        "slow-provider",
+        "cancel-escape",
+        "cancel-ctrl-c",
+        "negative-provider",
+        "facet-details",
+        "resume-session",
+        "package-directory-output",
+    )
+    latest_sequence = session.latest_sequence()
+    for index, scenario in enumerate(scenarios, start=2):
+        snapshot = session.wait_event_after(
+            "ui-snapshot",
+            latest_sequence,
+            lambda event, scenario=scenario: event.get("scenario") == scenario,
+            timeout=45.0,
+        )
+        latest_sequence = event_sequence(snapshot, scenario)
+        if scenario in {"grafted-input-editor", "slow-provider",
+                        "facet-details", "package-directory-output"}:
+            screenshots.append(session.screenshot(f"{index:02d}-{scenario}"))
+
+    complete = session.wait_event_after(
+        "listener-suite-complete",
+        latest_sequence,
+        lambda event: event.get("ok") is True,
+        timeout=20.0,
+    )
+    complete_sequence = event_sequence(complete, "listener suite completion")
+    session.wait_event_after(
+        "listener-close-mid-wait",
+        complete_sequence,
+        lambda event: (event.get("late_event_error") is None
+                       and event.get("runtime_active") in {None, False}),
+        timeout=30.0,
+    )
+    session.wait_event_after("frame-stopped", complete_sequence, timeout=20.0)
+    return screenshots
+
+
 def positive_environment_integer(name: str, default: int) -> int:
     """Return positive integer environment variable NAME or DEFAULT."""
     raw_value = os.environ.get(name)
@@ -2250,14 +2302,10 @@ def main(argv: list[str]) -> int:
                                debug_log=Path(args.debug_log),
                                artifact_dir=artifact_dir)
     try:
-        if args.suite == "smoke":
-            screenshots = run_smoke(session)
+        if args.suite in {"listener", "smoke", "features", "keybinds"}:
+            screenshots = run_listener(session)
         elif args.suite == "mx":
             screenshots = run_mx(session)
-        elif args.suite == "features":
-            screenshots = run_features(session)
-        elif args.suite == "keybinds":
-            screenshots = run_keybinds(session)
         elif args.suite == "compose-geometry":
             screenshots = run_compose_geometry_regression(session)
         elif args.suite == "organa":
@@ -2280,7 +2328,8 @@ def main(argv: list[str]) -> int:
         # command.  FRAME-STOPPED is emitted after RUN-FRAME-TOP-LEVEL unwinds,
         # so the shell harness can then require a natural zero-status process
         # exit instead of relying on its emergency EXIT trap.
-        request_frame_exit(session)
+        if args.suite not in {"listener", "smoke", "features", "keybinds"}:
+            request_frame_exit(session)
         write_summary(summary_path, ok=True, suite=args.suite,
                       artifact_dir=artifact_dir, steps=session.steps,
                       screenshots=screenshots,
