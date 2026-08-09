@@ -26,6 +26,10 @@
   :description "Listener command-owned agent wait and frame-process settlement tests"
   :in rplaca-suite)
 
+(def-suite listener-presentation-suite
+  :description "Listener assistant-turn presentation, facet translators, mode/stop/compose, and wholine tests"
+  :in rplaca-suite)
+
 (def-suite legacy-path-suite
   :description "Legacy path migration tests"
   :in rplaca-suite)

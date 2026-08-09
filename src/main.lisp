@@ -391,14 +391,6 @@ Blank or busy submissions return NIL values without mutating BUFFER."
                             (and latest (message-raw-content latest)))
        :status status))))
 
-(defun emit-listener-assistant-turn (frame turn)
-  "Emit TURN's primary body once as one durable presentation."
-  (let ((stream (clim:frame-standard-output frame)))
-    (clim:with-output-as-presentation (stream turn 'assistant-turn)
-      (write-string (assistant-turn-primary-text turn) stream))
-    (terpri stream))
-  turn)
-
 (defun send-message (buffer)
   "Send the current input message to the agent."
   (cond

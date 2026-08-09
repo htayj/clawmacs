@@ -335,7 +335,7 @@
                  (rplaca::assistant-turn-artifact-refs turn)))
       (is (equal '("media-1") (rplaca::assistant-turn-media-refs turn)))
       (is (= 1 (count-substring-in-listener-output "assistant body" output)))
-      (is (string= "assistant body" (string-trim '(#\Newline) output)))
+      (is (search "[tools]" output))
       (is (eq turn (rplaca::rplaca-listener-pending-assistant-turn frame)))
       (is (= 3 (rplaca:buffer-message-count buffer))))))
 

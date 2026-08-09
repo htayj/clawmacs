@@ -427,6 +427,16 @@ the raw string as its buffer (no fill pointer), so length is the endpoint."
   (declare (ignore view))
   (format stream "[~A]" (string-downcase (turn-facet-kind object))))
 
+;;; The [close] control rendered at the head of the details pane.  It carries no
+;;; domain data; a presentation-to-command-translator turns a click into
+;;; com-close-details.
+(clim:define-presentation-type close-details () :inherit-from t)
+
+(clim:define-presentation-method clim:present
+    (object (type close-details) stream (view clim:textual-view) &key)
+  (declare (ignore view object))
+  (write-string "[close]" stream))
+
 (defun set-rplaca-listener-selected-detail (frame turn facet-kind)
   "Select TURN/FACET-KIND as the details-pane content for FRAME."
   (setf (rplaca-listener-selected-detail frame) (cons turn facet-kind)))
@@ -434,6 +444,40 @@ the raw string as its buffer (no fill pointer), so length is the endpoint."
 (defun clear-rplaca-listener-selected-detail (frame)
   "Clear FRAME's details-pane selection."
   (setf (rplaca-listener-selected-detail frame) nil))
+
+(defun listener-turn-nonempty-facet-kinds (turn)
+  "Return TURN's facet keywords that carry non-empty data, in canonical order.
+Empty facets are omitted so the interactor only shows summaries the user can
+actually open in the details pane."
+  (remove nil
+          (list (and (assistant-turn-tool-uses turn) :tools)
+                (and (assistant-turn-reasoning turn) :reasoning)
+                (and (assistant-turn-metadata turn) :metadata)
+                (and (assistant-turn-artifact-refs turn) :artifacts)
+                (and (assistant-turn-media-refs turn) :media)
+                (and (assistant-turn-inspect-payload turn) :inspect))))
+
+(defun emit-listener-assistant-turn (frame turn)
+  "Emit TURN's settled primary body once as one durable single-box
+assistant-turn presentation, then emit one turn-facet summary presentation per
+non-empty facet.  No token streaming, typeout, transcript, or system messages:
+the body is the final settled text only."
+  (let ((stream (clim:frame-standard-output frame)))
+    ;; Primary body: exactly one durable presentation.  :single-box t keeps the
+    ;; whole body as one presentation object regardless of line breaks, so a
+    ;; later redisplay or translator sees one record, not per-line fragments.
+    (clim:with-output-as-presentation (stream turn 'assistant-turn :single-box t)
+      (write-string (or (assistant-turn-primary-text turn) "") stream))
+    (terpri stream)
+    ;; Facet summaries: each is its own nested presentation wrapping a
+    ;; turn-facet struct, so the show-details translator can hit-test it
+    ;; independently.  Emitted only when the facet actually has data.
+    (dolist (kind (listener-turn-nonempty-facet-kinds turn))
+      (let ((facet (make-turn-facet :turn turn :kind kind)))
+        (clim:with-output-as-presentation (stream facet 'turn-facet)
+          (format stream "[~A]" (string-downcase kind))))
+      (terpri stream))
+    turn))
 
 (defun listener-recording-stream-p (stream)
   "Return true when STREAM supports CLIM output recording (formatting-table)."
@@ -524,9 +568,13 @@ pairs.  Signal a clear error on malformed input rather than silently dropping it
   "Render the selected assistant-turn facet in the details pane.
 
 Pure: it only reads FRAME's stored selection and writes to PANE; it performs no
-domain mutation."
+domain mutation.  A [close] control at the head translates back to
+com-close-details via the close-details presentation-to-command-translator."
   (let ((detail (rplaca-listener-selected-detail frame)))
     (when detail
+      (clim:with-output-as-presentation (pane :close 'close-details)
+        (write-string "[close]" pane))
+      (terpri pane)
       (let ((turn (car detail))
             (facet (cdr detail)))
         (when (and turn facet)
@@ -540,17 +588,104 @@ domain mutation."
               (:inspect (render-listener-inspect-facet pane turn)))))))))
 
 (defun display-listener-wholine (frame pane)
-  "Render a compact package/directory/liveness status line for FRAME."
+  "Render a compact package/directory/liveness status line for FRAME.
+
+While an agent turn is active (a live await request in a waiting/cancelling
+phase), show the running progress label and an Esc-to-cancel hint drawn from
+todo9's gesture-loop cancellation.  When idle, neither is shown."
   (let* ((context (rplaca-listener-context frame))
          (buffer (rplaca-listener-conversation-buffer frame))
          (package-name (listener-context-package-name context))
          (directory (if buffer
                         (namestring (buffer-working-directory buffer))
                         ""))
-         (progress (rplaca-listener-progress frame)))
-    (format pane "~A  pkg:~A  dir:~A~@[  ~A~]"
+         (progress (rplaca-listener-progress frame))
+         (request (rplaca-listener-active-await-request frame))
+         (active-p (and request
+                        (member (listener-await-request-phase request)
+                                '(:waiting :cancelling :detached-cancelling)))))
+    (format pane "~A  pkg:~A  dir:~A"
             (or (rplaca-listener-session-label frame) "rplaca")
-            package-name directory progress)))
+            package-name directory)
+    (when (and progress active-p)
+      (format pane "  ~A" progress))
+    (when active-p
+      (write-string "  Esc to cancel" pane))))
+
+;;; --------------------------------------------------------------------------
+;;; Todo 10: detail commands, layout-switch seams, and presentation translators.
+;;; --------------------------------------------------------------------------
+;;;
+;;; com-show-turn-details stores the selected (turn . facet) FIRST, then flips
+;;; to the listener+details layout as its LAST effect, so the details-pane
+;;; display function (which reads the selection) always observes the new value
+;;; when redisplay runs.  com-close-details is symmetric: clear FIRST, restore
+;;; listener-only LAST.  The layout switches are wrapped in notinline seams so
+;;; deterministic headless tests can prove the store-before-switch ordering
+;;; without driving a grafted frame.
+
+(declaim (notinline listener-set-details-layout
+                    listener-set-listener-layout))
+
+(defun listener-set-details-layout (frame)
+  "Switch FRAME to the listener+details layout (real setf; grafted frame only)."
+  (setf (clim:frame-current-layout frame) 'listener+details))
+
+(defun listener-set-listener-layout (frame)
+  "Restore FRAME to the listener-only layout (real setf; grafted frame only)."
+  (setf (clim:frame-current-layout frame) 'listener-only))
+
+(define-rplaca-listener-command (com-show-turn-details :name "Show-Turn-Details")
+    ((facet turn-facet))
+  "Open TURN-FACET's facet in the details pane.  Stores the selection before
+switching layout so the details display function sees it on redisplay."
+  (let ((frame clim:*application-frame*))
+    (set-rplaca-listener-selected-detail frame
+                                          (turn-facet-turn facet)
+                                          (turn-facet-kind facet))
+    (listener-set-details-layout frame)))
+
+(define-rplaca-listener-command (com-close-details :name "Close-Details")
+    ()
+  "Close the details pane.  Clears the selection before restoring the
+listener-only layout."
+  (let ((frame clim:*application-frame*))
+    (clear-rplaca-listener-selected-detail frame)
+    (listener-set-listener-layout frame)))
+
+(clim:define-presentation-to-command-translator com-show-turn-details-translator
+    (turn-facet com-show-turn-details rplaca-listener
+     :gesture :select
+     :documentation "Show details"
+     :pointer-documentation "Open this facet in the details pane"
+     :menu t)
+    (object)
+  (when (typep object 'turn-facet)
+    (list object)))
+
+(clim:define-presentation-to-command-translator com-close-details-translator
+    (close-details com-close-details rplaca-listener
+     :gesture :select
+     :documentation "Close details"
+     :pointer-documentation "Close the details pane"
+     :menu t)
+    (object)
+  (declare (ignore object))
+  nil)
+
+;;; Frame-local keystroke accelerators (no global keymap).  The primary keyboard
+;;; path is the comma-prefix command names (,Close-Details, ,Stop-Response,
+;;; ,Lisp-Mode, ...); this supplementary accelerator lives in the frame's own
+;;; command table.  Esc/abort during an active agent turn is owned by the todo9
+;;; await gesture loop (listener-escape-gesture-p in await-listener-agent-turn)
+;;; and is NOT rebound here.  Stop/mode/compose commands are likewise present in
+;;; this frame-local command table and reachable via their comma-prefix names.
+(let ((table (clim:find-command-table 'rplaca-listener)))
+  (handler-case
+      (clim:add-keystroke-to-command-table
+       table '(:control #\w) :command '(com-close-details) :errorp nil)
+    (error (condition)
+      (file-debug-log "listener-keystroke-registration-failed" "~A" condition))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Construction-time pane appearance, lifecycle, and frame launcher.

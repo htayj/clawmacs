@@ -298,3 +298,81 @@ Returns the source-text if ASK-AGENT was invoked, or NIL otherwise."
   (let ((ask-source (listener-eval-form form source-text)))
     (when (and ask-source (fboundp 'com-say))
       (funcall (symbol-function 'com-say) ask-source))))
+
+;;; --------------------------------------------------------------------------
+;;; Todo 10: Lisp/Say mode commands, Stop Response, and Compose.
+;;; --------------------------------------------------------------------------
+
+(define-rplaca-listener-command (com-lisp-mode :name "Lisp Mode")
+    ()
+  "Switch the listener to :eval input mode.  The prompt (and wholine, on the
+next command-loop redisplay) reflect the new mode."
+  (let ((frame clim:*application-frame*))
+    (setf (rplaca-listener-context frame)
+          (listener-context-set-input-mode
+           (rplaca-listener-context frame) :eval))))
+
+(define-rplaca-listener-command (com-say-mode :name "Say Mode")
+    ()
+  "Switch the listener to :say input mode."
+  (let ((frame clim:*application-frame*))
+    (setf (rplaca-listener-context frame)
+          (listener-context-set-input-mode
+           (rplaca-listener-context frame) :say))))
+
+(define-rplaca-listener-command (com-stop-response :name "Stop Response")
+    ()
+  "Stop the active provider/tool response once, when one is busy.  Idempotent:
+a second invocation finds nothing owned and is a no-op.  This is a defensive
+escape hatch for busy-but-not-awaiting states; it does not duplicate the todo9
+Esc/gesture cancellation that owns the in-await wait loop."
+  (let* ((frame clim:*application-frame*)
+         (buffer (rplaca-listener-conversation-buffer frame)))
+    (when (and (buffer-agent-busy-p buffer)
+               (not (buffer-runtime-stopping-p buffer)))
+      (stop-streaming-response buffer))))
+
+(declaim (notinline listener-read-compose-text))
+
+(defun listener-read-compose-text (frame)
+  "Open a multiline compose dialog and return the entered string, or NIL.
+
+The default path is an accepting-values dialog with a text-editor pane so the
+user can enter multiline prose that the single-line interactor rejects.  This
+is the only seam between the dialog surface and the one-shot submission; tests
+override it to drive com-say headlessly.  Drei is not used here to keep the
+dialog McCLIM-native and dependency-light for this todo."
+  (let ((stream (clim:frame-standard-output frame))
+        (text nil))
+    (handler-case
+        (clim:accepting-values (stream :own-window t
+                                       :label "Compose prose")
+          (setf text
+                 (clim:accept 'clim:string
+                              :stream stream
+                              :prompt "Prose"
+                              :view clim:+text-editor-view+)))
+      (error () nil))
+    text))
+
+(defun listener-compose-multiline-prose (frame)
+  "Read multiline prose, reject blank/busy, and hand it to com-say exactly
+once.  Blank and busy are rejected before any interpolation or send."
+  (let ((buffer (rplaca-listener-conversation-buffer frame)))
+    (when (listener-say-busy-p frame buffer)
+      (listener-write-input-error frame "An agent turn is already active.")
+      (return-from listener-compose-multiline-prose nil))
+    (let ((text (listener-read-compose-text frame)))
+      (cond
+        ((or (null text) (blank-string-p text))
+         (listener-write-input-error frame "Compose text is blank."))
+        (t
+         ;; Resolve through SYMBOL-FUNCTION so the same stub surface the rest
+         ;; of the listener uses (see com-eval's ask-agent handoff) applies.
+         (funcall (symbol-function 'com-say) text))))))
+
+(define-rplaca-listener-command (com-compose :name "Compose")
+    ()
+  "Open a multiline compose dialog and submit the result once to com-say."
+  (let ((frame clim:*application-frame*))
+    (listener-compose-multiline-prose frame)))
